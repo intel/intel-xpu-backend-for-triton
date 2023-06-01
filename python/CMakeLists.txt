@@ -1,0 +1,66 @@
+
+# Python module
+if(TRITON_BUILD_PYTHON_MODULE)
+    message(STATUS "Adding Intel Extension Python module")
+    set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/csrc)
+    set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/intel_extension_for_triton.cc)
+    include_directories("." ${PYTHON_SRC_PATH})
+    include_directories(../include)
+
+    if(PYTHON_INCLUDE_DIRS)
+        include_directories(${PYTHON_INCLUDE_DIRS})
+    else()
+        find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
+        include_directories(${Python3_INCLUDE_DIRS})
+        link_directories(${Python3_LIBRARY_DIRS})
+        link_libraries(${Python3_LIBRARIES})
+        add_link_options(${Python3_LINK_OPTIONS})
+    endif()
+
+    add_library(intel_extension_for_triton SHARED ${PYTHON_SRC})
+
+    get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+    get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
+
+    set(INTEL_EXTENSION_LIBRARIES
+            TritonAnalysis
+            TritonTransforms
+            TritonGPUTransforms
+            TritonSPIRV
+            TritonGPUToSPIRV
+            ${dialect_libs}
+            ${conversion_libs}
+
+            # optimizations
+            MLIRPass
+            MLIRTransforms
+            MLIRSupport
+            MLIRIR
+            ${dialect_libs}
+            ${conversion_libs}
+            )
+    target_link_libraries(intel_extension_for_triton PRIVATE ${INTEL_EXTENSION_LIBRARIES})
+    target_link_libraries(intel_extension_for_triton PRIVATE ${LLVM_LIBRARIES})
+    # TODO: Figure out which target is sufficient to fix errors; intel_extension_for_triton is
+    # apparently not enough
+    link_libraries(stdc++fs)
+
+    target_link_options(intel_extension_for_triton PRIVATE ${LLVM_LDFLAGS})
+
+    install(FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf.spv
+            ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf-bf16.spv
+            ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf-fp64.spv
+            DESTINATION third_party/xpu/lib
+            COMPONENT intel_extension_for_triton)
+
+    install(FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/utils/sycl.cpp
+            DESTINATION third_party/xpu/utils
+            COMPONENT intel_extension_for_triton)
+
+    install(FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/__init__.py
+            DESTINATION third_party/xpu/
+            COMPONENT intel_extension_for_triton)
+endif()
