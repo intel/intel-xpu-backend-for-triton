@@ -11,7 +11,7 @@ import torch
 from intel_extension_for_pytorch.xpu.cpp_extension import (DpcppBuildExtension,
                                                            DPCPPExtension)
 
-import triton._C.libintel_extension_for_triton.triton as _triton
+import triton._C.libintel_xpu_backend_for_triton.triton as _triton
 from triton.common.backend import BaseBackend, register_backend
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
