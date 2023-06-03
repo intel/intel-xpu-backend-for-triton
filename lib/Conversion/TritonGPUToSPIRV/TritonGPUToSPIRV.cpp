@@ -245,10 +245,10 @@ struct GetProgramIdOpToSPIRVConversion
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    assert(op.getAxis() < 3);
+    assert(op.getAxisAsInt() < 3);
 
     Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(
-            loc, rewriter.getIndexType(), dims[op.getAxis()]);
+            loc, rewriter.getIndexType(), dims[op.getAxisAsInt()]);
     Value blockId_idx = rewriter.create<::mlir::arith::TruncIOp>(
             loc, i32_ty, blockId);
     auto *typeConverter = this->template getTypeConverter<SPIRVTypeConverter>();
