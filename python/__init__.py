@@ -31,7 +31,6 @@ def _add_external_libs(mod, libs):
 def ttgir_to_spirv(mod, extern_libs, arch):
     if extern_libs:
         _add_external_libs(mod, extern_libs)
-    # return _triton.translate_triton_gpu_to_spirv(mod, compute_capability)
     spirv_code, share_memory_size = _triton.translate_triton_gpu_to_spirv(str(mod), arch)
     mod.share_memory_size = share_memory_size
     return spirv_code
@@ -347,11 +346,11 @@ class SYCLDriver(DriverBase):
         self.backend = "SYCL"
 
 
-class ExtensionBackend(BaseBackend):
+class XPUBackend(BaseBackend):
     stub_so_path = ""
 
     def __init__(self, device_type: str) -> None:
-        super(ExtensionBackend, self).__init__(device_type)
+        super(XPUBackend, self).__init__(device_type)
         self.driver = SYCLDriver()
 
     def add_stages(self, arch, extern_libs, stages):
@@ -441,4 +440,4 @@ class ExtensionBackend(BaseBackend):
             return cache_path
 
 
-register_backend("xpu", ExtensionBackend)
+register_backend("xpu", XPUBackend)

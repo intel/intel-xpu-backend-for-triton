@@ -47,20 +47,17 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
     target_link_options(intel_xpu_backend_for_triton PRIVATE ${LLVM_LDFLAGS})
 
-    install(FILES
-            ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf.spv
-            ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf-bf16.spv
-            ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf-fp64.spv
-            DESTINATION third_party/xpu/lib
-            COMPONENT intel_xpu_backend_for_triton)
+    file(INSTALL
+         ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf.spv
+         ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf-bf16.spv
+         ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf-fp64.spv
+         DESTINATION ${PYTHON_THIRD_PARTY_PATH}/xpu/lib)
 
-    install(FILES
-            ${CMAKE_CURRENT_SOURCE_DIR}/utils/sycl.cpp
-            DESTINATION third_party/xpu/utils
-            COMPONENT intel_xpu_backend_for_triton)
+    file(INSTALL
+         ${CMAKE_CURRENT_SOURCE_DIR}/utils/sycl.cpp
+         DESTINATION ${PYTHON_THIRD_PARTY_PATH}/xpu/utils)
 
-    install(FILES
-            ${CMAKE_CURRENT_SOURCE_DIR}/__init__.py
-            DESTINATION third_party/xpu/
-            COMPONENT intel_xpu_backend_for_triton)
+    file(INSTALL
+         ${CMAKE_CURRENT_SOURCE_DIR}/__init__.py
+         DESTINATION ${PYTHON_THIRD_PARTY_PATH}/xpu/)
 endif()

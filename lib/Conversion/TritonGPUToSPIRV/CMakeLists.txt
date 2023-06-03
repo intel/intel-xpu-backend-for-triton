@@ -1,5 +1,5 @@
 
-MESSAGE(STATUS "johnlu add TritonGPUToSPIRV")
+MESSAGE(STATUS "Add TritonGPUToSPIRV")
 add_mlir_conversion_library(TritonGPUToSPIRV
     TritonGPUToSPIRV.cpp
     ViewOpToSPIRV.cpp
@@ -34,4 +34,4 @@ add_mlir_conversion_library(TritonGPUToSPIRV
     TritonGPUTransforms
 )
 
-MESSAGE(STATUS "johnlu conversion_libs ${conversion_libs}")
+MESSAGE(STATUS "Conversion_libs ${conversion_libs}")

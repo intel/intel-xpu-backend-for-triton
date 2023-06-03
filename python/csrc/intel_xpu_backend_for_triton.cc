@@ -74,7 +74,7 @@ void init_triton_translation(py::module &m) {
         });
 }
 
-void init_intel_extension_for_triton(py::module &m) {
+void init_intel_xpu_backend_for_triton(py::module &m) {
   py::module subm = m.def_submodule("triton");
   init_triton_translation(subm);
 }
