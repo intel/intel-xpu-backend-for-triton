@@ -24,8 +24,10 @@ bool getBoolEnv(const std::string &env) {
   {                                                                            \
     auto result = (value2);                                                    \
     if ((value1) != (result)) {                                                \
-      std::cout << "L0 API error code:" << std::hex << result << std::endl;    \
-      exit(-1);                                                                \
+      std::string err_log("L0 API error code: ");                              \
+      std::stringstream ss;                                                    \
+      ss << std::hex << result << std::endl;                                   \
+      throw std::runtime_error(err_log + ss.str());                            \
     }                                                                          \
   }
 
@@ -69,7 +71,7 @@ ze_module_handle_t create_module(ze_context_handle_t context,
     EXPECT_EQ(ZE_RESULT_SUCCESS,
               zeModuleBuildLogGetString(buildlog, &szLog, strLog));
 
-    std::cout << "L0 build module failed. Log:\\n" << strLog << std::endl;
+    std::cerr << "L0 build module failed. Log:\n" << strLog << std::endl;
     free(strLog);
     EXPECT_EQ(ZE_RESULT_SUCCESS, zeModuleBuildLogDestroy(buildlog));
   }
