@@ -14,9 +14,10 @@
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 
 #include "SPIRV-Tools/tools/io.h"
-#include "spirv-tools/optimizer.hpp"
 #include "spirv-tools/libspirv.hpp"
 #include "spirv-tools/linker.hpp"
+#include "spirv-tools/optimizer.hpp"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include <dlfcn.h>
 #include <filesystem>
@@ -295,6 +296,9 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream 
     auto newModuleOp =
             builder.create<spirv::ModuleOp>(op.getLoc(), op.getName());
 
+    unsigned threadsPerWarp =
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(op);
+
     auto& region = op.getRegion();
     auto& parent = *newModuleOp.getBody()->getParent();
     auto iter = newModuleOp.getBody()->getIterator();
@@ -309,6 +313,11 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream 
     newModuleOp->setAttrs(op->getAttrDictionary());
 
     //Set the spirv module attributes
+    newModuleOp->setAttr(
+        triton::gpu::TritonGPUDialect::getThreadsPerWarpAttrName(),
+        IntegerAttr::get(mlir::IntegerType::get(builder.getContext(), 32),
+                         llvm::APInt(32, threadsPerWarp)));
+
     newModuleOp->setAttr("addressing_model",
                          builder.getAttr<spirv::AddressingModelAttr>(
                                  spirv::AddressingModel::Physical64));
