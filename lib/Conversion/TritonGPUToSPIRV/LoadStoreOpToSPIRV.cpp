@@ -28,7 +28,7 @@ struct LoadStoreSPIRVConversionBase {
     if (!tensorTy)
       return 1;
     auto contiguity = getContiguity(ptr);
-    auto pointeeBitWidth = getPointeeBitWidth(tensorTy);
+    auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
     // The maximum vector size is 128 bits on NVIDIA GPUs.
     return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
   }
@@ -105,17 +105,17 @@ struct LoadOpSPIRVConversion
     }
 
     // vectorized iteration through all the pointer/mask/other elements
-    const int valueElemNbits =
+    const int valueElemNBits =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      const size_t maxWordWidth = std::max<size_t>(32, valueElemNbits);
-      const size_t totalWidth = valueElemNbits * vec;
+      const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
+      const size_t totalWidth = valueElemNBits * vec;
       const size_t width = std::min(totalWidth, maxWordWidth);
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
-      const size_t wordNElems = width / valueElemNbits;
+      const size_t wordNElems = width / valueElemNBits;
       assert(wordNElems * nWords * numVecs == numElems);
 
       SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
@@ -140,7 +140,7 @@ struct LoadOpSPIRVConversion
       Value other_ = undef(retTy);;
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
-          size_t size = width / valueElemNbits;
+          size_t size = width / valueElemNBits;
 
           Value v;
           if (size > 1) {
@@ -178,7 +178,7 @@ struct LoadOpSPIRVConversion
       ret = *tailblock->args_begin();
       // Extract and store return values
       SmallVector<Value> rets;
-      int elemsPerWord = width / valueElemNbits;
+      int elemsPerWord = width / valueElemNBits;
       for (unsigned int ii = 0; ii < nWords; ++ii) {
         Value curr;
         if (retTy.isa<mlir::VectorType>()) {
@@ -225,7 +225,6 @@ struct StoreOpSPIRVConversion
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
     Value ptr = op.getPtr();
     Value value = op.getValue();
 
@@ -264,22 +263,18 @@ struct StoreOpSPIRVConversion
     // numElements = 1 for scalar
     auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     auto numElems = tensorTy ? tensorTy.getNumElements() : 1;
-    Value mask = int_val(1, 1);
-    auto tid = tid_val();
-    mask = logic_and(mask,
-                icmp_ult(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
-
+    Value mask = getMask(valueTy, rewriter, loc);
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
-    const size_t valueElemNbits = dtsize * 8;
+    const size_t valueElemNBits = dtsize * 8;
 
     const int numVecs = elemsPerThread / vec;
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
-      const size_t maxWordWidth = std::max<size_t>(32, valueElemNbits);
-      const size_t totalWidth = valueElemNbits * vec;
+      const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
+      const size_t totalWidth = valueElemNBits * vec;
       const size_t width = std::min(totalWidth, maxWordWidth);
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
-      const size_t wordNElems = width / valueElemNbits;
+      const size_t wordNElems = width / valueElemNBits;
       assert(wordNElems * nWords * numVecs == elemsPerThread);
 
       Value maskVal = spirvMask ? logic_and(mask, maskElems[vecStart]) : mask;
