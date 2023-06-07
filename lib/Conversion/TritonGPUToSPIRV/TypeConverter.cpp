@@ -48,7 +48,7 @@ MAP_FN(spirv::StorageClass::StorageBuffer, 0)                                \
   MAP_FN(spirv::StorageClass::HostOnlyINTEL, 23)
 #endif
 
-Optional<spirv::StorageClass>
+std::optional<spirv::StorageClass>
 getStorageClassForMemorySpace(unsigned space) {
 #define STORAGE_SPACE_MAP_FN(storage, space)                                   \
   case space:                                                                  \
@@ -65,26 +65,26 @@ getStorageClassForMemorySpace(unsigned space) {
 TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
         spirv::TargetEnvAttr &targetAttr, SPIRVConversionOptions &option)
         : SPIRVTypeConverter(targetAttr, option) {
-  addConversion([&](triton::PointerType type) -> llvm::Optional<Type> {
+  addConversion([&](triton::PointerType type) -> std::optional<Type> {
     return convertTritonPointerType(type);
   });
-  addConversion([&](RankedTensorType type) -> llvm::Optional<Type> {
+  addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type);
   });
   // Internally store float8 as int8
-  addConversion([&](mlir::Float8E4M3FNType type) -> llvm::Optional<Type> {
+  addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
     llvm::report_fatal_error("SPIRV doesn't support fp8 type");
     return IntegerType::get(type.getContext(), 8);
   });
-  addConversion([&](mlir::Float8E5M2Type type) -> llvm::Optional<Type> {
+  addConversion([&](mlir::Float8E5M2Type type) -> std::optional<Type> {
     llvm::report_fatal_error("SPIRV doesn't support fp8 type");
     return IntegerType::get(type.getContext(), 8);
   });
   // Internally store bfloat16 as int16
-  addConversion([&](BFloat16Type type) -> llvm::Optional<Type> {
+  addConversion([&](BFloat16Type type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 16);
   });
-  addConversion([&](IndexType type) -> llvm::Optional<Type> {
+  addConversion([&](IndexType type) -> std::optional<Type> {
     return getIndexType();
   });
 
@@ -92,7 +92,7 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
   // non-SPIRV types persist after an SPIRV conversion.
   addSourceMaterialization([&](OpBuilder &builder, Type resultType,
                                ValueRange inputs,
-                               Location loc) -> Optional<Value> {
+                               Location loc) -> std::optional<Value> {
     if (inputs.size() != 1)
       return std::nullopt;
 
@@ -101,7 +101,7 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
   });
   addTargetMaterialization([&](OpBuilder &builder, Type resultType,
                                ValueRange inputs,
-                               Location loc) -> Optional<Value> {
+                               Location loc) -> std::optional<Value> {
     if (inputs.size() != 1)
       return std::nullopt;
 
@@ -113,7 +113,7 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
 Type TritonGPUToSPIRVTypeConverter::convertTritonPointerType(
     triton::PointerType type) {
   // Recursively translate pointee type
-  Optional<spirv::StorageClass> storageClass = getStorageClassForMemorySpace(
+  std::optional<spirv::StorageClass> storageClass = getStorageClassForMemorySpace(
           type.getAddressSpace());
   assert(storageClass && "uncompatible pointer address type in SPIRV");
   return spirv::PointerType::get(convertType(type.getPointeeType()), *storageClass);
