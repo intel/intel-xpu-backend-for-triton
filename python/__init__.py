@@ -249,7 +249,9 @@ PYBIND11_MODULE(__triton_launcher, m) {{
                        py::object &launch_exit_hook,
                        py::object &compiled_kernel,
                        {', '.join([f"{_extracted_type_pybind11(ty)} _arg{i}" for i, ty in signature.items()])}){{
-      int threads_per_warp = compiled_kernel.attr("threads_per_warp").cast<int>();
+      int threads_per_warp = 32;
+      if(py::hasattr(compiled_kernel, "threads_per_warp"))
+        threads_per_warp = compiled_kernel.attr("threads_per_warp").cast<int>();
       sycl::queue* stream = static_cast<sycl::queue*>(_stream);
       sycl::kernel* kernel = static_cast<sycl::kernel*>(_kernel);
       sycl_kernel_launch(grid_x, grid_y, grid_z, num_warps, threads_per_warp, shared_memory, *stream, *kernel,
