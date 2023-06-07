@@ -416,6 +416,59 @@ public:
     return ret;
   }
 
+  SmallVector<Value>
+  loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
+                          Value src, SharedMemoryObject smemObj, Type elemTy,
+                          Location loc,
+                          ConversionPatternRewriter &rewriter) const {
+    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto dstShape = dstTy.getShape();
+    assert(dstShape.size() == 2 &&
+           "Unexpected rank of loadSharedToDistributed");
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto dstDistributedLayout = dstTy.getEncoding();
+    if (auto mmaLayout = dstDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
+      assert((!mmaLayout.isVolta()) &&
+             "ConvertLayout Shared->MMAv1 is not supported yet");
+    }
+    auto srcSharedLayout =
+        srcTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto srcElemTy = srcTy.getElementType();
+    auto dstElemTy = dstTy.getElementType();
+    auto inOrd = triton::gpu::getOrder(srcSharedLayout);
+    auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
+    unsigned outVec =
+        inOrd == outOrd
+            ? triton::gpu::getContigPerThread(dstDistributedLayout)[outOrd[0]]
+            : 1;
+    unsigned inVec = srcSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
+    assert(outElems == dstIndices.size());
+
+    DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
+        loc, outVec, dstTy, srcSharedLayout, srcElemTy, smemObj, rewriter,
+        smemObj.offsets, smemObj.strides);
+    assert(outElems % minVec == 0 && "Unexpected number of elements");
+    unsigned numVecs = outElems / minVec;
+    auto wordTy = minVec == 1 ? elemTy : vec_ty(elemTy, minVec);
+    SmallVector<Value> outVals(outElems);
+    for (unsigned i = 0; i < numVecs; ++i) {
+      Value smemAddr = sharedPtrs[i * minVec];
+      smemAddr = bitcast(smemAddr, ptr_ty(wordTy, spirv::StorageClass::Workgroup));
+      Value valVec = load(smemAddr);
+      for (unsigned v = 0; v < minVec; ++v) {
+        if (minVec != 1) {
+          Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
+          outVals[i * minVec + v] = currVal;
+        } else {
+          outVals[i * minVec + v] = valVec;
+        }
+      }
+    }
+    return outVals;
+  }
+
   void storeDistributedToShared(Value src, Value llSrc,
                                 ArrayRef<Value> dstStrides,
                                 ArrayRef<SmallVector<Value>> srcIndices,
