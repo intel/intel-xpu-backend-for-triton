@@ -416,6 +416,59 @@ public:
     return ret;
   }
 
+  SmallVector<Value>
+  loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
+                          Value src, SharedMemoryObject smemObj, Type elemTy,
+                          Location loc,
+                          ConversionPatternRewriter &rewriter) const {
+    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto dstShape = dstTy.getShape();
+    assert(dstShape.size() == 2 &&
+           "Unexpected rank of loadSharedToDistributed");
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto dstDistributedLayout = dstTy.getEncoding();
+    if (auto mmaLayout = dstDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
+      assert((!mmaLayout.isVolta()) &&
+             "ConvertLayout Shared->MMAv1 is not supported yet");
+    }
+    auto srcSharedLayout =
+        srcTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto srcElemTy = srcTy.getElementType();
+    auto dstElemTy = dstTy.getElementType();
+    auto inOrd = triton::gpu::getOrder(srcSharedLayout);
+    auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
+    unsigned outVec =
+        inOrd == outOrd
+            ? triton::gpu::getContigPerThread(dstDistributedLayout)[outOrd[0]]
+            : 1;
+    unsigned inVec = srcSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
+    assert(outElems == dstIndices.size());
+
+    DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
+        loc, outVec, dstTy, srcSharedLayout, srcElemTy, smemObj, rewriter,
+        smemObj.offsets, smemObj.strides);
+    assert(outElems % minVec == 0 && "Unexpected number of elements");
+    unsigned numVecs = outElems / minVec;
+    auto wordTy = minVec == 1 ? elemTy : vec_ty(elemTy, minVec);
+    SmallVector<Value> outVals(outElems);
+    for (unsigned i = 0; i < numVecs; ++i) {
+      Value smemAddr = sharedPtrs[i * minVec];
+      smemAddr = bitcast(smemAddr, ptr_ty(wordTy, spirv::StorageClass::Workgroup));
+      Value valVec = load(smemAddr);
+      for (unsigned v = 0; v < minVec; ++v) {
+        if (minVec != 1) {
+          Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
+          outVals[i * minVec + v] = currVal;
+        } else {
+          outVals[i * minVec + v] = valVec;
+        }
+      }
+    }
+    return outVals;
+  }
+
   void storeDistributedToShared(Value src, Value llSrc,
                                 ArrayRef<Value> dstStrides,
                                 ArrayRef<SmallVector<Value>> srcIndices,
@@ -487,6 +540,46 @@ public:
   // -----------------------------------------------------------------------
   // Utilities
   // -----------------------------------------------------------------------
+  Value getMask(Type valueTy, ConversionPatternRewriter &rewriter,
+                Location loc) const {
+    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+    Value mask = int_val(1, 1);
+    auto tid = tid_val();
+    if (tensorTy) {
+      auto layout = tensorTy.getEncoding();
+      auto shape = tensorTy.getShape();
+      unsigned rank = shape.size();
+      auto sizePerThread = triton::gpu::getSizePerThread(layout);
+      auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
+      auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
+      auto order = triton::gpu::getOrder(layout);
+      auto shapePerCTA = triton::gpu::getShapePerCTA(layout, shape);
+      Value warpSize = i32_val(product<unsigned>(threadsPerWarp));
+      Value laneId = urem(tid, warpSize);
+      Value warpId = udiv(tid, warpSize);
+      SmallVector<Value> multiDimWarpId =
+          delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+      SmallVector<Value> multiDimThreadId =
+          delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+      for (unsigned dim = 0; dim < rank; ++dim) {
+        // if there is no data replication across threads on this dimension
+        if (shape[dim] >= shapePerCTA[dim])
+          continue;
+        // Otherwise, we need to mask threads that will replicate data on this
+        // dimension. Calculate the thread index on this dimension for the CTA
+        Value threadDim =
+            add(mul(multiDimWarpId[dim], i32_val(threadsPerWarp[dim])),
+                multiDimThreadId[dim]);
+        mask = logic_and(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
+                                   i32_val(shape[dim])));
+      }
+    } else {
+      // If the tensor is not ranked, then it is a scalar and only thread 0 can
+      // write
+      mask = logic_and(mask, icmp_eq(tid, i32_val(0)));
+    }
+    return mask;
+  }
 
   // Convert an \param index to a multi-dim coordinate given \param shape and
   // \param order.

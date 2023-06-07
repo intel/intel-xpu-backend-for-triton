@@ -54,7 +54,7 @@ void init_triton_translation(py::module &m) {
               throw std::runtime_error("Parse MLIR file failed.");
             auto spirvModule = ::mlir::triton::translateTritonGPUToSPIRVIR(*module, capabilities);
             if (spirvModule.empty())
-              llvm::report_fatal_error("Failed to translate TritonGPU to SPIRV IR.");
+              throw std::runtime_error("Failed to translate TritonGPU to SPIRV IR.");
 
             auto shared = (*module)->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared");
             return py::make_tuple<py::return_value_policy::take_ownership>(spirvModule, shared.getInt());
