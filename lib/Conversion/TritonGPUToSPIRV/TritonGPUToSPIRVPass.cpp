@@ -111,7 +111,7 @@ struct ReturnOpConversion : public OpConversionPattern<triton::ReturnOp> {
             rewriter.create<spirv::UndefOp>(op.getLoc(), packedResultsTy);
         auto loc = op.getLoc();
         for (auto it : llvm::enumerate(adaptor.getOperands())) {
-          packedResults = insert_val(packedResultsTy, packedResults, it.value(),
+          packedResults = insert_val(packedResultsTy, it.value(), packedResults,
                                      rewriter.getI32ArrayAttr(it.index()));
         }
         newOp = rewriter.create<spirv::ReturnValueOp>(op.getLoc(), TypeRange(), packedResults);
