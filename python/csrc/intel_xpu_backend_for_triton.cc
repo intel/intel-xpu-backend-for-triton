@@ -75,7 +75,6 @@ void init_triton_translation(py::module &m) {
   m.def("add_external_libs",
         [](mlir::ModuleOp &op, const std::vector<std::string> &names,
            const std::vector<std::string> &paths) {
-            std::cout << "Add external libs" << std::endl;
           ::mlir::triton::addExternalLibs(op, names, paths);
         });   
 }
