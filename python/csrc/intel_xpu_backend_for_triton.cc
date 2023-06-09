@@ -72,6 +72,12 @@ void init_triton_translation(py::module &m) {
           py::bytes bytes(spvbin);
           return std::move(bytes);
         });
+  m.def("add_external_libs",
+        [](mlir::ModuleOp &op, const std::vector<std::string> &names,
+           const std::vector<std::string> &paths) {
+            std::cout << "Add external libs" << std::endl;
+          ::mlir::triton::addExternalLibs(op, names, paths);
+        });   
 }
 
 void init_intel_xpu_backend_for_triton(py::module &m) {
