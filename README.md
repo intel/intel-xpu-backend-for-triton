@@ -2,6 +2,9 @@
 
 This is the development repository of Intel® XPU Backend for Triton\*, a new [OpenAI Triton](https://github.com/openai/triton) backend for Intel® GPUs. Triton is a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton\* is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs. Intel® XPU Backend for Triton\* is a third party module used by triton to provide reasonable tradeoff between performance and productivity on Intel® GPUs.
 
+# Installation Guide
+For detailed installation guide, please refer to [Installation Guide](docs/Installation.md).
+
 ## License
 
 _MIT License_. As found in [LICENSE](https://github.com/intel/intel-xpu-backend-for-triton/blob/main/LICENSE) file.
