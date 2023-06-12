@@ -71,7 +71,6 @@ jobs:
           source ${HOME}/env_triton.sh
           export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
           pip install pytest
-          pip install pytest-xdist pytest-excel
           rm -rf ~/.triton/cache
           export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/ 
           bash ${HOME}/triton-nightly/case_prepare_nightly.sh
@@ -89,10 +88,9 @@ jobs:
           source ${HOME}/env_triton.sh
           export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
           pip install pytest
-          pip install pytest-xdist pytest-excel
           rm -rf ~/.triton/cache
           export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/ 
-          git clone -b main https://github.com/intel-sandbox/triton-torch-xpu/ triton-tests
+          bash ${HOME}/triton-nightly/case_prepare_nightly.sh
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
           ZE_AFFINITY_MASK=2.0 pytest -v . 2>&1 | tee ./ut_raw.log || true
           if [ ! -f "./ut_raw.log" ]; then

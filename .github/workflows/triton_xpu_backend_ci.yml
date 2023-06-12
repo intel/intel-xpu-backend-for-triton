@@ -21,7 +21,7 @@ jobs:
           else
             echo '::set-output name=matrix::["ubuntu-latest"]'
           fi
-          
+
   Integration-Tests:
     needs: Runner-Preparation
     runs-on: ${{ matrix.runner }}
@@ -89,7 +89,7 @@ jobs:
           pip install pytest
           rm -rf ~/.triton/cache
           export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/ 
-          bash ${HOME}/triton-preci/case_prepare.sh
+          bash ${HOME}/triton-preci/case_prepare_ci.sh
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
           ZE_AFFINITY_MASK=2.0 pytest -v . 2>&1 | tee ./ut_raw.log || true
           if [ ! -f "./ut_raw.log" ]; then
