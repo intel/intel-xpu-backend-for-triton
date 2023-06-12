@@ -104,3 +104,4 @@ jobs:
           echo -e "================================================================"
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
           grep "^FAILED" ut_raw.log | awk '{print $2}' |& tee ./ut_failed.log
+
