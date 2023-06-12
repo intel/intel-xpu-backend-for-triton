@@ -1,0 +1,268 @@
+name: Nightly Tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8,11 * * *"
+
+jobs:
+
+  Runner-Preparation:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"intel/intel-xpu-backend-for-triton" ]; then
+            echo '::set-output name=matrix::[["self-hosted", "ATSM"], ["self-hosted", "PVC"]]'
+          else
+            echo '::set-output name=matrix::["ubuntu-latest"]'
+          fi
+
+  Nightly-Tests:
+    needs: Runner-Preparation
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
+
+    steps:
+
+      - name: Create conda environment
+        run: |
+          source ${HOME}/env_triton.sh
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
+          ${HOME}/miniconda3/bin/conda install -c conda-forge pybind11 -y
+        env:
+          HTTP_PROXY: http://proxy.ims.intel.com:911
+          HTTPS_PROXY: http://proxy.ims.intel.com:911
+      
+      - name: Install Dependency
+        run: |
+          python --version
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          python --version
+          pip install setuptools cython numpy wheel scikit-build scipy
+          ln -sf /usr/lib/x86_64-linux-gnu/libstdc++.so.6 ${HOME}/miniconda3/envs/triton-nightly-test/lib/libstdc++.so.6
+          pip install psutil cpuid
+          cd ${HOME}/triton-nightly
+
+          installed_llvm_git_version=$(cat ${HOME}/triton-nightly/llvm/build/include/llvm/Support/VCSRevision.h | grep LLVM_REVISION | awk '{print $3}' | sed 's/"//g' || true)
+          echo -e "[ INFO ] Installed llvm Hash: $installed_llvm_git_version"
+          current_llvm_git_version=$(git ls-remote -- https://github.com/chengjunlu/llvm/ -b triton_debug |awk '{print $1}')
+          echo -e "[ INFO ] Current llvm Hash: $current_llvm_git_version"
+          if [[ "$installed_llvm_git_version" != "$current_llvm_git_version" ]];then
+            echo -e "========================================================================="
+            echo "llvm BUILD"
+            echo -e "========================================================================="
+            rm -rf ${HOME}/triton-nightly/llvm
+            git clone -b triton_debug https://github.com/chengjunlu/llvm/
+            cd llvm
+            mkdir build && cd build
+            cmake ../llvm -G Ninja  -DLLVM_ENABLE_PROJECTS="mlir" -DCMAKE_BUILD_TYPE=Release -DLLVM_USE_LINKER=gold  -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU"
+            ninja all
+          else
+            echo -e "========================================================================="
+            echo "llvm READY"
+            echo -e "========================================================================="
+          fi
+
+          installed_torch_git_version=$(python -c "import torch;print(torch.version.git_version)"|| true)
+          echo -e "[ INFO ] Installed Torch Hash: $installed_torch_git_version"
+          current_torch_git_version=$(git ls-remote -- https://github.com/intel-innersource/frameworks.ai.pytorch.private-gpu.git -b chengjun/pytorch-2.0.1 |awk '{print $1}')
+          echo -e "[ INFO ] Current Torch Hash: $current_torch_git_version"
+          if [[ -z "$(pip list | grep torch.private)" || "$installed_torch_git_version" != "$current_torch_git_version" ]];then
+            echo -e "========================================================================="
+            echo "Private-torch BUILD"
+            echo -e "========================================================================="
+            rm -rf ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+            cd ${HOME}/triton-nightly
+            git clone -b chengjun/pytorch-2.0.1 https://github.com/intel-innersource/frameworks.ai.pytorch.private-gpu/
+            cd frameworks.ai.pytorch.private-gpu
+            git submodule sync
+            git submodule update --init --recursive --jobs 0
+            conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
+            python setup.py develop
+            source ${HOME}/env_triton.sh
+          else
+            echo -e "========================================================================="
+            echo "Private-torch READY"
+            echo -e "========================================================================="
+          fi
+
+          installed_IPEX_git_version=$(python -c "import torch, intel_extension_for_pytorch;print(intel_extension_for_pytorch.__ipex_gitrev__)"|| true)
+          echo -e "[ INFO ] Installed IPEX Hash: $installed_IPEX_git_version"
+          current_IPEX_git_version=$(git ls-remote -- https://github.com/intel-innersource/frameworks.ai.pytorch.ipex-gpu -b master |awk '{print $1}')
+          current_IPEX_version=${current_IPEX_git_version: 0: 9}
+          echo -e "[ INFO ] Current IPEX Hash: $current_IPEX_version"
+          if [[ -z "$(pip list | grep torch.ipex-gpu)" || "$installed_IPEX_git_version" != "$current_IPEX_version" ]];then
+            echo -e "========================================================================="
+            echo "IPEX BUILD"
+            echo -e "========================================================================="
+            rm -rf ${HOME}/triton-nightly/frameworks.ai.pytorch.ipex-gpu
+            cd ${HOME}/triton-nightly
+            pip uninstall intel_extension_for_pytorch
+            git clone -b master https://github.com/intel-innersource/frameworks.ai.pytorch.ipex-gpu
+            cd frameworks.ai.pytorch.ipex-gpu
+            git submodule sync
+            git submodule update --init --recursive --jobs 0
+            pip install -r requirements.txt
+            USE_ONEMKL=OFF python setup.py develop
+            source ${HOME}/env_triton.sh
+          else
+            echo -e "========================================================================="
+            echo "IPEX READY"
+            echo -e "========================================================================="
+          fi
+
+      - name: Build triton
+        run: |
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          source ${HOME}/env_triton.sh
+          pip uninstall -y triton
+          export PYBIND11_SYSPATH=${HOME}/miniconda3/envs/triton-preci/lib/python3.10/site-packages/pybind11/
+          export LLVM_SYSPATH=${HOME}/triton-nightly/llvm/build/
+          git clone https://github.com/openai/triton triton
+          cd triton
+          git submodule sync
+          git submodule update --init --recursive --jobs 0
+          cd third_party/intel_xpu_backend
+          git checkout main && git pull
+          cd ../../python
+          python setup.py clean
+          TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
+      
+      - name: Unit test on ATSM
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'ATSM')}} && ${{ contains(matrix.runner, 'ATSM') }}
+        run: |
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          source ${HOME}/env_triton.sh
+          export PYBIND11_SYSPATH=${HOME}/miniconda3/envs/triton-preci/lib/python3.10/site-packages/pybind11/
+          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          pip install pytest
+          pip install pytest-xdist pytest-excel
+          rm -rf ~/.triton/cache
+          export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/ 
+          git clone -b main https://github.com/intel-sandbox/triton-torch-xpu/ triton-tests
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          pytest -v . 2>&1 | tee ./ut_raw.log || true
+          if [ ! -f "./ut_raw.log" ]; then
+            echo -e "[ERROR] IPEX GPU Triton UT FAIL"
+            exit 1
+          fi
+
+      - name: Unit test on PVC
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'PVC')}} && ${{ contains(matrix.runner, 'PVC') }}
+        run: |
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          source ${HOME}/env_triton.sh
+          export PYBIND11_SYSPATH=${HOME}/miniconda3/envs/triton-preci/lib/python3.10/site-packages/pybind11/
+          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          pip install pytest
+          pip install pytest-xdist pytest-excel
+          rm -rf ~/.triton/cache
+          export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/ 
+          git clone -b main https://github.com/intel-sandbox/triton-torch-xpu/ triton-tests
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          ZE_AFFINITY_MASK=2.0 pytest -v . 2>&1 | tee ./ut_raw.log || true
+          if [ ! -f "./ut_raw.log" ]; then
+            echo -e "[ERROR] IPEX GPU Triton UT FAIL"
+            exit 1
+          fi
+
+      - name: Failed Success Skip Log
+        run: |
+          echo -e "================================================================"
+          echo -e "Failed Success Skip Log"
+          echo -e "================================================================"
+
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          grep "^FAILED" ut_raw.log | awk '{print $2}' |& tee ./ut_failed.log
+          grep "SKIPPED" ut_raw.log | awk '{print $1}' | tee ./ut_skip.log
+          grep "PASSED" ut_raw.log | awk '{print $1}' | tee ./num_success_raw.log
+          num_failed=$(cat ./ut_failed.log | wc -l)
+          num_skip=$(cat ./ut_skip.log | wc -l)
+          num_success_raw=$(cat ./num_success_raw.log | wc -l)
+      
+      - name: Total Pass Rate Log(no matmul/dot)
+        run: |
+          echo -e "================================================================"
+          echo -e "Total Pass Rate Log(no matmul/dot)"
+          echo -e "================================================================"
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          grep "(expected)" ut_raw.log | awk '{print $1}' | tee ./ut_expected.log
+          num_expected=$(cat ./ut_expected.log | wc -l)
+          grep "dot" ut_raw.log | awk '{print $1}' | tee ./ut_dot.log
+          num_dot=$(cat ./ut_dot.log | wc -l)
+          grep "matmul" ut_raw.log | awk '{print $1}' | tee ./ut_matmul.log
+          num_matmul=$(cat ./ut_matmul.log | wc -l)
+          grep "dot" ./num_success_raw.log | awk '{print $1}' | tee ./ut_dot_success.log
+          num_dot_success=$(cat ./ut_dot_success.log | wc -l)
+          grep "matmul" ./num_success_raw.log | awk '{print $1}' | tee ./ut_matmul_success.log
+          num_matmul_success=$(cat ./ut_matmul_success.log | wc -l)
+          let num_expected_skip_and_sucess=num_success_raw-num_dot_success-num_matmul_success+num_expected
+          num_total_raw=$(grep "collected" ut_raw.log | awk '{print $4}')
+          let num_total=num_total_raw-num_dot-num_matmul
+          pass_rate_total=`awk 'BEGIN{printf "%.2f%%\n",('$num_expected_skip_and_sucess'/'$num_total')*100}'`
+      
+      - name: Float32 Ralated Pass Rate Log(no matmul/dot)
+        run: |
+          echo -e "================================================================"
+          echo -e "Float32 Ralated Pass Rate Log(no matmul/dot)"
+          echo -e "================================================================"
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          grep "float32" ut_raw.log | awk '{print $1}' | tee ./ut_float32.log
+          sed -i  '/z_tri/,$d' ./ut_float32.log
+          sed -i '$d' ./ut_float32.log
+          grep -v 'matmul\|dot' ./ut_float32.log | awk '{print $1}' | tee ./ut_float32_total.log
+          num_float32=$(cat ./ut_float32_total.log | wc -l)
+          grep -v 'float\|int\|bool\|long\|f8\|f16\|i32\|i64\|u64' ut_raw.log | awk '{print $1}' | tee ./ut_no_datatype.log
+          sed -i '1,8d' ./ut_no_datatype.log
+          sed -i  '/==/,$d' ./ut_no_datatype.log
+          sed -i '$d' ./ut_no_datatype.log
+          grep -v 'matmul\|dot' ./ut_no_datatype.log | awk '{print $1}' | tee ./ut_no_datatype_total.log
+          num_no_datatype=$(cat ./ut_no_datatype_total.log | wc -l)
+
+          grep -v 'matmul\|dot' ./num_success_raw.log | awk '{print $1}' | tee ./ut_success.log
+          grep "float32" ./ut_success.log | awk '{print $1}' | tee ./ut_float32_success.log
+          num_float32_success=$(cat ./ut_float32_success.log | wc -l)
+          grep -v 'float\|int\|bool\|long\|f8\|f16\|i32\|i64\|u64' ./ut_success.log | awk '{print $1}' | tee ./ut_no_datatype_success.log
+          num_no_datatype_success=$(cat ./ut_no_datatype_success.log | wc -l)
+          let num_float32_related_total=num_float32+num_no_datatype
+          let num_float32_related_expected_skip_and_success_total=num_float32_success+num_no_datatype_success
+          pass_rate_float32_related=`awk 'BEGIN{printf "%.2f%%\n",('$num_float32_related_expected_skip_and_success_total'/'$num_float32_related_total')*100}'`
+
+      - name: Pass Rate Summary Log(no matmul/dot)
+        run: |
+          echo -e "================================================================"
+          echo -e "Pass Rate Summary Log(no matmul/dot)"
+          echo -e "================================================================"
+
+          echo ""num_skip"; $num_skip" | tee -a ./pass_rate_summary.log
+          echo ""num_failed"; $num_failed" | tee -a ./pass_rate_summary.log
+
+          echo ""num_matmul"; $num_matmul" | tee -a ./pass_rate_summary.log
+          echo ""num_dot"; $num_dot" | tee -a ./pass_rate_summary.log
+          echo ""num_expected"; $num_expected" | tee -a ./pass_rate_summary.log
+          echo ""num_success_raw"; $num_success_raw" | tee -a ./pass_rate_summary.log
+          echo ""num_expected_skip_and_sucess"; $num_expected_skip_and_sucess" | tee -a ./pass_rate_summary.log
+          echo ""num_total_raw"; $num_total_raw" | tee -a ./pass_rate_summary.log
+          echo ""num_total"; $num_total" | tee -a ./pass_rate_summary.log
+          echo ""pass_rate_total"; $pass_rate_total" | tee -a ./pass_rate_summary.log
+
+          echo ""num_float32"; $num_float32" | tee -a ./pass_rate_summary.log
+          echo ""num_no_datatype"; $num_no_datatype" | tee -a ./pass_rate_summary.log
+          echo ""num_float32_success"; $num_float32_success" | tee -a ./pass_rate_summary.log
+          echo ""num_no_datatype_success"; $num_no_datatype_success" | tee -a ./pass_rate_summary.log
+          echo ""num_float32_related_total"; $num_float32_related_total" | tee -a ./pass_rate_summary.log
+          echo ""num_float32_related_expected_skip_and_success_total"; $num_float32_related_expected_skip_and_success_total" | tee -a ./pass_rate_summary.log
+          echo ""pass_rate_float32_related"; $pass_rate_float32_related" | tee -a ./pass_rate_summary.log
+
+      - name: upload triton nightly data
+        uses: actions/upload-artifact@v2
+        with:
+          name: Triton-nightly-data
+          path: ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit/*.log
