@@ -35,10 +35,6 @@ jobs:
           source ${HOME}/env_triton.sh
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
-          ${HOME}/miniconda3/bin/conda install -c conda-forge pybind11 -y
-        env:
-          HTTP_PROXY: http://proxy.ims.intel.com:911
-          HTTPS_PROXY: http://proxy.ims.intel.com:911
       
       - name: Install Dependency
         run: |
@@ -49,81 +45,14 @@ jobs:
           ln -sf /usr/lib/x86_64-linux-gnu/libstdc++.so.6 ${HOME}/miniconda3/envs/triton-nightly-test/lib/libstdc++.so.6
           pip install psutil cpuid
           cd ${HOME}/triton-nightly
-
-          installed_llvm_git_version=$(cat ${HOME}/triton-nightly/llvm/build/include/llvm/Support/VCSRevision.h | grep LLVM_REVISION | awk '{print $3}' | sed 's/"//g' || true)
-          echo -e "[ INFO ] Installed llvm Hash: $installed_llvm_git_version"
-          current_llvm_git_version=$(git ls-remote -- https://github.com/chengjunlu/llvm/ -b triton_debug |awk '{print $1}')
-          echo -e "[ INFO ] Current llvm Hash: $current_llvm_git_version"
-          if [[ "$installed_llvm_git_version" != "$current_llvm_git_version" ]];then
-            echo -e "========================================================================="
-            echo "llvm BUILD"
-            echo -e "========================================================================="
-            rm -rf ${HOME}/triton-nightly/llvm
-            git clone -b triton_debug https://github.com/chengjunlu/llvm/
-            cd llvm
-            mkdir build && cd build
-            cmake ../llvm -G Ninja  -DLLVM_ENABLE_PROJECTS="mlir" -DCMAKE_BUILD_TYPE=Release -DLLVM_USE_LINKER=gold  -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU"
-            ninja all
-          else
-            echo -e "========================================================================="
-            echo "llvm READY"
-            echo -e "========================================================================="
-          fi
-
-          installed_torch_git_version=$(python -c "import torch;print(torch.version.git_version)"|| true)
-          echo -e "[ INFO ] Installed Torch Hash: $installed_torch_git_version"
-          current_torch_git_version=$(git ls-remote -- https://github.com/intel-innersource/frameworks.ai.pytorch.private-gpu.git -b chengjun/pytorch-2.0.1 |awk '{print $1}')
-          echo -e "[ INFO ] Current Torch Hash: $current_torch_git_version"
-          if [[ -z "$(pip list | grep torch.private)" || "$installed_torch_git_version" != "$current_torch_git_version" ]];then
-            echo -e "========================================================================="
-            echo "Private-torch BUILD"
-            echo -e "========================================================================="
-            rm -rf ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
-            cd ${HOME}/triton-nightly
-            git clone -b chengjun/pytorch-2.0.1 https://github.com/intel-innersource/frameworks.ai.pytorch.private-gpu/
-            cd frameworks.ai.pytorch.private-gpu
-            git submodule sync
-            git submodule update --init --recursive --jobs 0
-            conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
-            python setup.py develop
-            source ${HOME}/env_triton.sh
-          else
-            echo -e "========================================================================="
-            echo "Private-torch READY"
-            echo -e "========================================================================="
-          fi
-
-          installed_IPEX_git_version=$(python -c "import torch, intel_extension_for_pytorch;print(intel_extension_for_pytorch.__ipex_gitrev__)"|| true)
-          echo -e "[ INFO ] Installed IPEX Hash: $installed_IPEX_git_version"
-          current_IPEX_git_version=$(git ls-remote -- https://github.com/intel-innersource/frameworks.ai.pytorch.ipex-gpu -b master |awk '{print $1}')
-          current_IPEX_version=${current_IPEX_git_version: 0: 9}
-          echo -e "[ INFO ] Current IPEX Hash: $current_IPEX_version"
-          if [[ -z "$(pip list | grep torch.ipex-gpu)" || "$installed_IPEX_git_version" != "$current_IPEX_version" ]];then
-            echo -e "========================================================================="
-            echo "IPEX BUILD"
-            echo -e "========================================================================="
-            rm -rf ${HOME}/triton-nightly/frameworks.ai.pytorch.ipex-gpu
-            cd ${HOME}/triton-nightly
-            pip uninstall intel_extension_for_pytorch
-            git clone -b master https://github.com/intel-innersource/frameworks.ai.pytorch.ipex-gpu
-            cd frameworks.ai.pytorch.ipex-gpu
-            git submodule sync
-            git submodule update --init --recursive --jobs 0
-            pip install -r requirements.txt
-            USE_ONEMKL=OFF python setup.py develop
-            source ${HOME}/env_triton.sh
-          else
-            echo -e "========================================================================="
-            echo "IPEX READY"
-            echo -e "========================================================================="
-          fi
+          bash ${HOME}/triton-nightly/env_prepare_nightly.sh
+          
 
       - name: Build triton
         run: |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh
           pip uninstall -y triton
-          export PYBIND11_SYSPATH=${HOME}/miniconda3/envs/triton-preci/lib/python3.10/site-packages/pybind11/
           export LLVM_SYSPATH=${HOME}/triton-nightly/llvm/build/
           git clone https://github.com/openai/triton triton
           cd triton
@@ -140,13 +69,12 @@ jobs:
         run: |
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
-          export PYBIND11_SYSPATH=${HOME}/miniconda3/envs/triton-preci/lib/python3.10/site-packages/pybind11/
           export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
           pip install pytest
           pip install pytest-xdist pytest-excel
           rm -rf ~/.triton/cache
           export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/ 
-          git clone -b main https://github.com/intel-sandbox/triton-torch-xpu/ triton-tests
+          bash ${HOME}/triton-nightly/case_prepare_nightly.sh
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
           pytest -v . 2>&1 | tee ./ut_raw.log || true
           if [ ! -f "./ut_raw.log" ]; then
@@ -159,7 +87,6 @@ jobs:
         run: |
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
-          export PYBIND11_SYSPATH=${HOME}/miniconda3/envs/triton-preci/lib/python3.10/site-packages/pybind11/
           export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
           pip install pytest
           pip install pytest-xdist pytest-excel

@@ -1,0 +1,106 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+
+  Runner-Preparation:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"intel/intel-xpu-backend-for-triton" ]; then
+            echo '::set-output name=matrix::[["self-hosted", "ATSM"], ["self-hosted", "PVC"]]'
+          else
+            echo '::set-output name=matrix::["ubuntu-latest"]'
+          fi
+          
+  Integration-Tests:
+    needs: Runner-Preparation
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
+
+    steps:
+
+      - name: Create conda environment
+        run: |
+          source ${HOME}/env_triton.sh
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
+      
+      - name: Install Dependency
+        run: |
+          python --version
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          python --version
+          pip install setuptools cython numpy wheel scikit-build scipy
+          ln -sf /usr/lib/x86_64-linux-gnu/libstdc++.so.6 ${HOME}/miniconda3/envs/triton-preci/lib/libstdc++.so.6
+          pip install psutil cpuid
+          bash ${HOME}/triton-preci/env_prepare_ci.sh
+
+      - name: Build triton
+        run: |
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          source ${HOME}/env_triton.sh
+          pip uninstall -y triton
+          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          git clone https://github.com/openai/triton triton
+          cd triton
+          git submodule sync
+          git submodule update --init --recursive --jobs 0
+          cd third_party/intel_xpu_backend
+          git checkout ${{github.event.pull_request.head.ref}} && git pull
+          cd ../../python
+          python setup.py clean
+          TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
+      
+      - name: Unit test on ATSM
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'ATSM')}} && ${{ contains(matrix.runner, 'ATSM') }}
+        run: |
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          source ${HOME}/env_triton.sh
+          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          pip install pytest
+          rm -rf ~/.triton/cache
+          export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/ 
+          bash ${HOME}/triton-preci/case_prepare_ci.sh
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          pytest -v . 2>&1 | tee ./ut_raw.log || true
+          if [ ! -f "./ut_raw.log" ]; then
+            echo -e "[ERROR] IPEX GPU Triton UT FAIL"
+            exit 1
+          fi
+
+      - name: Unit test on PVC
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'PVC')}} && ${{ contains(matrix.runner, 'PVC') }}
+        run: |
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          source ${HOME}/env_triton.sh
+          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          pip install pytest
+          rm -rf ~/.triton/cache
+          export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/ 
+          bash ${HOME}/triton-preci/case_prepare.sh
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          ZE_AFFINITY_MASK=2.0 pytest -v . 2>&1 | tee ./ut_raw.log || true
+          if [ ! -f "./ut_raw.log" ]; then
+            echo -e "[ERROR] IPEX GPU Triton UT FAIL"
+            exit 1
+          fi
+
+      - name: Failed Log
+        run: |
+          echo -e "================================================================"
+          echo -e "FAILED LOG"
+          echo -e "================================================================"
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          grep "^FAILED" ut_raw.log | awk '{print $2}' |& tee ./ut_failed.log
