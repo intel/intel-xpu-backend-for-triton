@@ -974,8 +974,8 @@ void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeCon
   POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
   POPULATE_UNARY_OP(triton::BitcastOp, spirv::BitcastOp)
-  POPULATE_UNARY_OP(triton::IntToPtrOp, spirv::BitcastOp)
-  POPULATE_UNARY_OP(triton::PtrToIntOp, spirv::BitcastOp)
+  POPULATE_UNARY_OP(triton::IntToPtrOp, spirv::ConvertUToPtrOp)
+  POPULATE_UNARY_OP(triton::PtrToIntOp, spirv::ConvertPtrToUOp)
 #undef POPULATE_UNARY_OP
 
   patterns.add<CmpIOpSPIRVConversion>(typeConverter, context, benefit);
