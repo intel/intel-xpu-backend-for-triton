@@ -388,7 +388,7 @@ class XPUBackend(BaseBackend):
 
     @functools.lru_cache(None)
     def get_device_properties(self, device):
-        return self.driver.utils.get_device_properties(torch.xpu.sycl_device(device))
+        return self.driver.utils.get_device_properties(torch.xpu.device(device).sycl_device)
 
     def get_current_device(self):
         return torch.xpu.current_device()
@@ -399,7 +399,7 @@ class XPUBackend(BaseBackend):
     def get_load_binary_fn(self):
 
         def _load_binary_fn(kernel_name, binary, shared_size, device):
-            return self.driver.utils.load_binary(kernel_name, binary, shared_size, torch.xpu.sycl_device(device))
+            return self.driver.utils.load_binary(kernel_name, binary, shared_size, torch.xpu.device(device).sycl_device)
 
         return _load_binary_fn
 
