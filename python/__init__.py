@@ -388,7 +388,7 @@ class XPUBackend(BaseBackend):
 
     @functools.lru_cache(None)
     def get_device_properties(self, device):
-        return self.driver.utils.get_device_properties(torch.xpu.device(device).to_sycl_dev())
+        return self.driver.utils.get_device_properties(torch.xpu.device(device).sycl_device)
 
     def get_current_device(self):
         return torch.xpu.current_device()
@@ -399,7 +399,7 @@ class XPUBackend(BaseBackend):
     def get_load_binary_fn(self):
 
         def _load_binary_fn(kernel_name, binary, shared_size, device):
-            return self.driver.utils.load_binary(kernel_name, binary, shared_size, torch.xpu.device(device).to_sycl_dev())
+            return self.driver.utils.load_binary(kernel_name, binary, shared_size, torch.xpu.device(device).sycl_device)
 
         return _load_binary_fn
 
@@ -409,17 +409,17 @@ class XPUBackend(BaseBackend):
     def get_architecture_descriptor(self, **kwargs):
         dev_props = torch.xpu.get_device_properties(torch.xpu.current_device())
         max_work_group_size = dev_props.max_work_group_size
-        max_num_subgroup = dev_props.max_num_subgroup
-        subgroup_sizes = dev_props.subgroup_sizes
+        max_num_sub_groups = dev_props.max_num_sub_groups
+        sub_group_sizes = dev_props.sub_group_sizes
         # TODO: chose a reasonable subgroup size
         threads_per_warp = 32
-        assert threads_per_warp in subgroup_sizes, "Current platform does not support threads_per_warp to be 32"
+        assert threads_per_warp in sub_group_sizes, "Current platform does not support threads_per_warp to be 32"
         num_warps = max_work_group_size // threads_per_warp
-        assert num_warps < max_num_subgroup, \
+        assert num_warps < max_num_sub_groups, \
             "invalid setting. max_work_group_size {}, max_num_subgroup {}, subgroup_sizes {}".format(
                 max_work_group_size,
-                max_num_subgroup,
-                max_num_subgroup)
+                max_num_sub_groups,
+                max_num_sub_groups)
         capability = {"num_warps": num_warps, "threads_per_warp": threads_per_warp}
         return capability
 
