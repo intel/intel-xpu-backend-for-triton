@@ -1,4 +1,6 @@
 #include "ElementwiseOpToSPIRV.h"
+#include "llvm/ADT/StringMap.h"
+#include <string>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -628,6 +630,13 @@ struct ExternElementwiseSPIRVConversion
   using Adaptor = typename Base::OpAdaptor;
   typedef typename Base::OpAdaptor OpAdaptor;
 
+  llvm::StringMap<std::string> imfMapping{
+    {"isinfd", "isinf"},
+    {"isnand", "isnan"},
+    {"powif", "pownf"},
+    {"powi", "pown"}
+  };
+
   Value createDestOp(T op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
@@ -637,8 +646,12 @@ struct ExternElementwiseSPIRVConversion
 
     // TODO: move the prefix changing to a bridge lib.
     std::string funcName;
-    if (symbol.consume_front("__nv")) {
-      funcName = "__devicelib_imf" + symbol.str();
+    if (symbol.consume_front("__nv_")) {
+      if (imfMapping.contains(symbol.str())){
+        funcName = "__devicelib_imf_" + imfMapping.at(symbol.str());
+      } else{
+        funcName = "__devicelib_imf_" + symbol.str();
+      }
     } else {
       funcName = symbol.str();
     }
