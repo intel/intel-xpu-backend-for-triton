@@ -969,7 +969,7 @@ void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeCon
   POPULATE_BINARY_OP(arith::RemUIOp, spirv::UModOp)
   POPULATE_BINARY_OP(arith::AndIOp, arith::AndIOp)   // &
   POPULATE_BINARY_OP(arith::OrIOp, arith::OrIOp)     // |
-  POPULATE_BINARY_OP(arith::XOrIOp, spirv::BitwiseXorOp)   // ^
+  POPULATE_BINARY_OP(arith::XOrIOp, arith::XOrIOp)   // ^
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
