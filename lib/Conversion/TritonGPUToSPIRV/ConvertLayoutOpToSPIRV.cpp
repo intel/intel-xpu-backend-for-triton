@@ -180,8 +180,6 @@ private:
     auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
     if (isInt1)
       elemTy = IntegerType::get(elemTy.getContext(), 8);
-    else if (isPtr)
-      elemTy = IntegerType::get(elemTy.getContext(), 64);
 
     auto llvmElemTy = getTypeConverter()->convertType(elemTy);
 
@@ -213,8 +211,6 @@ private:
             auto currVal = vals[elemId + linearCTAId * accumSizePerThread];
             if (isInt1)
               currVal = zext(llvmElemTy, currVal);
-            else if (isPtr)
-              currVal = ptrtoint(llvmElemTy, currVal);
             store(currVal, ptr);
           } else {
             Value currVal = load(ptr);
@@ -222,8 +218,6 @@ private:
               currVal = icmp_ne(currVal,
                                 rewriter.create<spirv::ConstantOp>(
                                         loc, i8_ty, rewriter.getI8IntegerAttr(0)));
-            else if (isPtr)
-              currVal = inttoptr(llvmElemTyOrig, currVal);
             vals[elemId + linearCTAId * accumSizePerThread] = currVal;
           }
         } else {
@@ -235,8 +229,6 @@ private:
               auto currVal = vals[elemId + linearCTAId * accumSizePerThread + v];
               if (isInt1)
                 currVal = zext(llvmElemTy, currVal);
-              else if (isPtr)
-                currVal = ptrtoint(llvmElemTy, currVal);
               valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
             }
             store(valVec, ptr);
@@ -248,8 +240,6 @@ private:
                 currVal = icmp_ne(currVal,
                                   rewriter.create<spirv::ConstantOp>(
                                           loc, i8_ty, rewriter.getI8IntegerAttr(0)));
-              else if (isPtr)
-                currVal = inttoptr(llvmElemTyOrig, currVal);
               vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
             }
           }
