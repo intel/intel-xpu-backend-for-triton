@@ -793,38 +793,57 @@ struct InsertSliceAsyncOpSPIRVConversion
       auto bitWidth = std::min<unsigned>(maxBitWidth, vecBitWidth);
       auto numWords = vecBitWidth / bitWidth;
       auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
-
-      // Tune CG and CA here.
       auto byteWidth = bitWidth / 8;
-      CacheModifier srcCacheModifier =
-          byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
-      auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
+
+      if (spirvMask) {
+        Value maskVal = maskElems[elemIdx];
+
+        // Create block structure for the masked memory copy.
+        auto *preheader = rewriter.getInsertionBlock();
+        auto opPosition = rewriter.getInsertionPoint();
+        auto *tailblock = rewriter.splitBlock(preheader, opPosition);
+        auto *condblock = rewriter.createBlock(tailblock);
+
+        // Test the mask
+        rewriter.setInsertionPoint(preheader, preheader->end());
+        rewriter.create<mlir::cf::CondBranchOp>(loc, maskVal, condblock, tailblock);
+
+        // Do the memory copy block
+        rewriter.setInsertionPoint(condblock, condblock->end());
+        rewriter.create<mlir::cf::BranchOp>(loc, tailblock);
+
+        // The memory copy insert position
+        rewriter.setInsertionPoint(condblock, condblock->begin());
+      }
+
+      Type spirvElemTy;
+      constexpr unsigned opaqueElemBitwidth = 32;
+      if (bitWidth > opaqueElemBitwidth) {
+        spirvElemTy = VectorType::get(ceil<unsigned>(bitWidth, opaqueElemBitwidth), IntegerType::get(getContext(), opaqueElemBitwidth));
+      } else {
+        spirvElemTy = IntegerType::get(getContext(), bitWidth);
+      }
 
       Value basePtr = sharedPtrs[elemIdx];
+      spirv::PointerType spirvBasePtrType = spirv::PointerType::get(spirvElemTy,
+                                                                spirv::StorageClass::Workgroup);
+      basePtr = bitcast(basePtr, spirvBasePtrType);
       for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
-        llvm::report_fatal_error("SPIRV No async load yet");
-//        PTXBuilder ptxBuilder;
-//        auto wordElemIdx = wordIdx * numWordElems;
-//        auto &copyAsyncOp =
-//                *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-//        auto *dstOperand =
-//                ptxBuilder.newAddrOperand(basePtr, "r", wordElemIdx * resByteWidth);
-//        auto *srcOperand =
-//                ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
-//        auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
-//        auto *srcSize = copySize;
-//        if (op.getMask()) {
-//          // We don't use predicate in this case, setting src-size to 0
-//          // if there's any mask. cp.async will automatically fill the
-//          // remaining slots with 0 if cp-size > src-size.
-//          // XXX(Keren): Always assume other = 0 for now.
-//          auto selectOp = select(maskElems[elemIdx + wordElemIdx],
-//                                 i32_val(byteWidth), i32_val(0));
-//          srcSize = ptxBuilder.newOperand(selectOp, "r");
-//        }
-//        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
-//        ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
+        Value spirvDestPtr = gep(spirvBasePtrType, basePtr, i32_val(wordIdx));
+
+        auto wordElemIdx = wordIdx * numWordElems;
+        auto srcPtr = srcElems[elemIdx + wordElemIdx];
+        spirv::PointerType srcPtrType = srcPtr.getType().dyn_cast<spirv::PointerType>();
+        spirv::PointerType spirvSrcPtrType = spirv::PointerType::get(spirvElemTy,
+                                                                     srcPtrType.getStorageClass());
+        Value spirvSrcPtr = bitcast( srcElems[elemIdx + wordElemIdx], spirvSrcPtrType);
+
+        rewriter.create<spirv::CopyMemoryOp>(op.getLoc(), spirvDestPtr, spirvSrcPtr,
+                                             /*memory_access=*/mlir::spirv::MemoryAccessAttr(),
+                                             /*alignment=*/mlir::IntegerAttr(),
+                                             /*source_memory_access=*/mlir::spirv::MemoryAccessAttr(),
+                                             /*source_alignment=*/::mlir::IntegerAttr());
       }
     }
 
