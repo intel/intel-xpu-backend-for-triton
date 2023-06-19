@@ -488,13 +488,10 @@ struct AtomicRMWOpSPIRVConversion
                      : op.getResult().getType();
     const size_t valueElemNbits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
-    // vec = 1, numElements = 1 for scalar
-    auto vec = getVectorSize(ptr);
     int numElems = 1;
     // tensor
     if (tensorTy) {
       auto valTy = val.getType().cast<RankedTensorType>();
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
       // mask
       numElems = tensorTy.getNumElements();
     }
@@ -503,18 +500,9 @@ struct AtomicRMWOpSPIRVConversion
     mask = logic_and(mask,
                 icmp_ult(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
 
-    auto vecTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
-    for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value rmwVal = undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        if (vec != 1) {
-          rmwVal = insert_element(vecTy, rmwVal, valElements[i + ii], i32_val(ii));
-        } else {
-          rmwVal = valElements[i + ii];
-        }
-      }
-
+    for (size_t i = 0; i < elemsPerThread; i += 1) {
+      Value rmwVal = valElements[i];
       Value rmwPtr = ptrElements[i];
       Value rmwMask = spirvMask ? logic_and(mask, maskElements[i]) : mask;
       if (!tensorTy) {
@@ -525,11 +513,11 @@ struct AtomicRMWOpSPIRVConversion
       auto *preheader = rewriter.getInsertionBlock();
       auto opPosition = rewriter.getInsertionPoint();
       auto *tailblock = rewriter.splitBlock(preheader, opPosition);
-      tailblock->addArgument(vecTy, loc);
+      tailblock->addArgument(valueElemTy, loc);
       auto *condblock = rewriter.createBlock(tailblock);
 
       // Test the mask
-      auto retType = vec == 1 ? valueElemTy : vecTy;
+      auto retType = valueElemTy;
       rewriter.setInsertionPoint(preheader, preheader->end());
       Value other = undef(retType);
       rewriter.create<mlir::cf::CondBranchOp>(loc, rmwMask, condblock, tailblock, ValueRange{other});
@@ -574,10 +562,7 @@ struct AtomicRMWOpSPIRVConversion
 
       ret = *tailblock->args_begin();
       if (tensorTy) {
-        for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-                  vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
-        }
+          resultVals[i] = ret;
       } else {
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, spirv::StorageClass::Workgroup));
