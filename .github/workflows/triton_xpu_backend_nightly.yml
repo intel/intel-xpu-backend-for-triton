@@ -29,8 +29,9 @@ jobs:
           pip install psutil cpuid
           cd ${HOME}/triton-nightly
           bash ${HOME}/triton-nightly/env_prepare_nightly.sh
+          python -c "import torch;import intel_extension_for_pytorch"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-              echo -e "[ERROR] Private-torch BUILD FAIL"
+              echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
               exit 1
           fi
           
@@ -113,6 +114,7 @@ jobs:
           echo -e "============ Total Pass Rate (no matmul/dot) ============" | tee -a ./ut_summary.log
           num_total=$(grep "collected" ut_status.log | awk '{print $4}')
           if [ -z $num_total ]; then num_total=0; fi
+          num_passed=$(cat ./ut_passed.log | wc -l)
           num_expected=$(grep "(expected)" ut_status.log | wc -l)
           num_dot=$(grep "dot" ut_status.log | wc -l)
           num_matmul=$(grep "matmul" ut_status.log | wc -l)
