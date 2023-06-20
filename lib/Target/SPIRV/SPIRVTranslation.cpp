@@ -342,6 +342,7 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream 
             spirv::Capability::Float64,
             spirv::Capability::AtomicFloat32AddEXT,
             spirv::Capability::ExpectAssumeKHR,
+            spirv::Capability::SubgroupDispatch,
             // clang-format on
     };
     spirv::Extension exts_opencl[] = {
