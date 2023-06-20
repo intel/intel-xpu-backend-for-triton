@@ -294,17 +294,14 @@ struct FpToFpOpSPIRVConversion
   static Value convertBf16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
-    // TODO: add device capability check on this.
-    if (false) {
+    if (isSupported(computeCapability)){
       return rewriter.create<spirv::INTELConvertBF16ToFOp>(loc, f32_ty, v);
     } else {
-      std::string libName = "libdevice";
-      std::string funcName = "__devicelib_imf_bfloat162float";
-      mlir::FunctionType funcType =
-              mlir::FunctionType::get(rewriter.getContext(), i16_ty,f32_ty);
-      spirv::FuncOp funcOp = appendOrGetFuncOp(rewriter, v, libName, funcName, funcType);
-
-      return rewriter.create<spirv::FunctionCallOp>(loc, f32_ty, funcName, v).getResult(0);
+      Value val = v;
+      val = zext(i32_ty, val);
+      val = shl(val, i32_val(16));
+      val = bitcast(val, f32_ty);
+      return val;
     }
   }
 
@@ -317,20 +314,43 @@ struct FpToFpOpSPIRVConversion
   static Value convertFp32ToBf16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
-    // TODO: add device capability check on this.
-    if (false) {
+    if (isSupported(computeCapability)){
+      // If support, then convert to bf16 using the INTELConvertFToBF16Op
       return rewriter.create<spirv::INTELConvertFToBF16Op>(loc, bf16_ty, v);
-    } else {
-      std::string libName = "libdevice";
-      std::string funcName = "__devicelib_imf_float2bfloat16";
-      mlir::FunctionType funcType =
-              mlir::FunctionType::get(rewriter.getContext(), f32_ty,i16_ty);
-      NamedAttrList attrs;
-      attrs.set(spirv::stringifyDecoration(spirv::Decoration::FuncParamAttr), StringAttr::get(v.getContext(),"Zext"));
-      spirv::FuncOp funcOp = appendOrGetFuncOp(rewriter, v, libName, funcName, funcType, attrs);
-
-    return rewriter.create<spirv::FunctionCallOp>(loc, i16_ty, funcName, v).getResult(0);
     }
+    else{
+      // Otherwise, Convert the FP32 value by RNE(Rounding to Nearest Even). 
+      // Algorithm is as follows:
+      //   STEP1: U32_VAL = BITCAST(F32_VAL)
+      //   STEP2: U32_VAL_TMP = U32_VAL >> 16
+      //   STEP3: U32_VAL_TMP = U32_VAL_TMP & 1
+      //   STEP4: ROUNDING_BIAS = U32_VAL_TMP + UINT32(0x7FFF)
+      //   STEP5: U32_VAL_TMP = U32_VAL + ROUNDING_BIAS
+      //   STEP6: BF16_VAL = static_cast<UINT16>(U32_VAL_TMP >> 16)
+      Value val = v;
+      auto mask = fcmp_oeq(val, val);
+      // STEP1
+      auto fp32_i32_value = bitcast(v, i32_ty);
+      // STEP2
+      val = lshr(fp32_i32_value, i32_val(16));
+      val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
+      // STEP3
+      val = and_(val, int_val(16, 1));
+      // STEP4
+      auto rounding_bias = int_val(16, 0x7FF);
+      val = add(val, rounding_bias);
+      val = zext(i32_ty, val);
+      // Step 5
+      val = add(val, fp32_i32_value);
+      // Step6
+      val= lshr(val, int_val(32, 16));
+      val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
+      val = bitcast(val, i16_ty);
+      // If the value is NaN, return BF16 NaN.
+      val = select(mask, val, int_val(16, 0xFFFF));
+      return val;
+    }
+
   }
 
   static Value convertFp32ToFp16(Location loc,
@@ -411,9 +431,16 @@ struct FpToFpOpSPIRVConversion
     rewriter.replaceOp(op, result);
     return success();
   }
-
+  static std::map<std::string, int> computeCapability;
 private:
 
+  static bool isSupported(std::map<std::string, int> computeCapability){
+    // Always return true for all pvc versions.
+    if (computeCapability.find("pvc") != computeCapability.end()){
+      return true;
+    }
+    return false;
+  }
   static spirv::FuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
                                   const Value& v,
                                   StringRef libName,
@@ -945,13 +972,16 @@ struct ExpOpSPIRVConversionApprox
   }
 };
 
+std::map<std::string, int> FpToFpOpSPIRVConversion::computeCapability;
+
 void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
                                           mlir::MLIRContext *context,
                                           RewritePatternSet &patterns,
                                           int numWarps,
                                           ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                           ModuleAllocation *allocation,
-                                          Value smem, PatternBenefit benefit) {
+                                          Value smem,PatternBenefit benefit, std::map<std::string, int> computeCapability) {
+
 #define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
   patterns.add<ElementwiseOpSPIRVConversion<SRC_OP, DST_OP>>(typeConverter, context, benefit);
   POPULATE_TERNARY_OP(triton::gpu::SelectOp, spirv::SelectOp)
@@ -1010,6 +1040,7 @@ void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeCon
   patterns.add<FPToSIOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<SIToFPOpSPIRVConversion>(typeConverter, context, benefit);
 
+  FpToFpOpSPIRVConversion::computeCapability = computeCapability;
   patterns.add<FpToFpOpSPIRVConversion>(typeConverter, context, benefit);
 
   patterns.add<ExternElementwiseSPIRVConversion<triton::PureExternElementwiseOp>>(

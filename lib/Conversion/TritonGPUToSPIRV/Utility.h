@@ -48,6 +48,8 @@
   rewriter.create<spirv::VectorExtractDynamicOp>(loc, __VA_ARGS__)
 #define load(...) rewriter.create<spirv::LoadOp>(loc, __VA_ARGS__)
 #define store(val, ptr) rewriter.create<spirv::StoreOp>(loc, ptr, val)
+#define fcmp_oeq(lhs, rhs)                                                     \
+  rewriter.create<spirv::FOrdEqualOp>(loc, lhs, rhs)
 #define fcmp_ogt(lhs, rhs)                                                     \
   rewriter.create<spirv::FOrdGreaterThanOp>(loc, lhs, rhs)
 #define fcmp_olt(lhs, rhs)                                                     \
@@ -79,6 +81,12 @@
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<spirv::UndefOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<spirv::FunctionCallOp>(loc, __VA_ARGS__)
+// Shift left logical
+#define shl(lhs, rhs) rewriter.create<spirv::ShiftLeftLogicalOp>(loc, lhs, rhs)
+// Shift right logical. The Most-significant bits are filled with 0
+#define lshr(lhs, rhs) rewriter.create<spirv::ShiftRightLogicalOp>(loc, lhs, rhs)
+// Shift right arithmetic. The Most-significant bits are filled with sign bit
+#define ashr(lhs, rhs) rewriter.create<spirv::ShiftRightArithmeticOp>(loc, lhs, rhs)
 
 // Types
 #define i64_ty rewriter.getIntegerType(64)
@@ -185,6 +193,9 @@ Value createConstantF32(Location loc, PatternRewriter &rewriter, float v);
 
 /// Create a 64-bit float constant.
 Value createConstantF64(Location loc, PatternRewriter &rewriter, float v);
+
+// /// Create a 16-bit bfloat16 constant.
+// Value createConstantBF16(Location loc, PatternRewriter &rewriter, float v);
 
 /// Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
