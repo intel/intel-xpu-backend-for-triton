@@ -988,7 +988,7 @@ void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeCon
                                           int numWarps,
                                           ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                           ModuleAllocation *allocation,
-                                          Value smem,PatternBenefit benefit, std::map<std::string, int> computeCapability) {
+                                          Value smem,PatternBenefit benefit, std::map<std::string, int> &computeCapability) {
 
 #define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
   patterns.add<ElementwiseOpSPIRVConversion<SRC_OP, DST_OP>>(typeConverter, context, benefit);
