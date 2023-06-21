@@ -824,11 +824,10 @@ struct InsertSliceAsyncOpSPIRVConversion
                                                                      srcPtrType.getStorageClass());
         Value spirvSrcPtr = bitcast( srcElems[elemIdx + wordElemIdx], spirvSrcPtrType);
 
-        rewriter.create<spirv::CopyMemoryOp>(op.getLoc(), spirvDestPtr, spirvSrcPtr,
-                                             /*memory_access=*/mlir::spirv::MemoryAccessAttr(),
-                                             /*alignment=*/mlir::IntegerAttr(),
-                                             /*source_memory_access=*/mlir::spirv::MemoryAccessAttr(),
-                                             /*source_alignment=*/::mlir::IntegerAttr());
+        // the cp.async is treated as a weak memory operation in the CUDA memory consistency model.
+        // So no explicit synchronization required here.
+        Value val = rewriter.create<spirv::LoadOp>(op.getLoc(), spirvSrcPtr);
+        rewriter.create<spirv::StoreOp>(op.getLoc(), spirvDestPtr, val);
       }
     }
 
