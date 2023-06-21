@@ -18,7 +18,12 @@ jobs:
           source ${HOME}/env_triton.sh
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
-      
+
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files
+
       - name: Install Dependency
         run: |
           python --version
@@ -34,7 +39,7 @@ jobs:
               echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
               exit 1
           fi
-          
+
       - name: Build Triton
         run: |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
@@ -103,7 +108,7 @@ jobs:
           echo "num_skipped: $num_skipped" | tee -a ./ut_summary.log
           echo "num_failed: $num_failed" | tee -a ./ut_summary.log
           echo "num_passed: $num_passed" | tee -a ./ut_summary.log
-      
+
       - name: New Failed Cases
         run: |
           echo "TODO: will add new failure cases"
@@ -129,7 +134,7 @@ jobs:
           echo "num_expected_skip_and_sucess: $num_expected_skip_and_sucess" | tee -a ./ut_summary.log
           echo "num_total_wo_mat_dot: $num_total_wo_mat_dot" | tee -a ./ut_summary.log
           echo "total_pass_rate: $total_pass_rate" | tee -a ./ut_summary.log
-      
+
       - name: Float32 Cases Pass Rate Calculate (no matmul/dot)
         run: |
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit
@@ -155,7 +160,7 @@ jobs:
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit
           cp ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/*.log .
           cat ut_summary.log
-      
+
       - name: Upload Triton PVC nightly Data
         uses: actions/upload-artifact@v3
         with:
