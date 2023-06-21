@@ -335,7 +335,8 @@ struct FpToFpOpSPIRVConversion
       auto fp32_i32_value = bitcast(v, i32_ty);
       // STEP2
       val = lshr(fp32_i32_value, i32_val(16));
-      val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
+      // val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
+      val = itrunc(i16_ty, val);
       // STEP3
       val = and_(val, int_val(16, 1));
       // STEP4
@@ -346,7 +347,8 @@ struct FpToFpOpSPIRVConversion
       val = add(val, fp32_i32_value);
       // Step6
       val= lshr(val, int_val(32, 16));
-      val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
+      // val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
+      val = itrunc(i16_ty, val);
       val = bitcast(val, i16_ty);
       // If the value is NaN, return BF16 NaN.
       val = select(mask, val, int_val(16, 0xFFFF));

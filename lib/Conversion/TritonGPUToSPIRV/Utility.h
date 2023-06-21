@@ -87,6 +87,10 @@
 #define lshr(lhs, rhs) rewriter.create<spirv::ShiftRightLogicalOp>(loc, lhs, rhs)
 // Shift right arithmetic. The Most-significant bits are filled with sign bit
 #define ashr(lhs, rhs) rewriter.create<spirv::ShiftRightArithmeticOp>(loc, lhs, rhs)
+// SPIRV lower TruncIOp with the SConvertOp logic
+#define itrunc(...) rewriter.create<spirv::SConvertOp>(loc, __VA_ARGS__)
+// SPIRV lower TruncFOp with the FConvertOp logic
+#define ftrunc(...) rewriter.create<spirv::FConvertOp>(loc, __VA_ARGS__)
 
 // Types
 #define i64_ty rewriter.getIntegerType(64)
