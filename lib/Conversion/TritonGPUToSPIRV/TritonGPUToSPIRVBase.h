@@ -951,12 +951,6 @@ public:
           : OpConversionPattern<SourceOp>(typeConverter, context, benefit),
             ConvertTritonGPUOpToSPIRVPatternBase(typeConverter) {}
   
-  // explicit ConvertTritonGPUOpToSPIRVPattern(TritonGPUToSPIRVTypeConverter &typeConverter,
-  //                                           MLIRContext *context,
-  //                                           PatternBenefit benefit = 1,
-  //                                           bool is_supported)
-  //         : OpConversionPattern<SourceOp>(typeConverter, context, benefit, is_supported),
-  //           ConvertTritonGPUOpToSPIRVPatternBase(typeConverter) {}
 
   explicit ConvertTritonGPUOpToSPIRVPattern(TritonGPUToSPIRVTypeConverter &typeConverter,
                                             MLIRContext *context,

@@ -198,9 +198,6 @@ Value createConstantF32(Location loc, PatternRewriter &rewriter, float v);
 /// Create a 64-bit float constant.
 Value createConstantF64(Location loc, PatternRewriter &rewriter, float v);
 
-// /// Create a 16-bit bfloat16 constant.
-// Value createConstantBF16(Location loc, PatternRewriter &rewriter, float v);
-
 /// Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
                           TypeConverter *converter, int64_t value);
