@@ -294,8 +294,8 @@ struct FpToFpOpSPIRVConversion
   static Value convertBf16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v,
-                                 bool special_op_supported=false) {
-    if (special_op_supported){
+                                 bool use_INTELCOnvertFToBF16Op=false) {
+    if (use_INTELCOnvertFToBF16Op){
       return rewriter.create<spirv::INTELConvertBF16ToFOp>(loc, f32_ty, v);
     } else {
       Value val = v;
@@ -315,8 +315,8 @@ struct FpToFpOpSPIRVConversion
   static Value convertFp32ToBf16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v,
-                                 bool special_op_supported=false) {
-    if (special_op_supported){
+                                 bool use_INTELCOnvertFToBF16Op=false) {
+    if (use_INTELCOnvertFToBF16Op){
       // If support, then convert to bf16 using the INTELConvertFToBF16Op
       return rewriter.create<spirv::INTELConvertFToBF16Op>(loc, bf16_ty, v);
     }
@@ -474,11 +474,11 @@ public:
   explicit ElementwiseOpSPIRVConversionBase(TritonGPUToSPIRVTypeConverter &converter,
                                        MLIRContext *context,
                                        PatternBenefit benefit = 1,
-                                       bool special_op_supported=false)
+                                       bool use_INTELCOnvertFToBF16Op=false)
       : ConvertTritonGPUOpToSPIRVPattern<SourceOp>(converter, context, benefit),
-        special_op_supported(special_op_supported) {}
+        use_INTELCOnvertFToBF16Op(use_INTELCOnvertFToBF16Op) {}
 
-  bool special_op_supported = false;
+  bool use_INTELCOnvertFToBF16Op = false;
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -790,10 +790,10 @@ struct FDivOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->special_op_supported);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->special_op_supported);
+      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
+      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FDivOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->special_op_supported);
+      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FDivOp>(loc, elemTy, operands[0],
                                             operands[1]);
@@ -814,10 +814,10 @@ struct FMulOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->special_op_supported);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->special_op_supported);
+      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
+      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FMulOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->special_op_supported);
+      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FMulOp>(loc, elemTy, operands[0],
                                            operands[1]);
@@ -838,10 +838,10 @@ struct FAddOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->special_op_supported);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->special_op_supported);
+      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
+      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FAddOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->special_op_supported);
+      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FAddOp>(loc, elemTy, operands[0],
                                            operands[1]);
@@ -862,10 +862,10 @@ struct FSubOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->special_op_supported);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->special_op_supported);
+      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
+      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FSubOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->special_op_supported);
+      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FSubOp>(loc, elemTy, operands[0],
                                            operands[1]);
@@ -886,7 +886,7 @@ struct SIToFPOpSPIRVConversion
     auto outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16()) {
       auto value = rewriter.create<arith::SIToFPOp>(loc, f32_ty, operands[0]);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, value, this->special_op_supported);
+      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, value, this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<arith::SIToFPOp>(loc, elemTy, operands[0]);
     }
@@ -906,7 +906,7 @@ struct FPToSIOpSPIRVConversion
     auto inElemTy = getElementType(op.getIn());
     if (inElemTy.isBF16()) {
       auto value =
-          FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->special_op_supported);
+          FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
       return rewriter.create<arith::FPToSIOp>(loc, elemTy, value);
     } else {
       return rewriter.create<arith::FPToSIOp>(loc, elemTy, operands[0]);
@@ -928,7 +928,7 @@ struct ExtFOpSPIRVConversion
     if (inElemTy.isBF16()) {
       auto outElemTy = getElementType(op.getOut());
       assert(outElemTy.isF32() && "unsupported conversion");
-      return FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->special_op_supported);
+      return FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<arith::ExtFOp>(loc, elemTy, operands[0]);
     }
@@ -949,7 +949,7 @@ struct TruncFOpSPIRVConversion
     if (outElemTy.isBF16()) {
       auto inElemTy = getElementType(op.getIn());
       assert(inElemTy.isF32() && "unsupported conversion");
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, operands[0], this->special_op_supported);
+      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<arith::TruncFOp>(loc, elemTy, operands[0]);
     }
@@ -971,7 +971,7 @@ struct ExpOpSPIRVConversionApprox
   }
 };
 
-bool specialOpSupported(std::map<std::string, int> computeCapability, std::string dtype){
+bool checkOpSupported(std::map<std::string, int> computeCapability, std::string dtype){
   // TODO: For now, we define the computeCapability with {dtype, int}.
   // If it is >= 1, then the special op is supported.
   if (computeCapability.find(dtype) != computeCapability.end() &&
@@ -1038,15 +1038,15 @@ void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeCon
 
   patterns.add<BitcastOpSPIRVConversion>(typeConverter, context, benefit);
 
-  patterns.add<FDivOpSPIRVConversion>(typeConverter, context, benefit, specialOpSupported(computeCapability, "bf16"));
-  patterns.add<FSubOpSPIRVConversion>(typeConverter, context, benefit, specialOpSupported(computeCapability, "bf16"));
-  patterns.add<FAddOpSPIRVConversion>(typeConverter, context, benefit, specialOpSupported(computeCapability, "bf16"));
-  patterns.add<FMulOpSPIRVConversion>(typeConverter, context, benefit, specialOpSupported(computeCapability, "bf16"));
+  patterns.add<FDivOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
+  patterns.add<FSubOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
+  patterns.add<FAddOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
+  patterns.add<FMulOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
 
-  patterns.add<ExtFOpSPIRVConversion>(typeConverter, context, benefit, specialOpSupported(computeCapability, "bf16"));
-  patterns.add<TruncFOpSPIRVConversion>(typeConverter, context, benefit, specialOpSupported(computeCapability, "bf16"));
-  patterns.add<FPToSIOpSPIRVConversion>(typeConverter, context, benefit, specialOpSupported(computeCapability, "bf16"));
-  patterns.add<SIToFPOpSPIRVConversion>(typeConverter, context, benefit, specialOpSupported(computeCapability, "bf16"));
+  patterns.add<ExtFOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
+  patterns.add<TruncFOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
+  patterns.add<FPToSIOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
+  patterns.add<SIToFPOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
 
   patterns.add<FpToFpOpSPIRVConversion>(typeConverter, context, benefit);
 
