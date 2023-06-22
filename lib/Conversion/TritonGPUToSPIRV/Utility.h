@@ -48,6 +48,8 @@
   rewriter.create<spirv::VectorExtractDynamicOp>(loc, __VA_ARGS__)
 #define load(...) rewriter.create<spirv::LoadOp>(loc, __VA_ARGS__)
 #define store(val, ptr) rewriter.create<spirv::StoreOp>(loc, ptr, val)
+#define fcmp_oeq(lhs, rhs)                                                     \
+  rewriter.create<spirv::FOrdEqualOp>(loc, lhs, rhs)
 #define fcmp_ogt(lhs, rhs)                                                     \
   rewriter.create<spirv::FOrdGreaterThanOp>(loc, lhs, rhs)
 #define fcmp_olt(lhs, rhs)                                                     \
@@ -79,6 +81,16 @@
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define undef(...) rewriter.create<spirv::UndefOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<spirv::FunctionCallOp>(loc, __VA_ARGS__)
+// Shift left logical
+#define shl(lhs, rhs) rewriter.create<spirv::ShiftLeftLogicalOp>(loc, lhs, rhs)
+// Shift right logical. The Most-significant bits are filled with 0
+#define lshr(lhs, rhs) rewriter.create<spirv::ShiftRightLogicalOp>(loc, lhs, rhs)
+// Shift right arithmetic. The Most-significant bits are filled with sign bit
+#define ashr(lhs, rhs) rewriter.create<spirv::ShiftRightArithmeticOp>(loc, lhs, rhs)
+// SPIRV lower TruncIOp with the SConvertOp logic
+#define itrunc(...) rewriter.create<spirv::SConvertOp>(loc, __VA_ARGS__)
+// SPIRV lower TruncFOp with the FConvertOp logic
+#define ftrunc(...) rewriter.create<spirv::FConvertOp>(loc, __VA_ARGS__)
 
 // Types
 #define i64_ty rewriter.getIntegerType(64)

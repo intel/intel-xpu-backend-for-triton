@@ -452,7 +452,7 @@ public:
     // ElementwiseOp
     populateElementwiseOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
                                         axisInfoAnalysis, &allocation, nullptr,
-            /*benefit=*/10);
+            /*benefit=*/10, computeCapability);
     // LoadStoreOp
     populateLoadStoreOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
                                       axisInfoAnalysis, allocation,
