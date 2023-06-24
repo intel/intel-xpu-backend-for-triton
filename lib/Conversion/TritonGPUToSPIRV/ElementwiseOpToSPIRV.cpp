@@ -431,12 +431,10 @@ private:
             "libname", StringAttr::get(v.getContext(),libName));
     attributes.set(
             "libpath", StringAttr::get(v.getContext(), ""));
+    auto linkageTypeAttr = b.getAttr<::mlir::spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
+    auto linkageAttr = b.getAttr<::mlir::spirv::LinkageAttributesAttr>(funcName.lower(), linkageTypeAttr);
     attributes.set(
-            "linkage_attributes", ArrayAttr::get(v.getContext(),
-                                                 {
-                                                         StringAttr::get(v.getContext(), funcName),
-                                                         StringAttr::get(v.getContext(), "Import"),
-                                                 }));
+            "linkage_attributes", linkageAttr);
     auto ret = b.create<spirv::FuncOp>(v.getLoc(), funcName, funcType, spirv::FunctionControl::Inline, attributes);
     return ret;
   }
@@ -685,12 +683,9 @@ private:
         "libname", StringAttr::get(op->getContext(), op.getLibname()));
     ret.getOperation()->setAttr(
         "libpath", StringAttr::get(op->getContext(), op.getLibpath()));
-    ret.getOperation()->setAttr(
-            "linkage_attributes", ArrayAttr::get(op->getContext(),
-                                                 {
-                                                   StringAttr::get(op->getContext(), funcName),
-                                                   StringAttr::get(op->getContext(), "Import"),
-                                                 }));
+    auto linkageTypeAttr = b.getAttr<::mlir::spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
+    auto linkageAttr = b.getAttr<::mlir::spirv::LinkageAttributesAttr>(funcName.lower(), linkageTypeAttr);
+    ret.getOperation()->setAttr("linkage_attributes", linkageAttr);
     return ret;
   }
 };
