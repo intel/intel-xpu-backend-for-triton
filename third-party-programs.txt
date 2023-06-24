@@ -1,23 +1,32 @@
 Intel® XPU Backend for Triton Third Party Programs File
- 
-This file contains the list of third party software ("third party programs")
-contained in the Intel software and their required notices and/or license
-terms. This third party software, even if included with the distribution of
-the Intel software, may be governed by separate license terms, including
-without limitation, third party license terms, other Intel software license
-terms, and open source software license terms. These separate license terms
-govern your use of the third party programs as set forth in in the
-"THIRD-PARTY-PROGRAMS" file.
 
-Third party programs and their corresponding required notices and/or license terms are listed
-below.
+This file contains the list of third party software ("third party programs")
+contained in the Intel software and their required notices and/or license terms.
+This third party software, even if included with the distribution of the Intel
+software, may be governed by separate license terms, including without
+limitation, third party license terms, other Intel software license terms, and
+open source software license terms. These separate license terms govern your use
+of the third party programs as set forth in the "third-party-programs.txt" or
+other similarly-named text file.
+
+Third party programs and their corresponding required notices and/or license
+terms are listed below.
 
 -------------------------------------------------------------
-1. Intel® Extensions for MLIR
+
+1. Intel® oneAPI DPC++ Compiler (Math Library component)
+   Copyright Intel Corporation
+
+   Intel® Extension for MLIR
    Copyright Intel Corporation
 
    llvm
 
+
+
+==============================================================================
+The LLVM Project is under the Apache License v2.0 with LLVM Exceptions:
+==============================================================================
 
                                  Apache License
                            Version 2.0, January 2004
@@ -293,4 +302,3 @@ CONTRIBUTORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS WITH THE
 SOFTWARE.
-

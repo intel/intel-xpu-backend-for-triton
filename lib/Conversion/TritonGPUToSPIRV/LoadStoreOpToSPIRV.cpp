@@ -488,13 +488,10 @@ struct AtomicRMWOpSPIRVConversion
                      : op.getResult().getType();
     const size_t valueElemNbits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
-    // vec = 1, numElements = 1 for scalar
-    auto vec = getVectorSize(ptr);
     int numElems = 1;
     // tensor
     if (tensorTy) {
       auto valTy = val.getType().cast<RankedTensorType>();
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
       // mask
       numElems = tensorTy.getNumElements();
     }
@@ -503,18 +500,9 @@ struct AtomicRMWOpSPIRVConversion
     mask = logic_and(mask,
                 icmp_ult(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
 
-    auto vecTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
-    for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value rmwVal = undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        if (vec != 1) {
-          rmwVal = insert_element(vecTy, rmwVal, valElements[i + ii], i32_val(ii));
-        } else {
-          rmwVal = valElements[i + ii];
-        }
-      }
-
+    for (size_t i = 0; i < elemsPerThread; i += 1) {
+      Value rmwVal = valElements[i];
       Value rmwPtr = ptrElements[i];
       Value rmwMask = spirvMask ? logic_and(mask, maskElements[i]) : mask;
       if (!tensorTy) {
@@ -525,11 +513,11 @@ struct AtomicRMWOpSPIRVConversion
       auto *preheader = rewriter.getInsertionBlock();
       auto opPosition = rewriter.getInsertionPoint();
       auto *tailblock = rewriter.splitBlock(preheader, opPosition);
-      tailblock->addArgument(vecTy, loc);
+      tailblock->addArgument(valueElemTy, loc);
       auto *condblock = rewriter.createBlock(tailblock);
 
       // Test the mask
-      auto retType = vec == 1 ? valueElemTy : vecTy;
+      auto retType = valueElemTy;
       rewriter.setInsertionPoint(preheader, preheader->end());
       Value other = undef(retType);
       rewriter.create<mlir::cf::CondBranchOp>(loc, rmwMask, condblock, tailblock, ValueRange{other});
@@ -574,10 +562,7 @@ struct AtomicRMWOpSPIRVConversion
 
       ret = *tailblock->args_begin();
       if (tensorTy) {
-        for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-                  vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
-        }
+          resultVals[i] = ret;
       } else {
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, spirv::StorageClass::Workgroup));
@@ -793,38 +778,57 @@ struct InsertSliceAsyncOpSPIRVConversion
       auto bitWidth = std::min<unsigned>(maxBitWidth, vecBitWidth);
       auto numWords = vecBitWidth / bitWidth;
       auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
-
-      // Tune CG and CA here.
       auto byteWidth = bitWidth / 8;
-      CacheModifier srcCacheModifier =
-          byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
-      auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
+
+      if (spirvMask) {
+        Value maskVal = maskElems[elemIdx];
+
+        // Create block structure for the masked memory copy.
+        auto *preheader = rewriter.getInsertionBlock();
+        auto opPosition = rewriter.getInsertionPoint();
+        auto *tailblock = rewriter.splitBlock(preheader, opPosition);
+        auto *condblock = rewriter.createBlock(tailblock);
+
+        // Test the mask
+        rewriter.setInsertionPoint(preheader, preheader->end());
+        rewriter.create<mlir::cf::CondBranchOp>(loc, maskVal, condblock, tailblock);
+
+        // Do the memory copy block
+        rewriter.setInsertionPoint(condblock, condblock->end());
+        rewriter.create<mlir::cf::BranchOp>(loc, tailblock);
+
+        // The memory copy insert position
+        rewriter.setInsertionPoint(condblock, condblock->begin());
+      }
+
+      Type spirvElemTy;
+      constexpr unsigned opaqueElemBitwidth = 32;
+      if (bitWidth > opaqueElemBitwidth) {
+        spirvElemTy = VectorType::get(ceil<unsigned>(bitWidth, opaqueElemBitwidth), IntegerType::get(getContext(), opaqueElemBitwidth));
+      } else {
+        spirvElemTy = IntegerType::get(getContext(), bitWidth);
+      }
 
       Value basePtr = sharedPtrs[elemIdx];
+      spirv::PointerType spirvBasePtrType = spirv::PointerType::get(spirvElemTy,
+                                                                spirv::StorageClass::Workgroup);
+      basePtr = bitcast(basePtr, spirvBasePtrType);
       for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
-        llvm::report_fatal_error("SPIRV No async load yet");
-//        PTXBuilder ptxBuilder;
-//        auto wordElemIdx = wordIdx * numWordElems;
-//        auto &copyAsyncOp =
-//                *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-//        auto *dstOperand =
-//                ptxBuilder.newAddrOperand(basePtr, "r", wordElemIdx * resByteWidth);
-//        auto *srcOperand =
-//                ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
-//        auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
-//        auto *srcSize = copySize;
-//        if (op.getMask()) {
-//          // We don't use predicate in this case, setting src-size to 0
-//          // if there's any mask. cp.async will automatically fill the
-//          // remaining slots with 0 if cp-size > src-size.
-//          // XXX(Keren): Always assume other = 0 for now.
-//          auto selectOp = select(maskElems[elemIdx + wordElemIdx],
-//                                 i32_val(byteWidth), i32_val(0));
-//          srcSize = ptxBuilder.newOperand(selectOp, "r");
-//        }
-//        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
-//        ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
+        Value spirvDestPtr = gep(spirvBasePtrType, basePtr, i32_val(wordIdx));
+
+        auto wordElemIdx = wordIdx * numWordElems;
+        auto srcPtr = srcElems[elemIdx + wordElemIdx];
+        spirv::PointerType srcPtrType = srcPtr.getType().dyn_cast<spirv::PointerType>();
+        spirv::PointerType spirvSrcPtrType = spirv::PointerType::get(spirvElemTy,
+                                                                     srcPtrType.getStorageClass());
+        Value spirvSrcPtr = bitcast( srcElems[elemIdx + wordElemIdx], spirvSrcPtrType);
+
+        rewriter.create<spirv::CopyMemoryOp>(op.getLoc(), spirvDestPtr, spirvSrcPtr,
+                                             /*memory_access=*/mlir::spirv::MemoryAccessAttr(),
+                                             /*alignment=*/mlir::IntegerAttr(),
+                                             /*source_memory_access=*/mlir::spirv::MemoryAccessAttr(),
+                                             /*source_alignment=*/::mlir::IntegerAttr());
       }
     }
 

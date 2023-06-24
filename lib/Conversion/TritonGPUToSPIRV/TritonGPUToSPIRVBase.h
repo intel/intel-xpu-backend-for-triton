@@ -78,29 +78,41 @@ protected:
     }
 
     auto fnType = funcOp.getFunctionType();
-    if (fnType.getNumResults() > 1) {
-      funcOp->emitError()
-              << "Conversion to SPIRV FuncOp doesn't more than one return result";
-      return nullptr;
-    }
-
     TypeConverter::SignatureConversion result(fnType.getNumInputs());
     for (const auto &argType : enumerate(fnType.getInputs())) {
       auto convertedType = getTypeConverter()->convertType(argType.value());
-      if (!convertedType)
+      if (!convertedType) {
+        funcOp->emitError()
+            << "Conversion to SPIRV FuncOp meet unsupported type.";
         return nullptr;
+      }
       result.addInputs(argType.index(), convertedType);
     }
 
-    Type resultType;
-    if (fnType.getNumResults() == 1) {
-      resultType = getTypeConverter()->convertType(fnType.getResult(0));
-      if (!resultType)
-        return nullptr;
+    // Pack the result types into a struct.
+    Type packedResultType;
+    unsigned numResults = funcOp.getNumResults();
+    if (numResults != 0) {
+      auto resultTypes = llvm::to_vector<4>(funcOp.getResultTypes());
+      if (numResults == 1) {
+        packedResultType = getTypeConverter()->convertType(resultTypes.front());
+      } else {
+        SmallVector<Type> convertedTypes;
+        for (auto t : resultTypes) {
+          auto converted = getTypeConverter()->convertType(t);
+          if (!converted) {
+            funcOp->emitError()
+                << "Conversion to SPIRV FuncOp meet unsupported type.";
+            return nullptr;
+          }
+          convertedTypes.push_back(converted);
+        }
+        packedResultType = spirv::StructType::get(convertedTypes);
+      }
     }
 
     auto spirvType = rewriter.getFunctionType(result.getConvertedTypes(),
-                                              resultType ? TypeRange(resultType)
+                                              packedResultType ? TypeRange(packedResultType)
                                                            : TypeRange());
 
     // Propagate argument/result attributes to all converted arguments/result

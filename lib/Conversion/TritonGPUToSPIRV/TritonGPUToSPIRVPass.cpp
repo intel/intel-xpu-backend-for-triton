@@ -59,23 +59,66 @@ public:
   }
 };
 
-struct ReturnOpConversion : public OpConversionPattern<func::ReturnOp> {
-  using OpConversionPattern<func::ReturnOp>::OpConversionPattern;
+struct ReturnOpConversion : public OpConversionPattern<triton::ReturnOp> {
+  using OpConversionPattern<triton::ReturnOp>::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(func::ReturnOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::ReturnOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    unsigned numArguments = op.getNumOperands();
+    auto funcOp = op->getParentOfType<spirv::FuncOp>();
+    if (funcOp->hasAttr(spirv::getEntryPointABIAttrName())) {
+      // A GPU kernel
+      if (op.getNumOperands() > 0) {
+        return rewriter.notifyMatchFailure(
+            op, "Kernel functions do not support return with operands");
+      }
+      rewriter.replaceOpWithNewOp<spirv::ReturnOp>(op, TypeRange(), ValueRange(),
+                                                  op->getAttrs());
+    } else {
+      // A device function
+      Operation* newOp;
+      if (adaptor.getOperands().size() < 2) {
+        // Single or no return value.
+        Type resultType = nullptr;
+        if (adaptor.getOperands().size() == 1) {
+          resultType = funcOp.getResultTypes().front();
+          newOp =
+              rewriter.create<spirv::ReturnValueOp>(op.getLoc(), TypeRange(), adaptor.getOperands());
+        } else {
+          newOp =
+              rewriter.create<spirv::ReturnOp>(op.getLoc(), TypeRange() );
+        };
+      } else {
+        // Pack the result types into a struct.
+        Type packedResultsTy = nullptr;
+        unsigned numResults = funcOp.getNumResults();
+        auto resultTypes = llvm::to_vector<4>(funcOp.getResultTypes());
 
-    // Currently, Triton kernel function always return nothing.
-    // TODO(Superjomn) add support for non-inline device function
-    if (numArguments > 0) {
-      return rewriter.notifyMatchFailure(
-          op, "Only kernel function with nothing returned is supported.");
+        if (numResults == 1) {
+          packedResultsTy = getTypeConverter()->convertType(resultTypes.front());
+        } else {
+          SmallVector<Type> convertedTypes;
+          for (auto t : resultTypes) {
+            auto converted = getTypeConverter()->convertType(t);
+            if (!converted)
+              return failure();
+            convertedTypes.push_back(converted);
+          }
+
+          packedResultsTy = spirv::StructType::get(convertedTypes);
+        }
+        Value packedResults =
+            rewriter.create<spirv::UndefOp>(op.getLoc(), packedResultsTy);
+        auto loc = op.getLoc();
+        for (auto it : llvm::enumerate(adaptor.getOperands())) {
+          packedResults = insert_val(packedResultsTy, it.value(), packedResults,
+                                     rewriter.getI32ArrayAttr(it.index()));
+        }
+        newOp = rewriter.create<spirv::ReturnValueOp>(op.getLoc(), TypeRange(), packedResults);
+      }
+      newOp->setAttrs(op->getAttrs());
+      rewriter.replaceOp(op, newOp->getResults());
     }
-
-    rewriter.replaceOpWithNewOp<LLVM::ReturnOp>(op, TypeRange(), ValueRange(),
-                                                op->getAttrs());
     return success();
   }
 };
@@ -86,7 +129,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
                    PatternBenefit benefit)
       : FuncOpConversionBase(converter, context, benefit), allocation(allocation),
       numWarps(numWarps) {}
-#if 0
+
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
     // Push back a variable that indicates the current stack pointer of shared
@@ -117,7 +160,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
                                 amendedFuncOp.end());
     return amendedFuncOp;
   }
-#endif
 
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
@@ -127,8 +169,8 @@ struct FuncOpConversion : public FuncOpConversionBase {
       return failure();
 
     auto amendedFuncOp = funcOp;
-//    if (!allocation.isRoot(funcOp))
-//      amendedFuncOp = amendFuncOp(funcOp, rewriter);
+    if (!allocation.isRoot(funcOp))
+      amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
     auto newFuncOp = convertFuncOpToSPIRVFuncOp(amendedFuncOp, rewriter);
     if (!newFuncOp) {
@@ -139,17 +181,17 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
     if (allocation.isRoot(funcOp)) {
       // Set an attribute to indicate this function is a kernel entry.
+      //    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
+      //    // for `nvvm.annotation` metadata.
+      //    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
       newFuncOp->setAttr(spirv::getEntryPointABIAttrName(),
                          spirv::EntryPointABIAttr::get(getContext(), nullptr, std::nullopt));
     } else {
       // The noinline function control will be used by the SPIRV codegen to prevent
       // inlining.
       newFuncOp.setFunctionControl(spirv::FunctionControl::DontInline);
-//      rewriter.eraseOp(amendedFuncOp);
+      rewriter.eraseOp(amendedFuncOp);
     }
-//    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
-//    // for `nvvm.annotation` metadata.
-//    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
 
@@ -158,6 +200,116 @@ struct FuncOpConversion : public FuncOpConversionBase {
   }
 
 private:
+  int numWarps{0};
+  ModuleAllocation &allocation;
+};
+
+// CallOpInterfaceLowering is adapted from
+// https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L485
+struct CallOpConversion : public OpConversionPattern<triton::CallOp> {
+  CallOpConversion(SPIRVTypeConverter &converter, MLIRContext *context, int numWarps,
+                   ModuleAllocation &allocation, PatternBenefit benefit)
+      : OpConversionPattern<triton::CallOp>(converter, context, benefit),
+        numWarps(numWarps), allocation(allocation) {}
+
+  LogicalResult
+  matchAndRewrite(triton::CallOp callOp,
+                  typename triton::CallOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto promotedOperands = promoteOperands(callOp, adaptor, rewriter);
+    auto newCallOp =
+        convertCallOpToSPIRVCallOp(callOp, promotedOperands, rewriter);
+    if (!newCallOp)
+      return failure();
+    allocation.mapCallOp(callOp, newCallOp);
+    auto results = getCallOpResults(callOp, newCallOp, rewriter);
+    rewriter.replaceOp(callOp, results);
+    return success();
+  }
+
+private:
+  SmallVector<Value, 4>
+  promoteOperands(triton::CallOp callOp,
+                  typename triton::CallOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const {
+    // Get the last argument of the caller, which is the current stack pointer
+    // of shared memory and append it to the operands of the callOp.
+    auto loc = callOp.getLoc();
+    auto caller = callOp->getParentOfType<FunctionOpInterface>();
+    auto base = allocation.getFunctionSharedMemoryBase(caller);
+    auto *funcAllocation = allocation.getFuncData(caller);
+    auto bufferId = funcAllocation->getBufferId(callOp);
+    auto offset = funcAllocation->getOffset(bufferId);
+    auto ptrTy = spirv::PointerType::get(
+        this->getTypeConverter()->convertType(rewriter.getI8Type()),
+        spirv::StorageClass::Workgroup);
+    if (!base) {
+      base = rewriter.create<spirv::UndefOp>(callOp.getLoc(), ptrTy);
+    }
+    auto offsetValue = gep(ptrTy, base, i32_val(offset));
+    SmallVector<Value, 4> promotedOperands;
+    auto opOperands = callOp->getOpOperands();
+    auto spirvOperands = adaptor.getOperands();
+    for (auto it : llvm::zip(opOperands, adaptor.getOperands())) {
+      auto& operand = std::get<0>(it);
+      auto& spirvOperand = std::get<1>(it);
+      promotedOperands.push_back(spirvOperand);
+    }
+    promotedOperands.push_back(offsetValue);
+    return promotedOperands;
+  }
+
+  spirv::FunctionCallOp
+  convertCallOpToSPIRVCallOp(triton::CallOp callOp,
+                            ArrayRef<Value> promotedOperands,
+                            ConversionPatternRewriter &rewriter) const {
+    // Pack the result types into a struct.
+    Type packedResult = nullptr;
+    unsigned numResults = callOp.getNumResults();
+    auto resultTypes = llvm::to_vector<4>(callOp.getResultTypes());
+
+    if (numResults != 0) {
+      if (numResults == 1) {
+        packedResult = getTypeConverter()->convertType(resultTypes.front());
+      } else {
+        SmallVector<Type> convertedTypes;
+        for (auto t : resultTypes) {
+          auto converted = getTypeConverter()->convertType(t);
+          if (!converted)
+            return nullptr;
+          convertedTypes.push_back(converted);
+        }
+
+        packedResult = spirv::StructType::get(convertedTypes);
+      }
+    }
+
+    auto newCallOp = rewriter.create<spirv::FunctionCallOp>(
+        callOp.getLoc(), packedResult ? TypeRange(packedResult) : TypeRange(),
+        promotedOperands, callOp->getAttrs());
+    return newCallOp;
+  }
+
+  SmallVector<Value>
+  getCallOpResults(triton::CallOp callOp, spirv::FunctionCallOp newCallOp,
+                   ConversionPatternRewriter &rewriter) const {
+    auto numResults = callOp.getNumResults();
+    SmallVector<Value> results;
+    if (numResults < 2) {
+      // If < 2 results, packing did not do anything and we can just return.
+      results.append(newCallOp.result_begin(), newCallOp.result_end());
+    } else {
+      // Otherwise, it had been converted to an operation producing a structure.
+      // Extract individual results from the structure and return them as list.
+      results.reserve(numResults);
+      for (unsigned i = 0; i < numResults; ++i) {
+        results.push_back(rewriter.create<spirv::CompositeExtractOp>(
+            callOp.getLoc(), newCallOp->getResult(0), i));
+      }
+    }
+    return results;
+  }
+
   int numWarps{0};
   ModuleAllocation &allocation;
 };
@@ -232,30 +384,12 @@ public:
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-    // Step 1: Decompose unoptimized layout conversions to use shared memory
-    // Step 2: Decompose insert_slice_async to use load + insert_slice for
-    //   pre-Ampere architectures or unsupported vectorized load sizes
-    // Step 3: Allocate shared memories and insert barriers
-    // Step 4: Convert SCF to CFG
-    // Step 5: Get axis and shared memory info
-    // Step 6: Convert FuncOp to spirv::FuncOp via partial conversion
-    // Step 7: Convert the rest of ops via partial conversion
-    //
-    // The reason for putting step 3 before step 4 is that the membar
-    // analysis currently only supports SCF but not CFG. The reason for a
-    // separation between 5/7 is that, step 6 is out of the scope of Dialect
-    // Conversion, thus we need to make sure the smem is not revised during the
-    // conversion of step 7.
-
-    // Step 1
+    // Preprocess
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp);
     decomposeBlockedToDotOperand(mod);
+    decomposeInsertSliceAsyncOp(mod);
 
-    // Step 2
-    if (failed(decomposeInsertSliceAsyncOp(mod)))
-      return signalPassFailure();
-
-    // Step 3
+    // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
     ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
@@ -271,31 +405,38 @@ public:
             applyPartialConversion(mod, scf_target, std::move(scf_patterns))))
       return signalPassFailure();
 
-    // Step 5 - get axis and shared memory info
-    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
-    mod->setAttr("triton_gpu.shared",
-                 mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
-                                        allocation.getSharedMemorySize()));
-
-    // Step 6
+    // Lower functions
     RewritePatternSet func_patterns(context);
     func_patterns.add<FuncOpConversion>(spirvTypeConverter, context, numWarps, allocation,
                                         1 /*benefit*/);
     if (failed(
             applyPartialConversion(mod, funcTarget, std::move(func_patterns))))
       return signalPassFailure();
-
+    // initSharedMemory is run before the conversion of call and ret ops,
+    // because the call op has to know the shared memory base address of each
+    // function
     initSharedMemory(allocation, spirvTypeConverter);
 
-    // Step 7 - rewrite rest of ops
-    // We set a higher benefit here to ensure triton's patterns runs before
-    // arith patterns for some encoding not supported by the community
-    // patterns.
+    // Convert call and ret ops
+    RewritePatternSet funcPatterns(context);
+    funcPatterns.add<CallOpConversion>(spirvTypeConverter, context, numWarps, allocation,
+                                       /*benefit=*/1);
+    funcPatterns.add<ReturnOpConversion>(spirvTypeConverter, context, /*benefit=*/1);
+    if (failed(
+            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+      return signalPassFailure();
+
+    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    // Rewrite ops
+    RewritePatternSet patterns(context);
+    // TritonGPU lowering patterns
     OpBuilder::InsertPoint indexInsertPoint;
     ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo indexCacheInfo{
-            &baseIndexCache, &indexCache, &indexInsertPoint};
-
-    RewritePatternSet patterns(context);
+        &baseIndexCache, &indexCache, &indexInsertPoint};
+    // TODO: enable index cache if there are multiple functions
+    if (axisInfoAnalysis.getNumFunctions() > 1) {
+      indexCacheInfo = {nullptr, nullptr, nullptr};
+    }
     // Normal conversions
     populateTritonGPUToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
                                      axisInfoAnalysis, allocation,
@@ -310,7 +451,7 @@ public:
             /*benefit=*/10);
     // ElementwiseOp
     populateElementwiseOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
-                                        axisInfoAnalysis, &allocation, smem,
+                                        axisInfoAnalysis, &allocation, nullptr,
             /*benefit=*/10);
     // LoadStoreOp
     populateLoadStoreOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
@@ -322,7 +463,7 @@ public:
                                    indexCacheInfo, /*benefit=*/10);
     // ViewOp
     populateViewOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
-                                 axisInfoAnalysis, &allocation, smem,
+                                 axisInfoAnalysis, &allocation, nullptr,
             /*benefit=*/10);
 
     // Add arith/math's patterns to help convert scalar expression to SPIRV.
@@ -341,8 +482,6 @@ public:
   }
 
 private:
-  Value smem;
-
   using IndexCacheKeyT = std::pair<Attribute, RankedTensorType>;
   DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
       baseIndexCache;
@@ -359,12 +498,20 @@ private:
     auto loc = mod.getLoc();
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
     auto shareMemSize = allocation.getSharedMemorySize();
-    if (shareMemSize)
     mod.walk([&](FunctionOpInterface funcOp) {
-      auto ptrTy = spirv::PointerType::get(typeConverter.convertType(b.getI8Type()),
-                                           spirv::StorageClass::Workgroup);
-      funcOp.insertArgument(funcOp.getNumArguments(), ptrTy, {}, funcOp.getLoc());
-      Value funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
+      Value funcSmem;
+      if (allocation.isRoot(funcOp)) {
+        if (shareMemSize) {
+          auto ptrTy =
+              spirv::PointerType::get(typeConverter.convertType(b.getI8Type()),
+                                      spirv::StorageClass::Workgroup);
+          funcOp.insertArgument(funcOp.getNumArguments(), ptrTy, {},
+                                funcOp.getLoc());
+          funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
+        }
+      } else {
+        funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
+      }
       allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
     });
     mod->setAttr("triton_gpu.shared",
@@ -372,7 +519,8 @@ private:
                                         allocation.getSharedMemorySize()));
   }
 
-  void decomposeMmaToDotOperand(ModuleOp mod, int numWarps, int threadsPerWarp) const {
+  void decomposeMmaToDotOperand(ModuleOp mod, int numWarps,
+                                int threadsPerWarp) const {
     // Replace `mma -> dot_op` with `mma -> blocked -> dot_op`
     // unless certain conditions are met
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
@@ -426,7 +574,7 @@ private:
     });
   }
 
-  LogicalResult decomposeInsertSliceAsyncOp(ModuleOp mod) const {
+  void decomposeInsertSliceAsyncOp(ModuleOp mod) const {
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     // TODO(Keren): This is a hacky knob that may cause performance regression
     // when decomposition has been performed. We should remove this knob once we
@@ -454,6 +602,7 @@ private:
       // Get the vectorized load size
       auto src = insertSliceAsyncOp.getSrc();
       auto dst = insertSliceAsyncOp.getDst();
+      auto mask = insertSliceAsyncOp.getMask();
       auto srcTy = src.getType().cast<RankedTensorType>();
       auto dstTy = dst.getType().cast<RankedTensorType>();
       auto srcBlocked =
@@ -462,6 +611,9 @@ private:
           dstTy.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
       auto resElemTy = dstTy.getElementType();
       unsigned inVec = axisInfoAnalysis.getPtrContiguity(src);
+      if (mask)
+        inVec =
+            std::min<unsigned>(axisInfoAnalysis.getMaskAlignment(mask), inVec);
       unsigned outVec = resSharedLayout.getVec();
       unsigned minVec = std::min(outVec, inVec);
       auto maxBitWidth =
@@ -525,7 +677,6 @@ private:
         asyncWaitOp.erase();
       }
     });
-    return success();
   }
 };
 
