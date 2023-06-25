@@ -950,6 +950,7 @@ public:
                                             PatternBenefit benefit = 1)
           : OpConversionPattern<SourceOp>(typeConverter, context, benefit),
             ConvertTritonGPUOpToSPIRVPatternBase(typeConverter) {}
+  
 
   explicit ConvertTritonGPUOpToSPIRVPattern(TritonGPUToSPIRVTypeConverter &typeConverter,
                                             MLIRContext *context,

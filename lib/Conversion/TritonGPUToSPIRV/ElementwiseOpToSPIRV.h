@@ -12,6 +12,6 @@ void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeCon
                                           int numWarps,
                                           ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                           ModuleAllocation *allocation,
-                                          Value smem, PatternBenefit benefit);
+                                          Value smem, PatternBenefit benefit, std::map<std::string, int> &computeCapability);
 
 #endif
