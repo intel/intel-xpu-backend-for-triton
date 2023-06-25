@@ -781,27 +781,6 @@ struct InsertSliceAsyncOpSPIRVConversion
       auto byteWidth = bitWidth / 8;
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
 
-      if (spirvMask) {
-        Value maskVal = maskElems[elemIdx];
-
-        // Create block structure for the masked memory copy.
-        auto *preheader = rewriter.getInsertionBlock();
-        auto opPosition = rewriter.getInsertionPoint();
-        auto *tailblock = rewriter.splitBlock(preheader, opPosition);
-        auto *condblock = rewriter.createBlock(tailblock);
-
-        // Test the mask
-        rewriter.setInsertionPoint(preheader, preheader->end());
-        rewriter.create<mlir::cf::CondBranchOp>(loc, maskVal, condblock, tailblock);
-
-        // Do the memory copy block
-        rewriter.setInsertionPoint(condblock, condblock->end());
-        rewriter.create<mlir::cf::BranchOp>(loc, tailblock);
-
-        // The memory copy insert position
-        rewriter.setInsertionPoint(condblock, condblock->begin());
-      }
-
       Type spirvElemTy;
       constexpr unsigned opaqueElemBitwidth = 32;
       if (bitWidth > opaqueElemBitwidth) {
@@ -809,6 +788,7 @@ struct InsertSliceAsyncOpSPIRVConversion
       } else {
         spirvElemTy = IntegerType::get(getContext(), bitWidth);
       }
+      size_t nWords = ceil<unsigned>(bitWidth, opaqueElemBitwidth);
 
       Value basePtr = sharedPtrs[elemIdx];
       spirv::PointerType spirvBasePtrType = spirv::PointerType::get(spirvElemTy,
@@ -824,10 +804,50 @@ struct InsertSliceAsyncOpSPIRVConversion
                                                                      srcPtrType.getStorageClass());
         Value spirvSrcPtr = bitcast( srcElems[elemIdx + wordElemIdx], spirvSrcPtrType);
 
+        Value ret;
+        if (spirvMask) {
+          Value maskVal = maskElems[elemIdx];
+
+          Value other_ = undef(spirvElemTy);;
+          for (size_t ii = 0; ii < nWords; ++ii) {
+            if (nWords > 1) {
+              Value v = int_val(opaqueElemBitwidth, 0);
+              other_ = insert_val(spirvElemTy, v, other_, rewriter.getI32ArrayAttr(ii));
+            }
+            else {
+              other_ = int_val(bitWidth, 0);
+            }
+          }
+
+          // Create block structure for the masked memory copy.
+          auto *preheader = rewriter.getInsertionBlock();
+          auto opPosition = rewriter.getInsertionPoint();
+          auto *tailblock = rewriter.splitBlock(preheader, opPosition);
+          tailblock->addArgument(spirvElemTy, loc);
+          auto *condblock = rewriter.createBlock(tailblock);
+
+          // Test the mask
+          rewriter.setInsertionPoint(preheader, preheader->end());
+          rewriter.create<mlir::cf::CondBranchOp>(loc, maskVal, condblock, tailblock, ValueRange{other_});
+
+          // Do the memory load block
+          rewriter.setInsertionPoint(condblock, condblock->end());
+          Value val = rewriter.create<spirv::LoadOp>(op.getLoc(), spirvSrcPtr);
+          rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{val});
+
+          // The memory copy insert position
+          rewriter.setInsertionPoint(tailblock, tailblock->begin());
+
+          ret = *tailblock->args_begin();
+        } else {
+          ret = rewriter.create<spirv::LoadOp>(op.getLoc(), spirvSrcPtr);
+        }
+
+        // Extract and store return values
+        rewriter.create<spirv::StoreOp>(op.getLoc(), spirvDestPtr, ret);
+
         // the cp.async is treated as a weak memory operation in the CUDA memory consistency model.
         // So no explicit synchronization required here.
-        Value val = rewriter.create<spirv::LoadOp>(op.getLoc(), spirvSrcPtr);
-        rewriter.create<spirv::StoreOp>(op.getLoc(), spirvDestPtr, val);
       }
     }
 
