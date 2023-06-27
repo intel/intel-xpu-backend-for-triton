@@ -49,7 +49,6 @@ jobs:
           source ${HOME}/miniconda3/bin/activate triton-preci
           python --version
           pip install setuptools cython numpy wheel scikit-build scipy
-          ln -sf /usr/lib/x86_64-linux-gnu/libstdc++.so.6 ${HOME}/miniconda3/envs/triton-preci/lib/libstdc++.so.6
           pip install psutil cpuid
           bash ${HOME}/triton-preci/env_prepare_ci.sh
           python -c "import torch;import intel_extension_for_pytorch"

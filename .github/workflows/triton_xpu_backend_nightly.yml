@@ -44,7 +44,6 @@ jobs:
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           python --version
           pip install setuptools cython numpy wheel scikit-build scipy
-          ln -sf /usr/lib/x86_64-linux-gnu/libstdc++.so.6 ${HOME}/miniconda3/envs/triton-nightly-test/lib/libstdc++.so.6
           pip install psutil cpuid
           cd ${HOME}/triton-nightly
           bash ${HOME}/triton-nightly/env_prepare_nightly.sh
