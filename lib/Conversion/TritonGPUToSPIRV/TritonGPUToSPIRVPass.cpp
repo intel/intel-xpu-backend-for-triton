@@ -3,10 +3,10 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToSPIRV/ArithToSPIRV.h"
 #include "mlir/Conversion/ControlFlowToSPIRV/ControlFlowToSPIRV.h"
+#include "mlir/Conversion/FuncToSPIRV/FuncToSPIRV.h"
 #include "mlir/Conversion/GPUToSPIRV/GPUToSPIRV.h"
 #include "mlir/Conversion/MathToSPIRV/MathToSPIRV.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
-#include "mlir/Conversion/FuncToSPIRV/FuncToSPIRV.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
@@ -51,8 +51,9 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 
 class TritonSPIRVFunctionConversionTarget : public ConversionTarget {
 public:
-  explicit TritonSPIRVFunctionConversionTarget(MLIRContext &ctx, SPIRVTypeConverter& typeConverter)
-          : ConversionTarget(ctx) {
+  explicit TritonSPIRVFunctionConversionTarget(
+      MLIRContext &ctx, SPIRVTypeConverter &typeConverter)
+      : ConversionTarget(ctx) {
     addLegalDialect<spirv::SPIRVDialect>();
     addIllegalOp<mlir::func::FuncOp>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -72,21 +73,20 @@ struct ReturnOpConversion : public OpConversionPattern<triton::ReturnOp> {
         return rewriter.notifyMatchFailure(
             op, "Kernel functions do not support return with operands");
       }
-      rewriter.replaceOpWithNewOp<spirv::ReturnOp>(op, TypeRange(), ValueRange(),
-                                                  op->getAttrs());
+      rewriter.replaceOpWithNewOp<spirv::ReturnOp>(
+          op, TypeRange(), ValueRange(), op->getAttrs());
     } else {
       // A device function
-      Operation* newOp;
+      Operation *newOp;
       if (adaptor.getOperands().size() < 2) {
         // Single or no return value.
         Type resultType = nullptr;
         if (adaptor.getOperands().size() == 1) {
           resultType = funcOp.getResultTypes().front();
-          newOp =
-              rewriter.create<spirv::ReturnValueOp>(op.getLoc(), TypeRange(), adaptor.getOperands());
+          newOp = rewriter.create<spirv::ReturnValueOp>(
+              op.getLoc(), TypeRange(), adaptor.getOperands());
         } else {
-          newOp =
-              rewriter.create<spirv::ReturnOp>(op.getLoc(), TypeRange() );
+          newOp = rewriter.create<spirv::ReturnOp>(op.getLoc(), TypeRange());
         };
       } else {
         // Pack the result types into a struct.
@@ -95,7 +95,8 @@ struct ReturnOpConversion : public OpConversionPattern<triton::ReturnOp> {
         auto resultTypes = llvm::to_vector<4>(funcOp.getResultTypes());
 
         if (numResults == 1) {
-          packedResultsTy = getTypeConverter()->convertType(resultTypes.front());
+          packedResultsTy =
+              getTypeConverter()->convertType(resultTypes.front());
         } else {
           SmallVector<Type> convertedTypes;
           for (auto t : resultTypes) {
@@ -114,7 +115,8 @@ struct ReturnOpConversion : public OpConversionPattern<triton::ReturnOp> {
           packedResults = insert_val(packedResultsTy, it.value(), packedResults,
                                      rewriter.getI32ArrayAttr(it.index()));
         }
-        newOp = rewriter.create<spirv::ReturnValueOp>(op.getLoc(), TypeRange(), packedResults);
+        newOp = rewriter.create<spirv::ReturnValueOp>(op.getLoc(), TypeRange(),
+                                                      packedResults);
       }
       newOp->setAttrs(op->getAttrs());
       rewriter.replaceOp(op, newOp->getResults());
@@ -124,11 +126,11 @@ struct ReturnOpConversion : public OpConversionPattern<triton::ReturnOp> {
 };
 
 struct FuncOpConversion : public FuncOpConversionBase {
-  FuncOpConversion(SPIRVTypeConverter &converter, MLIRContext *context, int numWarps,
-                   ModuleAllocation &allocation,
+  FuncOpConversion(SPIRVTypeConverter &converter, MLIRContext *context,
+                   int numWarps, ModuleAllocation &allocation,
                    PatternBenefit benefit)
-      : FuncOpConversionBase(converter, context, benefit), allocation(allocation),
-      numWarps(numWarps) {}
+      : FuncOpConversionBase(converter, context, benefit),
+        allocation(allocation), numWarps(numWarps) {}
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
@@ -137,7 +139,8 @@ struct FuncOpConversion : public FuncOpConversionBase {
     auto loc = funcOp.getLoc();
     auto ctx = funcOp->getContext();
     auto ptrTy = spirv::PointerType::get(
-        this->getTypeConverter()->convertType(rewriter.getI8Type()), spirv::StorageClass::Workgroup);
+        this->getTypeConverter()->convertType(rewriter.getI8Type()),
+        spirv::StorageClass::Workgroup);
     // 1. Modify the function type to add the new argument.
     auto funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
@@ -181,14 +184,17 @@ struct FuncOpConversion : public FuncOpConversionBase {
 
     if (allocation.isRoot(funcOp)) {
       // Set an attribute to indicate this function is a kernel entry.
-      //    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
+      //    // Set an attribute for maxntidx, it could be used in latter LLVM
+      //    codegen
       //    // for `nvvm.annotation` metadata.
-      //    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
-      newFuncOp->setAttr(spirv::getEntryPointABIAttrName(),
-                         spirv::EntryPointABIAttr::get(getContext(), nullptr, std::nullopt));
+      //    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 *
+      //    numWarps));
+      newFuncOp->setAttr(
+          spirv::getEntryPointABIAttrName(),
+          spirv::EntryPointABIAttr::get(getContext(), nullptr, std::nullopt));
     } else {
-      // The noinline function control will be used by the SPIRV codegen to prevent
-      // inlining.
+      // The noinline function control will be used by the SPIRV codegen to
+      // prevent inlining.
       newFuncOp.setFunctionControl(spirv::FunctionControl::DontInline);
       rewriter.eraseOp(amendedFuncOp);
     }
@@ -207,8 +213,9 @@ private:
 // CallOpInterfaceLowering is adapted from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L485
 struct CallOpConversion : public OpConversionPattern<triton::CallOp> {
-  CallOpConversion(SPIRVTypeConverter &converter, MLIRContext *context, int numWarps,
-                   ModuleAllocation &allocation, PatternBenefit benefit)
+  CallOpConversion(SPIRVTypeConverter &converter, MLIRContext *context,
+                   int numWarps, ModuleAllocation &allocation,
+                   PatternBenefit benefit)
       : OpConversionPattern<triton::CallOp>(converter, context, benefit),
         numWarps(numWarps), allocation(allocation) {}
 
@@ -251,8 +258,8 @@ private:
     auto opOperands = callOp->getOpOperands();
     auto spirvOperands = adaptor.getOperands();
     for (auto it : llvm::zip(opOperands, adaptor.getOperands())) {
-      auto& operand = std::get<0>(it);
-      auto& spirvOperand = std::get<1>(it);
+      auto &operand = std::get<0>(it);
+      auto &spirvOperand = std::get<1>(it);
       promotedOperands.push_back(spirvOperand);
     }
     promotedOperands.push_back(offsetValue);
@@ -261,8 +268,8 @@ private:
 
   spirv::FunctionCallOp
   convertCallOpToSPIRVCallOp(triton::CallOp callOp,
-                            ArrayRef<Value> promotedOperands,
-                            ConversionPatternRewriter &rewriter) const {
+                             ArrayRef<Value> promotedOperands,
+                             ConversionPatternRewriter &rewriter) const {
     // Pack the result types into a struct.
     Type packedResult = nullptr;
     unsigned numResults = callOp.getNumResults();
@@ -316,11 +323,12 @@ private:
 
 class TritonSPIRVConversionTarget : public ConversionTarget {
 public:
-  explicit TritonSPIRVConversionTarget(MLIRContext &ctx, SPIRVTypeConverter& typeConverter)
-          : ConversionTarget(ctx) {
+  explicit TritonSPIRVConversionTarget(MLIRContext &ctx,
+                                       SPIRVTypeConverter &typeConverter)
+      : ConversionTarget(ctx) {
     addLegalDialect<spirv::SPIRVDialect>();
-//    addIllegalDialect<triton::TritonDialect>();
-//    addIllegalDialect<triton::gpu::TritonGPUDialect>();
+    //    addIllegalDialect<triton::TritonDialect>();
+    //    addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addIllegalDialect<mlir::func::FuncDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -336,7 +344,8 @@ class ConvertTritonGPUToSPIRV
     : public ConvertTritonGPUToSPIRVBase<ConvertTritonGPUToSPIRV> {
 
 public:
-  explicit ConvertTritonGPUToSPIRV(std::map<std::string, int> computeCapability) {
+  explicit ConvertTritonGPUToSPIRV(
+      std::map<std::string, int> computeCapability) {
     this->computeCapability = std::move(computeCapability);
   }
 
@@ -345,32 +354,30 @@ public:
     ModuleOp mod = getOperation();
 
     spirv::Capability caps_opencl[] = {
-            spirv::Capability::Addresses,
-            spirv::Capability::Float16Buffer,
-            spirv::Capability::Int64,
-            spirv::Capability::Int16,
-            spirv::Capability::Int8,
-            spirv::Capability::Kernel,
-            spirv::Capability::Linkage,
-            spirv::Capability::Vector16,
-            spirv::Capability::GenericPointer,
-            spirv::Capability::Groups,
-            spirv::Capability::Float16,
-            spirv::Capability::Float64,
-            spirv::Capability::AtomicFloat32AddEXT,
-            spirv::Capability::ExpectAssumeKHR,
+        spirv::Capability::Addresses,
+        spirv::Capability::Float16Buffer,
+        spirv::Capability::Int64,
+        spirv::Capability::Int16,
+        spirv::Capability::Int8,
+        spirv::Capability::Kernel,
+        spirv::Capability::Linkage,
+        spirv::Capability::Vector16,
+        spirv::Capability::GenericPointer,
+        spirv::Capability::Groups,
+        spirv::Capability::Float16,
+        spirv::Capability::Float64,
+        spirv::Capability::AtomicFloat32AddEXT,
+        spirv::Capability::ExpectAssumeKHR,
     };
     spirv::Extension exts_opencl[] = {
-            spirv::Extension::SPV_EXT_shader_atomic_float_add,
-            spirv::Extension::SPV_KHR_expect_assume};
-    auto triple = spirv::VerCapExtAttr::get(
-            spirv::Version::V_1_4, caps_opencl, exts_opencl, context);
+        spirv::Extension::SPV_EXT_shader_atomic_float_add,
+        spirv::Extension::SPV_KHR_expect_assume};
+    auto triple = spirv::VerCapExtAttr::get(spirv::Version::V_1_4, caps_opencl,
+                                            exts_opencl, context);
     auto targetAttr = spirv::TargetEnvAttr::get(
-            triple, spirv::getDefaultResourceLimits(context),
-            spirv::ClientAPI::OpenCL,
-            spirv::Vendor::Unknown,
-            spirv::DeviceType::Unknown,
-            spirv::TargetEnvAttr::kUnknownDeviceID);
+        triple, spirv::getDefaultResourceLimits(context),
+        spirv::ClientAPI::OpenCL, spirv::Vendor::Unknown,
+        spirv::DeviceType::Unknown, spirv::TargetEnvAttr::kUnknownDeviceID);
 
     mod->setAttr(spirv::getTargetEnvAttrName(), targetAttr);
 
@@ -378,7 +385,8 @@ public:
     // TODO: need confirm
     options.use64bitIndex = true;
     TritonGPUToSPIRVTypeConverter spirvTypeConverter(targetAttr, options);
-    TritonSPIRVFunctionConversionTarget funcTarget(*context, spirvTypeConverter);
+    TritonSPIRVFunctionConversionTarget funcTarget(*context,
+                                                   spirvTypeConverter);
     TritonSPIRVConversionTarget spirvTarget(*context, spirvTypeConverter);
 
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
@@ -399,7 +407,7 @@ public:
     mlir::populateSCFToControlFlowConversionPatterns(scf_patterns);
     mlir::ConversionTarget scf_target(*context);
     scf_target.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
-            scf::WhileOp, scf::ExecuteRegionOp>();
+                            scf::WhileOp, scf::ExecuteRegionOp>();
     scf_target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     if (failed(
             applyPartialConversion(mod, scf_target, std::move(scf_patterns))))
@@ -407,8 +415,8 @@ public:
 
     // Lower functions
     RewritePatternSet func_patterns(context);
-    func_patterns.add<FuncOpConversion>(spirvTypeConverter, context, numWarps, allocation,
-                                        1 /*benefit*/);
+    func_patterns.add<FuncOpConversion>(spirvTypeConverter, context, numWarps,
+                                        allocation, 1 /*benefit*/);
     if (failed(
             applyPartialConversion(mod, funcTarget, std::move(func_patterns))))
       return signalPassFailure();
@@ -419,9 +427,11 @@ public:
 
     // Convert call and ret ops
     RewritePatternSet funcPatterns(context);
-    funcPatterns.add<CallOpConversion>(spirvTypeConverter, context, numWarps, allocation,
+    funcPatterns.add<CallOpConversion>(spirvTypeConverter, context, numWarps,
+                                       allocation,
                                        /*benefit=*/1);
-    funcPatterns.add<ReturnOpConversion>(spirvTypeConverter, context, /*benefit=*/1);
+    funcPatterns.add<ReturnOpConversion>(spirvTypeConverter, context,
+                                         /*benefit=*/1);
     if (failed(
             applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
       return signalPassFailure();
@@ -438,47 +448,48 @@ public:
       indexCacheInfo = {nullptr, nullptr, nullptr};
     }
     // Normal conversions
-    populateTritonGPUToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
-                                     axisInfoAnalysis, allocation,
-                                    indexCacheInfo, /*benefit=*/10);
+    populateTritonGPUToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                     numWarps, axisInfoAnalysis, allocation,
+                                     indexCacheInfo, /*benefit=*/10);
     // ConvertLayoutOp
-    populateConvertLayoutOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
-                                          axisInfoAnalysis, allocation,
-                                          indexCacheInfo, /*benefit=*/10);
+    populateConvertLayoutOpToSPIRVPatterns(
+        spirvTypeConverter, context, patterns, numWarps, axisInfoAnalysis,
+        allocation, indexCacheInfo, /*benefit=*/10);
     // DotOp
-    populateDotOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
-                                axisInfoAnalysis, allocation,
-            /*benefit=*/10);
+    populateDotOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                 numWarps, axisInfoAnalysis, allocation,
+                                 /*benefit=*/10);
     // ElementwiseOp
-    populateElementwiseOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
-                                        axisInfoAnalysis, &allocation, nullptr,
-            /*benefit=*/10, computeCapability);
+    populateElementwiseOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                         numWarps, axisInfoAnalysis,
+                                         &allocation, nullptr,
+                                         /*benefit=*/10, computeCapability);
     // LoadStoreOp
-    populateLoadStoreOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
-                                      axisInfoAnalysis, allocation,
-                                      indexCacheInfo, /*benefit=*/10);
+    populateLoadStoreOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                       numWarps, axisInfoAnalysis, allocation,
+                                       indexCacheInfo, /*benefit=*/10);
     // ReduceOp
-    populateReduceOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
-                                   axisInfoAnalysis, allocation,
-                                   indexCacheInfo, /*benefit=*/10);
+    populateReduceOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                    numWarps, axisInfoAnalysis, allocation,
+                                    indexCacheInfo, /*benefit=*/10);
     // ViewOp
-    populateViewOpToSPIRVPatterns(spirvTypeConverter, context, patterns, numWarps,
-                                 axisInfoAnalysis, &allocation, nullptr,
-            /*benefit=*/10);
+    populateViewOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                  numWarps, axisInfoAnalysis, &allocation,
+                                  nullptr,
+                                  /*benefit=*/10);
 
     // Add arith/math's patterns to help convert scalar expression to SPIRV.
-    mlir::arith::populateArithToSPIRVPatterns(spirvTypeConverter,
-                                                            patterns);
+    mlir::arith::populateArithToSPIRVPatterns(spirvTypeConverter, patterns);
     mlir::populateMathToSPIRVPatterns(spirvTypeConverter, patterns);
     mlir::populateFuncToSPIRVPatterns(spirvTypeConverter, patterns);
     mlir::populateGPUToSPIRVPatterns(spirvTypeConverter, patterns);
     mlir::cf::populateControlFlowToSPIRVPatterns(spirvTypeConverter, patterns);
 
-//    ::llvm::DebugFlag = true;
-//    ::llvm::setCurrentDebugType("dialect-conversion");
+    //    ::llvm::DebugFlag = true;
+    //    ::llvm::setCurrentDebugType("dialect-conversion");
     if (failed(applyPartialConversion(mod, spirvTarget, std::move(patterns))))
       return signalPassFailure();
-//    ::llvm::DebugFlag = false;
+    //    ::llvm::DebugFlag = false;
   }
 
 private:
@@ -624,8 +635,7 @@ private:
 
       // If the load byte width is not eligible or the current compute
       // capability does not support async copy, then we do decompose
-      if (triton::gpu::InsertSliceAsyncOp::getEligibleLoadByteWidth(
-              80)
+      if (triton::gpu::InsertSliceAsyncOp::getEligibleLoadByteWidth(80)
               .contains(byteWidth))
         return;
 
@@ -685,8 +695,8 @@ private:
 namespace mlir {
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToSPIRVPass(std::map<std::string, int> computeCapability) {
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToSPIRVPass(
+    std::map<std::string, int> computeCapability) {
   return std::make_unique<::ConvertTritonGPUToSPIRV>(computeCapability);
 }
 

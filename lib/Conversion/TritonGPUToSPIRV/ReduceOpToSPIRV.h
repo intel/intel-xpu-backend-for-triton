@@ -6,13 +6,11 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-void populateReduceOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                     mlir::MLIRContext *context,
-                                     RewritePatternSet &patterns,
-                                     int numWarps,
-                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                     ModuleAllocation &allocation,
-                                     ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
-                                     PatternBenefit benefit);
+void populateReduceOpToSPIRVPatterns(
+    TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
+    RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
+    ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
+    PatternBenefit benefit);
 
 #endif

@@ -245,7 +245,8 @@ PYBIND11_MODULE(sycl_utils, m) {
         //                  CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH,
         //                  device));
 
-        py::dict properties = py::dict("max_shared_mem"_a = max_shared_mem, "support_fp64"_a = support_fp64);
+        py::dict properties = py::dict("max_shared_mem"_a = max_shared_mem,
+                                       "support_fp64"_a = support_fp64);
         return properties;
         //          return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}",
         //          "max_shared_mem",
