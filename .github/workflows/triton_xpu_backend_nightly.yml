@@ -18,11 +18,7 @@ jobs:
           source ${HOME}/env_triton.sh
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
-
-      - name: Check pre-commit
-        run: |
           python3 -m pip install --upgrade pre-commit
-          python3 -m pre_commit run --all-files
 
       - name: Install Dependency
         run: |
@@ -40,7 +36,7 @@ jobs:
               exit 1
           fi
 
-      - name: Build Triton
+      - name: Check Pre-commit
         run: |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh
@@ -55,7 +51,12 @@ jobs:
           git submodule update --init --recursive --jobs 0
           cd third_party/intel_xpu_backend
           git checkout main && git pull
-          cd ../../python
+          python3 -m pre_commit run --all-files
+
+      - name: Build Triton
+        shell: bash
+        run:  |
+          cd triton/python
           python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
