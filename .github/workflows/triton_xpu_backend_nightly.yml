@@ -20,22 +20,6 @@ jobs:
           conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
           python3 -m pip install --upgrade pre-commit
 
-      - name: Install Dependency
-        run: |
-          python --version
-          source ${HOME}/miniconda3/bin/activate triton-nightly-test
-          python --version
-          pip install setuptools cython numpy wheel scikit-build scipy
-          ln -sf /usr/lib/x86_64-linux-gnu/libstdc++.so.6 ${HOME}/miniconda3/envs/triton-nightly-test/lib/libstdc++.so.6
-          pip install psutil cpuid
-          cd ${HOME}/triton-nightly
-          bash ${HOME}/triton-nightly/env_prepare_nightly.sh
-          python -c "import torch;import intel_extension_for_pytorch"
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-              echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
-              exit 1
-          fi
-
       - name: Check Pre-commit
         run: |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
@@ -53,14 +37,31 @@ jobs:
           git checkout main && git pull
           python3 -m pre_commit run --all-files
 
+      - name: Install Dependency
+        run: |
+          python --version
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          python --version
+          pip install setuptools cython numpy wheel scikit-build scipy
+          ln -sf /usr/lib/x86_64-linux-gnu/libstdc++.so.6 ${HOME}/miniconda3/envs/triton-nightly-test/lib/libstdc++.so.6
+          pip install psutil cpuid
+          cd ${HOME}/triton-nightly
+          bash ${HOME}/triton-nightly/env_prepare_nightly.sh
+          python -c "import torch;import intel_extension_for_pytorch"
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+              echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
+              exit 1
+          fi
+
       - name: Build Triton
         shell: bash
         run:  |
           cd triton/python
           python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
+          python -c "import triton"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-              echo -e "[ERROR] Private-torch BUILD FAIL"
+              echo -e "[ERROR] Triton BUILD FAIL"
               exit 1
           fi
 
