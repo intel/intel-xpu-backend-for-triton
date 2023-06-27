@@ -25,7 +25,6 @@ jobs:
       - name: Check Pre-commit
         shell: bash
         run: |
-          set -ex
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
           pip uninstall -y triton
@@ -45,7 +44,6 @@ jobs:
       - name: Install Dependency
         shell: bash
         run: |
-          set -ex
           python --version
           source ${HOME}/miniconda3/bin/activate triton-preci
           python --version
@@ -74,7 +72,6 @@ jobs:
       - name: Unit Test for triton on PVC
         shell: bash
         run: |
-          set -ex
           echo -e "[ INFO ] Run UT test on Node $(hostname)"
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
