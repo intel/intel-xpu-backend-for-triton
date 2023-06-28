@@ -292,6 +292,19 @@ public:
     return threadId;
   }
 
+  Value getProgramId(ConversionPatternRewriter &rewriter, Location loc, mlir::gpu::Dimension dim = mlir::gpu::Dimension::x) const {
+    auto spirvIndexTy = this->getTypeConverter()->getIndexType();
+    auto cast = rewriter.create<UnrealizedConversionCastOp>(
+        loc, TypeRange{spirvIndexTy},
+        ValueRange{rewriter.create<::mlir::gpu::BlockIdOp>(
+            loc, rewriter.getIndexType(), dim)});
+
+    Value threadId = rewriter.create<::mlir::arith::TruncIOp>(
+        loc, i32_ty, cast.getResult(0)
+    );
+    return threadId;
+  }
+
   // -----------------------------------------------------------------------
   // Shared memory utilities
   // -----------------------------------------------------------------------
