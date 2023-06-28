@@ -291,7 +291,8 @@ public:
     return threadId;
   }
 
-  Value getProgramId(ConversionPatternRewriter &rewriter, Location loc, mlir::gpu::Dimension dim = mlir::gpu::Dimension::x) const {
+  Value getProgramId(ConversionPatternRewriter &rewriter, Location loc,
+                     mlir::gpu::Dimension dim = mlir::gpu::Dimension::x) const {
     auto spirvIndexTy = this->getTypeConverter()->getIndexType();
     auto cast = rewriter.create<UnrealizedConversionCastOp>(
         loc, TypeRange{spirvIndexTy},
@@ -299,8 +300,7 @@ public:
             loc, rewriter.getIndexType(), dim)});
 
     Value threadId = rewriter.create<::mlir::arith::TruncIOp>(
-        loc, i32_ty, cast.getResult(0)
-    );
+        loc, i32_ty, cast.getResult(0));
     return threadId;
   }
 

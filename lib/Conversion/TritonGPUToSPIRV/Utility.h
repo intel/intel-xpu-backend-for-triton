@@ -118,7 +118,8 @@
   spirv::createIndexConstant(rewriter, loc, this->getTypeConverter(),          \
                              __VA_ARGS__)
 #define tid_val() getThreadId(rewriter, loc)
-#define pid_val(dim) getProgramId(rewriter, loc, static_cast<mlir::gpu::Dimension>(dim));
+#define pid_val(dim)                                                           \
+  getProgramId(rewriter, loc, static_cast<mlir::gpu::Dimension>(dim));
 
 // Attributes
 #define i32_arr_attr(...) rewriter.getI32ArrayAttr({__VA_ARGS__})

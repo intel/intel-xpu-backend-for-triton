@@ -515,27 +515,27 @@ struct AtomicRMWOpSPIRVConversion
       numElems = tensorTy.getNumElements();
     }
     Value mask = getMask(valueTy, rewriter, loc);
-      // Create block structure for the masked rmw.
-      auto *preheader = rewriter.getInsertionBlock();
-      auto opPosition = rewriter.getInsertionPoint();
-      auto *tailblock = rewriter.splitBlock(preheader, opPosition);
-      tailblock->addArgument(valueElemTy, loc);
-      auto *condblock = rewriter.createBlock(tailblock);
+    // Create block structure for the masked rmw.
+    auto *preheader = rewriter.getInsertionBlock();
+    auto opPosition = rewriter.getInsertionPoint();
+    auto *tailblock = rewriter.splitBlock(preheader, opPosition);
+    tailblock->addArgument(valueElemTy, loc);
+    auto *condblock = rewriter.createBlock(tailblock);
 
-      // Test the mask
-      auto retType = valueElemTy;
-      rewriter.setInsertionPoint(preheader, preheader->end());
-      Value other = undef(retType);
-      rewriter.create<mlir::cf::CondBranchOp>(loc, rmwMask, condblock,
-                                              tailblock, ValueRange{other});
+    // Test the mask
+    auto retType = valueElemTy;
+    rewriter.setInsertionPoint(preheader, preheader->end());
+    Value other = undef(retType);
+    rewriter.create<mlir::cf::CondBranchOp>(loc, rmwMask, condblock, tailblock,
+                                            ValueRange{other});
 
-      // Do the Atomic
-      rewriter.setInsertionPoint(condblock, condblock->end());
+    // Do the Atomic
+    rewriter.setInsertionPoint(condblock, condblock->end());
 
-      Value ptrElem =
-          bitcast(rmwPtr, ptr_ty(retType, spirv::StorageClass::CrossWorkgroup));
-      Value ret;
-      switch (atomicRmwAttr) {
+    Value ptrElem =
+        bitcast(rmwPtr, ptr_ty(retType, spirv::StorageClass::CrossWorkgroup));
+    Value ret;
+    switch (atomicRmwAttr) {
 
 #define DISPATCH(rwmop__, sprivop__)                                           \
   case (rwmop__):                                                              \
@@ -547,53 +547,55 @@ struct AtomicRMWOpSPIRVConversion
         rmwVal);                                                               \
     break;
 
-        DISPATCH(RMWOp::AND, spirv::AtomicAndOp);
-        DISPATCH(RMWOp::OR, spirv::AtomicOrOp);
-        DISPATCH(RMWOp::XOR, spirv::AtomicXorOp);
-        DISPATCH(RMWOp::ADD, spirv::AtomicIAddOp);
-        DISPATCH(RMWOp::FADD, spirv::EXTAtomicFAddOp);
-        DISPATCH(RMWOp::MAX, spirv::AtomicSMaxOp);
-        DISPATCH(RMWOp::MIN, spirv::AtomicSMinOp);
-        DISPATCH(RMWOp::UMAX, spirv::AtomicUMaxOp);
-        DISPATCH(RMWOp::UMIN, spirv::AtomicUMinOp);
-        DISPATCH(RMWOp::XCHG, spirv::AtomicExchangeOp);
+      DISPATCH(RMWOp::AND, spirv::AtomicAndOp);
+      DISPATCH(RMWOp::OR, spirv::AtomicOrOp);
+      DISPATCH(RMWOp::XOR, spirv::AtomicXorOp);
+      DISPATCH(RMWOp::ADD, spirv::AtomicIAddOp);
+      DISPATCH(RMWOp::FADD, spirv::EXTAtomicFAddOp);
+      DISPATCH(RMWOp::MAX, spirv::AtomicSMaxOp);
+      DISPATCH(RMWOp::MIN, spirv::AtomicSMinOp);
+      DISPATCH(RMWOp::UMAX, spirv::AtomicUMaxOp);
+      DISPATCH(RMWOp::UMIN, spirv::AtomicUMinOp);
+      DISPATCH(RMWOp::XCHG, spirv::AtomicExchangeOp);
 
 #undef DISPATCH
 
-      default:
-        return failure();
-      }
-
-      rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{ret});
-      rewriter.setInsertionPoint(tailblock, tailblock->begin());
-
-      ret = *tailblock->args_begin();
-      if (tensorTy) {
-        resultVals[i] = ret;
-      } else {
-        if (op->user_begin() == op->user_end()) {
-          rewriter.replaceOp(op, {ret});
-          return success();
-        }
-        Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, spirv::StorageClass::Workgroup));
-        // Only threads with rmwMask = True store the result
-        store(ret, atomPtr);
-        barrier();
-        ret = load(atomPtr);
-        barrier();
-        rewriter.replaceOp(op, {ret});
-      }
+    default:
+      return failure();
     }
+
+    rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{ret});
+    rewriter.setInsertionPoint(tailblock, tailblock->begin());
+
+    ret = *tailblock->args_begin();
     if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = getTypeConverter()->packLLElements(
-          loc, resultVals, rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
+      resultVals[i] = ret;
+    } else {
+      if (op->user_begin() == op->user_end()) {
+        rewriter.replaceOp(op, {ret});
+        return success();
+      }
+      Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+      atomPtr =
+          bitcast(atomPtr, ptr_ty(valueElemTy, spirv::StorageClass::Workgroup));
+      // Only threads with rmwMask = True store the result
+      store(ret, atomPtr);
+      barrier();
+      ret = load(atomPtr);
+      barrier();
+      rewriter.replaceOp(op, {ret});
     }
-    return success();
   }
-};
+  if (tensorTy) {
+    Type structTy = getTypeConverter()->convertType(tensorTy);
+    Value resultStruct =
+        getTypeConverter()->packLLElements(loc, resultVals, rewriter, structTy);
+    rewriter.replaceOp(op, {resultStruct});
+  }
+  return success();
+}
+}
+;
 
 struct InsertSliceOpSPIRVConversion
     : public ConvertTritonGPUOpToSPIRVPattern<tensor::InsertSliceOp> {
@@ -823,13 +825,14 @@ struct InsertSliceAsyncOpSPIRVConversion
         if (spirvMask) {
           Value maskVal = maskElems[elemIdx];
 
-          Value other_ = undef(spirvElemTy);;
+          Value other_ = undef(spirvElemTy);
+          ;
           for (size_t ii = 0; ii < nWords; ++ii) {
             if (nWords > 1) {
               Value v = int_val(opaqueElemBitwidth, 0);
-              other_ = insert_val(spirvElemTy, v, other_, rewriter.getI32ArrayAttr(ii));
-            }
-            else {
+              other_ = insert_val(spirvElemTy, v, other_,
+                                  rewriter.getI32ArrayAttr(ii));
+            } else {
               other_ = int_val(bitWidth, 0);
             }
           }
@@ -860,8 +863,8 @@ struct InsertSliceAsyncOpSPIRVConversion
         // Extract and store return values
         rewriter.create<spirv::StoreOp>(op.getLoc(), spirvDestPtr, ret);
 
-        // the cp.async is treated as a weak memory operation in the CUDA memory consistency model.
-        // So no explicit synchronization required here.
+        // the cp.async is treated as a weak memory operation in the CUDA memory
+        // consistency model. So no explicit synchronization required here.
       }
     }
 
@@ -881,6 +884,6 @@ void populateLoadStoreOpToSPIRVPatterns(
   patterns.add<StoreOpSPIRVConversion>(typeConverter, context, axisInfoAnalysis,
                                        benefit);
   patterns.add<AtomicCASOpSPIRVConversion>(typeConverter, context, allocation,
-                                                  allocation, indexCacheInfo,
-                                                  axisInfoAnalysis, benefit);
+                                           allocation, indexCacheInfo,
+                                           axisInfoAnalysis, benefit);
 }
