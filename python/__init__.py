@@ -12,6 +12,7 @@ from intel_extension_for_pytorch.xpu.cpp_extension import (DpcppBuildExtension,
                                                            DPCPPExtension)
 
 import triton._C.libintel_xpu_backend_for_triton.triton as _triton
+from triton._C.libtriton.triton import add_external_libs
 from triton.common.backend import BaseBackend, register_backend
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
@@ -23,7 +24,8 @@ def _add_external_libs(mod, libs):
     for name, path in libs.items():
         if len(name) == 0 or len(path) == 0:
             return
-    _triton.add_external_libs(mod, list(libs.keys()), list(libs.values()))
+    # Use triton's add_external_libs instead of backend one.
+    add_external_libs(mod, list(libs.keys()), list(libs.values()))
 
 
 # SPIRV translation
