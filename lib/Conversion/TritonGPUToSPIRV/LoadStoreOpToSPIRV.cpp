@@ -482,11 +482,11 @@ struct AtomicRMWOpSPIRVConversion
       maskElements = getTypeConverter()->unpackLLElements(
               loc, spirvMask, rewriter, op.getMask().getType());
 
-    auto tensorTy = op.getResult().getType().dyn_cast<RankedTensorType>();
+    auto valueTy = op.getResult().getType();
+    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Type valueElemTy =
-            tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
-                     : op.getResult().getType();
-    const size_t valueElemNbits = valueElemTy.getIntOrFloatBitWidth();
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
+                 : valueTy;
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
     int numElems = 1;
     // tensor
@@ -495,19 +495,13 @@ struct AtomicRMWOpSPIRVConversion
       // mask
       numElems = tensorTy.getNumElements();
     }
-    Value mask = int_val(1, 1);
-    auto tid = tid_val();
-    mask = logic_and(mask,
-                icmp_ult(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
+    Value mask = getMask(valueTy, rewriter, loc);
 
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += 1) {
       Value rmwVal = valElements[i];
       Value rmwPtr = ptrElements[i];
       Value rmwMask = spirvMask ? logic_and(mask, maskElements[i]) : mask;
-      if (!tensorTy) {
-        rmwMask = logic_and(rmwMask, icmp_eq(tid, i32_val(0)));
-      }
 
       // Create block structure for the masked rmw.
       auto *preheader = rewriter.getInsertionBlock();
@@ -564,8 +558,13 @@ struct AtomicRMWOpSPIRVConversion
       if (tensorTy) {
           resultVals[i] = ret;
       } else {
+        if (op->user_begin() == op->user_end()) {
+          rewriter.replaceOp(op, {ret});
+          return success();
+        }
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, spirv::StorageClass::Workgroup));
+        // Only threads with rmwMask = True store the result
         store(ret, atomPtr);
         barrier();
         ret = load(atomPtr);
@@ -781,27 +780,6 @@ struct InsertSliceAsyncOpSPIRVConversion
       auto byteWidth = bitWidth / 8;
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
 
-      if (spirvMask) {
-        Value maskVal = maskElems[elemIdx];
-
-        // Create block structure for the masked memory copy.
-        auto *preheader = rewriter.getInsertionBlock();
-        auto opPosition = rewriter.getInsertionPoint();
-        auto *tailblock = rewriter.splitBlock(preheader, opPosition);
-        auto *condblock = rewriter.createBlock(tailblock);
-
-        // Test the mask
-        rewriter.setInsertionPoint(preheader, preheader->end());
-        rewriter.create<mlir::cf::CondBranchOp>(loc, maskVal, condblock, tailblock);
-
-        // Do the memory copy block
-        rewriter.setInsertionPoint(condblock, condblock->end());
-        rewriter.create<mlir::cf::BranchOp>(loc, tailblock);
-
-        // The memory copy insert position
-        rewriter.setInsertionPoint(condblock, condblock->begin());
-      }
-
       Type spirvElemTy;
       constexpr unsigned opaqueElemBitwidth = 32;
       if (bitWidth > opaqueElemBitwidth) {
@@ -809,6 +787,7 @@ struct InsertSliceAsyncOpSPIRVConversion
       } else {
         spirvElemTy = IntegerType::get(getContext(), bitWidth);
       }
+      size_t nWords = ceil<unsigned>(bitWidth, opaqueElemBitwidth);
 
       Value basePtr = sharedPtrs[elemIdx];
       spirv::PointerType spirvBasePtrType = spirv::PointerType::get(spirvElemTy,
@@ -824,10 +803,50 @@ struct InsertSliceAsyncOpSPIRVConversion
                                                                      srcPtrType.getStorageClass());
         Value spirvSrcPtr = bitcast( srcElems[elemIdx + wordElemIdx], spirvSrcPtrType);
 
+        Value ret;
+        if (spirvMask) {
+          Value maskVal = maskElems[elemIdx];
+
+          Value other_ = undef(spirvElemTy);;
+          for (size_t ii = 0; ii < nWords; ++ii) {
+            if (nWords > 1) {
+              Value v = int_val(opaqueElemBitwidth, 0);
+              other_ = insert_val(spirvElemTy, v, other_, rewriter.getI32ArrayAttr(ii));
+            }
+            else {
+              other_ = int_val(bitWidth, 0);
+            }
+          }
+
+          // Create block structure for the masked memory copy.
+          auto *preheader = rewriter.getInsertionBlock();
+          auto opPosition = rewriter.getInsertionPoint();
+          auto *tailblock = rewriter.splitBlock(preheader, opPosition);
+          tailblock->addArgument(spirvElemTy, loc);
+          auto *condblock = rewriter.createBlock(tailblock);
+
+          // Test the mask
+          rewriter.setInsertionPoint(preheader, preheader->end());
+          rewriter.create<mlir::cf::CondBranchOp>(loc, maskVal, condblock, tailblock, ValueRange{other_});
+
+          // Do the memory load block
+          rewriter.setInsertionPoint(condblock, condblock->end());
+          Value val = rewriter.create<spirv::LoadOp>(op.getLoc(), spirvSrcPtr);
+          rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{val});
+
+          // The memory copy insert position
+          rewriter.setInsertionPoint(tailblock, tailblock->begin());
+
+          ret = *tailblock->args_begin();
+        } else {
+          ret = rewriter.create<spirv::LoadOp>(op.getLoc(), spirvSrcPtr);
+        }
+
+        // Extract and store return values
+        rewriter.create<spirv::StoreOp>(op.getLoc(), spirvDestPtr, ret);
+
         // the cp.async is treated as a weak memory operation in the CUDA memory consistency model.
         // So no explicit synchronization required here.
-        Value val = rewriter.create<spirv::LoadOp>(op.getLoc(), spirvSrcPtr);
-        rewriter.create<spirv::StoreOp>(op.getLoc(), spirvDestPtr, val);
       }
     }
 
