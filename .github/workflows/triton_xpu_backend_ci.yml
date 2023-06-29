@@ -27,9 +27,6 @@ jobs:
         shell: bash
         run: |
           source ${HOME}/miniconda3/bin/activate triton-preci
-          source ${HOME}/env_triton.sh
-          pip uninstall -y triton
-          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
           rm -rf triton
           git clone https://github.com/openai/triton triton
           cd triton
@@ -60,6 +57,10 @@ jobs:
       - name: Build Triton
         shell: bash
         run:  |
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          source ${HOME}/env_triton.sh
+          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          pip uninstall -y triton
           cd triton/python
           python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
