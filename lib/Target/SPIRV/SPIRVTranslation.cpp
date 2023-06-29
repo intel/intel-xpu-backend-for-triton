@@ -464,6 +464,5 @@ translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
   return spirvModule;
 }
 
-
 } // namespace triton
 } // namespace mlir

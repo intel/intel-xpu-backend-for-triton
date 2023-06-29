@@ -11,7 +11,6 @@
 namespace mlir {
 namespace triton {
 
-
 LogicalResult assembleSPIRV(std::string spirvCode, raw_ostream &output);
 
 LogicalResult disassembleSPIRV(uint32_t *binary_ptr, size_t binary_size,
