@@ -9,8 +9,10 @@ using ::mlir::spirv::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
-struct ReturnOpSPIRVConversion : public ConvertTritonGPUOpToSPIRVPattern<triton::ReturnOp> {
-  using ConvertTritonGPUOpToSPIRVPattern<triton::ReturnOp>::ConvertTritonGPUOpToSPIRVPattern;
+struct ReturnOpSPIRVConversion
+    : public ConvertTritonGPUOpToSPIRVPattern<triton::ReturnOp> {
+  using ConvertTritonGPUOpToSPIRVPattern<
+      triton::ReturnOp>::ConvertTritonGPUOpToSPIRVPattern;
 
   LogicalResult
   matchAndRewrite(triton::ReturnOp op, OpAdaptor adaptor,
@@ -25,7 +27,7 @@ struct ReturnOpSPIRVConversion : public ConvertTritonGPUOpToSPIRVPattern<triton:
     }
 
     rewriter.replaceOpWithNewOp<spirv::ReturnOp>(op, TypeRange(), ValueRange(),
-                                                op->getAttrs());
+                                                 op->getAttrs());
     return success();
   }
 };
@@ -91,9 +93,9 @@ struct BroadcastOpSPIRVConversion
 };
 
 struct AssertOpSPIRVConversion
-        : public ConvertTritonGPUOpToSPIRVPattern<triton::AssertOp> {
+    : public ConvertTritonGPUOpToSPIRVPattern<triton::AssertOp> {
   using ConvertTritonGPUOpToSPIRVPattern<
-          triton::AssertOp>::ConvertTritonGPUOpToSPIRVPattern;
+      triton::AssertOp>::ConvertTritonGPUOpToSPIRVPattern;
 
   LogicalResult
   matchAndRewrite(triton::AssertOp op, OpAdaptor adaptor,
@@ -101,22 +103,22 @@ struct AssertOpSPIRVConversion
     auto loc = op.getLoc();
     auto ctx = rewriter.getContext();
     auto elems = getTypeConverter()->unpackLLElements(
-            loc, adaptor.getCondition(), rewriter, op.getCondition().getType());
+        loc, adaptor.getCondition(), rewriter, op.getCondition().getType());
     auto elemTy = elems[0].getType();
     Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {
       if (elemTy.isSignedInteger() || elemTy.isSignlessInteger()) {
-        condition =
-                logic_or(condition,
-                         logic_cmp_eq(elem, rewriter.create<spirv::ConstantOp>(
-                            loc, elemTy, rewriter.getZeroAttr(elemTy))));
+        condition = logic_or(
+            condition,
+            logic_cmp_eq(elem, rewriter.create<spirv::ConstantOp>(
+                                   loc, elemTy, rewriter.getZeroAttr(elemTy))));
       } else {
         assert(false && "Unsupported type for assert");
         return failure();
       }
     }
     spirvAssert(op, condition, adaptor.getMessage(), adaptor.getFile(),
-             adaptor.getFunc(), adaptor.getLine(), rewriter);
+                adaptor.getFunc(), adaptor.getLine(), rewriter);
     rewriter.eraseOp(op);
     return success();
   }
@@ -124,8 +126,8 @@ struct AssertOpSPIRVConversion
   // op: the op at which the assert is inserted. Unlike printf, we need to
   // know about the op to split the block.
   static void spirvAssert(Operation *op, Value condition, StringRef message,
-                       StringRef file, StringRef func, int line,
-                       ConversionPatternRewriter &rewriter) {
+                          StringRef file, StringRef func, int line,
+                          ConversionPatternRewriter &rewriter) {
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     auto ctx = rewriter.getContext();
     auto loc = op->getLoc();
@@ -143,13 +145,13 @@ struct AssertOpSPIRVConversion
     auto funcOp = getAssertfailDeclaration(rewriter);
     StringRef funcName("__assert_fail");
     auto moduleOp =
-            rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     Value messageString =
-            spirv::addStringToModule(loc, rewriter, "assertMessage_", message);
+        spirv::addStringToModule(loc, rewriter, "assertMessage_", message);
     Value fileString =
-            spirv::addStringToModule(loc, rewriter, "assertFile_", file);
+        spirv::addStringToModule(loc, rewriter, "assertFile_", file);
     Value funcString =
-            spirv::addStringToModule(loc, rewriter, "assertFunc_", func);
+        spirv::addStringToModule(loc, rewriter, "assertFunc_", func);
     Value lineNumber = i32_val(line);
     Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
 
@@ -169,7 +171,7 @@ struct AssertOpSPIRVConversion
   static spirv::FuncOp
   getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
     auto moduleOp =
-            rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     StringRef funcName("__assert_fail");
     Operation *funcOp = moduleOp.lookupSymbol(funcName);
     if (funcOp)
@@ -184,27 +186,26 @@ struct AssertOpSPIRVConversion
                                ptr_ty(i8_ty, spirv::StorageClass::Generic),
                                rewriter.getIntegerType(sizeof(size_t) * 8)};
 
-    mlir::FunctionType funcType = mlir::FunctionType::get(rewriter.getContext(), argsType, {});
+    mlir::FunctionType funcType =
+        mlir::FunctionType::get(rewriter.getContext(), argsType, {});
 
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
 
     return rewriter.create<spirv::FuncOp>(UnknownLoc::get(ctx), funcName,
-                                             funcType);
+                                          funcType);
   }
-
 };
 
 struct MakeRangeOpSPIRVConversion
-        : public ConvertTritonGPUOpToSPIRVPattern<triton::MakeRangeOp> {
+    : public ConvertTritonGPUOpToSPIRVPattern<triton::MakeRangeOp> {
 
   MakeRangeOpSPIRVConversion(
-          TritonGPUToSPIRVTypeConverter &converter,
-          MLIRContext *context,
-          ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
-          PatternBenefit benefit)
-          : ConvertTritonGPUOpToSPIRVPattern<triton::MakeRangeOp>(
-                  converter, context, indexCacheInfo, benefit) {}
+      TritonGPUToSPIRVTypeConverter &converter, MLIRContext *context,
+      ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
+      PatternBenefit benefit)
+      : ConvertTritonGPUOpToSPIRVPattern<triton::MakeRangeOp>(
+            converter, context, indexCacheInfo, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
@@ -216,8 +217,8 @@ struct MakeRangeOpSPIRVConversion
 
     auto elemTy = rankedTy.getElementType();
     assert(elemTy.isInteger(32));
-    Value start =  rewriter.create<spirv::ConstantOp>(
-            loc, elemTy, rewriter.getIntegerAttr( elemTy, op.getStart()));
+    Value start = rewriter.create<spirv::ConstantOp>(
+        loc, elemTy, rewriter.getIntegerAttr(elemTy, op.getStart()));
     auto idxs = emitIndices(loc, rewriter, layout, rankedTy);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
@@ -235,11 +236,9 @@ struct MakeRangeOpSPIRVConversion
   }
 };
 
-
 struct GetProgramIdOpToSPIRVConversion
-        : public OpConversionPattern<triton::GetProgramIdOp> {
-  using OpConversionPattern<
-          triton::GetProgramIdOp>::OpConversionPattern;
+    : public OpConversionPattern<triton::GetProgramIdOp> {
+  using OpConversionPattern<triton::GetProgramIdOp>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
@@ -248,14 +247,14 @@ struct GetProgramIdOpToSPIRVConversion
     assert(op.getAxisAsInt() < 3);
 
     Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(
-            loc, rewriter.getIndexType(), dims[op.getAxisAsInt()]);
-    Value blockId_idx = rewriter.create<::mlir::arith::TruncIOp>(
-            loc, i32_ty, blockId);
+        loc, rewriter.getIndexType(), dims[op.getAxisAsInt()]);
+    Value blockId_idx =
+        rewriter.create<::mlir::arith::TruncIOp>(loc, i32_ty, blockId);
     auto *typeConverter = this->template getTypeConverter<SPIRVTypeConverter>();
     auto indexType = typeConverter->getIndexType();
 
     rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
-            op, TypeRange{i32_ty}, ValueRange{blockId_idx});
+        op, TypeRange{i32_ty}, ValueRange{blockId_idx});
     return success();
   }
 
@@ -326,9 +325,9 @@ struct AddPtrOpSPIRVConversion
 };
 
 struct AllocTensorOpSPIRVConversion
-        : public ConvertTritonGPUOpToSPIRVPattern<triton::gpu::AllocTensorOp> {
+    : public ConvertTritonGPUOpToSPIRVPattern<triton::gpu::AllocTensorOp> {
   using ConvertTritonGPUOpToSPIRVPattern<
-          triton::gpu::AllocTensorOp>::ConvertTritonGPUOpToSPIRVPattern;
+      triton::gpu::AllocTensorOp>::ConvertTritonGPUOpToSPIRVPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
@@ -439,9 +438,9 @@ struct AsyncWaitOpSPIRVConversion
 };
 
 struct AsyncCommitGroupOpSPIRVConversion
-        : public ConvertTritonGPUOpToSPIRVPattern<triton::gpu::AsyncCommitGroupOp> {
+    : public ConvertTritonGPUOpToSPIRVPattern<triton::gpu::AsyncCommitGroupOp> {
   using ConvertTritonGPUOpToSPIRVPattern<
-          triton::gpu::AsyncCommitGroupOp>::ConvertTritonGPUOpToSPIRVPattern;
+      triton::gpu::AsyncCommitGroupOp>::ConvertTritonGPUOpToSPIRVPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCommitGroupOp op, OpAdaptor adaptor,
@@ -461,23 +460,26 @@ struct AsyncCommitGroupOpSPIRVConversion
 void populateTritonGPUToSPIRVPatterns(
     TritonGPUToSPIRVTypeConverter &typeConverter, MLIRContext *context,
     RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit) {
   patterns.add<AddPtrOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<AllocTensorOpSPIRVConversion>(typeConverter, context, allocation,
-                                        benefit);
-  patterns.add<AsyncCommitGroupOpSPIRVConversion>(typeConverter, context, benefit);
+                                             benefit);
+  patterns.add<AsyncCommitGroupOpSPIRVConversion>(typeConverter, context,
+                                                  benefit);
   patterns.add<AsyncWaitOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<BroadcastOpSPIRVConversion>(typeConverter, context, benefit);
 
-  patterns.add<ExtractSliceOpSPIRVConversion>(typeConverter, context, allocation,
-                                         benefit);
-  patterns.add<GetProgramIdOpToSPIRVConversion>(typeConverter, context, benefit);
-  patterns.add<GetNumProgramsOpSPIRVConversion>(typeConverter, context, benefit);
-  patterns.add<MakeRangeOpSPIRVConversion>(typeConverter, context, indexCacheInfo, benefit);
+  patterns.add<ExtractSliceOpSPIRVConversion>(typeConverter, context,
+                                              allocation, benefit);
+  patterns.add<GetProgramIdOpToSPIRVConversion>(typeConverter, context,
+                                                benefit);
+  patterns.add<GetNumProgramsOpSPIRVConversion>(typeConverter, context,
+                                                benefit);
+  patterns.add<MakeRangeOpSPIRVConversion>(typeConverter, context,
+                                           indexCacheInfo, benefit);
   patterns.add<ReturnOpSPIRVConversion>(typeConverter, context, benefit);
-//  patterns.add<PrintfOpConversion>(typeConverter, benefit);
+  //  patterns.add<PrintfOpConversion>(typeConverter, benefit);
   patterns.add<AssertOpSPIRVConversion>(typeConverter, context, benefit);
 }

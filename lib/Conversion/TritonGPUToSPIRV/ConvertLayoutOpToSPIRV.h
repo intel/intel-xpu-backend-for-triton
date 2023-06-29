@@ -8,13 +8,11 @@ using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 
-void populateConvertLayoutOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                           mlir::MLIRContext *context,
-                                           RewritePatternSet &patterns,
-                                           int numWarps,
-                                           ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                           ModuleAllocation &allocation,
-                                           ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
-                                           PatternBenefit benefit);
+void populateConvertLayoutOpToSPIRVPatterns(
+    TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
+    RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
+    ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
+    PatternBenefit benefit);
 
 #endif

@@ -9,10 +9,10 @@ using ::mlir::spirv::getStridesFromShapeAndOrder;
 using ::mlir::spirv::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
-using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
+using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
@@ -217,7 +217,7 @@ private:
             if (isInt1)
               currVal = icmp_ne(currVal,
                                 rewriter.create<spirv::ConstantOp>(
-                                        loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+                                    loc, i8_ty, rewriter.getI8IntegerAttr(0)));
             vals[elemId + linearCTAId * accumSizePerThread] = currVal;
           }
         } else {
@@ -226,7 +226,8 @@ private:
           if (stNotRd) {
             Value valVec = undef(vecTy);
             for (unsigned v = 0; v < vec; ++v) {
-              auto currVal = vals[elemId + linearCTAId * accumSizePerThread + v];
+              auto currVal =
+                  vals[elemId + linearCTAId * accumSizePerThread + v];
               if (isInt1)
                 currVal = zext(llvmElemTy, currVal);
               valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
@@ -237,9 +238,9 @@ private:
             for (unsigned v = 0; v < vec; ++v) {
               Value currVal = extract_element(llvmElemTy, valVec, idx_val(v));
               if (isInt1)
-                currVal = icmp_ne(currVal,
-                                  rewriter.create<spirv::ConstantOp>(
-                                          loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+                currVal = icmp_ne(
+                    currVal, rewriter.create<spirv::ConstantOp>(
+                                 loc, i8_ty, rewriter.getI8IntegerAttr(0)));
               vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
             }
           }
@@ -431,7 +432,8 @@ private:
     auto outOrd = dstSharedLayout.getOrder();
     Value smemBase = getSharedMemoryBase(loc, rewriter, dst);
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto elemPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy), spirv::StorageClass::Workgroup);
+    auto elemPtrTy = ptr_ty(getTypeConverter()->convertType(elemTy),
+                            spirv::StorageClass::Workgroup);
     smemBase = bitcast(smemBase, elemPtrTy);
 
     auto dstStrides =
@@ -529,19 +531,19 @@ private:
       }
     } else if (!isOuter && mmaLayout.isVolta() && isHMMA) { // tensor core v1
       DotOpMmaV1ConversionHelper helper(mmaLayout);
-//      bool isMMAv1Row =
-//          dotOperandLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
+      //      bool isMMAv1Row =
+      //          dotOperandLayout.getIsMMAv1Row().cast<BoolAttr>().getValue();
       auto srcSharedLayout = src.getType()
                                  .cast<RankedTensorType>()
                                  .getEncoding()
                                  .cast<SharedEncodingAttr>();
 
       // Can only convert [1, 0] to row or [0, 1] to col for now
-//      if ((srcSharedLayout.getOrder()[0] == 1 && !isMMAv1Row) ||
-//          (srcSharedLayout.getOrder()[0] == 0 && isMMAv1Row)) {
-//        llvm::errs() << "Unsupported Shared -> DotOperand[MMAv1] conversion\n";
-//        return Value();
-//      }
+      //      if ((srcSharedLayout.getOrder()[0] == 1 && !isMMAv1Row) ||
+      //          (srcSharedLayout.getOrder()[0] == 0 && isMMAv1Row)) {
+      //        llvm::errs() << "Unsupported Shared -> DotOperand[MMAv1]
+      //        conversion\n"; return Value();
+      //      }
 
       if (dotOperandLayout.getOpIdx() == 0) { // operand $a
         // TODO[Superjomn]: transA is not available here.
@@ -561,14 +563,12 @@ private:
   }
 };
 
-void populateConvertLayoutOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                            mlir::MLIRContext *context,
-                                            RewritePatternSet &patterns,
-                                            int numWarps,
-                                            ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                            ModuleAllocation &allocation,
-                                            ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
-                                            PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpSPIRVConversion>(typeConverter, context, allocation,
-                                          indexCacheInfo, benefit);
+void populateConvertLayoutOpToSPIRVPatterns(
+    TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
+    RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
+    ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
+    PatternBenefit benefit) {
+  patterns.add<ConvertLayoutOpSPIRVConversion>(
+      typeConverter, context, allocation, indexCacheInfo, benefit);
 }

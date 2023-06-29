@@ -1,7 +1,6 @@
 #ifndef TRITON_TRITONGPUTOSPIRVBASE_H
 #define TRITON_TRITONGPUTOSPIRVBASE_H
 
-
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
@@ -11,10 +10,10 @@
 //
 #include "DotOpHelpers.h" // This cannot be removed so far. The utility defined marco has conflict with SPIRV header.
 #include "Utility.h"
+#include "mlir/Dialect/SPIRV/Transforms/SPIRVConversion.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
 #include <set>
-#include "mlir/Dialect/SPIRV/Transforms/SPIRVConversion.h"
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -67,13 +66,13 @@ protected:
   // to this legalization pattern.
   spirv::FuncOp
   convertFuncOpToSPIRVFuncOp(triton::FuncOp funcOp,
-                            ConversionPatternRewriter &rewriter) const {
+                             ConversionPatternRewriter &rewriter) const {
     // Convert the original function arguments. They are converted using the
     // TypeConverter provided to this legalization pattern.
     auto varargsAttr = funcOp->getAttrOfType<BoolAttr>("func.varargs");
     if (varargsAttr && varargsAttr.getValue()) {
-      funcOp->emitError()
-              << "Conversion to SPIRV FuncOp doesn't support variadic param function.";
+      funcOp->emitError() << "Conversion to SPIRV FuncOp doesn't support "
+                             "variadic param function.";
       return nullptr;
     }
 
@@ -111,9 +110,9 @@ protected:
       }
     }
 
-    auto spirvType = rewriter.getFunctionType(result.getConvertedTypes(),
-                                              packedResultType ? TypeRange(packedResultType)
-                                                           : TypeRange());
+    auto spirvType = rewriter.getFunctionType(
+        result.getConvertedTypes(),
+        packedResultType ? TypeRange(packedResultType) : TypeRange());
 
     // Propagate argument/result attributes to all converted arguments/result
     // obtained after converting a given original argument/result.
@@ -122,12 +121,12 @@ protected:
     if (ArrayAttr resAttrDicts = funcOp.getAllResultAttrs()) {
       assert(!resAttrDicts.empty() && "expected array to be non-empty");
       auto newResAttrDicts =
-              (funcOp.getNumResults() == 1)
+          (funcOp.getNumResults() == 1)
               ? resAttrDicts
               : rewriter.getArrayAttr(
-                      {wrapAsStructAttrs(rewriter, resAttrDicts)});
+                    {wrapAsStructAttrs(rewriter, resAttrDicts)});
       attributes.push_back(
-              rewriter.getNamedAttr(funcOp.getResAttrsAttrName(), newResAttrDicts));
+          rewriter.getNamedAttr(funcOp.getResAttrsAttrName(), newResAttrDicts));
     }
     if (ArrayAttr argAttrDicts = funcOp.getAllArgAttrs()) {
       SmallVector<Attribute, 4> newArgAttrs(spirvType.getNumInputs());
@@ -138,8 +137,7 @@ protected:
           newArgAttrs[mapping->inputNo + j] = argAttrDicts[i];
       }
       attributes.push_back(rewriter.getNamedAttr(
-              funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(newArgAttrs)));
-
+          funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(newArgAttrs)));
     }
     for (const auto &pair : llvm::enumerate(attributes)) {
       if (pair.value().getName() == "llvm.linkage") {
@@ -152,8 +150,7 @@ protected:
     // functions have linkage.
     spirv::FunctionControl linkage = spirv::FunctionControl::None;
     if (funcOp->hasAttr("llvm.linkage")) {
-      funcOp->emitError()
-              << "Contains llvm.linkage attribute not in SPIRV";
+      funcOp->emitError() << "Contains llvm.linkage attribute not in SPIRV";
       return nullptr;
 #if 0
       auto attr =
@@ -193,7 +190,7 @@ protected:
     }
 
     auto newFuncOp = rewriter.create<spirv::FuncOp>(
-            funcOp.getLoc(), funcOp.getName(), spirvType, linkage, attributes);
+        funcOp.getLoc(), funcOp.getName(), spirvType, linkage, attributes);
 
     rewriter.inlineRegionBefore(funcOp.getBody(), newFuncOp.getBody(),
                                 newFuncOp.end());
@@ -243,22 +240,25 @@ public:
     OpBuilder::InsertPoint *indexInsertPoint;
   };
 
-  explicit ConvertTritonGPUOpToSPIRVPatternBase(TritonGPUToSPIRVTypeConverter &typeConverter)
-  : converter(&typeConverter) {}
+  explicit ConvertTritonGPUOpToSPIRVPatternBase(
+      TritonGPUToSPIRVTypeConverter &typeConverter)
+      : converter(&typeConverter) {}
 
-  explicit ConvertTritonGPUOpToSPIRVPatternBase(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                                IndexCacheInfo indexCacheInfo)
-  : converter(&typeConverter), indexCacheInfo(indexCacheInfo) {}
+  explicit ConvertTritonGPUOpToSPIRVPatternBase(
+      TritonGPUToSPIRVTypeConverter &typeConverter,
+      IndexCacheInfo indexCacheInfo)
+      : converter(&typeConverter), indexCacheInfo(indexCacheInfo) {}
 
-  explicit ConvertTritonGPUOpToSPIRVPatternBase(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                                ModuleAllocation &allocation)
-  : converter(&typeConverter), allocation(&allocation) {}
+  explicit ConvertTritonGPUOpToSPIRVPatternBase(
+      TritonGPUToSPIRVTypeConverter &typeConverter,
+      ModuleAllocation &allocation)
+      : converter(&typeConverter), allocation(&allocation) {}
 
-  explicit ConvertTritonGPUOpToSPIRVPatternBase(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                                ModuleAllocation &allocation,
-                                                IndexCacheInfo indexCacheInfo)
-  : converter(&typeConverter), indexCacheInfo(indexCacheInfo),
-  allocation(&allocation) {}
+  explicit ConvertTritonGPUOpToSPIRVPatternBase(
+      TritonGPUToSPIRVTypeConverter &typeConverter,
+      ModuleAllocation &allocation, IndexCacheInfo indexCacheInfo)
+      : converter(&typeConverter), indexCacheInfo(indexCacheInfo),
+        allocation(&allocation) {}
 
   TritonGPUToSPIRVTypeConverter *getTypeConverter() const { return converter; }
 
@@ -268,13 +268,13 @@ public:
                                   ConversionPatternRewriter &rewriter) {
     auto elems = smemObj.getElems();
     auto types = smemObj.getTypes();
-    auto structTy =
-        spirv::StructType::get(types);
+    auto structTy = spirv::StructType::get(types);
     // pack into struct
     Value spirvStruct = rewriter.create<spirv::UndefOp>(loc, structTy);
     for (const auto &v : llvm::enumerate(elems)) {
       assert(v.value() && "can not insert null values");
-      spirvStruct = insert_val(structTy, v.value(), spirvStruct, rewriter.getI32ArrayAttr(v.index()));
+      spirvStruct = insert_val(structTy, v.value(), spirvStruct,
+                               rewriter.getI32ArrayAttr(v.index()));
     }
     return spirvStruct;
   }
@@ -282,17 +282,17 @@ public:
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
     auto spirvIndexTy = this->getTypeConverter()->getIndexType();
     auto cast = rewriter.create<UnrealizedConversionCastOp>(
-            loc, TypeRange{spirvIndexTy},
-            ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
-                    loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
+        loc, TypeRange{spirvIndexTy},
+        ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
+            loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)});
 
     Value threadId = rewriter.create<::mlir::arith::TruncIOp>(
-      loc, i32_ty, cast.getResult(0)
-    );
+        loc, i32_ty, cast.getResult(0));
     return threadId;
   }
 
-  Value getProgramId(ConversionPatternRewriter &rewriter, Location loc, mlir::gpu::Dimension dim = mlir::gpu::Dimension::x) const {
+  Value getProgramId(ConversionPatternRewriter &rewriter, Location loc,
+                     mlir::gpu::Dimension dim = mlir::gpu::Dimension::x) const {
     auto spirvIndexTy = this->getTypeConverter()->getIndexType();
     auto cast = rewriter.create<UnrealizedConversionCastOp>(
         loc, TypeRange{spirvIndexTy},
@@ -300,8 +300,7 @@ public:
             loc, rewriter.getIndexType(), dim)});
 
     Value threadId = rewriter.create<::mlir::arith::TruncIOp>(
-        loc, i32_ty, cast.getResult(0)
-    );
+        loc, i32_ty, cast.getResult(0));
     return threadId;
   }
 
@@ -312,8 +311,8 @@ public:
   Value getSharedMemoryBase(Location loc, ConversionPatternRewriter &rewriter,
                             T value) const {
     auto ptrTy = spirv::PointerType::get(
-            this->getTypeConverter()->convertType(rewriter.getI8Type()),
-            spirv::StorageClass::Workgroup);
+        this->getTypeConverter()->convertType(rewriter.getI8Type()),
+        spirv::StorageClass::Workgroup);
     FunctionOpInterface funcOp;
     if constexpr (std::is_pointer_v<T>)
       funcOp = value->template getParentOfType<FunctionOpInterface>();
@@ -480,7 +479,8 @@ public:
     SmallVector<Value> outVals(outElems);
     for (unsigned i = 0; i < numVecs; ++i) {
       Value smemAddr = sharedPtrs[i * minVec];
-      smemAddr = bitcast(smemAddr, ptr_ty(wordTy, spirv::StorageClass::Workgroup));
+      smemAddr =
+          bitcast(smemAddr, ptr_ty(wordTy, spirv::StorageClass::Workgroup));
       Value valVec = load(smemAddr);
       for (unsigned v = 0; v < minVec; ++v) {
         if (minVec != 1) {
@@ -532,7 +532,7 @@ public:
       wordTy = elemTy;
     else
       wordTy = vec_ty(elemTy, minVec);
-//    auto elemPtrTy = ptr_ty(elemTy);
+    //    auto elemPtrTy = ptr_ty(elemTy);
     Value outVecVal = i32_val(outVec);
     Value minVecVal = i32_val(minVec);
     Value word;
@@ -556,7 +556,8 @@ public:
       if (i % minVec == minVec - 1) {
         Value smemAddr = sharedPtrs[i / minVec * minVec];
         if (minVec > 1)
-          smemAddr = bitcast(smemAddr, ptr_ty(wordTy, spirv::StorageClass::Workgroup));
+          smemAddr =
+              bitcast(smemAddr, ptr_ty(wordTy, spirv::StorageClass::Workgroup));
         store(word, smemAddr);
       }
     }
@@ -595,8 +596,9 @@ public:
         Value threadDim =
             add(mul(multiDimWarpId[dim], i32_val(threadsPerWarp[dim])),
                 multiDimThreadId[dim]);
-        mask = logic_and(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
-                                   i32_val(shape[dim])));
+        mask = logic_and(mask,
+                         icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
+                                  i32_val(shape[dim])));
       }
     } else {
       // If the tensor is not ranked, then it is a scalar and only thread 0 can
@@ -714,9 +716,9 @@ public:
             emitBaseIndexForBlockedLayout(loc, rewriter, blockedLayout, type);
       } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
         if (mmaLayout.isVolta())
-          assert(0 && "add mma layout support" );
+          assert(0 && "add mma layout support");
         if (mmaLayout.isAmpere())
-          assert(0 && "add mma layout support" );
+          assert(0 && "add mma layout support");
       } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
         auto parentLayout = sliceLayout.getParent();
         auto parentShape = sliceLayout.paddedShape(type.getShape());
@@ -741,9 +743,9 @@ public:
       return emitOffsetForBlockedLayout(blockedLayout, type);
     if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
       if (mmaLayout.isVolta())
-        assert(0 && "add mma layout support" );
+        assert(0 && "add mma layout support");
       if (mmaLayout.isAmpere())
-        assert(0 && "add mma layout support" );
+        assert(0 && "add mma layout support");
     }
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
       return emitOffsetForSliceLayout(sliceLayout, type);
@@ -770,7 +772,7 @@ public:
       if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
         result = emitIndicesForDistributedLayout(loc, b, blocked, type);
       } else if (auto mma = layout.dyn_cast<MmaEncodingAttr>()) {
-        assert(0 && "add mma layout support" );
+        assert(0 && "add mma layout support");
       } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
         result = emitIndicesForDistributedLayout(loc, b, slice, type);
       } else {
@@ -950,48 +952,43 @@ protected:
   IndexCacheInfo indexCacheInfo;
 };
 
-
 template <typename SourceOp>
 class ConvertTritonGPUOpToSPIRVPattern
-        : public OpConversionPattern<SourceOp>,
-          public ConvertTritonGPUOpToSPIRVPatternBase {
+    : public OpConversionPattern<SourceOp>,
+      public ConvertTritonGPUOpToSPIRVPatternBase {
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit ConvertTritonGPUOpToSPIRVPattern(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                            MLIRContext *context,
-                                            PatternBenefit benefit = 1)
-          : OpConversionPattern<SourceOp>(typeConverter, context, benefit),
-            ConvertTritonGPUOpToSPIRVPatternBase(typeConverter) {}
-  
+  explicit ConvertTritonGPUOpToSPIRVPattern(
+      TritonGPUToSPIRVTypeConverter &typeConverter, MLIRContext *context,
+      PatternBenefit benefit = 1)
+      : OpConversionPattern<SourceOp>(typeConverter, context, benefit),
+        ConvertTritonGPUOpToSPIRVPatternBase(typeConverter) {}
 
-  explicit ConvertTritonGPUOpToSPIRVPattern(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                            MLIRContext *context,
-                                            IndexCacheInfo indexCacheInfo,
-                                            PatternBenefit benefit = 1)
-          : OpConversionPattern<SourceOp>(typeConverter, context, benefit),
-            ConvertTritonGPUOpToSPIRVPatternBase(typeConverter, indexCacheInfo) {}
+  explicit ConvertTritonGPUOpToSPIRVPattern(
+      TritonGPUToSPIRVTypeConverter &typeConverter, MLIRContext *context,
+      IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
+      : OpConversionPattern<SourceOp>(typeConverter, context, benefit),
+        ConvertTritonGPUOpToSPIRVPatternBase(typeConverter, indexCacheInfo) {}
 
-  explicit ConvertTritonGPUOpToSPIRVPattern(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                           MLIRContext *context,
-                                           ModuleAllocation &allocation,
-                                           PatternBenefit benefit = 1)
-          : OpConversionPattern<SourceOp>(typeConverter, context, benefit),
-            ConvertTritonGPUOpToSPIRVPatternBase(typeConverter, allocation) {}
+  explicit ConvertTritonGPUOpToSPIRVPattern(
+      TritonGPUToSPIRVTypeConverter &typeConverter, MLIRContext *context,
+      ModuleAllocation &allocation, PatternBenefit benefit = 1)
+      : OpConversionPattern<SourceOp>(typeConverter, context, benefit),
+        ConvertTritonGPUOpToSPIRVPatternBase(typeConverter, allocation) {}
 
-  explicit ConvertTritonGPUOpToSPIRVPattern(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                            MLIRContext *context,
-                                            ModuleAllocation &allocation,
-                                            IndexCacheInfo indexCacheInfo,
-                                            PatternBenefit benefit = 1)
-          : OpConversionPattern<SourceOp>(typeConverter, context, benefit),
-            ConvertTritonGPUOpToSPIRVPatternBase(typeConverter, allocation,
-                                                indexCacheInfo) {}
+  explicit ConvertTritonGPUOpToSPIRVPattern(
+      TritonGPUToSPIRVTypeConverter &typeConverter, MLIRContext *context,
+      ModuleAllocation &allocation, IndexCacheInfo indexCacheInfo,
+      PatternBenefit benefit = 1)
+      : OpConversionPattern<SourceOp>(typeConverter, context, benefit),
+        ConvertTritonGPUOpToSPIRVPatternBase(typeConverter, allocation,
+                                             indexCacheInfo) {}
 
 protected:
   TritonGPUToSPIRVTypeConverter *getTypeConverter() const {
     SPIRVTypeConverter *ret =
-    ((ConvertTritonGPUOpToSPIRVPatternBase *)this)->getTypeConverter();
+        ((ConvertTritonGPUOpToSPIRVPatternBase *)this)->getTypeConverter();
     return (TritonGPUToSPIRVTypeConverter *)ret;
   }
 };

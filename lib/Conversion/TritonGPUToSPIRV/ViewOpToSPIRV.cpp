@@ -34,7 +34,7 @@ struct SplatOpSPIRVConversion
     auto loc = op->getLoc();
     auto src = adaptor.getSrc();
     auto spirvStruct = convertSplatLikeOp(src.getType(), op.getType(), src,
-                                       getTypeConverter(), rewriter, loc);
+                                          getTypeConverter(), rewriter, loc);
     rewriter.replaceOp(op, {spirvStruct});
     return success();
   }
@@ -66,8 +66,9 @@ struct ArithConstantSplatOpSPIRVConversion
     } else if (type::isInt(elemType)) {
       val = values.getValues<IntegerAttr>()[0];
     } else {
-      llvm::errs() << "ArithConstantSplatOpSPIRVConversion get unsupported type: "
-                   << value.getType() << "\n";
+      llvm::errs()
+          << "ArithConstantSplatOpSPIRVConversion get unsupported type: "
+          << value.getType() << "\n";
       return failure();
     }
 
@@ -119,7 +120,8 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
 
 struct ViewOpSPIRVConversion : public ConvertTritonGPUOpToSPIRVPattern<ViewOp> {
   using OpAdaptor = typename ViewOp::Adaptor;
-  using ConvertTritonGPUOpToSPIRVPattern<ViewOp>::ConvertTritonGPUOpToSPIRVPattern;
+  using ConvertTritonGPUOpToSPIRVPattern<
+      ViewOp>::ConvertTritonGPUOpToSPIRVPattern;
 
   LogicalResult
   matchAndRewrite(ViewOp op, OpAdaptor adaptor,
@@ -136,9 +138,10 @@ struct ViewOpSPIRVConversion : public ConvertTritonGPUOpToSPIRVPattern<ViewOp> {
 };
 
 struct ExpandDimsOpSPIRVConversion
-        : public ConvertTritonGPUOpToSPIRVPattern<ExpandDimsOp> {
+    : public ConvertTritonGPUOpToSPIRVPattern<ExpandDimsOp> {
   using OpAdaptor = typename ExpandDimsOp::Adaptor;
-  using ConvertTritonGPUOpToSPIRVPattern<ExpandDimsOp>::ConvertTritonGPUOpToSPIRVPattern;
+  using ConvertTritonGPUOpToSPIRVPattern<
+      ExpandDimsOp>::ConvertTritonGPUOpToSPIRVPattern;
 
   LogicalResult
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
@@ -175,7 +178,7 @@ struct ExpandDimsOpSPIRVConversion
   }
 };
 
-#if  0
+#if 0
 struct TransOpConversion
         : public ConvertTritonGPUOpToLLVMPattern<triton::TransOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -200,17 +203,15 @@ struct TransOpConversion
 };
 #endif
 
-
-void populateViewOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                   mlir::MLIRContext *context,
-                                   mlir::RewritePatternSet &patterns,
-                                   int numWarps,
-                                   mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                   mlir::ModuleAllocation *allocation,
-                                   mlir::Value smem,
-                                   mlir::PatternBenefit benefit) {
+void populateViewOpToSPIRVPatterns(
+    TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
+    mlir::RewritePatternSet &patterns, int numWarps,
+    mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    mlir::ModuleAllocation *allocation, mlir::Value smem,
+    mlir::PatternBenefit benefit) {
   patterns.add<ViewOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<ExpandDimsOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<SplatOpSPIRVConversion>(typeConverter, context, benefit);
-  patterns.add<ArithConstantSplatOpSPIRVConversion>(typeConverter, context, benefit);
+  patterns.add<ArithConstantSplatOpSPIRVConversion>(typeConverter, context,
+                                                    benefit);
 }

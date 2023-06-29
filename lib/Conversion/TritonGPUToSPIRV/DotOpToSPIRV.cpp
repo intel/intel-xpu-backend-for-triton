@@ -11,7 +11,8 @@ using ::mlir::spirv::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 
-struct DotOpSPIRVConversion : public ConvertTritonGPUOpToSPIRVPattern<triton::DotOp> {
+struct DotOpSPIRVConversion
+    : public ConvertTritonGPUOpToSPIRVPattern<triton::DotOp> {
   using ConvertTritonGPUOpToSPIRVPattern<
       triton::DotOp>::ConvertTritonGPUOpToSPIRVPattern;
 
@@ -33,8 +34,8 @@ struct DotOpSPIRVConversion : public ConvertTritonGPUOpToSPIRVPattern<triton::Do
                                     .getEncoding()
                                     .dyn_cast<MmaEncodingAttr>();
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
-//      if (mmaLayout.isVolta())
-//        return convertMMA884(op, adaptor, rewriter);
+      //      if (mmaLayout.isVolta())
+      //        return convertMMA884(op, adaptor, rewriter);
       if (mmaLayout.isAmpere())
         return convertMMA16816(op, adaptor, rewriter);
 
@@ -239,7 +240,8 @@ private:
     auto bElemType = getTypeConverter()->getElementTypeForStruct(bTensorTy);
 
     if (aElemType != bElemType) {
-      llvm::report_fatal_error("tt.dot a, b operands must have same float type");
+      llvm::report_fatal_error(
+          "tt.dot a, b operands must have same float type");
     }
 
     auto cElemType = getTypeConverter()->getElementTypeForStruct(cTensorTy);
@@ -284,8 +286,9 @@ private:
     SmallVector<Value> ret = cc;
 
     if (cElemType != aElemType) {
-      for(auto& rr: ret) {
-        if (cElemType.getIntOrFloatBitWidth() > aElemType.getIntOrFloatBitWidth()) {
+      for (auto &rr : ret) {
+        if (cElemType.getIntOrFloatBitWidth() >
+            aElemType.getIntOrFloatBitWidth()) {
           rr = rewriter.create<mlir::arith::TruncFOp>(loc, aElemType, rr);
         } else {
           rr = rewriter.create<mlir::arith::ExtFOp>(loc, aElemType, rr);
@@ -311,8 +314,9 @@ private:
     }
 
     if (dElemType != aElemType) {
-      for(auto& rr: ret) {
-        if (dElemType.getIntOrFloatBitWidth() > aElemType.getIntOrFloatBitWidth()) {
+      for (auto &rr : ret) {
+        if (dElemType.getIntOrFloatBitWidth() >
+            aElemType.getIntOrFloatBitWidth()) {
           rr = rewriter.create<mlir::arith::ExtFOp>(loc, dElemType, rr);
         } else {
           rr = rewriter.create<mlir::arith::TruncFOp>(loc, dElemType, rr);
@@ -330,10 +334,10 @@ private:
 
 void populateDotOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
                                   mlir::MLIRContext *context,
-                                  RewritePatternSet &patterns,
-                                  int numWarps,
+                                  RewritePatternSet &patterns, int numWarps,
                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                   ModuleAllocation &allocation,
                                   PatternBenefit benefit) {
-  patterns.add<DotOpSPIRVConversion>(typeConverter, context, allocation, benefit);
+  patterns.add<DotOpSPIRVConversion>(typeConverter, context, allocation,
+                                     benefit);
 }

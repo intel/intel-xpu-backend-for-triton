@@ -151,10 +151,12 @@ private:
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto ty = srcTys[i].getElementType();
       auto spirvElemTy = getTypeConverter()->convertType(ty);
-      elemPtrTys[i] = spirv::PointerType::get(spirvElemTy, spirv::StorageClass::Workgroup);
+      elemPtrTys[i] =
+          spirv::PointerType::get(spirvElemTy, spirv::StorageClass::Workgroup);
     }
     auto spirvIndexTy = getTypeConverter()->getIndexType();
-    auto indexPtrTy = spirv::PointerType::get(spirvIndexTy, spirv::StorageClass::Workgroup);
+    auto indexPtrTy =
+        spirv::PointerType::get(spirvIndexTy, spirv::StorageClass::Workgroup);
 
     auto smemShape = helper.getScratchConfigBasic();
     unsigned elems = product<unsigned>(smemShape);
@@ -319,10 +321,12 @@ private:
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto ty = srcTys[i].getElementType();
       auto spirvElemTy = getTypeConverter()->convertType(ty);
-      elemPtrTys[i] = spirv::PointerType::get(spirvElemTy, spirv::StorageClass::Workgroup);
+      elemPtrTys[i] =
+          spirv::PointerType::get(spirvElemTy, spirv::StorageClass::Workgroup);
     }
     auto spirvIndexTy = getTypeConverter()->getIndexType();
-    auto indexPtrTy = spirv::PointerType::get(spirvIndexTy, spirv::StorageClass::Workgroup);
+    auto indexPtrTy =
+        spirv::PointerType::get(spirvIndexTy, spirv::StorageClass::Workgroup);
 
     auto smemShapes = helper.getScratchConfigsFast();
     unsigned elems = product<unsigned>(smemShapes[0]);
@@ -475,8 +479,7 @@ private:
         for (size_t j = 0; j < resultElems; ++j) {
           SmallVector<Value> readIdx = resultIndices[j];
           readIdx.insert(readIdx.begin() + axis, i32_val(0));
-          readOffset =
-              linearize(rewriter, loc, readIdx, smemShapes[0], order);
+          readOffset = linearize(rewriter, loc, readIdx, smemShapes[0], order);
           Value readPtr = gep(elemPtrTys[i], smemBases[i], readOffset);
           resultVals[j] = load(readPtr);
         }
@@ -494,14 +497,12 @@ private:
   }
 };
 
-void populateReduceOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                     mlir::MLIRContext *context,
-                                     RewritePatternSet &patterns,
-                                     int numWarps,
-                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                     ModuleAllocation &allocation,
-                                     ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
-                                     PatternBenefit benefit) {
+void populateReduceOpToSPIRVPatterns(
+    TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
+    RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
+    ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
+    PatternBenefit benefit) {
   patterns.add<ReduceOpSPIRVConversion>(typeConverter, context, allocation,
-                                   indexCacheInfo, benefit);
+                                        indexCacheInfo, benefit);
 }

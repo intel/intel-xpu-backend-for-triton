@@ -17,12 +17,11 @@ using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
-
 /// Mapping between SPIR-V storage classes to Triton memory spaces.
 ///
 #define STORAGE_SPACE_MAP_LIST(MAP_FN)                                         \
   MAP_FN(spirv::StorageClass::CrossWorkgroup, 1)                               \
-  MAP_FN(spirv::StorageClass::Workgroup, 3)                                    \
+  MAP_FN(spirv::StorageClass::Workgroup, 3)
 
 #if 0
 MAP_FN(spirv::StorageClass::StorageBuffer, 0)                                \
@@ -48,23 +47,22 @@ MAP_FN(spirv::StorageClass::StorageBuffer, 0)                                \
   MAP_FN(spirv::StorageClass::HostOnlyINTEL, 23)
 #endif
 
-Optional<spirv::StorageClass>
-getStorageClassForMemorySpace(unsigned space) {
+Optional<spirv::StorageClass> getStorageClassForMemorySpace(unsigned space) {
 #define STORAGE_SPACE_MAP_FN(storage, space)                                   \
   case space:                                                                  \
     return storage;
 
   switch (space) {
     STORAGE_SPACE_MAP_LIST(STORAGE_SPACE_MAP_FN)
-    default:
-      return std::nullopt;
+  default:
+    return std::nullopt;
   }
 #undef STORAGE_SPACE_MAP_FN
 }
 
 TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
-        spirv::TargetEnvAttr &targetAttr, SPIRVConversionOptions &option)
-        : SPIRVTypeConverter(targetAttr, option) {
+    spirv::TargetEnvAttr &targetAttr, SPIRVConversionOptions &option)
+    : SPIRVTypeConverter(targetAttr, option) {
   addConversion([&](triton::PointerType type) -> llvm::Optional<Type> {
     return convertTritonPointerType(type);
   });
@@ -84,9 +82,8 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
   addConversion([&](BFloat16Type type) -> llvm::Optional<Type> {
     return IntegerType::get(type.getContext(), 16);
   });
-  addConversion([&](IndexType type) -> llvm::Optional<Type> {
-    return getIndexType();
-  });
+  addConversion(
+      [&](IndexType type) -> llvm::Optional<Type> { return getIndexType(); });
 
   // Add generic source and target materializations to handle cases where
   // non-SPIRV types persist after an SPIRV conversion.
@@ -97,7 +94,7 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
       return std::nullopt;
 
     return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
-            .getResult(0);
+        .getResult(0);
   });
   addTargetMaterialization([&](OpBuilder &builder, Type resultType,
                                ValueRange inputs,
@@ -106,17 +103,18 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
       return std::nullopt;
 
     return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
-            .getResult(0);
+        .getResult(0);
   });
 }
 
 Type TritonGPUToSPIRVTypeConverter::convertTritonPointerType(
     triton::PointerType type) {
   // Recursively translate pointee type
-  Optional<spirv::StorageClass> storageClass = getStorageClassForMemorySpace(
-          type.getAddressSpace());
+  Optional<spirv::StorageClass> storageClass =
+      getStorageClassForMemorySpace(type.getAddressSpace());
   assert(storageClass && "uncompatible pointer address type in SPIRV");
-  return spirv::PointerType::get(convertType(type.getPointeeType()), *storageClass);
+  return spirv::PointerType::get(convertType(type.getPointeeType()),
+                                 *storageClass);
 }
 
 Value TritonGPUToSPIRVTypeConverter::packLLElements(
@@ -146,7 +144,8 @@ Value TritonGPUToSPIRVTypeConverter::packLLElements(
                      << elementTypes[v.index()] << " but got "
                      << v.value().getType();
     }
-    spirvStruct = insert_val(structType, v.value(), spirvStruct, rewriter.getI32ArrayAttr(v.index()));
+    spirvStruct = insert_val(structType, v.value(), spirvStruct,
+                             rewriter.getI32ArrayAttr(v.index()));
   }
   return spirvStruct;
 }
@@ -160,7 +159,7 @@ SmallVector<Value> TritonGPUToSPIRVTypeConverter::unpackLLElements(
       spirvStruct.getType().isa<spirv::PointerType>())
     return {spirvStruct};
   auto types =
-          spirvStruct.getType().cast<spirv::StructType>().getElementTypes();
+      spirvStruct.getType().cast<spirv::StructType>().getElementTypes();
   SmallVector<Value> results(types.size());
   for (unsigned i = 0; i < types.size(); ++i) {
     Type type = types[i];
