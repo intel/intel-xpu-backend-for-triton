@@ -10,19 +10,19 @@ using namespace mlir::triton;
 Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
   return rewriter.create<spirv::ConstantOp>(loc, i32ty,
-                                           IntegerAttr::get(i32ty, v));
+                                            IntegerAttr::get(i32ty, v));
 }
 
 Value createConstantF32(Location loc, PatternRewriter &rewriter, float v) {
   auto type = type::f32Ty(rewriter.getContext());
   return rewriter.create<spirv::ConstantOp>(loc, type,
-                                           rewriter.getF32FloatAttr(v));
+                                            rewriter.getF32FloatAttr(v));
 }
 
 Value createConstantF64(Location loc, PatternRewriter &rewriter, float v) {
   auto type = type::f64Ty(rewriter.getContext());
   return rewriter.create<spirv::ConstantOp>(loc, type,
-                                           rewriter.getF64FloatAttr(v));
+                                            rewriter.getF64FloatAttr(v));
 }
 
 // Create an index type constant.
@@ -30,23 +30,22 @@ Value createIndexConstant(OpBuilder &builder, Location loc,
                           TypeConverter *converter, int64_t value) {
   Type ty = converter->convertType(builder.getIndexType());
   return builder.create<spirv::ConstantOp>(loc, ty,
-                                          builder.getIntegerAttr(ty, value));
+                                           builder.getIntegerAttr(ty, value));
 }
 
 // Create an integer constant of \param width bits.
 Value createSPIRVIntegerConstant(OpBuilder &builder, Location loc, short width,
-                                int64_t value) {
+                                 int64_t value) {
   Type ty = builder.getIntegerType(width);
   return builder.create<spirv::ConstantOp>(loc, ty,
-                                          builder.getIntegerAttr(ty, value));
+                                           builder.getIntegerAttr(ty, value));
 }
-
 
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value spirvStruct,
                                 ConversionPatternRewriter &rewriter) {
   auto types =
-          spirvStruct.getType().cast<spirv::StructType>().getElementTypes();
+      spirvStruct.getType().cast<spirv::StructType>().getElementTypes();
   SmallVector<Value> elems(types.size());
   for (unsigned i = 0; i < types.size(); ++i) {
     Type type = types[i];
@@ -73,7 +72,7 @@ getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
 }
 
 void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-              Value val, Value pred) {
+                 Value val, Value pred) {
   // scalar store
   // Create block structure for the masked load.
   auto *preheader = rewriter.getInsertionBlock();
@@ -112,13 +111,14 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   }
 
   auto scope = rewriter.getAttr<spirv::ScopeAttr>(spirv::Scope::Subgroup);
-  return rewriter.create<spirv::GroupNonUniformShuffleXorOp>(
-          loc, scope, val, i32_val(i));
+  return rewriter.create<spirv::GroupNonUniformShuffleXorOp>(loc, scope, val,
+                                                             i32_val(i));
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content) {
-  auto funcOp = rewriter.getBlock()->getParent()->getParentOfType<spirv::FuncOp>();
+  auto funcOp =
+      rewriter.getBlock()->getParent()->getParentOfType<spirv::FuncOp>();
   assert(funcOp);
   auto moduleOp = funcOp->getParentOfType<mlir::ModuleOp>();
   auto ctx = moduleOp.getContext();
@@ -130,7 +130,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   } while (moduleOp.lookupSymbol(stringConstName));
 
   llvm::SmallVector<Attribute, 8> contentStr;
-  for(auto c: content) {
+  for (auto c : content) {
     auto cAttr = rewriter.getI8IntegerAttr(c);
     contentStr.push_back(cAttr);
   }
@@ -143,26 +143,27 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
     VectorType _vec_type = VectorType::get({(int64_t)contentSize}, i8_ty);
-    DenseElementsAttr dstElementsAttr = DenseElementsAttr::get(_vec_type, contentStr);
-    globalString = rewriter.create<spirv::ConstantOp>(UnknownLoc::get(ctx), globalType,
-                                                dstElementsAttr);
+    DenseElementsAttr dstElementsAttr =
+        DenseElementsAttr::get(_vec_type, contentStr);
+    globalString = rewriter.create<spirv::ConstantOp>(
+        UnknownLoc::get(ctx), globalType, dstElementsAttr);
 
     globalVar = rewriter.create<spirv::GlobalVariableOp>(
-        UnknownLoc::get(ctx), ptr_ty(globalType, spirv::StorageClass::CrossWorkgroup), stringConstName,
-//        FlatSymbolRefAttr::get(globalString));
+        UnknownLoc::get(ctx),
+        ptr_ty(globalType, spirv::StorageClass::CrossWorkgroup),
+        stringConstName,
+        //        FlatSymbolRefAttr::get(globalString));
         nullptr);
   }
 
   Value zero = i32_val(0);
-  Value globalPtr =
-      rewriter.create<spirv::AddressOfOp>(UnknownLoc::get(rewriter.getContext()), globalVar);
-  Value stringStart =
-      rewriter.create<spirv::PtrAccessChainOp>(UnknownLoc::get(ctx),
-                                               ptr_ty(i8_ty, spirv::StorageClass::CrossWorkgroup),
-                                               globalPtr,
-                                               zero,
-                                               zero);
-  Value genericStringStart = bitcast(stringStart, ptr_ty(i8_ty, spirv::StorageClass::Generic));
+  Value globalPtr = rewriter.create<spirv::AddressOfOp>(
+      UnknownLoc::get(rewriter.getContext()), globalVar);
+  Value stringStart = rewriter.create<spirv::PtrAccessChainOp>(
+      UnknownLoc::get(ctx), ptr_ty(i8_ty, spirv::StorageClass::CrossWorkgroup),
+      globalPtr, zero, zero);
+  Value genericStringStart =
+      bitcast(stringStart, ptr_ty(i8_ty, spirv::StorageClass::Generic));
   return genericStringStart;
 }
 

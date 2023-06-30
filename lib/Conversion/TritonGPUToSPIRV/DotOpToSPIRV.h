@@ -9,8 +9,7 @@ using namespace mlir::triton;
 
 void populateDotOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
                                   mlir::MLIRContext *context,
-                                  RewritePatternSet &patterns,
-                                  int numWarps,
+                                  RewritePatternSet &patterns, int numWarps,
                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                   ModuleAllocation &allocation,
                                   PatternBenefit benefit);

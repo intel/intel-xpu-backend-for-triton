@@ -6,12 +6,11 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                          mlir::MLIRContext *context,
-                                          RewritePatternSet &patterns,
-                                          int numWarps,
-                                          ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                          ModuleAllocation *allocation,
-                                          Value smem, PatternBenefit benefit, std::map<std::string, int> &computeCapability);
+void populateElementwiseOpToSPIRVPatterns(
+    TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
+    RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation *allocation,
+    Value smem, PatternBenefit benefit,
+    std::map<std::string, int> &computeCapability);
 
 #endif

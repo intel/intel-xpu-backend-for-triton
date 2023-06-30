@@ -30,50 +30,46 @@
 #define xor_(...) rewriter.create<spirv::BitwiseXorOp>(loc, __VA_ARGS__)
 #define logic_or(...) rewriter.create<spirv::LogicalOrOp>(loc, __VA_ARGS__)
 #define or_(...) rewriter.create<spirv::BitwiseOrOp>(loc, __VA_ARGS__)
-#define bitcast(val__, type__)   ({                                       \
+#define bitcast(val__, type__)                                                 \
+  ({                                                                           \
     Value srcVal__ = (val__);                                                  \
     Type dstType__ = (type__);                                                 \
     Type srcType__ = srcVal__.getType();                                       \
-    Value toVal__ = (srcType__ != dstType__) ?                                 \
-       rewriter.create<spirv::BitcastOp>(loc, dstType__, srcVal__) : srcVal__; \
+    Value toVal__ =                                                            \
+        (srcType__ != dstType__)                                               \
+            ? rewriter.create<spirv::BitcastOp>(loc, dstType__, srcVal__)      \
+            : srcVal__;                                                        \
     toVal__;                                                                   \
   })
-#define gep(...) rewriter.create<spirv::PtrAccessChainOp>(loc, __VA_ARGS__, ValueRange{})
+#define gep(...)                                                               \
+  rewriter.create<spirv::PtrAccessChainOp>(loc, __VA_ARGS__, ValueRange{})
 #define ptr_ty(...) spirv::PointerType::get(__VA_ARGS__)
-#define insert_val(...) rewriter.create<spirv::CompositeInsertOp>(loc, __VA_ARGS__)
-#define extract_val(...) rewriter.create<spirv::CompositeExtractOp>(loc, __VA_ARGS__)
+#define insert_val(...)                                                        \
+  rewriter.create<spirv::CompositeInsertOp>(loc, __VA_ARGS__)
+#define extract_val(...)                                                       \
+  rewriter.create<spirv::CompositeExtractOp>(loc, __VA_ARGS__)
 #define insert_element(...)                                                    \
   rewriter.create<spirv::VectorInsertDynamicOp>(loc, __VA_ARGS__)
 #define extract_element(...)                                                   \
   rewriter.create<spirv::VectorExtractDynamicOp>(loc, __VA_ARGS__)
 #define load(...) rewriter.create<spirv::LoadOp>(loc, __VA_ARGS__)
 #define store(val, ptr) rewriter.create<spirv::StoreOp>(loc, ptr, val)
-#define fcmp_oeq(lhs, rhs)                                                     \
-  rewriter.create<spirv::FOrdEqualOp>(loc, lhs, rhs)
+#define fcmp_oeq(lhs, rhs) rewriter.create<spirv::FOrdEqualOp>(loc, lhs, rhs)
 #define fcmp_ogt(lhs, rhs)                                                     \
   rewriter.create<spirv::FOrdGreaterThanOp>(loc, lhs, rhs)
-#define fcmp_olt(lhs, rhs)                                                     \
-  rewriter.create<spirv::FOrdLessThanOp>(loc, lhs, rhs)
-#define icmp_eq(...)                                                           \
-  rewriter.create<spirv::IEqualOp>(loc, __VA_ARGS__)
-#define logic_cmp_eq(...)                                                       \
+#define fcmp_olt(lhs, rhs) rewriter.create<spirv::FOrdLessThanOp>(loc, lhs, rhs)
+#define icmp_eq(...) rewriter.create<spirv::IEqualOp>(loc, __VA_ARGS__)
+#define logic_cmp_eq(...)                                                      \
   rewriter.create<spirv::LogicalEqualOp>(loc, __VA_ARGS__)
-#define icmp_ne(...)                                                           \
-  rewriter.create<spirv::INotEqualOp>(loc, __VA_ARGS__)
-#define icmp_slt(...)                                                          \
-  rewriter.create<spirv::SLessThanOp>(loc, __VA_ARGS__)
-#define icmp_sle(...)                                                          \
-  rewriter.create<spirv::SLessThanEqualOp>(loc, __VA_ARGS__)
-#define icmp_sgt(...)                                                          \
-  rewriter.create<spirv::SGreaterThanOp>(loc, __VA_ARGS__)
+#define icmp_ne(...) rewriter.create<spirv::INotEqualOp>(loc, __VA_ARGS__)
+#define icmp_slt(...) rewriter.create<spirv::SLessThanOp>(loc, __VA_ARGS__)
+#define icmp_sle(...) rewriter.create<spirv::SLessThanEqualOp>(loc, __VA_ARGS__)
+#define icmp_sgt(...) rewriter.create<spirv::SGreaterThanOp>(loc, __VA_ARGS__)
 #define icmp_sge(...)                                                          \
   rewriter.create<spirv::SGreaterThanEqualOp>(loc, __VA_ARGS__)
-#define icmp_ult(...)                                                          \
-  rewriter.create<spirv::ULessThanOp>(loc, __VA_ARGS__)
-#define icmp_ule(...)                                                          \
-  rewriter.create<spirv::ULessThanEqualOp>(loc, __VA_ARGS__)
-#define icmp_ugt(...)                                                          \
-  rewriter.create<spirv::UGreaterThanOp>(loc, __VA_ARGS__)
+#define icmp_ult(...) rewriter.create<spirv::ULessThanOp>(loc, __VA_ARGS__)
+#define icmp_ule(...) rewriter.create<spirv::ULessThanEqualOp>(loc, __VA_ARGS__)
+#define icmp_ugt(...) rewriter.create<spirv::UGreaterThanOp>(loc, __VA_ARGS__)
 #define icmp_uge(...)                                                          \
   rewriter.create<spirv::UGreaterThanEqualOp>(loc, __VA_ARGS__)
 #define select(...) rewriter.create<spirv::SelectOp>(loc, __VA_ARGS__)
@@ -84,9 +80,11 @@
 // Shift left logical
 #define shl(lhs, rhs) rewriter.create<spirv::ShiftLeftLogicalOp>(loc, lhs, rhs)
 // Shift right logical. The Most-significant bits are filled with 0
-#define lshr(lhs, rhs) rewriter.create<spirv::ShiftRightLogicalOp>(loc, lhs, rhs)
+#define lshr(lhs, rhs)                                                         \
+  rewriter.create<spirv::ShiftRightLogicalOp>(loc, lhs, rhs)
 // Shift right arithmetic. The Most-significant bits are filled with sign bit
-#define ashr(lhs, rhs) rewriter.create<spirv::ShiftRightArithmeticOp>(loc, lhs, rhs)
+#define ashr(lhs, rhs)                                                         \
+  rewriter.create<spirv::ShiftRightArithmeticOp>(loc, lhs, rhs)
 // SPIRV lower TruncIOp with the SConvertOp logic
 #define itrunc(...) rewriter.create<spirv::SConvertOp>(loc, __VA_ARGS__)
 // SPIRV lower TruncFOp with the FConvertOp logic
@@ -117,10 +115,11 @@
 #define int_val(width, val)                                                    \
   spirv::createSPIRVIntegerConstant(rewriter, loc, width, val)
 #define idx_val(...)                                                           \
-  spirv::createIndexConstant(rewriter, loc, this->getTypeConverter(),           \
-                            __VA_ARGS__)
+  spirv::createIndexConstant(rewriter, loc, this->getTypeConverter(),          \
+                             __VA_ARGS__)
 #define tid_val() getThreadId(rewriter, loc)
-#define pid_val(dim) getProgramId(rewriter, loc, static_cast<mlir::gpu::Dimension>(dim));
+#define pid_val(dim)                                                           \
+  getProgramId(rewriter, loc, static_cast<mlir::gpu::Dimension>(dim));
 
 // Attributes
 #define i32_arr_attr(...) rewriter.getI32ArrayAttr({__VA_ARGS__})
@@ -205,7 +204,7 @@ Value createIndexConstant(OpBuilder &builder, Location loc,
 
 /// Create an integer constant of \param width bits.
 Value createSPIRVIntegerConstant(OpBuilder &builder, Location loc, short width,
-                                int64_t value);
+                                 int64_t value);
 
 /// Helper function to get strides from a given shape and its order
 SmallVector<Value>
@@ -276,7 +275,7 @@ getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
                                 ConversionPatternRewriter &rewriter);
 
 void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred);
+                 Value val, Value pred);
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
