@@ -168,8 +168,8 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
-                        const Value &v, bool use_INTELCOnvertFToBF16Op) {
-  if (use_INTELCOnvertFToBF16Op) {
+                        const Value &v, bool use_INTELConvertFToBF16Op) {
+  if (use_INTELConvertFToBF16Op) {
     // If support, then convert to bf16 using the INTELConvertFToBF16Op
     return rewriter.create<spirv::INTELConvertFToBF16Op>(loc, bf16_ty, v);
   } else {
@@ -209,8 +209,8 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
-                        const Value &v, bool use_INTELCOnvertFToBF16Op) {
-  if (use_INTELCOnvertFToBF16Op) {
+                        const Value &v, bool use_INTELConvertFToBF16Op) {
+  if (use_INTELConvertFToBF16Op) {
     return rewriter.create<spirv::INTELConvertBF16ToFOp>(loc, f32_ty, v);
   } else {
     Value val = v;
