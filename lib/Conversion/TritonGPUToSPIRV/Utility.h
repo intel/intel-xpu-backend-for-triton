@@ -283,6 +283,11 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
+spirv::FuncOp appendOrGetFuncOp(Location loc,
+                                ConversionPatternRewriter &rewriter,
+                                StringRef libName, StringRef funcName,
+                                mlir::FunctionType funcType,
+                                const NamedAttrList &extraAttrs = {});
 } // namespace spirv
 } // namespace mlir
 
