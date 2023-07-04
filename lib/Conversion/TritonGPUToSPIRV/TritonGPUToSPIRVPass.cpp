@@ -476,7 +476,7 @@ public:
     populateViewOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
                                   numWarps, axisInfoAnalysis, &allocation,
                                   nullptr,
-                                  /*benefit=*/10);
+                                  /*benefit=*/10, computeCapability);
 
     // Add arith/math's patterns to help convert scalar expression to SPIRV.
     mlir::arith::populateArithToSPIRVPatterns(spirvTypeConverter, patterns);
