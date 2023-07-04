@@ -337,11 +337,14 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
             spirv::Capability::AtomicFloat32AddEXT,
             spirv::Capability::ExpectAssumeKHR,
             spirv::Capability::SubgroupDispatch,
+            spirv::Capability::VectorComputeINTEL,
+            spirv::Capability::VectorAnyINTEL,
         // clang-format on
     };
     spirv::Extension exts_opencl[] = {
         spirv::Extension::SPV_EXT_shader_atomic_float_add,
-        spirv::Extension::SPV_KHR_expect_assume};
+        spirv::Extension::SPV_KHR_expect_assume,
+        spirv::Extension::SPV_INTEL_vector_compute};
     newModuleOp->setAttr("vce_triple", spirv::VerCapExtAttr::get(
                                            spirv::Version::V_1_4, caps_opencl,
                                            exts_opencl, builder.getContext()));

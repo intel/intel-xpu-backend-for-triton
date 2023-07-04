@@ -192,6 +192,14 @@ struct FuncOpConversion : public FuncOpConversionBase {
       newFuncOp->setAttr(
           spirv::getEntryPointABIAttrName(),
           spirv::EntryPointABIAttr::get(getContext(), nullptr, std::nullopt));
+
+      unsigned threadsPerWarp =
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      if (threadsPerWarp == 1) {
+        newFuncOp->setAttr(spirv::SPIRVDialect::getAttributeName(
+                               spirv::Decoration::VectorComputeFunctionINTEL),
+                           UnitAttr::get(rewriter.getContext()));
+      }
     } else {
       // The noinline function control will be used by the SPIRV codegen to
       // prevent inlining.

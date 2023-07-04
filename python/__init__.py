@@ -390,7 +390,7 @@ class XPUBackend(BaseBackend):
 
     @functools.lru_cache(None)
     def get_device_properties(self, device):
-        return self.driver.utils.get_device_properties(torch.xpu.device(device).sycl_device)
+        return self.driver.utils.get_device_properties(torch.xpu.device(device).to_sycl_dev())
 
     def get_current_device(self):
         return torch.xpu.current_device()
@@ -401,7 +401,7 @@ class XPUBackend(BaseBackend):
     def get_load_binary_fn(self):
 
         def _load_binary_fn(kernel_name, binary, shared_size, device):
-            return self.driver.utils.load_binary(kernel_name, binary, shared_size, torch.xpu.device(device).sycl_device)
+            return self.driver.utils.load_binary(kernel_name, binary, shared_size, torch.xpu.device(device).to_sycl_dev())
 
         return _load_binary_fn
 
@@ -409,20 +409,30 @@ class XPUBackend(BaseBackend):
         return "spvbin"
 
     def get_architecture_descriptor(self, **kwargs):
-        dev_props = self.driver.utils.get_device_properties(torch.xpu.device(torch.xpu.current_device()).sycl_device)
-        max_work_group_size = dev_props['max_work_group_size']
-        max_num_sub_groups = dev_props['max_num_sub_groups']
-        sub_group_sizes = dev_props['sub_group_sizes']
-        # TODO: chose a reasonable subgroup size
-        threads_per_warp = 32
-        assert threads_per_warp in sub_group_sizes, "Current platform does not support threads_per_warp to be 32"
-        num_warps = max_work_group_size // threads_per_warp
-        assert num_warps < max_num_sub_groups, \
-            "invalid setting. max_work_group_size {}, max_num_subgroup {}, subgroup_sizes {}".format(
-                max_work_group_size,
-                max_num_sub_groups,
-                max_num_sub_groups)
-        capability = {"num_warps": num_warps, "threads_per_warp": threads_per_warp}
+        if True:
+            # SIMD paradigm
+            dev_props = self.driver.utils.get_device_properties(torch.xpu.device(torch.xpu.current_device()).to_sycl_dev())
+            eu_count_per_ss = dev_props['eu_count_per_ss']
+            threads_per_eu = dev_props['threads_per_eu']
+            num_warps = eu_count_per_ss * threads_per_eu
+            threads_per_warp = 1
+            capability = {"num_warps": num_warps, "threads_per_warp": threads_per_warp}
+        else:
+            # SIMT paradigm
+            dev_props = self.driver.utils.get_device_properties(torch.xpu.device(torch.xpu.current_device()).to_sycl_dev())
+            max_work_group_size = dev_props['max_work_group_size']
+            max_num_subgroup = dev_props['max_num_sub_groups']
+            subgroup_sizes = dev_props['sub_group_sizes']
+            # TODO: chose a reasonable subgroup size
+            threads_per_warp = 32
+            assert threads_per_warp in subgroup_sizes, "Current platform does not support threads_per_warp to be 32"
+            num_warps = max_work_group_size // threads_per_warp
+            assert num_warps < max_num_subgroup, \
+                "invalid setting. max_work_group_size {}, max_num_subgroup {}, subgroup_sizes {}".format(
+                    max_work_group_size,
+                    max_num_subgroup,
+                    max_num_subgroup)
+            capability = {"num_warps": num_warps, "threads_per_warp": threads_per_warp}
         return capability
 
     def make_launcher_stub(self, name, signature, constants):
