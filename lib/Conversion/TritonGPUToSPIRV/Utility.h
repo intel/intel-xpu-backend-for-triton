@@ -302,6 +302,12 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
  */
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         const Value &v, bool use_INTELConvertFToBF16Op = false);
+
+spirv::FuncOp appendOrGetFuncOp(Location loc,
+                                ConversionPatternRewriter &rewriter,
+                                StringRef libName, StringRef funcName,
+                                mlir::FunctionType funcType,
+                                const NamedAttrList &extraAttrs = {});
 } // namespace spirv
 } // namespace mlir
 
