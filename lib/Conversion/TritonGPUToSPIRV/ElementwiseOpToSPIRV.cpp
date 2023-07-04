@@ -293,68 +293,10 @@ struct FpToFpOpSPIRVConversion
     llvm::report_fatal_error("SPIRV doesn't support FP8 yet");
   }
 
-  static Value convertBf16ToFp32(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v,
-                                 bool use_INTELCOnvertFToBF16Op = false) {
-    if (use_INTELCOnvertFToBF16Op) {
-      return rewriter.create<spirv::INTELConvertBF16ToFOp>(loc, f32_ty, v);
-    } else {
-      Value val = v;
-      val = zext(i32_ty, val);
-      val = shl(val, i32_val(16));
-      val = bitcast(val, f32_ty);
-      return val;
-    }
-  }
-
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     return rewriter.create<spirv::FConvertOp>(loc, f32_ty, v);
-  }
-
-  static Value convertFp32ToBf16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v,
-                                 bool use_INTELCOnvertFToBF16Op = false) {
-    if (use_INTELCOnvertFToBF16Op) {
-      // If support, then convert to bf16 using the INTELConvertFToBF16Op
-      return rewriter.create<spirv::INTELConvertFToBF16Op>(loc, bf16_ty, v);
-    } else {
-      // Otherwise, Convert the FP32 value by RNE(Rounding to Nearest Even).
-      // Algorithm is as follows:
-      //   STEP1: U32_VAL = BITCAST(F32_VAL)
-      //   STEP2: U32_VAL_TMP = U32_VAL >> 16
-      //   STEP3: U32_VAL_TMP = U32_VAL_TMP & 1
-      //   STEP4: ROUNDING_BIAS = U32_VAL_TMP + UINT32(0x7FFF)
-      //   STEP5: U32_VAL_TMP = U32_VAL + ROUNDING_BIAS
-      //   STEP6: BF16_VAL = static_cast<UINT16>(U32_VAL_TMP >> 16)
-      Value val = v;
-      auto mask = fcmp_oeq(val, val);
-      // STEP1
-      auto fp32_i32_value = bitcast(v, i32_ty);
-      // STEP2
-      val = lshr(fp32_i32_value, i32_val(16));
-      // val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
-      val = itrunc(i16_ty, val);
-      // STEP3
-      val = and_(val, int_val(16, 1));
-      // STEP4
-      auto rounding_bias = int_val(16, 0x7FF);
-      val = add(val, rounding_bias);
-      val = zext(i32_ty, val);
-      // Step 5
-      val = add(val, fp32_i32_value);
-      // Step6
-      val = lshr(val, int_val(32, 16));
-      // val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
-      val = itrunc(i16_ty, val);
-      val = bitcast(val, i16_ty);
-      // If the value is NaN, return BF16 NaN.
-      val = select(mask, val, int_val(16, 0xFFFF));
-      return val;
-    }
   }
 
   static Value convertFp32ToFp16(Location loc,
@@ -802,13 +744,13 @@ struct FDivOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(
+      auto lhs = mlir::spirv::convertBf16ToFp32(
           loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(
+      auto rhs = mlir::spirv::convertBf16ToFp32(
           loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FDivOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(
-          loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, f32_result,
+                                            this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FDivOp>(loc, elemTy, operands[0],
                                             operands[1]);
@@ -830,13 +772,13 @@ struct FMulOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(
+      auto lhs = mlir::spirv::convertBf16ToFp32(
           loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(
+      auto rhs = mlir::spirv::convertBf16ToFp32(
           loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FMulOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(
-          loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, f32_result,
+                                            this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FMulOp>(loc, elemTy, operands[0],
                                             operands[1]);
@@ -858,13 +800,13 @@ struct FAddOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(
+      auto lhs = mlir::spirv::convertBf16ToFp32(
           loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(
+      auto rhs = mlir::spirv::convertBf16ToFp32(
           loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FAddOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(
-          loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, f32_result,
+                                            this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FAddOp>(loc, elemTy, operands[0],
                                             operands[1]);
@@ -886,13 +828,13 @@ struct FSubOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(
+      auto lhs = mlir::spirv::convertBf16ToFp32(
           loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(
+      auto rhs = mlir::spirv::convertBf16ToFp32(
           loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FSubOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(
-          loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, f32_result,
+                                            this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FSubOp>(loc, elemTy, operands[0],
                                             operands[1]);
@@ -914,8 +856,8 @@ struct SIToFPOpSPIRVConversion
     auto outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16()) {
       auto value = rewriter.create<arith::SIToFPOp>(loc, f32_ty, operands[0]);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(
-          loc, rewriter, value, this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, value,
+                                            this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<arith::SIToFPOp>(loc, elemTy, operands[0]);
     }
@@ -935,7 +877,7 @@ struct FPToSIOpSPIRVConversion
                      ValueRange operands, Location loc) const {
     auto inElemTy = getElementType(op.getIn());
     if (inElemTy.isBF16()) {
-      auto value = FpToFpOpSPIRVConversion::convertBf16ToFp32(
+      auto value = mlir::spirv::convertBf16ToFp32(
           loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
       return rewriter.create<arith::FPToSIOp>(loc, elemTy, value);
     } else {
@@ -959,8 +901,8 @@ struct ExtFOpSPIRVConversion
     if (inElemTy.isBF16()) {
       auto outElemTy = getElementType(op.getOut());
       assert(outElemTy.isF32() && "unsupported conversion");
-      return FpToFpOpSPIRVConversion::convertBf16ToFp32(
-          loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertBf16ToFp32(loc, rewriter, operands[0],
+                                            this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<arith::ExtFOp>(loc, elemTy, operands[0]);
     }
@@ -982,8 +924,8 @@ struct TruncFOpSPIRVConversion
     if (outElemTy.isBF16()) {
       auto inElemTy = getElementType(op.getIn());
       assert(inElemTy.isF32() && "unsupported conversion");
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(
-          loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, operands[0],
+                                            this->use_INTELCOnvertFToBF16Op);
     } else {
       return rewriter.create<arith::TruncFOp>(loc, elemTy, operands[0]);
     }
