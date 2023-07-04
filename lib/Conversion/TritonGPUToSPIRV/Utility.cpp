@@ -41,6 +41,17 @@ Value createSPIRVIntegerConstant(OpBuilder &builder, Location loc, short width,
                                            builder.getIntegerAttr(ty, value));
 }
 
+bool checkOpSupported(std::map<std::string, int> computeCapability,
+                      std::string dtype) {
+  // TODO: For now, we define the computeCapability with {dtype, int}.
+  // If it is >= 1, then the special op is supported.
+  if (computeCapability.find(dtype) != computeCapability.end() &&
+      computeCapability.at(dtype) >= 1) {
+    return true;
+  }
+  return false;
+}
+
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value spirvStruct,
                                 ConversionPatternRewriter &rewriter) {

@@ -271,15 +271,7 @@ struct SharedMemoryObject {
 };
 // Check specific <string, int> pair of function is supported for this device.
 bool checkOpSupported(std::map<std::string, int> computeCapability,
-                      std::string dtype) {
-  // TODO: For now, we define the computeCapability with {dtype, int}.
-  // If it is >= 1, then the special op is supported.
-  if (computeCapability.find(dtype) != computeCapability.end() &&
-      computeCapability.at(dtype) >= 1) {
-    return true;
-  }
-  return false;
-}
+                      std::string dtype);
 
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
