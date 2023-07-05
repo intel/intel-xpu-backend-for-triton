@@ -58,7 +58,7 @@ jobs:
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
-          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          export LLVM_SYSPATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/llvm/build/
           pip uninstall -y triton
           cd triton/python
           python setup.py clean
@@ -75,7 +75,7 @@ jobs:
           echo -e "[ INFO ] Run UT test on Node $(hostname)"
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
-          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          export LLVM_SYSPATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/llvm/build/
           pip install pytest
           rm -rf ~/.triton/cache
           export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/
