@@ -269,6 +269,9 @@ struct SharedMemoryObject {
     return gep(type, base, offset);
   }
 };
+// Check specific <string, int> pair of function is supported for this device.
+bool checkOpSupported(std::map<std::string, int> computeCapability,
+                      std::string dtype);
 
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
@@ -283,6 +286,22 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content);
 
+/*
+ * Convert Fp32 To Bf16.
+ * TODO: This function is retrived from ElemetwiseOpToSPIRV.cpp, because other
+ * places where spirv op does not support bf16 also use this conversion. We will
+ * move this back when spirv supports the conversion.
+ */
+Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
+                        const Value &v, bool use_INTELConvertFToBF16Op = false);
+/*
+ * Convert Bf16 To Fp32 .
+ * TODO: This function is retrived from ElemetwiseOpToSPIRV.cpp, because other
+ * places where spirv op does not support bf16 also use this conversion. We will
+ * move this back when spirv supports the conversion.
+ */
+Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
+                        const Value &v, bool use_INTELConvertFToBF16Op = false);
 } // namespace spirv
 } // namespace mlir
 

@@ -48,6 +48,15 @@ struct ArithConstantSplatOpSPIRVConversion
   using ConvertTritonGPUOpToSPIRVPattern<
       arith::ConstantOp>::ConvertTritonGPUOpToSPIRVPattern;
 
+  explicit ArithConstantSplatOpSPIRVConversion(
+      TritonGPUToSPIRVTypeConverter &converter, MLIRContext *context,
+      PatternBenefit benefit = 1, bool use_INTELConvertFToBF16Op = false)
+      : ConvertTritonGPUOpToSPIRVPattern<arith::ConstantOp>(converter, context,
+                                                            benefit),
+        use_INTELConvertFToBF16Op(use_INTELConvertFToBF16Op) {}
+
+  bool use_INTELConvertFToBF16Op = false;
+
   LogicalResult
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -61,7 +70,13 @@ struct ArithConstantSplatOpSPIRVConversion
     auto elemType = values.getElementType();
 
     Attribute val;
-    if (elemType.isBF16() || type::isFloat(elemType)) {
+    if (elemType.isBF16()) {
+      // spirv::ConstantOp does not support bf16, Thus it needs special
+      // treatment first.
+      auto v = values.getValues<FloatAttr>()[0];
+      auto lit_v = v.getValue();
+      val = rewriter.getF32FloatAttr(lit_v.convertToFloat());
+    } else if (type::isFloat(elemType)) {
       val = values.getValues<FloatAttr>()[0];
     } else if (type::isInt(elemType)) {
       val = values.getValues<IntegerAttr>()[0];
@@ -72,7 +87,18 @@ struct ArithConstantSplatOpSPIRVConversion
       return failure();
     }
 
-    auto constOp = rewriter.create<spirv::ConstantOp>(loc, elemType, val);
+    Value constOp;
+    if (elemType.isBF16()) {
+      // spirv::ConstantOp does not support bf16.
+      constOp = rewriter.create<spirv::ConstantOp>(loc, f32_ty, val);
+    } else {
+      constOp = rewriter.create<spirv::ConstantOp>(loc, elemType, val);
+    }
+
+    if (elemType.isBF16()) {
+      constOp = mlir::spirv::convertFp32ToBf16(loc, rewriter, constOp,
+                                               use_INTELConvertFToBF16Op);
+    }
     auto llStruct = SplatOpSPIRVConversion::convertSplatLikeOp(
         elemType, op.getType(), constOp, getTypeConverter(), rewriter, loc);
     rewriter.replaceOp(op, llStruct);
@@ -208,10 +234,13 @@ void populateViewOpToSPIRVPatterns(
     mlir::RewritePatternSet &patterns, int numWarps,
     mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis,
     mlir::ModuleAllocation *allocation, mlir::Value smem,
-    mlir::PatternBenefit benefit) {
+    mlir::PatternBenefit benefit,
+    std::map<std::string, int> &computeCapability) {
   patterns.add<ViewOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<ExpandDimsOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<SplatOpSPIRVConversion>(typeConverter, context, benefit);
-  patterns.add<ArithConstantSplatOpSPIRVConversion>(typeConverter, context,
-                                                    benefit);
+  patterns.add<ArithConstantSplatOpSPIRVConversion>(
+      typeConverter, context, benefit,
+      mlir::spirv::checkOpSupported(computeCapability,
+                                    "INTELConvertFToBF16Op"));
 }

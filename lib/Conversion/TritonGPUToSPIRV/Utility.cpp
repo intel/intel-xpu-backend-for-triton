@@ -41,6 +41,17 @@ Value createSPIRVIntegerConstant(OpBuilder &builder, Location loc, short width,
                                            builder.getIntegerAttr(ty, value));
 }
 
+bool checkOpSupported(std::map<std::string, int> computeCapability,
+                      std::string dtype) {
+  // TODO: For now, we define the computeCapability with {dtype, int}.
+  // If it is >= 1, then the special op is supported.
+  if (computeCapability.find(dtype) != computeCapability.end() &&
+      computeCapability.at(dtype) >= 1) {
+    return true;
+  }
+  return false;
+}
+
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value spirvStruct,
                                 ConversionPatternRewriter &rewriter) {
@@ -165,6 +176,60 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   Value genericStringStart =
       bitcast(stringStart, ptr_ty(i8_ty, spirv::StorageClass::Generic));
   return genericStringStart;
+}
+
+Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
+                        const Value &v, bool use_INTELConvertFToBF16Op) {
+  if (use_INTELConvertFToBF16Op) {
+    // If support, then convert to bf16 using the INTELConvertFToBF16Op
+    return rewriter.create<spirv::INTELConvertFToBF16Op>(loc, bf16_ty, v);
+  } else {
+    // Otherwise, Convert the FP32 value by RNE(Rounding to Nearest Even).
+    // Algorithm is as follows:
+    //   STEP1: U32_VAL = BITCAST(F32_VAL)
+    //   STEP2: U32_VAL_TMP = U32_VAL >> 16
+    //   STEP3: U32_VAL_TMP = U32_VAL_TMP & 1
+    //   STEP4: ROUNDING_BIAS = U32_VAL_TMP + UINT32(0x7FFF)
+    //   STEP5: U32_VAL_TMP = U32_VAL + ROUNDING_BIAS
+    //   STEP6: BF16_VAL = static_cast<UINT16>(U32_VAL_TMP >> 16)
+    Value val = v;
+    auto mask = fcmp_oeq(val, val);
+    // STEP1
+    auto fp32_i32_value = bitcast(v, i32_ty);
+    // STEP2
+    val = lshr(fp32_i32_value, i32_val(16));
+    // val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
+    val = itrunc(i16_ty, val);
+    // STEP3
+    val = and_(val, int_val(16, 1));
+    // STEP4
+    auto rounding_bias = int_val(16, 0x7FF);
+    val = add(val, rounding_bias);
+    val = zext(i32_ty, val);
+    // Step 5
+    val = add(val, fp32_i32_value);
+    // Step6
+    val = lshr(val, int_val(32, 16));
+    // val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
+    val = itrunc(i16_ty, val);
+    val = bitcast(val, i16_ty);
+    // If the value is NaN, return BF16 NaN.
+    val = select(mask, val, int_val(16, 0xFFFF));
+    return val;
+  }
+}
+
+Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
+                        const Value &v, bool use_INTELConvertFToBF16Op) {
+  if (use_INTELConvertFToBF16Op) {
+    return rewriter.create<spirv::INTELConvertBF16ToFOp>(loc, f32_ty, v);
+  } else {
+    Value val = v;
+    val = zext(i32_ty, val);
+    val = shl(val, i32_val(16));
+    val = bitcast(val, f32_ty);
+    return val;
+  }
 }
 
 } // namespace spirv

@@ -12,6 +12,7 @@ void populateViewOpToSPIRVPatterns(
     mlir::RewritePatternSet &patterns, int numWarps,
     mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis,
     mlir::ModuleAllocation *allocation, mlir::Value smem,
-    mlir::PatternBenefit benefit);
+    mlir::PatternBenefit benefit,
+    std::map<std::string, int> &computeCapability);
 
 #endif
