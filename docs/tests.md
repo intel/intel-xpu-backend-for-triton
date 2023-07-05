@@ -1,7 +1,3 @@
-# lit Tests
-
-TODO: We are on an active stage for adding lit tests, will add later.
-
 # Unit Tests for Triton
 This is for unit tests under `triton/python/tests/unit` and `pytorch/tests/inductor`. Please refer to [Unit Tests](test_docs/unit_tests.md) for detail.
 

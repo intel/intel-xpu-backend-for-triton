@@ -17,7 +17,7 @@ pip install pytest-xdist
 
 # Triton Unit Tests
 This test case lies under `triton/python/tests/unit`.
-[TODO: ] The `triton/python/tests/regression` is not supported yet.
+[Note: ] The `triton/python/tests/regression` is not supported yet.
 
 
 **Important**
@@ -55,7 +55,6 @@ pytest -n 8 ... (The same with before)
 
 # Torch Inductor Tests
 
-[TODO]
 This test case lies under `pytorch/tests/inductor`. We are on an active developing process, some changes are internally are going to be upstreamed to PyTorch shortly. We will update the docs then.
 
 
