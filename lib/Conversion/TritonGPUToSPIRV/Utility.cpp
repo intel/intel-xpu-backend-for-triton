@@ -232,5 +232,48 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
   }
 }
 
+spirv::FuncOp getNearestFuncOp(Operation *from) {
+  assert(from && "expected valid operation");
+  if (isa<spirv::FuncOp>(from))
+    return dyn_cast<spirv::FuncOp>(from);
+
+  while (from->getParentOp()) {
+    from = from->getParentOp();
+
+    if (isa<spirv::FuncOp>(from))
+      return dyn_cast<spirv::FuncOp>(from);
+  }
+  return nullptr;
+}
+
+spirv::FuncOp appendOrGetFuncOp(Location loc,
+                                ConversionPatternRewriter &rewriter,
+                                StringRef libName, StringRef funcName,
+                                mlir::FunctionType funcType,
+                                const NamedAttrList &extraAttrs) {
+  spirv::FuncOp func =
+      getNearestFuncOp(rewriter.getBlock()->getParent()->getParentOp());
+  assert(func && "cannot find func op");
+  auto funcAttr = StringAttr::get(rewriter.getContext(), funcName);
+  Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(func, funcAttr);
+  if (funcOp)
+    return cast<spirv::FuncOp>(*funcOp);
+
+  mlir::OpBuilder b(func);
+  NamedAttrList attributes(extraAttrs);
+  attributes.set("libname", StringAttr::get(rewriter.getContext(), libName));
+  attributes.set("libpath", StringAttr::get(rewriter.getContext(), ""));
+  attributes.set(
+      "linkage_attributes",
+      ArrayAttr::get(rewriter.getContext(),
+                     {
+                         StringAttr::get(rewriter.getContext(), funcName),
+                         StringAttr::get(rewriter.getContext(), "Import"),
+                     }));
+  auto ret = b.create<spirv::FuncOp>(
+      loc, funcName, funcType, spirv::FunctionControl::Inline, attributes);
+  return ret;
+}
+
 } // namespace spirv
 } // namespace mlir
