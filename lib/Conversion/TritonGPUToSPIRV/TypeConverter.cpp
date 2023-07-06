@@ -69,6 +69,11 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
   addConversion([&](RankedTensorType type) -> llvm::Optional<Type> {
     return convertTritonTensorType(type);
   });
+  addConversion([&](mlir::VectorType type) -> llvm::Optional<Type> {
+    // Recursively translate vector type
+    return mlir::VectorType::get(type.getShape(),
+                                 convertType(type.getElementType()));
+  });
   // Internally store float8 as int8
   addConversion([&](mlir::Float8E4M3FNType type) -> llvm::Optional<Type> {
     llvm::report_fatal_error("SPIRV doesn't support fp8 type");
