@@ -10,7 +10,7 @@ Intel® XPU Backend for Triton\* serves as a third-party backend for [OpenAI Tri
 
 Intel® XPU Backend for Triton\* requires [PyTorch](https://pytorch.org/get-started/locally/) and [intel-extension-for-pytorch](https://github.com/intel/intel-extension-for-pytorch/) for build.
 
-Please follow installation guide for [intel_extension_for_pytorch](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide) for the detailed building process and make sure the associated driver and oneAPI toolkit are installed correctly.
+Please follow [installation guide for intel_extension_for_pytorch](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide) for the detailed building process and make sure the associated driver and oneAPI toolkit are installed correctly.
 
 Note that these two should be **build from the source** for now.
 
