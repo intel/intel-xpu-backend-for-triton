@@ -507,15 +507,20 @@ struct AtomicRMWOpSPIRVConversion
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
-    int numElems = 1;
     // tensor
     if (tensorTy) {
       auto valTy = val.getType().cast<RankedTensorType>();
-      // mask
-      numElems = tensorTy.getNumElements();
+      if (valTy.getElementType().isF16()) {
+        auto vec = getVectorSize(ptr);
+        // We only do the fp16 atomic when it is able to be packed to 32 bits.
+        if (vec > 1 && ((vec % 2) == 0))
+          return rewriteFP16Atomic(op, adaptor, rewriter);
+      }
     }
+    // mask
     Value mask = getMask(valueTy, rewriter, loc);
 
+    // vec = 1 for scalar
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += 1) {
       Value rmwVal = valElements[i];
@@ -599,6 +604,138 @@ struct AtomicRMWOpSPIRVConversion
           loc, resultVals, rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
     }
+    return success();
+  }
+
+  LogicalResult rewriteFP16Atomic(triton::AtomicRMWOp op, OpAdaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+
+    auto atomicRmwAttr = op.getAtomicRmwOp();
+
+    Value val = op.getVal();
+    Value ptr = op.getPtr();
+
+    Value spirvPtr = adaptor.getPtr();
+    Value spirvVal = adaptor.getVal();
+    Value spirvMask = adaptor.getMask();
+
+    auto valElements = getTypeConverter()->unpackLLElements(
+        loc, spirvVal, rewriter, val.getType());
+    auto ptrElements = getTypeConverter()->unpackLLElements(
+        loc, spirvPtr, rewriter, ptr.getType());
+    SmallVector<Value> maskElements;
+    if (spirvMask)
+      maskElements = getTypeConverter()->unpackLLElements(
+          loc, spirvMask, rewriter, op.getMask().getType());
+
+    auto valueTy = op.getResult().getType();
+    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+    Type valueElemTy =
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
+                 : valueTy;
+    const size_t valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
+    auto elemsPerThread = getTotalElemsPerThread(val.getType());
+
+    auto vec = getVectorSize(ptr);
+    int numElems = tensorTy.getNumElements();
+    // tensor
+    auto valTy = val.getType().cast<RankedTensorType>();
+    vec = std::min<unsigned>(vec, 2);
+    // mask
+    Value mask = getMask(valueTy, rewriter, loc);
+    auto vecTy = vec_ty(valueElemTy, vec);
+    SmallVector<Value> resultVals(elemsPerThread);
+    for (size_t i = 0; i < elemsPerThread; i += vec) {
+      Value rmwPtr = ptrElements[i];
+      Value rmwMask = spirvMask ? logic_and(mask, maskElements[i]) : mask;
+
+      // Create block structure for the masked rmw.
+      auto *preheader = rewriter.getInsertionBlock();
+      auto opPosition = rewriter.getInsertionPoint();
+      auto *tailblock = rewriter.splitBlock(preheader, opPosition);
+      tailblock->addArgument(vecTy, loc);
+      auto *condblock = rewriter.createBlock(tailblock);
+
+      // Test the mask
+      auto retType = vecTy;
+      rewriter.setInsertionPoint(preheader, preheader->end());
+      Value other = undef(retType);
+      rewriter.create<mlir::cf::CondBranchOp>(loc, rmwMask, condblock,
+                                              tailblock, ValueRange{other});
+
+      // Do the Atomic
+      rewriter.setInsertionPoint(condblock, condblock->end());
+
+      // fetch the value
+      Value ptrElem =
+          bitcast(rmwPtr, ptr_ty(retType, spirv::StorageClass::CrossWorkgroup));
+      Value origin = rewriter.create<spirv::LoadOp>(loc, ptrElem);
+
+      // do-while loop
+      auto *loop = rewriter.splitBlock(rewriter.getInsertionBlock(),
+                                       rewriter.getInsertionPoint());
+      loop->addArgument(vecTy, loc);
+
+      rewriter.create<mlir::cf::BranchOp>(loc, loop, ValueRange{origin});
+      rewriter.setInsertionPoint(loop, loop->begin());
+      origin = *loop->args_begin();
+
+      Value modify = undef(retType);
+      for (int ii = 0; ii < vec; ++ii) {
+        Value loadVal = extract_element(origin, i32_val(ii));
+        Value rmwVal = valElements[i + ii];
+        switch (atomicRmwAttr) {
+
+#define DISPATCH(rwmop__, sprivop__)                                           \
+  case (rwmop__):                                                              \
+    loadVal = rewriter.create<sprivop__>(loc, loadVal, rmwVal);                \
+    break;
+
+          DISPATCH(RMWOp::FADD, spirv::FAddOp);
+
+#undef DISPATCH
+
+        default:
+          return failure();
+        }
+        modify = insert_element(retType, modify, loadVal, i32_val(ii));
+      }
+
+      Type writeTy = rewriter.getIntegerType(valueElemNBits * vec);
+      modify = bitcast(modify, writeTy);
+
+      Value ptrWrite =
+          bitcast(rmwPtr, ptr_ty(writeTy, spirv::StorageClass::CrossWorkgroup));
+
+      Value comparator = bitcast(origin, writeTy);
+      Value exchange = rewriter.create<spirv::AtomicCompareExchangeOp>(
+          loc, writeTy, ptrWrite, mlir::spirv::Scope::Device,
+          mlir::spirv::MemorySemantics::AcquireRelease |
+              mlir::spirv::MemorySemantics::MakeAvailable |
+              mlir::spirv::MemorySemantics::MakeVisible,
+          mlir::spirv::MemorySemantics::None, modify, comparator);
+      Value equal = icmp_eq(comparator, exchange);
+
+      rewriter.create<mlir::cf::CondBranchOp>(
+          loc, equal, tailblock, ValueRange{bitcast(modify, retType)}, loop,
+          ValueRange{bitcast(exchange, retType)});
+      rewriter.setInsertionPoint(tailblock, tailblock->begin());
+
+      Value ret = *tailblock->args_begin();
+
+      for (int ii = 0; ii < vec; ++ii) {
+        resultVals[i + ii] =
+            vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
+      }
+    }
+
+    Type structTy = getTypeConverter()->convertType(tensorTy);
+    Value resultStruct =
+        getTypeConverter()->packLLElements(loc, resultVals, rewriter, structTy);
+    rewriter.replaceOp(op, {resultStruct});
+
     return success();
   }
 };
