@@ -310,8 +310,7 @@ def _prepare_ldflags(extra_ldflags, verbose, is_standalone):
             extra_ldflags.append(f"-Wl,-rpath")
 
     oneapi_link_args = []
-    oneapi_link_args += ["-lsycl", "-lOpenCL", "-lm", "-ldl"]
-    oneapi_link_args += ["-ldnnl"]
+    oneapi_link_args += ["-lsycl"]
     extra_ldflags += oneapi_link_args
 
     return extra_ldflags

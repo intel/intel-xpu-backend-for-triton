@@ -10,6 +10,10 @@ import setuptools
 import torch
 from intel_extension_for_pytorch.xpu.cpp_extension import (DpcppBuildExtension,
                                                            DPCPPExtension)
+# for add extensions.py in sys.path
+import sys
+sys.path.append(os.path.abspath(os.path.join(__file__, os.pardir)))  
+
 from extensions import (SYCLExtension, SYCLBuildExtension)
 import triton._C.libintel_xpu_backend_for_triton.triton as _triton
 from triton._C.libtriton.triton import add_external_libs
@@ -101,7 +105,7 @@ def generate_launcher(constants, signature):
             'fp64': 'double',
         }[ty]
 
-    if os.getenv("TRITON_XPU_PROFILE").lower() == 'on':
+    if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':
     # Ipex available src
         return f"""
 #include <pybind11/pybind11.h>
@@ -425,7 +429,7 @@ PYBIND11_MODULE(__triton_launcher, m) {{
 
 def _build_xpu_ext(name, src, srcdir):
 
-    if os.getenv("TRITON_XPU_PROFILE").lower() == 'on':
+    if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':
         current_build_extension = DpcppBuildExtension
         current_extension = DPCPPExtension
     else:
