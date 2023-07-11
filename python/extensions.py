@@ -1,12 +1,12 @@
 import copy
+import errno
 import os
-import setuptools
 import shutil
 import sys
-import errno
-import pybind11  # noqa: F401
 from typing import List
 
+import pybind11  # noqa: F401
+import setuptools
 from setuptools.command.build_ext import build_ext
 
 IS_WINDOWS = sys.platform == "win32"
