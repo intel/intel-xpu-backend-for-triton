@@ -3,7 +3,6 @@ import hashlib
 import os
 import re
 import sysconfig
-import pybind11
 import tempfile
 from pathlib import Path
 
@@ -15,14 +14,14 @@ from intel_extension_for_pytorch.xpu.cpp_extension import (DpcppBuildExtension,
 import sys
 sys.path.append(os.path.abspath(os.path.join(__file__, os.pardir)))
 
-from extensions import (SYCLExtension, SYCLBuildExtension)
-from triton._C.libtriton.triton import add_external_libs
-from triton.common.backend import BaseBackend, register_backend
-from triton.compiler.make_launcher import make_so_cache_key
-from triton.runtime.cache import get_cache_manager
-from triton.runtime.driver import DriverBase
-from triton.runtime.jit import version_key
-import triton._C.libintel_xpu_backend_for_triton.triton as _triton
+from extensions import (SYCLExtension, SYCLBuildExtension)  # noqa:E402
+from triton._C.libtriton.triton import add_external_libs  # noqa:E402
+from triton.common.backend import BaseBackend, register_backend  # noqa:E402
+from triton.compiler.make_launcher import make_so_cache_key  # noqa:E402
+from triton.runtime.cache import get_cache_manager  # noqa:E402
+from triton.runtime.driver import DriverBase  # noqa:E402
+from triton.runtime.jit import version_key  # noqa:E402
+import triton._C.libintel_xpu_backend_for_triton.triton as _triton  # noqa:E402
 
 
 def _add_external_libs(mod, libs):
@@ -38,7 +37,7 @@ def _add_external_libs(mod, libs):
 def ttgir_to_spirv(mod, extern_libs, arch):
     if extern_libs:
         _add_external_libs(mod, extern_libs)
-    spirv_code, share_memory_size = _triton.translate_triton_gpu_to_spirv(str(mod), arch)
+    spirv_code, share_memory_size = _triton.translate_triton_gpu_to_spirv(str(mod), arch)  # noqa: E501
     mod.share_memory_size = share_memory_size
     return spirv_code
 
@@ -90,7 +89,7 @@ def ty_to_cpp(ty):
 
 
 def generate_launcher(constants, signature):
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())  # noqa: E501
 
     def _extracted_type_pybind11(ty):
         if ty[0] == '*':
@@ -106,7 +105,7 @@ def generate_launcher(constants, signature):
             'fp64': 'double',
         }[ty]
 
-    if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':
+    if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':  # noqa: E501
         # Ipex available src
         return f"""
 #include <pybind11/pybind11.h>
@@ -267,7 +266,7 @@ PYBIND11_MODULE(__triton_launcher, m) {{
     }});
 }}
 
-"""
+"""  # noqa: E501
 
     else:
         return f"""
@@ -425,12 +424,12 @@ PYBIND11_MODULE(__triton_launcher, m) {{
     }});
 }}
 
-"""
+"""  # noqa: E501
 
 
 def _build_xpu_ext(name, src, srcdir):
 
-    if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':
+    if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':  # noqa: E501
         current_build_extension = DpcppBuildExtension
         current_extension = DPCPPExtension
     else:
@@ -438,7 +437,7 @@ def _build_xpu_ext(name, src, srcdir):
         current_extension = SYCLExtension
 
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
-    so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
+    so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))  # noqa: E501
 
     # fallback on setuptools
     extra_compile_args = ['-w']
@@ -560,7 +559,7 @@ class XPUBackend(BaseBackend):
 
     @functools.lru_cache(None)
     def get_device_properties(self, device):
-        return self.driver.utils.get_device_properties(torch.xpu.device(device).sycl_device)
+        return self.driver.utils.get_device_properties(torch.xpu.device(device).sycl_device)  # noqa: E501
 
     def get_current_device(self):
         return torch.xpu.current_device()
@@ -571,7 +570,7 @@ class XPUBackend(BaseBackend):
     def get_load_binary_fn(self):
 
         def _load_binary_fn(kernel_name, binary, shared_size, device):
-            return self.driver.utils.load_binary(kernel_name, binary, shared_size, torch.xpu.device(device).sycl_device)
+            return self.driver.utils.load_binary(kernel_name, binary, shared_size, torch.xpu.device(device).sycl_device)  # noqa: E501
 
         return _load_binary_fn
 
@@ -579,20 +578,20 @@ class XPUBackend(BaseBackend):
         return "spvbin"
 
     def get_architecture_descriptor(self, **kwargs):
-        dev_props = self.driver.utils.get_device_properties(torch.xpu.device(torch.xpu.current_device()).sycl_device)
+        dev_props = self.driver.utils.get_device_properties(torch.xpu.device(torch.xpu.current_device()).sycl_device)  # noqa: E501
         max_work_group_size = dev_props['max_work_group_size']
         max_num_sub_groups = dev_props['max_num_sub_groups']
         sub_group_sizes = dev_props['sub_group_sizes']
         # TODO: chose a reasonable subgroup size
         threads_per_warp = 32
-        assert threads_per_warp in sub_group_sizes, "Current platform does not support threads_per_warp to be 32"
+        assert threads_per_warp in sub_group_sizes, "Current platform does not support threads_per_warp to be 32"  # noqa: E501
         num_warps = max_work_group_size // threads_per_warp
         assert num_warps < max_num_sub_groups, \
-            "invalid setting. max_work_group_size {}, max_num_subgroup {}, subgroup_sizes {}".format(
+            "invalid setting. max_work_group_size {}, max_num_subgroup {}, subgroup_sizes {}".format(  # noqa: E501
                 max_work_group_size,
                 max_num_sub_groups,
                 max_num_sub_groups)
-        capability = {"num_warps": num_warps, "threads_per_warp": threads_per_warp}
+        capability = {"num_warps": num_warps, "threads_per_warp": threads_per_warp}  # noqa: E501
         return capability
 
     def make_launcher_stub(self, name, signature, constants):

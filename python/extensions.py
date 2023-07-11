@@ -4,7 +4,7 @@ import setuptools
 import shutil
 import sys
 import errno
-import pybind11
+import pybind11  # noqa: F401
 from typing import List
 
 from setuptools.command.build_ext import build_ext
@@ -238,12 +238,12 @@ class SYCLBuildExtension(build_ext, object):
             raise "Not implemented"
         else:
             self.compiler._compile = unix_wrap_single_compile
-            self.compiler.link_shared_object = unix_wrap_single_link_shared_object
+            self.compiler.link_shared_object = unix_wrap_single_link_shared_object  # noqa: E501
 
         build_ext.build_extensions(self)
 
     def _add_compile_flag(self, extension, flag):
-        extension.extra_compile_args = copy.deepcopy(extension.extra_compile_args)
+        extension.extra_compile_args = copy.deepcopy(extension.extra_compile_args)  # noqa: E501
         if isinstance(extension.extra_compile_args, dict):
             for args in extension.extra_compile_args.values():
                 args.append(flag)
@@ -255,34 +255,6 @@ class SYCLBuildExtension(build_ext, object):
             extension,
             "-D_GLIBCXX_USE_CXX11_ABI=1"
         )
-
-
-def include_paths() -> List[str]:
-    """
-    Get the include paths required to build a DPC++ extension.
-
-    Returns:
-        A list of include path strings.
-    """
-    # add pytorch include directories
-    paths = []
-
-    # python_base_path = shutil.which("python")
-    # python_base_path = os.path.abspath(os.path.join(python_base_path, os.pardir))
-    # python_base_path = os.path.abspath(os.path.join(python_base_path, os.pardir))
-
-    # python_version = sys.version.split('.')[0] + '.' + sys.version.split('.')[1]
-
-    # pybind11_path = os.path.join(python_base_path, 'lib')
-    # pybind11_path = os.path.join(pybind11_path, 'python' + python_version)
-    # pybind11_path = os.path.join(pybind11_path, 'site-packages')
-    # pybind11_path = os.path.join(pybind11_path, 'pybind11/include')
-
-    # if not os.path.exists(pybind11_path):
-    #     raise Exception("Didn't found pybind11 in conda site-packages, pls try pip install pybind11")
-
-    # paths.append(pybind11_path)
-    return paths
 
 
 def _prepare_compile_flags(extra_compile_args):
@@ -331,7 +303,6 @@ def SYCLExtension(name, sources, *args, **kwargs):
     kwargs["libraries"] = libraries
 
     include_dirs = kwargs.get("include_dirs", [])
-    include_dirs += include_paths()
     kwargs["include_dirs"] = include_dirs
 
     kwargs["language"] = "c++"
