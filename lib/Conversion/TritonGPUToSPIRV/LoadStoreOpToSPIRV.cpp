@@ -293,7 +293,7 @@ struct StoreOpSPIRVConversion
       const size_t wordNElems = width / valueElemNBits;
       assert(wordNElems * nWords * numVecs == elemsPerThread);
 
-      Value maskVal = spirvMask ? logic_and(mask, maskElems[vecStart]) : mask;
+      Value maskVal = spirvMask ? and_(mask, maskElems[vecStart]) : mask;
 
       // scalar store
       // Create block structure for the masked load.
@@ -525,7 +525,7 @@ struct AtomicRMWOpSPIRVConversion
     for (size_t i = 0; i < elemsPerThread; i += 1) {
       Value rmwVal = valElements[i];
       Value rmwPtr = ptrElements[i];
-      Value rmwMask = spirvMask ? logic_and(mask, maskElements[i]) : mask;
+      Value rmwMask = spirvMask ? and_(mask, maskElements[i]) : mask;
 
       // Create block structure for the masked rmw.
       auto *preheader = rewriter.getInsertionBlock();
@@ -649,7 +649,7 @@ struct AtomicRMWOpSPIRVConversion
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       Value rmwPtr = ptrElements[i];
-      Value rmwMask = spirvMask ? logic_and(mask, maskElements[i]) : mask;
+      Value rmwMask = spirvMask ? and_(mask, maskElements[i]) : mask;
 
       // Create block structure for the masked rmw.
       auto *preheader = rewriter.getInsertionBlock();

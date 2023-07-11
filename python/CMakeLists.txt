@@ -32,15 +32,21 @@ if(TRITON_BUILD_PYTHON_MODULE)
             ${conversion_libs}
 
             # optimizations
+            MLIRBytecodeWriter
             MLIRPass
             MLIRTransforms
             MLIRSupport
-            MLIRIR
+            # things go crazy in the library loops in Analysis and GPUTransforms and
+            # CMake supporting in --starg-group and --end-group.
+            # here we repeat the link libraries to work around it.
+            TritonAnalysis
+            TritonTransforms
+            TritonGPUTransforms
             ${dialect_libs}
             ${conversion_libs}
             )
-    target_link_libraries(intel_xpu_backend_for_triton PRIVATE ${INTEL_EXTENSION_LIBRARIES})
     target_link_libraries(intel_xpu_backend_for_triton PRIVATE ${LLVM_LIBRARIES})
+    target_link_libraries(intel_xpu_backend_for_triton PRIVATE ${INTEL_EXTENSION_LIBRARIES})
     # TODO: Figure out which target is sufficient to fix errors; intel_xpu_backend_for_triton is
     # apparently not enough
     link_libraries(stdc++fs)

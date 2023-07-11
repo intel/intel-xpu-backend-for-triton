@@ -1,5 +1,4 @@
 #include "TypeConverter.h"
-#include "DotOpHelpers.h"
 #include "Utility.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -7,9 +6,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::spirv::DotOpFMAConversionHelper;
-using ::mlir::spirv::DotOpMmaV1ConversionHelper;
-using ::mlir::spirv::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -76,7 +72,15 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
                                  convertType(type.getElementType()));
   });
   // Internally store float8 as int8
+  addConversion([&](mlir::Float8E4M3B11FNUZType type) -> std::optional<Type> {
+    llvm::report_fatal_error("SPIRV doesn't support fp8 type");
+    return IntegerType::get(type.getContext(), 8);
+  });
   addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
+    llvm::report_fatal_error("SPIRV doesn't support fp8 type");
+    return IntegerType::get(type.getContext(), 8);
+  });
+  addConversion([&](mlir::Float8E4M3FNUZType type) -> std::optional<Type> {
     llvm::report_fatal_error("SPIRV doesn't support fp8 type");
     return IntegerType::get(type.getContext(), 8);
   });
