@@ -396,10 +396,11 @@ public:
     TritonSPIRVConversionTarget spirvTarget(*context, spirvTypeConverter);
 
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Preprocess
-    decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp);
+    decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
     decomposeBlockedToDotOperand(mod);
     decomposeInsertSliceAsyncOp(mod);
 
@@ -463,7 +464,7 @@ public:
         allocation, indexCacheInfo, /*benefit=*/10);
     // DotOp
     populateDotOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
-                                 numWarps, axisInfoAnalysis, allocation,
+                                 allocation,
                                  /*benefit=*/10);
     // ElementwiseOp
     populateElementwiseOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
@@ -499,7 +500,6 @@ public:
   }
 
 private:
-  using IndexCacheKeyT = std::pair<Attribute, RankedTensorType>;
   DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
       baseIndexCache;
   DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
@@ -536,8 +536,8 @@ private:
                                         allocation.getSharedMemorySize()));
   }
 
-  void decomposeMmaToDotOperand(ModuleOp mod, int numWarps,
-                                int threadsPerWarp) const {
+  void decomposeMmaToDotOperand(ModuleOp mod, int numWarps, int threadsPerWarp,
+                                int numCTAs) const {
     // Replace `mma -> dot_op` with `mma -> blocked -> dot_op`
     // unless certain conditions are met
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
@@ -553,7 +553,7 @@ private:
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::BlockedEncodingAttr::get(
                 mod.getContext(), srcType.getShape(), getSizePerThread(srcMma),
-                getOrder(srcMma), numWarps, threadsPerWarp));
+                getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
@@ -580,7 +580,8 @@ private:
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::SharedEncodingAttr::get(
                 mod.getContext(), dstDotOp, srcType.getShape(),
-                getOrder(srcBlocked), srcType.getElementType()));
+                srcBlocked.getOrder(), srcBlocked.getCTALayout(),
+                srcType.getElementType()));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getOperand());
         auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(

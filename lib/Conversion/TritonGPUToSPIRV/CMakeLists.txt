@@ -1,17 +1,17 @@
-
-MESSAGE(STATUS "Add TritonGPUToSPIRV")
 add_mlir_conversion_library(TritonGPUToSPIRV
     TritonGPUToSPIRV.cpp
     ViewOpToSPIRV.cpp
     ElementwiseOpToSPIRV.cpp
     TritonGPUToSPIRVPass.cpp
+    ConvertLayoutOpToSPIRV/SharedToDotOperandFMA.cpp
+    ConvertLayoutOpToSPIRV.cpp
+    DotOpToSPIRV/FMA.cpp
     LoadStoreOpToSPIRV.cpp
     ReduceOpToSPIRV.cpp
-    ConvertLayoutOpToSPIRV.cpp
     TypeConverter.cpp
-    DotOpHelpers.cpp
     Utility.cpp
     DotOpToSPIRV.cpp
+
 
     ADDITIONAL_HEADER_DIRS
     ${PROJECT_SOURCE_DIR}/include/triton/Conversion/TritonGPUToSPIRV
@@ -26,12 +26,9 @@ add_mlir_conversion_library(TritonGPUToSPIRV
     MLIRIR
     MLIRPass
     MLIRGPUOps
-    MLIRGPUToNVVMTransforms
     MLIRGPUTransforms
     TritonAnalysis
     TritonIR
     TritonGPUIR
     TritonGPUTransforms
 )
-
-MESSAGE(STATUS "Conversion_libs ${conversion_libs}")
