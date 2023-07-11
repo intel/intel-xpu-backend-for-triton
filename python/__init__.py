@@ -107,9 +107,11 @@ def generate_launcher(constants, signature):
         return f"""
 #include <pybind11/pybind11.h>
 #include <sycl/sycl.hpp>
+#include <cstdlib>
+#ifdef TRITON_XPU_PROFILE
 #include <ipex.h>
 #include <ATen/record_function.h>
-#include <cstdlib>
+#endif
 
 namespace py = pybind11;
 
@@ -177,7 +179,9 @@ static void set_scalar_arg(
 
 static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr, {arg_decls}) {{
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-  RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
+  if (getBoolEnv("TRITON_XPU_PROFILE")) {{
+    RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
+  }}
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
   uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
@@ -237,165 +241,9 @@ static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, i
     }};
 
   auto event = stream.submit(cgf);
-  xpu::profiler_record(kernel_name, event);
-}}
-
-PYBIND11_MODULE(__triton_launcher, m) {{
-  m.doc() = "triton bindings to the C++ launcher API";
-    m.def("launch", [](int grid_x,
-                       int grid_y,
-                       int grid_z,
-                       int num_warps,
-                       int shared_memory,
-                       void* _stream,
-                       void* _kernel,
-                       py::object &launch_enter_hook,
-                       py::object &launch_exit_hook,
-                       py::object &compiled_kernel,
-                       {', '.join([f"{_extracted_type_pybind11(ty)} _arg{i}" for i, ty in signature.items()])}){{
-      int threads_per_warp = 32;
-      if(py::hasattr(compiled_kernel, "threads_per_warp"))
-        threads_per_warp = compiled_kernel.attr("threads_per_warp").cast<int>();
-      sycl::queue* stream = static_cast<sycl::queue*>(_stream);
-      sycl::kernel* kernel = static_cast<sycl::kernel*>(_kernel);
-      sycl_kernel_launch(grid_x, grid_y, grid_z, num_warps, threads_per_warp, shared_memory, *stream, *kernel,
-             {', '.join(f"getPointer(_arg{i},{i})" if ty[0] == "*" else f"_arg{i}" for i, ty in signature.items())});
-    }});
-}}
-
-"""  # noqa: E501
-
-    else:
-        return f"""
-#include <pybind11/pybind11.h>
-#include <sycl/sycl.hpp>
-#include <cstdlib>
-
-namespace py = pybind11;
-
-namespace {{
-
-bool getBoolEnv(const std::string &env) {{
-        const char *s = std::getenv(env.c_str());
-        std::string str(s ? s : "");
-        std::transform(str.begin(), str.end(), str.begin(),
-                        [](unsigned char c) {{ return std::tolower(c); }});
-        return (str == "on" || str == "true" || str == "1");
-}}
-
-}}
-
-static inline void* getPointer(const py::object& _obj, int idx) {{
-  PyObject* obj = _obj.ptr();
-  if (PyLong_Check(obj)) {{
-    auto ptrValue = PyLong_AsUnsignedLongLong(obj);
-    if (PyErr_Occurred()) {{
-      PyErr_Print();
-    }}
-    return (void*)ptrValue;
+  if (getBoolEnv("TRITON_XPU_PROFILE")) {{
+    xpu::profiler_record(kernel_name, event);
   }}
-  if (obj == Py_None) {{
-    return (void*)0;
-  }}
-  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-  if (ptr) {{
-    PyObject *empty_tuple = PyTuple_New(0);
-    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
-    Py_DECREF(empty_tuple);
-    Py_DECREF(ptr);
-    if (!PyLong_Check(ret)) {{
-      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
-    }}
-    return (void*)PyLong_AsVoidPtr(ret);
-  }}
-  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
-  return (void*)0;
-}}
-
-static void set_scalar_arg(
-        sycl::handler& cgh,
-        int index,
-        size_t size,
-        const void* value) {{
-    switch (size) {{
-    case sizeof(uint8_t):
-    cgh.set_arg(index, *static_cast<const uint8_t*>(value));
-    break;
-    case sizeof(uint16_t):
-    cgh.set_arg(index, *static_cast<const uint16_t*>(value));
-    break;
-    case sizeof(uint32_t):
-    cgh.set_arg(index, *static_cast<const uint32_t*>(value));
-    break;
-    case sizeof(uint64_t):
-    cgh.set_arg(index, *static_cast<const uint64_t*>(value));
-    break;
-    default:
-    assert(false && "wrong scalar size in sycl gen.");
-    }}
-}}
-
-static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr, {arg_decls}) {{
-  std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-  void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
-  uint32_t num_params = sizeof(params)/sizeof(params[0]);
-  uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
-
-  size_t global_range_x = gridX*threads_per_warp*num_warps;
-  size_t global_range_y = gridY;
-  size_t global_range_z = gridZ;
-
-  size_t local_range_x = num_warps*threads_per_warp;
-  size_t local_range_y = 1;
-  size_t local_range_z = 1;
-
-  sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
-  sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
-  sycl::nd_range<3> parallel_work_size(global_range, local_range);
-
-  if (getBoolEnv("MLIR_ENABLE_DUMP")){{
-    std::cout << "kernel info name:" << kernel_name << " @" << &kernel_ptr << std::endl;
-    std::cout << "kernel info attributes:" << kernel_ptr.get_info<sycl::info::kernel::attributes>() << std::endl;
-    std::cout << "kernel info reference_count:" << kernel_ptr.get_info<sycl::info::kernel::reference_count>() << std::endl;
-    std::cout << "kernel info num_args:" << kernel_ptr.get_info<sycl::info::kernel::num_args>() << std::endl;
-
-    std::cout << "launch num param:" << num_params << std::endl;
-    std::cout << "  gridx: " << gridX << std::endl;
-    std::cout << "  gridY: " << gridY << std::endl;
-    std::cout << "  gridZ: " << gridZ << std::endl;
-    std::cout << "  num_warps: " << num_warps << std::endl;
-    std::cout << "  threads_per_warp: " << threads_per_warp << std::endl;
-    std::cout << "  global range:[" << "x:"<< global_range_x << ", y:" << global_range_y << ", z:" << global_range_z << "]" << std::endl;
-    std::cout << "  local range:[" << "x:"<< local_range_x << ", y:" << local_range_y << ", z:" << local_range_z << "]" << std::endl;
-    std::cout << "  shared_memory: " << shared_memory << std::endl;
-
-    // param
-    {" ".join(f'std::cout << "  param {idx}:" << *({ty_to_cpp(item)}*)params[{idx}] << std::endl;' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
-  }}
-
-  if (shared_memory) {{
-    expected_num_params -= 1;
-  }}
-  assert(num_params == expected_num_params && "number of kernel param not matched");
-
-  // Submit the imported kernel.
-  auto cgf = [&](sycl::handler &cgh) {{
-
-    {" ".join(f'set_scalar_arg(cgh, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
-
-    if (shared_memory) {{
-        using share_mem_t = sycl::accessor<int8_t, 1, sycl::access::mode::read_write, sycl::access::target::local>;
-        share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
-        cgh.set_arg(num_params, local_buffer);
-        //cgh.parallel_for(sycl::nd_range{{sycl::range{{(uint32_t)gridX*threads_per_warp*num_warps}}, sycl::range{{work_group_size}}}}, kernel_ptr);
-        cgh.parallel_for(parallel_work_size, kernel_ptr);
-    }} else {{
-        cgh.parallel_for(parallel_work_size, kernel_ptr);
-    }}
-
-    }};
-
-  auto event = stream.submit(cgf);
 }}
 
 PYBIND11_MODULE(__triton_launcher, m) {{
@@ -426,12 +274,11 @@ PYBIND11_MODULE(__triton_launcher, m) {{
 
 def _build_xpu_ext(name, src, srcdir):
 
+    current_build_extension = SYCLBuildExtension
+    current_extension = SYCLExtension
     if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':  # noqa: E501
         current_build_extension = DpcppBuildExtension
         current_extension = DPCPPExtension
-    else:
-        current_build_extension = SYCLBuildExtension
-        current_extension = SYCLExtension
 
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))  # noqa: E501
