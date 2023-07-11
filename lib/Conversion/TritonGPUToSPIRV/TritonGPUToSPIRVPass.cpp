@@ -463,7 +463,7 @@ public:
         allocation, indexCacheInfo, /*benefit=*/10);
     // DotOp
     populateDotOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
-                                 numWarps, axisInfoAnalysis, allocation,
+                                 allocation,
                                  /*benefit=*/10);
     // ElementwiseOp
     populateElementwiseOpToSPIRVPatterns(spirvTypeConverter, context, patterns,

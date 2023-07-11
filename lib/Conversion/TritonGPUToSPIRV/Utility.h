@@ -92,6 +92,7 @@
 #define ftrunc(...) rewriter.create<spirv::FConvertOp>(loc, __VA_ARGS__)
 
 // Types
+#define int_ty(width) rewriter.getIntegerType(width)
 #define i64_ty rewriter.getIntegerType(64)
 #define i32_ty rewriter.getIntegerType(32)
 #define i16_ty rewriter.getIntegerType(16)
@@ -262,8 +263,8 @@ struct SharedMemoryObject {
     return offsets[order];
   }
 
-  Value getBaseBeforeSwizzle(int order, Location loc,
-                             ConversionPatternRewriter &rewriter) const {
+  Value getBaseBeforeSlice(int order, Location loc,
+                           ConversionPatternRewriter &rewriter) const {
     Value cSwizzleOffset = getCSwizzleOffset(order);
     Value offset = sub(i32_val(0), cSwizzleOffset);
     Type type = base.getType();
@@ -277,6 +278,28 @@ bool checkOpSupported(std::map<std::string, int> computeCapability,
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
                                 ConversionPatternRewriter &rewriter);
+
+// Convert an \param index to a multi-dim coordinate given \param shape and
+// \param order.
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, Value linear,
+                               ArrayRef<unsigned> shape,
+                               ArrayRef<unsigned> order);
+
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, unsigned linear,
+                               ArrayRef<unsigned> shape);
+
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, Value linear,
+                               ArrayRef<unsigned> shape);
+
+Value linearize(ConversionPatternRewriter &rewriter, Location loc,
+                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
+                ArrayRef<unsigned> order);
+
+Value linearize(ConversionPatternRewriter &rewriter, Location loc,
+                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape);
 
 void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                  Value val, Value pred);

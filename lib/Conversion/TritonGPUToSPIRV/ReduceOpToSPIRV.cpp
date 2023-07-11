@@ -3,6 +3,8 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::mlir::spirv::delinearize;
+using ::mlir::spirv::linearize;
 using ::mlir::spirv::shflSync;
 using ::mlir::spirv::storeShared;
 using ::mlir::triton::gpu::getElemsPerThread;
