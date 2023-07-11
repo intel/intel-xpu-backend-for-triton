@@ -3,6 +3,7 @@ import hashlib
 import os
 import re
 import sysconfig
+import pybind11
 import tempfile
 from pathlib import Path
 
@@ -12,16 +13,16 @@ from intel_extension_for_pytorch.xpu.cpp_extension import (DpcppBuildExtension,
                                                            DPCPPExtension)
 # for add extensions.py in sys.path
 import sys
-sys.path.append(os.path.abspath(os.path.join(__file__, os.pardir)))  
+sys.path.append(os.path.abspath(os.path.join(__file__, os.pardir)))
 
 from extensions import (SYCLExtension, SYCLBuildExtension)
-import triton._C.libintel_xpu_backend_for_triton.triton as _triton
 from triton._C.libtriton.triton import add_external_libs
 from triton.common.backend import BaseBackend, register_backend
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
 from triton.runtime.driver import DriverBase
 from triton.runtime.jit import version_key
+import triton._C.libintel_xpu_backend_for_triton.triton as _triton
 
 
 def _add_external_libs(mod, libs):
@@ -106,7 +107,7 @@ def generate_launcher(constants, signature):
         }[ty]
 
     if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':
-    # Ipex available src
+        # Ipex available src
         return f"""
 #include <pybind11/pybind11.h>
 #include <sycl/sycl.hpp>
@@ -453,9 +454,9 @@ def _build_xpu_ext(name, src, srcdir):
 
     # create extension module
     ext = current_extension(name,
-                         [src],
-                         extra_compile_args=extra_compile_args,
-                         libraries=libraries)
+                            [src],
+                            extra_compile_args=extra_compile_args,
+                            libraries=libraries)
 
     args = ['build_ext']
     args.append('--build-temp=' + srcdir)

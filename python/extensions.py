@@ -4,7 +4,7 @@ import setuptools
 import shutil
 import sys
 import errno
-
+import pybind11
 from typing import List
 
 from setuptools.command.build_ext import build_ext
@@ -14,6 +14,7 @@ SHARED_FLAG = "/DLL" if IS_WINDOWS else "-shared"
 SYCL_FLAG = "-fsycl"
 
 COMMON_DPCPP_FLAGS = ["-fPIC"]
+
 
 def get_dpcpp_complier():
     # build cxx via dpcpp
@@ -31,9 +32,6 @@ def get_icx_complier():
     icx_cmp = shutil.which("icx")
     if icx_cmp is None:
         raise RuntimeError("Failed to find compiler path from OS PATH")
-    _ccbin = os.getenv("CC")
-    if _ccbin is not None:
-        dpcpp_cmp = _ccbin
     return icx_cmp
 
 
@@ -52,24 +50,24 @@ class SYCLBuildExtension(build_ext, object):
     A custom :mod:`setuptools` build extension .
     This class:`setuptools.build_ext` subclass takes care of passing the
     minimum required compiler flags (e.g. ``-std=c++17``) for icpx compilation.
-    
-    When using :class:`SYCLBuildExtension`, it is allowed to supply a dictionary
-    for ``extra_compile_args`` (rather than the usual list) that maps from
-    languages (``cxx``) to a list of additional compiler flags to supply to the
-    compiler.
 
-    ``no_python_abi_suffix`` (bool): If ``no_python_abi_suffix`` is ``False`` (default),
-    then we attempt to build module with python abi suffix, example:
-    output module name: module_name.cpython-37m-x86_64-linux-gnu.so, the
-    ``cpython-37m-x86_64-linux-gnu`` is append python abi suffix.
+    When using :class:`SYCLBuildExtension`, it is allowed to supply a
+    dictionary for ``extra_compile_args`` (rather than the usual list) that
+    maps from languages (``cxx``) to a list of additional compiler flags to
+    supply to the compiler.
 
+    ``no_python_abi_suffix`` (bool): If ``no_python_abi_suffix`` is
+    ``False`` (default), then we attempt to build module with python abi
+    suffix, example: output module name:
+    module_name.cpython-37m-x86_64-linux-gnu.so
+    , the ``cpython-37m-x86_64-linux-gnu`` is append python abi suffix.
     """
 
     @classmethod
     def with_options(cls, **options):
         r"""
-        Returns a subclass with alternative constructor that extends any original keyword
-        arguments to the original constructor with the given options.
+        Returns a subclass with alternative constructor that extends original
+        keyword arguments to the original constructor with the given options.
         """
 
         class cls_with_options(cls):  # type: ignore[misc, valid-type]
@@ -112,8 +110,6 @@ class SYCLBuildExtension(build_ext, object):
             original_spawn = self.compiler.spawn
         else:
             original_compile = self.compiler._compile
-            # save origin function for passthough
-            original_link_shared_object = self.compiler.link_shared_object
             original_spawn = self.compiler.spawn
 
         def append_std17_if_no_std_present(cflags) -> None:
@@ -174,7 +170,8 @@ class SYCLBuildExtension(build_ext, object):
             library_dirs_args += [f"-L{x}" for x in library_dirs]
 
             runtime_library_dirs_args = []
-            runtime_library_dirs_args += [f"-L{x}" for x in runtime_library_dirs]
+            runtime_library_dirs_args += [f"-L{x}"
+                                          for x in runtime_library_dirs]
 
             libraries_args = []
             libraries_args += [f"-l{x}" for x in libraries]
@@ -182,8 +179,9 @@ class SYCLBuildExtension(build_ext, object):
 
             """
             link command formats:
-            cmd = [LD common_args objects library_dirs_args runtime_library_dirs_args libraries_args
-                    -o target_name extra_postargs]
+            cmd = [LD common_args objects library_dirs_args
+            runtime_library_dirs_args libraries_args -o
+            target_name extra_postargs]
             """
 
             cmd_line += [linker]
@@ -258,6 +256,7 @@ class SYCLBuildExtension(build_ext, object):
             "-D_GLIBCXX_USE_CXX11_ABI=1"
         )
 
+
 def include_paths() -> List[str]:
     """
     Get the include paths required to build a DPC++ extension.
@@ -268,23 +267,22 @@ def include_paths() -> List[str]:
     # add pytorch include directories
     paths = []
 
-    python_base_path = shutil.which("python")
-    python_base_path = os.path.abspath(os.path.join(python_base_path, os.pardir))
-    python_base_path = os.path.abspath(os.path.join(python_base_path, os.pardir))
+    # python_base_path = shutil.which("python")
+    # python_base_path = os.path.abspath(os.path.join(python_base_path, os.pardir))
+    # python_base_path = os.path.abspath(os.path.join(python_base_path, os.pardir))
 
-    python_version = sys.version.split('.')[0] + '.' + sys.version.split('.')[1]
+    # python_version = sys.version.split('.')[0] + '.' + sys.version.split('.')[1]
 
-    pybind11_path = os.path.join(python_base_path, 'lib')
-    pybind11_path = os.path.join(pybind11_path, 'python' + python_version)
-    pybind11_path = os.path.join(pybind11_path, 'site-packages')
-    pybind11_path = os.path.join(pybind11_path, 'pybind11/include')
+    # pybind11_path = os.path.join(python_base_path, 'lib')
+    # pybind11_path = os.path.join(pybind11_path, 'python' + python_version)
+    # pybind11_path = os.path.join(pybind11_path, 'site-packages')
+    # pybind11_path = os.path.join(pybind11_path, 'pybind11/include')
 
-    if not os.path.exists(pybind11_path):
-        raise Exception("Didn't found pybind11 in conda site-packages, pls try pip install pybind11")
+    # if not os.path.exists(pybind11_path):
+    #     raise Exception("Didn't found pybind11 in conda site-packages, pls try pip install pybind11")
 
-    paths.append(pybind11_path)
+    # paths.append(pybind11_path)
     return paths
-
 
 
 def _prepare_compile_flags(extra_compile_args):
@@ -307,7 +305,7 @@ def _prepare_ldflags(extra_ldflags, verbose, is_standalone):
             extra_ldflags.append(f"/LIBPATH:{python_lib_path}")
     else:
         if is_standalone:
-            extra_ldflags.append(f"-Wl,-rpath")
+            extra_ldflags.append("-Wl,-rpath")
 
     oneapi_link_args = []
     oneapi_link_args += ["-lsycl"]
