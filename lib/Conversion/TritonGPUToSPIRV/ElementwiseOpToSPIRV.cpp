@@ -948,6 +948,33 @@ struct ExpOpSPIRVConversionApprox
   }
 };
 
+struct AbsFOpConversion
+    : ElementwiseOpSPIRVConversionBase<mlir::math::AbsFOp, AbsFOpConversion> {
+  using Base =
+      ElementwiseOpSPIRVConversionBase<mlir::math::AbsFOp, AbsFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value createDestOp(mlir::math::AbsFOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+
+    if (llvm::isa<IntegerType>(elemTy)) {
+      // Mask out the sign bit
+      auto num_bits =
+          getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
+      assert(num_bits <= 16);
+      auto mask = (1u << (num_bits - 1u)) - 1u;
+      auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
+      auto maskConst =
+          rewriter.create<spirv::ConstantOp>(loc, elemTy, maskAttr);
+      return and_(operands[0], maskConst);
+    }
+
+    return rewriter.create<mlir::math::AbsFOp>(loc, elemTy, operands[0]);
+  }
+};
+
 void populateElementwiseOpToSPIRVPatterns(
     TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
     RewritePatternSet &patterns, int numWarps,
@@ -985,7 +1012,6 @@ void populateElementwiseOpToSPIRVPatterns(
   POPULATE_UNARY_OP(arith::ExtUIOp, arith::ExtUIOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, arith::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, arith::UIToFPOp)
-  POPULATE_UNARY_OP(math::AbsFOp, math::AbsFOp)
   POPULATE_UNARY_OP(math::AbsIOp, math::AbsIOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
@@ -1009,6 +1035,7 @@ void populateElementwiseOpToSPIRVPatterns(
 
   patterns.add<BitcastOpSPIRVConversion>(typeConverter, context, benefit);
 
+  patterns.add<AbsFOpConversion>(typeConverter, context, benefit);
   patterns.add<FDivOpSPIRVConversion>(
       typeConverter, context, benefit,
       mlir::spirv::checkOpSupported(computeCapability,
