@@ -101,7 +101,7 @@ def generate_launcher(constants, signature):
             'fp64': 'double',
         }[ty]
 
-    if os.getenv("TRITON_XPU_PROFILE").lower() == 'on'
+    if os.getenv("TRITON_XPU_PROFILE").lower() == 'on':
     # Ipex available src
         return f"""
 #include <pybind11/pybind11.h>
