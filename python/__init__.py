@@ -27,6 +27,37 @@ def _add_external_libs(mod, libs):
     add_external_libs(mod, list(libs.keys()), list(libs.values()))
 
 
+def ttir_to_ttgir(mod, num_warps):
+    context = _triton.context()
+    mod = _triton.parse_mlir_module(str(mod), context)
+    mod.context = context
+    pm = _triton.pass_manager(mod.context)
+    pm.enable_debug()
+    pm.add_convert_triton_to_tritongpu_pass(num_warps)
+    pm.run(mod)
+    return mod
+
+
+def optimize_ttgir(mod, num_stages, arch):
+    pm = _triton.pass_manager(mod.context)
+    pm.enable_debug()
+    pm.add_tritongpu_coalesce_pass()
+    pm.add_tritongpu_remove_layout_conversions_pass()
+    # pm.add_triton_intel_gpu_accelerate_matmul_pass(arch)
+    pm.add_tritongpu_remove_layout_conversions_pass()
+    pm.add_tritongpu_optimize_dot_operands_pass()
+    pm.add_tritongpu_pipeline_pass(num_stages)
+    pm.add_tritongpu_prefetch_pass()
+    pm.add_tritongpu_optimize_dot_operands_pass()
+    pm.add_tritongpu_remove_layout_conversions_pass()
+    pm.add_tritongpu_decompose_conversions_pass()
+    pm.add_tritongpu_reorder_instructions_pass()
+    pm.add_cse_pass()
+    pm.add_symbol_dce_pass()
+    pm.run(mod)
+    return mod
+
+
 # SPIRV translation
 
 def ttgir_to_spirv(mod, extern_libs, arch):
@@ -249,6 +280,10 @@ PYBIND11_MODULE(__triton_launcher, m) {{
                        int grid_y,
                        int grid_z,
                        int num_warps,
+                       int num_ctas,
+                       int clusterDimX,
+                       int clusterDimY,
+                       int clusterDimZ,
                        int shared_memory,
                        void* _stream,
                        void* _kernel,
@@ -369,7 +404,7 @@ class XPUBackend(BaseBackend):
         self.driver = SYCLDriver()
 
     def add_stages(self, arch, extern_libs, stages):
-        filter_in_stages = ["ast", "ttir", "ttgir"]
+        filter_in_stages = ["ast", "ttir"]
         filter_out_stages = []
         for key, _ in stages.items():
             if key not in filter_in_stages:
@@ -377,6 +412,8 @@ class XPUBackend(BaseBackend):
         for filter_out_key in filter_out_stages:
             stages.pop(filter_out_key)
 
+        stages["intel_ttgir"] = (lambda path: path,
+                                 lambda src: optimize_ttgir(ttir_to_ttgir(src, arch["num_warps"]), arch["num_stages"], arch))
         stages["spirv"] = (lambda path: Path(path).read_text(),
                            lambda src: ttgir_to_spirv(src, extern_libs, arch))
         stages["spvbin"] = (lambda path: Path(path).read_bytes(),
@@ -420,7 +457,7 @@ class XPUBackend(BaseBackend):
         return "spvbin"
 
     def get_architecture_descriptor(self, **kwargs):
-        dev_props = self.driver.utils.get_device_properties(torch.xpu.device(torch.xpu.current_device()).sycl_device)  # noqa: E501
+        dev_props = self.get_device_properties(self.get_current_device())
         max_work_group_size = dev_props['max_work_group_size']
         max_num_sub_groups = dev_props['max_num_sub_groups']
         sub_group_sizes = dev_props['sub_group_sizes']
@@ -433,12 +470,12 @@ class XPUBackend(BaseBackend):
                 max_work_group_size,
                 max_num_sub_groups,
                 max_num_sub_groups)
-        capability = {"num_warps": num_warps, "threads_per_warp": threads_per_warp}  # noqa: E501
+        capability = {"num_warps": num_warps, "threads_per_warp": threads_per_warp, "num_stages": 2}  # noqa: E501
         return capability
 
-    def make_launcher_stub(self, name, signature, constants):
+    def make_launcher_stub(self, name, signature, constants, ids):
         # name of files that are cached
-        so_cache_key = make_so_cache_key(version_key(), signature, constants)
+        so_cache_key = make_so_cache_key(version_key(), signature, constants, ids)
         so_cache_manager = get_cache_manager(so_cache_key)
         so_name = f"{name}.so"
         # retrieve stub from cache if it exists

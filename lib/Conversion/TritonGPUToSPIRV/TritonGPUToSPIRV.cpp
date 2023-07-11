@@ -108,7 +108,7 @@ struct AssertOpSPIRVConversion
     Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {
       if (elemTy.isSignedInteger() || elemTy.isSignlessInteger()) {
-        condition = logic_or(
+        condition = or_(
             condition,
             logic_cmp_eq(elem, rewriter.create<spirv::ConstantOp>(
                                    loc, elemTy, rewriter.getZeroAttr(elemTy))));
