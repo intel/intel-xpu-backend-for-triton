@@ -297,7 +297,7 @@ def include_paths() -> List[str]:
     for info in infos:
         if "Location" in info:
             pybind11_path = info[10:]
-    
+
     pybind11_path = os.path.join(pybind11_path, 'pybind11/include')
     if not os.path.exists(pybind11_path):
         raise Exception("Didn't found pybind11 in conda site-packages, pls try pip install pybind11")
