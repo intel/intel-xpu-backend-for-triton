@@ -61,7 +61,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
     file(INSTALL
          ${CMAKE_CURRENT_SOURCE_DIR}/__init__.py
-         ${CMAKE_CURRENT_SOURCE_DIR}/extensions.py
          DESTINATION ${PYTHON_THIRD_PARTY_PATH}/xpu/)
 
+    file(INSTALL
+         ${CMAKE_CURRENT_SOURCE_DIR}/extensions.py
+         DESTINATION ${PYTHON_THIRD_PARTY_PATH}/xpu/)
 endif()
