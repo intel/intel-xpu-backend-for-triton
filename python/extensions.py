@@ -286,6 +286,28 @@ def _prepare_ldflags(extra_ldflags, verbose, is_standalone):
     return extra_ldflags
 
 
+def include_paths() -> List[str]:
+    """
+    Get the include paths required to build a DPC++ extension.
+
+    Returns:
+        A list of include path strings.
+    """
+    info = os.popen('pip show pybind11').read().split('\n')
+    for item in info:
+        if "Location:" in item:
+            pybind11_path = item[10:]
+    pybind11_path = os.path.join(pybind11_path, 'pybind11/include')
+    print(pybind11_path)
+    if not os.path.exists(pybind11_path):
+        raise Exception("pls try pip install pybind11")
+
+    paths = [pybind11_path, ]
+    # add oneAPI include directories
+
+    return paths
+
+
 def SYCLExtension(name, sources, *args, **kwargs):
     r"""
     Creates a :class:`setuptools.Extension` for SYCL
@@ -303,6 +325,7 @@ def SYCLExtension(name, sources, *args, **kwargs):
     kwargs["libraries"] = libraries
 
     include_dirs = kwargs.get("include_dirs", [])
+    include_dirs += include_paths()
     kwargs["include_dirs"] = include_dirs
 
     kwargs["language"] = "c++"
