@@ -241,7 +241,7 @@ RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
 
   auto event = stream.submit(cgf);
 #ifdef TRITON_XPU_PROFILE
-RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
+xpu::profiler_record(kernel_name, event);
 #endif
 }}
 
