@@ -8,8 +8,6 @@ from pathlib import Path
 
 import setuptools
 import torch
-from intel_extension_for_pytorch.xpu.cpp_extension import (DpcppBuildExtension,
-                                                           DPCPPExtension)
 
 import triton._C.libintel_xpu_backend_for_triton.triton as _triton  # noqa:E402
 from .extensions import SYCLBuildExtension, SYCLExtension  # noqa:E402
@@ -272,11 +270,6 @@ PYBIND11_MODULE(__triton_launcher, m) {{
 
 
 def _build_xpu_ext(name, src, srcdir):
-    current_build_extension = SYCLBuildExtension
-    current_extension = SYCLExtension
-    if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':  # noqa: E501
-        current_build_extension = DpcppBuildExtension
-        current_extension = DPCPPExtension
 
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))  # noqa: E501
@@ -294,10 +287,10 @@ def _build_xpu_ext(name, src, srcdir):
     # build extension module
 
     # create extension module
-    ext = current_extension(name,
-                            [src],
-                            extra_compile_args=extra_compile_args,
-                            libraries=libraries)
+    ext = SYCLExtension(name,
+                        [src],
+                        extra_compile_args=extra_compile_args,
+                        libraries=libraries)
 
     args = ['build_ext']
     args.append('--build-temp=' + srcdir)
@@ -307,7 +300,7 @@ def _build_xpu_ext(name, src, srcdir):
         name=name,
         ext_modules=[ext],
         cmdclass={
-            'build_ext': current_build_extension},
+            'build_ext': SYCLBuildExtension},
         script_args=args,
     )
     # with quiet():
