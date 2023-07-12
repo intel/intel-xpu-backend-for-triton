@@ -476,20 +476,6 @@ def get_pytorch_include_dir():
     return paths
 
 
-def get_ipex_include_dir():
-    infos = os.popen("pip show intel_extension_for_pytorch").read().split("\n")
-    for info in infos:
-        if "Location" in info:
-            ipex_path = info[10:]
-
-    ipex_path = os.path.join(ipex_path, 'pybind11/include')
-    if not os.path.exists(ipex_path):
-        raise Exception("Didn't found pybind11 in conda site-packages, pls try pip install pybind11")
-
-    paths = [ipex_path, ]
-    return paths
-
-
 def get_one_api_help():
     oneAPI = _one_api_help()
     return oneAPI
