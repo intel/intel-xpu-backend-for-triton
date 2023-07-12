@@ -272,7 +272,6 @@ PYBIND11_MODULE(__triton_launcher, m) {{
 
 
 def _build_xpu_ext(name, src, srcdir):
-    print(src)
     current_build_extension = SYCLBuildExtension
     current_extension = SYCLExtension
     if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':  # noqa: E501
