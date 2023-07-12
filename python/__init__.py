@@ -102,9 +102,8 @@ def generate_launcher(constants, signature):
             'fp64': 'double',
         }[ty]
 
-    if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':  # noqa: E501
-        # Ipex available src
-        return f"""
+    # Ipex available src
+    return f"""
 #include <pybind11/pybind11.h>
 #include <sycl/sycl.hpp>
 #include <cstdlib>
@@ -179,9 +178,9 @@ static void set_scalar_arg(
 
 static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr, {arg_decls}) {{
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-  if (getBoolEnv("TRITON_XPU_PROFILE")) {{
-    RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
-  }}
+#ifdef TRITON_XPU_PROFILE
+RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
+#endif
   void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
   uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
@@ -241,9 +240,9 @@ static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, i
     }};
 
   auto event = stream.submit(cgf);
-  if (getBoolEnv("TRITON_XPU_PROFILE")) {{
-    xpu::profiler_record(kernel_name, event);
-  }}
+#ifdef TRITON_XPU_PROFILE
+RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
+#endif
 }}
 
 PYBIND11_MODULE(__triton_launcher, m) {{
@@ -273,7 +272,7 @@ PYBIND11_MODULE(__triton_launcher, m) {{
 
 
 def _build_xpu_ext(name, src, srcdir):
-
+    print(src)
     current_build_extension = SYCLBuildExtension
     current_extension = SYCLExtension
     if os.getenv("TRITON_XPU_PROFILE") is not None and os.getenv("TRITON_XPU_PROFILE").lower() == 'on':  # noqa: E501
