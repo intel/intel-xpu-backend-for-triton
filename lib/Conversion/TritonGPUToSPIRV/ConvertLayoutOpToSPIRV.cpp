@@ -236,8 +236,16 @@ private:
             for (unsigned v = 0; v < vec; ++v) {
               auto currVal =
                   vals[elemId + linearCTAId * accumSizePerThread + v];
-              if (isInt1)
-                currVal = zext(llvmElemTy, currVal);
+              if (isInt1) {
+                // If it is i1, then convert val into the i8
+                // Because the spirv::BitCastOp does not support i1, we use the
+                // select to create i8.
+                Value mask = int_val(1, 1);
+                Value maskedSrc = logic_and(currVal, mask);
+                Value isOne = logic_cmp_eq(maskedSrc, mask);
+
+                currVal = select(isOne, int_val(8, 1), int_val(8, 0));
+              }
               valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
             }
             store(valVec, ptr);
