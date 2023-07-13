@@ -209,8 +209,16 @@ private:
         if (vec == 1) {
           if (stNotRd) {
             auto currVal = vals[elemId + linearCTAId * accumSizePerThread];
-            if (isInt1)
-              currVal = zext(llvmElemTy, currVal);
+            if (isInt1) {
+              // If it is i1, then convert val into the i8
+              // Because the spirv::BitCastOp does not support i1, we use the
+              // select to create i8.
+              Value mask = int_val(1, 1);
+              Value maskedSrc = logic_and(currVal, mask);
+              Value isOne = logic_cmp_eq(maskedSrc, mask);
+
+              currVal = select(isOne, int_val(8, 1), int_val(8, 0));
+            }
             store(currVal, ptr);
           } else {
             Value currVal = load(ptr);
@@ -279,7 +287,10 @@ private:
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto elemPtrTy = ptr_ty(llvmElemTy, spirv::StorageClass::Workgroup);
-    smemBase = bitcast(smemBase, elemPtrTy);
+    if (!llvmElemTy.isInteger(1)) {
+      // avoid unecessary bitcast. Since the i1 will be stored in i8.
+      smemBase = bitcast(smemBase, elemPtrTy);
+    }
     auto shape = dstTy.getShape();
     unsigned rank = dstTy.getRank();
     SmallVector<unsigned> numReplicates(rank);
