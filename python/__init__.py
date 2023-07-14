@@ -8,15 +8,15 @@ from pathlib import Path
 
 import setuptools
 import torch
-
 import triton._C.libintel_xpu_backend_for_triton.triton as _triton  # noqa:E402
-from .extensions import SYCLBuildExtension, SYCLExtension  # noqa:E402
 from triton._C.libtriton.triton import add_external_libs  # noqa:E402
 from triton.common.backend import BaseBackend, register_backend  # noqa:E402
 from triton.compiler.make_launcher import make_so_cache_key  # noqa:E402
 from triton.runtime.cache import get_cache_manager  # noqa:E402
 from triton.runtime.driver import DriverBase  # noqa:E402
 from triton.runtime.jit import version_key  # noqa:E402
+
+from .extensions import SYCLBuildExtension, SYCLExtension  # noqa:E402
 
 
 def _add_external_libs(mod, libs):
