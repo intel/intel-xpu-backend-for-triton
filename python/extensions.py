@@ -6,6 +6,7 @@ import sys
 import warnings
 from typing import List
 
+import intel_extension_for_pytorch
 import pybind11  # noqa: F401
 import setuptools
 import torch
@@ -356,12 +357,6 @@ def _get_dpcpp_root():
     return dpcpp_root
 
 
-def _get_onemkl_root():
-    # TODO: Need to decouple with toolchain env scripts
-    path = os.getenv("MKLROOT")
-    return path
-
-
 def _get_onednn_root():
     # TODO: Need to decouple with toolchain env scripts
     path = os.getenv("DNNLROOT")
@@ -376,16 +371,9 @@ class _one_api_help:
 
     def __init__(self):
         self.__dpcpp_root = _get_dpcpp_root()
-        self.__onemkl_root = _get_onemkl_root()
         self.__onednn_root = _get_onednn_root()
 
-        infos = os.popen("pip show intel_extension_for_pytorch").read().split("\n")
-        for info in infos:
-            if "Location" in info:
-                ipex_path = info[10:]
-        ipex_path = os.path.join(ipex_path, "intel_extension_for_pytorch")
-
-        self.__ipex_root = ipex_path
+        self.__ipex_root = os.path.dirname(intel_extension_for_pytorch.__file__)
 
         self.check_onednn_cfg()
         self.check_dpcpp_cfg()
@@ -408,9 +396,6 @@ class _one_api_help:
         if self.__dpcpp_root is None:
             raise "Didn't detect dpcpp root. Please source <oneapi_dir>/compiler/<version>/env/vars.sh "
 
-    def get_ipex_include_dir(self):
-        return [os.path.join(self.__ipex_root, "include")]
-
     def get_ipex_lib_dir(self):
         return [os.path.join(self.__ipex_root, "lib")]
 
@@ -420,24 +405,11 @@ class _one_api_help:
             os.path.join(self.__dpcpp_root, "linux", "include", "sycl"),
         ]
 
-    def get_onemkl_include_dir(self):
-        return [os.path.join(self.__onemkl_root, "include")]
-
     def get_onednn_include_dir(self):
         return [os.path.join(self.__onednn_root, "include")]
 
     def get_onednn_lib_dir(self):
         return [os.path.join(self.__onednn_root, "lib")]
-
-    def is_onemkl_ready(self):
-        if self.__onemkl_root is None:
-            return False
-        return True
-
-    def is_onednn_ready(self):
-        if self.__onednn_root is None:
-            return False
-        return True
 
     def get_library_dirs(self):
         library_dirs = []
@@ -448,9 +420,7 @@ class _one_api_help:
     def get_include_dirs(self):
         include_dirs = []
         include_dirs += [f"{x}" for x in self.get_dpcpp_include_dir()]
-        include_dirs += [f"{x}" for x in self.get_onemkl_include_dir()]
         include_dirs += [f"{x}" for x in self.get_onednn_include_dir()]
-        include_dirs += [f"{x}" for x in self.get_ipex_include_dir()]
         return include_dirs
 
     def get_onemkl_libraries(self):
@@ -463,16 +433,8 @@ class _one_api_help:
         ]
 
 
-def get_pytorch_include_dir():
-    lib_include = os.path.join(_TORCH_PATH, "include")
-    paths = [
-        lib_include,
-        # Remove this once torch/torch.h is officially no longer supported for C++ extensions.
-        os.path.join(lib_include, "torch", "csrc", "api", "include"),
-        # Some internal (old) Torch headers don't properly prefix their includes,
-        # so we need to pass -Itorch/lib/include/TH as well.
-        os.path.join(lib_include, "TH"),
-    ]
+def get_pytorch_ipex_onemkl_include_dir():
+    paths = intel_extension_for_pytorch.xpu.cpp_extension.include_paths()
     return paths
 
 
@@ -491,19 +453,12 @@ def include_paths() -> List[str]:
     if use_profile():
         # add pytorch include directories
         paths = []
-        paths += get_pytorch_include_dir()
+        paths += get_pytorch_ipex_onemkl_include_dir()
 
         # add oneAPI include directories
         paths += get_one_api_help().get_include_dirs()
     else:
-        infos = os.popen("pip show pybind11").read().split("\n")
-        for info in infos:
-            if "Location" in info:
-                pybind11_path = info[10:]
-
-        pybind11_path = os.path.join(pybind11_path, 'pybind11/include')
-        if not os.path.exists(pybind11_path):
-            raise Exception("Didn't found pybind11 in conda site-packages, pls try pip install pybind11")
+        pybind11_path = pybind11.get_include()
 
         paths = [pybind11_path, ]
 
