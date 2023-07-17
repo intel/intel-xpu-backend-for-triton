@@ -55,6 +55,7 @@
 #define load(...) rewriter.create<spirv::LoadOp>(loc, __VA_ARGS__)
 #define store(val, ptr) rewriter.create<spirv::StoreOp>(loc, ptr, val)
 #define fcmp_oeq(lhs, rhs) rewriter.create<spirv::FOrdEqualOp>(loc, lhs, rhs)
+#define fis_nan(val) rewriter.create<spirv::IsNanOp>(loc, val)
 #define fcmp_ogt(lhs, rhs)                                                     \
   rewriter.create<spirv::FOrdGreaterThanOp>(loc, lhs, rhs)
 #define fcmp_olt(lhs, rhs) rewriter.create<spirv::FOrdLessThanOp>(loc, lhs, rhs)
