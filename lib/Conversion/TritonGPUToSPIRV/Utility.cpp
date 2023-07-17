@@ -193,19 +193,16 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
     //   STEP5: U32_VAL_TMP = U32_VAL + ROUNDING_BIAS
     //   STEP6: BF16_VAL = static_cast<UINT16>(U32_VAL_TMP >> 16)
     Value val = v;
-    auto mask = fcmp_oeq(val, val);
+    auto mask = fis_nan(val);
     // STEP1
     auto fp32_i32_value = bitcast(v, i32_ty);
     // STEP2
     val = lshr(fp32_i32_value, i32_val(16));
-    // val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
-    val = itrunc(i16_ty, val);
     // STEP3
-    val = and_(val, int_val(16, 1));
+    val = and_(val, int_val(32, 1));
     // STEP4
-    auto rounding_bias = int_val(16, 0x7FF);
+    auto rounding_bias = int_val(32, 0x7FFF);
     val = add(val, rounding_bias);
-    val = zext(i32_ty, val);
     // Step 5
     val = add(val, fp32_i32_value);
     // Step6
@@ -214,7 +211,7 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
     val = itrunc(i16_ty, val);
     val = bitcast(val, i16_ty);
     // If the value is NaN, return BF16 NaN.
-    val = select(mask, val, int_val(16, 0xFFFF));
+    val = select(mask, int_val(16, 0xFFFF), val);
     return val;
   }
 }
