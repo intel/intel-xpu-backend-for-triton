@@ -16,11 +16,11 @@ template <typename T> class OperationPass;
 
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToSPIRVPass(std::map<std::string, int> computeCapability = {});
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToSPIRVPass(
+    std::map<std::string, int> computeCapability = {});
 
 } // namespace triton
 
 } // namespace mlir
 
-#endif //TRITON_TRITONGPUTOSPIRVPASS_H
+#endif // TRITON_TRITONGPUTOSPIRVPASS_H

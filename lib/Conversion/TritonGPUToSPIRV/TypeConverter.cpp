@@ -17,12 +17,11 @@ using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
-
 /// Mapping between SPIR-V storage classes to Triton memory spaces.
 ///
 #define STORAGE_SPACE_MAP_LIST(MAP_FN)                                         \
   MAP_FN(spirv::StorageClass::CrossWorkgroup, 1)                               \
-  MAP_FN(spirv::StorageClass::Workgroup, 3)                                    \
+  MAP_FN(spirv::StorageClass::Workgroup, 3)
 
 #if 0
 MAP_FN(spirv::StorageClass::StorageBuffer, 0)                                \
@@ -56,8 +55,8 @@ getStorageClassForMemorySpace(unsigned space) {
 
   switch (space) {
     STORAGE_SPACE_MAP_LIST(STORAGE_SPACE_MAP_FN)
-    default:
-      return std::nullopt;
+  default:
+    return std::nullopt;
   }
 #undef STORAGE_SPACE_MAP_FN
 }
@@ -70,6 +69,11 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
   });
   addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type);
+  });
+  addConversion([&](mlir::VectorType type) -> llvm::Optional<Type> {
+    // Recursively translate vector type
+    return mlir::VectorType::get(type.getShape(),
+                                 convertType(type.getElementType()));
   });
   // Internally store float8 as int8
   addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
@@ -97,7 +101,7 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
       return std::nullopt;
 
     return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
-            .getResult(0);
+        .getResult(0);
   });
   addTargetMaterialization([&](OpBuilder &builder, Type resultType,
                                ValueRange inputs,
@@ -106,7 +110,7 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
       return std::nullopt;
 
     return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
-            .getResult(0);
+        .getResult(0);
   });
 }
 
@@ -116,7 +120,8 @@ Type TritonGPUToSPIRVTypeConverter::convertTritonPointerType(
   std::optional<spirv::StorageClass> storageClass = getStorageClassForMemorySpace(
           type.getAddressSpace());
   assert(storageClass && "uncompatible pointer address type in SPIRV");
-  return spirv::PointerType::get(convertType(type.getPointeeType()), *storageClass);
+  return spirv::PointerType::get(convertType(type.getPointeeType()),
+                                 *storageClass);
 }
 
 Value TritonGPUToSPIRVTypeConverter::packLLElements(
@@ -146,7 +151,8 @@ Value TritonGPUToSPIRVTypeConverter::packLLElements(
                      << elementTypes[v.index()] << " but got "
                      << v.value().getType();
     }
-    spirvStruct = insert_val(structType, v.value(), spirvStruct, rewriter.getI32ArrayAttr(v.index()));
+    spirvStruct = insert_val(structType, v.value(), spirvStruct,
+                             rewriter.getI32ArrayAttr(v.index()));
   }
   return spirvStruct;
 }
@@ -160,7 +166,7 @@ SmallVector<Value> TritonGPUToSPIRVTypeConverter::unpackLLElements(
       spirvStruct.getType().isa<spirv::PointerType>())
     return {spirvStruct};
   auto types =
-          spirvStruct.getType().cast<spirv::StructType>().getElementTypes();
+      spirvStruct.getType().cast<spirv::StructType>().getElementTypes();
   SmallVector<Value> results(types.size());
   for (unsigned i = 0; i < types.size(); ++i) {
     Type type = types[i];

@@ -7,9 +7,9 @@ using namespace mlir;
 using namespace mlir::triton;
 
 void populateLoadStoreOpToSPIRVPatterns(
-    TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
+    TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
+    RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
     PatternBenefit benefit);
 

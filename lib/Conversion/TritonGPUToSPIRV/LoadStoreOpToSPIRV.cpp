@@ -1,6 +1,6 @@
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 #include "LoadStoreOpToSPIRV.h"
 
@@ -13,7 +13,8 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreSPIRVConversionBase {
-  explicit LoadStoreSPIRVConversionBase(ModuleAxisInfoAnalysis &axisAnalysisPass)
+  explicit LoadStoreSPIRVConversionBase(
+      ModuleAxisInfoAnalysis &axisAnalysisPass)
       : axisAnalysisPass(axisAnalysisPass) {}
 
   unsigned getContiguity(Value ptr) const {
@@ -47,9 +48,12 @@ struct LoadOpSPIRVConversion
   using ConvertTritonGPUOpToSPIRVPattern<
       triton::LoadOp>::ConvertTritonGPUOpToSPIRVPattern;
 
-  LoadOpSPIRVConversion(TritonGPUToSPIRVTypeConverter &converter, MLIRContext *context,
-                        ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
-      : ConvertTritonGPUOpToSPIRVPattern<triton::LoadOp>(converter, context, benefit),
+  LoadOpSPIRVConversion(TritonGPUToSPIRVTypeConverter &converter,
+                        MLIRContext *context,
+                        ModuleAxisInfoAnalysis &axisAnalysisPass,
+                        PatternBenefit benefit)
+      : ConvertTritonGPUOpToSPIRVPattern<triton::LoadOp>(converter, context,
+                                                         benefit),
         LoadStoreSPIRVConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -77,8 +81,8 @@ struct LoadOpSPIRVConversion
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
     // Get the SPIRV values for pointers
-    auto ptrElems = getTypeConverter()->unpackLLElements(loc, spirvPtr, rewriter,
-                                                         ptr.getType());
+    auto ptrElems = getTypeConverter()->unpackLLElements(
+        loc, spirvPtr, rewriter, ptr.getType());
     assert(ptrElems.size() == numElems);
 
     // Get the SPIRV values for mask
@@ -100,8 +104,8 @@ struct LoadOpSPIRVConversion
     }
     SmallVector<Value> otherElems;
     if (other) {
-      otherElems = getTypeConverter()->unpackLLElements(loc, spirvOther, rewriter,
-                                                        other.getType());
+      otherElems = getTypeConverter()->unpackLLElements(
+          loc, spirvOther, rewriter, other.getType());
     }
 
     // vectorized iteration through all the pointer/mask/other elements
@@ -119,9 +123,11 @@ struct LoadOpSPIRVConversion
       assert(wordNElems * nWords * numVecs == numElems);
 
       SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
-      Type retTy = retTys.size() > 1
-                   ? mlir::VectorType::get({(int64_t)nWords}, IntegerType::get(getContext(), width))
-                   : retTys[0];
+      Type retTy =
+          retTys.size() > 1
+              ? mlir::VectorType::get({(int64_t)nWords},
+                                      IntegerType::get(getContext(), width))
+              : retTys[0];
 
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
 
@@ -137,7 +143,8 @@ struct LoadOpSPIRVConversion
       rewriter.setInsertionPoint(preheader, preheader->end());
 
       // Prediction false to use the other value.
-      Value other_ = undef(retTy);;
+      Value other_ = undef(retTy);
+      ;
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
           size_t size = width / valueElemNBits;
@@ -163,12 +170,15 @@ struct LoadOpSPIRVConversion
         }
       }
 
-      rewriter.create<mlir::cf::CondBranchOp>(loc, pred, condblock, tailblock, ValueRange{other_});
+      rewriter.create<mlir::cf::CondBranchOp>(loc, pred, condblock, tailblock,
+                                              ValueRange{other_});
 
       // Do the load
       rewriter.setInsertionPoint(condblock, condblock->end());
 
-      Value ptrElem = bitcast(ptrElems[vecStart], ptr_ty(retTy, spirv::StorageClass::CrossWorkgroup));
+      Value ptrElem =
+          bitcast(ptrElems[vecStart],
+                  ptr_ty(retTy, spirv::StorageClass::CrossWorkgroup));
 
       Value ret = rewriter.create<spirv::LoadOp>(loc, ptrElem);
       rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{ret});
@@ -182,12 +192,14 @@ struct LoadOpSPIRVConversion
       for (unsigned int ii = 0; ii < nWords; ++ii) {
         Value curr;
         if (retTy.isa<mlir::VectorType>()) {
-          curr = extract_val(IntegerType::get(getContext(), width), ret, rewriter.getI32ArrayAttr(ii));
+          curr = extract_val(IntegerType::get(getContext(), width), ret,
+                             rewriter.getI32ArrayAttr(ii));
         } else {
           curr = ret;
         }
         if (elemsPerWord > 1)
-          curr = bitcast(curr, mlir::VectorType::get({(int64_t)elemsPerWord}, valueElemTy));
+          curr = bitcast(curr, mlir::VectorType::get({(int64_t)elemsPerWord},
+                                                     valueElemTy));
         else
           curr = bitcast(curr, valueElemTy);
         rets.push_back(curr);
@@ -196,7 +208,8 @@ struct LoadOpSPIRVConversion
       for (size_t ii = 0; ii < vec; ++ii) {
         Value loaded;
         if (elemsPerWord > 1)
-          loaded = extract_val(valueElemTy, rets[ii / elemsPerWord], rewriter.getI32ArrayAttr(ii % elemsPerWord));
+          loaded = extract_val(valueElemTy, rets[ii / elemsPerWord],
+                               rewriter.getI32ArrayAttr(ii % elemsPerWord));
         else
           loaded = rets[ii / elemsPerWord];
         loadedVals.push_back(loaded);
@@ -205,22 +218,25 @@ struct LoadOpSPIRVConversion
 
     Type spirvResultStructTy = getTypeConverter()->convertType(valueTy);
     Value resultStruct = getTypeConverter()->packLLElements(
-            loc, loadedVals, rewriter, spirvResultStructTy);
+        loc, loadedVals, rewriter, spirvResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
 };
 
 struct StoreOpSPIRVConversion
-        : public ConvertTritonGPUOpToSPIRVPattern<triton::StoreOp>,
-          public LoadStoreSPIRVConversionBase {
+    : public ConvertTritonGPUOpToSPIRVPattern<triton::StoreOp>,
+      public LoadStoreSPIRVConversionBase {
   using ConvertTritonGPUOpToSPIRVPattern<
-          triton::StoreOp>::ConvertTritonGPUOpToSPIRVPattern;
+      triton::StoreOp>::ConvertTritonGPUOpToSPIRVPattern;
 
-  StoreOpSPIRVConversion(TritonGPUToSPIRVTypeConverter &converter, MLIRContext *context,
-                         ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
-          : ConvertTritonGPUOpToSPIRVPattern<triton::StoreOp>(converter, context, benefit),
-            LoadStoreSPIRVConversionBase(axisAnalysisPass) {}
+  StoreOpSPIRVConversion(TritonGPUToSPIRVTypeConverter &converter,
+                         MLIRContext *context,
+                         ModuleAxisInfoAnalysis &axisAnalysisPass,
+                         PatternBenefit benefit)
+      : ConvertTritonGPUOpToSPIRVPattern<triton::StoreOp>(converter, context,
+                                                          benefit),
+        LoadStoreSPIRVConversionBase(axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -242,8 +258,8 @@ struct StoreOpSPIRVConversion
     unsigned vec = getVectorSize(ptr);
     unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
 
-    auto ptrElems = getTypeConverter()->unpackLLElements(loc, spirvPtr, rewriter,
-                                                         ptr.getType());
+    auto ptrElems = getTypeConverter()->unpackLLElements(
+        loc, spirvPtr, rewriter, ptr.getType());
     auto valueElems = getTypeConverter()->unpackLLElements(
         loc, spirvValue, rewriter, value.getType());
     assert(ptrElems.size() == valueElems.size());
@@ -288,17 +304,19 @@ struct StoreOpSPIRVConversion
 
       // Test the mask
       rewriter.setInsertionPoint(preheader, preheader->end());
-      rewriter.create<mlir::cf::CondBranchOp>(loc, maskVal, condblock, tailblock);
+      rewriter.create<mlir::cf::CondBranchOp>(loc, maskVal, condblock,
+                                              tailblock);
 
       // Do the Store
       rewriter.setInsertionPoint(condblock, condblock->end());
 
       Type valArgTy = IntegerType::get(ctx, width);
-      Type valueVectorTy = nWords > 1
-                           ? mlir::VectorType::get({(int64_t)nWords}, valArgTy)
-                           : valArgTy;
+      Type valueVectorTy =
+          nWords > 1 ? mlir::VectorType::get({(int64_t)nWords}, valArgTy)
+                     : valArgTy;
 
-      auto wordTy = wordNElems > 1 ? vec_ty(valueElemTy, wordNElems) : valueElemTy;
+      auto wordTy =
+          wordNElems > 1 ? vec_ty(valueElemTy, wordNElems) : valueElemTy;
 
       Value valToStore = undef(valueVectorTy);
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
@@ -312,19 +330,23 @@ struct StoreOpSPIRVConversion
             elem = sext(i8_ty, elem);
           }
           if (wordNElems > 1)
-            spirvWord = insert_element(wordTy, spirvWord, elem, i32_val(elemIdx));
+            spirvWord =
+                insert_element(wordTy, spirvWord, elem, i32_val(elemIdx));
           else
             spirvWord = elem;
         }
         spirvWord = bitcast(spirvWord, valArgTy);
 
         if (nWords > 1)
-          valToStore = insert_element(valueVectorTy, valToStore, spirvWord, i32_val(wordIdx));
+          valToStore = insert_element(valueVectorTy, valToStore, spirvWord,
+                                      i32_val(wordIdx));
         else
           valToStore = spirvWord;
       }
 
-      Value ptrElem = bitcast(ptrElems[vecStart], ptr_ty(valueVectorTy, spirv::StorageClass::CrossWorkgroup));
+      Value ptrElem =
+          bitcast(ptrElems[vecStart],
+                  ptr_ty(valueVectorTy, spirv::StorageClass::CrossWorkgroup));
 
       rewriter.create<spirv::StoreOp>(loc, ptrElem, valToStore);
       rewriter.create<mlir::cf::BranchOp>(loc, tailblock);
@@ -337,19 +359,18 @@ struct StoreOpSPIRVConversion
 };
 
 struct AtomicCASOpSPIRVConversion
-        : public ConvertTritonGPUOpToSPIRVPattern<triton::AtomicCASOp>,
-          public LoadStoreSPIRVConversionBase {
+    : public ConvertTritonGPUOpToSPIRVPattern<triton::AtomicCASOp>,
+      public LoadStoreSPIRVConversionBase {
   using ConvertTritonGPUOpToSPIRVPattern<
-          triton::AtomicCASOp>::ConvertTritonGPUOpToSPIRVPattern;
+      triton::AtomicCASOp>::ConvertTritonGPUOpToSPIRVPattern;
 
   AtomicCASOpSPIRVConversion(TritonGPUToSPIRVTypeConverter &converter,
-                             MLIRContext *context,
-                             ModuleAllocation &allocation,
+                             MLIRContext *context, ModuleAllocation &allocation,
                              ModuleAxisInfoAnalysis &axisAnalysisPass,
                              PatternBenefit benefit)
-          : ConvertTritonGPUOpToSPIRVPattern<triton::AtomicCASOp>(
-          converter, context, allocation, benefit),
-            LoadStoreSPIRVConversionBase(axisAnalysisPass) {}
+      : ConvertTritonGPUOpToSPIRVPattern<triton::AtomicCASOp>(
+            converter, context, allocation, benefit),
+        LoadStoreSPIRVConversionBase(axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
@@ -362,21 +383,22 @@ struct AtomicCASOpSPIRVConversion
     Value spirvVal = adaptor.getVal();
 
     auto ptrElements = getTypeConverter()->unpackLLElements(
-            loc, spirvPtr, rewriter, op.getPtr().getType());
+        loc, spirvPtr, rewriter, op.getPtr().getType());
     auto cmpElements = getTypeConverter()->unpackLLElements(
-            loc, spirvCmp, rewriter, op.getCmp().getType());
+        loc, spirvCmp, rewriter, op.getCmp().getType());
     auto valElements = getTypeConverter()->unpackLLElements(
-            loc, spirvVal, rewriter, op.getVal().getType());
+        loc, spirvVal, rewriter, op.getVal().getType());
 
     auto TensorTy = op.getResult().getType().dyn_cast<RankedTensorType>();
     Type valueElemTy =
-            TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
-                     : op.getResult().getType();
+        TensorTy ? getTypeConverter()->convertType(TensorTy.getElementType())
+                 : op.getResult().getType();
     auto tid = tid_val();
     Value pred = icmp_eq(tid, i32_val(0));
 
     Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-    atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, spirv::StorageClass::Workgroup));
+    atomPtr =
+        bitcast(atomPtr, ptr_ty(valueElemTy, spirv::StorageClass::Workgroup));
 
     Value casPtr = ptrElements[0];
     Value casCmp = cmpElements[0];
@@ -392,23 +414,21 @@ struct AtomicCASOpSPIRVConversion
     // Test the prediction
     rewriter.setInsertionPoint(preheader, preheader->end());
     Value other = undef(valueElemTy);
-    rewriter.create<mlir::cf::CondBranchOp>(loc, pred, condblock, tailblock, ValueRange{other});
+    rewriter.create<mlir::cf::CondBranchOp>(loc, pred, condblock, tailblock,
+                                            ValueRange{other});
 
     // Do the Atomic
     rewriter.setInsertionPoint(condblock, condblock->end());
 
-    auto old = rewriter.create<spirv::AtomicCompareExchangeOp>(loc,
-                                                  valueElemTy,
-                                                  casPtr,
-                                                  mlir::spirv::Scope::Device,
-                                                  mlir::spirv::MemorySemantics::AcquireRelease |
-                                                  mlir::spirv::MemorySemantics::MakeAvailable  |
-                                                  mlir::spirv::MemorySemantics::MakeVisible,
-                                                  mlir::spirv::MemorySemantics::AcquireRelease |
-                                                  mlir::spirv::MemorySemantics::MakeAvailable  |
-                                                  mlir::spirv::MemorySemantics::MakeVisible,
-                                                  casVal,
-                                                  casCmp);
+    auto old = rewriter.create<spirv::AtomicCompareExchangeOp>(
+        loc, valueElemTy, casPtr, mlir::spirv::Scope::Device,
+        mlir::spirv::MemorySemantics::AcquireRelease |
+            mlir::spirv::MemorySemantics::MakeAvailable |
+            mlir::spirv::MemorySemantics::MakeVisible,
+        mlir::spirv::MemorySemantics::AcquireRelease |
+            mlir::spirv::MemorySemantics::MakeAvailable |
+            mlir::spirv::MemorySemantics::MakeVisible,
+        casVal, casCmp);
 
     rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{old});
     rewriter.setInsertionPoint(tailblock, tailblock->begin());
@@ -444,19 +464,18 @@ struct AtomicCASOpSPIRVConversion
 };
 
 struct AtomicRMWOpSPIRVConversion
-        : public ConvertTritonGPUOpToSPIRVPattern<triton::AtomicRMWOp>,
-          public LoadStoreSPIRVConversionBase {
+    : public ConvertTritonGPUOpToSPIRVPattern<triton::AtomicRMWOp>,
+      public LoadStoreSPIRVConversionBase {
   using ConvertTritonGPUOpToSPIRVPattern<
-          triton::AtomicRMWOp>::ConvertTritonGPUOpToSPIRVPattern;
+      triton::AtomicRMWOp>::ConvertTritonGPUOpToSPIRVPattern;
 
   AtomicRMWOpSPIRVConversion(TritonGPUToSPIRVTypeConverter &converter,
-                             MLIRContext *context,
-                             ModuleAllocation &allocation,
+                             MLIRContext *context, ModuleAllocation &allocation,
                              ModuleAxisInfoAnalysis &axisAnalysisPass,
                              PatternBenefit benefit)
-          : ConvertTritonGPUOpToSPIRVPattern<triton::AtomicRMWOp>(
-          converter, context, allocation, benefit),
-            LoadStoreSPIRVConversionBase(axisAnalysisPass) {}
+      : ConvertTritonGPUOpToSPIRVPattern<triton::AtomicRMWOp>(
+            converter, context, allocation, benefit),
+        LoadStoreSPIRVConversionBase(axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
@@ -474,40 +493,39 @@ struct AtomicRMWOpSPIRVConversion
     Value spirvMask = adaptor.getMask();
 
     auto valElements = getTypeConverter()->unpackLLElements(
-            loc, spirvVal, rewriter, val.getType());
+        loc, spirvVal, rewriter, val.getType());
     auto ptrElements = getTypeConverter()->unpackLLElements(
-            loc, spirvPtr, rewriter, ptr.getType());
+        loc, spirvPtr, rewriter, ptr.getType());
     SmallVector<Value> maskElements;
     if (spirvMask)
       maskElements = getTypeConverter()->unpackLLElements(
-              loc, spirvMask, rewriter, op.getMask().getType());
+          loc, spirvMask, rewriter, op.getMask().getType());
 
-    auto tensorTy = op.getResult().getType().dyn_cast<RankedTensorType>();
+    auto valueTy = op.getResult().getType();
+    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
     Type valueElemTy =
-            tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
-                     : op.getResult().getType();
-    const size_t valueElemNbits = valueElemTy.getIntOrFloatBitWidth();
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
+                 : valueTy;
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
-    int numElems = 1;
     // tensor
     if (tensorTy) {
       auto valTy = val.getType().cast<RankedTensorType>();
-      // mask
-      numElems = tensorTy.getNumElements();
+      if (valTy.getElementType().isF16()) {
+        auto vec = getVectorSize(ptr);
+        // We only do the fp16 atomic when it is able to be packed to 32 bits.
+        if (vec > 1 && ((vec % 2) == 0))
+          return rewriteFP16Atomic(op, adaptor, rewriter);
+      }
     }
-    Value mask = int_val(1, 1);
-    auto tid = tid_val();
-    mask = logic_and(mask,
-                icmp_ult(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
+    // mask
+    Value mask = getMask(valueTy, rewriter, loc);
 
+    // vec = 1 for scalar
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += 1) {
       Value rmwVal = valElements[i];
       Value rmwPtr = ptrElements[i];
       Value rmwMask = spirvMask ? logic_and(mask, maskElements[i]) : mask;
-      if (!tensorTy) {
-        rmwMask = logic_and(rmwMask, icmp_eq(tid, i32_val(0)));
-      }
 
       // Create block structure for the masked rmw.
       auto *preheader = rewriter.getInsertionBlock();
@@ -520,25 +538,26 @@ struct AtomicRMWOpSPIRVConversion
       auto retType = valueElemTy;
       rewriter.setInsertionPoint(preheader, preheader->end());
       Value other = undef(retType);
-      rewriter.create<mlir::cf::CondBranchOp>(loc, rmwMask, condblock, tailblock, ValueRange{other});
+      rewriter.create<mlir::cf::CondBranchOp>(loc, rmwMask, condblock,
+                                              tailblock, ValueRange{other});
 
       // Do the Atomic
       rewriter.setInsertionPoint(condblock, condblock->end());
 
-      Value ptrElem = bitcast(rmwPtr, ptr_ty(retType, spirv::StorageClass::CrossWorkgroup));
+      Value ptrElem =
+          bitcast(rmwPtr, ptr_ty(retType, spirv::StorageClass::CrossWorkgroup));
       Value ret;
       switch (atomicRmwAttr) {
 
-#define DISPATCH(rwmop__, sprivop__) case (rwmop__):                                             \
-        ret = rewriter.create<sprivop__>(loc,                                                  \
-                                         retType,                                              \
-                                         ptrElem,                                              \
-                                         mlir::spirv::Scope::Device,                           \
-                                         mlir::spirv::MemorySemantics::AcquireRelease |        \
-                                         mlir::spirv::MemorySemantics::MakeAvailable  |        \
-                                         mlir::spirv::MemorySemantics::MakeVisible,            \
-                                         rmwVal);                                              \
-        break;
+#define DISPATCH(rwmop__, sprivop__)                                           \
+  case (rwmop__):                                                              \
+    ret = rewriter.create<sprivop__>(                                          \
+        loc, retType, ptrElem, mlir::spirv::Scope::Device,                     \
+        mlir::spirv::MemorySemantics::AcquireRelease |                         \
+            mlir::spirv::MemorySemantics::MakeAvailable |                      \
+            mlir::spirv::MemorySemantics::MakeVisible,                         \
+        rmwVal);                                                               \
+    break;
 
         DISPATCH(RMWOp::AND, spirv::AtomicAndOp);
         DISPATCH(RMWOp::OR, spirv::AtomicOrOp);
@@ -553,8 +572,8 @@ struct AtomicRMWOpSPIRVConversion
 
 #undef DISPATCH
 
-        default:
-          return failure();
+      default:
+        return failure();
       }
 
       rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{ret});
@@ -562,10 +581,16 @@ struct AtomicRMWOpSPIRVConversion
 
       ret = *tailblock->args_begin();
       if (tensorTy) {
-          resultVals[i] = ret;
+        resultVals[i] = ret;
       } else {
+        if (op->user_begin() == op->user_end()) {
+          rewriter.replaceOp(op, {ret});
+          return success();
+        }
         Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(valueElemTy, spirv::StorageClass::Workgroup));
+        atomPtr = bitcast(atomPtr,
+                          ptr_ty(valueElemTy, spirv::StorageClass::Workgroup));
+        // Only threads with rmwMask = True store the result
         store(ret, atomPtr);
         barrier();
         ret = load(atomPtr);
@@ -576,9 +601,141 @@ struct AtomicRMWOpSPIRVConversion
     if (tensorTy) {
       Type structTy = getTypeConverter()->convertType(tensorTy);
       Value resultStruct = getTypeConverter()->packLLElements(
-              loc, resultVals, rewriter, structTy);
+          loc, resultVals, rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
     }
+    return success();
+  }
+
+  LogicalResult rewriteFP16Atomic(triton::AtomicRMWOp op, OpAdaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+
+    auto atomicRmwAttr = op.getAtomicRmwOp();
+
+    Value val = op.getVal();
+    Value ptr = op.getPtr();
+
+    Value spirvPtr = adaptor.getPtr();
+    Value spirvVal = adaptor.getVal();
+    Value spirvMask = adaptor.getMask();
+
+    auto valElements = getTypeConverter()->unpackLLElements(
+        loc, spirvVal, rewriter, val.getType());
+    auto ptrElements = getTypeConverter()->unpackLLElements(
+        loc, spirvPtr, rewriter, ptr.getType());
+    SmallVector<Value> maskElements;
+    if (spirvMask)
+      maskElements = getTypeConverter()->unpackLLElements(
+          loc, spirvMask, rewriter, op.getMask().getType());
+
+    auto valueTy = op.getResult().getType();
+    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+    Type valueElemTy =
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
+                 : valueTy;
+    const size_t valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
+    auto elemsPerThread = getTotalElemsPerThread(val.getType());
+
+    auto vec = getVectorSize(ptr);
+    int numElems = tensorTy.getNumElements();
+    // tensor
+    auto valTy = val.getType().cast<RankedTensorType>();
+    vec = std::min<unsigned>(vec, 2);
+    // mask
+    Value mask = getMask(valueTy, rewriter, loc);
+    auto vecTy = vec_ty(valueElemTy, vec);
+    SmallVector<Value> resultVals(elemsPerThread);
+    for (size_t i = 0; i < elemsPerThread; i += vec) {
+      Value rmwPtr = ptrElements[i];
+      Value rmwMask = spirvMask ? logic_and(mask, maskElements[i]) : mask;
+
+      // Create block structure for the masked rmw.
+      auto *preheader = rewriter.getInsertionBlock();
+      auto opPosition = rewriter.getInsertionPoint();
+      auto *tailblock = rewriter.splitBlock(preheader, opPosition);
+      tailblock->addArgument(vecTy, loc);
+      auto *condblock = rewriter.createBlock(tailblock);
+
+      // Test the mask
+      auto retType = vecTy;
+      rewriter.setInsertionPoint(preheader, preheader->end());
+      Value other = undef(retType);
+      rewriter.create<mlir::cf::CondBranchOp>(loc, rmwMask, condblock,
+                                              tailblock, ValueRange{other});
+
+      // Do the Atomic
+      rewriter.setInsertionPoint(condblock, condblock->end());
+
+      // fetch the value
+      Value ptrElem =
+          bitcast(rmwPtr, ptr_ty(retType, spirv::StorageClass::CrossWorkgroup));
+      Value origin = rewriter.create<spirv::LoadOp>(loc, ptrElem);
+
+      // do-while loop
+      auto *loop = rewriter.splitBlock(rewriter.getInsertionBlock(),
+                                       rewriter.getInsertionPoint());
+      loop->addArgument(vecTy, loc);
+
+      rewriter.create<mlir::cf::BranchOp>(loc, loop, ValueRange{origin});
+      rewriter.setInsertionPoint(loop, loop->begin());
+      origin = *loop->args_begin();
+
+      Value modify = undef(retType);
+      for (int ii = 0; ii < vec; ++ii) {
+        Value loadVal = extract_element(origin, i32_val(ii));
+        Value rmwVal = valElements[i + ii];
+        switch (atomicRmwAttr) {
+
+#define DISPATCH(rwmop__, sprivop__)                                           \
+  case (rwmop__):                                                              \
+    loadVal = rewriter.create<sprivop__>(loc, loadVal, rmwVal);                \
+    break;
+
+          DISPATCH(RMWOp::FADD, spirv::FAddOp);
+
+#undef DISPATCH
+
+        default:
+          return failure();
+        }
+        modify = insert_element(retType, modify, loadVal, i32_val(ii));
+      }
+
+      Type writeTy = rewriter.getIntegerType(valueElemNBits * vec);
+      modify = bitcast(modify, writeTy);
+
+      Value ptrWrite =
+          bitcast(rmwPtr, ptr_ty(writeTy, spirv::StorageClass::CrossWorkgroup));
+
+      Value comparator = bitcast(origin, writeTy);
+      Value exchange = rewriter.create<spirv::AtomicCompareExchangeOp>(
+          loc, writeTy, ptrWrite, mlir::spirv::Scope::Device,
+          mlir::spirv::MemorySemantics::AcquireRelease |
+              mlir::spirv::MemorySemantics::MakeAvailable |
+              mlir::spirv::MemorySemantics::MakeVisible,
+          mlir::spirv::MemorySemantics::None, modify, comparator);
+      Value equal = icmp_eq(comparator, exchange);
+
+      rewriter.create<mlir::cf::CondBranchOp>(
+          loc, equal, tailblock, ValueRange{bitcast(modify, retType)}, loop,
+          ValueRange{bitcast(exchange, retType)});
+      rewriter.setInsertionPoint(tailblock, tailblock->begin());
+
+      Value ret = *tailblock->args_begin();
+
+      for (int ii = 0; ii < vec; ++ii) {
+        resultVals[i + ii] =
+            vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
+      }
+    }
+
+    Type structTy = getTypeConverter()->convertType(tensorTy);
+    Value resultStruct =
+        getTypeConverter()->packLLElements(loc, resultVals, rewriter, structTy);
+    rewriter.replaceOp(op, {resultStruct});
+
     return success();
   }
 };
@@ -641,8 +798,8 @@ struct InsertSliceOpSPIRVConversion
 
     auto spirvSrc = adaptor.getSource();
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
-    storeDistributedToShared(src, spirvSrc, srcStrides, srcIndices, dst, smemBase,
-                             elemTy, loc, rewriter);
+    storeDistributedToShared(src, spirvSrc, srcStrides, srcIndices, dst,
+                             smemBase, elemTy, loc, rewriter);
     // Barrier is not necessary.
     // The membar pass knows that it writes to shared memory and will handle it
     // properly.
@@ -658,14 +815,13 @@ struct InsertSliceAsyncOpSPIRVConversion
       triton::gpu::InsertSliceAsyncOp>::ConvertTritonGPUOpToSPIRVPattern;
 
   InsertSliceAsyncOpSPIRVConversion(
-          TritonGPUToSPIRVTypeConverter &converter,
-          MLIRContext *context,
-          ModuleAllocation &allocation,
-          ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
+      TritonGPUToSPIRVTypeConverter &converter, MLIRContext *context,
+      ModuleAllocation &allocation,
+      ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
       ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
       : ConvertTritonGPUOpToSPIRVPattern<triton::gpu::InsertSliceAsyncOp>(
-          converter, context, allocation, indexCacheInfo, benefit),
-            LoadStoreSPIRVConversionBase(axisAnalysisPass) {}
+            converter, context, allocation, indexCacheInfo, benefit),
+        LoadStoreSPIRVConversionBase(axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
@@ -698,8 +854,8 @@ struct InsertSliceAsyncOpSPIRVConversion
     Value spirvIndex = adaptor.getIndex();
 
     // %src
-    auto srcElems = getTypeConverter()->unpackLLElements(loc, spirvSrc, rewriter,
-                                                         src.getType());
+    auto srcElems = getTypeConverter()->unpackLLElements(
+        loc, spirvSrc, rewriter, src.getType());
 
     // %dst
     auto dstTy = dst.getType().cast<RankedTensorType>();
@@ -737,8 +893,8 @@ struct InsertSliceAsyncOpSPIRVConversion
       // It's not necessary for now because the pipeline pass will skip
       // generating insert_slice_async if the load op has any "other" tensor.
       // assert(false && "insert_slice_async: Other value not supported yet");
-      otherElems = getTypeConverter()->unpackLLElements(loc, spirvOther, rewriter,
-                                                        other.getType());
+      otherElems = getTypeConverter()->unpackLLElements(
+          loc, spirvOther, rewriter, other.getType());
       assert(srcElems.size() == otherElems.size());
     }
 
@@ -781,53 +937,79 @@ struct InsertSliceAsyncOpSPIRVConversion
       auto byteWidth = bitWidth / 8;
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
 
-      if (spirvMask) {
-        Value maskVal = maskElems[elemIdx];
-
-        // Create block structure for the masked memory copy.
-        auto *preheader = rewriter.getInsertionBlock();
-        auto opPosition = rewriter.getInsertionPoint();
-        auto *tailblock = rewriter.splitBlock(preheader, opPosition);
-        auto *condblock = rewriter.createBlock(tailblock);
-
-        // Test the mask
-        rewriter.setInsertionPoint(preheader, preheader->end());
-        rewriter.create<mlir::cf::CondBranchOp>(loc, maskVal, condblock, tailblock);
-
-        // Do the memory copy block
-        rewriter.setInsertionPoint(condblock, condblock->end());
-        rewriter.create<mlir::cf::BranchOp>(loc, tailblock);
-
-        // The memory copy insert position
-        rewriter.setInsertionPoint(condblock, condblock->begin());
-      }
-
       Type spirvElemTy;
       constexpr unsigned opaqueElemBitwidth = 32;
       if (bitWidth > opaqueElemBitwidth) {
-        spirvElemTy = VectorType::get(ceil<unsigned>(bitWidth, opaqueElemBitwidth), IntegerType::get(getContext(), opaqueElemBitwidth));
+        spirvElemTy =
+            VectorType::get(ceil<unsigned>(bitWidth, opaqueElemBitwidth),
+                            IntegerType::get(getContext(), opaqueElemBitwidth));
       } else {
         spirvElemTy = IntegerType::get(getContext(), bitWidth);
       }
+      size_t nWords = ceil<unsigned>(bitWidth, opaqueElemBitwidth);
 
       Value basePtr = sharedPtrs[elemIdx];
-      spirv::PointerType spirvBasePtrType = spirv::PointerType::get(spirvElemTy,
-                                                                spirv::StorageClass::Workgroup);
+      spirv::PointerType spirvBasePtrType =
+          spirv::PointerType::get(spirvElemTy, spirv::StorageClass::Workgroup);
       basePtr = bitcast(basePtr, spirvBasePtrType);
       for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         Value spirvDestPtr = gep(spirvBasePtrType, basePtr, i32_val(wordIdx));
 
         auto wordElemIdx = wordIdx * numWordElems;
         auto srcPtr = srcElems[elemIdx + wordElemIdx];
-        spirv::PointerType srcPtrType = srcPtr.getType().dyn_cast<spirv::PointerType>();
-        spirv::PointerType spirvSrcPtrType = spirv::PointerType::get(spirvElemTy,
-                                                                     srcPtrType.getStorageClass());
-        Value spirvSrcPtr = bitcast( srcElems[elemIdx + wordElemIdx], spirvSrcPtrType);
+        spirv::PointerType srcPtrType =
+            srcPtr.getType().dyn_cast<spirv::PointerType>();
+        spirv::PointerType spirvSrcPtrType =
+            spirv::PointerType::get(spirvElemTy, srcPtrType.getStorageClass());
+        Value spirvSrcPtr =
+            bitcast(srcElems[elemIdx + wordElemIdx], spirvSrcPtrType);
 
-        // the cp.async is treated as a weak memory operation in the CUDA memory consistency model.
-        // So no explicit synchronization required here.
-        Value val = rewriter.create<spirv::LoadOp>(op.getLoc(), spirvSrcPtr);
-        rewriter.create<spirv::StoreOp>(op.getLoc(), spirvDestPtr, val);
+        Value ret;
+        if (spirvMask) {
+          Value maskVal = maskElems[elemIdx];
+
+          Value other_ = undef(spirvElemTy);
+          ;
+          for (size_t ii = 0; ii < nWords; ++ii) {
+            if (nWords > 1) {
+              Value v = int_val(opaqueElemBitwidth, 0);
+              other_ = insert_val(spirvElemTy, v, other_,
+                                  rewriter.getI32ArrayAttr(ii));
+            } else {
+              other_ = int_val(bitWidth, 0);
+            }
+          }
+
+          // Create block structure for the masked memory copy.
+          auto *preheader = rewriter.getInsertionBlock();
+          auto opPosition = rewriter.getInsertionPoint();
+          auto *tailblock = rewriter.splitBlock(preheader, opPosition);
+          tailblock->addArgument(spirvElemTy, loc);
+          auto *condblock = rewriter.createBlock(tailblock);
+
+          // Test the mask
+          rewriter.setInsertionPoint(preheader, preheader->end());
+          rewriter.create<mlir::cf::CondBranchOp>(
+              loc, maskVal, condblock, tailblock, ValueRange{other_});
+
+          // Do the memory load block
+          rewriter.setInsertionPoint(condblock, condblock->end());
+          Value val = rewriter.create<spirv::LoadOp>(op.getLoc(), spirvSrcPtr);
+          rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{val});
+
+          // The memory copy insert position
+          rewriter.setInsertionPoint(tailblock, tailblock->begin());
+
+          ret = *tailblock->args_begin();
+        } else {
+          ret = rewriter.create<spirv::LoadOp>(op.getLoc(), spirvSrcPtr);
+        }
+
+        // Extract and store return values
+        rewriter.create<spirv::StoreOp>(op.getLoc(), spirvDestPtr, ret);
+
+        // the cp.async is treated as a weak memory operation in the CUDA memory
+        // consistency model. So no explicit synchronization required here.
       }
     }
 
@@ -837,20 +1019,22 @@ struct InsertSliceAsyncOpSPIRVConversion
 };
 
 void populateLoadStoreOpToSPIRVPatterns(
-        TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context, RewritePatternSet &patterns,
-        int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-        ModuleAllocation &allocation,
-        ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
-        PatternBenefit benefit) {
-  patterns.add<LoadOpSPIRVConversion>(typeConverter, context, axisInfoAnalysis, benefit);
-  patterns.add<StoreOpSPIRVConversion>(typeConverter, context, axisInfoAnalysis, benefit);
+    TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
+    RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
+    ConvertTritonGPUOpToSPIRVPatternBase::IndexCacheInfo &indexCacheInfo,
+    PatternBenefit benefit) {
+  patterns.add<LoadOpSPIRVConversion>(typeConverter, context, axisInfoAnalysis,
+                                      benefit);
+  patterns.add<StoreOpSPIRVConversion>(typeConverter, context, axisInfoAnalysis,
+                                       benefit);
   patterns.add<AtomicCASOpSPIRVConversion>(typeConverter, context, allocation,
-                                      axisInfoAnalysis, benefit);
+                                           axisInfoAnalysis, benefit);
   patterns.add<AtomicRMWOpSPIRVConversion>(typeConverter, context, allocation,
-                                      axisInfoAnalysis, benefit);
+                                           axisInfoAnalysis, benefit);
   patterns.add<InsertSliceOpSPIRVConversion>(typeConverter, context, allocation,
-                                        indexCacheInfo, benefit);
-  patterns.add<InsertSliceAsyncOpSPIRVConversion>(typeConverter, context, allocation,
-                                             indexCacheInfo, axisInfoAnalysis,
-                                             benefit);
+                                             indexCacheInfo, benefit);
+  patterns.add<InsertSliceAsyncOpSPIRVConversion>(typeConverter, context,
+                                                  allocation, indexCacheInfo,
+                                                  axisInfoAnalysis, benefit);
 }

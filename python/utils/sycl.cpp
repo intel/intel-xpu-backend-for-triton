@@ -2,6 +2,7 @@
 #include <iostream>
 #include <level_zero/ze_api.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include <sycl/ext/oneapi/backend/level_zero.hpp>
 #include <sycl/sycl.hpp>
 
@@ -210,50 +211,34 @@ PYBIND11_MODULE(sycl_utils, m) {
   m.def(
       "get_device_properties",
       [](void *device_ptr) {
-        //          int device_id;
-        //          if (!PyArg_ParseTuple(args, "i", &device_id))
-        //            return NULL;
-        //          // Get device handle
-        //          CUdevice device;
-        //          cuDeviceGet(&device, device_id);
-
         sycl::device *device = static_cast<sycl::device *>(device_ptr);
 
-        // create a struct to hold device properties
         auto max_shared_mem =
             device->get_info<sycl::info::device::local_mem_size>();
         bool support_fp64 = device->has(sycl::aspect::fp64);
-        //          int multiprocessor_count;
-        //          int sm_clock_rate;
-        //          int mem_clock_rate;
-        //          int mem_bus_width;
-        //          CUDA_CHECK(cuDeviceGetAttribute(
-        //                  &max_shared_mem,
-        //                  CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
-        //                  device));
-        //          CUDA_CHECK(cuDeviceGetAttribute(
-        //                  &multiprocessor_count,
-        //                  CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
-        //          CUDA_CHECK(cuDeviceGetAttribute(&sm_clock_rate,
-        //                                          CU_DEVICE_ATTRIBUTE_CLOCK_RATE,
-        //                                          device));
-        //          CUDA_CHECK(cuDeviceGetAttribute(
-        //                  &mem_clock_rate,
-        //                  CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, device));
-        //          CUDA_CHECK(cuDeviceGetAttribute(
-        //                  &mem_bus_width,
-        //                  CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH,
-        //                  device));
+        auto eu_count_per_ss = device->get_info<
+            sycl::info::device::ext_intel_gpu_eu_count_per_subslice>();
+        auto threads_per_eu = device->get_info<
+            sycl::info::device::ext_intel_gpu_hw_threads_per_eu>();
+        auto max_clock_frequency =
+            device->get_info<sycl::info::device::max_clock_frequency>();
+        auto max_work_group_size =
+            device->get_info<sycl::info::device::max_work_group_size>();
+        auto max_num_sub_groups =
+            device->get_info<sycl::info::device::max_num_sub_groups>();
+        auto sub_group_sizes =
+            device->get_info<sycl::info::device::sub_group_sizes>();
 
-        py::dict properties = py::dict("max_shared_mem"_a = max_shared_mem, "support_fp64"_a = support_fp64);
+        py::dict properties =
+            py::dict("max_shared_mem"_a = max_shared_mem,
+                     "support_fp64"_a = support_fp64,
+                     "eu_count_per_ss"_a = eu_count_per_ss,
+                     "threads_per_eu"_a = threads_per_eu,
+                     "max_clock_frequency"_a = max_clock_frequency,
+                     "max_work_group_size"_a = max_work_group_size,
+                     "max_num_sub_groups"_a = max_num_sub_groups,
+                     "sub_group_sizes"_a = sub_group_sizes);
         return properties;
-        //          return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}",
-        //          "max_shared_mem",
-        //                               max_shared_mem, "multiprocessor_count",
-        //                               multiprocessor_count, "sm_clock_rate",
-        //                               sm_clock_rate, "mem_clock_rate",
-        //                               mem_clock_rate, "mem_bus_width",
-        //                               mem_bus_width);
       },
       "Get the properties for a given device",
       py::return_value_policy::take_ownership);

@@ -91,7 +91,8 @@ inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
   auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return inValues;
-  auto encoding = tensorTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+  auto encoding =
+      tensorTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
   if (!(encoding && encoding.getParent().isa<MmaEncodingAttr>()))
     return inValues;
   SmallVector<Value> outValues;
@@ -114,7 +115,8 @@ inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
   auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
   if (!tensorTy)
     return inValues;
-  auto encoding = tensorTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+  auto encoding =
+      tensorTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
   if (!(encoding && encoding.getParent().isa<MmaEncodingAttr>()))
     return inValues;
   SmallVector<Value> outValues;
@@ -291,70 +293,10 @@ struct FpToFpOpSPIRVConversion
     llvm::report_fatal_error("SPIRV doesn't support FP8 yet");
   }
 
-  static Value convertBf16ToFp32(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v,
-                                 bool use_INTELCOnvertFToBF16Op=false) {
-    if (use_INTELCOnvertFToBF16Op){
-      return rewriter.create<spirv::INTELConvertBF16ToFOp>(loc, f32_ty, v);
-    } else {
-      Value val = v;
-      val = zext(i32_ty, val);
-      val = shl(val, i32_val(16));
-      val = bitcast(val, f32_ty);
-      return val;
-    }
-  }
-
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     return rewriter.create<spirv::FConvertOp>(loc, f32_ty, v);
-  }
-
-  static Value convertFp32ToBf16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v,
-                                 bool use_INTELCOnvertFToBF16Op=false) {
-    if (use_INTELCOnvertFToBF16Op){
-      // If support, then convert to bf16 using the INTELConvertFToBF16Op
-      return rewriter.create<spirv::INTELConvertFToBF16Op>(loc, bf16_ty, v);
-    }
-    else{
-      // Otherwise, Convert the FP32 value by RNE(Rounding to Nearest Even). 
-      // Algorithm is as follows:
-      //   STEP1: U32_VAL = BITCAST(F32_VAL)
-      //   STEP2: U32_VAL_TMP = U32_VAL >> 16
-      //   STEP3: U32_VAL_TMP = U32_VAL_TMP & 1
-      //   STEP4: ROUNDING_BIAS = U32_VAL_TMP + UINT32(0x7FFF)
-      //   STEP5: U32_VAL_TMP = U32_VAL + ROUNDING_BIAS
-      //   STEP6: BF16_VAL = static_cast<UINT16>(U32_VAL_TMP >> 16)
-      Value val = v;
-      auto mask = fcmp_oeq(val, val);
-      // STEP1
-      auto fp32_i32_value = bitcast(v, i32_ty);
-      // STEP2
-      val = lshr(fp32_i32_value, i32_val(16));
-      // val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
-      val = itrunc(i16_ty, val);
-      // STEP3
-      val = and_(val, int_val(16, 1));
-      // STEP4
-      auto rounding_bias = int_val(16, 0x7FF);
-      val = add(val, rounding_bias);
-      val = zext(i32_ty, val);
-      // Step 5
-      val = add(val, fp32_i32_value);
-      // Step6
-      val= lshr(val, int_val(32, 16));
-      // val = rewriter.create<arith::TruncIOp>(loc, i16_ty, val);
-      val = itrunc(i16_ty, val);
-      val = bitcast(val, i16_ty);
-      // If the value is NaN, return BF16 NaN.
-      val = select(mask, val, int_val(16, 0xFFFF));
-      return val;
-    }
-
   }
 
   static Value convertFp32ToFp16(Location loc,
@@ -438,13 +380,13 @@ struct FpToFpOpSPIRVConversion
 
 private:
   static spirv::FuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
-                                  const Value& v,
-                                  StringRef libName,
-                                  StringRef funcName,
-                                  mlir::FunctionType funcType,
-                                  const NamedAttrList& extraAttrs = {}) {
+                                         const Value &v, StringRef libName,
+                                         StringRef funcName,
+                                         mlir::FunctionType funcType,
+                                         const NamedAttrList &extraAttrs = {}) {
     auto funcAttr = StringAttr::get(v.getContext(), funcName);
-    Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(v.getDefiningOp(), funcAttr);
+    Operation *funcOp =
+        SymbolTable::lookupNearestSymbolFrom(v.getDefiningOp(), funcAttr);
     if (funcOp)
       return cast<spirv::FuncOp>(*funcOp);
 
@@ -469,14 +411,13 @@ class ElementwiseOpSPIRVConversionBase
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit ElementwiseOpSPIRVConversionBase(TritonGPUToSPIRVTypeConverter &converter,
-                                       MLIRContext *context,
-                                       PatternBenefit benefit = 1,
-                                       bool use_INTELCOnvertFToBF16Op=false)
+  explicit ElementwiseOpSPIRVConversionBase(
+      TritonGPUToSPIRVTypeConverter &converter, MLIRContext *context,
+      PatternBenefit benefit = 1, bool use_INTELConvertFToBF16Op = false)
       : ConvertTritonGPUOpToSPIRVPattern<SourceOp>(converter, context, benefit),
-        use_INTELCOnvertFToBF16Op(use_INTELCOnvertFToBF16Op) {}
+        use_INTELConvertFToBF16Op(use_INTELConvertFToBF16Op) {}
 
-  bool use_INTELCOnvertFToBF16Op = false;
+  bool use_INTELConvertFToBF16Op = false;
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -526,9 +467,8 @@ template <typename SourceOp, typename DestOp>
 struct ElementwiseOpSPIRVConversion
     : public ElementwiseOpSPIRVConversionBase<
           SourceOp, ElementwiseOpSPIRVConversion<SourceOp, DestOp>> {
-  using Base =
-          ElementwiseOpSPIRVConversionBase<SourceOp,
-              ElementwiseOpSPIRVConversion<SourceOp, DestOp>>;
+  using Base = ElementwiseOpSPIRVConversionBase<
+      SourceOp, ElementwiseOpSPIRVConversion<SourceOp, DestOp>>;
   using Base::Base;
   using OpAdaptor = typename Base::OpAdaptor;
 
@@ -555,9 +495,9 @@ static bool isBoolScalarOrVector(Type type) {
 
 struct CmpIOpSPIRVConversion
     : public ElementwiseOpSPIRVConversionBase<triton::gpu::CmpIOp,
-            CmpIOpSPIRVConversion> {
-  using Base =
-          ElementwiseOpSPIRVConversionBase<triton::gpu::CmpIOp, CmpIOpSPIRVConversion>;
+                                              CmpIOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<triton::gpu::CmpIOp,
+                                                CmpIOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -566,20 +506,22 @@ struct CmpIOpSPIRVConversion
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
 
-    Type oprandType = this->getTypeConverter()->convertType(operands[0].getType());
+    Type oprandType =
+        this->getTypeConverter()->convertType(operands[0].getType());
     switch (op.getPredicate()) {
 
-#define DISPATCH_WITH_LOGICAL(cmpPredicate, spirvOp, spirvLogicOp)              \
-      case cmpPredicate:                                                        \
-          if (isBoolScalarOrVector(oprandType)) {                               \
-          return rewriter.create<spirvLogicOp>(loc, operands[0], operands[1]);  \
-        }                                                                       \
-        else {                                                                  \
-          return rewriter.create<spirvOp>(loc, operands[0], operands[1]);       \
-        }                                                                       \
+#define DISPATCH_WITH_LOGICAL(cmpPredicate, spirvOp, spirvLogicOp)             \
+  case cmpPredicate:                                                           \
+    if (isBoolScalarOrVector(oprandType)) {                                    \
+      return rewriter.create<spirvLogicOp>(loc, operands[0], operands[1]);     \
+    } else {                                                                   \
+      return rewriter.create<spirvOp>(loc, operands[0], operands[1]);          \
+    }
 
-      DISPATCH_WITH_LOGICAL(arith::CmpIPredicate::eq, spirv::IEqualOp, spirv::LogicalEqualOp);
-      DISPATCH_WITH_LOGICAL(arith::CmpIPredicate::ne, spirv::INotEqualOp, spirv::LogicalNotEqualOp);
+      DISPATCH_WITH_LOGICAL(arith::CmpIPredicate::eq, spirv::IEqualOp,
+                            spirv::LogicalEqualOp);
+      DISPATCH_WITH_LOGICAL(arith::CmpIPredicate::ne, spirv::INotEqualOp,
+                            spirv::LogicalNotEqualOp);
 #undef DISPATCH_WITH_LOGICAL
 
 #define DISPATCH(cmpPredicate, spirvOp)                                        \
@@ -597,8 +539,8 @@ struct CmpIOpSPIRVConversion
 
 #undef DISPATCH
 
-      default:
-        break;
+    default:
+      break;
     }
     return nullptr;
   }
@@ -606,20 +548,19 @@ struct CmpIOpSPIRVConversion
 
 struct CmpFOpSPIRVConversion
     : public ElementwiseOpSPIRVConversionBase<triton::gpu::CmpFOp,
-            CmpFOpSPIRVConversion> {
-  using Base =
-          ElementwiseOpSPIRVConversionBase<triton::gpu::CmpFOp, CmpFOpSPIRVConversion>;
+                                              CmpFOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<triton::gpu::CmpFOp,
+                                                CmpFOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
   // An interface to support variant DestOp builder.
   Value createDestOp(triton::gpu::CmpFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, ValueRange operands,
-                                   Location loc) const {
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
     switch (op.getPredicate()) {
-#define DISPATCH(cmpPredicate, spirvOp)                                         \
-  case cmpPredicate:                                                            \
+#define DISPATCH(cmpPredicate, spirvOp)                                        \
+  case cmpPredicate:                                                           \
     return rewriter.create<spirvOp>(loc, operands[0], operands[1]);
 
       // Ordered.
@@ -639,8 +580,8 @@ struct CmpFOpSPIRVConversion
 
 #undef DISPATCH
 
-      default:
-        break;
+    default:
+      break;
     }
     return nullptr;
   }
@@ -648,18 +589,18 @@ struct CmpFOpSPIRVConversion
 
 template <class T>
 struct ExternElementwiseSPIRVConversion
-    : public ElementwiseOpSPIRVConversionBase<T, ExternElementwiseSPIRVConversion<T>> {
-  using Base = ElementwiseOpSPIRVConversionBase<T, ExternElementwiseSPIRVConversion<T>>;
+    : public ElementwiseOpSPIRVConversionBase<
+          T, ExternElementwiseSPIRVConversion<T>> {
+  using Base =
+      ElementwiseOpSPIRVConversionBase<T, ExternElementwiseSPIRVConversion<T>>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
   typedef typename Base::OpAdaptor OpAdaptor;
 
-  llvm::StringMap<std::string> imfMapping{
-    {"isinfd", "isinf"},
-    {"isnand", "isnan"},
-    {"powif", "pownf"},
-    {"powi", "pown"}
-  };
+  llvm::StringMap<std::string> imfMapping{{"isinfd", "isinf"},
+                                          {"isnand", "isnan"},
+                                          {"powif", "pownf"},
+                                          {"powi", "pown"}};
 
   Value createDestOp(T op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
@@ -671,9 +612,9 @@ struct ExternElementwiseSPIRVConversion
     // TODO: move the prefix changing to a bridge lib.
     std::string funcName;
     if (symbol.consume_front("__nv_")) {
-      if (imfMapping.contains(symbol.str())){
+      if (imfMapping.contains(symbol.str())) {
         funcName = "__devicelib_imf_" + imfMapping.at(symbol.str());
-      } else{
+      } else {
         funcName = "__devicelib_imf_" + symbol.str();
       }
     } else {
@@ -682,21 +623,24 @@ struct ExternElementwiseSPIRVConversion
 
     mlir::FunctionType funcType = getFunctionType(elemTy, operands);
 
-    spirv::FuncOp funcOp =
-        appendOrGetFuncOp(rewriter, op, funcName, funcType);
+    spirv::FuncOp funcOp = appendOrGetFuncOp(rewriter, op, funcName, funcType);
 
-    return rewriter.create<spirv::FunctionCallOp>(loc, elemTy, funcName, operands).getResult(0);
+    return rewriter
+        .create<spirv::FunctionCallOp>(loc, elemTy, funcName, operands)
+        .getResult(0);
   }
 
 private:
-  mlir::FunctionType getFunctionType(Type resultType, ValueRange operands) const {
+  mlir::FunctionType getFunctionType(Type resultType,
+                                     ValueRange operands) const {
     SmallVector<Type> operandTypes(operands.getTypes());
-    return mlir::FunctionType::get(this->getContext(), operandTypes, resultType);
+    return mlir::FunctionType::get(this->getContext(), operandTypes,
+                                   resultType);
   }
 
-  spirv::FuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
-                                   T op,
-                                   StringRef funcName, mlir::FunctionType funcType) const {
+  spirv::FuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter, T op,
+                                  StringRef funcName,
+                                  mlir::FunctionType funcType) const {
     auto funcAttr = StringAttr::get(op->getContext(), funcName);
     Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
     if (funcOp)
@@ -717,25 +661,28 @@ private:
 };
 
 struct BitcastOpSPIRVConversion
-        : ElementwiseOpSPIRVConversionBase<triton::BitcastOp, BitcastOpSPIRVConversion> {
-  using Base =
-          ElementwiseOpSPIRVConversionBase<triton::BitcastOp, BitcastOpSPIRVConversion>;
+    : ElementwiseOpSPIRVConversionBase<triton::BitcastOp,
+                                       BitcastOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<triton::BitcastOp,
+                                                BitcastOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
   Value createDestOp(triton::BitcastOp op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
-    // a safety bitcast that checks the input type and the output type follows the SPIRV dialect rule.
+    // a safety bitcast that checks the input type and the output type follows
+    // the SPIRV dialect rule.
     return bitcast(operands[0], elemTy);
   }
 };
 
 template <typename SourceOp>
 struct ZeroFillShiftOpSPIRVConversion
-        : ElementwiseOpSPIRVConversionBase<SourceOp, ZeroFillShiftOpSPIRVConversion<SourceOp>> {
-  using Base =
-          ElementwiseOpSPIRVConversionBase<SourceOp, ZeroFillShiftOpSPIRVConversion<SourceOp>>;
+    : ElementwiseOpSPIRVConversionBase<
+          SourceOp, ZeroFillShiftOpSPIRVConversion<SourceOp>> {
+  using Base = ElementwiseOpSPIRVConversionBase<
+      SourceOp, ZeroFillShiftOpSPIRVConversion<SourceOp>>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -745,7 +692,8 @@ struct ZeroFillShiftOpSPIRVConversion
     // we need to align PTX semantic for shift op, which has clamps.
     auto base = operands[0];
     auto shift = operands[1];
-    auto bw = int_val(elemTy.getIntOrFloatBitWidth(), elemTy.getIntOrFloatBitWidth());
+    auto bw =
+        int_val(elemTy.getIntOrFloatBitWidth(), elemTy.getIntOrFloatBitWidth());
     auto zero = int_val(elemTy.getIntOrFloatBitWidth(), 0);
     auto shiftVal = rewriter.create<SourceOp>(loc, elemTy, base, shift);
     return select(icmp_ult(shift, bw), shiftVal, zero);
@@ -754,9 +702,10 @@ struct ZeroFillShiftOpSPIRVConversion
 
 template <typename SourceOp>
 struct SignFillShiftOpSPIRVConversion
-        : ElementwiseOpSPIRVConversionBase<SourceOp, SignFillShiftOpSPIRVConversion<SourceOp>> {
-  using Base =
-          ElementwiseOpSPIRVConversionBase<SourceOp, SignFillShiftOpSPIRVConversion<SourceOp>>;
+    : ElementwiseOpSPIRVConversionBase<
+          SourceOp, SignFillShiftOpSPIRVConversion<SourceOp>> {
+  using Base = ElementwiseOpSPIRVConversionBase<
+      SourceOp, SignFillShiftOpSPIRVConversion<SourceOp>>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -766,16 +715,20 @@ struct SignFillShiftOpSPIRVConversion
     // we need to align PTX semantic for shift op, which has clamps.
     auto base = operands[0];
     auto shift = operands[1];
-    auto bw = int_val(elemTy.getIntOrFloatBitWidth(), elemTy.getIntOrFloatBitWidth());
-    shift = select(icmp_ult(shift, bw), shift, int_val(elemTy.getIntOrFloatBitWidth(), elemTy.getIntOrFloatBitWidth() - 1));
+    auto bw =
+        int_val(elemTy.getIntOrFloatBitWidth(), elemTy.getIntOrFloatBitWidth());
+    shift = select(icmp_ult(shift, bw), shift,
+                   int_val(elemTy.getIntOrFloatBitWidth(),
+                           elemTy.getIntOrFloatBitWidth() - 1));
     return rewriter.create<SourceOp>(loc, elemTy, base, shift);
   }
 };
 
 struct FDivOpSPIRVConversion
-    : ElementwiseOpSPIRVConversionBase<mlir::arith::DivFOp, FDivOpSPIRVConversion> {
-  using Base =
-          ElementwiseOpSPIRVConversionBase<mlir::arith::DivFOp, FDivOpSPIRVConversion>;
+    : ElementwiseOpSPIRVConversionBase<mlir::arith::DivFOp,
+                                       FDivOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::arith::DivFOp,
+                                                FDivOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -785,10 +738,13 @@ struct FDivOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
+      auto lhs = mlir::spirv::convertBf16ToFp32(
+          loc, rewriter, operands[0], this->use_INTELConvertFToBF16Op);
+      auto rhs = mlir::spirv::convertBf16ToFp32(
+          loc, rewriter, operands[1], this->use_INTELConvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FDivOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, f32_result,
+                                            this->use_INTELConvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FDivOp>(loc, elemTy, operands[0],
                                             operands[1]);
@@ -797,9 +753,10 @@ struct FDivOpSPIRVConversion
 };
 
 struct FMulOpSPIRVConversion
-    : ElementwiseOpSPIRVConversionBase<mlir::arith::MulFOp, FMulOpSPIRVConversion> {
-  using Base =
-          ElementwiseOpSPIRVConversionBase<mlir::arith::MulFOp, FMulOpSPIRVConversion>;
+    : ElementwiseOpSPIRVConversionBase<mlir::arith::MulFOp,
+                                       FMulOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::arith::MulFOp,
+                                                FMulOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -809,21 +766,25 @@ struct FMulOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
+      auto lhs = mlir::spirv::convertBf16ToFp32(
+          loc, rewriter, operands[0], this->use_INTELConvertFToBF16Op);
+      auto rhs = mlir::spirv::convertBf16ToFp32(
+          loc, rewriter, operands[1], this->use_INTELConvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FMulOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, f32_result,
+                                            this->use_INTELConvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FMulOp>(loc, elemTy, operands[0],
-                                           operands[1]);
+                                            operands[1]);
     }
   }
 };
 
 struct FAddOpSPIRVConversion
-    : ElementwiseOpSPIRVConversionBase<mlir::arith::AddFOp, FAddOpSPIRVConversion> {
-  using Base =
-          ElementwiseOpSPIRVConversionBase<mlir::arith::AddFOp, FAddOpSPIRVConversion>;
+    : ElementwiseOpSPIRVConversionBase<mlir::arith::AddFOp,
+                                       FAddOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::arith::AddFOp,
+                                                FAddOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -833,21 +794,25 @@ struct FAddOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
+      auto lhs = mlir::spirv::convertBf16ToFp32(
+          loc, rewriter, operands[0], this->use_INTELConvertFToBF16Op);
+      auto rhs = mlir::spirv::convertBf16ToFp32(
+          loc, rewriter, operands[1], this->use_INTELConvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FAddOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, f32_result,
+                                            this->use_INTELConvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FAddOp>(loc, elemTy, operands[0],
-                                           operands[1]);
+                                            operands[1]);
     }
   }
 };
 
 struct FSubOpSPIRVConversion
-    : ElementwiseOpSPIRVConversionBase<mlir::arith::SubFOp, FSubOpSPIRVConversion> {
-  using Base =
-          ElementwiseOpSPIRVConversionBase<mlir::arith::SubFOp, FSubOpSPIRVConversion>;
+    : ElementwiseOpSPIRVConversionBase<mlir::arith::SubFOp,
+                                       FSubOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::arith::SubFOp,
+                                                FSubOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -857,21 +822,25 @@ struct FSubOpSPIRVConversion
     auto lhsElemTy = getElementType(op.getLhs());
     auto rhsElemTy = getElementType(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      auto lhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
-      auto rhs = FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[1], this->use_INTELCOnvertFToBF16Op);
+      auto lhs = mlir::spirv::convertBf16ToFp32(
+          loc, rewriter, operands[0], this->use_INTELConvertFToBF16Op);
+      auto rhs = mlir::spirv::convertBf16ToFp32(
+          loc, rewriter, operands[1], this->use_INTELConvertFToBF16Op);
       auto f32_result = rewriter.create<spirv::FSubOp>(loc, lhs, rhs);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, f32_result, this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, f32_result,
+                                            this->use_INTELConvertFToBF16Op);
     } else {
       return rewriter.create<spirv::FSubOp>(loc, elemTy, operands[0],
-                                           operands[1]);
+                                            operands[1]);
     }
   }
 };
 
 struct SIToFPOpSPIRVConversion
-    : ElementwiseOpSPIRVConversionBase<mlir::arith::SIToFPOp, SIToFPOpSPIRVConversion> {
-  using Base =
-      ElementwiseOpSPIRVConversionBase<mlir::arith::SIToFPOp, SIToFPOpSPIRVConversion>;
+    : ElementwiseOpSPIRVConversionBase<mlir::arith::SIToFPOp,
+                                       SIToFPOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::arith::SIToFPOp,
+                                                SIToFPOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -881,7 +850,8 @@ struct SIToFPOpSPIRVConversion
     auto outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16()) {
       auto value = rewriter.create<arith::SIToFPOp>(loc, f32_ty, operands[0]);
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, value, this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, value,
+                                            this->use_INTELConvertFToBF16Op);
     } else {
       return rewriter.create<arith::SIToFPOp>(loc, elemTy, operands[0]);
     }
@@ -889,9 +859,10 @@ struct SIToFPOpSPIRVConversion
 };
 
 struct FPToSIOpSPIRVConversion
-    : ElementwiseOpSPIRVConversionBase<mlir::arith::FPToSIOp, FPToSIOpSPIRVConversion> {
-  using Base =
-      ElementwiseOpSPIRVConversionBase<mlir::arith::FPToSIOp, FPToSIOpSPIRVConversion>;
+    : ElementwiseOpSPIRVConversionBase<mlir::arith::FPToSIOp,
+                                       FPToSIOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::arith::FPToSIOp,
+                                                FPToSIOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -900,8 +871,8 @@ struct FPToSIOpSPIRVConversion
                      ValueRange operands, Location loc) const {
     auto inElemTy = getElementType(op.getIn());
     if (inElemTy.isBF16()) {
-      auto value =
-          FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
+      auto value = mlir::spirv::convertBf16ToFp32(
+          loc, rewriter, operands[0], this->use_INTELConvertFToBF16Op);
       return rewriter.create<arith::FPToSIOp>(loc, elemTy, value);
     } else {
       return rewriter.create<arith::FPToSIOp>(loc, elemTy, operands[0]);
@@ -910,9 +881,10 @@ struct FPToSIOpSPIRVConversion
 };
 
 struct ExtFOpSPIRVConversion
-    : ElementwiseOpSPIRVConversionBase<mlir::arith::ExtFOp, ExtFOpSPIRVConversion> {
-  using Base =
-      ElementwiseOpSPIRVConversionBase<mlir::arith::ExtFOp, ExtFOpSPIRVConversion>;
+    : ElementwiseOpSPIRVConversionBase<mlir::arith::ExtFOp,
+                                       ExtFOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::arith::ExtFOp,
+                                                ExtFOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -923,7 +895,8 @@ struct ExtFOpSPIRVConversion
     if (inElemTy.isBF16()) {
       auto outElemTy = getElementType(op.getOut());
       assert(outElemTy.isF32() && "unsupported conversion");
-      return FpToFpOpSPIRVConversion::convertBf16ToFp32(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertBf16ToFp32(loc, rewriter, operands[0],
+                                            this->use_INTELConvertFToBF16Op);
     } else {
       return rewriter.create<arith::ExtFOp>(loc, elemTy, operands[0]);
     }
@@ -931,9 +904,10 @@ struct ExtFOpSPIRVConversion
 };
 
 struct TruncFOpSPIRVConversion
-    : ElementwiseOpSPIRVConversionBase<mlir::arith::TruncFOp, TruncFOpSPIRVConversion> {
-  using Base =
-      ElementwiseOpSPIRVConversionBase<mlir::arith::TruncFOp, TruncFOpSPIRVConversion>;
+    : ElementwiseOpSPIRVConversionBase<mlir::arith::TruncFOp,
+                                       TruncFOpSPIRVConversion> {
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::arith::TruncFOp,
+                                                TruncFOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -944,7 +918,8 @@ struct TruncFOpSPIRVConversion
     if (outElemTy.isBF16()) {
       auto inElemTy = getElementType(op.getIn());
       assert(inElemTy.isF32() && "unsupported conversion");
-      return FpToFpOpSPIRVConversion::convertFp32ToBf16(loc, rewriter, operands[0], this->use_INTELCOnvertFToBF16Op);
+      return mlir::spirv::convertFp32ToBf16(loc, rewriter, operands[0],
+                                            this->use_INTELConvertFToBF16Op);
     } else {
       return rewriter.create<arith::TruncFOp>(loc, elemTy, operands[0]);
     }
@@ -952,9 +927,10 @@ struct TruncFOpSPIRVConversion
 };
 
 struct ExpOpSPIRVConversionApprox
-    : ElementwiseOpSPIRVConversionBase<mlir::math::ExpOp, ExpOpSPIRVConversionApprox> {
-  using Base =
-      ElementwiseOpSPIRVConversionBase<mlir::math::ExpOp, ExpOpSPIRVConversionApprox>;
+    : ElementwiseOpSPIRVConversionBase<mlir::math::ExpOp,
+                                       ExpOpSPIRVConversionApprox> {
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::math::ExpOp,
+                                                ExpOpSPIRVConversionApprox>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
@@ -962,36 +938,53 @@ struct ExpOpSPIRVConversionApprox
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
     // Use spirv.Cl.exp to calculate exponentials.
-    return rewriter.create<spirv::CLExpOp>(loc, elemTy, operands[0]);    
+    return rewriter.create<spirv::CLExpOp>(loc, elemTy, operands[0]);
   }
 };
 
-bool checkOpSupported(std::map<std::string, int> computeCapability, std::string dtype){
-  // TODO: For now, we define the computeCapability with {dtype, int}.
-  // If it is >= 1, then the special op is supported.
-  if (computeCapability.find(dtype) != computeCapability.end() &&
-      computeCapability.at(dtype)>= 1
-    ){
-    return true;
-  }
-  return false;
-}
+struct AbsFOpConversion
+    : ElementwiseOpSPIRVConversionBase<mlir::math::AbsFOp, AbsFOpConversion> {
+  using Base =
+      ElementwiseOpSPIRVConversionBase<mlir::math::AbsFOp, AbsFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
 
-void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
-                                          mlir::MLIRContext *context,
-                                          RewritePatternSet &patterns,
-                                          int numWarps,
-                                          ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                          ModuleAllocation *allocation,
-                                          Value smem,PatternBenefit benefit, std::map<std::string, int> &computeCapability) {
+  Value createDestOp(mlir::math::AbsFOp op, OpAdaptor adaptor,
+                     ConversionPatternRewriter &rewriter, Type elemTy,
+                     ValueRange operands, Location loc) const {
+
+    if (llvm::isa<IntegerType>(elemTy)) {
+      // Mask out the sign bit
+      auto num_bits =
+          getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
+      assert(num_bits <= 16);
+      auto mask = (1u << (num_bits - 1u)) - 1u;
+      auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
+      auto maskConst =
+          rewriter.create<spirv::ConstantOp>(loc, elemTy, maskAttr);
+      return and_(operands[0], maskConst);
+    }
+
+    return rewriter.create<mlir::math::AbsFOp>(loc, elemTy, operands[0]);
+  }
+};
+
+void populateElementwiseOpToSPIRVPatterns(
+    TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
+    RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation *allocation,
+    Value smem, PatternBenefit benefit,
+    std::map<std::string, int> &computeCapability) {
 
 #define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
-  patterns.add<ElementwiseOpSPIRVConversion<SRC_OP, DST_OP>>(typeConverter, context, benefit);
+  patterns.add<ElementwiseOpSPIRVConversion<SRC_OP, DST_OP>>(                  \
+      typeConverter, context, benefit);
   POPULATE_TERNARY_OP(triton::gpu::SelectOp, spirv::SelectOp)
 #undef POPULATE_TERNARY_OP
 
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
-  patterns.add<ElementwiseOpSPIRVConversion<SRC_OP, DST_OP>>(typeConverter, context, benefit);
+  patterns.add<ElementwiseOpSPIRVConversion<SRC_OP, DST_OP>>(                  \
+      typeConverter, context, benefit);
   POPULATE_BINARY_OP(arith::SubIOp, spirv::ISubOp) // -
   POPULATE_BINARY_OP(arith::AddIOp, spirv::IAddOp) // +
   POPULATE_BINARY_OP(arith::MulIOp, spirv::IMulOp) // *
@@ -1000,19 +993,19 @@ void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeCon
   POPULATE_BINARY_OP(arith::RemFOp, spirv::FRemOp) // %
   POPULATE_BINARY_OP(arith::RemSIOp, spirv::SRemOp)
   POPULATE_BINARY_OP(arith::RemUIOp, spirv::UModOp)
-  POPULATE_BINARY_OP(arith::AndIOp, arith::AndIOp)   // &
-  POPULATE_BINARY_OP(arith::OrIOp, arith::OrIOp)     // |
-  POPULATE_BINARY_OP(arith::XOrIOp, arith::XOrIOp)   // ^
+  POPULATE_BINARY_OP(arith::AndIOp, arith::AndIOp) // &
+  POPULATE_BINARY_OP(arith::OrIOp, arith::OrIOp)   // |
+  POPULATE_BINARY_OP(arith::XOrIOp, arith::XOrIOp) // ^
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
-  patterns.add<ElementwiseOpSPIRVConversion<SRC_OP, DST_OP>>(typeConverter, context, benefit);
+  patterns.add<ElementwiseOpSPIRVConversion<SRC_OP, DST_OP>>(                  \
+      typeConverter, context, benefit);
   POPULATE_UNARY_OP(arith::TruncIOp, arith::TruncIOp)
   POPULATE_UNARY_OP(arith::ExtSIOp, arith::ExtSIOp)
   POPULATE_UNARY_OP(arith::ExtUIOp, arith::ExtUIOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, arith::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, arith::UIToFPOp)
-  POPULATE_UNARY_OP(math::AbsFOp, math::AbsFOp)
   POPULATE_UNARY_OP(math::AbsIOp, math::AbsIOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
@@ -1027,31 +1020,62 @@ void populateElementwiseOpToSPIRVPatterns(TritonGPUToSPIRVTypeConverter &typeCon
   patterns.add<CmpIOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<CmpFOpSPIRVConversion>(typeConverter, context, benefit);
 
-  patterns.add<ZeroFillShiftOpSPIRVConversion<arith::ShLIOp>>(typeConverter, context, benefit);
-  patterns.add<ZeroFillShiftOpSPIRVConversion<arith::ShRUIOp>>(typeConverter, context, benefit);
-  patterns.add<SignFillShiftOpSPIRVConversion<arith::ShRSIOp>>(typeConverter, context, benefit);
+  patterns.add<ZeroFillShiftOpSPIRVConversion<arith::ShLIOp>>(typeConverter,
+                                                              context, benefit);
+  patterns.add<ZeroFillShiftOpSPIRVConversion<arith::ShRUIOp>>(
+      typeConverter, context, benefit);
+  patterns.add<SignFillShiftOpSPIRVConversion<arith::ShRSIOp>>(
+      typeConverter, context, benefit);
 
   patterns.add<BitcastOpSPIRVConversion>(typeConverter, context, benefit);
 
-  patterns.add<FDivOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
-  patterns.add<FSubOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
-  patterns.add<FAddOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
-  patterns.add<FMulOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
+  patterns.add<AbsFOpConversion>(typeConverter, context, benefit);
+  patterns.add<FDivOpSPIRVConversion>(
+      typeConverter, context, benefit,
+      mlir::spirv::checkOpSupported(computeCapability,
+                                    "INTELConvertFToBF16Op"));
+  patterns.add<FSubOpSPIRVConversion>(
+      typeConverter, context, benefit,
+      mlir::spirv::checkOpSupported(computeCapability,
+                                    "INTELConvertFToBF16Op"));
+  patterns.add<FAddOpSPIRVConversion>(
+      typeConverter, context, benefit,
+      mlir::spirv::checkOpSupported(computeCapability,
+                                    "INTELConvertFToBF16Op"));
+  patterns.add<FMulOpSPIRVConversion>(
+      typeConverter, context, benefit,
+      mlir::spirv::checkOpSupported(computeCapability,
+                                    "INTELConvertFToBF16Op"));
 
-  patterns.add<ExtFOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
-  patterns.add<TruncFOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
-  patterns.add<FPToSIOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
-  patterns.add<SIToFPOpSPIRVConversion>(typeConverter, context, benefit, checkOpSupported(computeCapability, "INTELCOnvertFToBF16Op"));
+  patterns.add<ExtFOpSPIRVConversion>(
+      typeConverter, context, benefit,
+      mlir::spirv::checkOpSupported(computeCapability,
+                                    "INTELConvertFToBF16Op"));
+  patterns.add<TruncFOpSPIRVConversion>(
+      typeConverter, context, benefit,
+      mlir::spirv::checkOpSupported(computeCapability,
+                                    "INTELConvertFToBF16Op"));
+  patterns.add<FPToSIOpSPIRVConversion>(
+      typeConverter, context, benefit,
+      mlir::spirv::checkOpSupported(computeCapability,
+                                    "INTELConvertFToBF16Op"));
+  patterns.add<SIToFPOpSPIRVConversion>(
+      typeConverter, context, benefit,
+      mlir::spirv::checkOpSupported(computeCapability,
+                                    "INTELConvertFToBF16Op"));
 
   patterns.add<FpToFpOpSPIRVConversion>(typeConverter, context, benefit);
 
-  patterns.add<ExternElementwiseSPIRVConversion<triton::PureExternElementwiseOp>>(
-      typeConverter, context, benefit);
-  patterns.add<ExternElementwiseSPIRVConversion<triton::ImpureExternElementwiseOp>>(
-      typeConverter, context, benefit);
+  patterns
+      .add<ExternElementwiseSPIRVConversion<triton::PureExternElementwiseOp>>(
+          typeConverter, context, benefit);
+  patterns
+      .add<ExternElementwiseSPIRVConversion<triton::ImpureExternElementwiseOp>>(
+          typeConverter, context, benefit);
   // ExpOpSPIRVConversionApprox will try using ex2.approx if the input type is
-  // FP32. For other input types, ExpOpSPIRVConversionApprox will return failure and
-  // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
+  // FP32. For other input types, ExpOpSPIRVConversionApprox will return failure
+  // and ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will
+  // call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpSPIRVConversionApprox>(typeConverter, context, benefit);
 }

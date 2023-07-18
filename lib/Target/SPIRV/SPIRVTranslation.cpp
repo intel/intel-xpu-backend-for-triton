@@ -1,17 +1,17 @@
 #include "mlir/Conversion/Passes.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
+#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
+#include "mlir/Target/SPIRV/Serialization.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Conversion/TritonGPUToSPIRV/TritonGPUToSPIRVPass.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
-#include "mlir/Target/SPIRV/Serialization.h"
-#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 
 #include "SPIRV-Tools/tools/io.h"
 #include "spirv-tools/libspirv.hpp"
@@ -28,10 +28,9 @@ namespace triton {
 static spv_target_env defaultSPIRVTargetEnv = SPV_ENV_OPENCL_2_2;
 
 LogicalResult assembleSPIRV(std::string spirvCode, raw_ostream &output) {
-  auto DisMessagePrinter = [](spv_message_level_t Level,
-                              const char* source,
-                              const spv_position_t& position,
-                              const char* message) -> void {
+  auto DisMessagePrinter = [](spv_message_level_t Level, const char *source,
+                              const spv_position_t &position,
+                              const char *message) -> void {
     llvm::errs() << " spirv assemble error: " << message << "\n";
   };
   spvtools::SpirvTools SpvTool(defaultSPIRVTargetEnv);
@@ -42,16 +41,17 @@ LogicalResult assembleSPIRV(std::string spirvCode, raw_ostream &output) {
     return failure("SPIRV: Failed to assemble the code");
   }
   std::stringstream is;
-  is.rdbuf()->pubsetbuf(reinterpret_cast<char*>(&binary[0]), binary.size() * sizeof(uint32_t));
+  is.rdbuf()->pubsetbuf(reinterpret_cast<char *>(&binary[0]),
+                        binary.size() * sizeof(uint32_t));
   output << is.str();
   return mlir::success();
 }
 
-LogicalResult disassembleSPIRV(uint32_t* binary_ptr, size_t binary_size, raw_ostream &output) {
-  auto DisMessagePrinter = [](spv_message_level_t Level,
-                              const char* source,
-                              const spv_position_t& position,
-                              const char* message) -> void {
+LogicalResult disassembleSPIRV(uint32_t *binary_ptr, size_t binary_size,
+                               raw_ostream &output) {
+  auto DisMessagePrinter = [](spv_message_level_t Level, const char *source,
+                              const spv_position_t &position,
+                              const char *message) -> void {
     llvm::errs() << " spirv disassemble error: " << message << "\n";
   };
   spvtools::SpirvTools SpvTool(defaultSPIRVTargetEnv);
@@ -79,37 +79,36 @@ getInterfaceVariables(spirv::FuncOp funcOp,
   // instructions in this function.
   funcOp.walk([&](spirv::AddressOfOp addressOfOp) {
     auto var =
-            module.lookupSymbol<spirv::GlobalVariableOp>(addressOfOp.getVariable());
+        module.lookupSymbol<spirv::GlobalVariableOp>(addressOfOp.getVariable());
     // TODO: Per SPIR-V spec: "Before version 1.4, the interface’s
     // storage classes are limited to the Input and Output storage classes.
     // Starting with version 1.4, the interface’s storage classes are all
     // storage classes used in declaring all global variables referenced by the
     // entry point’s call tree." We should consider the target environment here.
     switch (var.getType().cast<spirv::PointerType>().getStorageClass()) {
-      case spirv::StorageClass::Input:
-      case spirv::StorageClass::Output:
-        interfaceVarSet.insert(var.getOperation());
-        break;
-      default:
-        break;
+    case spirv::StorageClass::Input:
+    case spirv::StorageClass::Output:
+      interfaceVarSet.insert(var.getOperation());
+      break;
+    default:
+      break;
     }
   });
   for (auto &var : interfaceVarSet) {
     interfaceVars.push_back(SymbolRefAttr::get(
-            funcOp.getContext(), cast<spirv::GlobalVariableOp>(var).getSymName()));
+        funcOp.getContext(), cast<spirv::GlobalVariableOp>(var).getSymName()));
   }
   return success();
 }
 
-
-static bool linkExternLib(std::vector<uint32_t>& binary,
-                          std::map<std::string, std::string>& externLibPaths) {
+static bool linkExternLib(std::vector<uint32_t> &binary,
+                          std::map<std::string, std::string> &externLibPaths) {
   if (externLibPaths.empty())
     return true;
 
   spvtools::Context ctx(defaultSPIRVTargetEnv);
-  auto print_msg_to_stderr = [](spv_message_level_t, const char*,
-                                const spv_position_t&, const char* m) {
+  auto print_msg_to_stderr = [](spv_message_level_t, const char *,
+                                const spv_position_t &, const char *m) {
     llvm::errs() << " spirv link error: " << m << "\n";
   };
   ctx.SetMessageConsumer(print_msg_to_stderr);
@@ -130,10 +129,7 @@ static bool linkExternLib(std::vector<uint32_t>& binary,
   }
 
   std::vector<uint32_t> linked_binary;
-  if (SPV_SUCCESS != spvtools::Link(ctx,
-                                    libs,
-                                    &linked_binary,
-                                    link_option)) {
+  if (SPV_SUCCESS != spvtools::Link(ctx, libs, &linked_binary, link_option)) {
     llvm::errs() << "Failed to link libs:";
     for (auto &path : externLibPaths) {
       llvm::errs() << " " << path.first;
@@ -146,10 +142,10 @@ static bool linkExternLib(std::vector<uint32_t>& binary,
   return true;
 }
 
-static bool optimizeSPIRVModule(std::vector<uint32_t>& binary) {
+static bool optimizeSPIRVModule(std::vector<uint32_t> &binary) {
   spvtools::Optimizer optimizer(defaultSPIRVTargetEnv);
-  auto print_msg_to_stderr = [](spv_message_level_t, const char*,
-                                const spv_position_t&, const char* m) {
+  auto print_msg_to_stderr = [](spv_message_level_t, const char *,
+                                const spv_position_t &, const char *m) {
     llvm::errs() << " spirv opt error: " << m << "\n";
   };
   optimizer.SetMessageConsumer(print_msg_to_stderr);
@@ -160,38 +156,37 @@ static bool optimizeSPIRVModule(std::vector<uint32_t>& binary) {
   optimizer_options.set_validator_options(validator_options);
   optimizer_options.set_run_validator(false);
 
-
   auto runOptimizer = [&](const std::vector<std::string> &flags,
-                                                       std::vector<uint32_t>& binary) {
+                          std::vector<uint32_t> &binary) {
     if (!optimizer.RegisterPassesFromFlags(flags)) {
-      llvm::errs() << " spirv opt error: pass register failed" << "\n";
+      llvm::errs() << " spirv opt error: pass register failed"
+                   << "\n";
       return false;
     }
 
     std::vector<uint32_t> optimized;
-    bool ok = optimizer.Run(binary.data(),
-                            binary.size(),
-                            &optimized,
+    bool ok = optimizer.Run(binary.data(), binary.size(), &optimized,
                             optimizer_options);
 
     binary.swap(optimized);
     return ok;
   };
 
-  // There is no recursive aggresive opt in SPIRV optimizer. We run the opt in two stage.
-  if (runOptimizer({"--eliminate-dead-functions",
-                "--eliminate-dead-inserts",
-                "--eliminate-dead-variables",
-                "--eliminate-dead-members",
-                "--eliminate-dead-code-aggressive",
-                "--eliminate-dead-input-components"}, binary) &&
+  // There is no recursive aggresive opt in SPIRV optimizer. We run the opt in
+  // two stage.
+  if (runOptimizer({"--eliminate-dead-functions", "--eliminate-dead-inserts",
+                    "--eliminate-dead-variables", "--eliminate-dead-members",
+                    "--eliminate-dead-code-aggressive",
+                    "--eliminate-dead-input-components"},
+                   binary) &&
       runOptimizer({"--eliminate-dead-const"}, binary)) {
     return true;
   }
   return false;
 }
 
-static std::map<std::string, std::string> getExternLibs(spirv::ModuleOp module) {
+static std::map<std::string, std::string>
+getExternLibs(spirv::ModuleOp module) {
   std::map<std::string, std::string> externLibs;
   SmallVector<spirv::FuncOp> funcs;
   module.walk([&](spirv::FuncOp func) {
@@ -202,9 +197,9 @@ static std::map<std::string, std::string> getExternLibs(spirv::ModuleOp module) 
   for (auto &func : funcs) {
     if (func.getOperation()->hasAttr("libname")) {
       auto name =
-              func.getOperation()->getAttr("libname").dyn_cast<StringAttr>();
+          func.getOperation()->getAttr("libname").dyn_cast<StringAttr>();
       auto path =
-              func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
+          func.getOperation()->getAttr("libpath").dyn_cast<StringAttr>();
       if (name) {
         std::string libName = name.str();
         // Note: skip the libdevice path. Use the Intel IMF lib.
@@ -216,29 +211,27 @@ static std::map<std::string, std::string> getExternLibs(spirv::ModuleOp module) 
 
   if (module.getOperation()->hasAttr("triton_gpu.externs")) {
     auto dict = module.getOperation()
-            ->getAttr("triton_gpu.externs")
-            .dyn_cast<DictionaryAttr>();
+                    ->getAttr("triton_gpu.externs")
+                    .dyn_cast<DictionaryAttr>();
     for (auto &attr : dict) {
       auto libName = attr.getName().strref().trim().str();
       // Note: skip the libdevice path. Use the Intel IMF lib.
       if (libName.compare("libdevice") != 0) {
         externLibs[libName] =
-                attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
-
+            attr.getValue().dyn_cast<StringAttr>().strref().trim().str();
       }
     }
   }
 
   if (!funcs.empty()) {
-    std::vector<std::string> lib_names = {"libsycl-fallback-imf.spv",
-                                          "libsycl-fallback-imf-fp64.spv",
-                                          "libsycl-fallback-imf-bf16.spv",
-                                          "libsycl-imf-dl.spv",
-                                          "libsycl-imf-dl-fp64.spv"};
+    std::vector<std::string> lib_names = {
+        "libsycl-fallback-imf.spv", "libsycl-fallback-imf-fp64.spv",
+        "libsycl-fallback-imf-bf16.spv", "libsycl-imf-dl.spv",
+        "libsycl-imf-dl-fp64.spv"};
     // first search for environmental path
     std::string env_path = ::triton::tools::getenv("TRITON_LIBDEVICE_PATH");
     if (!env_path.empty()) {
-      for (auto& lib_name: lib_names) {
+      for (auto &lib_name : lib_names) {
         externLibs.try_emplace(lib_name, env_path + "/" + lib_name);
       }
       return externLibs;
@@ -255,18 +248,18 @@ static std::map<std::string, std::string> getExternLibs(spirv::ModuleOp module) 
       return std::filesystem::path(fileinfo.dli_fname);
     }();
     static const auto runtime_path =
-            this_library_path.parent_path().parent_path() / "third_party" / "xpu" /
-            "lib";
+        this_library_path.parent_path().parent_path() / "third_party" / "xpu" /
+        "lib";
     if (fs::exists(runtime_path)) {
-      for (auto& lib_name: lib_names) {
+      for (auto &lib_name : lib_names) {
         externLibs.try_emplace(lib_name, (runtime_path / lib_name).string());
       }
     } else {
       static const auto this_file_path = std::filesystem::path(__FILE__);
       static const auto compiletime_path = this_file_path.parent_path()
-                                                   .parent_path()
-                                                   .parent_path()
-                                                   .parent_path() /
+                                               .parent_path()
+                                               .parent_path()
+                                               .parent_path() /
                                            "python" / "triton" / "third_party" /
                                            "xpu" / "lib";
       if (!fs::exists(compiletime_path)) {
@@ -275,8 +268,9 @@ static std::map<std::string, std::string> getExternLibs(spirv::ModuleOp module) 
                                 compiletime_path.string();
         llvm::report_fatal_error(error_msg.c_str());
       }
-      for (auto& lib_name: lib_names) {
-        externLibs.try_emplace(lib_name, (compiletime_path / lib_name).string());
+      for (auto &lib_name : lib_names) {
+        externLibs.try_emplace(lib_name,
+                               (compiletime_path / lib_name).string());
       }
     }
   }
@@ -284,8 +278,8 @@ static std::map<std::string, std::string> getExternLibs(spirv::ModuleOp module) 
   return externLibs;
 }
 
-
-static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream &output) {
+static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
+                                                   raw_ostream &output) {
   if (!module)
     return failure();
 
@@ -296,25 +290,25 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream 
 
   module.walk([&](ModuleOp op) {
     auto newModuleOp =
-            builder.create<spirv::ModuleOp>(op.getLoc(), op.getName());
+        builder.create<spirv::ModuleOp>(op.getLoc(), op.getName());
 
     unsigned threadsPerWarp =
         triton::gpu::TritonGPUDialect::getThreadsPerWarp(op);
 
-    auto& region = op.getRegion();
-    auto& parent = *newModuleOp.getBody()->getParent();
+    auto &region = op.getRegion();
+    auto &parent = *newModuleOp.getBody()->getParent();
     auto iter = newModuleOp.getBody()->getIterator();
 
     parent.getBlocks().splice(iter, region.getBlocks());
 
     // Remove the terminator block that was automatically added by builder
-    auto& last_block = newModuleOp.getBodyRegion().back();
+    auto &last_block = newModuleOp.getBodyRegion().back();
     last_block.getParent()->getBlocks().remove(last_block);
 
-    //copy the attributes
+    // copy the attributes
     newModuleOp->setAttrs(op->getAttrDictionary());
 
-    //Set the spirv module attributes
+    // Set the spirv module attributes
     newModuleOp->setAttr(
         triton::gpu::TritonGPUDialect::getThreadsPerWarpAttrName(),
         IntegerAttr::get(mlir::IntegerType::get(builder.getContext(), 32),
@@ -322,12 +316,12 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream 
 
     newModuleOp->setAttr("addressing_model",
                          builder.getAttr<spirv::AddressingModelAttr>(
-                                 spirv::AddressingModel::Physical64));
-    newModuleOp->setAttr("memory_model",
-                         builder.getAttr<spirv::MemoryModelAttr>(
-                                 spirv::MemoryModel::OpenCL));
+                             spirv::AddressingModel::Physical64));
+    newModuleOp->setAttr(
+        "memory_model",
+        builder.getAttr<spirv::MemoryModelAttr>(spirv::MemoryModel::OpenCL));
     spirv::Capability caps_opencl[] = {
-            // clang-format off
+        // clang-format off
             spirv::Capability::Addresses,
             spirv::Capability::Float16Buffer,
             spirv::Capability::Int64,
@@ -343,15 +337,14 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream 
             spirv::Capability::AtomicFloat32AddEXT,
             spirv::Capability::ExpectAssumeKHR,
             spirv::Capability::SubgroupDispatch,
-            // clang-format on
+        // clang-format on
     };
     spirv::Extension exts_opencl[] = {
-            spirv::Extension::SPV_EXT_shader_atomic_float_add,
-            spirv::Extension::SPV_KHR_expect_assume};
-    newModuleOp->setAttr("vce_triple",
-                       spirv::VerCapExtAttr::get(
-                               spirv::Version::V_1_4, caps_opencl,
-                               exts_opencl, builder.getContext()));
+        spirv::Extension::SPV_EXT_shader_atomic_float_add,
+        spirv::Extension::SPV_KHR_expect_assume};
+    newModuleOp->setAttr("vce_triple", spirv::VerCapExtAttr::get(
+                                           spirv::Version::V_1_4, caps_opencl,
+                                           exts_opencl, builder.getContext()));
 
     spirvModules.push_back(newModuleOp);
   });
@@ -362,12 +355,14 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream 
   if (spirvModules.size() != 1)
     return module.emitError("found more than one 'spv.module' op");
 
-  for(auto &sprivModule: spirvModules) {
-    int threadsPerWarp = sprivModule->getAttr("triton_gpu.threads-per-warp").cast<IntegerAttr>().getInt();
+  for (auto &sprivModule : spirvModules) {
+    int threadsPerWarp = sprivModule->getAttr("triton_gpu.threads-per-warp")
+                             .cast<IntegerAttr>()
+                             .getInt();
     sprivModule.walk([&](spirv::FuncOp op) {
       auto entryPointAttrName = spirv::getEntryPointABIAttrName();
       auto entryPointAttr =
-              op->getAttrOfType<spirv::EntryPointABIAttr>(entryPointAttrName);
+          op->getAttrOfType<spirv::EntryPointABIAttr>(entryPointAttrName);
       if (!entryPointAttr) {
         return;
       }
@@ -383,12 +378,11 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream 
         return;
       }
 
-      builder.create<spirv::EntryPointOp>(op.getLoc(), spirv::ExecutionModel::Kernel,
-                                          op, interfaceVars);
+      builder.create<spirv::EntryPointOp>(
+          op.getLoc(), spirv::ExecutionModel::Kernel, op, interfaceVars);
 
-      builder.create<spirv::ExecutionModeOp>(op.getLoc(), op,
-                                             spirv::ExecutionMode::SubgroupSize,
-                                             threadsPerWarp);
+      builder.create<spirv::ExecutionModeOp>(
+          op.getLoc(), op, spirv::ExecutionMode::SubgroupSize, threadsPerWarp);
 
       op->removeAttr(entryPointAttrName);
       op->removeAttr("sym_visibility");
@@ -397,7 +391,6 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream 
     sprivModule.walk([&](mlir::Operation *op) {
       op->removeAttr("tt.contiguity");
       op->removeAttr("tt.divisibility");
-
     });
   }
 
@@ -406,24 +399,27 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module, raw_ostream 
 
   // Link external libraries before perform optimizations.
   // This allows the optimizers to inline and perform
-  // analyses on the used library functions, and eliminate any unused functions as
-  // dead code.
+  // analyses on the used library functions, and eliminate any unused functions
+  // as dead code.
   auto externLibs = getExternLibs(spirvModules[0]);
-  std::vector<uint32_t> linked_binary(binary.data(), binary.data() + binary.size());
+  std::vector<uint32_t> linked_binary(binary.data(),
+                                      binary.data() + binary.size());
   if (!linkExternLib(linked_binary, externLibs))
     return failure();
 
   if (!optimizeSPIRVModule(linked_binary))
     return failure();
 
-  if (failed(disassembleSPIRV(linked_binary.data(), linked_binary.size(), output)))
+  if (failed(
+          disassembleSPIRV(linked_binary.data(), linked_binary.size(), output)))
     return failure();
 
   return mlir::success();
 }
 
 std::string
-translateTritonGPUToSPIRVIR(mlir::ModuleOp module, std::map<std::string, int> computeCapability) {
+translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
+                            std::map<std::string, int> computeCapability) {
   mlir::PassManager pm(module->getContext());
   mlir::registerPassManagerCLOptions();
   if (failed(applyPassManagerCLOptions(pm))) {
@@ -444,7 +440,7 @@ translateTritonGPUToSPIRVIR(mlir::ModuleOp module, std::map<std::string, int> co
 
   pm.addPass(mlir::createConvertSCFToCFPass());
   pm.addPass(createConvertTritonGPUToSPIRVPass(computeCapability));
-//  pm.addPass(mlir::arith::createConvertArithToSPIRVPass());
+  //  pm.addPass(mlir::arith::createConvertArithToSPIRVPass());
   // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
   // pm.addPass(mlir::createCanonicalizerPass());
@@ -467,26 +463,6 @@ translateTritonGPUToSPIRVIR(mlir::ModuleOp module, std::map<std::string, int> co
 
   return spirvModule;
 }
-
-void addExternalLibs(mlir::ModuleOp &module,
-                     const std::vector<std::string> &names,
-                     const std::vector<std::string> &paths) {
-  if (names.empty() || names.size() != paths.size())
-    return;
-  llvm::SmallVector<NamedAttribute, 2> attrs;
-
-  for (size_t i = 0; i < names.size(); ++i) {
-    auto name = StringAttr::get(module->getContext(), names[i]);
-    auto path = StringAttr::get(module->getContext(), paths[i]);
-    NamedAttribute attr(name, path);
-    attrs.push_back(attr);
-  }
-
-  DictionaryAttr dict = DictionaryAttr::get(module->getContext(), attrs);
-
-  module.getOperation()->setAttr("triton_gpu.externs", dict);
-}
-
 
 } // namespace triton
 } // namespace mlir
