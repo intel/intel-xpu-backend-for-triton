@@ -243,17 +243,9 @@ private:
     // of shared memory and append it to the operands of the callOp.
     auto loc = callOp.getLoc();
     auto caller = callOp->getParentOfType<FunctionOpInterface>();
-    auto base = allocation.getFunctionSharedMemoryBase(caller);
-    auto *funcAllocation = allocation.getFuncData(caller);
-    auto bufferId = funcAllocation->getBufferId(callOp);
-    auto offset = funcAllocation->getOffset(bufferId);
     auto ptrTy = spirv::PointerType::get(
         this->getTypeConverter()->convertType(rewriter.getI8Type()),
         spirv::StorageClass::Workgroup);
-    if (!base) {
-      base = rewriter.create<spirv::UndefOp>(callOp.getLoc(), ptrTy);
-    }
-    auto offsetValue = gep(ptrTy, base, i32_val(offset));
     SmallVector<Value, 4> promotedOperands;
     auto opOperands = callOp->getOpOperands();
     auto spirvOperands = adaptor.getOperands();
@@ -262,6 +254,20 @@ private:
       auto &spirvOperand = std::get<1>(it);
       promotedOperands.push_back(spirvOperand);
     }
+    auto base = allocation.getFunctionSharedMemoryBase(caller);
+    if (!base) {
+      base = rewriter.create<spirv::UndefOp>(callOp.getLoc(), ptrTy);
+    }
+    auto *funcAllocation = allocation.getFuncData(caller);
+    auto bufferId = funcAllocation->getBufferId(callOp);
+    // function doesn't have a shared mem buffer
+    if (bufferId == (size_t)-1) {
+      promotedOperands.push_back(base);
+      return promotedOperands;
+    }
+    // function has a shared mem buffer
+    auto offset = funcAllocation->getOffset(bufferId);
+    auto offsetValue = gep(ptrTy, base, i32_val(offset));
     promotedOperands.push_back(offsetValue);
     return promotedOperands;
   }
