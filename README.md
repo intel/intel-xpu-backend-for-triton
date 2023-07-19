@@ -42,7 +42,7 @@ If you encountered any problem, please refer to the [wiki](https://github.com/in
 
 
 # Test Guide
-Please Refer to [test.md](docs/tests.md) for more information.
+Please refer to [test.md](docs/tests.md) for more information.
 
 # Contributing
 It is a warm welcome for any contributions from the community, please refer to the [contribution guidelines](CONTRIBUTING.md) and [code of conduct](CODE_OF_CONDUCT.md).
