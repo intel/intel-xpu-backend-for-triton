@@ -38,7 +38,7 @@ cd python
 TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
 ```
 
-If you encountered any problem, please refer to the [wiki](https://github.com/intel/intel-xpu-backend-for-triton/wiki) first.
+If you encountered any problem, please refer to the [wiki](https://github.com/intel/intel-xpu-backend-for-triton/wiki) first. This wiki also contains a [full build guide](https://github.com/intel/intel-xpu-backend-for-triton/wiki/Build-Triton-From-Scratch) for triton. It is recommended to follow that first.
 
 
 # Test Guide
