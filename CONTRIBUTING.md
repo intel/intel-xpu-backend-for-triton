@@ -1,3 +1,9 @@
+- [Contributing](#contributing)
+    - [License](#license)
+    - [Sign your work](#sign-your-work)
+    - [Coding Style and PreCommit](#coding-style-and-precommit)
+
+
 # Contributing
 
 ### License

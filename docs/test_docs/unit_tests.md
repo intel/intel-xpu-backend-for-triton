@@ -7,9 +7,8 @@
 
 
 # Dependencies
-1. All components listed in [SetUp](../setup.md) wiki page.
 
-2. Tests related
+1. Tests related
 
 * `pytest`
 * `pytest-xdist` : (Optional Plugin) If you wish to run in parallel. A known limitation is that this won't capture the `-s` flag of `pytest`, so if you wish to debug and capture the output, it is not recommended to use this.
@@ -25,7 +24,7 @@ pip install pytest-xdist
 # Triton Unit Tests
 This test case lies under `triton/python/tests/unit/language`.
 
-[Note: ] The other tests `triton/python/tests/` are not supported yet.
+[Note: ] The other tests `triton/python/tests/` are not ported support yet.
 
 
 **Important**
