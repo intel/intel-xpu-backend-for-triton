@@ -70,7 +70,7 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
   addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type);
   });
-  addConversion([&](mlir::VectorType type) -> llvm::Optional<Type> {
+  addConversion([&](mlir::VectorType type) -> std::optional<Type> {
     // Recursively translate vector type
     return mlir::VectorType::get(type.getShape(),
                                  convertType(type.getElementType()));
