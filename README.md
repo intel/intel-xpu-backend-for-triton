@@ -44,6 +44,9 @@ If you encountered any problem, please refer to the [wiki](https://github.com/in
 # Test Guide
 Please refer to the [test guide](docs/tests.md) for more information.
 
+# Known Limitations
+For known limitations, please refer to the [wiki page for known limitations](https://github.com/intel/intel-xpu-backend-for-triton/wiki/Known-Limitations).
+
 # Contributing
 It is a warm welcome for any contributions from the community, please refer to the [contribution guidelines](CONTRIBUTING.md) and [code of conduct](CODE_OF_CONDUCT.md).
 
