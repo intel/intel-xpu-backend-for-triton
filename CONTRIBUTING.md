@@ -55,3 +55,22 @@ Use your real name (sorry, no pseudonyms or anonymous contributions.)
 
 If you set your `user.name` and `user.email` git configs, you can sign your
 commit automatically with `git commit -s`.
+
+### Coding Style and PreCommit
+Changes to C++ Code should follow [LLVM Code Style](https://llvm.org/docs/CodingStandards.html). Changes to Python Code should follow the rules set in `pre-commit` process.
+
+In general, you don't need to worry about the coding style, the pre-commit process will help you automatically format the code.
+
+It is recommended to do the following to register a pre-commit hook. So that everytime you call `git commit`, it will trigger the pre-commit hook to automatically format the code for you.
+
+```Bash
+pip install pre-commit
+# Under intel_xpu_backend repo
+pre-commit install
+```
+
+If you need to manually run, you could use the following command:
+
+```Bash
+python3 -m pre_commit run --all-files
+```
