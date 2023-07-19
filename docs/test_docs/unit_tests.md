@@ -1,3 +1,10 @@
+- [Dependencies](#dependencies)
+- [Triton Unit Tests](#triton-unit-tests)
+  - [Optional](#optional)
+- [Torch Inductor Tests](#torch-inductor-tests)
+- [Appendix](#appendix)
+  - [Skipping tests](#skipping-tests)
+
 
 # Dependencies
 1. All components listed in [SetUp](../setup.md) wiki page.
@@ -16,31 +23,35 @@ pip install pytest-xdist
 
 
 # Triton Unit Tests
-This test case lies under `triton/python/tests/unit`.
-[Note: ] The `triton/python/tests/regression` is not supported yet.
+This test case lies under `triton/python/tests/unit/language`.
+
+[Note: ] The other tests `triton/python/tests/` are not supported yet.
 
 
 **Important**
-1. If you are running tests including math lib, you should set the following flag to the triton lib. If you are running CI/Nightly tests, it is recommended to set this before a full coverage test.
-```
-export TRITON_LIBDEVICE_PATH={abs-path-to-triton}/python/triton/third_party/xpu/
-```
+1. If you are running tests including math lib, you should set the following flag to the triton lib. It is recommended to set this before a full coverage test.
+    ```
+    export TRITON_LIBDEVICE_PATH={abs-path-to-triton}/python/triton/third_party/xpu/
+    ```
 
-2. To run the tests, one need to manually add the `import intel_extension_for_pytorch` before using xpu.
-
+1. To run the tests, one needs to manually add the `import intel_extension_for_pytorch` before using xpu.
+2. If there are cases using `triton.compile`, one needs to use `kernel = triton.compile(name, device_type='xpu')` instead of just using `triton.compile(name)`.
 
 
 **Run single test**
 ```
 # Please make sure added `import intel_extension_for_pytorch` to the test_file.py first.
-(triton-tests)$
-pytest -sv -k [your pattern(eg. test_dot)] test_file.py --device=xpu
+(tests/unit/language)$
+pytest -sv -k [your pattern(eg. test_bin_op)] test_file.py --device=xpu
 ```
+
+The `-s` flag will capture all the outputs. If you don't use it, then just run without this flag.
+
 
 **Run all tests**
 ```
 # Please make sure added `import intel_extension_for_pytorch` to the test_file.py first.
-(triton-tests)$
+(tests/unit/language)$
 pytest -v test_file.py --device=xpu
 ```
 
@@ -48,20 +59,21 @@ Note that the `test_file.py` could be `.`, meaning running all tests on the curr
 
 ## Optional
 **Run tests in parallel**
-You need install `pytest-xdist` first.
+
+You need to install `pytest-xdist` first.
 ```
-pytest -n 8 ... (The same with before)
+pytest -n 8 ... (The same as before)
 ```
 
 # Torch Inductor Tests
 
-This test case lies under `pytorch/tests/inductor`. We are on an active developing process, some changes are internally are going to be upstreamed to PyTorch shortly. We will update the docs then.
+This test case lies under `pytorch/tests/inductor`. We are in an active development process, some changes are internally going to be upstreamed to PyTorch shortly. We will update the docs then.
 
 
 # Appendix
 ## Skipping tests
 
-There are two way to skip:
+There are two ways to skip:
 
 1. Skip the whole test function by using a decorator:
 

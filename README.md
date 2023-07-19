@@ -1,10 +1,10 @@
 # Intel® XPU Backend for Triton\*
 
-This is the development repository of Intel® XPU Backend for Triton\*, a new [OpenAI Triton](https://github.com/openai/triton) backend for Intel® GPUs. Triton is a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton\* is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs. Intel® XPU Backend for Triton\* is a third party module used by triton to provide reasonable tradeoff between performance and productivity on Intel® GPUs.
+This is the development repository of Intel® XPU Backend for Triton\*, a new [OpenAI Triton](https://github.com/openai/triton) backend for Intel® GPUs. Triton is a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton\* is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs. Intel® XPU Backend for Triton\* is a third-party module used by Triton to provide a reasonable tradeoff between performance and productivity on Intel® GPUs.
 
 # SetUp Guide
 
-Intel® XPU Backend for Triton\* serves as a third-party backend for [OpenAI Triton](https://github.com/openai/triton). One should build from triton repo, instead of building from intel-xpu-backend-for-triton.
+Intel® XPU Backend for Triton\* serves as a third-party backend for [OpenAI Triton](https://github.com/openai/triton). One should build from the triton repo, instead of building from intel-xpu-backend-for-triton.
 
 ## Pre-Request
 
@@ -43,6 +43,9 @@ If you encountered any problem, please refer to the [wiki](https://github.com/in
 
 # Test Guide
 Please Refer to [test.md](docs/tests.md) for more information.
+
+# Contributing
+It is a warm welcome for any contributions from the community, please refer to the [contribution guidelines](CONTRIBUTING.md) and [code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
