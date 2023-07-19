@@ -7,8 +7,8 @@
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators
-#define inttoptr(...) rewriter.create<spirv::BitcastOp>(loc, __VA_ARGS__)
-#define ptrtoint(...) rewriter.create<spirv::BitcastOp>(loc, __VA_ARGS__)
+#define inttoptr(...) rewriter.create<spirv::ConvertUToPtrOp>(loc, __VA_ARGS__)
+#define ptrtoint(...) rewriter.create<spirv::ConvertPtrToUOp>(loc, __VA_ARGS__)
 #define zext(...) rewriter.create<spirv::UConvertOp>(loc, __VA_ARGS__)
 #define sext(...) rewriter.create<spirv::SConvertOp>(loc, __VA_ARGS__)
 #define fpext(...) rewriter.create<spirv::FConvertOp>(loc, __VA_ARGS__)
@@ -55,6 +55,7 @@
 #define load(...) rewriter.create<spirv::LoadOp>(loc, __VA_ARGS__)
 #define store(val, ptr) rewriter.create<spirv::StoreOp>(loc, ptr, val)
 #define fcmp_oeq(lhs, rhs) rewriter.create<spirv::FOrdEqualOp>(loc, lhs, rhs)
+#define fis_nan(val) rewriter.create<spirv::IsNanOp>(loc, val)
 #define fcmp_ogt(lhs, rhs)                                                     \
   rewriter.create<spirv::FOrdGreaterThanOp>(loc, lhs, rhs)
 #define fcmp_olt(lhs, rhs) rewriter.create<spirv::FOrdLessThanOp>(loc, lhs, rhs)

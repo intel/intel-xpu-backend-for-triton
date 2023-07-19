@@ -180,6 +180,8 @@ private:
     auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
     if (isInt1)
       elemTy = IntegerType::get(elemTy.getContext(), 8);
+    else if (isPtr)
+      elemTy = IntegerType::get(elemTy.getContext(), 64);
 
     auto llvmElemTy = getTypeConverter()->convertType(elemTy);
 
@@ -205,12 +207,17 @@ private:
             linearize(rewriter, loc, multiDimOffset, paddedRepShape, outOrd);
 
         auto elemPtrTy = ptr_ty(llvmElemTy, spirv::StorageClass::Workgroup);
-        Value ptr = gep(elemPtrTy, smemBase, offset);
+
+        Value ptr = gep(elemPtrTy, bitcast(smemBase, elemPtrTy), offset);
+
         if (vec == 1) {
           if (stNotRd) {
             auto currVal = vals[elemId + linearCTAId * accumSizePerThread];
-            if (isInt1)
-              currVal = zext(llvmElemTy, currVal);
+            if (isInt1) {
+              // spriv::UConvert doesn't support i1
+              currVal = select(currVal, int_val(8, 1), int_val(8, 0));
+            } else if (isPtr)
+              currVal = ptrtoint(llvmElemTy, currVal);
             store(currVal, ptr);
           } else {
             Value currVal = load(ptr);
@@ -218,6 +225,8 @@ private:
               currVal = icmp_ne(currVal,
                                 rewriter.create<spirv::ConstantOp>(
                                     loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+            else if (isPtr)
+              currVal = inttoptr(llvmElemTyOrig, currVal);
             vals[elemId + linearCTAId * accumSizePerThread] = currVal;
           }
         } else {
@@ -228,8 +237,11 @@ private:
             for (unsigned v = 0; v < vec; ++v) {
               auto currVal =
                   vals[elemId + linearCTAId * accumSizePerThread + v];
-              if (isInt1)
-                currVal = zext(llvmElemTy, currVal);
+              if (isInt1) {
+                // spriv::UConvert doesn't support i1
+                currVal = select(currVal, int_val(8, 1), int_val(8, 0));
+              } else if (isPtr)
+                currVal = ptrtoint(llvmElemTy, currVal);
               valVec = insert_element(vecTy, valVec, currVal, idx_val(v));
             }
             store(valVec, ptr);
@@ -241,6 +253,8 @@ private:
                 currVal = icmp_ne(
                     currVal, rewriter.create<spirv::ConstantOp>(
                                  loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+              else if (isPtr)
+                currVal = inttoptr(llvmElemTyOrig, currVal);
               vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
             }
           }
