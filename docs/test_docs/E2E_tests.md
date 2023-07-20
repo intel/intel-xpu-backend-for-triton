@@ -42,7 +42,6 @@ MODE=${4:-inference}        # inference / training
 SCENARIO=${5:-accuracy}     # accuracy / performance
 DEVICE=${6:-xpu}            # xpu / cuda
 CARD=${7:-0}                # 0 / 1 / 2 / 3 ...
-SHAPE=${8:-static}          # static / dynamic
 
 WORKSPACE=`pwd`
 LOG_DIR=${WORKSPACE}/inductor_log/${SUITE}/${MODEL}/${DT}
@@ -56,15 +55,9 @@ if [[ $MODE == "training" ]]; then
     Mode_extra="--training "
 fi
 
-Shape_extra=""
-if [[ $SHAPE == "dynamic" ]]; then
-    echo "Testing with dynamic shapes."
-    Shape_extra="--dynamic-shapes --dynamic-batch-only "
-fi
-
 ulimit -n 1048576
 
-ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --only ${MODEL} --${SCENARIO} --${DT} -d${DEVICE} -n50 --no-skip --dashboard ${Mode_extra} ${Shape_extra} --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv &> ${LOG_DIR}/${LOG_NAME}.log
+ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --only ${MODEL} --${SCENARIO} --${DT} -d${DEVICE} -n50 --no-skip --dashboard ${Mode_extra} --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv &> ${LOG_DIR}/${LOG_NAME}.log
 cat ${LOG_DIR}/${LOG_NAME}.csv
 
 ```
@@ -79,12 +72,12 @@ Below is the detail for those who are interested in more fine-grained control.
 
 Normally, the command will be like the following:
 
-```Python
-python benchmarks/dynamo/${SUITE}.py --only ${MODEL} --accuracy --amp -dxpu -n50 --no-skip --dashboard ${Mode_extra} ${Shape_extra} --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv
+```Bash
+python benchmarks/dynamo/${SUITE}.py --only ${MODEL} --accuracy --amp -dxpu -n50 --no-skip --dashboard ${Mode_extra}  --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv
 ```
 The full arg lists could be found with the following command:
 
-```Python
+```Bash
 python benchmarks/dynamo/huggingface.py --help
 ```
 
