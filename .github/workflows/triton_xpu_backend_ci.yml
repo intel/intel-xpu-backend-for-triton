@@ -81,8 +81,9 @@ jobs:
           export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/
           rm -rf triton-tests
           bash ${HOME}/triton-preci/case_prepare_ci.sh
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit
-          ZE_AFFINITY_MASK=1.0 pytest -v . 2>&1 | tee ./ut_raw.log || true
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit/language
+          bash ${HOME}/triton-preci/case_update_ci.sh
+          ZE_AFFINITY_MASK=1.0 pytest -v . --device=xpu 2>&1 | tee ./ut_raw.log || true
           res=$(cat ut_raw.log | sed -n '7p' |  awk '{print $NF}')
           if [ "$res" == "error" ]; then
             echo -e "[ERROR] IPEX PVC Triton UT FAIL"
