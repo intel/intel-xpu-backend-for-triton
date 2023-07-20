@@ -1,10 +1,10 @@
 # Intel® XPU Backend for Triton\*
 
-This is the development repository of Intel® XPU Backend for Triton\*, a new [OpenAI Triton](https://github.com/openai/triton) backend for Intel® GPUs. Triton is a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton\* is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs. Intel® XPU Backend for Triton\* is a third-party module used by Triton to provide a reasonable tradeoff between performance and productivity on Intel® GPUs.
+This is the development repository of Intel® XPU Backend for Triton\*, a new [OpenAI Triton](https://github.com/openai/triton) backend for Intel® GPUs. Triton is a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton\* is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs. Intel® XPU Backend for Triton\* is a module used by Triton to provide a reasonable tradeoff between performance and productivity on Intel® GPUs.
 
 # SetUp Guide
 
-Intel® XPU Backend for Triton\* serves as a third-party backend for [OpenAI Triton](https://github.com/openai/triton). One should build from the triton repo, instead of building from intel-xpu-backend-for-triton.
+Intel® XPU Backend for Triton\* serves as a backend for [OpenAI Triton](https://github.com/openai/triton). One should build from the triton repo, instead of building from intel-xpu-backend-for-triton.
 
 ## Pre-Request
 
@@ -14,7 +14,7 @@ Please follow [installation guide for intel_extension_for_pytorch](https://intel
 
 Note that these two should be **build from the source** for now.
 
-## Build as a third-party backend
+## Build Intel® GPUs backend
 
 ```Bash
 # Clone OpenAI/triton
