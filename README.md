@@ -8,9 +8,9 @@ Intel® XPU Backend for Triton\* serves as a third-party backend for [OpenAI Tri
 
 ## Pre-Request
 
-Intel® XPU Backend for Triton\* requires [PyTorch](https://pytorch.org/get-started/locally/) and [intel-extension-for-pytorch](https://github.com/intel/intel-extension-for-pytorch/) for build.
+Intel® XPU Backend for Triton\* requires [PyTorch](https://pytorch.org/get-started/locally/) for building, and [intel-extension-for-pytorch](https://github.com/intel/intel-extension-for-pytorch/) for running kernels on xpu.
 
-Please follow [installation guide for intel_extension_for_pytorch](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide) for the detailed building process and make sure the associated driver and oneAPI toolkit are installed correctly.
+Please follow [installation guide for intel_extension_for_pytorch](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide) for the detailed process and make sure the associated driver and oneAPI toolkit are installed correctly.
 
 Note that these two should be **build from the source** for now.
 
@@ -41,8 +41,8 @@ TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
 If you encountered any problem, please refer to the [wiki](https://github.com/intel/intel-xpu-backend-for-triton/wiki) first. This wiki also contains a [full build guide](https://github.com/intel/intel-xpu-backend-for-triton/wiki/Build-Triton-From-Scratch) for triton. It is recommended to follow that first.
 
 
-# Test Guide
-Please refer to the [test guide](docs/tests.md) for more information.
+# Usage Guide
+Please refer to the [HowToRun.md](docs/HowToRun.md) for more information.
 
 # Known Limitations
 For known limitations, please refer to the [wiki page for known limitations](https://github.com/intel/intel-xpu-backend-for-triton/wiki/Known-Limitations).
