@@ -271,8 +271,8 @@ PYBIND11_MODULE(__triton_launcher, m) {{
 
 def _build_xpu_ext(name, src, srcdir):
 
-    TRITON_XPU_DISABLE_LOGGING = os.getenv('TRITON_XPU_DISABLE_LOGGING')
-    if TRITON_XPU_DISABLE_LOGGING is not None and (TRITON_XPU_DISABLE_LOGGING == '1' or TRITON_XPU_DISABLE_LOGGING.lower() == 'on'):
+    TRITON_XPU_BUILD_LOGGING = os.getenv('TRITON_XPU_BUILD_LOGGING')
+    if TRITON_XPU_BUILD_LOGGING is None or TRITON_XPU_BUILD_LOGGING == '0' or TRITON_XPU_BUILD_LOGGING.lower() == 'off':
         import logging
         logging.disable(logging.CRITICAL)
 
