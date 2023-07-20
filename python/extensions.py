@@ -411,7 +411,8 @@ def include_paths() -> List[str]:
         try:
             import pybind11
         except Exception as e:
-            raise ImportError("failed when import pybind11, pls try pip install pybind11")
+            print("failed when import pybind11, pls try pip install pybind11\n Excention:", e)
+            raise ImportError("failed when import pybind11, pls try pip install pybind11\n Excention:", e)
 
         pybind11_path = pybind11.get_include()
 
