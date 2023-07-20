@@ -408,7 +408,11 @@ def include_paths() -> List[str]:
         # add oneAPI include directories
         paths += get_one_api_help().get_include_dirs()
     else:
-        import pybind11
+        try:
+            import pybind11
+        except Exception as e:
+            raise ImportError("failed when import pybind11, pls try pip install pybind11")
+
         pybind11_path = pybind11.get_include()
 
         paths = [pybind11_path, ]
