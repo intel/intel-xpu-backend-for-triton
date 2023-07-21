@@ -79,7 +79,7 @@ jobs:
           bash ${HOME}/triton-nightly/case_prepare_nightly.sh
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit/language
           bash ${HOME}/triton-nightly/case_update_nightly.sh
-          ZE_AFFINITY_MASK=1.0 pytest -v . --device=xpu 2>&1 | tee ./ut_raw.log || true
+          ZE_AFFINITY_MASK=1.0 pytest -v -ra --tb=line . --device=xpu 2>&1 | tee ./ut_raw.log || true
           res=$(cat ut_raw.log | sed -n '7p' |  awk '{print $NF}')
           if [ "$res" == "error" ]; then
             echo -e "[ERROR] IPEX PVC Triton UT FAIL"
@@ -88,7 +88,7 @@ jobs:
 
       - name: UT Log Preview
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit/language
           echo "============ UT raw log head ============"
           head -n 20 ut_raw.log
           echo "============ UT raw log tail ============"
@@ -96,7 +96,7 @@ jobs:
 
       - name: UT Status Overview
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit/language
           echo -e "============ UT Status Overview ============" | tee ./ut_summary.log
           lineNum=`grep -n " \[100%\]" ut_raw.log | tail -n 1 | cut -d: -f1`
           if [ -z $lineNum ]; then lineNum=`cat ./ut_raw.log | wc -l`; fi
@@ -119,7 +119,7 @@ jobs:
 
       - name: Total Pass Rate Calculate (no matmul/dot)
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit/language
           echo -e "============ Total Pass Rate (no matmul/dot) ============" | tee -a ./ut_summary.log
           num_total=$(grep "collected" ut_status.log | awk '{print $4}')
           if [ -z $num_total ]; then num_total=0; fi
@@ -141,7 +141,7 @@ jobs:
 
       - name: Float32 Cases Pass Rate Calculate (no matmul/dot)
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit/language
           echo -e "============ Float32 Cases Pass Rate (no matmul/dot) ============" | tee -a ./ut_summary.log
           num_float32=$(grep "float32" ut_status.log | grep -v 'matmul\|dot' | wc -l)
           num_no_datatype=$(grep -v 'float\|int\|bool\|long\|f8\|f16\|i32\|i64\|u64' ut_status.log | grep -v 'matmul\|dot' | wc -l)
@@ -161,7 +161,7 @@ jobs:
 
       - name: UT Status Summary (no matmul/dot)
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit/language
           cp ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/*.log .
           cat ut_summary.log
 
@@ -169,4 +169,4 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: Triton-nightly-data
-          path: /home/sdp/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit/*.log
+          path: /home/sdp/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit/language/*.log
