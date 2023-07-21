@@ -81,6 +81,11 @@ jobs:
           export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/
           rm -rf triton-tests
           bash ${HOME}/triton-preci/case_prepare_ci.sh
+          git submodule sync
+          git submodule update --init --recursive --jobs 0
+          cd third_party/intel_xpu_backend
+          git checkout ${{github.event.pull_request.head.ref}} && git pull
+          git branch
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/python/test/unit/language
           bash ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton-tests/third_party/intel_xpu_backend/.github/scripts/case_update.sh
           ZE_AFFINITY_MASK=1.0 pytest -v -ra --tb=line . --device=xpu 2>&1 | tee ./ut_raw.log || true
