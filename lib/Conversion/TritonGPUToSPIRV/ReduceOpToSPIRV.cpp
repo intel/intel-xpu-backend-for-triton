@@ -89,10 +89,7 @@ private:
                           std::map<int, Value> &ints, unsigned originalAxis,
                           unsigned axis) const {
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-      // auto dim = sliceLayout.getDim();
       // Recover the axis in the parent layout
-      // std::cout << " dim " << dim << " axis " << axis << "\n";
-      // assert(dim != axis && "Reduction axis cannot be sliced");
       auto parentAxis = axis < sliceLayout.getDim() ? axis : axis + 1;
       auto parentLayout = sliceLayout.getParent();
       getWriteIndexBasic(rewriter, loc, parentLayout, index, writeIdx, ints,
