@@ -60,8 +60,10 @@ jobs:
           pip install pybind11
           cd ${HOME}/triton-nightly
           cp 0001-Hard-code-to-support-xpu-event.patch triton
-          cd triton & git apply 0001-Hard-code-to-support-xpu-event.patch
-          cd python & python setup.py clean
+          cd triton
+          git apply 0001-Hard-code-to-support-xpu-event.patch
+          cd python
+          python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
           python -c "import triton"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
