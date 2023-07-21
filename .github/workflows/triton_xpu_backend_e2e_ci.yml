@@ -60,6 +60,7 @@ jobs:
           pip uninstall -y triton
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs
+          pip install pybind11
           cd triton/python
           python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
