@@ -60,8 +60,9 @@ jobs:
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs
           pip install pybind11
-          cd triton/python
-          python setup.py clean
+          cp 0001-Hard-code-to-support-xpu-event.patch triton
+          cd triton & git apply 0001-Hard-code-to-support-xpu-event.patch
+          cd python & python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
           python -c "import triton"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -96,6 +97,10 @@ jobs:
           echo "num_passed: $num_passed" | tee -a ./e2e_summary.log
           echo "num_failed: $num_failed" | tee -a ./e2e_summary.log
           echo "num_total: $num_total" | tee -a ./e2e_summary.log
+          if [ $num_passed -lt 44 ]; then
+            echo -e "[ERROR] Inductor E2E Nightly test for amp_bf16 passed_num < 44"
+            exit 1
+          fi
           cd ../amp_fp16
           echo -e "============ Acc Check for amp_fp16 ============" | tee -a ./e2e_summary.log
           num_passed=$(grep "(pass)" inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
@@ -105,6 +110,10 @@ jobs:
           echo "num_passed: $num_passed" | tee -a ./e2e_summary.log
           echo "num_failed: $num_failed" | tee -a ./e2e_summary.log
           echo "num_total: $num_total" | tee -a ./e2e_summary.log
+          if [ $num_passed -lt 45 ]; then
+            echo -e "[ERROR] Inductor E2E Nightly test for amp_fp16 passed_num < 45"
+            exit 1
+          fi
 
       - name: Upload Triton Inductor E2E Nightly Data
         uses: actions/upload-artifact@v3
