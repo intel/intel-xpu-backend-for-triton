@@ -1,0 +1,112 @@
+name: Inductor E2E CI Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+
+  Inductor-E2E-CI-Tests:
+    
+    runs-on: [self-hosted, PVC_E2E]
+
+    steps:
+
+      - name: Create conda environment
+        run: |
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
+          conda install -y -c conda-forge libstdcxx-ng
+
+      - name: Triton source code prepare
+        run: |
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          rm -rf triton
+          git clone https://github.com/openai/triton triton
+          cd triton
+          git submodule sync
+          git submodule update --init --recursive --jobs 0
+          cd third_party/intel_xpu_backend
+          git checkout main && git pull
+          cd ../..
+          git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
+          triton_commit=`git rev-parse HEAD`
+          echo "triton_commit: ${triton_commit}" | tee sw_info.log
+
+      - name: Install Dependency
+        run: |
+          python --version
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          python --version
+          pip install setuptools cython numpy wheel scikit-build scipy
+          pip install psutil cpuid
+          cd ${HOME}/triton-nightly
+          bash ${HOME}/triton-nightly/env_prepare_nightly.sh
+          python -c "import torch;import intel_extension_for_pytorch"
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+              echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
+              exit 1
+          fi
+
+      - name: Build Triton
+        shell: bash
+        run:  |
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          source ${HOME}/env_triton.sh
+          export LLVM_SYSPATH=${HOME}/triton-nightly/llvm/build/
+          pip uninstall -y triton
+          sudo update-ca-certificates --fresh
+          export SSL_CERT_DIR=/etc/ssl/certs          
+          cd triton/python
+          python setup.py clean
+          TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
+          python -c "import triton"
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+              echo -e "[ERROR] Triton BUILD FAIL"
+              exit 1
+          fi
+
+      - name: E2E Test for triton on PVC
+        run: |
+          echo -e "[ INFO ] Run E2E test on Node $(hostname)"
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          source ${HOME}/env_triton.sh
+          export LLVM_SYSPATH=${HOME}/triton-nightly/llvm/build/
+          pip install pandas
+          cd ${HOME}/triton-nightly
+          bash set_proxy.sh
+          cp inductor_xpu_test.sh ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+          rm -rf inductor_log
+          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 1 & \
+          INDUCTOR_AMP_DT=float16 bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 & wait
+
+      - name: Test Results Overview
+        run: |
+          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
+          cd /amp_bf16
+          echo -e "============ Acc Check for amp_bf16 ============" | tee -a ./e2e_summary.log
+          num_passed=$(grep "(pass)" inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
+          csv_lines=$(cat inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
+          let num_total=csv_lines-1
+          let num_failed=num_total-num_passed
+          echo "num_passed: $num_passed" | tee -a ./e2e_summary.log
+          echo "num_failed: $num_failed" | tee -a ./e2e_summary.log
+          echo "num_total: $num_total" | tee -a ./e2e_summary.log
+          cd ../amp_fp16
+          echo -e "============ Acc Check for amp_fp16 ============" | tee -a ./e2e_summary.log
+          num_passed=$(grep "(pass)" inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
+          csv_lines=$(cat inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
+          let num_total=csv_lines-1
+          let num_failed=num_total-num_passed
+          echo "num_passed: $num_passed" | tee -a ./e2e_summary.log
+          echo "num_failed: $num_failed" | tee -a ./e2e_summary.log       
+          echo "num_total: $num_total" | tee -a ./e2e_summary.log
+
+      - name: Upload Triton Inductor E2E CI Data
+        uses: actions/upload-artifact@v3
+        with:
+          name: Triton-Inductor-E2E-CI-Data
+          path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/
