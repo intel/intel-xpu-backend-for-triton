@@ -1,14 +1,13 @@
-name: Inductor E2E CI Tests
+name: Inductor E2E Nightly Tests
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches:
-      - main
+  schedule:
+    - cron: "0 8,11 * * *"
 
 jobs:
 
-  Inductor-E2E-CI-Tests:
+  Inductor-E2E-Nightly-Tests:
 
     runs-on: [self-hosted, PVC_E2E]
 
@@ -106,8 +105,8 @@ jobs:
           echo "num_failed: $num_failed" | tee -a ./e2e_summary.log
           echo "num_total: $num_total" | tee -a ./e2e_summary.log
 
-      - name: Upload Triton Inductor E2E CI Data
+      - name: Upload Triton Inductor E2E Nightly Data
         uses: actions/upload-artifact@v3
         with:
-          name: Triton-Inductor-E2E-CI-Data
+          name: Triton-Inductor-E2E-Nightly-Data
           path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/
