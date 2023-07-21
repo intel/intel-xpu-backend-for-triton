@@ -23,6 +23,7 @@ jobs:
       - name: Triton source code prepare
         run: |
           source ${HOME}/miniconda3/bin/activate triton-preci
+          cd ${HOME}/triton-preci
           rm -rf triton
           git clone https://github.com/openai/triton triton
           cd triton
