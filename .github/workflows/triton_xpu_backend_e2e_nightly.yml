@@ -67,7 +67,7 @@ jobs:
           python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py bdist_wheel
           pip install dist/*.whl
-          cd ${HOME}/triton-preci
+          cd ${HOME}/triton-nightly
           python -c "import triton"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
               echo -e "[ERROR] Triton BUILD FAIL"
