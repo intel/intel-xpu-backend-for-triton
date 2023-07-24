@@ -129,7 +129,7 @@ jobs:
           cat ./new_failed_cases.log
           num_new_failed_cases=$(cat ./new_failed_cases.log | wc -l)
           echo "num_new_failed_cases: $num_new_failed_cases" | tee -a ./ut_summary.log
-          if [ ! -s ./new_failed_cases.log ]; then
+          if [ "$num_new_failed_cases" != "0" ]; then
               echo -e "Triton has new failed cases"
               exit 1
           fi
