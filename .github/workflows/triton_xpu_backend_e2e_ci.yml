@@ -97,7 +97,7 @@ jobs:
           cd ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
           cd amp_bf16
           echo -e "============ Acc Check for amp_bf16 ============" | tee -a ./e2e_summary.log
-          num_passed_amp_bf16=$(grep "(pass)" inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
+          num_passed_amp_bf16=$(grep "pass" inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
           csv_lines=$(cat inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
           let num_total_amp_bf16=csv_lines-1
           let num_failed_amp_bf16=num_total_amp_bf16-num_passed_amp_bf16
@@ -106,7 +106,7 @@ jobs:
           echo "num_total_amp_bf16: $num_total_amp_bf16" | tee -a ./e2e_summary.log
           cd ../amp_fp16
           echo -e "============ Acc Check for amp_fp16 ============" | tee -a ./e2e_summary.log
-          num_passed_amp_fp16=$(grep "(pass)" inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
+          num_passed_amp_fp16=$(grep "pass" inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
           csv_lines=$(cat inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
           let num_total_amp_fp16=csv_lines-1
           let num_failed_amp_fp16=num_total_amp_fp16-num_passed_amp_fp16
