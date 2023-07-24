@@ -119,9 +119,25 @@ jobs:
           echo "num_failed: $num_failed" | tee -a ./ut_summary.log
           echo "num_passed: $num_passed" | tee -a ./ut_summary.log
 
+      - name: New Solved Cases
+        run: |
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/triton-preci/baseline_failed.log | tee -a ./new_solved_cases.log
+          echo -e "============ New Solved Cases ============"
+          cat ./new_solved_cases.log
+          num_new_solved_cases=$(cat ./new_solved_cases.log | wc -l)
+          echo "num_new_solved_cases: $num_new_solved_cases" | tee -a ./ut_summary.log
+
       - name: New Failed Cases
         run: |
-          echo "TODO: will add new failure cases"
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/triton-preci/baseline_failed.log ./ut_failed.log | tee -a ./new_failed_cases.log
+          echo -e "============ New Failed Cases ============"
+          cat ./new_failed_cases.log
+          num_new_failed_cases=$(cat ./new_failed_cases.log | wc -l)
+          echo "num_new_failed_cases: $num_new_failed_cases" | tee -a ./ut_summary.log
+          if [ ! -s ./new_failed_cases.log ]; then
+              echo -e "Triton has new failed cases"
+              exit 1
+          fi
 
       - name: Total Pass Rate Calculate (no matmul/dot)
         run: |
