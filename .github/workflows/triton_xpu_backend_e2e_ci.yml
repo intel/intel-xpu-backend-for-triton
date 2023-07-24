@@ -86,7 +86,7 @@ jobs:
           pip install pandas
           cd ${HOME}/triton-preci
           bash set_proxy.sh
-          cp inductor_xpu_test.sh ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu
+          cp ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu
           cd ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu
           rm -rf inductor_log
           bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 & \
