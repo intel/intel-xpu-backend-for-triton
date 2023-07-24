@@ -29,12 +29,14 @@ jobs:
           rm -rf triton
           git clone https://github.com/openai/triton triton
           cd triton
-          triton_commit=`git rev-parse HEAD`
-          echo "triton_commit: ${triton_commit}" | tee sw_info.log
           git submodule sync
           git submodule update --init --recursive --jobs 0
           cd third_party/intel_xpu_backend
           git checkout ${{github.event.pull_request.head.ref}} && git pull
+          cd ../..
+          git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
+          triton_commit=`git rev-parse HEAD`
+          echo "triton_commit: ${triton_commit}" | tee sw_info.log
           git branch
           python3 -m pre_commit run --all-files
 
@@ -59,6 +61,7 @@ jobs:
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
           export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          pip install pybind11
           pip uninstall -y triton
           cd triton/python
           python setup.py clean
@@ -78,7 +81,7 @@ jobs:
           export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
           pip install pytest
           rm -rf ~/.triton/cache
-          export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/
+          export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/lib
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
           bash ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/third_party/intel_xpu_backend/.github/scripts/case_update.sh
           ZE_AFFINITY_MASK=1.0 pytest -v -ra --tb=line . --device=xpu 2>&1 | tee ./ut_raw.log || true
