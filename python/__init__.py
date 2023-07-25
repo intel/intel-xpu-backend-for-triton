@@ -16,7 +16,7 @@ from triton.runtime.cache import get_cache_manager  # noqa:E402
 from triton.runtime.driver import DriverBase  # noqa:E402
 from triton.runtime.jit import version_key  # noqa:E402
 
-from .extensions import SYCLBuildExtension, SYCLExtension  # noqa:E402
+from .extensions import SYCLBuildExtension, SYCLExtension, use_profile  # noqa:E402
 
 
 def _add_external_libs(mod, libs):
@@ -290,12 +290,14 @@ def _build_xpu_ext(name, src, srcdir):
     # extra_link_args = []
     # create extension module
     # build extension module
+    define_macros = [('TRITON_XPU_PROFILE', None)] if use_profile() else []
 
     # create extension module
     ext = SYCLExtension(name,
                         [src],
                         extra_compile_args=extra_compile_args,
-                        libraries=libraries)
+                        libraries=libraries,
+                        define_macros=define_macros)
 
     args = ['build_ext']
     args.append('--build-temp=' + srcdir)
