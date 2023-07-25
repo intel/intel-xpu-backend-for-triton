@@ -3,7 +3,7 @@ name: Inductor E2E Nightly Tests
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 8,11 * * *"
+    - cron: "0 16 * * *" # run at 4 PM UTC
 
 jobs:
 
@@ -88,8 +88,8 @@ jobs:
           rm -rf inductor_log
           bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 & \
           bash inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 1 & \
-          INDUCTOR_AMP_DT=float16 bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 & \
-          INDUCTOR_AMP_DT=float16 bash inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 3 & wait
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 3 & wait
 
       - name: Test Results Overview
         run: |
