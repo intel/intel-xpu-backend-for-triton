@@ -56,6 +56,7 @@ jobs:
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh
           export LLVM_SYSPATH=${HOME}/triton-nightly/llvm/build/
+          pip install pybind11
           pip uninstall -y triton
           cd triton/python
           python setup.py clean
@@ -74,7 +75,7 @@ jobs:
           export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
           pip install pytest
           rm -rf ~/.triton/cache
-          export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/
+          export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/lib
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
           bash ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/third_party/intel_xpu_backend/.github/scripts/case_update.sh
           ZE_AFFINITY_MASK=1.0 pytest -v -ra --tb=line . --device=xpu 2>&1 | tee ./ut_raw.log || true
@@ -111,9 +112,27 @@ jobs:
           echo "num_failed: $num_failed" | tee -a ./ut_summary.log
           echo "num_passed: $num_passed" | tee -a ./ut_summary.log
 
+      - name: New Solved Cases
+        run: |
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log | tee -a ./new_solved_cases.log
+          echo -e "============ New Solved Cases ============"
+          cat ./new_solved_cases.log
+          num_new_solved_cases=$(cat ./new_solved_cases.log | wc -l)
+          echo "num_new_solved_cases: $num_new_solved_cases" | tee -a ./ut_summary.log
+
       - name: New Failed Cases
         run: |
-          echo "TODO: will add new failure cases"
+          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log ./ut_failed.log | tee -a ./new_failed_cases.log
+          echo -e "============ New Failed Cases ============"
+          cat ./new_failed_cases.log
+          num_new_failed_cases=$(cat ./new_failed_cases.log | wc -l)
+          echo "num_new_failed_cases: $num_new_failed_cases" | tee -a ./ut_summary.log
+          if [ "$num_new_failed_cases" != "0" ]; then
+              echo -e "Triton has new failed cases"
+              exit 1
+          fi
 
       - name: Total Pass Rate Calculate (no matmul/dot)
         run: |
