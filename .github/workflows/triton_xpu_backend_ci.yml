@@ -122,7 +122,7 @@ jobs:
       - name: New Solved Cases
         run: |
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
-          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/triton-preci/baseline_failed.log | tee -a ./new_solved_cases.log
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/third_party/intel_xpu_backend/.github/tests/baseline_failed.log | tee -a ./new_solved_cases.log
           echo -e "============ New Solved Cases ============"
           cat ./new_solved_cases.log
           num_new_solved_cases=$(cat ./new_solved_cases.log | wc -l)
@@ -131,7 +131,7 @@ jobs:
       - name: New Failed Cases
         run: |
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
-          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/triton-preci/baseline_failed.log ./ut_failed.log | tee -a ./new_failed_cases.log
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/third_party/intel_xpu_backend/.github/tests/baseline_failed.log ./ut_failed.log | tee -a ./new_failed_cases.log
           echo -e "============ New Failed Cases ============"
           cat ./new_failed_cases.log
           num_new_failed_cases=$(cat ./new_failed_cases.log | wc -l)
