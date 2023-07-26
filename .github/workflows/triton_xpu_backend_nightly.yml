@@ -3,7 +3,7 @@ name: Nightly Tests
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 8,11 * * *"
+    - cron: "0 14 * * *"
 
 jobs:
 
