@@ -90,7 +90,9 @@ jobs:
           cd ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu
           rm -rf inductor_log
           bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 static 2 0 & \
-          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 1 static 2 1 & wait
+          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 1 static 2 1 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 static 2 0 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 3 static 2 1 & wait
 
       - name: Test Results Overview
         run: |

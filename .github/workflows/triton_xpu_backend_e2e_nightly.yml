@@ -3,7 +3,7 @@ name: Inductor E2E Nightly Tests
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 16 * * *" # run at 4 PM UTC
+    - cron: "0 14 * * *" # run at 2 PM UTC
 
 jobs:
 
@@ -86,10 +86,10 @@ jobs:
           cp ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu
           cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
           rm -rf inductor_log
-          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 static 4 0 & \
-          bash inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 1 static 4 1 & \
-          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 static 4 2 & \
-          bash inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 3 static 4 3 & wait
+          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 & \
+          bash inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 1 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 3 & wait
 
       - name: Test Results Overview
         run: |
