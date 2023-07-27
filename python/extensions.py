@@ -408,10 +408,8 @@ def include_paths() -> List[str]:
         # add oneAPI include directories
         paths += get_one_api_help().get_include_dirs()
     else:
-        paths = []
-        pybind11_path = os.path.join(torch.utils.cpp_extension.include_paths()[0], "pybind11")
-
-        paths = [pybind11_path, ]
+        import torch.utils.cpp_extension
+        paths = torch.utils.cpp_extension.include_paths()
 
     return paths
 
