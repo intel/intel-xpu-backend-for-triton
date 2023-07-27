@@ -408,13 +408,8 @@ def include_paths() -> List[str]:
         # add oneAPI include directories
         paths += get_one_api_help().get_include_dirs()
     else:
-        try:
-            import pybind11
-        except Exception as e:
-            print("failed when import pybind11, pls try pip install pybind11\n Excention:", e)
-            raise ImportError("failed when import pybind11, pls try pip install pybind11\n Excention:", e)
-
-        pybind11_path = pybind11.get_include()
+        paths = []
+        pybind11_path = os.path.join(torch.utils.cpp_extension.include_paths()[0], "pybind11")
 
         paths = [pybind11_path, ]
 
