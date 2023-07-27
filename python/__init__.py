@@ -271,6 +271,11 @@ PYBIND11_MODULE(__triton_launcher, m) {{
 
 def _build_xpu_ext(name, src, srcdir):
 
+    TRITON_XPU_BUILD_LOGGING = os.getenv('TRITON_XPU_BUILD_LOGGING')
+    if TRITON_XPU_BUILD_LOGGING is None or TRITON_XPU_BUILD_LOGGING == '0' or TRITON_XPU_BUILD_LOGGING.lower() == 'off':
+        import logging
+        logging.disable(logging.CRITICAL)
+
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))  # noqa: E501
 
