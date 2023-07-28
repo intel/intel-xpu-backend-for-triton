@@ -1,0 +1,132 @@
+name: Inductor E2E CI Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+
+  Inductor-E2E-CI-Tests:
+
+    runs-on: [self-hosted, PVC_E2E]
+
+    steps:
+
+      - name: Create conda environment
+        run: |
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
+          conda install -y -c conda-forge libstdcxx-ng
+
+      - name: Triton source code prepare
+        run: |
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          cd ${HOME}/triton-preci
+          rm -rf triton
+          git clone https://github.com/openai/triton triton
+          cd triton
+          git submodule sync
+          git submodule update --init --recursive --jobs 0
+          cd third_party/intel_xpu_backend
+          git checkout ${{github.event.pull_request.head.ref}} && git pull
+          cd ../..
+          git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
+          triton_commit=`git rev-parse HEAD`
+          echo "triton_commit: ${triton_commit}" | tee sw_info.log
+
+      - name: Install Dependency
+        run: |
+          python --version
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          python --version
+          pip install setuptools cython numpy wheel scikit-build scipy
+          pip install psutil cpuid
+          cd ${HOME}/triton-preci
+          bash ${HOME}/triton-preci/env_prepare_ci.sh
+          source ${HOME}/env_triton.sh
+          python -c "import torch;import intel_extension_for_pytorch"
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+              echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
+              exit 1
+          fi
+
+      - name: Build Triton
+        shell: bash
+        run:  |
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          source ${HOME}/env_triton.sh
+          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          pip uninstall -y triton
+          sudo update-ca-certificates --fresh
+          export SSL_CERT_DIR=/etc/ssl/certs
+          pip install pybind11
+          cd ${HOME}/triton-preci
+          cp 0001-Hard-code-to-support-xpu-event.patch triton
+          cd triton
+          git apply 0001-Hard-code-to-support-xpu-event.patch
+          cd python
+          python setup.py clean
+          TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py bdist_wheel
+          pip install dist/*.whl
+          cd ${HOME}/triton-preci
+          python -c "import triton"
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+              echo -e "[ERROR] Triton BUILD FAIL"
+              exit 1
+          fi
+
+      - name: E2E Test for triton on PVC
+        run: |
+          echo -e "[ INFO ] Run E2E test on Node $(hostname)"
+          source ${HOME}/miniconda3/bin/activate triton-preci
+          source ${HOME}/env_triton.sh
+          export LLVM_SYSPATH=${HOME}/triton-preci/llvm/build/
+          pip install pandas
+          cd ${HOME}/triton-preci
+          bash set_proxy.sh
+          cp ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu
+          cd ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu
+          rm -rf inductor_log
+          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 static 2 0 & \
+          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 1 static 2 1 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 static 2 0 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 3 static 2 1 & wait
+
+      - name: Test Results Overview
+        run: |
+          cd ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
+          cd amp_bf16
+          echo -e "============ Acc Check for amp_bf16 ============" | tee -a ./e2e_summary.log
+          num_passed_amp_bf16=$(grep "pass" inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
+          csv_lines=$(cat inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
+          let num_total_amp_bf16=csv_lines-1
+          let num_failed_amp_bf16=num_total_amp_bf16-num_passed_amp_bf16
+          echo "num_passed_amp_bf16: $num_passed_amp_bf16" | tee -a ./e2e_summary.log
+          echo "num_failed_amp_bf16: $num_failed_amp_bf16" | tee -a ./e2e_summary.log
+          echo "num_total_amp_bf16: $num_total_amp_bf16" | tee -a ./e2e_summary.log
+          cd ../amp_fp16
+          echo -e "============ Acc Check for amp_fp16 ============" | tee -a ./e2e_summary.log
+          num_passed_amp_fp16=$(grep "pass" inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
+          csv_lines=$(cat inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
+          let num_total_amp_fp16=csv_lines-1
+          let num_failed_amp_fp16=num_total_amp_fp16-num_passed_amp_fp16
+          echo "num_passed_amp_fp16: $num_passed_amp_fp16" | tee -a ./e2e_summary.log
+          echo "num_failed_amp_fp16: $num_failed_amp_fp16" | tee -a ./e2e_summary.log
+          echo "num_total_amp_fp16: $num_total_amp_fp16" | tee -a ./e2e_summary.log
+          if [ $num_passed_amp_bf16 -lt 44 ]; then
+            echo -e "[ERROR] Inductor E2E CI test for amp_bf16 passed_num < 44"
+            exit 1
+          fi
+          if [ $num_passed_amp_fp16 -lt 45 ]; then
+            echo -e "[ERROR] Inductor E2E CI test for amp_fp16 passed_num < 45"
+            exit 1
+          fi
+
+
+      - name: Upload Triton Inductor E2E CI Data
+        uses: actions/upload-artifact@v3
+        with:
+          name: Triton-Inductor-E2E-CI-Data
+          path: /home/gta/triton-preci/frameworks.ai.pytorch.private-gpu/inductor_log/
