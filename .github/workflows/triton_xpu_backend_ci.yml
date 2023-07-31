@@ -49,6 +49,7 @@ jobs:
           pip install setuptools cython numpy wheel scikit-build scipy
           pip install psutil cpuid
           bash ${HOME}/triton-preci/env_prepare_ci.sh
+          source ${HOME}/env_triton.sh
           python -c "import torch;import intel_extension_for_pytorch"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
               echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
