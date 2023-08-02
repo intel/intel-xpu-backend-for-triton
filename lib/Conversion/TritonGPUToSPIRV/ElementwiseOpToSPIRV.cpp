@@ -392,15 +392,16 @@ private:
 
     mlir::OpBuilder b(v.getDefiningOp()->getParentOfType<spirv::FuncOp>());
     NamedAttrList attributes(extraAttrs);
-    attributes.set(
-            "libname", StringAttr::get(v.getContext(),libName));
-    attributes.set(
-            "libpath", StringAttr::get(v.getContext(), ""));
-    auto linkageTypeAttr = b.getAttr<::mlir::spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
-    auto linkageAttr = b.getAttr<::mlir::spirv::LinkageAttributesAttr>(funcName.lower(), linkageTypeAttr);
-    attributes.set(
-            "linkage_attributes", linkageAttr);
-    auto ret = b.create<spirv::FuncOp>(v.getLoc(), funcName, funcType, spirv::FunctionControl::Inline, attributes);
+    attributes.set("libname", StringAttr::get(v.getContext(), libName));
+    attributes.set("libpath", StringAttr::get(v.getContext(), ""));
+    auto linkageTypeAttr =
+        b.getAttr<::mlir::spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
+    auto linkageAttr = b.getAttr<::mlir::spirv::LinkageAttributesAttr>(
+        funcName.lower(), linkageTypeAttr);
+    attributes.set("linkage_attributes", linkageAttr);
+    auto ret =
+        b.create<spirv::FuncOp>(v.getLoc(), funcName, funcType,
+                                spirv::FunctionControl::Inline, attributes);
     return ret;
   }
 };
@@ -653,8 +654,10 @@ private:
         "libname", StringAttr::get(op->getContext(), op.getLibname()));
     ret.getOperation()->setAttr(
         "libpath", StringAttr::get(op->getContext(), op.getLibpath()));
-    auto linkageTypeAttr = b.getAttr<::mlir::spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
-    auto linkageAttr = b.getAttr<::mlir::spirv::LinkageAttributesAttr>(funcName.lower(), linkageTypeAttr);
+    auto linkageTypeAttr =
+        b.getAttr<::mlir::spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
+    auto linkageAttr = b.getAttr<::mlir::spirv::LinkageAttributesAttr>(
+        funcName.lower(), linkageTypeAttr);
     ret.getOperation()->setAttr("linkage_attributes", linkageAttr);
     return ret;
   }

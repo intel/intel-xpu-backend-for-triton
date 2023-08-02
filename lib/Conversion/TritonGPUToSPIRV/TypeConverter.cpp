@@ -62,8 +62,8 @@ getStorageClassForMemorySpace(unsigned space) {
 }
 
 TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
-        spirv::TargetEnvAttr &targetAttr, SPIRVConversionOptions &option)
-        : SPIRVTypeConverter(targetAttr, option) {
+    spirv::TargetEnvAttr &targetAttr, SPIRVConversionOptions &option)
+    : SPIRVTypeConverter(targetAttr, option) {
   addConversion([&](triton::PointerType type) -> std::optional<Type> {
     return convertTritonPointerType(type);
   });
@@ -88,9 +88,8 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
   addConversion([&](BFloat16Type type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 16);
   });
-  addConversion([&](IndexType type) -> std::optional<Type> {
-    return getIndexType();
-  });
+  addConversion(
+      [&](IndexType type) -> std::optional<Type> { return getIndexType(); });
 
   // Add generic source and target materializations to handle cases where
   // non-SPIRV types persist after an SPIRV conversion.
@@ -117,8 +116,8 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
 Type TritonGPUToSPIRVTypeConverter::convertTritonPointerType(
     triton::PointerType type) {
   // Recursively translate pointee type
-  std::optional<spirv::StorageClass> storageClass = getStorageClassForMemorySpace(
-          type.getAddressSpace());
+  std::optional<spirv::StorageClass> storageClass =
+      getStorageClassForMemorySpace(type.getAddressSpace());
   assert(storageClass && "uncompatible pointer address type in SPIRV");
   return spirv::PointerType::get(convertType(type.getPointeeType()),
                                  *storageClass);
