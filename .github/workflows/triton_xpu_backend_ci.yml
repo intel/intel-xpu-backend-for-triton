@@ -38,6 +38,7 @@ jobs:
           triton_commit=`git rev-parse HEAD`
           echo "triton_commit: ${triton_commit}" | tee sw_info.log
           git branch
+          cd third_party/intel_xpu_backend
           python3 -m pre_commit run --all-files
 
       - name: Install Dependency
