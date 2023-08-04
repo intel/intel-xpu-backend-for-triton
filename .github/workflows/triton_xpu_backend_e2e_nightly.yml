@@ -59,11 +59,7 @@ jobs:
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs
           pip install pybind11
-          cd ${HOME}/triton-nightly
-          cp 0001-Hard-code-to-support-xpu-event.patch triton
-          cd triton
-          git apply 0001-Hard-code-to-support-xpu-event.patch
-          cd python
+          cd ${HOME}/triton-nightly/triton/python
           python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py bdist_wheel
           pip install dist/*.whl
@@ -90,39 +86,67 @@ jobs:
           bash inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 1 & \
           bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 & \
           bash inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 3 & wait
-
-      - name: Test Results Overview
-        run: |
-          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
-          cd amp_bf16
-          echo -e "============ Acc Check for amp_bf16 ============" | tee -a ./e2e_summary.log
-          num_passed_amp_bf16=$(grep "pass" inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
-          csv_lines=$(cat inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
-          let num_total_amp_bf16=csv_lines-1
-          let num_failed_amp_bf16=num_total_amp_bf16-num_passed_amp_bf16
-          echo "num_passed_amp_bf16: $num_passed_amp_bf16" | tee -a ./e2e_summary.log
-          echo "num_failed_amp_bf16: $num_failed_amp_bf16" | tee -a ./e2e_summary.log
-          echo "num_total_amp_bf16: $num_total_amp_bf16" | tee -a ./e2e_summary.log
-          cd ../amp_fp16
-          echo -e "============ Acc Check for amp_fp16 ============" | tee -a ./e2e_summary.log
-          num_passed_amp_fp16=$(grep "pass" inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
-          csv_lines=$(cat inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
-          let num_total_amp_fp16=csv_lines-1
-          let num_failed_amp_fp16=num_total_amp_fp16-num_passed_amp_fp16
-          echo "num_passed_amp_fp16: $num_passed_amp_fp16" | tee -a ./e2e_summary.log
-          echo "num_failed_amp_fp16: $num_failed_amp_fp16" | tee -a ./e2e_summary.log
-          echo "num_total_amp_fp16: $num_total_amp_fp16" | tee -a ./e2e_summary.log
-          if [ $num_passed_amp_bf16 -lt 44 ]; then
-            echo -e "[ERROR] Inductor E2E Nightly test for amp_bf16 passed_num < 44"
-            exit 1
-          fi
-          if [ $num_passed_amp_fp16 -lt 45 ]; then
-            echo -e "[ERROR] Inductor E2E Nightly test for amp_fp16 passed_num < 45"
-            exit 1
-          fi
+          cp ${HOME}/triton-nightly/triton/sw_info.log inductor_log/
 
       - name: Upload Triton Inductor E2E Nightly Data
         uses: actions/upload-artifact@v3
         with:
           name: Triton-Inductor-E2E-Nightly-Data
           path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/
+
+      - name: Test Results Overview
+        run: |
+          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
+          cd amp_bf16
+          echo -e "============ Acc Check for HF amp_bf16 ============" | tee -a ./e2e_summary.log
+          csv_lines_inf=$(cat inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
+          let num_total_amp_bf16=csv_lines_inf-1
+          num_passed_amp_bf16_inf=$(grep "pass" inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
+          let num_failed_amp_bf16_inf=num_total_amp_bf16-num_passed_amp_bf16_inf
+          amp_bf16_inf_acc_pass_rate=`awk 'BEGIN{printf "%.2f%%\n",('$num_passed_amp_bf16_inf'/'$num_total_amp_bf16')*100}'`
+          echo "num_total_amp_bf16: $num_total_amp_bf16" | tee -a ./e2e_summary.log
+          echo "num_passed_amp_bf16_inf: $num_passed_amp_bf16_inf" | tee -a ./e2e_summary.log
+          echo "num_failed_amp_bf16_inf: $num_failed_amp_bf16_inf" | tee -a ./e2e_summary.log
+          echo "amp_bf16_inf_acc_pass_rate: $amp_bf16_inf_acc_pass_rate" | tee -a ./e2e_summary.log
+
+          num_passed_amp_bf16_tra=$(grep "pass" inductor_huggingface_amp_bf16_training_xpu_accuracy.csv | wc -l)
+          let num_failed_amp_bf16_tra=num_total_amp_bf16-num_passed_amp_bf16_tra
+          amp_bf16_tra_acc_pass_rate=`awk 'BEGIN{printf "%.2f%%\n",('$num_passed_amp_bf16_tra'/'$num_total_amp_bf16')*100}'`
+          echo "num_passed_amp_bf16_tra: $num_passed_amp_bf16_tra" | tee -a ./e2e_summary.log
+          echo "num_failed_amp_bf16_tra: $num_failed_amp_bf16_tra" | tee -a ./e2e_summary.log
+          echo "amp_bf16_tra_acc_pass_rate: $amp_bf16_tra_acc_pass_rate" | tee -a ./e2e_summary.log
+
+          cd ../amp_fp16
+          echo -e "============ Acc Check for HF amp_fp16 ============" | tee -a ./e2e_summary.log
+          csv_lines_inf=$(cat inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
+          let num_total_amp_fp16=csv_lines_inf-1
+          num_passed_amp_fp16_inf=$(grep "pass" inductor_huggingface_amp_fp16_inference_xpu_accuracy.csv | wc -l)
+          let num_failed_amp_fp16_inf=num_total_amp_fp16-num_passed_amp_fp16_inf
+          amp_fp16_inf_acc_pass_rate=`awk 'BEGIN{printf "%.2f%%\n",('$num_passed_amp_fp16_inf'/'$num_total_amp_fp16')*100}'`
+          echo "num_total_amp_fp16: $num_total_amp_fp16" | tee -a ./e2e_summary.log
+          echo "num_passed_amp_fp16_inf: $num_passed_amp_fp16_inf" | tee -a ./e2e_summary.log
+          echo "num_failed_amp_fp16_inf: $num_failed_amp_fp16_inf" | tee -a ./e2e_summary.log
+          echo "amp_fp16_inf_acc_pass_rate: $amp_fp16_inf_acc_pass_rate" | tee -a ./e2e_summary.log
+
+          num_passed_amp_fp16_tra=$(grep "pass" inductor_huggingface_amp_fp16_training_xpu_accuracy.csv | wc -l)
+          let num_failed_amp_fp16_tra=num_total_amp_fp16-num_passed_amp_fp16_tra
+          amp_fp16_tra_acc_pass_rate=`awk 'BEGIN{printf "%.2f%%\n",('$num_passed_amp_fp16_tra'/'$num_total_amp_fp16')*100}'`
+          echo "num_passed_amp_fp16_tra: $num_passed_amp_fp16_tra" | tee -a ./e2e_summary.log
+          echo "num_failed_amp_fp16_tra: $num_failed_amp_fp16_tra" | tee -a ./e2e_summary.log
+          echo "amp_fp16_tra_acc_pass_rate: $amp_fp16_tra_acc_pass_rate" | tee -a ./e2e_summary.log
+          if [ $num_passed_amp_bf16_inf -lt 45 ]; then
+            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_bf16 inference passed_num < 45"
+            exit 1
+          fi
+          if [ $num_passed_amp_fp16_inf -lt 45 ]; then
+            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_fp16 inference passed_num < 45"
+            exit 1
+          fi
+          if [ $num_passed_amp_bf16_tra -lt 42 ]; then
+            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_bf16 training passed_num < 42"
+            exit 1
+          fi
+          if [ $num_passed_amp_fp16_tra -lt 42 ]; then
+            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_fp16 training passed_num < 42"
+            exit 1
+          fi
