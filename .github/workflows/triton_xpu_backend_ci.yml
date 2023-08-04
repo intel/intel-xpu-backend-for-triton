@@ -38,6 +38,7 @@ jobs:
           triton_commit=`git rev-parse HEAD`
           echo "triton_commit: ${triton_commit}" | tee sw_info.log
           git branch
+          cd third_party/intel_xpu_backend
           python3 -m pre_commit run --all-files
 
       - name: Install Dependency
@@ -49,6 +50,7 @@ jobs:
           pip install setuptools cython numpy wheel scikit-build scipy
           pip install psutil cpuid
           bash ${HOME}/triton-preci/env_prepare_ci.sh
+          source ${HOME}/env_triton.sh
           python -c "import torch;import intel_extension_for_pytorch"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
               echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
