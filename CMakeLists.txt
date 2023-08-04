@@ -1,8 +1,13 @@
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+if (DEFINED ENV(TRITON_INTEL_LLVM_DIR))
+MESSAGE(STATUS "[intel_xpu_backend]: using TRITON_INTEL_LLVM_DIR")
+else ()
+MESSAGE(STATUS "[intel_xpu_backend]: using original llvm ")
 
 set(XPU_BACKEND_RECURSIVE ON)
+endif()
 
 if(XPU_BACKEND_RECURSIVE)
 set(TRITON_BUILD_PYTHON_MODULE ON)
@@ -35,11 +40,15 @@ foreach(CACHE_VAR ${CACHE_VARS})
     endif()
 
     if(CACHE_VAR STREQUAL "TRITON_BUILD_TUTORIALS")
-        # Disable the tutorial component
         set(CMAKE_ARGS "${CMAKE_ARGS};-D${CACHE_VAR}${CACHE_VAR_TYPE}=OFF")
     elseif(CACHE_VAR STREQUAL "TRITON_BUILD_PYTHON_MODULE")
-        # Disable the tutorial component
         set(CMAKE_ARGS "${CMAKE_ARGS};-D${CACHE_VAR}${CACHE_VAR_TYPE}=OFF")
+    elseif(CACHE_VAR STREQUAL "LLVM_LIBRARY_DIR")
+        continue()
+    elseif(CACHE_VAR STREQUAL "LLVM_DIR")
+        continue()
+    elseif(CACHE_VAR STREQUAL "LLVM_INCLUDE_DIRS")
+        continue()
     else()
         set(CMAKE_ARGS "${CMAKE_ARGS};-D${CACHE_VAR}${CACHE_VAR_TYPE}=${${CACHE_VAR}}")
     endif()
