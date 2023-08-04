@@ -1,7 +1,7 @@
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-if (DEFINED ENV(TRITON_INTEL_LLVM_DIR))
+if (DEFINED ENV{TRITON_INTEL_LLVM_DIR})
 MESSAGE(STATUS "[intel_xpu_backend]: using TRITON_INTEL_LLVM_DIR")
 else ()
 MESSAGE(STATUS "[intel_xpu_backend]: using original llvm ")
