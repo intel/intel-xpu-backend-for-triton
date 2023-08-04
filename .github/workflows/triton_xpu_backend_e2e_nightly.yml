@@ -150,4 +150,3 @@ jobs:
             echo -e "[ERROR] Inductor E2E Nightly test for HF amp_fp16 training passed_num < 42"
             exit 1
           fi
-
