@@ -1,0 +1,26 @@
+From 755eb6ba096aaec5d02cf94c6d65a52f1d761344 Mon Sep 17 00:00:00 2001
+From: Stonepia <tong.su@intel.com>
+Date: Fri, 4 Aug 2023 09:43:14 +0000
+Subject: [PATCH] temporarily hard code has_triton function
+
+---
+ torch/_inductor/utils.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/torch/_inductor/utils.py b/torch/_inductor/utils.py
+index dc48ed3898..ba659fec94 100644
+--- a/torch/_inductor/utils.py
++++ b/torch/_inductor/utils.py
+@@ -42,8 +42,9 @@ def has_triton():
+         return False
+     try:
+         import triton
++        return triton is not None
+
+-        return triton is not None and get_device_capability() >= (7, 0)
++        # return triton is not None and get_device_capability() >= (7, 0)
+     except ImportError:
+         return False
+
+--
+2.34.1
