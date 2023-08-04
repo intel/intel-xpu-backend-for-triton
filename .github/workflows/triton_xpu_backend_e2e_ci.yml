@@ -132,4 +132,3 @@ jobs:
             echo -e "[ERROR] Inductor E2E CI test for HF amp_fp16 inference passed_num < 45"
             exit 1
           fi
-
