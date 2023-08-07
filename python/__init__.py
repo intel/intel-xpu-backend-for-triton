@@ -127,7 +127,7 @@ bool getBoolEnv(const std::string &env) {{
 static inline void* getPointer(const py::object& _obj, int idx) {{
   PyObject* obj = _obj.ptr();
   if (PyLong_Check(obj)) {{
-    auto ptrValue = PyLong_AsUnsignedLongLong(obj);
+    auto ptrValue = PyLong_AsVoidPtr(obj);
     if (PyErr_Occurred()) {{
       PyErr_Print();
     }}
