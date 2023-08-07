@@ -4,13 +4,13 @@ This is the development repository of XPU Backend for Triton\*, a new [OpenAI Tr
 
 # Setup Guide
 
-XPU Backend for Triton\* serves as a backend for [OpenAI Triton](https://github.com/openai/triton). One should build from the triton repo, instead of building from intel-xpu-backend-for-triton.
+XPU Backend for Triton\* serves as a backend for [OpenAI Triton](https://github.com/openai/triton). One should build from the Triton repo, instead of building from intel-xpu-backend-for-triton.
 
 ## Prerequisites
 
 XPU Backend for Triton\* requires [PyTorch](https://pytorch.org/get-started/locally/) for building, and [Intel® Extension for PyTorch* ](https://github.com/intel/intel-extension-for-pytorch/) for running kernels on XPU.
 
-Please follow [installation guide for Intel® Extension for PyTorch* ](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide) for the detailed process and make sure the associated driver and oneAPI toolkit are installed correctly.
+Please follow [installation guide for Intel® Extension for PyTorch* ](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide) for the detailed process and make sure the associated driver and Intel® oneAPI Base Toolkit are installed correctly.
 
 Note that these two should be **built from the source** for now.
 
