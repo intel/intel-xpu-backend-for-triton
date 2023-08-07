@@ -11,9 +11,9 @@
 
 
 # Overview
-This doc contains [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) setup for Intel® XPU Backend for Triton\*.
+This doc contains [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) setup for XPU Backend for Triton\*.
 
-The Benchmark contains different suites and shares as a common frontend usage. This doc below is an example showing [Hugging Face](https://huggingface.co/) End-to-End models for triton.
+The Benchmark contains different suites and shares as a common frontend usage. This doc below is an example showing [Hugging Face\*](https://huggingface.co/) End-to-End models for triton.
 
 # Pre-Request
 The PyTorch version should be the same as the one in [installation guide for intel_extension_for_pytorch](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide).
@@ -122,7 +122,7 @@ TORCH_COMPILE_DEBUG=1 python ... &> test.log
 For now, we need to go into the output log to find where the reproduced code is. By looking at the above output, there are some lines like below:
 
 ```Bash
-orch._inductor.debug: [WARNING] GoogleFnet__3_inference_3 debug trace: /tmp/torchinductor_username/rc/dlkmcaknezrsmfxw5emr4pdy5qtny47pozz5wihpvwhsi7x3elg.debug
+torch._inductor.debug: [WARNING] GoogleFnet__3_inference_3 debug trace: /tmp/torchinductor_username/rc/dlkmcaknezrsmfxw5emr4pdy5qtny47pozz5wihpvwhsi7x3elg.debug
 ```
 In this folder, you could find the file structure like below:
 
@@ -147,8 +147,7 @@ You could open that Python file, import `intel_extension_for_pytorch`, and then 
 In the future, you could use minifer to produce the above, by enabling the following flags:
 
 ```Python
-+torch._dynamo.config.repro_after="dynamo"
-
+torch._dynamo.config.repro_after="dynamo"
 ```
 
 
@@ -156,7 +155,7 @@ In the future, you could use minifer to produce the above, by enabling the follo
 
 To profile the result, one should use the `performance` mode instead of `accuracy`. i.e, One should use
 
-```
+```Bash
 python benchmarks/dynamo/${SUITE}.py  ... --performance ...
 ```
 
