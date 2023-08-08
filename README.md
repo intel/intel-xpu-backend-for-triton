@@ -1,14 +1,14 @@
-# XPU Backend for Triton\*
+# Intel® XPU Backend for Triton\*
 
-This is the development repository of XPU Backend for Triton\*, a new [OpenAI Triton](https://github.com/openai/triton) backend for Intel GPUs. Triton is a language and compiler for writing highly efficient custom deep learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs. XPU Backend for Triton\* is a module used by Triton to provide a reasonable tradeoff between performance and productivity on Intel GPUs.
+This is the development repository of Intel® XPU Backend for Triton\*, a new [OpenAI Triton](https://github.com/openai/triton) backend for Intel GPUs. Triton is a language and compiler for writing highly efficient custom deep learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs. Intel® XPU Backend for Triton\* is a module used by Triton to provide a reasonable tradeoff between performance and productivity on Intel GPUs.
 
 # Setup Guide
 
-XPU Backend for Triton\* serves as a backend for [OpenAI Triton](https://github.com/openai/triton). One should build from the Triton repo, instead of building from intel-xpu-backend-for-triton.
+Intel® XPU Backend for Triton\* serves as a backend for [OpenAI Triton](https://github.com/openai/triton). One should build from the Triton repo, instead of building from intel-xpu-backend-for-triton.
 
 ## Prerequisites
 
-XPU Backend for Triton\* requires [PyTorch](https://pytorch.org/get-started/locally/) for building, and [Intel® Extension for PyTorch* ](https://github.com/intel/intel-extension-for-pytorch/) for running kernels on XPU.
+Intel® XPU Backend for Triton\* requires [PyTorch](https://pytorch.org/get-started/locally/) for building, and [Intel® Extension for PyTorch* ](https://github.com/intel/intel-extension-for-pytorch/) for running kernels on XPU.
 
 Please follow [installation guide for Intel® Extension for PyTorch* ](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide) for the detailed process and make sure the associated driver and Intel® oneAPI Base Toolkit are installed correctly.
 
