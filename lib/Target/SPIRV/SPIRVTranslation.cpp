@@ -114,7 +114,7 @@ static bool linkExternLib(std::vector<uint32_t> &binary,
   ctx.SetMessageConsumer(print_msg_to_stderr);
 
   spvtools::LinkerOptions link_option;
-  link_option.SetAllowPartialLinkage(false);
+  link_option.SetAllowPartialLinkage(true);
   link_option.SetCreateLibrary(false);
 
   std::vector<std::vector<uint32_t>> libs{binary};
@@ -224,10 +224,8 @@ getExternLibs(spirv::ModuleOp module) {
   }
 
   if (!funcs.empty()) {
-    std::vector<std::string> lib_names = {
-        "libsycl-fallback-imf.spv", "libsycl-fallback-imf-fp64.spv",
-        "libsycl-fallback-imf-bf16.spv", "libsycl-imf-dl.spv",
-        "libsycl-imf-dl-fp64.spv"};
+    std::vector<std::string> lib_names = {"libsycl-fallback-imf.spv",
+                                          "libsycl-fallback-imf-fp64.spv"};
     // first search for environmental path
     std::string env_path = ::triton::tools::getenv("TRITON_LIBDEVICE_PATH");
     if (!env_path.empty()) {
