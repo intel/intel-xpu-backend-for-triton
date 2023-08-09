@@ -208,7 +208,7 @@ private:
     ints[16] = i32_val(16);
 
     // reduce across threads
-    for (auto it : accs) {
+    for (auto& it : accs) {
       const SmallVector<unsigned> &key = it.first;
       auto &acc = it.second;
       // get the writeIdx at which to write in smem
@@ -388,7 +388,7 @@ private:
     Value laneZero = icmp_eq(laneIdAxis, zero);
 
     std::map<SmallVector<unsigned>, SmallVector<Value>> finalAccs;
-    for (auto it : accs) {
+    for (auto& it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> acc = it.second;
 

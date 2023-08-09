@@ -283,7 +283,7 @@ private:
                                               nSizePerThread, rewriter, loc,
                                               getTypeConverter(), bTensorTy);
 
-    SmallVector<Value> ret = cc;
+    SmallVector<Value> ret = std::move(cc);
 
     if (cElemType != aElemType) {
       for (auto &rr : ret) {

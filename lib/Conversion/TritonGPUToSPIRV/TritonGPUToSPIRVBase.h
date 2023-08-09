@@ -97,7 +97,7 @@ protected:
         packedResultType = getTypeConverter()->convertType(resultTypes.front());
       } else {
         SmallVector<Type> convertedTypes;
-        for (auto t : resultTypes) {
+        for (auto& t : resultTypes) {
           auto converted = getTypeConverter()->convertType(t);
           if (!converted) {
             funcOp->emitError()
@@ -234,10 +234,10 @@ public:
   // Key: pair<layout, shape>
   struct IndexCacheInfo {
     DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
-        *baseIndexCache;
+        *baseIndexCache = nullptr;
     DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
-             CacheKeyDenseMapInfo> *indexCache;
-    OpBuilder::InsertPoint *indexInsertPoint;
+             CacheKeyDenseMapInfo> *indexCache = nullptr;
+    OpBuilder::InsertPoint *indexInsertPoint = nullptr;
   };
 
   explicit ConvertTritonGPUOpToSPIRVPatternBase(
@@ -332,7 +332,7 @@ public:
   DenseMap<unsigned, Value>
   getSwizzledSharedPtrs(Location loc, unsigned inVec, RankedTensorType srcTy,
                         triton::gpu::SharedEncodingAttr resSharedLayout,
-                        Type resElemTy, SharedMemoryObject smemObj,
+                        Type resElemTy, SharedMemoryObject& smemObj,
                         ConversionPatternRewriter &rewriter,
                         SmallVectorImpl<Value> &offsetVals,
                         SmallVectorImpl<Value> &srcStrides) const {
@@ -442,7 +442,7 @@ public:
 
   SmallVector<Value>
   loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
-                          Value src, SharedMemoryObject smemObj, Type elemTy,
+                          Value src, SharedMemoryObject& smemObj, Type elemTy,
                           Location loc,
                           ConversionPatternRewriter &rewriter) const {
     auto dstTy = dst.getType().cast<RankedTensorType>();
@@ -671,7 +671,8 @@ public:
             ArrayRef<Value> offsets, ArrayRef<Value> strides) const {
     assert(offsets.size() == strides.size());
     Value ret = i32_val(0);
-    for (auto [offset, stride] : llvm::zip(offsets, strides)) {
+    auto zips = llvm::zip(offsets, strides);
+    for (const auto& [offset, stride] : zips) {
       ret = add(ret, mul(offset, stride));
     }
     return ret;
@@ -947,8 +948,8 @@ private:
   }
 
 protected:
-  TritonGPUToSPIRVTypeConverter *converter;
-  ModuleAllocation *allocation;
+  TritonGPUToSPIRVTypeConverter *converter = nullptr;
+  ModuleAllocation *allocation = nullptr;
   IndexCacheInfo indexCacheInfo;
 };
 
