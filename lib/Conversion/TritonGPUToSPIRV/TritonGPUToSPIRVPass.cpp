@@ -99,7 +99,7 @@ struct ReturnOpConversion : public OpConversionPattern<triton::ReturnOp> {
               getTypeConverter()->convertType(resultTypes.front());
         } else {
           SmallVector<Type> convertedTypes;
-          for (auto& t : resultTypes) {
+          for (auto &t : resultTypes) {
             auto converted = getTypeConverter()->convertType(t);
             if (!converted)
               return failure();
@@ -112,7 +112,7 @@ struct ReturnOpConversion : public OpConversionPattern<triton::ReturnOp> {
             rewriter.create<spirv::UndefOp>(op.getLoc(), packedResultsTy);
         auto loc = op.getLoc();
         auto its = llvm::enumerate(adaptor.getOperands());
-        for (const auto& it : its) {
+        for (const auto &it : its) {
           packedResults = insert_val(packedResultsTy, it.value(), packedResults,
                                      rewriter.getI32ArrayAttr(it.index()));
         }
@@ -251,7 +251,7 @@ private:
     auto opOperands = callOp->getOpOperands();
     auto spirvOperands = adaptor.getOperands();
     auto its = llvm::zip(opOperands, adaptor.getOperands());
-    for (const auto& it : its) {
+    for (const auto &it : its) {
       auto &operand = std::get<0>(it);
       auto &spirvOperand = std::get<1>(it);
       promotedOperands.push_back(spirvOperand);
@@ -288,7 +288,7 @@ private:
         packedResult = getTypeConverter()->convertType(resultTypes.front());
       } else {
         SmallVector<Type> convertedTypes;
-        for (auto& t : resultTypes) {
+        for (auto &t : resultTypes) {
           auto converted = getTypeConverter()->convertType(t);
           if (!converted)
             return nullptr;

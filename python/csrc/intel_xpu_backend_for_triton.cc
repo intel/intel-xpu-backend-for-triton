@@ -52,8 +52,8 @@ void init_triton_translation(py::module &m) {
             mlir::parseSourceString<mlir::ModuleOp>(ttgir, &context);
         if (!module)
           throw std::runtime_error("Parse MLIR file failed.");
-        auto spirvModule =
-            ::mlir::triton::translateTritonGPUToSPIRVIR(*module, std::move(capabilities));
+        auto spirvModule = ::mlir::triton::translateTritonGPUToSPIRVIR(
+            *module, std::move(capabilities));
         if (spirvModule.empty())
           throw std::runtime_error(
               "Failed to translate TritonGPU to SPIRV IR.");

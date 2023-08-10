@@ -97,7 +97,7 @@ protected:
         packedResultType = getTypeConverter()->convertType(resultTypes.front());
       } else {
         SmallVector<Type> convertedTypes;
-        for (auto& t : resultTypes) {
+        for (auto &t : resultTypes) {
           auto converted = getTypeConverter()->convertType(t);
           if (!converted) {
             funcOp->emitError()
@@ -332,7 +332,7 @@ public:
   DenseMap<unsigned, Value>
   getSwizzledSharedPtrs(Location loc, unsigned inVec, RankedTensorType srcTy,
                         triton::gpu::SharedEncodingAttr resSharedLayout,
-                        Type resElemTy, SharedMemoryObject& smemObj,
+                        Type resElemTy, SharedMemoryObject &smemObj,
                         ConversionPatternRewriter &rewriter,
                         SmallVectorImpl<Value> &offsetVals,
                         SmallVectorImpl<Value> &srcStrides) const {
@@ -442,7 +442,7 @@ public:
 
   SmallVector<Value>
   loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
-                          Value src, SharedMemoryObject& smemObj, Type elemTy,
+                          Value src, SharedMemoryObject &smemObj, Type elemTy,
                           Location loc,
                           ConversionPatternRewriter &rewriter) const {
     auto dstTy = dst.getType().cast<RankedTensorType>();
@@ -672,7 +672,7 @@ public:
     assert(offsets.size() == strides.size());
     Value ret = i32_val(0);
     auto zips = llvm::zip(offsets, strides);
-    for (const auto& [offset, stride] : zips) {
+    for (const auto &[offset, stride] : zips) {
       ret = add(ret, mul(offset, stride));
     }
     return ret;

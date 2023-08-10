@@ -96,7 +96,7 @@ inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
   if (!(encoding && encoding.getParent().isa<MmaEncodingAttr>()))
     return inValues;
   SmallVector<Value> outValues;
-  for (auto& v : inValues) {
+  for (auto &v : inValues) {
     // cast i32 to appropriate eltType vector and extract elements
     auto eltType = typeConverter->convertType(tensorTy.getElementType());
     auto vecType = vec_ty(eltType, 32 / eltType.getIntOrFloatBitWidth());
@@ -432,7 +432,7 @@ public:
     //
     SmallVector<SmallVector<Value>> allOperands;
     auto operands = adaptor.getOperands();
-    for (const auto& operand : operands) {
+    for (const auto &operand : operands) {
       auto argTy = op->getOperand(0).getType();
       auto sub_operands = this->getTypeConverter()->unpackLLElements(
           loc, operand, rewriter, argTy);
@@ -440,7 +440,7 @@ public:
                                this->getTypeConverter());
       allOperands.resize(sub_operands.size());
       auto vs = llvm::enumerate(sub_operands);
-      for (const auto& v : vs)
+      for (const auto &v : vs)
         allOperands[v.index()].push_back(v.value());
     }
     if (allOperands.size() == 0)
