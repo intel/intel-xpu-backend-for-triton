@@ -10,4 +10,4 @@ Please refer to [Unit Tests](test_docs/unit_tests.md) for detail.
 # End-to-End Benchmark Tests
 This is for End-to-End tests under `pytorch/benchmarks/dynamo`.
 
-Please refer to [E2E_tests](test_docs/E2E_tests.md) for detail.
+Please refer to [End-to-End Benchmark Tests](test_docs/end_to_end_tests.md) for detail.
