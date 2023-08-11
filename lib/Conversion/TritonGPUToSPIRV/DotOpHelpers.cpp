@@ -1165,7 +1165,8 @@ std::function<void(int, int)> MMA16816ConversionHelper::getLoadMatrixFn(
   };
 
   // (a, b) is the coordinate.
-  auto load = [=, &vals, &ld2, &smemObj](int a, int b) {
+  auto load = [=, &vals, &ld2, &smemObj, instrShape = std::move(instrShape),
+               matShape = std::move(matShape)](int a, int b) {
     MMA16816SmemLoader loader(
         wpt, sharedLayout.getOrder(), kOrder, smemObj.strides,
         tensorTy.getShape() /*tileShape*/, std::move(instrShape),
