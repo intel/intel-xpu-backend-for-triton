@@ -2,44 +2,51 @@
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 if (DEFINED ENV{TRITON_INTEL_LLVM_DIR})
-MESSAGE(STATUS "[intel_xpu_backend]: using TRITON_INTEL_LLVM_DIR")
+MESSAGE(STATUS "[intel_xpu_backend]: using user provide llvm path")
+else ()
 
-# set_target_properties(SPIRV-Tools-shared PROPERTIES EXCLUDE_FROM_ALL ON)
-if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/llvm)
+if (DEFINED ENV{TRITON_INTEL_LLVM})
+MESSAGE(STATUS "[intel_xpu_backend]: using TRITON_INTEL_LLVM")
+
+SET(TRITON_INTEL_LLVM_DIR $ENV{HOME}/.triton/intel_llvm)
+MESSAGE(STATUS "[intel_xpu_backend]: set intel llvm path ${TRITON_INTEL_LLVM_DIR}")
+if (EXISTS ${TRITON_INTEL_LLVM_DIR})
 MESSAGE(STATUS "[intel_xpu_backend]: using previous exists llvm")
 else()
 include(FetchContent)
 function(download_file url hash)
 
-FetchContent_Declare(private-llvm
+FetchContent_Declare(intel-llvm
 URL ${url}
-SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llvm
+SOURCE_DIR ${TRITON_INTEL_LLVM_DIR}
 )
 
-FetchContent_Populate(private-llvm)
+FetchContent_Populate(intel-llvm)
 endfunction(download_file)
 
-MESSAGE(STATUS "[intel_xpu_backend]: downloading private llvm for intel_xpu_backend")
+MESSAGE(STATUS "[intel_xpu_backend]: downloading intel llvm for intel_xpu_backend, path ${TRITON_INTEL_LLVM_DIR}")
 download_file(
   https://github.com/chuanqi129/inductor-tools/releases/download/0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-ubuntu-22.04-release.tar.xz
   40ea513050b3689201c7877854909662
 )
 
-MESSAGE(STATUS "[intel_xpu_backend]: unziping private-llvm")
-add_custom_target(
-    unpack-llvm
-    COMMAND
-        ${CMAKE_COMMAND} -E tar xf ${CMAKE_CURRENT_SOURCE_DIR}/llvm/private-llvm.tar.xz
-)
+MESSAGE(STATUS "[intel_xpu_backend]:Triton uses LLVM version ${LLVM_PACKAGE_VERSION} with revision ${LLVM_GIT_REVISION}")
+MESSAGE(STATUS "[intel_xpu_backend]:Use the LLVM version with revision to re-config for the intel_xpu_backend")
 
-set(ENV{TRITON_INTEL_LLVM_DIR}  ${CMAKE_CURRENT_SOURCE_DIR}/llvm)
-MESSAGE(STATUS "[intel_xpu_backend]: set llvm path ENV{TRITON_INTEL_LLVM_DIR}")
+# hints from https://stackoverflow.com/questions/10205986/how-to-capture-cmake-command-line-arguments
+# Propagate the CMake vars to the intel xpu backend
+
+set(CMAKE_ARGS "${CMAKE_ARGS};-DLLVM_DIR=${TRITON_INTEL_LLVM_DIR}")
+set(CMAKE_ARGS "${CMAKE_ARGS};-DLLVM_INCLUDE_DIRS=${TRITON_INTEL_LLVM_DIR}/include")
+set(CMAKE_ARGS "${CMAKE_ARGS};-DLLVM_LIBRARY_DIR=${TRITON_INTEL_LLVM_DIR}/lib")
+
 endif()
 
 else ()
 MESSAGE(STATUS "[intel_xpu_backend]: using original llvm ")
 
 set(XPU_BACKEND_RECURSIVE ON)
+endif()
 endif()
 
 if(XPU_BACKEND_RECURSIVE)
@@ -52,15 +59,7 @@ add_subdirectory(lib)
 add_subdirectory(python)
 else()
 
-MESSAGE(STATUS "[intel_xpu_backend]:Triton uses LLVM version ${LLVM_PACKAGE_VERSION} with revision ${LLVM_GIT_REVISION}")
-MESSAGE(STATUS "[intel_xpu_backend]:Use the LLVM version with revision to re-config for the intel_xpu_backend")
 
-# hints from https://stackoverflow.com/questions/10205986/how-to-capture-cmake-command-line-arguments
-# Propagate the CMake vars to the intel xpu backend
-
-set(CMAKE_ARGS "${CMAKE_ARGS};-DLLVM_DIR=$ENV{TRITON_INTEL_LLVM_DIR}")
-set(CMAKE_ARGS "${CMAKE_ARGS};-DLLVM_INCLUDE_DIRS=$ENV{TRITON_INTEL_LLVM_DIR}/include")
-set(CMAKE_ARGS "${CMAKE_ARGS};-DLLVM_LIBRARY_DIR=$ENV{TRITON_INTEL_LLVM_DIR}/lib")
 
 get_cmake_property(CACHE_VARS CACHE_VARIABLES)
 foreach(CACHE_VAR ${CACHE_VARS})

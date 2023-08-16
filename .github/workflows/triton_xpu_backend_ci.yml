@@ -62,7 +62,7 @@ jobs:
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
-          export TRITON_INTEL_LLVM_DIR=${HOME}/triton-preci/llvm/
+          export TRITON_INTEL_LLVM=1
           pip install pybind11
           pip uninstall -y triton
           cd triton/python
