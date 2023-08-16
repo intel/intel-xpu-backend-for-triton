@@ -3,11 +3,9 @@ import errno
 import os
 import shutil
 import sys
-import warnings
 from typing import List
 
-import pybind11  # noqa: F401
-import setuptools
+import setuptools  # noqa: F401
 import torch
 from setuptools.command.build_ext import build_ext
 from torch.utils.cpp_extension import _TORCH_PATH
@@ -336,14 +334,8 @@ def _prepare_ldflags(extra_ldflags, verbose, is_standalone):
                 extra_ldflags.append(f"-Wl,-rpath,{TORCH_LIB_PATH}")
 
         library_dirs = library_paths()
-        # Append oneMKL link parameters, detailed please reference:
-        # https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl-link-line-advisor.html
         oneapi_link_args += [f"-L{x}" for x in library_dirs]
-        # oneapi_link_args += ['-fsycl-device-code-split=per_kernel']
-        oneapi_link_args += ["-Wl,--start-group"]
-        oneapi_link_args += [f"{x}" for x in get_one_api_help().get_onemkl_libraries()]
-        oneapi_link_args += ["-Wl,--end-group"]
-        oneapi_link_args += ["-ldnnl", "-lOpenCL", "-lpthread", "-lm", "-ldl"]
+        oneapi_link_args += ["-Wl", "-ldnnl", "-lOpenCL", "-lpthread", "-lm", "-ldl"]
         oneapi_link_args += ['-lintel-ext-pt-gpu']
 
     extra_ldflags += oneapi_link_args
@@ -356,60 +348,19 @@ def _get_dpcpp_root():
     return dpcpp_root
 
 
-def _get_onemkl_root():
-    # TODO: Need to decouple with toolchain env scripts
-    path = os.getenv("MKLROOT")
-    return path
-
-
-def _get_onednn_root():
-    # TODO: Need to decouple with toolchain env scripts
-    path = os.getenv("DNNLROOT")
-    return path
-
-
 class _one_api_help:
     __dpcpp_root = None
-    __onemkl_root = None
-    __onednn_root = None
     __ipex_root = None
 
     def __init__(self):
+        import intel_extension_for_pytorch
         self.__dpcpp_root = _get_dpcpp_root()
-        self.__onemkl_root = _get_onemkl_root()
-        self.__onednn_root = _get_onednn_root()
-
-        infos = os.popen("pip show intel_extension_for_pytorch").read().split("\n")
-        for info in infos:
-            if "Location" in info:
-                ipex_path = info[10:]
-        ipex_path = os.path.join(ipex_path, "intel_extension_for_pytorch")
-
-        self.__ipex_root = ipex_path
-
-        self.check_onednn_cfg()
+        self.__ipex_root = os.path.dirname(intel_extension_for_pytorch.__file__)
         self.check_dpcpp_cfg()
-        self.check_onemkl_cfg()
-
-    def check_onemkl_cfg(self):
-        if self.__onemkl_root is None:
-            raise "Didn't detect mkl root. Please source <oneapi_dir>/mkl/<version>/env/vars.sh "
-
-    def check_onednn_cfg(self):
-        if self.__onednn_root is None:
-            raise "Didn't detect dnnl root. Please source <oneapi_dir>/dnnl/<version>/env/vars.sh "
-        else:
-            warnings.warn(
-                "This extension has static linked onednn library. Please attaction to \
-                that, this path of onednn version maybe not match with the built-in version."
-            )
 
     def check_dpcpp_cfg(self):
         if self.__dpcpp_root is None:
             raise "Didn't detect dpcpp root. Please source <oneapi_dir>/compiler/<version>/env/vars.sh "
-
-    def get_ipex_include_dir(self):
-        return [os.path.join(self.__ipex_root, "include")]
 
     def get_ipex_lib_dir(self):
         return [os.path.join(self.__ipex_root, "lib")]
@@ -420,59 +371,20 @@ class _one_api_help:
             os.path.join(self.__dpcpp_root, "linux", "include", "sycl"),
         ]
 
-    def get_onemkl_include_dir(self):
-        return [os.path.join(self.__onemkl_root, "include")]
-
-    def get_onednn_include_dir(self):
-        return [os.path.join(self.__onednn_root, "include")]
-
-    def get_onednn_lib_dir(self):
-        return [os.path.join(self.__onednn_root, "lib")]
-
-    def is_onemkl_ready(self):
-        if self.__onemkl_root is None:
-            return False
-        return True
-
-    def is_onednn_ready(self):
-        if self.__onednn_root is None:
-            return False
-        return True
-
     def get_library_dirs(self):
         library_dirs = []
         library_dirs += [f"{x}" for x in self.get_ipex_lib_dir()]
-        library_dirs += [f"{x}" for x in self.get_onednn_lib_dir()]
         return library_dirs
 
     def get_include_dirs(self):
         include_dirs = []
         include_dirs += [f"{x}" for x in self.get_dpcpp_include_dir()]
-        include_dirs += [f"{x}" for x in self.get_onemkl_include_dir()]
-        include_dirs += [f"{x}" for x in self.get_onednn_include_dir()]
-        include_dirs += [f"{x}" for x in self.get_ipex_include_dir()]
         return include_dirs
 
-    def get_onemkl_libraries(self):
-        MKLROOT = self.__onemkl_root
-        return [
-            f"{MKLROOT}/lib/intel64/libmkl_sycl.a",
-            f"{MKLROOT}/lib/intel64/libmkl_intel_ilp64.a",
-            f"{MKLROOT}/lib/intel64/libmkl_sequential.a",
-            f"{MKLROOT}/lib/intel64/libmkl_core.a",
-        ]
 
-
-def get_pytorch_include_dir():
-    lib_include = os.path.join(_TORCH_PATH, "include")
-    paths = [
-        lib_include,
-        # Remove this once torch/torch.h is officially no longer supported for C++ extensions.
-        os.path.join(lib_include, "torch", "csrc", "api", "include"),
-        # Some internal (old) Torch headers don't properly prefix their includes,
-        # so we need to pass -Itorch/lib/include/TH as well.
-        os.path.join(lib_include, "TH"),
-    ]
+def get_pytorch_ipex_onemkl_include_dir():
+    import intel_extension_for_pytorch
+    paths = intel_extension_for_pytorch.xpu.cpp_extension.include_paths()
     return paths
 
 
@@ -491,21 +403,13 @@ def include_paths() -> List[str]:
     if use_profile():
         # add pytorch include directories
         paths = []
-        paths += get_pytorch_include_dir()
+        paths += get_pytorch_ipex_onemkl_include_dir()
 
         # add oneAPI include directories
         paths += get_one_api_help().get_include_dirs()
     else:
-        infos = os.popen("pip show pybind11").read().split("\n")
-        for info in infos:
-            if "Location" in info:
-                pybind11_path = info[10:]
-
-        pybind11_path = os.path.join(pybind11_path, 'pybind11/include')
-        if not os.path.exists(pybind11_path):
-            raise Exception("Didn't found pybind11 in conda site-packages, pls try pip install pybind11")
-
-        paths = [pybind11_path, ]
+        import torch.utils.cpp_extension
+        paths = torch.utils.cpp_extension.include_paths()
 
     return paths
 
