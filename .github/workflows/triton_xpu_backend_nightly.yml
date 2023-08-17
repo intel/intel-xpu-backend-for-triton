@@ -56,7 +56,6 @@ jobs:
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh
-          export TRITON_INTEL_LLVM=1
           pip install pybind11
           pip uninstall -y triton
           cd triton/python

@@ -5,8 +5,8 @@ if (DEFINED ENV{TRITON_INTEL_LLVM_DIR})
 MESSAGE(STATUS "[intel_xpu_backend]: using user provide llvm path")
 else ()
 
-if (DEFINED ENV{TRITON_INTEL_LLVM})
-MESSAGE(STATUS "[intel_xpu_backend]: using TRITON_INTEL_LLVM")
+if (DEFINED ENV{TRITON_CODEGEN_INTEL_XPU_BACKEND})
+MESSAGE(STATUS "[intel_xpu_backend]: using intel_llvm")
 
 SET(TRITON_INTEL_LLVM_DIR $ENV{HOME}/.triton/intel_llvm)
 MESSAGE(STATUS "[intel_xpu_backend]: set intel llvm path ${TRITON_INTEL_LLVM_DIR}")
@@ -29,7 +29,7 @@ download_file(
   https://github.com/chuanqi129/inductor-tools/releases/download/0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-ubuntu-22.04-release.tar.xz
   40ea513050b3689201c7877854909662
 )
-
+endif()
 MESSAGE(STATUS "[intel_xpu_backend]:Triton uses LLVM version ${LLVM_PACKAGE_VERSION} with revision ${LLVM_GIT_REVISION}")
 MESSAGE(STATUS "[intel_xpu_backend]:Use the LLVM version with revision to re-config for the intel_xpu_backend")
 
@@ -40,7 +40,6 @@ set(CMAKE_ARGS "${CMAKE_ARGS};-DLLVM_DIR=${TRITON_INTEL_LLVM_DIR}")
 set(CMAKE_ARGS "${CMAKE_ARGS};-DLLVM_INCLUDE_DIRS=${TRITON_INTEL_LLVM_DIR}/include")
 set(CMAKE_ARGS "${CMAKE_ARGS};-DLLVM_LIBRARY_DIR=${TRITON_INTEL_LLVM_DIR}/lib")
 
-endif()
 
 else ()
 MESSAGE(STATUS "[intel_xpu_backend]: using original llvm ")
