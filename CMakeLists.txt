@@ -26,7 +26,7 @@ endfunction(download_file)
 
 MESSAGE(STATUS "[intel_xpu_backend]: downloading intel llvm for intel_xpu_backend, path ${TRITON_INTEL_LLVM_DIR}")
 download_file(
-  https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-ubuntu-18.04-release.tar.xz
+    https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-ubuntu-22.04-release.tar.xz
 )
 endif()
 MESSAGE(STATUS "[intel_xpu_backend]:Triton uses LLVM version ${LLVM_PACKAGE_VERSION} with revision ${LLVM_GIT_REVISION}")
