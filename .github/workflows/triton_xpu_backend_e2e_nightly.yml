@@ -54,7 +54,6 @@ jobs:
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh
-          export TRITON_INTEL_LLVM=1
           pip uninstall -y triton
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs
