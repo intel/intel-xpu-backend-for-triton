@@ -74,7 +74,6 @@ jobs:
           echo -e "[ INFO ] Run E2E test on Node $(hostname)"
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh
-          export LLVM_SYSPATH=${HOME}/triton-nightly/llvm/build/
           pip install pandas
           cd ${HOME}/triton-nightly
           bash set_proxy.sh
