@@ -199,6 +199,12 @@ void init_triton_translation(py::module &m) {
       },
       ret::take_ownership);
 
+  m.def("add_external_libs",
+        [](mlir::ModuleOp &op, const std::vector<std::string> &names,
+           const std::vector<std::string> &paths) {
+          ::mlir::triton::addExternalLibs(op, names, paths);
+        });
+
   m.def("compile_spirv_to_spvbin",
         [](const std::string &spirvCode, int capability) -> py::object {
           std::string spvbin;
