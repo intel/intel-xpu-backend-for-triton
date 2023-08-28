@@ -10,7 +10,7 @@ MESSAGE(STATUS "[intel_xpu_backend]: using intel_llvm")
 
 SET(TRITON_INTEL_LLVM_DIR $ENV{HOME}/.triton/intel_llvm)
 MESSAGE(STATUS "[intel_xpu_backend]: set intel llvm path ${TRITON_INTEL_LLVM_DIR}")
-if (EXISTS ${TRITON_INTEL_LLVM_DIR})
+if (EXISTS ${TRITON_INTEL_LLVM_DIR}/lib/cmake)
 MESSAGE(STATUS "[intel_xpu_backend]: using previous exists llvm")
 else()
 include(FetchContent)
@@ -53,10 +53,11 @@ elseif("${OS_ID}" STREQUAL "centos")
 endif()
 endif()
 
+MESSAGE(STATUS "[intel_xpu_backend]: downloading intel llvm from ${LLVM_DOWNLOAD_URL}")
 download_file(${LLVM_DOWNLOAD_URL})
 endif()
-MESSAGE(STATUS "[intel_xpu_backend]:Triton uses LLVM version ${LLVM_PACKAGE_VERSION} with revision ${LLVM_GIT_REVISION}")
-MESSAGE(STATUS "[intel_xpu_backend]:Use the LLVM version with revision to re-config for the intel_xpu_backend")
+MESSAGE(STATUS "[intel_xpu_backend]: Triton uses LLVM version ${LLVM_PACKAGE_VERSION} with revision ${LLVM_GIT_REVISION}")
+MESSAGE(STATUS "[intel_xpu_backend]: Use the LLVM version with revision to re-config for the intel_xpu_backend")
 
 # hints from https://stackoverflow.com/questions/10205986/how-to-capture-cmake-command-line-arguments
 # Propagate the CMake vars to the intel xpu backend
