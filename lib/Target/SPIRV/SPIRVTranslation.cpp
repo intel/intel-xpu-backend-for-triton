@@ -482,6 +482,5 @@ void addExternalLibs(mlir::ModuleOp &module,
   module.getOperation()->setAttr("triton_gpu.externs", dict);
 }
 
-
 } // namespace triton
 } // namespace mlir
