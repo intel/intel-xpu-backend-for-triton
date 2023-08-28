@@ -89,7 +89,7 @@ else()
 
     add_custom_target(intel_xpu_backend_for_triton ALL
             COMMAND
-            ${CMAKE_COMMAND} --build . --config ${CMAKE_BUILD_TYPE} --target intel_xpu_backend_for_triton
+            ${CMAKE_COMMAND} --build . -j --config ${CMAKE_BUILD_TYPE} --target intel_xpu_backend_for_triton
             WORKING_DIRECTORY  ${CMAKE_CURRENT_BINARY_DIR}/triton
             COMMENT "Building intel_xpu_backend_for_triton"
             VERBATIM
