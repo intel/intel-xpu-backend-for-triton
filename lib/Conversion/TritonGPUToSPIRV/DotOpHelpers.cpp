@@ -164,7 +164,7 @@ Value DotOpMmaV1ConversionHelper::loadA(
 
   SmallVector<Value> elems;
   elems.reserve(has.size() * 2);
-  for (auto item : has) { // has is a map, the key should be ordered.
+  for (auto &item : has) { // has is a map, the key should be ordered.
     elems.push_back(item.second.first);
     elems.push_back(item.second.second);
   }
@@ -447,7 +447,7 @@ DotOpMmaV1ConversionHelper::getMNCoords(Value thread,
     }
   }
 
-  SmallVector<SmallVector<Value>> axes({idxM, idxN});
+  SmallVector<SmallVector<Value>> axes({std::move(idxM), std::move(idxN)});
 
   // product the axis M and axis N to get coords, ported from
   // generator::init_idx method from triton2.0
@@ -1019,10 +1019,10 @@ Value MMA16816ConversionHelper::loadB(Value tensor,
                              tensorTy.getShape().end());
 
   // TODO[Superjomn]: transB cannot be accessed in ConvertLayoutOp.
-  bool transB = false;
-  if (transB) {
-    std::swap(shape[0], shape[1]);
-  }
+  // bool transB = false;
+  // if (transB) {
+  //   std::swap(shape[0], shape[1]);
+  // }
 
   auto [matShapeM, matShapeN, matShapeK] = getMmaMatShape(tensorTy);
   auto [mmaInstrM, mmaInstrN, mmaInstrK] = getMmaInstrShape(tensorTy);
@@ -1165,11 +1165,13 @@ std::function<void(int, int)> MMA16816ConversionHelper::getLoadMatrixFn(
   };
 
   // (a, b) is the coordinate.
-  auto load = [=, &vals, &ld2](int a, int b) {
+  auto load = [=, &vals, &ld2, &smemObj, instrShape = std::move(instrShape),
+               matShape = std::move(matShape)](int a, int b) {
     MMA16816SmemLoader loader(
         wpt, sharedLayout.getOrder(), kOrder, smemObj.strides,
-        tensorTy.getShape() /*tileShape*/, instrShape, matShape, perPhase,
-        maxPhase, elemBytes, rewriter, typeConverter, loc);
+        tensorTy.getShape() /*tileShape*/, std::move(instrShape),
+        std::move(matShape), perPhase, maxPhase, elemBytes, rewriter,
+        typeConverter, loc);
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs =
         loader.computeOffsets(warpId, lane, cSwizzleOffset);

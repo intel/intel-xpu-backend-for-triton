@@ -106,7 +106,7 @@ struct AssertOpSPIRVConversion
         loc, adaptor.getCondition(), rewriter, op.getCondition().getType());
     auto elemTy = elems[0].getType();
     Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
-    for (auto elem : elems) {
+    for (auto &elem : elems) {
       if (elemTy.isSignedInteger() || elemTy.isSignlessInteger()) {
         condition = logic_or(
             condition,
