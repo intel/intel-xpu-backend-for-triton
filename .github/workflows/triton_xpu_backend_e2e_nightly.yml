@@ -7,7 +7,7 @@ on:
 
 jobs:
 
-  Inductor-E2E-Nightly-Tests:
+  Tests-Env-Prepare:
 
     runs-on: [self-hosted, PVC_E2E]
 
@@ -69,15 +69,27 @@ jobs:
               exit 1
           fi
 
-      - name: E2E Test for triton on PVC
+      - name: Prepare Benchmark
         run: |
-          echo -e "[ INFO ] Run E2E test on Node $(hostname)"
+          cp ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+          cp ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/scripts/inductor_perf_summary.py ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+          pip install styleFrame scipy pandas
+
+  Accuracy-Test:
+
+    needs: Tests-Env-Prepare
+
+    runs-on: [self-hosted, PVC_E2E]
+
+    steps:
+      
+      - name: ACC Test for triton on PVC
+        run: |
+          echo -e "[ INFO ] Run E2E Acc test on Node $(hostname)"
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh
-          pip install pandas
           cd ${HOME}/triton-nightly
           bash set_proxy.sh
-          cp ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
           cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
           rm -rf inductor_log
           bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 & \
@@ -86,13 +98,7 @@ jobs:
           bash inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 3 & wait
           cp ${HOME}/triton-nightly/triton/sw_info.log inductor_log/
 
-      - name: Upload Triton Inductor E2E Nightly Data
-        uses: actions/upload-artifact@v3
-        with:
-          name: Triton-Inductor-E2E-Nightly-Data
-          path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/
-
-      - name: Test Results Overview
+      - name: ACC Test Results Overview
         run: |
           cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
           cd amp_bf16
@@ -148,3 +154,41 @@ jobs:
             echo -e "[ERROR] Inductor E2E Nightly test for HF amp_fp16 training passed_num < 42"
             exit 1
           fi
+
+      - name: Upload Triton Inductor E2E Nightly Data
+        uses: actions/upload-artifact@v3
+        with:
+          name: Triton-Inductor-E2E-Nightly-Data
+          path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/
+
+  Performance-Test:
+
+    needs: Accuracy-Test
+
+    runs-on: [self-hosted, PVC_E2E]
+
+    steps:
+      
+      - name: Perf Test for triton on PVC
+        run: |
+          echo -e "[ INFO ] Run E2E Perf test on Node $(hostname)"
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          source ${HOME}/env_triton.sh
+          cd ${HOME}/triton-nightly
+          bash set_proxy.sh
+          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+          bash inductor_xpu_test.sh huggingface amp_bf16 inference performance xpu 0 & \
+          bash inductor_xpu_test.sh huggingface amp_bf16 training performance xpu 1 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference performance xpu 2 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 training performance xpu 3 & wait
+
+      - name: Perf Test Results Generate and Overview
+        run: |
+          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+          python inductor_perf_summary.py -s huggingface -p amp_bf16 amp_fp16
+
+      - name: Upload Triton Inductor E2E Nightly Data
+        uses: actions/upload-artifact@v3
+        with:
+          name: Triton-Inductor-E2E-Nightly-Data
+          path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/          
