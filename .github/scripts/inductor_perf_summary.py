@@ -1,5 +1,5 @@
 """
-Summary performance csv files for triton Inductor e2e tests 
+Summary performance csv files for triton Inductor e2e tests
 
 precision:  'amp_bf16','amp_fp16','bfloat16','float16','float32'
 mode: 'inference','training'
@@ -112,7 +112,7 @@ def update_summary(excel):
         summary.iloc[12:13,5:6]= passrate_values['float16_inference']
         summary.iloc[14:15,5:6]= passrate_values['float16_training']
         summary.iloc[13:14,5:6]= geomean_values['float16_inference']
-        summary.iloc[15:16,5:6]= geomean_values['float16_training']    
+        summary.iloc[15:16,5:6]= geomean_values['float16_training']
     if 'float32' in args.precision:
         summary.iloc[16:17,5:6]= passrate_values['float32_inference']
         summary.iloc[18:19,5:6]= passrate_values['float32_training']

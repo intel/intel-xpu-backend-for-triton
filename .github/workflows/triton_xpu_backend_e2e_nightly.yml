@@ -138,28 +138,38 @@ jobs:
           echo "num_passed_amp_fp16_tra: $num_passed_amp_fp16_tra" | tee -a ./e2e_summary.log
           echo "num_failed_amp_fp16_tra: $num_failed_amp_fp16_tra" | tee -a ./e2e_summary.log
           echo "amp_fp16_tra_acc_pass_rate: $amp_fp16_tra_acc_pass_rate" | tee -a ./e2e_summary.log
-          if [ $num_passed_amp_bf16_inf -lt 45 ]; then
-            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_bf16 inference passed_num < 45"
-            exit 1
-          fi
-          if [ $num_passed_amp_fp16_inf -lt 45 ]; then
-            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_fp16 inference passed_num < 45"
-            exit 1
-          fi
-          if [ $num_passed_amp_bf16_tra -lt 42 ]; then
-            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_bf16 training passed_num < 42"
-            exit 1
-          fi
-          if [ $num_passed_amp_fp16_tra -lt 42 ]; then
-            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_fp16 training passed_num < 42"
-            exit 1
-          fi
 
       - name: Upload Triton Inductor E2E Nightly Data
         uses: actions/upload-artifact@v3
         with:
           name: Triton-Inductor-E2E-Nightly-Data
           path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/
+
+      - name: Test Results Check
+        run: |
+          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
+          cd amp_bf16
+          num_passed_amp_bf16_inf=$(grep "num_passed_amp_bf16_inf:" e2e_summary.log | sed -e 's/.*://;s/[^0-9.]//')
+          if [ $num_passed_amp_bf16_inf -lt 45 ]; then
+            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_bf16 inference passed_num < 45"
+            exit 1
+          fi
+          num_passed_amp_bf16_tra=$(grep "num_passed_amp_bf16_tra:" e2e_summary.log | sed -e 's/.*://;s/[^0-9.]//')
+          if [ $num_passed_amp_bf16_tra -lt 42 ]; then
+            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_bf16 training passed_num < 42"
+            exit 1
+          fi
+          cd ../amp_fp16
+          num_passed_amp_fp16_inf=$(grep "num_passed_amp_fp16_inf:" e2e_summary.log | sed -e 's/.*://;s/[^0-9.]//')
+          if [ $num_passed_amp_fp16_inf -lt 45 ]; then
+            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_fp16 inference passed_num < 45"
+            exit 1
+          fi
+          num_passed_amp_fp16_tra=$(grep "num_passed_amp_fp16_tra:" e2e_summary.log | sed -e 's/.*://;s/[^0-9.]//')
+          if [ $num_passed_amp_fp16_tra -lt 42 ]; then
+            echo -e "[ERROR] Inductor E2E Nightly test for HF amp_fp16 training passed_num < 42"
+            exit 1
+          fi
 
   Performance-Test:
 
@@ -191,4 +201,4 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: Triton-Inductor-E2E-Nightly-Data
-          path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/          
+          path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/
