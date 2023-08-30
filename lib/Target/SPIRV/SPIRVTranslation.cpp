@@ -38,6 +38,7 @@ LogicalResult assembleSPIRV(std::string spirvCode, raw_ostream &output) {
 
   std::vector<uint32_t> binary;
   if (!SpvTool.Assemble(spirvCode, &binary, SPV_TEXT_TO_BINARY_OPTION_NONE)) {
+    // return failure("SPIRV: Failed to assemble the code");
     return failure();
   }
   std::stringstream is;
@@ -59,6 +60,7 @@ LogicalResult disassembleSPIRV(uint32_t *binary_ptr, size_t binary_size,
 
   std::string spriv_code;
   if (!SpvTool.Disassemble(binary_ptr, binary_size, &spriv_code)) {
+    // return failure("SPIRV: Failed to generate textual assembly");
     return failure();
   }
   output << spriv_code;

@@ -453,7 +453,7 @@ public:
 
   SmallVector<Value>
   loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
-                          Value src, SharedMemoryObject smemObj, Type elemTy,
+                          Value src, SharedMemoryObject &smemObj, Type elemTy,
                           Location loc,
                           ConversionPatternRewriter &rewriter) const {
     auto dstTy = dst.getType().cast<RankedTensorType>();
