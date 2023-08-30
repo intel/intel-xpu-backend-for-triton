@@ -169,7 +169,7 @@ private:
     ints[16] = i32_val(16);
 
     // reduce across threads
-    for (auto it : accs) {
+    for (auto &it : accs) {
       const SmallVector<unsigned> &key = it.first;
       auto &acc = it.second;
       // get the writeIdx at which to write in smem
@@ -317,7 +317,7 @@ private:
                     ConversionPatternRewriter &rewriter) const {
     triton::ReduceOp op = helper.getOperation();
     unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
-    for (auto it : accs) {
+    for (auto &it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &acc = accs[key];
       warpReduce(rewriter, op.getLoc(), acc, op, sizeIntraWarps);
@@ -393,7 +393,7 @@ private:
     Value zero = i32_val(0);
     Value laneZero = icmp_eq(laneIdAxis, zero);
 
-    for (auto it : accs) {
+    for (auto &it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &acc = it.second;
 
