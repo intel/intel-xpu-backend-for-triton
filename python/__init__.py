@@ -9,6 +9,7 @@ from pathlib import Path
 import setuptools
 import torch
 import triton._C.libintel_xpu_backend_for_triton.triton as _triton  # noqa:E402
+from triton._C.libtriton.triton import ir as triton_ir
 from triton.common.backend import BaseBackend, register_backend  # noqa:E402
 from triton.compiler.make_launcher import make_so_cache_key  # noqa:E402
 from triton.runtime.cache import get_cache_manager  # noqa:E402
@@ -16,6 +17,18 @@ from triton.runtime.driver import DriverBase  # noqa:E402
 from triton.runtime.jit import version_key  # noqa:E402
 
 from .extensions import SYCLBuildExtension, SYCLExtension, use_profile  # noqa:E402
+
+
+def is_ws_supported(module):
+    # Override triton's `is_ws_supported` function, so that
+    # the module id is kept the same within the overall context.
+    if isinstance(module, _triton.module):
+        return False
+    else:
+        return triton_ir.is_ws_supported
+
+
+triton_ir.is_ws_supported = is_ws_supported
 
 
 def _add_external_libs(mod, libs):
