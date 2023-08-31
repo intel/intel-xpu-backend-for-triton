@@ -54,6 +54,7 @@ jobs:
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh
+          export LD_PRELOAD=$LD_PRELOAD:/home/gta/miniconda3/envs/triton-nightly-test/lib/libtinfow.so.6
           pip uninstall -y triton
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs
@@ -82,7 +83,7 @@ jobs:
     runs-on: [self-hosted, PVC_E2E]
 
     steps:
-      
+
       - name: ACC Test for triton on PVC
         run: |
           echo -e "[ INFO ] Run E2E Acc test on Node $(hostname)"
@@ -178,7 +179,7 @@ jobs:
     runs-on: [self-hosted, PVC_E2E]
 
     steps:
-      
+
       - name: Perf Test for triton on PVC
         run: |
           echo -e "[ INFO ] Run E2E Perf test on Node $(hostname)"

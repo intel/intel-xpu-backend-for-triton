@@ -57,6 +57,7 @@ jobs:
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
+          export LD_PRELOAD=$LD_PRELOAD:/home/gta/miniconda3/envs/triton-preci/lib/libtinfow.so.6
           pip uninstall -y triton
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs
@@ -137,4 +138,3 @@ jobs:
             echo -e "[ERROR] Inductor E2E CI test for HF amp_fp16 inference passed_num < 45"
             exit 1
           fi
-
