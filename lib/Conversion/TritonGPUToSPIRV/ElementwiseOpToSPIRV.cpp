@@ -397,7 +397,7 @@ private:
     auto linkageTypeAttr =
         b.getAttr<::mlir::spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
     auto linkageAttr = b.getAttr<::mlir::spirv::LinkageAttributesAttr>(
-        funcName.lower(), linkageTypeAttr);
+        funcName.str(), linkageTypeAttr);
     attributes.set("linkage_attributes", linkageAttr);
     auto ret =
         b.create<spirv::FuncOp>(v.getLoc(), funcName, funcType,
@@ -659,7 +659,7 @@ private:
     auto linkageTypeAttr =
         b.getAttr<::mlir::spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
     auto linkageAttr = b.getAttr<::mlir::spirv::LinkageAttributesAttr>(
-        funcName.lower(), linkageTypeAttr);
+        funcName.str(), linkageTypeAttr);
     ret.getOperation()->setAttr("linkage_attributes", linkageAttr);
     return ret;
   }
