@@ -1,10 +1,26 @@
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+if (${CMAKE_VERSION} VERSION_GREATER_EQUAL 3.24)
+  cmake_policy(SET CMP0135 NEW)
+endif ()
+
 if(DEFINED ENV{TRITON_INTEL_LLVM_DIR})
   message(STATUS "[intel_xpu_backend]: using user provide llvm path")
 else()
   if(DEFINED ENV{TRITON_CODEGEN_INTEL_XPU_BACKEND})
     message(STATUS "[intel_xpu_backend]: using intel_llvm")
+
+SET(TRITON_INTEL_LLVM_DIR $ENV{HOME}/.triton/intel_llvm)
+MESSAGE(STATUS "[intel_xpu_backend]: set intel llvm path ${TRITON_INTEL_LLVM_DIR}")
+if (EXISTS ${TRITON_INTEL_LLVM_DIR}/lib/cmake)
+MESSAGE(STATUS "[intel_xpu_backend]: using previous exists llvm")
+else()
+include(FetchContent)
+function(download_file url)
+FetchContent_Declare(intel-llvm
+URL ${url}
+SOURCE_DIR ${TRITON_INTEL_LLVM_DIR}
+)
 
     set(TRITON_INTEL_LLVM_DIR $ENV{HOME}/.triton/intel_llvm)
     message(
@@ -61,7 +77,6 @@ else()
             set(LLVM_DOWNLOAD_URL
                 https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-centos-7-release.tar.xz
             )
-            message(
               STATUS
                 "[intel_xpu_backend]: downloading intel llvm for ${OS_ID} ${OS_VERSION_ID}"
             )
