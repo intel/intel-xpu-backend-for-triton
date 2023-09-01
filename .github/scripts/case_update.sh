@@ -13,8 +13,9 @@ sed -i 's/f.name/&, device_type=device/' ${HOME}/actions-runner/_work/intel-xpu-
 sed -i '/pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")/ a\    if dtype in ["float8e4b15", "tl.float8e4b15x4", "float8e4nv", "float8e5"]:\n        pytest.skip("fp8 is not supported yet")' ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language/test_core.py
 sed -i "/ptx = pgm.asm\['ptx'\]/,/^$/d" ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language/test_core.py
 sed -i '/capability = torch.cuda.get_device_capability.*/i \    check_cuda_only(device)' ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language/test_core.py
+sed -i -r '/h\.asm\["ptx"\]/,/^$/d' ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language/test_core.py
 # TODO : This following change will affect the test_dot, we need to modify this after the dot is enabled
-sed -i -r '/[h|pgm]\.asm\["ptx"\]/,/^$/d' ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language/test_core.py
+sed -i -r '/pgm\.asm\["ptx"\]/,/(assert "shared" not in red_code)|(^$)/d' test_core.py  ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language/test_core.py
 
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/operators/test_blocksparse.py
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/operators/test_cross_entropy.py
