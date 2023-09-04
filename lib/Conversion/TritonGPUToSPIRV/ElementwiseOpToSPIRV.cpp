@@ -83,6 +83,13 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
   llvm_unreachable("unimplemented code path");
 }
 
+inline Type getElementType(Value value) {
+  auto type = value.getType();
+  if (auto tensorType = type.dyn_cast<RankedTensorType>())
+    return tensorType.getElementType();
+  return type;
+}
+
 inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
                                     Type srcTy,
                                     ConversionPatternRewriter &rewriter,
@@ -590,12 +597,12 @@ struct CmpFOpSPIRVConversion
   }
 };
 
-template <class T>
 struct ExternElementwiseSPIRVConversion
     : public ElementwiseOpSPIRVConversionBase<
-          T, ExternElementwiseSPIRVConversion<T>> {
+          ExternElementwiseOp, ExternElementwiseSPIRVConversion> {
   using Base =
-      ElementwiseOpSPIRVConversionBase<T, ExternElementwiseSPIRVConversion<T>>;
+      ElementwiseOpSPIRVConversionBase<ExternElementwiseOp,
+                                       ExternElementwiseSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
   typedef typename Base::OpAdaptor OpAdaptor;
@@ -605,7 +612,7 @@ struct ExternElementwiseSPIRVConversion
                                           {"powif", "pownf"},
                                           {"powi", "pown"}};
 
-  Value createDestOp(T op, OpAdaptor adaptor,
+  Value createDestOp(ExternElementwiseOp op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
     StringRef symbol = op.getSymbol();
@@ -641,8 +648,8 @@ private:
                                    resultType);
   }
 
-  spirv::FuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter, T op,
-                                  StringRef funcName,
+  spirv::FuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
+                                  ExternElementwiseOp op, StringRef funcName,
                                   mlir::FunctionType funcType) const {
     auto funcAttr = StringAttr::get(op->getContext(), funcName);
     Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
@@ -1071,12 +1078,8 @@ void populateElementwiseOpToSPIRVPatterns(
 
   patterns.add<FpToFpOpSPIRVConversion>(typeConverter, context, benefit);
 
-  patterns
-      .add<ExternElementwiseSPIRVConversion<triton::PureExternElementwiseOp>>(
-          typeConverter, context, benefit);
-  patterns
-      .add<ExternElementwiseSPIRVConversion<triton::ImpureExternElementwiseOp>>(
-          typeConverter, context, benefit);
+  patterns.add<ExternElementwiseSPIRVConversion>(typeConverter, context,
+                                                 benefit);
   // ExpOpSPIRVConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpSPIRVConversionApprox will return failure
   // and ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will

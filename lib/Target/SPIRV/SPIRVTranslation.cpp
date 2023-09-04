@@ -465,5 +465,24 @@ translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
   return spirvModule;
 }
 
+void addExternalLibs(mlir::ModuleOp &module,
+                     const std::vector<std::string> &names,
+                     const std::vector<std::string> &paths) {
+  if (names.empty() || names.size() != paths.size())
+    return;
+  llvm::SmallVector<NamedAttribute, 2> attrs;
+
+  for (size_t i = 0; i < names.size(); ++i) {
+    auto name = StringAttr::get(module->getContext(), names[i]);
+    auto path = StringAttr::get(module->getContext(), paths[i]);
+    NamedAttribute attr(name, path);
+    attrs.push_back(attr);
+  }
+
+  DictionaryAttr dict = DictionaryAttr::get(module->getContext(), attrs);
+
+  module.getOperation()->setAttr("triton_gpu.externs", dict);
+}
+
 } // namespace triton
 } // namespace mlir
