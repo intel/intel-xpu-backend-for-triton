@@ -138,8 +138,10 @@ else()
     elseif(CACHE_VAR STREQUAL "LLVM_INCLUDE_DIRS")
       continue()
     else()
+      # Keep ; semantic by replacing it with \\;
+      string(REPLACE ";" "\\;" CACHE_VAR_VAL "${${CACHE_VAR}}")
       set(CMAKE_ARGS
-          "${CMAKE_ARGS};-D${CACHE_VAR}${CACHE_VAR_TYPE}=${${CACHE_VAR}}")
+          "${CMAKE_ARGS};-D${CACHE_VAR}${CACHE_VAR_TYPE}=${CACHE_VAR_VAL}")
     endif()
   endforeach()
 
