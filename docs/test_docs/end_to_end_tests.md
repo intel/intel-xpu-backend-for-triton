@@ -32,10 +32,10 @@ First, copy the sh file  [intel_xpu_backend/.github/scripts/inductor_xpu_test.sh
 
 ```Bash
 # Run all models
-bash xpu_run_batch.sh huggingface amp_bf16 training performance  xpu 0 static 2 1
+bash xpu_run_batch.sh huggingface amp_bf16 training performance  xpu 0
 
 # Run single model `T5Small`
-bash xpu_run_batch.sh huggingface amp_bf16 training performance  xpu 0 static 2 1 T5Small
+bash xpu_run_batch.sh huggingface amp_bf16 training performance  xpu 0 static 1 0 T5Small
 ```
 
 There are also useful env flag, for example:
