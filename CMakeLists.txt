@@ -48,8 +48,9 @@ else()
 
         if("${OS_ID}" STREQUAL "ubuntu")
           if("${OS_VERSION_ID}" STREQUAL "22.04")
+            # For ubuntu 22.04, we still use llvm for ubuntu 18.04 in purpose to align with OpenAI Triton.
             set(LLVM_DOWNLOAD_URL
-                https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-ubuntu-22.04-release.tar.xz
+                https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-ubuntu-20.04-release.tar.xz
             )
             message(
               STATUS
