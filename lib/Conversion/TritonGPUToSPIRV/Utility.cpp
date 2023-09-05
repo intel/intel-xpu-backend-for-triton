@@ -7,6 +7,18 @@ namespace mlir {
 namespace spirv {
 using namespace mlir::triton;
 
+/// Returns true if the given `type` is a boolean scalar or vector type.
+bool isBoolScalarOrVector(Type type) {
+  assert(type && "Not a valid type");
+  if (type.isInteger(1))
+    return true;
+
+  if (auto vecType = dyn_cast<VectorType>(type))
+    return vecType.getElementType().isInteger(1);
+
+  return false;
+}
+
 Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
   return rewriter.create<spirv::ConstantOp>(loc, i32ty,
@@ -80,6 +92,82 @@ getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
     stride *= shape[idx];
   }
   return strides;
+}
+
+// Convert an \param index to a multi-dim coordinate given \param shape and
+// \param order.
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, Value linear,
+                               ArrayRef<unsigned> shape,
+                               ArrayRef<unsigned> order) {
+  unsigned rank = shape.size();
+  assert(rank == order.size());
+  auto reordered = reorder(shape, order);
+  SmallVector<Value> reorderedMultiDim(rank);
+  if (auto constantOp = linear.getDefiningOp<arith::ConstantOp>()) {
+    unsigned intVal =
+        constantOp.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+    reorderedMultiDim = delinearize(rewriter, loc, intVal, reordered);
+  } else {
+    reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
+  }
+  SmallVector<Value> multiDim(rank);
+  for (unsigned i = 0; i < rank; ++i) {
+    multiDim[order[i]] = reorderedMultiDim[i];
+  }
+  return multiDim;
+}
+
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, unsigned linear,
+                               ArrayRef<unsigned> shape) {
+  unsigned rank = shape.size();
+  assert(rank > 0);
+  SmallVector<Value> multiDim(rank);
+  unsigned remained = linear;
+  for (auto &&en : llvm::enumerate(shape)) {
+    unsigned dimSize = en.value();
+    multiDim[en.index()] = i32_val(remained % dimSize);
+    remained = remained / dimSize;
+  }
+  return multiDim;
+}
+
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, Value linear,
+                               ArrayRef<unsigned> shape) {
+  unsigned rank = shape.size();
+  assert(rank > 0);
+  SmallVector<Value> multiDim(rank);
+  Value remained = linear;
+  for (auto &&en : llvm::enumerate(shape)) {
+    Value dimSize = i32_val(en.value());
+    multiDim[en.index()] = urem(remained, dimSize);
+    remained = udiv(remained, dimSize);
+  }
+  return multiDim;
+}
+
+Value linearize(ConversionPatternRewriter &rewriter, Location loc,
+                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
+                ArrayRef<unsigned> order) {
+  return linearize(rewriter, loc, reorder<Value>(multiDim, order),
+                   reorder<unsigned>(shape, order));
+}
+
+Value linearize(ConversionPatternRewriter &rewriter, Location loc,
+                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape) {
+  auto rank = multiDim.size();
+  Value linear = i32_val(0);
+  if (rank > 0) {
+    linear = multiDim.back();
+    for (auto [dim, dimShape] :
+         llvm::reverse(llvm::zip(multiDim.drop_back(), shape.drop_back()))) {
+      Value dimSize = i32_val(dimShape);
+      linear = add(mul(linear, dimSize), dim);
+    }
+  }
+  return linear;
 }
 
 void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
