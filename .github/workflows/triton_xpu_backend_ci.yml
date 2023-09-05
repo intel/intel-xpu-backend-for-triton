@@ -6,6 +6,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
 
   Integration-Tests:
@@ -62,6 +66,7 @@ jobs:
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
+          export LD_PRELOAD=$LD_PRELOAD:${CONDA_PREFIX}/lib/libtinfow.so.6
           pip install pybind11
           pip uninstall -y triton
           cd triton/python
