@@ -94,12 +94,6 @@ jobs:
           bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 3 static 2 1 & wait
           cp ${HOME}/triton-preci/triton/sw_info.log inductor_log/
 
-      - name: Upload Triton Inductor E2E CI Data
-        uses: actions/upload-artifact@v3
-        with:
-          name: Triton-Inductor-E2E-CI-Data
-          path: /home/gta/triton-preci/frameworks.ai.pytorch.private-gpu/inductor_log/
-
       - name: Test Results Overview
         run: |
           cd ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
@@ -127,10 +121,23 @@ jobs:
           echo "num_failed_amp_fp16_inf: $num_failed_amp_fp16_inf" | tee -a ./e2e_summary.log
           echo "amp_fp16_inf_acc_pass_rate: $amp_fp16_inf_acc_pass_rate" | tee -a ./e2e_summary.log
 
+      - name: Upload Triton Inductor E2E CI Data
+        uses: actions/upload-artifact@v3
+        with:
+          name: Triton-Inductor-E2E-CI-Data
+          path: /home/gta/triton-preci/frameworks.ai.pytorch.private-gpu/inductor_log/
+
+      - name: Test Results Check
+        run: |
+          cd ${HOME}/triton-preci/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
+          cd amp_bf16
+          num_passed_amp_bf16_inf=$(grep "num_passed_amp_bf16_inf:" e2e_summary.log | sed -e 's/.*://;s/[^0-9.]//')
           if [ $num_passed_amp_bf16_inf -lt 45 ]; then
             echo -e "[ERROR] Inductor E2E CI test for HF amp_bf16 inference passed_num < 45"
             exit 1
           fi
+          cd ../amp_fp16
+          num_passed_amp_fp16_inf=$(grep "num_passed_amp_fp16_inf:" e2e_summary.log | sed -e 's/.*://;s/[^0-9.]//')
           if [ $num_passed_amp_fp16_inf -lt 45 ]; then
             echo -e "[ERROR] Inductor E2E CI test for HF amp_fp16 inference passed_num < 45"
             exit 1
