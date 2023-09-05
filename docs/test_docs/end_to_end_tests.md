@@ -28,46 +28,30 @@ Simply run the model using the following sh file. Note that there are some trick
 
 
 
-First, create a sh file called `single_run.sh` under the PyTorch source folder, then run using the following `sh` file with the command:
-
-```
-./single_run.sh huggingface AlbertForMaskedLM float32 training accuracy xpu 0
-```
+First, copy the sh file  [intel_xpu_backend/.github/scripts/inductor_xpu_test.sh](../../.github/scripts/inductor_xpu_test.sh) to the PyTorch source folder, then run the `sh` file with the command:
 
 ```Bash
-#! /bin/bash
-# This script works for xpu / cuda device inductor tests
+# Run all models
+bash xpu_run_batch.sh huggingface amp_bf16 training performance  xpu 0 static 2 1
 
-SUITE=${1:-huggingface}     # huggingface / torchbench / timm_models
-MODEL=${2:-AlbertForMaskedLM}
-DT=${3:-float32}            # float32 / float16 / amp
-MODE=${4:-inference}        # inference / training
-SCENARIO=${5:-accuracy}     # accuracy / performance
-DEVICE=${6:-xpu}            # xpu / cuda
-CARD=${7:-0}                # 0 / 1 / 2 / 3 ...
+# Run single model `T5Small`
+bash xpu_run_batch.sh huggingface amp_bf16 training performance  xpu 0 static 2 1 T5Small
+```
 
-WORKSPACE=`pwd`
+There are also useful env flag, for example:
+- `TORCHINDUCTOR_CACHE_DIR={some_DIR}`: Where the cache files are put. It is useful when debugging.
+- `TORCH_COMPILE_DEBUG=1`: Whether print debug info.
+- `TRITON_XPU_PROFILE=ON`: Show XPU triton kernels for debug.
+
+By default, the cache dir is under `/tmp/torchinductor_{user}/`, it is recommended to change the cache dir to a new place when you are debugging. For example,
+
+```Bash
 LOG_DIR=${WORKSPACE}/inductor_log/${SUITE}/${MODEL}/${DT}
 mkdir -p ${LOG_DIR}
-LOG_NAME=inductor_${SUITE}_${MODEL}_${DT}_${MODE}_${DEVICE}_${SCENARIO}
 export TORCHINDUCTOR_CACHE_DIR=${LOG_DIR}
-
-Mode_extra=""
-if [[ $MODE == "training" ]]; then
-    echo "Testing with training mode."
-    Mode_extra="--training "
-fi
-
-ulimit -n 1048576
-
-ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --only ${MODEL} --${SCENARIO} --${DT} -d${DEVICE} -n50 --no-skip --dashboard ${Mode_extra} --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv &> ${LOG_DIR}/${LOG_NAME}.log
-cat ${LOG_DIR}/${LOG_NAME}.csv
 
 ```
 
-The log file is under `inductor_log/${SUITE}/${MODEL}/${DT}/${LOG_NAME}.log`.
-
-If you need to do a batch run for the whole suite, delete the `--only ${MODEL}` from the above script and rerun.
 
 # Detail for commands
 
