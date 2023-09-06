@@ -3,12 +3,17 @@ name: Integration Tests
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - main
+    branches: [main]
+  merge_group:
+    branches: [main]
+    types: [checks_requested]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+env:
+  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
 
 jobs:
 
@@ -17,6 +22,9 @@ jobs:
     runs-on: [self-hosted, PVC]
 
     steps:
+
+      - name: Checkout
+        uses: actions/checkout@v2
 
       - name: Create conda environment
         run: |
@@ -30,13 +38,14 @@ jobs:
         shell: bash
         run: |
           source ${HOME}/miniconda3/bin/activate triton-preci
+          cd ${HOME}/triton-preci
           rm -rf triton
           git clone https://github.com/openai/triton triton
           cd triton
           git submodule sync
           git submodule update --init --recursive --jobs 0
-          cd third_party/intel_xpu_backend
-          git checkout ${{github.event.pull_request.head.ref}} && git pull
+          cd third_party/intel_xpu_backend && rm -rf *
+          cp -r ${{ github.workspace }} .
           cd ../..
           git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
           triton_commit=`git rev-parse HEAD`
@@ -69,6 +78,7 @@ jobs:
           export LD_PRELOAD=$LD_PRELOAD:${CONDA_PREFIX}/lib/libtinfow.so.6
           pip install pybind11
           pip uninstall -y triton
+          rm -rf ~/.triton/intel_llvm
           cd triton/python
           python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
@@ -86,9 +96,9 @@ jobs:
           source ${HOME}/env_triton.sh
           pip install pytest
           rm -rf ~/.triton/cache
-          export TRITON_LIBDEVICE_PATH=${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/triton/third_party/xpu/lib
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
-          bash ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/third_party/intel_xpu_backend/.github/scripts/case_update.sh
+          export TRITON_LIBDEVICE_PATH=${HOME}/triton-preci/triton/python/triton/third_party/xpu/lib
+          cd ${HOME}/triton-preci/triton/python/test/unit/language
+          bash ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/scripts/case_update.sh
           ZE_AFFINITY_MASK=1.0 pytest -v -ra --tb=line . --device=xpu 2>&1 | tee ./ut_raw.log || true
           res=$(cat ut_raw.log | sed -n '7p' |  awk '{print $NF}')
           if [ "$res" == "error" ]; then
@@ -98,7 +108,7 @@ jobs:
 
       - name: UT Log Preview
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
+          cd ${HOME}/triton-preci/triton/python/test/unit/language
           echo "============ UT raw log head ============"
           head -n 20 ut_raw.log
           echo "============ UT raw log tail ============"
@@ -106,7 +116,7 @@ jobs:
 
       - name: UT Status Overview
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
+          cd ${HOME}/triton-preci/triton/python/test/unit/language
           echo -e "============ UT Status Overview ============" | tee ./ut_summary.log
           lineNum=`grep -n " \[100%\]" ut_raw.log | tail -n 1 | cut -d: -f1`
           if [ -z $lineNum ]; then lineNum=`cat ./ut_raw.log | wc -l`; fi
@@ -126,8 +136,8 @@ jobs:
 
       - name: New Solved Cases
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
-          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log | tee -a ./new_solved_cases.log
+          cd ${HOME}/triton-preci/triton/python/test/unit/language
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log | tee -a ./new_solved_cases.log
           echo -e "============ New Solved Cases ============"
           cat ./new_solved_cases.log
           num_new_solved_cases=$(cat ./new_solved_cases.log | wc -l)
@@ -135,8 +145,8 @@ jobs:
 
       - name: New Failed Cases
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
-          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log ./ut_failed.log | tee -a ./new_failed_cases.log
+          cd ${HOME}/triton-preci/triton/python/test/unit/language
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log ./ut_failed.log | tee -a ./new_failed_cases.log
           echo -e "============ New Failed Cases ============"
           cat ./new_failed_cases.log
           num_new_failed_cases=$(cat ./new_failed_cases.log | wc -l)
@@ -148,7 +158,7 @@ jobs:
 
       - name: Total Pass Rate Calculate (no matmul/dot)
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
+          cd ${HOME}/triton-preci/triton/python/test/unit/language
           echo -e "============ Total Pass Rate (no matmul/dot) ============" | tee -a ./ut_summary.log
           num_total=$(grep "collected" ut_status.log | awk '{print $4}')
           if [ -z $num_total ]; then num_total=0; fi
@@ -170,7 +180,7 @@ jobs:
 
       - name: Float32 Cases Pass Rate Calculate (no matmul/dot)
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
+          cd ${HOME}/triton-preci/triton/python/test/unit/language
           echo -e "============ Float32 Cases Pass Rate (no matmul/dot) ============" | tee -a ./ut_summary.log
           num_float32=$(grep "float32" ut_status.log | grep -v 'matmul\|dot' | wc -l)
           num_no_datatype=$(grep -v 'float\|int\|bool\|long\|f8\|f16\|i32\|i64\|u64' ut_status.log | grep -v 'matmul\|dot' | wc -l)
@@ -190,8 +200,8 @@ jobs:
 
       - name: UT Status Summary (no matmul/dot)
         run: |
-          cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
-          cp ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/*.log .
+          cd ${HOME}/triton-preci/triton/python/test/unit/language
+          cp ${HOME}/triton-preci/triton/*.log .
           cat ut_summary.log
 
       - name: Upload Triton PVC CI Data
