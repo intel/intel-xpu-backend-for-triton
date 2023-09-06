@@ -12,9 +12,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-env:
-  TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
-
 jobs:
 
   Inductor-E2E-CI-Tests:
@@ -71,6 +68,7 @@ jobs:
           source ${HOME}/env_triton.sh
           export LD_PRELOAD=$LD_PRELOAD:${CONDA_PREFIX}/lib/libtinfow.so.6
           pip uninstall -y triton
+          rm -rf ~/.triton/intel_llvm
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs
           pip install pybind11
