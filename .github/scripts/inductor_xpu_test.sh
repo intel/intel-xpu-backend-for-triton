@@ -10,11 +10,18 @@ CARD=${6:-0}                # 0 / 1 / 2 / 3 ...
 SHAPE=${7:-static}          # static / dynamic
 NUM_SHARDS=${8}             # num test shards
 SHARD_ID=${9}               # shard id
+MODEL_ONLY=${10}            # GoogleFnet / T5Small
 
 WORKSPACE=`pwd`
 LOG_DIR=$WORKSPACE/inductor_log/${SUITE}/${DT}
 mkdir -p ${LOG_DIR}
 LOG_NAME=inductor_${SUITE}_${DT}_${MODE}_${DEVICE}_${SCENARIO}
+
+Model_only_extra=""
+if [[ -n "$MODEL_ONLY" ]]; then
+    echo "Testing model ${MODEL_ONLY}"
+    Model_only_extra="--only ${MODEL_ONLY}"
+fi
 
 Mode_extra=""
 if [[ $MODE == "training" ]]; then
@@ -35,10 +42,10 @@ fi
 
 ulimit -n 1048576
 if [[ $DT == "amp_bf16" ]]; then
-    ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --${SCENARIO} --amp -d${DEVICE} -n10 --no-skip --dashboard ${Mode_extra} ${Shape_extra} ${partition_flags} --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv 2>&1 | tee ${LOG_DIR}/${LOG_NAME}.log
+    ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --${SCENARIO} --amp -d${DEVICE} -n10 --no-skip --dashboard ${Mode_extra} ${Shape_extra} ${partition_flags} ${Model_only_extra} --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv 2>&1 | tee ${LOG_DIR}/${LOG_NAME}.log
 elif [[ $DT == "amp_fp16" ]]; then
     export INDUCTOR_AMP_DT=float16
-    ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --${SCENARIO} --amp -d${DEVICE} -n10 --no-skip --dashboard ${Mode_extra} ${Shape_extra} ${partition_flags} --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv 2>&1 | tee ${LOG_DIR}/${LOG_NAME}.log
+    ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --${SCENARIO} --amp -d${DEVICE} -n10 --no-skip --dashboard ${Mode_extra} ${Shape_extra} ${partition_flags} ${Model_only_extra}  --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv 2>&1 | tee ${LOG_DIR}/${LOG_NAME}.log
 else
-    ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --${SCENARIO} --${DT} -d${DEVICE} -n10 --no-skip --dashboard ${Mode_extra} ${Shape_extra} ${partition_flags} --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv 2>&1 | tee ${LOG_DIR}/${LOG_NAME}.log
+    ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --${SCENARIO} --${DT} -d${DEVICE} -n10 --no-skip --dashboard ${Mode_extra} ${Shape_extra} ${partition_flags} ${Model_only_extra}  --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv 2>&1 | tee ${LOG_DIR}/${LOG_NAME}.log
 fi
