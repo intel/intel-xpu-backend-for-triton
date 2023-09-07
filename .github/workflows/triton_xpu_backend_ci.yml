@@ -79,7 +79,7 @@ jobs:
           pip install pybind11
           pip uninstall -y triton
           rm -rf ~/.triton/intel_llvm
-          cd triton/python
+          cd ${HOME}/triton-preci/triton/python
           python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
           python -c "import triton"
