@@ -19,7 +19,6 @@ else()
     else()
       include(FetchContent)
       function(download_file url)
-        cmake_policy(SET CMP0135 NEW)
 
         FetchContent_Declare(intel-llvm URL ${url} SOURCE_DIR
                                             ${TRITON_INTEL_LLVM_DIR})
