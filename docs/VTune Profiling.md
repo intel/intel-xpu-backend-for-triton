@@ -19,8 +19,10 @@ You can start a web interface with the following command:
 ```Bash
 # First source the necessary env
 source  ~/intel/oneapi/vtune/latest/env/vars.sh
-# Start the VTune Profiler Server.
-vtune-backend --web-port 8080 --allow-remote-access
+# (Recommended) Start the VTune Profiler Server if you wish to use this server for profiling
+vtune-server --web-port=8080 --data-directory ./ --allow-remote-access --enable-server-profiling
+# Start the VTune Profiler Server locally
+vtune-backend --web-port 8080 --data-directory ./ --allow-remote-access
 ```
 
 The above command enables the remote access with the port 8080. It will normally have the output like below:
@@ -74,6 +76,7 @@ By clicking the above figure's `Configure Analysis` button, the first step is to
 
 ![Where Setup](imgs/Profiling/vtune_where.png)
 
+You could use the `where` tab to deploy the VTune Profiler to a remote server.
 Enter the server ip address and username / password. Then by clicking the `Deploy Agent`, it will automatically deploy the agent. After the agent is setup, now the second column of `what` is available.
 
 ### What Setup
