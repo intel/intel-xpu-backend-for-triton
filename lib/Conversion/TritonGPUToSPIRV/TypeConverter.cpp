@@ -1,5 +1,4 @@
 #include "TypeConverter.h"
-#include "DotOpHelpers.h"
 #include "Utility.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -7,9 +6,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::spirv::DotOpFMAConversionHelper;
-using ::mlir::spirv::DotOpMmaV1ConversionHelper;
-using ::mlir::spirv::MMA16816ConversionHelper;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -47,7 +43,8 @@ MAP_FN(spirv::StorageClass::StorageBuffer, 0)                                \
   MAP_FN(spirv::StorageClass::HostOnlyINTEL, 23)
 #endif
 
-Optional<spirv::StorageClass> getStorageClassForMemorySpace(unsigned space) {
+std::optional<spirv::StorageClass>
+getStorageClassForMemorySpace(unsigned space) {
 #define STORAGE_SPACE_MAP_FN(storage, space)                                   \
   case space:                                                                  \
     return storage;
@@ -63,38 +60,46 @@ Optional<spirv::StorageClass> getStorageClassForMemorySpace(unsigned space) {
 TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
     spirv::TargetEnvAttr &targetAttr, SPIRVConversionOptions &option)
     : SPIRVTypeConverter(targetAttr, option) {
-  addConversion([&](triton::PointerType type) -> llvm::Optional<Type> {
+  addConversion([&](triton::PointerType type) -> std::optional<Type> {
     return convertTritonPointerType(type);
   });
-  addConversion([&](RankedTensorType type) -> llvm::Optional<Type> {
+  addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type);
   });
-  addConversion([&](mlir::VectorType type) -> llvm::Optional<Type> {
+  addConversion([&](mlir::VectorType type) -> std::optional<Type> {
     // Recursively translate vector type
     return mlir::VectorType::get(type.getShape(),
                                  convertType(type.getElementType()));
   });
   // Internally store float8 as int8
-  addConversion([&](mlir::Float8E4M3FNType type) -> llvm::Optional<Type> {
+  addConversion([&](mlir::Float8E4M3B11FNUZType type) -> std::optional<Type> {
     llvm::report_fatal_error("SPIRV doesn't support fp8 type");
     return IntegerType::get(type.getContext(), 8);
   });
-  addConversion([&](mlir::Float8E5M2Type type) -> llvm::Optional<Type> {
+  addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
+    llvm::report_fatal_error("SPIRV doesn't support fp8 type");
+    return IntegerType::get(type.getContext(), 8);
+  });
+  addConversion([&](mlir::Float8E4M3FNUZType type) -> std::optional<Type> {
+    llvm::report_fatal_error("SPIRV doesn't support fp8 type");
+    return IntegerType::get(type.getContext(), 8);
+  });
+  addConversion([&](mlir::Float8E5M2Type type) -> std::optional<Type> {
     llvm::report_fatal_error("SPIRV doesn't support fp8 type");
     return IntegerType::get(type.getContext(), 8);
   });
   // Internally store bfloat16 as int16
-  addConversion([&](BFloat16Type type) -> llvm::Optional<Type> {
+  addConversion([&](BFloat16Type type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 16);
   });
   addConversion(
-      [&](IndexType type) -> llvm::Optional<Type> { return getIndexType(); });
+      [&](IndexType type) -> std::optional<Type> { return getIndexType(); });
 
   // Add generic source and target materializations to handle cases where
   // non-SPIRV types persist after an SPIRV conversion.
   addSourceMaterialization([&](OpBuilder &builder, Type resultType,
                                ValueRange inputs,
-                               Location loc) -> Optional<Value> {
+                               Location loc) -> std::optional<Value> {
     if (inputs.size() != 1)
       return std::nullopt;
 
@@ -103,7 +108,7 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
   });
   addTargetMaterialization([&](OpBuilder &builder, Type resultType,
                                ValueRange inputs,
-                               Location loc) -> Optional<Value> {
+                               Location loc) -> std::optional<Value> {
     if (inputs.size() != 1)
       return std::nullopt;
 
@@ -115,7 +120,7 @@ TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
 Type TritonGPUToSPIRVTypeConverter::convertTritonPointerType(
     triton::PointerType type) {
   // Recursively translate pointee type
-  Optional<spirv::StorageClass> storageClass =
+  std::optional<spirv::StorageClass> storageClass =
       getStorageClassForMemorySpace(type.getAddressSpace());
   assert(storageClass && "uncompatible pointer address type in SPIRV");
   return spirv::PointerType::get(convertType(type.getPointeeType()),

@@ -25,11 +25,31 @@
 #define smin(...) rewriter.create<spirv::CLSMinOp>(loc, __VA_ARGS__)
 #define umin(...) rewriter.create<spirv::CLUMinOp>(loc, __VA_ARGS__)
 #define fmin(...) rewriter.create<spirv::CLFMinOp>(loc, __VA_ARGS__)
-#define logic_and(...) rewriter.create<spirv::LogicalAndOp>(loc, __VA_ARGS__)
-#define and_(...) rewriter.create<spirv::BitwiseAndOp>(loc, __VA_ARGS__)
+#define and_(op1, op2)                                                         \
+  ({                                                                           \
+    Value op1__ = (op1);                                                       \
+    Value op2__ = (op2);                                                       \
+    Value toVal__;                                                             \
+    if (mlir::spirv::isBoolScalarOrVector(op1__.getType())) {                  \
+      toVal__ = rewriter.create<spirv::LogicalAndOp>(loc, op1__, op2__);       \
+    } else {                                                                   \
+      toVal__ = rewriter.create<spirv::BitwiseAndOp>(loc, op1__, op2__);       \
+    }                                                                          \
+    toVal__;                                                                   \
+  })
 #define xor_(...) rewriter.create<spirv::BitwiseXorOp>(loc, __VA_ARGS__)
-#define logic_or(...) rewriter.create<spirv::LogicalOrOp>(loc, __VA_ARGS__)
-#define or_(...) rewriter.create<spirv::BitwiseOrOp>(loc, __VA_ARGS__)
+#define or_(op1, op2)                                                          \
+  ({                                                                           \
+    Value op1__ = (op1);                                                       \
+    Value op2__ = (op2);                                                       \
+    Value toVal__;                                                             \
+    if (mlir::spirv::isBoolScalarOrVector(op1__.getType())) {                  \
+      toVal__ = rewriter.create<spirv::LogicalOrOp>(loc, op1__, op2__);        \
+    } else {                                                                   \
+      toVal__ = rewriter.create<spirv::BitwiseOrOp>(loc, op1__, op2__);        \
+    }                                                                          \
+    toVal__;                                                                   \
+  })
 #define bitcast(val__, type__)                                                 \
   ({                                                                           \
     Value srcVal__ = (val__);                                                  \
@@ -92,6 +112,7 @@
 #define ftrunc(...) rewriter.create<spirv::FConvertOp>(loc, __VA_ARGS__)
 
 // Types
+#define int_ty(width) rewriter.getIntegerType(width)
 #define i64_ty rewriter.getIntegerType(64)
 #define i32_ty rewriter.getIntegerType(32)
 #define i16_ty rewriter.getIntegerType(16)
@@ -191,6 +212,9 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
 
 namespace spirv {
 
+/// Returns true if the given `type` is a boolean scalar or vector type.
+bool isBoolScalarOrVector(Type type);
+
 Value createConstantI32(Location loc, PatternRewriter &rewriter, int32_t v);
 
 /// Create a 32-bit float constant.
@@ -262,8 +286,8 @@ struct SharedMemoryObject {
     return offsets[order];
   }
 
-  Value getBaseBeforeSwizzle(int order, Location loc,
-                             ConversionPatternRewriter &rewriter) const {
+  Value getBaseBeforeSlice(int order, Location loc,
+                           ConversionPatternRewriter &rewriter) const {
     Value cSwizzleOffset = getCSwizzleOffset(order);
     Value offset = sub(i32_val(0), cSwizzleOffset);
     Type type = base.getType();
@@ -277,6 +301,28 @@ bool checkOpSupported(std::map<std::string, int> computeCapability,
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct,
                                 ConversionPatternRewriter &rewriter);
+
+// Convert an \param index to a multi-dim coordinate given \param shape and
+// \param order.
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, Value linear,
+                               ArrayRef<unsigned> shape,
+                               ArrayRef<unsigned> order);
+
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, unsigned linear,
+                               ArrayRef<unsigned> shape);
+
+SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
+                               Location loc, Value linear,
+                               ArrayRef<unsigned> shape);
+
+Value linearize(ConversionPatternRewriter &rewriter, Location loc,
+                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
+                ArrayRef<unsigned> order);
+
+Value linearize(ConversionPatternRewriter &rewriter, Location loc,
+                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape);
 
 void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                  Value val, Value pred);

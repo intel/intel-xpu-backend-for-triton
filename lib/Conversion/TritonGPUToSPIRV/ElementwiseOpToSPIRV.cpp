@@ -78,9 +78,16 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
     //   ret.push_back(values[i + 14]);
     //   ret.push_back(values[i + 15]);
     // }
-    return values;
+    // return values;
   }
   llvm_unreachable("unimplemented code path");
+}
+
+inline Type getElementType(Value value) {
+  auto type = value.getType();
+  if (auto tensorType = type.dyn_cast<RankedTensorType>())
+    return tensorType.getElementType();
+  return type;
 }
 
 inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
@@ -96,7 +103,7 @@ inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
   if (!(encoding && encoding.getParent().isa<MmaEncodingAttr>()))
     return inValues;
   SmallVector<Value> outValues;
-  for (auto v : inValues) {
+  for (auto &v : inValues) {
     // cast i32 to appropriate eltType vector and extract elements
     auto eltType = typeConverter->convertType(tensorTy.getElementType());
     auto vecType = vec_ty(eltType, 32 / eltType.getIntOrFloatBitWidth());
@@ -394,12 +401,11 @@ private:
     NamedAttrList attributes(extraAttrs);
     attributes.set("libname", StringAttr::get(v.getContext(), libName));
     attributes.set("libpath", StringAttr::get(v.getContext(), ""));
-    attributes.set("linkage_attributes",
-                   ArrayAttr::get(v.getContext(),
-                                  {
-                                      StringAttr::get(v.getContext(), funcName),
-                                      StringAttr::get(v.getContext(), "Import"),
-                                  }));
+    auto linkageTypeAttr =
+        b.getAttr<::mlir::spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
+    auto linkageAttr = b.getAttr<::mlir::spirv::LinkageAttributesAttr>(
+        funcName.lower(), linkageTypeAttr);
+    attributes.set("linkage_attributes", linkageAttr);
     auto ret =
         b.create<spirv::FuncOp>(v.getLoc(), funcName, funcType,
                                 spirv::FunctionControl::Inline, attributes);
@@ -431,14 +437,16 @@ public:
     SmallVector<Value> resultVals;
     //
     SmallVector<SmallVector<Value>> allOperands;
-    for (auto operand : adaptor.getOperands()) {
+    auto operands = adaptor.getOperands();
+    for (const auto &operand : operands) {
       auto argTy = op->getOperand(0).getType();
       auto sub_operands = this->getTypeConverter()->unpackLLElements(
           loc, operand, rewriter, argTy);
       sub_operands = unpackI32(sub_operands, argTy, rewriter, loc,
                                this->getTypeConverter());
       allOperands.resize(sub_operands.size());
-      for (auto v : llvm::enumerate(sub_operands))
+      auto vs = llvm::enumerate(sub_operands);
+      for (const auto &v : vs)
         allOperands[v.index()].push_back(v.value());
     }
     if (allOperands.size() == 0)
@@ -589,12 +597,12 @@ struct CmpFOpSPIRVConversion
   }
 };
 
-template <class T>
 struct ExternElementwiseSPIRVConversion
     : public ElementwiseOpSPIRVConversionBase<
-          T, ExternElementwiseSPIRVConversion<T>> {
+          ExternElementwiseOp, ExternElementwiseSPIRVConversion> {
   using Base =
-      ElementwiseOpSPIRVConversionBase<T, ExternElementwiseSPIRVConversion<T>>;
+      ElementwiseOpSPIRVConversionBase<ExternElementwiseOp,
+                                       ExternElementwiseSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
   typedef typename Base::OpAdaptor OpAdaptor;
@@ -604,7 +612,7 @@ struct ExternElementwiseSPIRVConversion
                                           {"powif", "pownf"},
                                           {"powi", "pown"}};
 
-  Value createDestOp(T op, OpAdaptor adaptor,
+  Value createDestOp(ExternElementwiseOp op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
     StringRef symbol = op.getSymbol();
@@ -640,8 +648,8 @@ private:
                                    resultType);
   }
 
-  spirv::FuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter, T op,
-                                  StringRef funcName,
+  spirv::FuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
+                                  ExternElementwiseOp op, StringRef funcName,
                                   mlir::FunctionType funcType) const {
     auto funcAttr = StringAttr::get(op->getContext(), funcName);
     Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
@@ -655,13 +663,11 @@ private:
         "libname", StringAttr::get(op->getContext(), op.getLibname()));
     ret.getOperation()->setAttr(
         "libpath", StringAttr::get(op->getContext(), op.getLibpath()));
-    ret.getOperation()->setAttr(
-        "linkage_attributes",
-        ArrayAttr::get(op->getContext(),
-                       {
-                           StringAttr::get(op->getContext(), funcName),
-                           StringAttr::get(op->getContext(), "Import"),
-                       }));
+    auto linkageTypeAttr =
+        b.getAttr<::mlir::spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
+    auto linkageAttr = b.getAttr<::mlir::spirv::LinkageAttributesAttr>(
+        funcName.lower(), linkageTypeAttr);
+    ret.getOperation()->setAttr("linkage_attributes", linkageAttr);
     return ret;
   }
 };
@@ -1019,8 +1025,8 @@ void populateElementwiseOpToSPIRVPatterns(
   POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
   POPULATE_UNARY_OP(triton::BitcastOp, spirv::BitcastOp)
-  POPULATE_UNARY_OP(triton::IntToPtrOp, spirv::BitcastOp)
-  POPULATE_UNARY_OP(triton::PtrToIntOp, spirv::BitcastOp)
+  POPULATE_UNARY_OP(triton::IntToPtrOp, spirv::ConvertUToPtrOp)
+  POPULATE_UNARY_OP(triton::PtrToIntOp, spirv::ConvertPtrToUOp)
 #undef POPULATE_UNARY_OP
 
   patterns.add<CmpIOpSPIRVConversion>(typeConverter, context, benefit);
@@ -1072,12 +1078,8 @@ void populateElementwiseOpToSPIRVPatterns(
 
   patterns.add<FpToFpOpSPIRVConversion>(typeConverter, context, benefit);
 
-  patterns
-      .add<ExternElementwiseSPIRVConversion<triton::PureExternElementwiseOp>>(
-          typeConverter, context, benefit);
-  patterns
-      .add<ExternElementwiseSPIRVConversion<triton::ImpureExternElementwiseOp>>(
-          typeConverter, context, benefit);
+  patterns.add<ExternElementwiseSPIRVConversion>(typeConverter, context,
+                                                 benefit);
   // ExpOpSPIRVConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpSPIRVConversionApprox will return failure
   // and ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will

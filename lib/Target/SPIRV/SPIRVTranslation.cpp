@@ -38,7 +38,8 @@ LogicalResult assembleSPIRV(std::string spirvCode, raw_ostream &output) {
 
   std::vector<uint32_t> binary;
   if (!SpvTool.Assemble(spirvCode, &binary, SPV_TEXT_TO_BINARY_OPTION_NONE)) {
-    return failure("SPIRV: Failed to assemble the code");
+    // return failure("SPIRV: Failed to assemble the code");
+    return failure();
   }
   std::stringstream is;
   is.rdbuf()->pubsetbuf(reinterpret_cast<char *>(&binary[0]),
@@ -59,7 +60,8 @@ LogicalResult disassembleSPIRV(uint32_t *binary_ptr, size_t binary_size,
 
   std::string spriv_code;
   if (!SpvTool.Disassemble(binary_ptr, binary_size, &spriv_code)) {
-    return failure("SPIRV: Failed to generate textual assembly");
+    // return failure("SPIRV: Failed to generate textual assembly");
+    return failure();
   }
   output << spriv_code;
   return mlir::success();
@@ -438,7 +440,7 @@ translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
   pm.addPass(mlir::createConvertSCFToCFPass());
-  pm.addPass(createConvertTritonGPUToSPIRVPass(computeCapability));
+  pm.addPass(createConvertTritonGPUToSPIRVPass(std::move(computeCapability)));
   //  pm.addPass(mlir::arith::createConvertArithToSPIRVPass());
   // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
@@ -461,6 +463,25 @@ translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
   }
 
   return spirvModule;
+}
+
+void addExternalLibs(mlir::ModuleOp &module,
+                     const std::vector<std::string> &names,
+                     const std::vector<std::string> &paths) {
+  if (names.empty() || names.size() != paths.size())
+    return;
+  llvm::SmallVector<NamedAttribute, 2> attrs;
+
+  for (size_t i = 0; i < names.size(); ++i) {
+    auto name = StringAttr::get(module->getContext(), names[i]);
+    auto path = StringAttr::get(module->getContext(), paths[i]);
+    NamedAttribute attr(name, path);
+    attrs.push_back(attr);
+  }
+
+  DictionaryAttr dict = DictionaryAttr::get(module->getContext(), attrs);
+
+  module.getOperation()->setAttr("triton_gpu.externs", dict);
 }
 
 } // namespace triton
