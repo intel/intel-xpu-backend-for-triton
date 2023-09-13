@@ -46,6 +46,7 @@ jobs:
           git submodule update --init --recursive --jobs 0
           cd third_party/intel_xpu_backend && rm -rf *
           cp -r ${{ github.workspace }}/* .
+          git log -1
           cd ../..
           git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
           triton_commit=`git rev-parse HEAD`
