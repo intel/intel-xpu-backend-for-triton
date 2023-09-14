@@ -52,7 +52,7 @@ jobs:
           git log -1
           rm -rf *
           ls
-          mv ${{ github.workspace }}/* .
+          cp ${{ github.workspace }}/* .
           ls
           git log -1
           cd ../..
