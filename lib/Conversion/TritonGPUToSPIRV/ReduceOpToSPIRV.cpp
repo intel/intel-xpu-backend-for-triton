@@ -4,9 +4,9 @@ using namespace mlir::triton;
 
 using ::mlir::spirv::delinearize;
 using ::mlir::spirv::linearize;
+using ::mlir::spirv::loadShared;
 using ::mlir::spirv::shflSync;
 using ::mlir::spirv::storeShared;
-using ::mlir::spirv::loadShared;
 using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
