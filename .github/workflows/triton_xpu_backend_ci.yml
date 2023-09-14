@@ -25,7 +25,7 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v3
-
+        
       - name: Create conda environment
         run: |
           source ${HOME}/env_triton.sh
@@ -39,6 +39,9 @@ jobs:
         run: |
           source ${HOME}/miniconda3/bin/activate triton-preci
           cd ${HOME}/triton-preci
+          cd ${{ github.workspace }}
+          ls 
+          git log -1
           rm -rf triton
           git clone https://github.com/openai/triton triton
           cd triton
@@ -47,7 +50,9 @@ jobs:
           cd third_party/intel_xpu_backend 
           git log -1
           rm -rf *
+          ls
           cp -r ${{ github.workspace }}/* .
+          ls
           git log -1
           cd ../..
           git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
