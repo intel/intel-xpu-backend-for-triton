@@ -45,7 +45,8 @@ jobs:
           git submodule sync
           git submodule update --init --recursive --jobs 0
           rm -rf third_party/intel_xpu_backend/
-          mkdir third_party/intel_xpu_backend/ && cd third_party/intel_xpu_backend/
+          mkdir -p third_party/intel_xpu_backend
+          cd third_party/intel_xpu_backend
           cp -r ${{ github.workspace }}/. .
           cd ../..
           git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
@@ -82,7 +83,9 @@ jobs:
           rm -rf ~/.triton/intel_llvm
           cd ${HOME}/triton-preci/triton/python
           python setup.py clean
-          TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
+          TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py bdist_wheel
+          pip install dist/*.whl
+          cd ${HOME}/triton-preci
           python -c "import triton"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
               echo -e "[ERROR] Triton BUILD FAIL"
