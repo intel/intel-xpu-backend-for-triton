@@ -50,8 +50,11 @@ jobs:
           git submodule update --init --recursive --jobs 0
           cd third_party/intel_xpu_backend 
           git log -1
-          rm -rf *
+          cd ..
+          rm -rf intel_xpu_backend
+          mkdir intel_xpu_backend
           ls
+          cd intel_xpu_backend
           cp -r ${{ github.workspace }}/* .
           ls
           git log -1
