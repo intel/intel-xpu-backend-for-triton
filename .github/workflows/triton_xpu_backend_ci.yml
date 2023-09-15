@@ -55,7 +55,7 @@ jobs:
           mkdir intel_xpu_backend
           ls
           cd intel_xpu_backend
-          cp -r ${{ github.workspace }}/* .
+          cp -r ${{ github.workspace }}/. .
           ls
           git log -1
           cd ../..
