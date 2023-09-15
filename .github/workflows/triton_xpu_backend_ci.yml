@@ -44,8 +44,8 @@ jobs:
           cd triton
           git submodule sync
           git submodule update --init --recursive --jobs 0
-          cd third_party/intel_xpu_backend
-          rm -rf *
+          rm -rf third_party/intel_xpu_backend/
+          mkdir third_party/intel_xpu_backend/ && cd third_party/intel_xpu_backend/
           cp -r ${{ github.workspace }}/. .
           cd ../..
           git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
