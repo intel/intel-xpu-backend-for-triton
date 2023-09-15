@@ -52,7 +52,7 @@ jobs:
           git log -1
           rm -rf *
           ls
-          cp -r ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/* .
+          cp -r ${{ github.workspace }}/* .
           ls
           git log -1
           cd ../..
