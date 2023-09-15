@@ -39,25 +39,14 @@ jobs:
         run: |
           source ${HOME}/miniconda3/bin/activate triton-preci
           cd ${HOME}/triton-preci
-          cd ${{ github.workspace }}
-          ls 
-          git log -1
-          cd ${HOME}/triton-preci
           rm -rf triton
           git clone https://github.com/openai/triton triton
           cd triton
           git submodule sync
           git submodule update --init --recursive --jobs 0
-          cd third_party/intel_xpu_backend 
-          git log -1
-          cd ..
-          rm -rf intel_xpu_backend
-          mkdir intel_xpu_backend
-          ls
-          cd intel_xpu_backend
+          cd third_party/intel_xpu_backend
+          rm -rf .*
           cp -r ${{ github.workspace }}/. .
-          ls
-          git log -1
           cd ../..
           git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
           triton_commit=`git rev-parse HEAD`
