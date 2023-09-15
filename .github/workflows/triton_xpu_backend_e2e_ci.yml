@@ -68,7 +68,6 @@ jobs:
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-preci
           source ${HOME}/env_triton.sh
-          export LD_PRELOAD=$LD_PRELOAD:${CONDA_PREFIX}/lib/libtinfow.so.6
           pip uninstall -y triton
           rm -rf ~/.triton/intel_llvm
           sudo update-ca-certificates --fresh
