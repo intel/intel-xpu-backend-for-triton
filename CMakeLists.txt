@@ -19,7 +19,6 @@ else()
     else()
       include(FetchContent)
       function(download_file url)
-        cmake_policy(SET CMP0135 NEW)
 
         FetchContent_Declare(intel-llvm URL ${url} SOURCE_DIR
                                             ${TRITON_INTEL_LLVM_DIR})
@@ -99,6 +98,11 @@ else()
       STATUS
         "[intel_xpu_backend]: Use the LLVM version with revision to re-config for the intel_xpu_backend"
     )
+    # Check if the the LLVM exists.
+    if (NOT EXISTS ${TRITON_INTEL_LLVM_DIR})
+      message (FATAL_ERROR "[intel_xpu_backend]: ${TRITON_INTEL_LLVM_DIR} could not be found. Check if the LLVM is correctly downloaded.")
+    endif()
+
     # hints from
     # https://stackoverflow.com/questions/10205986/how-to-capture-cmake-command-line-arguments
     # Propagate the CMake vars to the intel xpu backend
