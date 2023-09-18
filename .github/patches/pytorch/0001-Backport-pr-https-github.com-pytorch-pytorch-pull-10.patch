@@ -1,0 +1,58 @@
+From 9fcd4690e522c319d444316e69fb49417a802875 Mon Sep 17 00:00:00 2001
+From: "Wang, Eikan" <eikan.wang@intel.com>
+Date: Wed, 23 Aug 2023 11:48:19 +0000
+Subject: [PATCH] Backport pr https://github.com/pytorch/pytorch/pull/107722 to
+ support Triton 2.1
+
+---
+ torch/_inductor/codegen/triton.py      | 2 +-
+ torch/_inductor/triton_ops/autotune.py | 6 +++++-
+ torch/_inductor/utils.py               | 2 +-
+ 3 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/torch/_inductor/codegen/triton.py b/torch/_inductor/codegen/triton.py
+index 89f2b6f698..b8f988161a 100644
+--- a/torch/_inductor/codegen/triton.py
++++ b/torch/_inductor/codegen/triton.py
+@@ -72,7 +72,7 @@ def config_of(args):
+         raise NotImplementedError(f"unhandled {type(x)}: {x}")
+ 
+     divisible_by_16 = [i for i, arg in enumerate(args) if is_aligned(arg)]
+-    return instance_descriptor(tuple(divisible_by_16), ())
++    return instance_descriptor(tuple(divisible_by_16), (), (), ())
+ 
+ 
+ class TritonPrinter(PythonPrinter):
+diff --git a/torch/_inductor/triton_ops/autotune.py b/torch/_inductor/triton_ops/autotune.py
+index 8edc9ce292..1ab35bc268 100644
+--- a/torch/_inductor/triton_ops/autotune.py
++++ b/torch/_inductor/triton_ops/autotune.py
+@@ -120,7 +120,11 @@ class CachingAutotuner(KernelInterface):
+                     grid_0, grid_1, grid_2 = grid(grid_meta)
+                 else:
+                     grid_0, grid_1, grid_2 = grid
+-                bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared,
++                # use default value for num_ctas and clusterDims
++                num_ctas = 1
++                clusterDims = [1, 1, 1]
++                bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps,
++                            num_ctas, *clusterDims, bin.shared,
+                             stream, bin.cu_function, None, None, None,
+                             {', '.join(call_args)})
+             """.lstrip(),
+diff --git a/torch/_inductor/utils.py b/torch/_inductor/utils.py
+index dc48ed3898..6fa8efa038 100644
+--- a/torch/_inductor/utils.py
++++ b/torch/_inductor/utils.py
+@@ -308,7 +308,7 @@ def has_incompatible_cudagraph_ops(gm):
+ 
+ 
+ instance_descriptor = collections.namedtuple(
+-    "instance_descriptor", ["divisible_by_16", "equal_to_1"]
++    "instance_descriptor", ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"]
+ )
+ 
+ 
+-- 
+2.40.1
+

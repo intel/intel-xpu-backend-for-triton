@@ -2,6 +2,31 @@ name: Integration Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      torch_repo:
+        description: 'torch_repo'
+        required: true
+        default: 'https://github.com/pytorch/pytorch.git'
+      torch_branch:
+        description: 'torch_branch'
+        required: true
+        default: 'release/2.1'
+      torch_commit:
+        description: 'torch_commit'
+        required: true
+        default: '9fcd4690e522c319d444316e69fb49417a802875'
+      ipex_repo:
+        description: 'ipex_repo'
+        required: true
+        default: 'https://github.com/intel/intel-extension-for-pytorch.git'
+      ipex_branch:
+        description: 'ipex_branch'
+        required: true
+        default: 'xpu-master'
+      ipex_commit:
+        description: 'ipex_commit'
+        required: true
+        default: '4af80f77740ed939be78eba28ae36951823f335c'
   pull_request:
     branches: [main]
   merge_group:
@@ -64,11 +89,20 @@ jobs:
           python --version
           pip install setuptools cython numpy wheel scikit-build scipy
           pip install psutil cpuid
-          bash ${HOME}/triton-preci/env_prepare_ci.sh
+          cd ${HOME}/triton-preci
+          cp triton/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
+          cp -r triton/third_party/intel_xpu_backend/.github/patches/ .
+          bash env_prepare.sh triton-preci \
+          ${{ github.event.inputs.torch_repo }} \
+          ${{ github.event.inputs.torch_branch }} \
+          ${{ github.event.inputs.torch_commit }} \
+          ${{ github.event.inputs.ipex_repo }} \
+          ${{ github.event.inputs.ipex_branch }} \
+          ${{ github.event.inputs.ipex_commit }}
           source ${HOME}/env_triton.sh
           python -c "import torch;import intel_extension_for_pytorch"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-              echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
+              echo -e "[ERROR] Public-torch or IPEX BUILD FAIL"
               exit 1
           fi
 

@@ -1,0 +1,31 @@
+From 35140e36097097870c70c29280d3aeaeb669df09 Mon Sep 17 00:00:00 2001
+From: Stonepia <tong.su@intel.com>
+Date: Fri, 1 Sep 2023 15:49:15 +0000
+Subject: [PATCH] Align for the new API for the launcher
+
+---
+ .../_inductor/xpu/triton_ops/autotune.py                  | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/intel_extension_for_pytorch/_inductor/xpu/triton_ops/autotune.py b/intel_extension_for_pytorch/_inductor/xpu/triton_ops/autotune.py
+index 8f09a2592..529921fb3 100644
+--- a/intel_extension_for_pytorch/_inductor/xpu/triton_ops/autotune.py
++++ b/intel_extension_for_pytorch/_inductor/xpu/triton_ops/autotune.py
+@@ -95,8 +95,12 @@ class XPUCachingAutotuner(CachingAutotuner):
+                     grid_0, grid_1, grid_2 = grid(grid_meta)
+                 else:
+                     grid_0, grid_1, grid_2 = grid
+-                bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps, bin.shared,
+-                            stream, bin.cu_function, None, None, bin,
++                # use default value for num_ctas and clusterDims
++                num_ctas = 1
++                clusterDims = [1, 1, 1]
++                bin.c_wrapper(grid_0, grid_1, grid_2, bin.num_warps,
++                            num_ctas, *clusterDims, bin.shared,
++                            stream, bin.cu_function, None, None, None,
+                             {', '.join(call_args)})
+             """.lstrip(),
+             scope,
+-- 
+2.40.1
+

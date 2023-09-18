@@ -2,6 +2,31 @@ name: Inductor E2E Nightly Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      torch_repo:
+        description: 'torch_repo'
+        required: true
+        default: 'https://github.com/pytorch/pytorch.git'
+      torch_branch:
+        description: 'torch_branch'
+        required: true
+        default: 'release/2.1'
+      torch_commit:
+        description: 'torch_commit'
+        required: true
+        default: '9fcd4690e522c319d444316e69fb49417a802875'
+      ipex_repo:
+        description: 'ipex_repo'
+        required: true
+        default: 'https://github.com/intel/intel-extension-for-pytorch.git'
+      ipex_branch:
+        description: 'ipex_branch'
+        required: true
+        default: 'xpu-master'
+      ipex_commit:
+        description: 'ipex_commit'
+        required: true
+        default: '4af80f77740ed939be78eba28ae36951823f335c'
   schedule:
     - cron: "0 14 * * *" # run at 2 PM UTC
 
@@ -41,11 +66,19 @@ jobs:
           pip install setuptools cython numpy wheel scikit-build scipy
           pip install psutil cpuid
           cd ${HOME}/triton-nightly
-          bash ${HOME}/triton-nightly/env_prepare_nightly.sh
+          cp triton/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
+          cp -r triton/third_party/intel_xpu_backend/.github/patches/ .
+          bash env_prepare.sh triton-nightly \
+          ${{ github.event.inputs.torch_repo }} \
+          ${{ github.event.inputs.torch_branch }} \
+          ${{ github.event.inputs.torch_commit }} \
+          ${{ github.event.inputs.ipex_repo }} \
+          ${{ github.event.inputs.ipex_branch }} \
+          ${{ github.event.inputs.ipex_commit }}
           source ${HOME}/env_triton.sh
           python -c "import torch;import intel_extension_for_pytorch"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-              echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
+              echo -e "[ERROR] Public-torch or IPEX BUILD FAIL"
               exit 1
           fi
 
@@ -71,8 +104,8 @@ jobs:
 
       - name: Prepare Benchmark
         run: |
-          cp ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
-          cp ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/scripts/inductor_perf_summary.py ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+          cp ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-nightly/pytorch
+          cp ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/scripts/inductor_perf_summary.py ${HOME}/triton-nightly/pytorch
           pip install styleFrame scipy pandas
 
   Accuracy-Test:
@@ -90,7 +123,7 @@ jobs:
           source ${HOME}/env_triton.sh
           cd ${HOME}/triton-nightly
           bash set_proxy.sh
-          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+          cd ${HOME}/triton-nightly/pytorch
           rm -rf inductor_log
           bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 & \
           bash inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 1 & \
@@ -100,7 +133,7 @@ jobs:
 
       - name: ACC Test Results Overview
         run: |
-          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
+          cd ${HOME}/triton-nightly/pytorch/inductor_log/huggingface
           cd amp_bf16
           echo -e "============ Acc Check for HF amp_bf16 ============" | tee -a ./e2e_summary.log
           csv_lines_inf=$(cat inductor_huggingface_amp_bf16_inference_xpu_accuracy.csv | wc -l)
@@ -143,11 +176,11 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: Triton-Inductor-E2E-Nightly-Data
-          path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/
+          path: /home/gta/triton-nightly/pytorch/inductor_log/
 
       - name: Test Results Check
         run: |
-          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/huggingface
+          cd ${HOME}/triton-nightly/pytorch/inductor_log/huggingface
           cd amp_bf16
           num_passed_amp_bf16_inf=$(grep "num_passed_amp_bf16_inf:" e2e_summary.log | sed -e 's/.*://;s/[^0-9.]//')
           if [ $num_passed_amp_bf16_inf -lt 45 ]; then
@@ -186,7 +219,7 @@ jobs:
           source ${HOME}/env_triton.sh
           cd ${HOME}/triton-nightly
           bash set_proxy.sh
-          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+          cd ${HOME}/triton-nightly/pytorch
           bash inductor_xpu_test.sh huggingface amp_bf16 inference performance xpu 0 & \
           bash inductor_xpu_test.sh huggingface amp_bf16 training performance xpu 1 & \
           bash inductor_xpu_test.sh huggingface amp_fp16 inference performance xpu 2 & \
@@ -194,11 +227,11 @@ jobs:
 
       - name: Perf Test Results Generate and Overview
         run: |
-          cd ${HOME}/triton-nightly/frameworks.ai.pytorch.private-gpu
+          cd ${HOME}/triton-nightly/pytorch
           python inductor_perf_summary.py -s huggingface -p amp_bf16 amp_fp16
 
       - name: Upload Triton Inductor E2E Nightly Data
         uses: actions/upload-artifact@v3
         with:
           name: Triton-Inductor-E2E-Nightly-Data
-          path: /home/gta/triton-nightly/frameworks.ai.pytorch.private-gpu/inductor_log/
+          path: /home/gta/triton-nightly/pytorch/inductor_log/
