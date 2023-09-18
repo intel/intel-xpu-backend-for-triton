@@ -1,7 +1,7 @@
 JOB_WORKSPACE=${1:-triton-preci}
 TORCH_REPO=${2:-https://github.com/pytorch/pytorch.git}
-TORCH_BRANCH=${3:-release/2.1}
-TORCH_COMMIT=${4:-9fcd4690e522c319d444316e69fb49417a802875}
+TORCH_BRANCH=${3:-v2.0.1}
+TORCH_COMMIT=${4:-e9ebda29d87ce0916ab08c06ab26fd3766a870e5}
 IPEX_REPO=${5:-https://github.com/intel/intel-extension-for-pytorch.git}
 IPEX_BRANCH=${6:-xpu-master}
 IPEX_COMMIT=${7:-4af80f77740ed939be78eba28ae36951823f335c}
@@ -15,14 +15,17 @@ if [[ -z "$(pip list | grep torch)" || "$installed_torch_git_version" != "$curre
     echo "Public torch BUILD"
     echo -e "========================================================================="
     rm -rf ${HOME}/${JOB_WORKSPACE}/pytorch
+    rm -rf ${HOME}/${JOB_WORKSPACE}/intel-extension-for-pytorch
     cd ${HOME}/${JOB_WORKSPACE}
     pip uninstall torch -y
     git clone -b ${TORCH_BRANCH} ${TORCH_REPO}
+    git clone -b xpu-master https://github.com/intel/intel-extension-for-pytorch
     pushd pytorch || exit 1
     git checkout ${TORCH_COMMIT}
     git submodule sync
     git submodule update --init --recursive --jobs 0
     git apply ../patches/pytorch/*.patch
+    git apply ../intel-extension-for-pytorch/torch_patches/*.patch
     conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
     python setup.py bdist_wheel 2>&1 | tee pytorch_build.log
     pip install dist/*.whl
