@@ -1,5 +1,9 @@
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+if(${CMAKE_VERSION} VERSION_GREATER_EQUAL 3.24)
+  cmake_policy(SET CMP0135 NEW)
+endif()
+
 if(DEFINED ENV{TRITON_INTEL_LLVM_DIR})
   message(STATUS "[intel_xpu_backend]: using user provide llvm path")
 else()
@@ -15,7 +19,6 @@ else()
     else()
       include(FetchContent)
       function(download_file url)
-        cmake_policy(SET CMP0135 NEW)
 
         FetchContent_Declare(intel-llvm URL ${url} SOURCE_DIR
                                             ${TRITON_INTEL_LLVM_DIR})
@@ -23,11 +26,24 @@ else()
         FetchContent_Populate(intel-llvm)
       endfunction(download_file)
 
+      # Default llvm package
       set(LLVM_DOWNLOAD_URL
           https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-ubuntu-18.04-release.tar.xz
       )
-      set(OS_INFO_FILE "/etc/os-release")
 
+      set(ENV_USE_LLVM_ASSERT "false")
+      if(DEFINED ENV{TRITON_USE_ASSERT_ENABLED_LLVM})
+        set(ENV_USE_LLVM_ASSERT "$ENV{TRITON_USE_ASSERT_ENABLED_LLVM}")
+        string(TOLOWER ${ENV_USE_LLVM_ASSERT} ENV_USE_LLVM_ASSERT)
+        message(STATUS "[intel_xpu_backend]: using intel llvm with assert version for UT")
+      endif()
+      if(ENV_USE_LLVM_ASSERT STREQUAL "true")
+        set(LLVM_DOWNLOAD_URL
+            https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-ubuntu-18.04-assert.tar.xz
+        )
+      endif()
+
+      set(OS_INFO_FILE "/etc/os-release")
       message(
         STATUS
           "[intel_xpu_backend]: downloading intel llvm for intel_xpu_backend, path ${TRITON_INTEL_LLVM_DIR}"
@@ -46,21 +62,19 @@ else()
           endif()
         endforeach()
 
-        if("${OS_ID}" STREQUAL "ubuntu")
-          if("${OS_VERSION_ID}" STREQUAL "22.04")
-            set(LLVM_DOWNLOAD_URL
-                https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-ubuntu-22.04-release.tar.xz
-            )
-            message(
-              STATUS
-                "[intel_xpu_backend]: downloading intel llvm for ${OS_ID} ${OS_VERSION_ID}"
-            )
-          endif()
-        elseif("${OS_ID}" STREQUAL "centos")
+        if("${OS_ID}" STREQUAL "centos")
           if("${OS_VERSION_ID}" STREQUAL "7")
-            set(LLVM_DOWNLOAD_URL
-                https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-centos-7-release.tar.xz
-            )
+            if(ENV_USE_LLVM_ASSERT STREQUAL "true")
+              set(LLVM_DOWNLOAD_URL
+                  https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-centos-7-assert.tar.xz
+              )
+
+            else()
+              set(LLVM_DOWNLOAD_URL
+                  https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_v0.1/llvm+mlir-17.0.0-x86_64-linux-gnu-centos-7-release.tar.xz
+              )
+
+            endif()
             message(
               STATUS
                 "[intel_xpu_backend]: downloading intel llvm for ${OS_ID} ${OS_VERSION_ID}"
@@ -84,6 +98,11 @@ else()
       STATUS
         "[intel_xpu_backend]: Use the LLVM version with revision to re-config for the intel_xpu_backend"
     )
+    # Check if the the LLVM exists.
+    if (NOT EXISTS ${TRITON_INTEL_LLVM_DIR})
+      message (FATAL_ERROR "[intel_xpu_backend]: ${TRITON_INTEL_LLVM_DIR} could not be found. Check if the LLVM is correctly downloaded.")
+    endif()
+
     # hints from
     # https://stackoverflow.com/questions/10205986/how-to-capture-cmake-command-line-arguments
     # Propagate the CMake vars to the intel xpu backend
