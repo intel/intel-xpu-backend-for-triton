@@ -295,8 +295,6 @@ private:
 
     auto threadsPerWarp =
         triton::gpu::getThreadsPerWarpWithUniqueData(srcLayout, srcShape);
-    auto warpsPerCTA =
-        triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape);
     auto order = getOrder(srcLayout);
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     Value warpSize =
