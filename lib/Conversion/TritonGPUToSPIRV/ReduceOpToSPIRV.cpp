@@ -298,7 +298,9 @@ private:
     auto warpsPerCTA =
         triton::gpu::getWarpsPerCTAWithUniqueData(srcLayout, srcShape);
     auto order = getOrder(srcLayout);
-    Value warpSize = i32_val(product<unsigned>(threadsPerWarp));
+    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    Value warpSize =
+        i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
     SmallVector<Value> multiDimLaneId =
