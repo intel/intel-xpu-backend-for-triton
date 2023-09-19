@@ -26,6 +26,5 @@ index 8f09a2592..529921fb3 100644
                              {', '.join(call_args)})
              """.lstrip(),
              scope,
--- 
+--
 2.40.1
-

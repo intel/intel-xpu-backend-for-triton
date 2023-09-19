@@ -16,12 +16,12 @@ index 89f2b6f698..b8f988161a 100644
 +++ b/torch/_inductor/codegen/triton.py
 @@ -72,7 +72,7 @@ def config_of(args):
          raise NotImplementedError(f"unhandled {type(x)}: {x}")
- 
+
      divisible_by_16 = [i for i, arg in enumerate(args) if is_aligned(arg)]
 -    return instance_descriptor(tuple(divisible_by_16), ())
 +    return instance_descriptor(tuple(divisible_by_16), (), (), ())
- 
- 
+
+
  class TritonPrinter(PythonPrinter):
 diff --git a/torch/_inductor/triton_ops/autotune.py b/torch/_inductor/triton_ops/autotune.py
 index 8edc9ce292..1ab35bc268 100644
@@ -45,14 +45,13 @@ index dc48ed3898..6fa8efa038 100644
 --- a/torch/_inductor/utils.py
 +++ b/torch/_inductor/utils.py
 @@ -308,7 +308,7 @@ def has_incompatible_cudagraph_ops(gm):
- 
- 
+
+
  instance_descriptor = collections.namedtuple(
 -    "instance_descriptor", ["divisible_by_16", "equal_to_1"]
 +    "instance_descriptor", ["divisible_by_16", "equal_to_1", "ids_of_folded_args", "divisible_by_8"]
  )
- 
- 
--- 
-2.40.1
 
+
+--
+2.40.1
