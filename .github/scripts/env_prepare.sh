@@ -19,7 +19,7 @@ if [[ -z "$(pip list | grep torch)" || "$installed_torch_git_version" != "$curre
     cd ${HOME}/${JOB_WORKSPACE}
     pip uninstall torch -y
     git clone -b ${TORCH_BRANCH} ${TORCH_REPO}
-    git clone -b xpu-master https://github.com/intel/intel-extension-for-pytorch
+    git clone -b ${IPEX_BRANCH} ${IPEX_REPO}
     pushd pytorch || exit 1
     git checkout ${TORCH_COMMIT}
     git submodule sync
