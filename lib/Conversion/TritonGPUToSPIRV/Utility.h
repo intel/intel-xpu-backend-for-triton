@@ -326,6 +326,8 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 
 void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                  Value val, Value pred);
+Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                 Value pred);
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i);
