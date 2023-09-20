@@ -17,6 +17,7 @@ sed -i '/capability = torch.cuda.get_device_capability.*/i \    check_cuda_only(
 sed -i -r '/h\.asm\["ptx"\]/,/^$/d' ${TRITON_ROOT}/triton/python/test/unit/language/test_core.py
 # TODO : This following change will affect the test_dot, we need to modify this after the dot is enabled
 sed -i -r '/pgm\.asm\["ptx"\]/,/(assert "shared" not in red_code)|(^$)/d' test_core.py  ${TRITON_ROOT}/triton/python/test/unit/language/test_core.py
+sed -i 's/slice_kernel\[(1,)](XBLOCK=32/slice_kernel\[(1,)](XBLOCK=32, device_type=device/g' ${TRITON_ROOT}/triton/python/test/unit/language/test_core.py
 
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_ROOT}/triton/python/test/unit/operators/test_blocksparse.py
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_ROOT}/triton/python/test/unit/operators/test_cross_entropy.py
