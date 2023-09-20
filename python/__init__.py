@@ -216,7 +216,7 @@ static void set_scalar_arg(
     }}
 }}
 
-static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr, {arg_decls}) {{
+static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr{', ' if signature.items() else ''} {arg_decls}) {{
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
 #ifdef TRITON_XPU_PROFILE
 RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
@@ -300,14 +300,14 @@ PYBIND11_MODULE(__triton_launcher, m) {{
                        void* _kernel,
                        py::object &launch_enter_hook,
                        py::object &launch_exit_hook,
-                       py::object &compiled_kernel,
+                       py::object &compiled_kernel{', ' if signature.items() else ''}
                        {', '.join([f"{_extracted_type_pybind11(ty)} _arg{i}" for i, ty in signature.items()])}){{
       int threads_per_warp = 32;
       if(py::hasattr(compiled_kernel, "threads_per_warp"))
         threads_per_warp = compiled_kernel.attr("threads_per_warp").cast<int>();
       sycl::queue* stream = static_cast<sycl::queue*>(_stream);
       sycl::kernel* kernel = static_cast<sycl::kernel*>(_kernel);
-      sycl_kernel_launch(grid_x, grid_y, grid_z, num_warps, threads_per_warp, shared_memory, *stream, *kernel,
+      sycl_kernel_launch(grid_x, grid_y, grid_z, num_warps, threads_per_warp, shared_memory, *stream, *kernel{', ' if signature.items() else ''}
              {', '.join(f"getPointer(_arg{i},{i})" if ty[0] == "*" else f"_arg{i}" for i, ty in signature.items())});
     }});
 }}
