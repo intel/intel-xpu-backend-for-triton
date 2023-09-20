@@ -122,16 +122,13 @@ jobs:
         run: |
           cd ${HOME}/triton-preci/triton/python/test/unit/language
           echo -e "============ UT Status Overview ============" | tee ./ut_summary.log
-          lineNum=`grep -n " \[100%\]" ut_raw.log | tail -n 1 | cut -d: -f1`
-          if [ -z $lineNum ]; then lineNum=`cat ./ut_raw.log | wc -l`; fi
-          head -n $lineNum ./ut_raw.log > ut_status.log
-          grep "FAILED" ut_status.log | awk '{print $1}' > ./ut_failed.log
-          grep "SKIPPED" ut_status.log | awk '{print $1}' > ./ut_skipped.log
-          grep "PASSED" ut_status.log | awk '{print $1}' > ./ut_passed.log
+          grep "^FAILED" ut_raw.log | awk '{print $1}' > ./ut_failed.log
+          grep "^SKIPPED" ut_raw.log | awk '{print $2}' | grep -o '[0-9]\+' > ./ut_skipped.log
+          grep "PASSED" ut_raw.log | awk '{print $5}' > ./ut_passed.log
           num_failed=$(cat ./ut_failed.log | wc -l)
-          num_skipped=$(cat ./ut_skipped.log | wc -l)
+          num_skipped=$(echo $(echo -n `cat ./ut_skipped.log | awk '{print $1}'`| tr ' ' '+')|bc)
           num_passed=$(cat ./ut_passed.log | wc -l)
-          num_total=$(grep "collected" ut_status.log | awk '{print $4}')
+          num_total=$(grep "items" ut_raw.log | awk '{print $3}' | grep -o '[0-9]\+')
           if [ -z $num_total ]; then num_total=0; fi
           echo "num_total: $num_total" | tee -a ./ut_summary.log
           echo "num_skipped: $num_skipped" | tee -a ./ut_summary.log
@@ -164,12 +161,11 @@ jobs:
         run: |
           cd ${HOME}/triton-preci/triton/python/test/unit/language
           echo -e "============ Total Pass Rate (no matmul/dot) ============" | tee -a ./ut_summary.log
-          num_total=$(grep "collected" ut_status.log | awk '{print $4}')
-          if [ -z $num_total ]; then num_total=0; fi
+          num_total=$(grep "items" ut_raw.log | awk '{print $3}' | grep -o '[0-9]\+')
           num_passed=$(cat ./ut_passed.log | wc -l)
-          num_expected=$(grep "(expected)" ut_status.log | wc -l)
-          num_dot=$(grep "dot" ut_status.log | wc -l)
-          num_matmul=$(grep "matmul" ut_status.log | wc -l)
+          num_expected=$(grep "(expected)" ut_raw.log | wc -l)
+          num_dot=$(grep "dot" ut_raw.log | wc -l)
+          num_matmul=$(grep "matmul" ut_raw.log | wc -l)
           num_dot_success=$(grep "dot" ./ut_passed.log | wc -l)
           num_matmul_success=$(grep "matmul" ./ut_passed.log | wc -l)
           let num_expected_skip_and_sucess=num_passed-num_dot_success-num_matmul_success+num_expected
@@ -186,8 +182,8 @@ jobs:
         run: |
           cd ${HOME}/triton-preci/triton/python/test/unit/language
           echo -e "============ Float32 Cases Pass Rate (no matmul/dot) ============" | tee -a ./ut_summary.log
-          num_float32=$(grep "float32" ut_status.log | grep -v 'matmul\|dot' | wc -l)
-          num_no_datatype=$(grep -v 'float\|int\|bool\|long\|f8\|f16\|i32\|i64\|u64' ut_status.log | grep -v 'matmul\|dot' | wc -l)
+          num_float32=$(grep "float32" ut_raw.log | grep -v 'matmul\|dot' | wc -l)
+          num_no_datatype=$(grep -v 'float\|int\|bool\|long\|f8\|f16\|i32\|i64\|u64' ut_raw.log | grep -v 'matmul\|dot' | wc -l)
           num_float32_success=$(grep -v 'matmul\|dot' ./ut_passed.log | grep "float32" | wc -l)
           num_no_datatype_success=$(grep -v 'matmul\|dot' ./ut_passed.log | grep -v 'float\|int\|bool\|long\|f8\|f16\|i32\|i64\|u64' | wc -l)
           let num_float32_cases_total=num_float32+num_no_datatype
