@@ -192,6 +192,40 @@ void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   rewriter.setInsertionPoint(tailblock, tailblock->begin());
 }
 
+Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                 Value pred) {
+  auto ptrTy = ptr.getType().cast<spirv::PointerType>();
+  auto retTy = ptrTy.getPointeeType();
+
+  // scalar load
+  // Create block structure for the masked load.
+  auto *preheader = rewriter.getInsertionBlock();
+  auto opPosition = rewriter.getInsertionPoint();
+  auto *tailblock = rewriter.splitBlock(preheader, opPosition);
+  tailblock->addArgument(retTy, loc);
+  auto *condblock = rewriter.createBlock(tailblock);
+
+  // Test the mask
+  rewriter.setInsertionPoint(preheader, preheader->end());
+
+  // Prediction false to use the other value.
+  Value other_ = undef(retTy);
+
+  rewriter.create<mlir::cf::CondBranchOp>(loc, pred, condblock, tailblock,
+                                          ValueRange{other_});
+
+  // Do the load
+  rewriter.setInsertionPoint(condblock, condblock->end());
+
+  Value ret = rewriter.create<spirv::LoadOp>(loc, ptr);
+  rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{ret});
+
+  rewriter.setInsertionPoint(tailblock, tailblock->begin());
+
+  ret = *tailblock->args_begin();
+  return ret;
+}
+
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
