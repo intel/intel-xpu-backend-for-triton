@@ -8,6 +8,7 @@ add_mlir_conversion_library(TritonGPUToSPIRV
     DotOpToSPIRV/FMA.cpp
     LoadStoreOpToSPIRV.cpp
     ReduceOpToSPIRV.cpp
+    ScanOpToSPIRV.cpp
     TypeConverter.cpp
     Utility.cpp
     DotOpToSPIRV.cpp

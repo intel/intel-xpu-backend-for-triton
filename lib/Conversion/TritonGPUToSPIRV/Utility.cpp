@@ -226,8 +226,8 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   return ret;
 }
 
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i) {
+static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
+                            Value val, int i, const std::string &shuffleType) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -235,8 +235,8 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = shflSync(loc, rewriter, val0, i);
-    val1 = shflSync(loc, rewriter, val1, i);
+    val0 = commonShflSync(loc, rewriter, val0, i, shuffleType);
+    val1 = commonShflSync(loc, rewriter, val1, i, shuffleType);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -244,8 +244,28 @@ Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
   }
 
   auto scope = rewriter.getAttr<spirv::ScopeAttr>(spirv::Scope::Subgroup);
-  return rewriter.create<spirv::GroupNonUniformShuffleXorOp>(loc, scope, val,
-                                                             i32_val(i));
+  if (shuffleType == "up") {
+    return rewriter.create<spirv::GroupNonUniformShuffleUpOp>(loc, scope, val,
+                                                              i32_val(i));
+  } else if (shuffleType == "down") {
+    return rewriter.create<spirv::GroupNonUniformShuffleDownOp>(loc, scope, val,
+                                                                i32_val(i));
+  } else if (shuffleType == "xor") {
+    return rewriter.create<spirv::GroupNonUniformShuffleXorOp>(loc, scope, val,
+                                                               i32_val(i));
+  } else {
+    llvm_unreachable("Unknown shuffle type");
+  }
+}
+
+Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+               int i) {
+  return commonShflSync(loc, rewriter, val, i, "xor");
+}
+
+Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i) {
+  return commonShflSync(loc, rewriter, val, i, "up");
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
