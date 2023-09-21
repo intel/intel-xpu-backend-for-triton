@@ -2,6 +2,31 @@ name: Integration Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      torchrepo:
+        description: 'torchrepo'
+        required: true
+        default: 'https://github.com/pytorch/pytorch.git'
+      torchbranch:
+        description: 'torchbranch'
+        required: true
+        default: 'v2.0.1'
+      torchcommit:
+        description: 'torchcommit'
+        required: true
+        default: 'e9ebda29d87ce0916ab08c06ab26fd3766a870e5'
+      ipexrepo:
+        description: 'ipexrepo'
+        required: true
+        default: 'https://github.com/intel/intel-extension-for-pytorch.git'
+      ipexbranch:
+        description: 'ipexbranch'
+        required: true
+        default: 'xpu-master'
+      ipexcommit:
+        description: 'ipexcommit'
+        required: true
+        default: '4af80f77740ed939be78eba28ae36951823f335c'
   pull_request:
     branches: [main]
   merge_group:
@@ -65,11 +90,20 @@ jobs:
           python --version
           pip install setuptools cython numpy wheel scikit-build scipy
           pip install psutil cpuid
-          bash ${HOME}/triton-preci/env_prepare_ci.sh
+          cd ${HOME}/triton-preci
+          cp triton/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
+          cp -r triton/third_party/intel_xpu_backend/.github/patches/ .
+          bash env_prepare.sh triton-preci \
+          ${{ github.event.inputs.torchrepo }} \
+          ${{ github.event.inputs.torchbranch }} \
+          ${{ github.event.inputs.torchcommit }} \
+          ${{ github.event.inputs.ipexrepo }} \
+          ${{ github.event.inputs.ipexbranch }} \
+          ${{ github.event.inputs.ipexcommit }}
           source ${HOME}/env_triton.sh
           python -c "import torch;import intel_extension_for_pytorch"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-              echo -e "[ERROR] Private-torch or IPEX BUILD FAIL"
+              echo -e "[ERROR] Public-torch or IPEX BUILD FAIL"
               exit 1
           fi
 
@@ -208,4 +242,4 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: Triton-ci-data
-          path: /home/sdp/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language/*.log
+          path: /home/sdp/triton-preci/triton/python/test/unit/language/*.log
