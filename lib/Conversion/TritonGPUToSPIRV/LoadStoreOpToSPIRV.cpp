@@ -144,7 +144,6 @@ struct LoadOpSPIRVConversion
 
       // Prediction false to use the other value.
       Value other_ = undef(retTy);
-      ;
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
           size_t size = width / valueElemNBits;
