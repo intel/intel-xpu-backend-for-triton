@@ -97,7 +97,7 @@ jobs:
         run: |
           cd ${HOME}/actions-runner/_work/intel-xpu-backend-for-triton/intel-xpu-backend-for-triton/triton/python/test/unit/language
           echo -e "============ UT Status Overview ============" | tee ./ut_summary.log
-          grep "^FAILED" ut_raw.log | awk '{print $1}' > ./ut_failed.log
+          grep "^FAILED" ut_raw.log | awk '{print $2}' > ./ut_failed.log
           grep "^SKIPPED" ut_raw.log | awk '{print $2}' | grep -o '[0-9]\+' > ./ut_skipped.log
           grep "PASSED" ut_raw.log | awk '{print $5}' > ./ut_passed.log
           num_failed=$(cat ./ut_failed.log | wc -l)
