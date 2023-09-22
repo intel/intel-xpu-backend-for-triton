@@ -1,7 +1,5 @@
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton/python/test/unit/interpreter/test_interpreter.py
-#JOB_WORKSPACE=${HOME}/triton-preci
 JOB_WORKSPACE=${1:-triton-preci}
-
 
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton/python/test/unit/language/assert_helper.py
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton/python/test/unit/language/print_helper.py
