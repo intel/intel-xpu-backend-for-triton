@@ -21,6 +21,7 @@ from .compiler import compile, CompilationError
 
 from . import language
 from . import testing
+from . import cpu
 
 __all__ = [
     "autotune",

@@ -1,0 +1,62 @@
+#include <pybind11/pybind11.h>
+#include <cstdlib>
+
+namespace py = pybind11;
+
+static inline void* getPointer(const py::object& _obj, int idx) {
+  PyObject* obj = _obj.ptr();
+  if (PyLong_Check(obj)) {
+    auto ptrValue = PyLong_AsVoidPtr(obj);
+    if (PyErr_Occurred()) {
+      PyErr_Print();
+    }
+    return (void*)ptrValue;
+  }
+  if (obj == Py_None) {
+    return (void*)0;
+  }
+  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+  if (ptr) {
+    PyObject *empty_tuple = PyTuple_New(0);
+    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
+    Py_DECREF(empty_tuple);
+    Py_DECREF(ptr);
+    if (!PyLong_Check(ret)) {
+      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+    }
+    return (void*)PyLong_AsVoidPtr(ret);
+  }
+  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+  return (void*)0;
+}
+
+PYBIND11_MODULE(__triton_launcher, m) {
+    m.doc() = "triton bindings to the c++ launcher API";
+    m.def("launch", [](int grid_x,
+                       int grid_y,
+                       int grid_z,
+                       int num_warps,
+                       int num_ctas,
+                       int clusterDimX,
+                       int clusterDimY,
+                       int clusterDimZ,
+                       int shared_memory,
+                       void* _stream,
+                       void* _kernel,
+                       py::object &launch_enter_hook,
+                       py::object &launch_exit_hook,
+                       py::object &compiled_kernel,
+                       {{args_decl}}) {
+        typedef void(*KernelFunction)({{func_args_decl}}, int, int, int);
+        KernelFunction kernel_function = reinterpret_cast<KernelFunction>(_kernel);
+        int num_programs = grid_x * grid_y * grid_z;
+        #pragma omp parallel for collapse(3)
+        for (int x = 0; x < grid_x; x++) {
+            for (int y = 0; y < grid_y; y++) {
+                for (int z = 0; z < grid_z; z++) {
+                    kernel_function({{args}}, x, y, z);
+                }
+            }
+        }
+    });
+}
