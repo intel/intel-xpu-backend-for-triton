@@ -453,6 +453,10 @@ class XPUBackend(BaseBackend):
     def get_device_properties(self, device):
         return self.driver.utils.get_device_properties(torch.xpu.device(device).sycl_device)  # noqa: E501
 
+    @functools.lru_cache(None)
+    def get_device_capability(self, device):
+        return torch.xpu.get_device_capability(device)
+
     def get_current_device(self):
         return torch.xpu.current_device()
 
@@ -470,10 +474,12 @@ class XPUBackend(BaseBackend):
         return "spvbin"
 
     def get_architecture_descriptor(self, **kwargs):
-        dev_props = self.get_device_properties(self.get_current_device())
-        max_work_group_size = dev_props['max_work_group_size']
-        max_num_sub_groups = dev_props['max_num_sub_groups']
-        sub_group_sizes = dev_props['sub_group_sizes']
+        cc = kwargs.get("cc", None)
+        if cc is None or not isinstance(cc, dict):
+            cc = self.get_device_capability(self.get_current_device())
+        max_work_group_size = cc['max_work_group_size']
+        max_num_sub_groups = cc['max_num_sub_groups']
+        sub_group_sizes = cc['sub_group_sizes']
         # TODO: chose a reasonable subgroup size
         threads_per_warp = 32
         assert threads_per_warp in sub_group_sizes, "Current platform does not support threads_per_warp to be 32"  # noqa: E501
