@@ -172,11 +172,16 @@ jobs:
       - name: New Solved Cases
         run: |
           cd ${HOME}/triton-preci/triton/python/test/unit/language
-          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log | tee -a ./new_solved_cases.log
-          echo -e "============ New Solved Cases ============"
-          cat ./new_solved_cases.log
-          num_new_solved_cases=$(cat ./new_solved_cases.log | wc -l)
-          echo "num_new_solved_cases: $num_new_solved_cases" | tee -a ./ut_summary.log
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log | tee -a ./new_solved_expected_cases.log
+          echo -e "============ New Solved Expected Cases ============"
+          cat ./new_solved_expected_cases.log
+          num_new_solved_expected_cases=$(cat ./new_solved_expected_cases.log | wc -l)
+          echo "num_new_solved_expected_cases: $num_new_solved_expected_cases" | tee -a ./ut_summary.log
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/tests/triton_todo_failure_tests.log | tee -a ./new_solved_todo_cases.log
+          echo -e "============ New Solved TODO Cases ============"
+          cat ./new_solved_todo_cases.log
+          num_new_solved_todo_cases=$(cat ./new_solved_todo_cases.log | wc -l)
+          echo "num_new_solved_todo_cases: $num_new_solved_todo_cases" | tee -a ./ut_summary.log
 
       - name: New Failed Cases
         run: |
@@ -184,9 +189,15 @@ jobs:
           awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log ./ut_failed.log | tee -a ./new_failed_cases.log
           echo -e "============ New Failed Cases ============"
           cat ./new_failed_cases.log
+          echo -e "============ New Failed Not TODO Cases ============"
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/tests/triton_todo_failure_tests.log ./new_failed_cases.log | tee -a ./new_failed_not_todo_cases.log
+          cat ./new_failed_not_todo_cases.log
           num_new_failed_cases=$(cat ./new_failed_cases.log | wc -l)
+          num_new_failed_not_todo_cases=$(cat ./new_failed_not_todo_cases.log | wc -l)
           echo "num_new_failed_cases: $num_new_failed_cases" | tee -a ./ut_summary.log
-          if [ "$num_new_failed_cases" != "0" ]; then
+          echo "num_new_failed_not_todo_cases: $num_new_failed_not_todo_cases" | tee -a ./ut_summary.log
+
+          if [ "$num_new_failed_not_todo_cases" != "0" ]; then
               echo -e "Triton has new failed cases"
               exit 1
           fi
