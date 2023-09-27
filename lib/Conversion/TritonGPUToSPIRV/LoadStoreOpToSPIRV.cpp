@@ -179,12 +179,7 @@ struct LoadOpSPIRVConversion
           bitcast(ptrElems[vecStart],
                   ptr_ty(retTy, spirv::StorageClass::CrossWorkgroup));
 
-      uint32_t alignment = nWords * width / 8;
-      Value ret = rewriter.create<spirv::LoadOp>(
-          loc, ptrElem,
-          spirv::MemoryAccessAttr::get(rewriter.getContext(),
-                                       spirv::MemoryAccess::Aligned),
-          rewriter.getI32IntegerAttr(alignment));
+      Value ret = rewriter.create<spirv::LoadOp>(loc, ptrElem);
       rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{ret});
 
       rewriter.setInsertionPoint(tailblock, tailblock->begin());
@@ -352,12 +347,7 @@ struct StoreOpSPIRVConversion
           bitcast(ptrElems[vecStart],
                   ptr_ty(valueVectorTy, spirv::StorageClass::CrossWorkgroup));
 
-      uint32_t alignment = nWords * width / 8;
-      rewriter.create<spirv::StoreOp>(
-          loc, ptrElem, valToStore,
-          spirv::MemoryAccessAttr::get(rewriter.getContext(),
-                                       spirv::MemoryAccess::Aligned),
-          rewriter.getI32IntegerAttr(alignment));
+      rewriter.create<spirv::StoreOp>(loc, ptrElem, valToStore);
       rewriter.create<mlir::cf::BranchOp>(loc, tailblock);
 
       rewriter.setInsertionPoint(tailblock, tailblock->begin());
