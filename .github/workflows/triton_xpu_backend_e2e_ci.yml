@@ -81,6 +81,7 @@ jobs:
           pip install psutil cpuid
           cd ${HOME}/triton-preci
           cp triton/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
+          cp triton/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
           cp -r triton/third_party/intel_xpu_backend/.github/patches/ .
           bash env_prepare.sh triton-preci \
           ${{ github.event.inputs.torchrepo }} \
@@ -100,7 +101,6 @@ jobs:
         shell: bash
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-preci
-          source ${HOME}/env_triton.sh
           pip uninstall -y triton
           rm -rf ~/.triton/intel_llvm
           sudo update-ca-certificates --fresh

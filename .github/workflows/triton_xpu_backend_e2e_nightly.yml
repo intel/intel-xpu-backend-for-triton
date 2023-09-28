@@ -67,6 +67,7 @@ jobs:
           pip install psutil cpuid
           cd ${HOME}/triton-nightly
           cp triton/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
+          cp triton/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
           cp -r triton/third_party/intel_xpu_backend/.github/patches/ .
           bash env_prepare.sh triton-nightly \
           ${{ github.event.inputs.torchrepo }} \
@@ -86,7 +87,6 @@ jobs:
         shell: bash
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
-          source ${HOME}/env_triton.sh
           pip uninstall -y triton
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs

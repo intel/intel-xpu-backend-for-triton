@@ -40,7 +40,6 @@ jobs:
 
       - name: Create conda environment
         run: |
-          source ${HOME}/env_triton.sh
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
           conda install -y -c conda-forge libstdcxx-ng
@@ -71,6 +70,7 @@ jobs:
           pip install psutil cpuid
           cd ${HOME}/triton-nightly
           cp triton/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
+          cp triton/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
           cp -r triton/third_party/intel_xpu_backend/.github/patches/ .
           bash env_prepare.sh triton-nightly \
           ${{ github.event.inputs.torchrepo }} \
@@ -90,7 +90,6 @@ jobs:
         shell: bash
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
-          source ${HOME}/env_triton.sh
           pip install pybind11
           pip uninstall -y triton
           cd ${HOME}/triton-nightly/triton/python
