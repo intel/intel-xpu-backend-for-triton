@@ -27,6 +27,10 @@ on:
         description: 'ipexcommit'
         required: true
         default: '4af80f77740ed939be78eba28ae36951823f335c'
+      oneapi:
+        description: 'oneapi'
+        required: true
+        default: '2023.2.0'
   pull_request:
     branches: [main]
   merge_group:
@@ -93,14 +97,16 @@ jobs:
           cp triton/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
           cp triton/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
           cp -r triton/third_party/intel_xpu_backend/.github/patches/ .
+          echo -e "oneAPI Basekit version: ${{ github.event.inputs.oneapi }}"
           bash env_prepare.sh triton-preci \
           ${{ github.event.inputs.torchrepo }} \
           ${{ github.event.inputs.torchbranch }} \
           ${{ github.event.inputs.torchcommit }} \
           ${{ github.event.inputs.ipexrepo }} \
           ${{ github.event.inputs.ipexbranch }} \
-          ${{ github.event.inputs.ipexcommit }}
-          source ${HOME}/env_triton.sh
+          ${{ github.event.inputs.ipexcommit }} \
+          ${{ github.event.inputs.oneapi }}
+          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
           python -c "import torch;import intel_extension_for_pytorch"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
               echo -e "[ERROR] Public-torch or IPEX BUILD FAIL"
@@ -119,6 +125,7 @@ jobs:
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py bdist_wheel
           pip install dist/*.whl
           cd ${HOME}/triton-preci
+          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
           python -c "import triton"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
               echo -e "[ERROR] Triton BUILD FAIL"
@@ -130,7 +137,7 @@ jobs:
         run: |
           echo -e "[ INFO ] Run UT test on Node $(hostname)"
           source ${HOME}/miniconda3/bin/activate triton-preci
-          source ${HOME}/env_triton.sh
+          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
           pip install pytest
           rm -rf ~/.triton/cache
           export TRITON_LIBDEVICE_PATH=${HOME}/triton-preci/triton/python/triton/third_party/xpu/lib
