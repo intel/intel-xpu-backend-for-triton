@@ -27,6 +27,10 @@ on:
         description: 'ipexcommit'
         required: true
         default: '4af80f77740ed939be78eba28ae36951823f335c'
+      oneapi:
+        description: 'oneAPI basekit version'
+        required: true
+        default: '2023.2.0'
   schedule:
     - cron: "0 14 * * *"
 
@@ -40,7 +44,6 @@ jobs:
 
       - name: Create conda environment
         run: |
-          source ${HOME}/env_triton.sh
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
           conda install -y -c conda-forge libstdcxx-ng
@@ -71,6 +74,7 @@ jobs:
           pip install psutil cpuid
           cd ${HOME}/triton-nightly
           cp triton/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
+          cp triton/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
           cp -r triton/third_party/intel_xpu_backend/.github/patches/ .
           bash env_prepare.sh triton-nightly \
           ${{ github.event.inputs.torchrepo }} \
@@ -78,8 +82,9 @@ jobs:
           ${{ github.event.inputs.torchcommit }} \
           ${{ github.event.inputs.ipexrepo }} \
           ${{ github.event.inputs.ipexbranch }} \
-          ${{ github.event.inputs.ipexcommit }}
-          source ${HOME}/env_triton.sh
+          ${{ github.event.inputs.ipexcommit }} \
+          ${{ github.event.inputs.oneapi }}
+          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
           python -c "import torch;import intel_extension_for_pytorch"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
               echo -e "[ERROR] Public-torch or IPEX BUILD FAIL"
@@ -90,7 +95,6 @@ jobs:
         shell: bash
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
-          source ${HOME}/env_triton.sh
           pip install pybind11
           pip uninstall -y triton
           cd ${HOME}/triton-nightly/triton/python
@@ -108,7 +112,7 @@ jobs:
         run: |
           echo -e "[ INFO ] Run UT test on Node $(hostname)"
           source ${HOME}/miniconda3/bin/activate triton-preci
-          source ${HOME}/env_triton.sh
+          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
           pip install pytest
           rm -rf ~/.triton/cache
           export TRITON_LIBDEVICE_PATH=${HOME}/triton-nightly/triton/python/triton/third_party/xpu/lib
