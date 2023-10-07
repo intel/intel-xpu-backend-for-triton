@@ -24,7 +24,6 @@ python ${HOME}/${JOB_WORKSPACE}/triton/third_party/intel_xpu_backend/.github/scr
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton/python/test/unit/operators/test_flash_attention.py
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton/python/test/unit/operators/test_inductor.py
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton/python/test/unit/operators/test_matmul.py
-
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton/python/test/unit/runtime/test_autotuner.py
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton/python/test/unit/runtime/test_cache.py
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton/python/test/unit/runtime/test_launch.py
