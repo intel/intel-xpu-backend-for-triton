@@ -22,6 +22,7 @@
 #include "ElementwiseOpToSPIRV.h"
 #include "LoadStoreOpToSPIRV.h"
 #include "ReduceOpToSPIRV.h"
+#include "ScanOpToSPIRV.h"
 #include "TritonGPUToSPIRV.h"
 #include "TypeConverter.h"
 #include "ViewOpToSPIRV.h"
@@ -481,6 +482,10 @@ public:
     populateReduceOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
                                     numWarps, axisInfoAnalysis, allocation,
                                     indexCacheInfo, /*benefit=*/10);
+    // ScanOp
+    populateScanOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                  numWarps, axisInfoAnalysis, allocation,
+                                  indexCacheInfo, /*benefit=*/10);
     // ViewOp
     populateViewOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
                                   numWarps, axisInfoAnalysis, &allocation,
