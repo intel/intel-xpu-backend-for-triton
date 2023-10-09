@@ -227,7 +227,8 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 }
 
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, int i, const std::string &shuffleType) {
+                            Value val, Value i,
+                            const std::string &shuffleType) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -246,13 +247,15 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   auto scope = rewriter.getAttr<spirv::ScopeAttr>(spirv::Scope::Subgroup);
   if (shuffleType == "up") {
     return rewriter.create<spirv::GroupNonUniformShuffleUpOp>(loc, scope, val,
-                                                              i32_val(i));
+                                                              i);
   } else if (shuffleType == "down") {
     return rewriter.create<spirv::GroupNonUniformShuffleDownOp>(loc, scope, val,
-                                                                i32_val(i));
+                                                                i);
   } else if (shuffleType == "xor") {
     return rewriter.create<spirv::GroupNonUniformShuffleXorOp>(loc, scope, val,
-                                                               i32_val(i));
+                                                               i);
+  } else if (shuffleType == "idx") {
+    return rewriter.create<spirv::GroupNonUniformShuffleOp>(loc, scope, val, i);
   } else {
     llvm_unreachable("Unknown shuffle type");
   }
@@ -260,12 +263,22 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                int i) {
-  return commonShflSync(loc, rewriter, val, i, "xor");
+  return commonShflSync(loc, rewriter, val, i32_val(i), "xor");
 }
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
-  return commonShflSync(loc, rewriter, val, i, "up");
+  return commonShflSync(loc, rewriter, val, i32_val(i), "up");
+}
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  int i) {
+  return commonShflSync(loc, rewriter, val, i32_val(i), "idx");
+}
+
+Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                  Value i) {
+  return commonShflSync(loc, rewriter, val, i, "idx");
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
