@@ -107,13 +107,15 @@ struct ArithConstantSplatOpSPIRVConversion
   }
 };
 
-#if 0
-struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
+struct CatOpSPIRVConversion
+    : public ConvertTritonGPUOpToSPIRVPattern<triton::CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
 
-  explicit CatOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                           PatternBenefit benefit = 1)
-          : ConvertTritonGPUOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
+  explicit CatOpSPIRVConversion(TritonGPUToSPIRVTypeConverter &typeConverter,
+                                MLIRContext *context,
+                                PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToSPIRVPattern<triton::CatOp>(typeConverter, context,
+                                                        benefit) {}
 
   LogicalResult
   matchAndRewrite(CatOp op, OpAdaptor adaptor,
@@ -122,13 +124,13 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
     auto resultTy = op.getType().template cast<RankedTensorType>();
     unsigned elems = getTotalElemsPerThread(resultTy);
     Type elemTy =
-            this->getTypeConverter()->convertType(resultTy.getElementType());
+        this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
     // unpack input values
     auto lhsVals = getTypeConverter()->unpackLLElements(
-            loc, adaptor.getLhs(), rewriter, op.getOperand(0).getType());
+        loc, adaptor.getLhs(), rewriter, op.getOperand(0).getType());
     auto rhsVals = getTypeConverter()->unpackLLElements(
-            loc, adaptor.getRhs(), rewriter, op.getOperand(1).getType());
+        loc, adaptor.getRhs(), rewriter, op.getOperand(1).getType());
     // concatenate (and potentially reorder) values
     SmallVector<Value> retVals;
     for (Value v : lhsVals)
@@ -137,12 +139,11 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
       retVals.push_back(v);
     // pack and replace
     Value ret =
-            getTypeConverter()->packLLElements(loc, retVals, rewriter, resultTy);
+        getTypeConverter()->packLLElements(loc, retVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
 };
-#endif
 
 struct ViewOpSPIRVConversion : public ConvertTritonGPUOpToSPIRVPattern<ViewOp> {
   using OpAdaptor = typename ViewOp::Adaptor;
@@ -243,4 +244,5 @@ void populateViewOpToSPIRVPatterns(
       typeConverter, context, benefit,
       mlir::spirv::checkOpSupported(computeCapability,
                                     "INTELConvertFToBF16Op"));
+  patterns.add<CatOpSPIRVConversion>(typeConverter, context, benefit);
 }
