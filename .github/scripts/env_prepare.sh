@@ -32,7 +32,6 @@ if [[ -z "$(pip list | grep torch)" || "$installed_torch_git_version" != "$curre
     conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
     python setup.py bdist_wheel 2>&1 | tee pytorch_build.log
     pip install dist/*.whl
-    source ${HOME}/env_triton.sh
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
         echo -e "[ERROR] Public-torch BUILD FAIL"
         exit 1
