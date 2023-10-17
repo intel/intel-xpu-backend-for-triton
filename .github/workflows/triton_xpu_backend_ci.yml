@@ -169,11 +169,14 @@ jobs:
           num_skipped=$(echo $(echo -n `cat ./ut_skipped.log | awk '{print $1}'`| tr ' ' '+')|bc)
           num_passed=$(cat ./ut_passed.log | wc -l)
           num_total=$(grep "items" ut_raw.log | awk '{print $3}' | grep -o '[0-9]\+')
+          let num_total_wo_skipped=num_total-num_skipped
+          total_pass_rate=`awk 'BEGIN{printf "%.2f%%\n",('$num_passed'/'$num_total_wo_skipped')*100}'`
           if [ -z $num_total ]; then num_total=0; fi
           echo "num_total: $num_total" | tee -a ./ut_summary.log
           echo "num_skipped: $num_skipped" | tee -a ./ut_summary.log
           echo "num_failed: $num_failed" | tee -a ./ut_summary.log
           echo "num_passed: $num_passed" | tee -a ./ut_summary.log
+          echo "total_pass_rate: $total_pass_rate" | tee -a ./ut_summary.log
 
       - name: New Solved Cases
         run: |
@@ -208,48 +211,7 @@ jobs:
               exit 1
           fi
 
-      - name: Total Pass Rate Calculate (no matmul/dot)
-        run: |
-          cd ${HOME}/triton-preci/triton/python/test/unit/language
-          echo -e "============ Total Pass Rate (no matmul/dot) ============" | tee -a ./ut_summary.log
-          num_total=$(grep "items" ut_raw.log | awk '{print $3}' | grep -o '[0-9]\+')
-          num_passed=$(cat ./ut_passed.log | wc -l)
-          num_expected=$(grep "(expected)" ut_raw.log | wc -l)
-          num_dot=$(grep "dot" ut_raw.log | wc -l)
-          num_matmul=$(grep "matmul" ut_raw.log | wc -l)
-          num_dot_success=$(grep "dot" ./ut_passed.log | wc -l)
-          num_matmul_success=$(grep "matmul" ./ut_passed.log | wc -l)
-          let num_expected_skip_and_sucess=num_passed-num_dot_success-num_matmul_success+num_expected
-          let num_total_wo_mat_dot=num_total-num_dot-num_matmul
-          total_pass_rate=`awk 'BEGIN{printf "%.2f%%\n",('$num_expected_skip_and_sucess'/'$num_total_wo_mat_dot')*100}'`
-          echo "num_matmul: $num_matmul" | tee -a ./ut_summary.log
-          echo "num_dot: $num_dot" | tee -a ./ut_summary.log
-          echo "num_expected: $num_expected" | tee -a ./ut_summary.log
-          echo "num_expected_skip_and_sucess: $num_expected_skip_and_sucess" | tee -a ./ut_summary.log
-          echo "num_total_wo_mat_dot: $num_total_wo_mat_dot" | tee -a ./ut_summary.log
-          echo "total_pass_rate: $total_pass_rate" | tee -a ./ut_summary.log
-
-      - name: Float32 Cases Pass Rate Calculate (no matmul/dot)
-        run: |
-          cd ${HOME}/triton-preci/triton/python/test/unit/language
-          echo -e "============ Float32 Cases Pass Rate (no matmul/dot) ============" | tee -a ./ut_summary.log
-          num_float32=$(grep "float32" ut_raw.log | grep -v 'matmul\|dot' | wc -l)
-          num_no_datatype=$(grep -v 'float\|int\|bool\|long\|f8\|f16\|i32\|i64\|u64' ut_raw.log | grep -v 'matmul\|dot' | wc -l)
-          num_float32_success=$(grep -v 'matmul\|dot' ./ut_passed.log | grep "float32" | wc -l)
-          num_no_datatype_success=$(grep -v 'matmul\|dot' ./ut_passed.log | grep -v 'float\|int\|bool\|long\|f8\|f16\|i32\|i64\|u64' | wc -l)
-          let num_float32_cases_total=num_float32+num_no_datatype
-          let num_float32_cases_expected_skip_and_success_total=num_float32_success+num_no_datatype_success
-          float32_cases_pass_rate=`awk 'BEGIN{printf "%.2f%%\n",('$num_float32_cases_expected_skip_and_success_total'/'$num_float32_cases_total')*100}'`
-
-          echo "num_float32: $num_float32" | tee -a ./ut_summary.log
-          echo "num_no_datatype: $num_no_datatype" | tee -a ./ut_summary.log
-          echo "num_float32_success: $num_float32_success" | tee -a ./ut_summary.log
-          echo "num_no_datatype_success: $num_no_datatype_success" | tee -a ./ut_summary.log
-          echo "num_float32_cases_total: $num_float32_cases_total" | tee -a ./ut_summary.log
-          echo "num_float32_cases_expected_skip_and_success_total: $num_float32_cases_expected_skip_and_success_total" | tee -a ./ut_summary.log
-          echo "float32_cases_pass_rate: $float32_cases_pass_rate" | tee -a ./ut_summary.log
-
-      - name: UT Status Summary (no matmul/dot)
+      - name: UT Status Summary
         run: |
           cd ${HOME}/triton-preci/triton/python/test/unit/language
           cp ${HOME}/triton-preci/triton/*.log .
