@@ -111,7 +111,7 @@ jobs:
       - name: Unit Test for triton on PVC
         run: |
           echo -e "[ INFO ] Run UT test on Node $(hostname)"
-          source ${HOME}/miniconda3/bin/activate triton-preci
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
           pip install pytest
           rm -rf ~/.triton/cache
