@@ -35,12 +35,38 @@ on:
     - cron: "0 14 * * *"
 
 jobs:
+  Runner-Preparation:
+    runs-on: [self-hosted]
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Prepare runner matrix
+        id: set-matrix
+        run: |
+          if [ x"${{ github.repository }}" == x"intel/intel-xpu-backend-for-triton" ]; then
+            echo '::set-output name=matrix::[["self-hosted", "ATSM"], ["self-hosted", "PVC"]]'
+          else
+            echo '::set-output name=matrix::["ubuntu-latest"]'
+          fi
 
   Nightly-Tests:
 
-    runs-on: [self-hosted, PVC]
+    needs: Runner-Preparation
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix)}}
 
     steps:
+      - name: Set ATSM ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'ATSM')}}
+        run: |
+          echo "BACKEND=ATSM" >> "${GITHUB_ENV}"
+
+      - name: Set PVC ENV
+        if: ${{(matrix.runner[0] == 'self-hosted') && (matrix.runner[1] == 'PVC')}}
+        run: |
+          echo "BACKEND=PVC" >> "${GITHUB_ENV}"
 
       - name: Create conda environment
         run: |
@@ -109,6 +135,7 @@ jobs:
           fi
 
       - name: Unit Test for triton on PVC
+        if: ${{ env.BACKEND == 'PVC'}}
         run: |
           echo -e "[ INFO ] Run UT test on Node $(hostname)"
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
@@ -125,7 +152,26 @@ jobs:
             exit 1
           fi
 
-      - name: UT Log Preview
+      - name: Unit Test for triton on ATSM
+        if: ${{ env.BACKEND == 'ATSM'}}
+        run: |
+          echo -e "[ INFO ] Run UT test on Node $(hostname)"
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
+          pip install pytest
+          rm -rf ~/.triton/cache
+          export TRITON_LIBDEVICE_PATH=${HOME}/triton-nightly/triton/python/triton/third_party/xpu/lib
+          cd ${HOME}/triton-nightly/triton/python/test/unit/language
+          bash ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/scripts/case_update.sh triton-nightly
+          ZE_AFFINITY_MASK=1.0 pytest -n 32 -v -ra --tb=line . --device=xpu 2>&1 | tee ./ut_raw.log || true
+          res=$(cat ut_raw.log | sed -n '7p' |  awk '{print $NF}')
+          if [ "$res" == "error" ]; then
+            echo -e "[ERROR] IPEX ATSM Triton UT FAIL"
+            exit 1
+          fi
+
+      - name: UT Log Preview on PVC
+        if: ${{ env.BACKEND == 'PVC'}}
         run: |
           cd ${HOME}/triton-nightly/triton/python/test/unit/language
           echo "============ UT raw log head ============"
@@ -133,7 +179,17 @@ jobs:
           echo "============ UT raw log tail ============"
           tail -n 20 ut_raw.log
 
-      - name: UT Status Overview
+      - name: UT Log Preview on ATSM
+        if: ${{ env.BACKEND == 'ATSM'}}
+        run: |
+          cd ${HOME}/triton-nightly/triton/python/test/unit/language
+          echo "============ UT raw log head ============"
+          head -n 20 ut_raw.log
+          echo "============ UT raw log tail ============"
+          tail -n 20 ut_raw.log
+
+      - name: UT Status Overview on PVC
+        if: ${{ env.BACKEND == 'PVC'}}
         run: |
           cd ${HOME}/triton-nightly/triton/python/test/unit/language
           echo -e "============ UT Status Overview ============" | tee ./ut_summary.log
@@ -153,7 +209,29 @@ jobs:
           echo "num_passed: $num_passed" | tee -a ./ut_summary.log
           echo "total_pass_rate: $total_pass_rate" | tee -a ./ut_summary.log
 
-      - name: New Solved Cases
+      - name: UT Status Overview on ATSM
+        if: ${{ env.BACKEND == 'ATSM'}}
+        run: |
+          cd ${HOME}/triton-nightly/triton/python/test/unit/language
+          echo -e "============ UT Status Overview ============" | tee ./ut_summary.log
+          grep "^FAILED" ut_raw.log | awk '{print $2}' > ./ut_failed.log
+          grep "^SKIPPED" ut_raw.log | awk '{print $2}' | grep -o '[0-9]\+' > ./ut_skipped.log
+          grep "PASSED" ut_raw.log | awk '{print $5}' > ./ut_passed.log
+          num_failed=$(cat ./ut_failed.log | wc -l)
+          num_skipped=$(echo $(echo -n `cat ./ut_skipped.log | awk '{print $1}'`| tr ' ' '+')|bc)
+          num_passed=$(cat ./ut_passed.log | wc -l)
+          num_total=$(grep "items" ut_raw.log | awk '{print $3}' | grep -o '[0-9]\+')
+          let num_total_wo_skipped=num_total-num_skipped
+          total_pass_rate=`awk 'BEGIN{printf "%.2f%%\n",('$num_passed'/'$num_total_wo_skipped')*100}'`
+          if [ -z $num_total ]; then num_total=0; fi
+          echo "num_total: $num_total" | tee -a ./ut_summary.log
+          echo "num_skipped: $num_skipped" | tee -a ./ut_summary.log
+          echo "num_failed: $num_failed" | tee -a ./ut_summary.log
+          echo "num_passed: $num_passed" | tee -a ./ut_summary.log
+          echo "total_pass_rate: $total_pass_rate" | tee -a ./ut_summary.log
+
+      - name: New Solved Cases on PVC
+        if: ${{ env.BACKEND == 'PVC'}}
         run: |
           cd ${HOME}/triton-nightly/triton/python/test/unit/language
           awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log | tee -a ./new_solved_expected_cases.log
@@ -167,7 +245,8 @@ jobs:
           num_new_solved_todo_cases=$(cat ./new_solved_todo_cases.log | wc -l)
           echo "num_new_solved_todo_cases: $num_new_solved_todo_cases" | tee -a ./ut_summary.log
 
-      - name: New Failed Cases
+      - name: New Failed Cases on PVC
+        if: ${{ env.BACKEND == 'PVC'}}
         run: |
           cd ${HOME}/triton-nightly/triton/python/test/unit/language
           awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests.log ./ut_failed.log | tee -a ./new_failed_cases.log
@@ -186,6 +265,41 @@ jobs:
               exit 1
           fi
 
+      - name: New Solved Cases on ATSM
+        if: ${{ env.BACKEND == 'ATSM'}}
+        run: |
+          cd ${HOME}/triton-nightly/triton/python/test/unit/language
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests_for_ATSM.log | tee -a ./new_solved_expected_cases_for_ATSM.log
+          echo -e "============ New Solved Expected Cases ============"
+          cat ./new_solved_expected_cases_for_ATSM.log
+          num_new_solved_expected_cases_for_ATSM=$(cat ./new_solved_expected_cases_for_ATSM.log | wc -l)
+          echo "num_new_solved_expected_cases_for_ATSM: $num_new_solved_expected_cases_for_ATSM" | tee -a ./ut_summary.log
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ./ut_failed.log ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/tests/triton_todo_failure_tests_for_ATSM.log | tee -a ./new_solved_todo_cases_for_ATSM.log
+          echo -e "============ New Solved TODO Cases ============"
+          cat ./new_solved_todo_cases_for_ATSM.log
+          num_new_solved_todo_cases_for_ATSM=$(cat ./new_solved_todo_cases_for_ATSM.log | wc -l)
+          echo "num_new_solved_todo_cases_for_ATSM: $num_new_solved_todo_cases_for_ATSM" | tee -a ./ut_summary.log
+
+      - name: New Failed Cases on ATSM
+        if: ${{ env.BACKEND == 'ATSM'}}
+        run: |
+          cd ${HOME}/triton-nightly/triton/python/test/unit/language
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests_for_ATSM.log ./ut_failed.log | tee -a ./new_failed_cases_for_ATSM.log
+          echo -e "============ New Failed Cases ============"
+          cat ./new_failed_cases.log
+          echo -e "============ New Failed Not TODO Cases ============"
+          awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/tests/triton_todo_failure_tests_for_ATSM.log ./new_failed_cases_for_ATSM.log | tee -a ./new_failed_not_todo_cases_for_ATSM.log
+          cat ./new_failed_not_todo_cases_for_ATSM.log
+          num_new_failed_cases_for_ATSM=$(cat ./new_failed_cases_for_ATSM.log | wc -l)
+          num_new_failed_not_todo_cases_for_ATSM=$(cat ./new_failed_not_todo_cases_for_ATSM.log | wc -l)
+          echo "num_new_failed_cases_for_ATSM: $num_new_failed_cases_for_ATSM" | tee -a ./ut_summary.log
+          echo "num_new_failed_not_todo_cases_for_ATSM: $num_new_failed_not_todo_cases_for_ATSM" | tee -a ./ut_summary.log
+
+          if [ "$num_new_failed_not_todo_cases_for_ATSM" != "0" ]; then
+              echo -e "Triton has new failed cases for ATSM"
+              exit 1
+          fi
+
       - name: UT Status Summary
         run: |
           cd ${HOME}/triton-nightly/triton/python/test/unit/language
@@ -193,6 +307,14 @@ jobs:
           cat ut_summary.log
 
       - name: Upload Triton PVC nightly Data
+        if: ${{ env.BACKEND == 'PVC'}}
+        uses: actions/upload-artifact@v3
+        with:
+          name: Triton-nightly-data
+          path: /home/sdp/triton-nightly/triton/python/test/unit/language/*.log
+
+      - name: Upload Triton ATSM nightly Data
+        if: ${{ env.BACKEND == 'ATSM'}}
         uses: actions/upload-artifact@v3
         with:
           name: Triton-nightly-data
