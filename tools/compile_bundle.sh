@@ -5,16 +5,10 @@
 #
 set -ueo pipefail
 
-#VER_LLVM="triton_debug"
-#VER_PYTORCH="v2.0.1"
+VER_PYTORCH="v2.0.1"
 VER_TORCHVISION="v0.15.2"
 VER_TORCHAUDIO="v2.0.2"
-#VER_TRITON="main"
-VER_LLVM="c06fdb9e163156b2398ca1688e363d67d86027ed"
-VER_PYTORCH="e9ebda29d87ce0916ab08c06ab26fd3766a870e5"
 VER_IPEX="xpu-master"
-VER_TRITON="c46a842"
-VER_TRITON_EXTENSION="1e9d8c7dc1404ad8a851a720bbb8d7fc5b1653d9"
 VER_GCC=11
 
 if [[ $# -lt 2 ]]; then
@@ -73,8 +67,8 @@ cd ${BASEFOLDER}
 set -x
 
 # Checkout individual components
-if [ ! -d llvm ]; then
-    git clone https://github.com/chengjunlu/llvm/
+if [ ! -d triton ]; then
+    git clone https://github.com/openai/triton
 fi
 if [ ! -d pytorch ]; then
     git clone https://github.com/pytorch/pytorch.git
@@ -88,20 +82,26 @@ fi
 if [ ! -d intel-extension-for-pytorch ]; then
     git clone https://github.com/intel/intel-extension-for-pytorch.git
 fi
-if [ ! -d triton ]; then
-    git clone https://github.com/openai/triton
-fi
 
 # Checkout required branch/commit and update submodules
-cd llvm
-if [ ! -z ${VER_LLVM} ]; then
-    git checkout sycl
-    git pull
-    git checkout ${VER_LLVM}
-fi
+cd triton
+git checkout main
+git pull
 git submodule sync
 git submodule update --init --recursive
-cd ../pytorch
+cd third_party/intel_xpu_backend
+git checkout main
+git pull
+cd ../..
+git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
+git submodule sync
+git submodule update --init --recursive
+cd third_party/intel_xpu_backend
+git checkout main
+git submodule sync
+git submodule update --init --recursive
+cd ../../..
+cd pytorch
 git stash
 git clean -fd
 if [ ! -z ${VER_PYTORCH} ]; then
@@ -111,7 +111,8 @@ if [ ! -z ${VER_PYTORCH} ]; then
 fi
 git submodule sync
 git submodule update --init --recursive
-cd ../vision
+cd ..
+cd vision
 if [ ! -z ${VER_TORCHVISION} ]; then
     git checkout main
     git pull
@@ -119,7 +120,8 @@ if [ ! -z ${VER_TORCHVISION} ]; then
 fi
 git submodule sync
 git submodule update --init --recursive
-cd ../audio
+cd ..
+cd audio
 if [ ! -z ${VER_TORCHAUDIO} ]; then
     git checkout main
     git pull
@@ -127,7 +129,8 @@ if [ ! -z ${VER_TORCHAUDIO} ]; then
 fi
 git submodule sync
 git submodule update --init --recursive
-cd ../intel-extension-for-pytorch
+cd ..
+cd intel-extension-for-pytorch
 if [ ! -z ${VER_IPEX} ]; then
     git checkout master
     git pull
@@ -135,24 +138,18 @@ if [ ! -z ${VER_IPEX} ]; then
 fi
 git submodule sync
 git submodule update --init --recursive
-cd ../triton
-if [ ! -z ${VER_TRITON} ]; then
-    git checkout main
-    git pull
-    git checkout ${VER_TRITON}
-fi
-git submodule sync
-git submodule update --init --recursive
-cd third_party/intel_xpu_backend
-git checkout main
-git pull
-git checkout ${VER_TRITON_EXTENSION}
-cd ../../..
+cd ..
 
 # Install python dependency
-python -m pip install cmake ninja mkl mkl-include Pillow
+python -m pip install cmake ninja mkl-static mkl-include Pillow pybind11
 
 # Compile individual component
+#  Triton
+cd triton/python
+python setup.py clean
+TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py bdist_wheel 2>&1 | tee build.log
+python -m pip install --force-reinstall dist/*.whl
+cd ../..
 #  PyTorch
 cd pytorch
 git apply ../intel-extension-for-pytorch/torch_patches/*.patch
@@ -163,6 +160,7 @@ if [ -n "${CONDA_PREFIX-}" ]; then
 elif [ -n "${VIRTUAL_ENV-}" ]; then
     export CMAKE_PREFIX_PATH=${VIRTUAL_ENV:-"$(dirname $(command -v python))/../"}
 fi
+export USE_STATIC_MKL=1
 export _GLIBCXX_USE_CXX11_ABI=1
 export USE_NUMA=0
 export USE_CUDA=0
@@ -171,8 +169,8 @@ python setup.py bdist_wheel 2>&1 | tee build.log
 unset USE_CUDA
 unset USE_NUMA
 unset _GLIBCXX_USE_CXX11_ABI
+unset USE_STATIC_MKL
 unset CMAKE_PREFIX_PATH
-python -m pip uninstall -y mkl mkl-include
 python -m pip install --force-reinstall dist/*.whl
 cd ..
 #  TorchVision
@@ -205,26 +203,8 @@ if [[ ! ${AOT} == "" ]]; then
     unset USE_AOT_DEVLIST
 fi
 python -m pip install --force-reinstall dist/*.whl
-cd ..
-#  LLVM
-cd llvm
-if [ -d build ]; then
-    rm -rf build
-fi
-mkdir build
-cd build
-cmake ../llvm -G Ninja  -DLLVM_ENABLE_PROJECTS="mlir" -DCMAKE_BUILD_TYPE=Release -DLLVM_USE_LINKER=gold  -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU"
-ninja all
-export LLVM_SYSPATH=$(pwd)
-cd ../..
-#  Triton
-python -m pip install pybind11
-cd triton/python
-python setup.py clean
-TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py bdist_wheel 2>&1 | tee build.log
-python -m pip install --force-reinstall dist/*.whl
-unset LLVM_SYSPATH
+python -m pip uninstall -y mkl-static mkl-include
 
 # Sanity Test
 cd ..
-python -c "import torch; import torchvision; import torchaudio; import intel_extension_for_pytorch as ipex; print(f'torch_cxx11_abi:     {torch.compiled_with_cxx11_abi()}'); print(f'torch_version:       {torch.__version__}'); print(f'torchvision_version: {torchvision.__version__}'); print(f'torchaudio_version:  {torchaudio.__version__}'); print(f'ipex_version:        {ipex.__version__}');"
+python -c "import torch; import torchvision; import torchaudio; import intel_extension_for_pytorch as ipex; import triton; print(f'torch_cxx11_abi:     {torch.compiled_with_cxx11_abi()}'); print(f'torch_version:       {torch.__version__}'); print(f'torchvision_version: {torchvision.__version__}'); print(f'torchaudio_version:  {torchaudio.__version__}'); print(f'ipex_version:        {ipex.__version__}'); print(f'triton_version:      {triton.__version__}');"
