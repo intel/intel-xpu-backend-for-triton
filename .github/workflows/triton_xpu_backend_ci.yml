@@ -255,7 +255,7 @@ jobs:
           echo "num_new_failed_not_todo_cases: $num_new_failed_not_todo_cases" | tee -a ./ut_summary.log
 
           if [ "$num_new_failed_not_todo_cases" != "0" ]; then
-              echo -e "Triton has new failed cases"
+              echo -e "Triton has new failed cases for PVC"
               exit 1
           fi
 
