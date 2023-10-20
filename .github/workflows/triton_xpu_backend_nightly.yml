@@ -254,7 +254,7 @@ jobs:
           cd ${HOME}/triton-nightly/triton/python/test/unit/language
           awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/tests/triton_expected_failure_tests_for_ATSM.log ./ut_failed.log | tee -a ./new_failed_cases_for_ATSM.log
           echo -e "============ New Failed Cases ============"
-          cat ./new_failed_cases.log
+          cat ./new_failed_cases_for_ATSM.log
           echo -e "============ New Failed Not TODO Cases ============"
           awk 'NR==FNR{a[$0]}NR>FNR{ if(!($1 in a)) print $0}' ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/tests/triton_todo_failure_tests_for_ATSM.log ./new_failed_cases_for_ATSM.log | tee -a ./new_failed_not_todo_cases_for_ATSM.log
           cat ./new_failed_not_todo_cases_for_ATSM.log
