@@ -431,12 +431,7 @@ struct AtomicCASOpSPIRVConversion
 
     auto old = rewriter.create<spirv::AtomicCompareExchangeOp>(
         loc, valueElemTy, casPtr, mlir::spirv::Scope::Device,
-        mlir::spirv::MemorySemantics::AcquireRelease |
-            mlir::spirv::MemorySemantics::MakeAvailable |
-            mlir::spirv::MemorySemantics::MakeVisible,
-        mlir::spirv::MemorySemantics::AcquireRelease |
-            mlir::spirv::MemorySemantics::MakeAvailable |
-            mlir::spirv::MemorySemantics::MakeVisible,
+        mlir::spirv::MemorySemantics::None, mlir::spirv::MemorySemantics::None,
         casVal, casCmp);
 
     rewriter.create<mlir::cf::BranchOp>(loc, tailblock, ValueRange{old});
@@ -562,10 +557,7 @@ struct AtomicRMWOpSPIRVConversion
   case (rwmop__):                                                              \
     ret = rewriter.create<sprivop__>(                                          \
         loc, retType, ptrElem, mlir::spirv::Scope::Device,                     \
-        mlir::spirv::MemorySemantics::AcquireRelease |                         \
-            mlir::spirv::MemorySemantics::MakeAvailable |                      \
-            mlir::spirv::MemorySemantics::MakeVisible,                         \
-        rmwVal);                                                               \
+        mlir::spirv::MemorySemantics::None, rmwVal);                           \
     break;
 
         DISPATCH(RMWOp::AND, spirv::AtomicAndOp);
@@ -721,9 +713,7 @@ struct AtomicRMWOpSPIRVConversion
       Value comparator = bitcast(origin, writeTy);
       Value exchange = rewriter.create<spirv::AtomicCompareExchangeOp>(
           loc, writeTy, ptrWrite, mlir::spirv::Scope::Device,
-          mlir::spirv::MemorySemantics::AcquireRelease |
-              mlir::spirv::MemorySemantics::MakeAvailable |
-              mlir::spirv::MemorySemantics::MakeVisible,
+          mlir::spirv::MemorySemantics::None,
           mlir::spirv::MemorySemantics::None, modify, comparator);
       Value equal = icmp_eq(comparator, exchange);
 
