@@ -14,9 +14,38 @@ from triton.common.backend import BaseBackend, register_backend  # noqa:E402
 from triton.compiler.make_launcher import make_so_cache_key  # noqa:E402
 from triton.runtime.cache import get_cache_manager  # noqa:E402
 from triton.runtime.driver import DriverBase  # noqa:E402
-from triton.runtime.jit import version_key  # noqa:E402
+from triton.common.backend import TRITON_PATH, TRITON_VERSION  # noqa:E402
 
 from .extensions import SYCLBuildExtension, SYCLExtension, use_profile  # noqa:E402
+
+
+@functools.lru_cache()
+def version_key():
+    import pkgutil
+    import subprocess
+    contents = []
+    # frontend
+    with open(__file__, "rb") as f:
+        contents += [hashlib.md5(f.read()).hexdigest()]
+    # compiler
+    compiler_path = os.path.join(TRITON_PATH, 'compiler')
+    for lib in pkgutil.iter_modules([compiler_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.md5(f.read()).hexdigest()]
+    # backend
+    with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
+        contents += [hashlib.md5(f.read()).hexdigest()]
+    # language
+    language_path = os.path.join(TRITON_PATH, 'language')
+    for lib in pkgutil.iter_modules([language_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.md5(f.read()).hexdigest()]
+    # ptxas version
+    try:
+        ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
+    except Exception:
+        ptxas_version = ''
+    return '-'.join(TRITON_VERSION) + '-' + ptxas_version + '-' + '-'.join(contents)
 
 
 def is_ws_supported(module):
@@ -506,6 +535,9 @@ class XPUBackend(BaseBackend):
                     return so_cache_manager.put(f.read(), so_name, binary=True)
         else:
             return cache_path
+
+    def get_version_key(self):
+        return version_key()
 
 
 register_backend("xpu", XPUBackend)
