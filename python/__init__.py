@@ -35,17 +35,14 @@ def version_key():
     # backend
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
         contents += [hashlib.md5(f.read()).hexdigest()]
+    with open(os.path.join(TRITON_PATH, "_C/libintel_xpu_backend_for_triton.so"), "rb") as f:
+        contents += [hashlib.md5(f.read()).hexdigest()]
     # language
     language_path = os.path.join(TRITON_PATH, 'language')
     for lib in pkgutil.iter_modules([language_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.md5(f.read()).hexdigest()]
-    # ptxas version
-    try:
-        ptxas_version = hashlib.md5(subprocess.check_output(["ptxas", "--version"])).hexdigest()
-    except Exception:
-        ptxas_version = ''
-    return '-'.join(TRITON_VERSION) + '-' + ptxas_version + '-' + '-'.join(contents)
+    return '-'.join(TRITON_VERSION) + '-' + '-'.join(contents)
 
 
 def is_ws_supported(module):
