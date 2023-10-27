@@ -22,7 +22,6 @@ from .extensions import SYCLBuildExtension, SYCLExtension, use_profile  # noqa:E
 @functools.lru_cache()
 def version_key():
     import pkgutil
-    import subprocess
     contents = []
     # frontend
     with open(__file__, "rb") as f:
