@@ -23,7 +23,7 @@ if [[ -n "$MODEL_ONLY" ]]; then
     Model_only_extra="--only ${MODEL_ONLY}"
 fi
 
-Mode_extra=""
+Mode_extra="--inference"
 if [[ $MODE == "training" ]]; then
     echo "Testing with training mode."
     Mode_extra="--training "
