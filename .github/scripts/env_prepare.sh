@@ -3,8 +3,8 @@ TORCH_REPO=${2:-https://github.com/pytorch/pytorch.git}
 TORCH_BRANCH=${3:-v2.1.0}
 TORCH_COMMIT=${4:-7bcf7da3a268b435777fe87c7794c382f444e86d}
 IPEX_REPO=${5:-https://github.com/intel/intel-extension-for-pytorch.git}
-IPEX_BRANCH=${6:-xpu-master}
-IPEX_COMMIT=${7:-ac371e2dc2bde70e4b9bb58979f5a1796d6085a6}
+IPEX_BRANCH=${6:-xpu-main-pre}
+IPEX_COMMIT=${7:-a93c1d4f77b7ae1b78855708fa289488acb432ad}
 ONEAPI_VER=${8:-2024.0}
 
 echo -e "[ INFO ] oneAPI Basekit version: ${ONEAPI_VER}"
