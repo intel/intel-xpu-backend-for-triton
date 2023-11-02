@@ -29,7 +29,7 @@ if [[ -z "$(pip list | grep torch)" || "$installed_torch_git_version" != "$curre
     git submodule update --init --recursive --jobs 0
     git apply ../patches/pytorch/*.patch
     git apply ../intel-extension-for-pytorch/torch_patches/*.patch
-    conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
+    conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl-include
     python setup.py bdist_wheel 2>&1 | tee pytorch_build.log
     pip install dist/*.whl
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
