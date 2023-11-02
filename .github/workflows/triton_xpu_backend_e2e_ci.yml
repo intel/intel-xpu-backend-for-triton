@@ -56,6 +56,7 @@ jobs:
         run: |
           source ${HOME}/miniconda3/bin/activate triton-preci
           conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl-include
+          conda install -y -f mkl==2021.4.0
           conda install -y -c conda-forge libstdcxx-ng
 
       - name: Triton source code prepare

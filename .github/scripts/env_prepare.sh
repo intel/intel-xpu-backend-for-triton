@@ -30,6 +30,7 @@ if [[ -z "$(pip list | grep torch)" || "$installed_torch_git_version" != "$curre
     git apply ../patches/pytorch/*.patch
     git apply ../intel-extension-for-pytorch/torch_patches/*.patch
     conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl-include
+    conda install -y -f mkl==2021.4.0 # (workaround): fixed version due to undefinded symbol. Once 2024 released, fix this
     python setup.py bdist_wheel 2>&1 | tee pytorch_build.log
     pip install dist/*.whl
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
