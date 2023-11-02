@@ -6,6 +6,7 @@
 #include "mlir/Support/FileUtilities.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
 #include <Python.h>
 #include <cctype>
@@ -313,9 +314,15 @@ void init_triton_translation(py::module &m) {
            [](mlir::PassManager &self) {
              self.addPass(mlir::createTritonGPUDecomposeConversionsPass());
            })
-      .def("add_scf_to_cfg", [](mlir::PassManager &self) {
-        self.addPass(mlir::createConvertSCFToCFPass());
-      });
+      .def("add_scf_to_cfg",
+           [](mlir::PassManager &self) {
+             self.addPass(mlir::createConvertSCFToCFPass());
+           })
+      .def("add_tritongpu_rewrite_tensor_pointer_pass",
+           [](mlir::PassManager &self, py::dict computeCapability) {
+             self.addPass(mlir::createTritonGPURewriteTensorPointerPass(80));
+           });
+  ;
 }
 
 void init_intel_xpu_backend_for_triton(py::module &m) {
