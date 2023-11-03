@@ -1,10 +1,10 @@
 JOB_WORKSPACE=${1:-triton-preci}
 TORCH_REPO=${2:-https://github.com/pytorch/pytorch.git}
-TORCH_BRANCH=${3:-v2.1.0}
-TORCH_COMMIT=${4:-7bcf7da3a268b435777fe87c7794c382f444e86d}
+TORCH_BRANCH=${3:-release/2.1}
+TORCH_COMMIT=${4:-209f2fa8ff86652f67d75c2f19bf9cb9942fd018}
 IPEX_REPO=${5:-https://github.com/intel/intel-extension-for-pytorch.git}
 IPEX_BRANCH=${6:-xpu-main-pre}
-IPEX_COMMIT=${7:-a93c1d4f77b7ae1b78855708fa289488acb432ad}
+IPEX_COMMIT=${7:-7980a37028023037b4f0b47617c5fc3343a6d09b}
 ONEAPI_VER=${8:-2024.0}
 
 echo -e "[ INFO ] oneAPI Basekit version: ${ONEAPI_VER}"

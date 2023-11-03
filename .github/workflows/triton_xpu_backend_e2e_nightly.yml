@@ -53,9 +53,9 @@ jobs:
         run: |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           cd ${HOME}/triton-nightly
-          rm -rf triton
-          git clone https://github.com/openai/triton triton
-          cd triton
+          rm -rf triton_src
+          git clone https://github.com/openai/triton triton_src
+          cd triton_src
           triton_commit=`git rev-parse HEAD`
           echo "triton_commit: ${triton_commit}" | tee sw_info.log
           git submodule sync
@@ -71,9 +71,9 @@ jobs:
           pip install setuptools cython numpy wheel scikit-build scipy
           pip install psutil cpuid
           cd ${HOME}/triton-nightly
-          cp triton/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
-          cp triton/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
-          cp -r triton/third_party/intel_xpu_backend/.github/patches/ .
+          cp triton_src/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
+          cp triton_src/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
+          cp -r triton_src/third_party/intel_xpu_backend/.github/patches/ .
           bash env_prepare.sh triton-nightly \
           ${{ github.event.inputs.torchrepo }} \
           ${{ github.event.inputs.torchbranch }} \
@@ -97,7 +97,7 @@ jobs:
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs
           pip install pybind11
-          cd ${HOME}/triton-nightly/triton/python
+          cd ${HOME}/triton-nightly/triton_src/python
           python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py bdist_wheel
           pip install dist/*.whl
@@ -111,8 +111,8 @@ jobs:
 
       - name: Prepare Benchmark
         run: |
-          cp ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-nightly/pytorch
-          cp ${HOME}/triton-nightly/triton/third_party/intel_xpu_backend/.github/scripts/inductor_perf_summary.py ${HOME}/triton-nightly/pytorch
+          cp ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-nightly/pytorch
+          cp ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/scripts/inductor_perf_summary.py ${HOME}/triton-nightly/pytorch
           pip install styleFrame scipy pandas
 
   Accuracy-Test:
@@ -136,7 +136,7 @@ jobs:
           bash inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 1 & \
           bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 & \
           bash inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 3 & wait
-          cp ${HOME}/triton-nightly/triton/sw_info.log inductor_log/
+          cp ${HOME}/triton-nightly/triton_src/sw_info.log inductor_log/
 
       - name: ACC Test Results Overview
         run: |
