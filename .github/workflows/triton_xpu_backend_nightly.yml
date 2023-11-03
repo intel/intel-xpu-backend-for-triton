@@ -119,7 +119,7 @@ jobs:
           export TRITON_LIBDEVICE_PATH=${HOME}/triton-nightly/triton_src/python/triton_src/third_party/xpu/lib
           cd ${HOME}/triton-nightly/triton_src/python/test/unit/language
           bash ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/scripts/case_update.sh triton-nightly
-          ZE_AFFINITY_MASK=1.0 pytest -n 32 -v -ra --tb=line . --device=xpu 2>&1 | tee ./ut_raw.log || true
+          ZE_AFFINITY_MASK=1 pytest -n 32 -v -ra --tb=line . --device=xpu 2>&1 | tee ./ut_raw.log || true
           res=$(cat ut_raw.log | sed -n '7p' |  awk '{print $NF}')
           if [ "$res" == "error" ]; then
             echo -e "[ERROR] IPEX PVC Triton UT FAIL"

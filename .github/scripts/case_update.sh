@@ -18,7 +18,7 @@ sed -i -r '/h\.asm\["ptx"\]/,/^$/d' ${HOME}/${JOB_WORKSPACE}/triton_src/python/t
 # TODO : This following change will affect the test_dot, we need to modify this after the dot is enabled
 sed -i -r '/pgm\.asm\["ptx"\]/,/(assert "shared" not in red_code)|(^$)/d' ${HOME}/${JOB_WORKSPACE}/triton_src/python/test/unit/language/test_core.py
 sed -i 's/slice_kernel\[(1,)](XBLOCK=32/slice_kernel\[(1,)](XBLOCK=32, device_type=device/g' ${HOME}/${JOB_WORKSPACE}/triton_src/python/test/unit/language/test_core.py
-python ${HOME}/${JOB_WORKSPACE}/triton/third_party/intel_xpu_backend/.github/scripts/case_update.py ${HOME}/${JOB_WORKSPACE}/triton_src/python/test/unit/language/test_core.py
+python ${HOME}/${JOB_WORKSPACE}/triton_src/third_party/intel_xpu_backend/.github/scripts/case_update.py ${HOME}/${JOB_WORKSPACE}/triton_src/python/test/unit/language/test_core.py
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton_src/python/test/unit/operators/test_blocksparse.py
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton_src/python/test/unit/operators/test_cross_entropy.py
 # sed -i '/import torch/ a\import intel_extension_for_pytorch' ${HOME}/${JOB_WORKSPACE}/triton_src/python/test/unit/operators/test_flash_attention.py
