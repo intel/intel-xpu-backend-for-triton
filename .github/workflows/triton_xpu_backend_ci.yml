@@ -141,7 +141,7 @@ jobs:
           source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
           pip install pytest
           rm -rf ~/.triton/cache
-          export TRITON_LIBDEVICE_PATH=${HOME}/triton-preci/triton_src/python/triton_src/third_party/xpu/lib
+          export TRITON_LIBDEVICE_PATH=${HOME}/triton-preci/triton_src/python/triton/third_party/xpu/lib
           cd ${HOME}/triton-preci/triton_src/python/test/unit/language
           bash ${HOME}/triton-preci/triton_src/third_party/intel_xpu_backend/.github/scripts/case_update.sh triton-preci
           ZE_AFFINITY_MASK=1 pytest -n 32 -v -ra --tb=line . --device=xpu 2>&1 | tee ./ut_raw.log || true
