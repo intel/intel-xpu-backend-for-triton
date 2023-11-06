@@ -246,7 +246,7 @@ cd ..
 python -c "import torch;print(torch.__version__)"
 ```
 
-### 6.1.3. Intel® Extension for PyTorch\* 
+### 6.1.3. Intel® Extension for PyTorch\*
 
 ```Bash
 cd intel-extension-for-pytorch
