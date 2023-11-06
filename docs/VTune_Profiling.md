@@ -14,7 +14,7 @@ This recipe explains how to do kernel profiling using Intel® VTune™ Profiler.
 
 
 # Server Setup
-The full install guide could be found in [Intel® VTune™ Profiler Installation Guide](https://www.intel.com/content/www/us/en/docs/vtune-profiler/installation-guide/2023-2/overview.html). If you are using a server, the whole installation and usage process will happen on the server, your local machine does not need anything. This recipe will use the [Web Server Interface](https://www.intel.com/content/www/us/en/docs/vtune-profiler/user-guide/2023-2/web-server-ui.html) for profiling.
+The full install guide could be found in [Intel® VTune™ Profiler Installation Guide](hhttps://www.intel.com/content/www/us/en/developer/tools/oneapi/vtune-profiler-documentation.html). If you are using a server, the whole installation and usage process will happen on the server, your local machine does not need anything. This recipe will use the [Web Server Interface](https://www.intel.com/content/www/us/en/docs/vtune-profiler/user-guide/2023-2/web-server-ui.html) for profiling.
 
 You can start a web interface with the following command:
 
