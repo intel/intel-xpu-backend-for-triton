@@ -6,8 +6,8 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [O
 - [Intel® XPU Backend for Triton\*](#intel-xpu-backend-for-triton)
 - [Setup Guide](#setup-guide)
   - [Prerequisites](#prerequisites)
-  - [Option1: Install From whl Packages](#option1-install-from-whl-packages)
-  - [Option2: Build From the Source](#option2-build-from-the-source)
+  - [Option 1: Install From whl Packages](#option-1-install-from-whl-packages)
+  - [Option 2: Build From the Source](#option-2-build-from-the-source)
 - [Usage Guide](#usage-guide)
   - [Code Modifications](#code-modifications)
     - [Example 1 : Triton Kernel](#example-1--triton-kernel)
@@ -21,7 +21,7 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [O
 
 # Setup Guide
 
-Intel® XPU Backend for Triton\* serves as a backend for [OpenAI Triton](https://github.com/openai/triton). There are two Options for installation.
+Intel® XPU Backend for Triton\* serves as a backend for [OpenAI Triton](https://github.com/openai/triton). There are two Options for installation: Install from whl package or build from the source. Please follow either option for setup.
 
 ## Prerequisites
 
@@ -31,7 +31,7 @@ Intel® XPU Backend for Triton\* requires the following two dependencies package
 
 Please follow [installation guide for Intel® Extension for PyTorch* ](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide) for the detailed process for **BOTH** PyTorch and Intel® Extension for PyTorch*. Please make sure that the associated driver and Intel® oneAPI Base Toolkit are installed correctly.
 
-## Option1: Install From whl Packages
+## Option 1: Install From whl Packages
 This method is the simplest way of getting things done.
 
 Download the latest `.whl` according to your Python version. We provide `Cython` and `Pypy` version. By default, it should be `CPython`. You could check your Python implementation with the following command:
@@ -47,7 +47,7 @@ wget https://github.com/intel/intel-xpu-backend-for-triton/releases/download/v2.
 pip install triton-2.1.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
 
-## Option2: Build From the Source
+## Option 2: Build From the Source
 
 ```Bash
 # Clone OpenAI/Triton
