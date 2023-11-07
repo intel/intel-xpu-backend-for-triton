@@ -26,7 +26,7 @@ add_mlir_conversion_library(TritonGPUToSPIRV
     LINK_LIBS PUBLIC
     MLIRIR
     MLIRPass
-    MLIRGPUOps
+    MLIRGPUDialect
     MLIRGPUTransforms
     TritonAnalysis
     TritonIR

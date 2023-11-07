@@ -1,4 +1,4 @@
-oneapi_ver=${1:-2023.2.0}
+oneapi_ver=${1:-2024.0}
 # compiler
 source ${HOME}/intel/oneapi/compiler/${oneapi_ver}/env/vars.sh
 # oneMKL

@@ -1015,12 +1015,12 @@ void populateElementwiseOpToSPIRVPatterns(
   POPULATE_BINARY_OP(arith::ShRUIOp, arith::ShRUIOp) // >>
   // For the fmax/fmin, if the arith.fastmath attribute
   // is set, the spirv ops will behave accordingly.
-  POPULATE_BINARY_OP(arith::MaxFOp, arith::MaxFOp)   // fmax
-  POPULATE_BINARY_OP(arith::MinFOp, arith::MinFOp)   // fmin
-  POPULATE_BINARY_OP(arith::MinSIOp, arith::MinSIOp) // smin
-  POPULATE_BINARY_OP(arith::MaxSIOp, arith::MaxSIOp) // smax
-  POPULATE_BINARY_OP(arith::MinUIOp, arith::MinUIOp) // umin
-  POPULATE_BINARY_OP(arith::MaxUIOp, arith::MaxUIOp) // umax
+  POPULATE_BINARY_OP(arith::MaximumFOp, arith::MaximumFOp) // fmax
+  POPULATE_BINARY_OP(arith::MinimumFOp, arith::MinimumFOp) // fmin
+  POPULATE_BINARY_OP(arith::MinSIOp, arith::MinSIOp)       // smin
+  POPULATE_BINARY_OP(arith::MaxSIOp, arith::MaxSIOp)       // smax
+  POPULATE_BINARY_OP(arith::MinUIOp, arith::MinUIOp)       // umin
+  POPULATE_BINARY_OP(arith::MaxUIOp, arith::MaxUIOp)       // umax
 #undef POPULATE_BINARY_OP
 
 #define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \

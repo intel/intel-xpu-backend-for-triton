@@ -1,11 +1,11 @@
 JOB_WORKSPACE=${1:-triton-preci}
 TORCH_REPO=${2:-https://github.com/pytorch/pytorch.git}
-TORCH_BRANCH=${3:-v2.0.1}
-TORCH_COMMIT=${4:-e9ebda29d87ce0916ab08c06ab26fd3766a870e5}
+TORCH_BRANCH=${3:-release/2.1}
+TORCH_COMMIT=${4:-209f2fa8ff86652f67d75c2f19bf9cb9942fd018}
 IPEX_REPO=${5:-https://github.com/intel/intel-extension-for-pytorch.git}
-IPEX_BRANCH=${6:-xpu-master}
-IPEX_COMMIT=${7:-4af80f77740ed939be78eba28ae36951823f335c}
-ONEAPI_VER=${8:-2023.2.0}
+IPEX_BRANCH=${6:-xpu-main-pre}
+IPEX_COMMIT=${7:-7980a37028023037b4f0b47617c5fc3343a6d09b}
+ONEAPI_VER=${8:-2024.0}
 
 echo -e "[ INFO ] oneAPI Basekit version: ${ONEAPI_VER}"
 
@@ -29,7 +29,8 @@ if [[ -z "$(pip list | grep torch)" || "$installed_torch_git_version" != "$curre
     git submodule update --init --recursive --jobs 0
     git apply ../patches/pytorch/*.patch
     git apply ../intel-extension-for-pytorch/torch_patches/*.patch
-    conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
+    conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl-include
+    conda install -y -f mkl==2021.4.0 # (workaround): fixed version due to undefinded symbol. Once 2024 released, fix this
     python setup.py bdist_wheel 2>&1 | tee pytorch_build.log
     pip install dist/*.whl
     if [ ${PIPESTATUS[0]} -ne 0 ]; then

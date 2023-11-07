@@ -55,16 +55,17 @@ jobs:
       - name: Create conda environment
         run: |
           source ${HOME}/miniconda3/bin/activate triton-preci
-          conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl mkl-include
+          conda install -y astunparse numpy ninja pyyaml setuptools cmake cffi typing_extensions future six requests dataclasses mkl-include
+          conda install -y -f mkl==2021.4.0
           conda install -y -c conda-forge libstdcxx-ng
 
       - name: Triton source code prepare
         run: |
           source ${HOME}/miniconda3/bin/activate triton-preci
           cd ${HOME}/triton-preci
-          rm -rf triton
-          git clone https://github.com/openai/triton triton
-          cd triton
+          rm -rf triton_src
+          git clone https://github.com/openai/triton triton_src
+          cd triton_src
           git submodule sync
           git submodule update --init --recursive --jobs 0
           rm -rf third_party/intel_xpu_backend/
@@ -84,9 +85,9 @@ jobs:
           pip install setuptools cython numpy wheel scikit-build scipy
           pip install psutil cpuid
           cd ${HOME}/triton-preci
-          cp triton/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
-          cp triton/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
-          cp -r triton/third_party/intel_xpu_backend/.github/patches/ .
+          cp triton_src/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
+          cp triton_src/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
+          cp -r triton_src/third_party/intel_xpu_backend/.github/patches/ .
           bash env_prepare.sh triton-preci \
           ${{ github.event.inputs.torchrepo }} \
           ${{ github.event.inputs.torchbranch }} \
@@ -111,7 +112,7 @@ jobs:
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs
           pip install pybind11
-          cd ${HOME}/triton-preci/triton/python
+          cd ${HOME}/triton-preci/triton_src/python
           python setup.py clean
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py bdist_wheel
           pip install dist/*.whl
@@ -130,14 +131,14 @@ jobs:
           pip install pandas
           cd ${HOME}/triton-preci
           bash set_proxy.sh
-          cp ${HOME}/triton-preci/triton/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-preci/pytorch
+          cp ${HOME}/triton-preci/triton_src/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-preci/pytorch
           cd ${HOME}/triton-preci/pytorch
           rm -rf inductor_log
           bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 static 2 0 & \
           bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 1 static 2 1 & \
           bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 static 2 0 & \
           bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 3 static 2 1 & wait
-          cp ${HOME}/triton-preci/triton/sw_info.log inductor_log/
+          cp ${HOME}/triton-preci/triton_src/sw_info.log inductor_log/
 
       - name: Test Results Overview
         run: |

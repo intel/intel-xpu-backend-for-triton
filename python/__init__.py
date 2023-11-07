@@ -10,13 +10,38 @@ import setuptools
 import torch
 import triton._C.libintel_xpu_backend_for_triton.triton as _triton  # noqa:E402
 from triton._C.libtriton.triton import ir as triton_ir
-from triton.common.backend import BaseBackend, register_backend  # noqa:E402
+from triton.common.backend import (TRITON_PATH, TRITON_VERSION,  # noqa:E402
+                                   BaseBackend, register_backend)
 from triton.compiler.make_launcher import make_so_cache_key  # noqa:E402
 from triton.runtime.cache import get_cache_manager  # noqa:E402
 from triton.runtime.driver import DriverBase  # noqa:E402
-from triton.runtime.jit import version_key  # noqa:E402
 
 from .extensions import SYCLBuildExtension, SYCLExtension, use_profile  # noqa:E402
+
+
+@functools.lru_cache()
+def version_key():
+    import pkgutil
+    contents = []
+    # frontend
+    with open(__file__, "rb") as f:
+        contents += [hashlib.md5(f.read()).hexdigest()]
+    # compiler
+    compiler_path = os.path.join(TRITON_PATH, 'compiler')
+    for lib in pkgutil.iter_modules([compiler_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.md5(f.read()).hexdigest()]
+    # backend
+    with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
+        contents += [hashlib.md5(f.read()).hexdigest()]
+    with open(os.path.join(TRITON_PATH, "_C/libintel_xpu_backend_for_triton.so"), "rb") as f:
+        contents += [hashlib.md5(f.read()).hexdigest()]
+    # language
+    language_path = os.path.join(TRITON_PATH, 'language')
+    for lib in pkgutil.iter_modules([language_path]):
+        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+            contents += [hashlib.md5(f.read()).hexdigest()]
+    return '-'.join(TRITON_VERSION) + '-' + '-'.join(contents)
 
 
 def is_ws_supported(module):
@@ -506,6 +531,9 @@ class XPUBackend(BaseBackend):
                     return so_cache_manager.put(f.read(), so_name, binary=True)
         else:
             return cache_path
+
+    def get_version_key(self):
+        return version_key()
 
 
 register_backend("xpu", XPUBackend)

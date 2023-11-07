@@ -88,3 +88,4 @@ test_core.py::test_reduce[1-argmax-float32-shape135-0]
 test_core.py::test_reduce[1-argmin-float32-shape127-1]
 test_core.py::test_ptx_cast[int16]
 test_core.py::test_ptx_cast[float16]
+test_core.py::test_constexpr_propagation

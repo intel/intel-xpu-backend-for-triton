@@ -23,7 +23,6 @@ if [[ -n "$MODEL_ONLY" ]]; then
     Model_only_extra="--only ${MODEL_ONLY}"
 fi
 
-
 Cur_Ver=`pip list | grep "^torch " | awk '{print $2}' | cut -d"+" -f 1`
 if [ $(printf "${Cur_Ver}\n2.0.2"|sort|head -1) = "${Cur_Ver}" ]; then
     Mode_extra="";
@@ -31,6 +30,7 @@ else
     # For PT 2.1
     Mode_extra="--inference --freezing ";
 fi
+
 if [[ $MODE == "training" ]]; then
     echo "Testing with training mode."
     Mode_extra="--training "
