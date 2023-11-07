@@ -74,7 +74,7 @@ cd python
 TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
 ```
 
-We also provide a detailed page for the overall building process. It includes all source building methods. You could refer to [build_from_source.md](build_from_source.md) for more detail.
+We also provide a detailed page for the overall building process. It includes all source building methods. You could refer to [build_from_source.md](docs/build_from_source.md) for more detail.
 If you encountered any problem, please refer to the [Possible-Build-Bugs](https://github.com/intel/intel-xpu-backend-for-triton/wiki/Possible-Build-Bugs) page first.
 
 
@@ -182,14 +182,14 @@ graph_result = optimized_mod(x)
 ```
 
 ## More Examples on Tests
-If you wish to take a look at more examples, please refer to the [Unit Tests](test_docs/unit_tests.md) and [End-to-End Benchmark Tests](test_docs/end_to_end_tests.md).
+If you wish to take a look at more examples, please refer to the [Unit Tests](docs/test_docs/unit_tests.md) and [End-to-End Benchmark Tests](docs/test_docs/end_to_end_tests.md).
 
 
 ## Performance Analysis Guide
 
 There are several ways of doing performance analysis. We recommend using `torch.profiler` for End-to-End performance analysis and using Intel® VTune™ Profiler for more detailed kernel analysis. We provide a comprehensive guide for those two:
-1. [end_to_end_tests#profiling settings](test_docs/end_to_end_tests.md#profiling-settings) section for using `torch.profiler`.
-2. [VTune Profiling Guide](VTune_Profiling.md) for kernel analysis.
+1. [end_to_end_tests#profiling settings](docs/test_docs/end_to_end_tests.md#profiling-settings) section for using `torch.profiler`.
+2. [VTune Profiling Guide](docs/VTune_Profiling.md) for kernel analysis.
 
 Note that the user needs to explicitly set `TRITON_XPU_PROFILE=1` when the user needs to enable kernel profiling.
 
