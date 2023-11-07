@@ -6,13 +6,15 @@ This recipe explains how to do kernel profiling using Intel® VTune™ Profiler.
     - [Where Setup](#where-setup)
     - [What Setup](#what-setup)
     - [How Setup](#how-setup)
-    - [Controling Profiler Range](#controling-profiler-range)
+    - [Controlling Profiler Range](#controlling-profiler-range)
     - [Start Profiling](#start-profiling)
 - [Analyze Result](#analyze-result)
+- [Additional Resources](#additional-resources)
+- [Permission Check](#permission-check)
 
 
 # Server Setup
-The full install guide could be found in [Intel® VTune™ Profiler Installation Guide](https://www.intel.com/content/www/us/en/docs/vtune-profiler/installation-guide/2023-2/overview.html). If you are using a server, the whole installation and usage process will happen on the server, your local machine does not need anything. This recipe will use the [Web Server Interface](https://www.intel.com/content/www/us/en/docs/vtune-profiler/user-guide/2023-2/web-server-ui.html) for profiling.
+The full install guide could be found in [Intel® VTune™ Profiler Installation Guide](hhttps://www.intel.com/content/www/us/en/developer/tools/oneapi/vtune-profiler-documentation.html). If you are using a server, the whole installation and usage process will happen on the server, your local machine does not need anything. This recipe will use the [Web Server Interface](https://www.intel.com/content/www/us/en/docs/vtune-profiler/user-guide/2023-2/web-server-ui.html) for profiling.
 
 You can start a web interface with the following command:
 
@@ -108,7 +110,7 @@ By default, there are a few available selections, such as which GPU to profile o
 
 The grey options is only available with custom choice. Please follow the "step 3" in the above picture, to create a new custom type. Then you can modify the options like "analyze user tasks,events, and counters" in "step 5".
 
-### Controling Profiler Range
+### Controlling Profiler Range
 It is recommended to pause the profiler until the kernel code is actually running, so to reduce profiler size and generate more readable result.
 
 For Python, one tool called [itt-python](https://github.com/NERSC/itt-python) could help to mark the start/end of the interest code. The usage is as follows:
@@ -141,6 +143,8 @@ On the bottom of the web interface, there are two buttons, it is highly recommen
 
 Directly click on Start also works, but the resulting data would be large and noisy. By using the **Start Paused**, the collector will not collect data until be triggered by the `itt.resume()` in the above call.
 
+Sometimes, the VTune doesn't allow to run due to the missing requirements. One could refer to [Permission Check](#permission-check) for detail.
+
 # Analyze Result
 
 After the result is collected, there are various of infos could be explored. Here is one example of identifying the optimizing direction for a kernel:
@@ -158,3 +162,43 @@ However, there is one red field indicating Point 2, that the stalled time is hig
 One could also find interesting point with **Graphis=>Platform** tab as is shown below. This one is much similar with chrome tracing but with richer information. One tip is to *Zoom In and Filter in by Selection* for interesting kernel, and then find possible optimizing field.
 
 ![platform_graph](imgs/Profiling/vtune_result_2.png)
+
+# Additional Resources
+- [Profiling Machine Learning Applications](https://www.intel.com/content/www/us/en/docs/vtune-profiler/cookbook/2023-2/profiling-machine-learning-applications.html): This documents could help for more detailed on profiling on Machine Learning projects.
+
+# Permission Check
+In some machines, the Intel® VTune™ Profiler requires additional settings for the functionality. You could run the check by using following tools:
+
+```Bash
+bash ~/intel/oneapi/vtune/latest/bin64/vtune-self-checker.sh
+```
+
+It will output the required settings. For example, it may has the following errors:
+
+```LOG
+HW event-based analysis (counting mode)
+Example of analysis types: Performance Snapshot
+    Collection: Ok
+    Finalization: Ok...
+    Report: Ok
+
+Instrumentation based analysis check
+Example of analysis types: Hotspots and Threading with user-mode sampling
+    Collection: Fail
+vtune: Error: Cannot start data collection because the scope of ptrace system call is limited. To enable profiling, please set /proc/sys/kernel/yama/ptrace_scope to 0. To make this change permanent, set kernel.yama.ptrace_scope to 0 in /etc/sysctl.d/10-ptrace.conf and reboot the machine.
+vtune: Warning: Microarchitecture performance insights will not be available. Make sure the sampling driver is installed and enabled on your system.
+
+HW event-based analysis check
+Example of analysis types: Hotspots with HW event-based sampling, HPC Performance Characterization, etc.
+    Collection: Fail
+vtune: Error: This analysis requires one of these actions: a) Install Intel Sampling Drivers. b) Configure driverless collection with Perf system-wide profiling. To enable Perf system-wide profiling, set /proc/sys/kernel/perf_event_paranoid to 1 or set up Perf tool capabilities.
+vtune: Warning: Access to /proc/kallsyms file is limited. Consider changing /proc/sys/kernel/kptr_restrict to 0 to enable resolution of OS kernel and kernel module symbols.
+```
+
+For example, the above suggests to set the `ptrace_scope` to 0 and `perf_envent_paranoid` to 1. One could do by
+
+```Bash
+echo "0" | sudo tee /proc/sys/kernel/yama/ptrace_scope
+sudo sh -c 'echo 1 >/proc/sys/kernel/perf_event_paranoid'
+```
+Note that it is not necessary to enable all if you don't have enough permission. Just set them according to your need.
