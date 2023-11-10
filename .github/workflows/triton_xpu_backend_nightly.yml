@@ -55,7 +55,7 @@ jobs:
         run: |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           cd ${HOME}/triton-nightly
-          rm -rf triton
+          rm -rf triton_src
           git clone https://github.com/openai/triton triton_src
           cd triton_src
           triton_commit=`git rev-parse HEAD`
