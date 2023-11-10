@@ -504,15 +504,15 @@ static bool isBoolScalarOrVector(Type type) {
 }
 
 struct CmpIOpSPIRVConversion
-    : public ElementwiseOpSPIRVConversionBase<triton::gpu::CmpIOp,
+    : public ElementwiseOpSPIRVConversionBase<mlir::arith::CmpIOp,
                                               CmpIOpSPIRVConversion> {
-  using Base = ElementwiseOpSPIRVConversionBase<triton::gpu::CmpIOp,
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::arith::CmpIOp,
                                                 CmpIOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
   // An interface to support variant DestOp builder.
-  Value createDestOp(triton::gpu::CmpIOp op, OpAdaptor adaptor,
+  Value createDestOp(mlir::arith::CmpIOp op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
 
@@ -557,15 +557,15 @@ struct CmpIOpSPIRVConversion
 };
 
 struct CmpFOpSPIRVConversion
-    : public ElementwiseOpSPIRVConversionBase<triton::gpu::CmpFOp,
+    : public ElementwiseOpSPIRVConversionBase<mlir::arith::CmpFOp,
                                               CmpFOpSPIRVConversion> {
-  using Base = ElementwiseOpSPIRVConversionBase<triton::gpu::CmpFOp,
+  using Base = ElementwiseOpSPIRVConversionBase<mlir::arith::CmpFOp,
                                                 CmpFOpSPIRVConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
   // An interface to support variant DestOp builder.
-  Value createDestOp(triton::gpu::CmpFOp op, OpAdaptor adaptor,
+  Value createDestOp(mlir::arith::CmpFOp op, OpAdaptor adaptor,
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
     switch (op.getPredicate()) {
@@ -991,7 +991,7 @@ void populateElementwiseOpToSPIRVPatterns(
 #define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
   patterns.add<ElementwiseOpSPIRVConversion<SRC_OP, DST_OP>>(                  \
       typeConverter, context, benefit);
-  POPULATE_TERNARY_OP(triton::gpu::SelectOp, spirv::SelectOp)
+  POPULATE_TERNARY_OP(mlir::arith::SelectOp, spirv::SelectOp)
 #undef POPULATE_TERNARY_OP
 
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
