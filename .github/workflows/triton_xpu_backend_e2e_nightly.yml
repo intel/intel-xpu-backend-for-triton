@@ -242,3 +242,20 @@ jobs:
         with:
           name: Triton-Inductor-E2E-Nightly-Data
           path: /home/gta/triton-nightly/pytorch/inductor_log/
+
+  Tests-Failure-And-Report:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    needs: [Tests-Env-Prepare, Accuracy-Test, Performance-Test]
+    if: always()
+    steps:
+      - name: Report github issue when failure detected
+        if: ${{ needs.Tests-Env-Prepare.result == 'failure' || needs.Accuracy-Test.result == 'failure' || needs.Performance-Test.result == 'failure' }}
+        run: |
+          build_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          notification_list="${{ secrets.ISSUE_NOTIFICATION_LIST }}"
+          repo="${{ github.repository }}"
+          gh --repo $repo issue comment 123  \
+              --body "E2E Nightly Failed $(date +'%Y-%m-%d'),See: $build_url
+                      cc $notificiation_list"

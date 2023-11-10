@@ -55,7 +55,7 @@ jobs:
         run: |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           cd ${HOME}/triton-nightly
-          rm -rf triton
+          rm -rf triton_src
           git clone https://github.com/openai/triton triton_src
           cd triton_src
           triton_commit=`git rev-parse HEAD`
@@ -198,3 +198,20 @@ jobs:
         with:
           name: Triton-nightly-data
           path: /home/sdp/triton-nightly/triton_src/python/test/unit/language/*.log
+
+  Tests-Failure-And-Report:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    needs: Nightly-Tests
+    if: always()
+    steps:
+      - name: Report github issue when failure detected
+        if: ${{ needs.Nightly-Tests.result == 'failure' }}
+        run: |
+          build_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          notification_list="${{ secrets.ISSUE_NOTIFICATION_LIST }}"
+          repo="${{ github.repository }}"
+          gh --repo $repo issue comment 123  \
+              --body "UT Nightly Failed $(date +'%Y-%m-%d'),See: $build_url
+                      cc $notificiation_list"
