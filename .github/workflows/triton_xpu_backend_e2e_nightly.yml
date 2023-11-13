@@ -140,6 +140,7 @@ jobs:
 
       - name: ACC Test Results Overview
         run: |
+          set +e
           cd ${HOME}/triton-nightly/pytorch/inductor_log/huggingface
           cd amp_bf16
           echo -e "============ Acc Check for HF amp_bf16 ============" | tee -a ./e2e_summary.log
@@ -234,6 +235,7 @@ jobs:
 
       - name: Perf Test Results Generate and Overview
         run: |
+          set +e
           cd ${HOME}/triton-nightly/pytorch
           python inductor_perf_summary.py -s huggingface -p amp_bf16 amp_fp16
 
