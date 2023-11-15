@@ -1,31 +1,115 @@
 - [Overview](#overview)
 - [Pre-Request](#pre-request)
-- [Use the Hugging Face model](#use-the-hugging-face-model)
-  - [TL;DR](#tldr)
-- [Detail for commands](#detail-for-commands)
-    - [Debugging Tips](#debugging-tips)
-  - [Profiling](#profiling)
+- [Package Installation](#package-installation)
+  - [HuggingFace and TIMM Models Installation](#huggingface-and-timm-models-installation)
+  - [TorchBench Installation](#torchbench-installation)
+    - [Install Torch Vision](#install-torch-vision)
+    - [Install Torch Text](#install-torch-text)
+    - [Install Torch Audio](#install-torch-audio)
+    - [Install TorchBenchmark](#install-torchbenchmark)
+- [Run the Model](#run-the-model)
+  - [Details for commands](#details-for-commands)
+  - [Debugging Tips](#debugging-tips)
+- [Profiling](#profiling)
+  - [Option 1 : Use Legacy Profiling](#option-1--use-legacy-profiling)
+    - [Profiling Settings](#profiling-settings)
+  - [Option 2: Use Kineto Profiling](#option-2-use-kineto-profiling)
+    - [Profiling Settings](#profiling-settings-1)
     - [End-to-end Tests Setting:](#end-to-end-tests-setting)
-      - [Profiling Settings](#profiling-settings)
       - [Profiling Tips](#profiling-tips)
 
 
 # Overview
 This doc contains [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) setup for XPU Backend for Triton\*.
 
-The Benchmark contains different suites and shares as a common frontend usage. This doc below is an example showing [Hugging Face\*](https://huggingface.co/) End-to-End models for triton.
+The Benchmark contains different suites and shares as a common frontend usage. This doc below is an example showing [Hugging Face\*](https://huggingface.co/), [TIMM Models](https://github.com/rwightman/pytorch-image-models) and [TorchBench](https://github.com/pytorch/benchmark) End-to-End models for [pytorch benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo).
 
 # Pre-Request
 The PyTorch version should be the same as the one in [installation guide for intel_extension_for_pytorch](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide).
 
 
-# Use the Hugging Face model
 
-## TL;DR
-PyTorch benchmark will automatically download necessary dependencies.
 
+# Package Installation
+## HuggingFace and TIMM Models Installation
+The scripts on [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) will automatically download and install transformers and timm packages respectively. However, there are cases when the script uninstalls the xpu version of PyTorch and replaces it with the CUDA version, so it is important to check PyTorch before run.
+
+```Bash
+# Wrong one, it uses CUDA version
+(triton_env) ➜  python
+>>> import torch
+>>> torch.__version__
+'2.1.0+cu121'
+>>> torch.__file__
+'/home/user/miniconda3/envs/triton_env/lib/python3.10/site-packages/torch/__init__.py'
+
+# Correct one, should use XPU
+>>> import torch
+>>> torch.__version__
+'2.1.0a0+gitdd9913f'
+>>> torch.__file__
+'/home/user/pytorch/torch/__init__.py'
+```
+If the PyTorch version is wrong, please re-install the [XPU version of PyTorch](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide).
+
+
+## TorchBench Installation
+TorchBench relies on [torchvision](https://github.com/pytorch/vision.git),[torchtext](https://github.com/pytorch/text) and [torchaudio](https://github.com/pytorch/audio.git). Since it by default build with CUDA support, for XPU support, all of these packages needs to be **BUILD FROM SOURCE**.
+
+Please follow the following command for building and installation dependencies:
+
+
+### Install Torch Vision
+
+```Bash
+git clone --recursive https://github.com/pytorch/vision.git
+cd vision
+conda install libpng jpeg
+conda install -c conda-forge ffmpeg
+python setup.py install
+```
+### Install Torch Text
+
+```Bash
+git clone --recursive https://github.com/pytorch/text
+cd text
+python setup.py clean install
+```
+
+Note that when building, it has the following error, it could be ignored.
+
+```Bash
+Processing dependencies for torchtext==0.17.0a0+c0d0685
+error: torch 2.1.0a0+gitdd9913f is installed but torch==2.1.0 is required by {'torchdata'}
+```
+
+### Install Torch Audio
+```Bash
+pip install torchaudio
+git clone --recursive https://github.com/pytorch/audio.git
+cd audio
+python setup.py install
+```
+
+### Install TorchBenchmark
+First check if all dependencies are installed correctly:
+
+```Bash
+python -c "import torchvision,torchtext,torchaudio;print(torchvision.__version__, torchtext.__version__, torchaudio.__version__)"
+```
+
+Now install the TorchBenchmark as a library
+```
+conda install git-lfs pyyaml pandas scipy psutil
+git clone --recursive https://github.com/pytorch/benchmark.git
+
+cd benchmark
+python install.py
+pip install .
+```
+
+# Run the Model
 Simply run the model using the following sh file. Note that there are some tricks for debugging. It is recommended to refer to [Debugging Tips](#debugging-tips).
-
 
 
 First, copy the sh file  [intel_xpu_backend/.github/scripts/inductor_xpu_test.sh](../../.github/scripts/inductor_xpu_test.sh) to the PyTorch source folder, then run the `sh` file with the command:
@@ -37,6 +121,9 @@ bash xpu_run_batch.sh huggingface amp_bf16 training performance  xpu 0
 # Run single model `T5Small`
 bash xpu_run_batch.sh huggingface amp_bf16 training performance  xpu 0 static 1 0 T5Small
 ```
+
+For the real example, you could refer to our CI command at [triton_xpu_backend_e2e_nightly.yml](https://github.com/intel/intel-xpu-backend-for-triton/blob/da1bc1fb7a39cb3c3332a92fba47c2fc1df25396/.github/workflows/triton_xpu_backend_e2e_nightly.yml#L230-L233).
+
 
 There are also useful env flag, for example:
 - `TORCHINDUCTOR_CACHE_DIR={some_DIR}`: Where the cache files are put. It is useful when debugging.
@@ -53,7 +140,7 @@ export TORCHINDUCTOR_CACHE_DIR=${LOG_DIR}
 ```
 
 
-# Detail for commands
+## Details for commands
 
 Below is the detail for those who are interested in more fine-grained control.
 
@@ -75,7 +162,7 @@ Please go to [torch._dynamo.config](https://github.com/pytorch/pytorch/blob/main
 
 One example of using the config is in [Debugging Tips](#debugging-tips). Please set the config according to your need.
 
-### Debugging Tips
+## Debugging Tips
 
 It is recommended to set the following environment variables for debugging:
 
@@ -135,15 +222,15 @@ torch._dynamo.config.repro_after="dynamo"
 ```
 
 
-## Profiling
+# Profiling
 
-To profile the result, one should use the `performance` mode instead of `accuracy`. i.e, One should use
+To profile the result, one should use the `performance` mode instead of `accuracy`,  and make sure the profiler trace flag `--export-profiler-trace` is enabled in the `inductor_xpu_test.sh`. i.e, One should use
 
 ```Bash
-python benchmarks/dynamo/${SUITE}.py  ... --performance ...
+python benchmarks/dynamo/${SUITE}.py  ... --performance --export-profiler-trace...
 ```
-
-For now, we use the [profiler_legacy](https://github.com/intel/intel-extension-for-pytorch/blob/xpu-master/docs/tutorials/features/profiler_legacy.md) to catch the profiling result.
+## Option 1 : Use Legacy Profiling
+For now, we use the [profiler_legacy](https://github.com/intel/intel-extension-for-pytorch/blob/xpu-master/docs/tutorials/features/profiler_legacy.md) to catch the profiling result. We are migrating legacy profiling to kineto profiling. As the legacy profiling is more stable, it is recommended to use legacy profiling first.
 
 A typical profiling code would look like below:
 
@@ -164,9 +251,8 @@ with torch.autograd.profiler_legacy.profile(use_xpu=True) as prof:
 # print the result table formatted by the legacy profiler tool as your wish
 print(prof.key_averages().table(sort_by="self_xpu_time_total"))
 ```
-### End-to-end Tests Setting:
 
-#### Profiling Settings
+### Profiling Settings
 
 For E2E tests, there are several places to change. You should cd to `pytorch/benchmarks/dynamo` and change the `common.py` as below. Note that the line number may not be the same, but the change places are unique.
 
@@ -191,6 +277,40 @@ rgs):
          else:
              yield
 ```
+## Option 2: Use Kineto Profiling
+We are migrating to kineto profiling. In the future, this will be the only option. A typical profiler case would like below. For now, be sure to enable the environmental flag `export IPEX_ZE_TRACING=1`.
+
+```Python
+import torch
+import intel_extension_for_pytorch
+from torch.profiler import profile, ProfilerActivity
+
+a = torch.randn(3).xpu()
+b = torch.randn(3).xpu()
+
+with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
+     c = a + b
+
+print(prof.key_averages().table())
+```
+### Profiling Settings
+Same as the legacy profiling, you could modify the code like:
+
+```diff
+@@ -530,7 +536,7 @@ def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
+     @contextlib.contextmanager
+     def maybe_profile(*args, **kwargs):
+         if kwargs.pop("enabled", True):
+-            with torch.profiler.profile(*args, **kwargs) as p:
++            with torch.autograd.profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU], *args, **kwargs) as p:
+                 yield p
+         else:
+             yield
+```
+
+
+### End-to-end Tests Setting:
+
 #### Profiling Tips
 
 To run the model, you should add the `--export-profiler-trace` flag when running. Because use the profiling process will link libtorch, this will greatly reduce the kernel compiling time. It is highly recommended to **run twice** for quicker result:
@@ -203,8 +323,7 @@ If you wish to make kernel name more readable, you could enable with the followi
 
 ```Python
 # common.py
-torch._inductor.config.triton.ordered_kernel_names = True
-torch._inductor.config.triton.descriptive_kernel_names = True
+torch._inductor.config.triton.unique_kernel_names = True
 torch._inductor.config.kernel_name_max_ops = 8
 ```
 
