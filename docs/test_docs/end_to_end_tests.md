@@ -20,19 +20,17 @@
 
 
 # Overview
-This doc contains [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) setup for XPU Backend for Triton\*.
+This document outlines the setup for [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo)  with XPU Backend for Triton*. It includes various suites and serves as a common frontend usage guide.
 
-The Benchmark contains different suites and shares as a common frontend usage. This doc below is an example showing [Hugging Face\*](https://huggingface.co/), [TIMM Models](https://github.com/rwightman/pytorch-image-models) and [TorchBench](https://github.com/pytorch/benchmark) End-to-End models for [pytorch benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo).
+The Benchmark contains different suites and shares as a common frontend usage. This doc below is an example showing [Hugging Face\*](https://huggingface.co/), [TIMM Models](https://github.com/rwightman/pytorch-image-models) and [TorchBench](https://github.com/pytorch/benchmark) End-to-End models within the [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) context.
+
 
 # Pre-Request
 The PyTorch version should be the same as the one in [installation guide for intel_extension_for_pytorch](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide).
 
-
-
-
 # Package Installation
 ## HuggingFace and TIMM Models Installation
-The scripts on [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) will automatically download and install transformers and timm packages respectively. However, there are cases when the script uninstalls the xpu version of PyTorch and replaces it with the CUDA version, so it is important to check PyTorch before run.
+The scripts on [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) automatically download and install the transformers and timm packages. However, there are instances where the script may uninstall the XPU version of PyTorch and install the CUDA version instead. Therefore, verifying the PyTorch version before running is crucial.
 
 ```Bash
 # Wrong one, it uses CUDA version
@@ -50,7 +48,7 @@ The scripts on [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/
 >>> torch.__file__
 '/home/user/pytorch/torch/__init__.py'
 ```
-If the PyTorch version is wrong, please re-install the [XPU version of PyTorch](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide).
+If the PyTorch version is incorrect, please reinstall the [XPU version of PyTorch](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide).
 
 
 ## TorchBench Installation
@@ -92,13 +90,13 @@ python setup.py install
 ```
 
 ### Install TorchBenchmark
-First check if all dependencies are installed correctly:
+Ensure all dependencies are correctly installed:
 
 ```Bash
 python -c "import torchvision,torchtext,torchaudio;print(torchvision.__version__, torchtext.__version__, torchaudio.__version__)"
 ```
 
-Now install the TorchBenchmark as a library
+Then install TorchBenchmark as a library:
 ```
 conda install git-lfs pyyaml pandas scipy psutil
 git clone --recursive https://github.com/pytorch/benchmark.git
@@ -112,7 +110,7 @@ pip install .
 Simply run the model using the following sh file. Note that there are some tricks for debugging. It is recommended to refer to [Debugging Tips](#debugging-tips).
 
 
-First, copy the sh file  [intel_xpu_backend/.github/scripts/inductor_xpu_test.sh](../../.github/scripts/inductor_xpu_test.sh) to the PyTorch source folder, then run the `sh` file with the command:
+Copy the shell script [intel_xpu_backend/.github/scripts/inductor_xpu_test.sh](../../.github/scripts/inductor_xpu_test.sh) to the PyTorch source folder, then execute the command:
 
 ```Bash
 # Run all models
@@ -122,15 +120,15 @@ bash xpu_run_batch.sh huggingface amp_bf16 training performance  xpu 0
 bash xpu_run_batch.sh huggingface amp_bf16 training performance  xpu 0 static 1 0 T5Small
 ```
 
-For the real example, you could refer to our CI command at [triton_xpu_backend_e2e_nightly.yml](https://github.com/intel/intel-xpu-backend-for-triton/blob/da1bc1fb7a39cb3c3332a92fba47c2fc1df25396/.github/workflows/triton_xpu_backend_e2e_nightly.yml#L230-L233).
+For the real example, refer to our CI command at [triton_xpu_backend_e2e_nightly.yml](https://github.com/intel/intel-xpu-backend-for-triton/blob/da1bc1fb7a39cb3c3332a92fba47c2fc1df25396/.github/workflows/triton_xpu_backend_e2e_nightly.yml#L230-L233).
 
 
-There are also useful env flag, for example:
-- `TORCHINDUCTOR_CACHE_DIR={some_DIR}`: Where the cache files are put. It is useful when debugging.
-- `TORCH_COMPILE_DEBUG=1`: Whether print debug info.
-- `TRITON_XPU_PROFILE=ON`: Show XPU triton kernels for debug.
+Environment variables for debugging include:
+- `TORCHINDUCTOR_CACHE_DIR={some_DIR}`: Specifies the cache directory. Useful for debugging.
+- `TORCH_COMPILE_DEBUG=1`: Enables debug information printing.
+- `TRITON_XPU_PROFILE=ON`: Displays XPU Triton kernels for debugging.
 
-By default, the cache dir is under `/tmp/torchinductor_{user}/`, it is recommended to change the cache dir to a new place when you are debugging. For example,
+By default, the cache dir is under `/tmp/torchinductor_{user}/`, It's advisable to change this when debugging, as demonstrated below:
 
 ```Bash
 LOG_DIR=${WORKSPACE}/inductor_log/${SUITE}/${MODEL}/${DT}
@@ -140,34 +138,27 @@ export TORCHINDUCTOR_CACHE_DIR=${LOG_DIR}
 ```
 
 
-## Details for commands
+## Command Details
 
-Below is the detail for those who are interested in more fine-grained control.
-
-Normally, the command will be like the following:
+For fine-grained control, the typical command structure is as follows:
 
 ```Bash
 python benchmarks/dynamo/${SUITE}.py --only ${MODEL} --accuracy --amp -dxpu -n50 --no-skip --dashboard ${Mode_extra}  --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv
 ```
-The full arg lists could be found with the following command:
+Full argument lists are accessible via:
 
 ```Bash
 python benchmarks/dynamo/huggingface.py --help
 ```
 
-In addition to the argument, there are configs in Python code to control the behavior:
-
-
-Please go to [torch._dynamo.config](https://github.com/pytorch/pytorch/blob/main/torch/_dynamo/config.py) and [torch._inductor.config](https://github.com/pytorch/pytorch/blob/main/torch/_inductor/config.py) to find all configs.
-
-One example of using the config is in [Debugging Tips](#debugging-tips). Please set the config according to your need.
+Additional configuration settings are available in Python code, specifically in [torch._dynamo.config](https://github.com/pytorch/pytorch/blob/main/torch/_dynamo/config.py) and [torch._inductor.config](https://github.com/pytorch/pytorch/blob/main/torch/_inductor/config.py). Set these configurations as needed.
 
 ## Debugging Tips
 
 It is recommended to set the following environment variables for debugging:
 
-- `TORCHINDUCTOR_CACHE_DIR={some-dir}`: Set this for where torchinductor cache is put.
-- `TRITON_CACHE_DIR={some-dir}`: Where the triton cache is. By default, it is under the `TORCHINDUCTOR_CACHE_DIR/triton` folder.
+- `TORCHINDUCTOR_CACHE_DIR={some-dir}`: Designates the torchinductor cache location.
+- `TRITON_CACHE_DIR={some-dir}`: Specifies the Triton cache directory, usually within the  `TORCHINDUCTOR_CACHE_DIR/triton` folder.
 - `TORCH_COMPILE_DEBUG_DIR={some-dir}`: Where the compile debug files be put. You could see folders like `aot_torchinductor` containing the torchinductor logs, and `torchdynamo` folder containing the dynamo log.
 - `TORCH_COMPILE_DEBUG=1`: Detailed for TorchInductor Tracing. It will print a lot of messages. Thus it is recommended to redirect the output to the file. By setting this flag, the re-producible Python file could be easily found.
 
@@ -183,8 +174,9 @@ torch._inductor.config.kernel_name_max_ops = 8
 
 **Reproducing Errors with Smaller Python File**
 
-Re-running from the overall model is quite a burden, you could try to reproduce the error using a smaller Python file.
-To reproduce the result, one could set the flag `TORCH_COMPILE_DEBUG=1`. Then the graph will be printed. Note that there are a lot of outputs, one could direct the output to a file.
+For efficiency, reproduce errors using a smaller Python file. Enable `TORCH_COMPILE_DEBUG=1` to generate detailed outputs, which can be redirected to a file for easier inspection. The debug folder will contain files like `fx_graph_readable.py`, `fx_graph_runnable.py`, and `output_code.py`, which can be used for further analysis and debugging.
+
+Note that there are a lot of outputs, one could direct the output to a file.
 
 ```Bash
 TORCH_COMPILE_DEBUG=1 python ... &> test.log
