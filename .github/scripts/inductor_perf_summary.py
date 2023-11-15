@@ -41,9 +41,9 @@ def caculate_passrate(df, compiler):
 
 def get_perf_csv(precision, mode):
     target_path = 'inductor_log/huggingface/' + precision + '/inductor_' + args.suite + '_' + precision + '_' + mode + '_xpu_performance.csv'
-    target_ori_data = pd.read_csv(target_path, header=0, encoding='utf-8', names=['dev', 'name', 'batch_size', 'speedup', 'abs_latency', 'compilation_latency', 'compression_ratio'])
+    target_ori_data = pd.read_csv(target_path)
     target_data = target_ori_data.copy()
-    target_data.sort_values(by=['name'], key=lambda col: col.str.lower(), inplace=True)
+    target_data.sort_values(by=['name'])
     return target_data
 
 
