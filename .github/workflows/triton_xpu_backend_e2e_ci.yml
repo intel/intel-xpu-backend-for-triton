@@ -38,7 +38,7 @@ on:
     types: [checks_requested]
   push:
     branches:
-      - yudong/ci_on_onerunner      
+      - yudong/ci_on_onerunner
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
