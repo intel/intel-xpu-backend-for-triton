@@ -198,3 +198,20 @@ jobs:
         with:
           name: Triton-nightly-data
           path: /home/sdp/triton-nightly/triton_src/python/test/unit/language/*.log
+
+  Tests-Failure-And-Report:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    needs: Nightly-Tests
+    if: always()
+    steps:
+      - name: Report github issue when failure detected
+        if: ${{ needs.Nightly-Tests.result == 'failure' }}
+        run: |
+          build_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          notification_list="${{ secrets.ISSUE_NOTIFICATION_LIST }}"
+          repo="${{ github.repository }}"
+          gh --repo $repo issue comment 123  \
+              --body "UT Nightly Failed $(date +'%Y-%m-%d'),See: $build_url
+                      cc $notificiation_list"
