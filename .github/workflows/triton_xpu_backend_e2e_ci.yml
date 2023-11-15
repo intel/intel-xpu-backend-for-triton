@@ -36,6 +36,9 @@ on:
   merge_group:
     branches: [main]
     types: [checks_requested]
+  push:
+    branches:
+      - yudong/ci_on_onerunner      
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
