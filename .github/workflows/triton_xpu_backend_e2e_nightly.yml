@@ -38,7 +38,7 @@ jobs:
 
   Tests-Env-Prepare:
 
-    runs-on: [self-hosted, PVC_E2E]
+    runs-on: [self-hosted, PVC_E2E_TEST]
 
     steps:
 
@@ -129,13 +129,12 @@ jobs:
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
           cd ${HOME}/triton-nightly
-          bash set_proxy.sh
           cd ${HOME}/triton-nightly/pytorch
           rm -rf inductor_log
           bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 & \
-          bash inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 1 & \
-          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 & \
-          bash inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 3 & wait
+          bash inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 2 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 3 & wait
+          bash inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 0 & wait
           cp ${HOME}/triton-nightly/triton_src/sw_info.log inductor_log/
 
       - name: ACC Test Results Overview
@@ -226,12 +225,11 @@ jobs:
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
           source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
           cd ${HOME}/triton-nightly
-          bash set_proxy.sh
           cd ${HOME}/triton-nightly/pytorch
           bash inductor_xpu_test.sh huggingface amp_bf16 inference performance xpu 0 & \
-          bash inductor_xpu_test.sh huggingface amp_bf16 training performance xpu 1 & \
-          bash inductor_xpu_test.sh huggingface amp_fp16 inference performance xpu 2 & \
-          bash inductor_xpu_test.sh huggingface amp_fp16 training performance xpu 3 & wait
+          bash inductor_xpu_test.sh huggingface amp_bf16 training performance xpu 2 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference performance xpu 3 & wait
+          bash inductor_xpu_test.sh huggingface amp_fp16 training performance xpu 0 & wait
 
       - name: Perf Test Results Generate and Overview
         run: |

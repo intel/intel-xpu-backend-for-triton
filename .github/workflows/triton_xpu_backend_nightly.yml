@@ -38,7 +38,7 @@ jobs:
 
   Nightly-Tests:
 
-    runs-on: [self-hosted, PVC]
+    runs-on: [self-hosted, PVC_TEST]
 
     steps:
 
