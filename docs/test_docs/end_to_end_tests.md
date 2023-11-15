@@ -8,7 +8,7 @@
     - [Install Torch Audio](#install-torch-audio)
     - [Install TorchBenchmark](#install-torchbenchmark)
 - [Run the Model](#run-the-model)
-  - [Details for commands](#details-for-commands)
+  - [Command Details](#command-details)
   - [Debugging Tips](#debugging-tips)
 - [Profiling](#profiling)
   - [Option 1 : Use Legacy Profiling](#option-1--use-legacy-profiling)
@@ -167,8 +167,7 @@ Alternatively, the above env flag could also be set in a Python file like below,
 
 ```Python
 # helps to generate descriptive kernel names
-torch._inductor.config.triton.ordered_kernel_names = True
-torch._inductor.config.triton.descriptive_kernel_names = True
+torch._inductor.config.triton.unique_kernel_names = True
 torch._inductor.config.kernel_name_max_ops = 8
 ```
 
