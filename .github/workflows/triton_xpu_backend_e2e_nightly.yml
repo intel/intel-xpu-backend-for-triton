@@ -38,7 +38,7 @@ jobs:
 
   Tests-Env-Prepare:
 
-    runs-on: [self-hosted, PVC_E2E_TEST]
+    runs-on: [self-hosted, PVC_E2E]
 
     steps:
 
@@ -258,4 +258,4 @@ jobs:
           repo="${{ github.repository }}"
           gh --repo $repo issue comment 123  \
               --body "E2E Nightly Failed $(date +'%Y-%m-%d'),See: $build_url
-                      cc $notificiation_list"
+                      cc $notification_list"
