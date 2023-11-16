@@ -214,4 +214,4 @@ jobs:
           repo="${{ github.repository }}"
           gh --repo $repo issue comment 123  \
               --body "UT Nightly Failed $(date +'%Y-%m-%d'),See: $build_url
-                      cc $notificiation_list"
+                      cc $notification_list"
