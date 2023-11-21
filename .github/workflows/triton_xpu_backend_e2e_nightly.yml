@@ -2,35 +2,6 @@ name: Inductor E2E Nightly Tests
 
 on:
   workflow_dispatch:
-    inputs:
-      torchrepo:
-        description: 'torchrepo'
-        required: true
-        default: 'https://github.com/pytorch/pytorch.git'
-      torchbranch:
-        description: 'torchbranch'
-        required: true
-        default: 'v2.0.1'
-      torchcommit:
-        description: 'torchcommit'
-        required: true
-        default: 'e9ebda29d87ce0916ab08c06ab26fd3766a870e5'
-      ipexrepo:
-        description: 'ipexrepo'
-        required: true
-        default: 'https://github.com/intel/intel-extension-for-pytorch.git'
-      ipexbranch:
-        description: 'ipexbranch'
-        required: true
-        default: 'xpu-master'
-      ipexcommit:
-        description: 'ipexcommit'
-        required: true
-        default: '4af80f77740ed939be78eba28ae36951823f335c'
-      oneapi:
-        description: 'oneAPI basekit version'
-        required: true
-        default: '2023.2.0'
   schedule:
     - cron: "0 14 * * *" # run at 2 PM UTC
 
@@ -67,6 +38,7 @@ jobs:
         run: |
           python --version
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          source ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/ci_pins/version.txt
           python --version
           pip install setuptools cython numpy wheel scikit-build scipy
           pip install psutil cpuid
@@ -74,15 +46,8 @@ jobs:
           cp triton_src/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
           cp triton_src/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
           cp -r triton_src/third_party/intel_xpu_backend/.github/patches/ .
-          bash env_prepare.sh triton-nightly \
-          ${{ github.event.inputs.torchrepo }} \
-          ${{ github.event.inputs.torchbranch }} \
-          ${{ github.event.inputs.torchcommit }} \
-          ${{ github.event.inputs.ipexrepo }} \
-          ${{ github.event.inputs.ipexbranch }} \
-          ${{ github.event.inputs.ipexcommit }} \
-          ${{ github.event.inputs.oneapi }}
-          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
+          bash env_prepare.sh triton-nightly $torch_repo $torch_branch $torch_commit $ipex_repo $ipex_branch $ipex_commit $oneapi_version
+          source ${HOME}/env_triton.sh $oneapi_version
           python -c "import torch;import intel_extension_for_pytorch"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
               echo -e "[ERROR] Public-torch or IPEX BUILD FAIL"
@@ -93,6 +58,7 @@ jobs:
         shell: bash
         run:  |
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
+          source ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/ci_pins/version.txt
           pip uninstall -y triton
           sudo update-ca-certificates --fresh
           export SSL_CERT_DIR=/etc/ssl/certs
@@ -102,7 +68,7 @@ jobs:
           TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py bdist_wheel
           pip install dist/*.whl
           cd ${HOME}/triton-nightly
-          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
+          source ${HOME}/env_triton.sh $oneapi_version
           python -c "import triton"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
               echo -e "[ERROR] Triton BUILD FAIL"
@@ -111,6 +77,7 @@ jobs:
 
       - name: Prepare Benchmark
         run: |
+          source ${HOME}/miniconda3/bin/activate triton-nightly-test
           cp ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-nightly/pytorch
           cp ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/scripts/inductor_perf_summary.py ${HOME}/triton-nightly/pytorch
           pip install styleFrame scipy pandas
@@ -121,13 +88,16 @@ jobs:
 
     runs-on: [self-hosted, PVC_E2E]
 
+    timeout-minutes: 720
+
     steps:
 
       - name: ACC Test for triton on PVC
         run: |
           echo -e "[ INFO ] Run E2E Acc test on Node $(hostname)"
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
-          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
+          source ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/ci_pins/version.txt
+          source ${HOME}/env_triton.sh $oneapi_version
           cd ${HOME}/triton-nightly
           cd ${HOME}/triton-nightly/pytorch
           rm -rf inductor_log
@@ -217,13 +187,16 @@ jobs:
 
     runs-on: [self-hosted, PVC_E2E]
 
+    timeout-minutes: 720
+
     steps:
 
       - name: Perf Test for triton on PVC
         run: |
           echo -e "[ INFO ] Run E2E Perf test on Node $(hostname)"
           source ${HOME}/miniconda3/bin/activate triton-nightly-test
-          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
+          source ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/ci_pins/version.txt
+          source ${HOME}/env_triton.sh $oneapi_version
           cd ${HOME}/triton-nightly
           cd ${HOME}/triton-nightly/pytorch
           bash inductor_xpu_test.sh huggingface amp_bf16 inference performance xpu 0 & \

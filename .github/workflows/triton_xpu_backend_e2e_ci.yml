@@ -2,35 +2,6 @@ name: Inductor E2E CI Tests
 
 on:
   workflow_dispatch:
-    inputs:
-      torchrepo:
-        description: 'torchrepo'
-        required: true
-        default: 'https://github.com/pytorch/pytorch.git'
-      torchbranch:
-        description: 'torchbranch'
-        required: true
-        default: 'v2.0.1'
-      torchcommit:
-        description: 'torchcommit'
-        required: true
-        default: 'e9ebda29d87ce0916ab08c06ab26fd3766a870e5'
-      ipexrepo:
-        description: 'ipexrepo'
-        required: true
-        default: 'https://github.com/intel/intel-extension-for-pytorch.git'
-      ipexbranch:
-        description: 'ipexbranch'
-        required: true
-        default: 'xpu-master'
-      ipexcommit:
-        description: 'ipexcommit'
-        required: true
-        default: '4af80f77740ed939be78eba28ae36951823f335c'
-      oneapi:
-        description: 'oneAPI basekit version'
-        required: true
-        default: '2023.2.0'
   pull_request:
     branches: [main]
   merge_group:
@@ -81,6 +52,7 @@ jobs:
         run: |
           python --version
           source ${HOME}/miniconda3/bin/activate triton-preci
+          source ${HOME}/triton-preci/triton_src/third_party/intel_xpu_backend/.github/ci_pins/version.txt
           python --version
           pip install setuptools cython numpy wheel scikit-build scipy
           pip install psutil cpuid
@@ -88,15 +60,8 @@ jobs:
           cp triton_src/third_party/intel_xpu_backend/.github/scripts/env_prepare.sh .
           cp triton_src/third_party/intel_xpu_backend/.github/scripts/env_triton.sh ${HOME}/
           cp -r triton_src/third_party/intel_xpu_backend/.github/patches/ .
-          bash env_prepare.sh triton-preci \
-          ${{ github.event.inputs.torchrepo }} \
-          ${{ github.event.inputs.torchbranch }} \
-          ${{ github.event.inputs.torchcommit }} \
-          ${{ github.event.inputs.ipexrepo }} \
-          ${{ github.event.inputs.ipexbranch }} \
-          ${{ github.event.inputs.ipexcommit }} \
-          ${{ github.event.inputs.oneapi }}
-          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
+          bash env_prepare.sh triton-preci $torch_repo $torch_branch $torch_commit $ipex_repo $ipex_branch $ipex_commit $oneapi_version
+          source ${HOME}/env_triton.sh $oneapi_version
           python -c "import torch;import intel_extension_for_pytorch"
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
               echo -e "[ERROR] Public-torch or IPEX BUILD FAIL"
@@ -127,16 +92,19 @@ jobs:
         run: |
           echo -e "[ INFO ] Run E2E test on Node $(hostname)"
           source ${HOME}/miniconda3/bin/activate triton-preci
-          source ${HOME}/env_triton.sh ${{ github.event.inputs.oneapi }}
+          source ${HOME}/triton-preci/triton_src/third_party/intel_xpu_backend/.github/ci_pins/version.txt
+          source ${HOME}/env_triton.sh $oneapi_version
           pip install pandas
           cd ${HOME}/triton-preci
           cp ${HOME}/triton-preci/triton_src/third_party/intel_xpu_backend/.github/scripts/inductor_xpu_test.sh ${HOME}/triton-preci/pytorch
           cd ${HOME}/triton-preci/pytorch
           rm -rf inductor_log
-          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 static 2 0 & \
-          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 2 static 2 1 & \
-          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 3 static 2 0 & wait
-          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 0 static 2 1 & wait
+          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0 static 3 0 & \
+          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 2 static 3 1 & \
+          bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 3 static 3 2 & wait
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 0 static 3 0 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 2 static 3 1 & \
+          bash inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 3 static 3 2 & wait
           cp ${HOME}/triton-preci/triton_src/sw_info.log inductor_log/
 
       - name: Test Results Overview

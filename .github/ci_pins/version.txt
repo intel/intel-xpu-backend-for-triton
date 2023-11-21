@@ -1,0 +1,7 @@
+torch_repo=https://github.com/pytorch/pytorch.git
+torch_branch=release/2.1
+torch_commit=209f2fa8ff86652f67d75c2f19bf9cb9942fd018
+ipex_repo=https://github.com/intel/intel-extension-for-pytorch.git
+ipex_branch=xpu-main-pre
+ipex_commit=7980a37028023037b4f0b47617c5fc3343a6d09b
+oneapi_version=2024.0
