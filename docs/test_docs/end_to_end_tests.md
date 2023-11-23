@@ -83,7 +83,6 @@ error: torch 2.1.0a0+gitdd9913f is installed but torch==2.1.0 is required by {'t
 
 ### Install Torch Audio
 ```Bash
-pip install torchaudio
 git clone --recursive https://github.com/pytorch/audio.git
 cd audio
 python setup.py install
@@ -99,11 +98,15 @@ python -c "import torchvision,torchtext,torchaudio;print(torchvision.__version__
 Then install TorchBenchmark as a library:
 ```
 conda install git-lfs pyyaml pandas scipy psutil
+pip install pyre_extensions
+pip install torchrec
+
 git clone --recursive https://github.com/pytorch/benchmark.git
 
 cd benchmark
 python install.py
-pip install .
+# Note that -e is necessary
+pip install -e .
 ```
 
 # Run the Model
