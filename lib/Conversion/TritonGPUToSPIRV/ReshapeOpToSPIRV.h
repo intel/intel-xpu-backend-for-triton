@@ -1,5 +1,5 @@
-#ifndef TRITON_VIEWOPTOSPIRV_H
-#define TRITON_VIEWOPTOSPIRV_H
+#ifndef TRITON_RESHAPEOPTOSPIRV_H
+#define TRITON_RESHAPEOPTOSPIRV_H
 
 #include "TritonGPUToSPIRVBase.h"
 #include "triton/Analysis/Membar.h"

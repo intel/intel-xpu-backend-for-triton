@@ -1,6 +1,6 @@
 add_mlir_conversion_library(TritonGPUToSPIRV
     TritonGPUToSPIRV.cpp
-    ViewOpToSPIRV.cpp
+    ReshapeOpToSPIRV.cpp
     ElementwiseOpToSPIRV.cpp
     TritonGPUToSPIRVPass.cpp
     ConvertLayoutOpToSPIRV/SharedToDotOperandFMA.cpp
