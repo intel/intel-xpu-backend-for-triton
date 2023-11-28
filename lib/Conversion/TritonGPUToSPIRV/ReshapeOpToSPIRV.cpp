@@ -1,4 +1,4 @@
-#include "ViewOpToSPIRV.h"
+#include "ReshapeOpToSPIRV.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -145,16 +145,35 @@ struct CatOpSPIRVConversion
   }
 };
 
-struct ViewOpSPIRVConversion : public ConvertTritonGPUOpToSPIRVPattern<ViewOp> {
-  using OpAdaptor = typename ViewOp::Adaptor;
+struct ReshapeOpSPIRVConversion
+    : public ConvertTritonGPUOpToSPIRVPattern<ReshapeOp> {
+  using OpAdaptor = typename ReshapeOp::Adaptor;
   using ConvertTritonGPUOpToSPIRVPattern<
-      ViewOp>::ConvertTritonGPUOpToSPIRVPattern;
+      ReshapeOp>::ConvertTritonGPUOpToSPIRVPattern;
 
   LogicalResult
-  matchAndRewrite(ViewOp op, OpAdaptor adaptor,
+  matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto resultTy = op.getType().template cast<RankedTensorType>();
+    auto srcTy = op.getSrc().getType().template cast<RankedTensorType>();
+    if (!op.getAllowReorder()) {
+      // Only support trivial block layouts for now.
+      auto mod = op->getParentOfType<ModuleOp>();
+      int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+      int threadsPerWarp =
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+      assert(resultTy.getEncoding() == triton::gpu::getDefaultBlockedEncoding(
+                                           op.getContext(), resultTy.getShape(),
+                                           numWarps, threadsPerWarp, numCTAs) &&
+             "ReshapeOp lowering only support block encoding right now.");
+      assert(srcTy.getEncoding() == triton::gpu::getDefaultBlockedEncoding(
+                                        op.getContext(), srcTy.getShape(),
+                                        numWarps, threadsPerWarp, numCTAs) &&
+             "ReshapeOp lowering only support block encoding right now.");
+    }
+
     auto vals = this->getTypeConverter()->unpackLLElements(
         loc, adaptor.getSrc(), rewriter, op.getOperand().getType());
     Value ret =
@@ -235,7 +254,7 @@ void populateViewOpToSPIRVPatterns(
     mlir::ModuleAllocation *allocation, mlir::Value smem,
     mlir::PatternBenefit benefit,
     std::map<std::string, int> &computeCapability) {
-  patterns.add<ViewOpSPIRVConversion>(typeConverter, context, benefit);
+  patterns.add<ReshapeOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<ExpandDimsOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<SplatOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<ArithConstantSplatOpSPIRVConversion>(

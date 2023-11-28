@@ -22,10 +22,10 @@
 #include "ElementwiseOpToSPIRV.h"
 #include "LoadStoreOpToSPIRV.h"
 #include "ReduceOpToSPIRV.h"
+#include "ReshapeOpToSPIRV.h"
 #include "ScanOpToSPIRV.h"
 #include "TritonGPUToSPIRV.h"
 #include "TypeConverter.h"
-#include "ViewOpToSPIRV.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
