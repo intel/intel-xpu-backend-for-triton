@@ -34,7 +34,7 @@ jobs:
           git submodule sync
           git submodule update --init --recursive --jobs 0
           cd third_party/intel_xpu_backend
-          git checkout yudong/ut_fullscope && git pull
+          git checkout main && git pull
           python3 -m pre_commit run --all-files
 
       - name: Install Dependency
@@ -117,6 +117,7 @@ jobs:
           num_language=$(grep "items" ut_raw.log | awk '{print $3}' | grep -o '[0-9]\+' | awk 'NR==1')
           num_others=$(grep "items" ut_raw.log | awk '{print $3}' | grep -o '[0-9]\+' | awk 'NR==2')
           let num_total=$num_language+$num_others
+          # 3 test_inline_asm* cases
           let num_total_wo_skipped=num_total-num_skipped+num_cuda_only_skipped-3
           total_pass_rate=`awk 'BEGIN{printf "%.2f%%\n",('$num_passed'/'$num_total_wo_skipped')*100}'`
           if [ -z $num_total ]; then num_total=0; fi
