@@ -28,7 +28,7 @@ else()
 
       # Default llvm package
       set(LLVM_DOWNLOAD_URL
-          https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_b1115f8c/llvm+mlir-18.0.0-x86_64-linux-gnu-ubuntu-18.04-release.tar.xz
+          https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_5e5a22ca/llvm+mlir-18.0.0-x86_64-linux-gnu-ubuntu-18.04-release.tar.xz
       )
 
       set(ENV_USE_LLVM_ASSERT "false")
@@ -39,7 +39,7 @@ else()
       endif()
       if(ENV_USE_LLVM_ASSERT STREQUAL "true")
         set(LLVM_DOWNLOAD_URL
-            https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_b1115f8c/llvm+mlir-18.0.0-x86_64-linux-gnu-ubuntu-18.04-assert.tar.xz
+            https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_5e5a22ca/llvm+mlir-18.0.0-x86_64-linux-gnu-ubuntu-18.04-assert.tar.xz
         )
       endif()
 
@@ -66,12 +66,12 @@ else()
           if("${OS_VERSION_ID}" STREQUAL "7")
             if(ENV_USE_LLVM_ASSERT STREQUAL "true")
               set(LLVM_DOWNLOAD_URL
-                  https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_b1115f8c/llvm+mlir-18.0.0-x86_64-linux-gnu-centos-7-assert.tar.xz
+                  https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_5e5a22ca/llvm+mlir-18.0.0-x86_64-linux-gnu-centos-7-assert.tar.xz
               )
 
             else()
               set(LLVM_DOWNLOAD_URL
-                  https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_b1115f8c/llvm+mlir-18.0.0-x86_64-linux-gnu-centos-7-release.tar.xz
+                  https://github.com/intel/intel-xpu-backend-for-triton/releases/download/llvm_pkg_5e5a22ca/llvm+mlir-18.0.0-x86_64-linux-gnu-centos-7-release.tar.xz
               )
 
             endif()

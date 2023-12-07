@@ -917,17 +917,11 @@ struct InsertSliceAsyncOpSPIRVConversion
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();
     auto sizePerThread = srcBlockedLayout.getSizePerThread();
-    auto threadsPerCTA = getThreadsPerCTA(srcBlockedLayout);
     auto inOrder = srcBlockedLayout.getOrder();
     DenseMap<unsigned, Value> sharedPtrs =
         getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy,
                               smemObj, rewriter, offsetVals, srcStrides);
 
-    // If perPhase * maxPhase > threadsPerCTA, we will have elements
-    // that share the same tile indices. The index calculation will
-    // be cached.
-    auto numSwizzleRows = std::max<unsigned>(
-        (perPhase * maxPhase) / threadsPerCTA[inOrder[1]], 1);
     // A sharedLayout encoding has a "vec" parameter.
     // On the column dimension, if inVec > outVec, it means we have to divide
     // single vector read into multiple ones
