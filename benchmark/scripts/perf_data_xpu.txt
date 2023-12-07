@@ -1,0 +1,258 @@
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/adv_inception_v3_triton_poi_fused__native_batch_norm_legit_functional_relu_threshold_backward_79.py
+0.157ms    0.036GB    226.50GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/AlbertForMaskedLM_triton_red_fused__to_copy_add_native_layer_norm_native_layer_norm_backward_sum_19.py
+14.040ms    0.973GB    69.33GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/AlbertForQuestionAnswering_triton_red_fused__to_copy_add_native_layer_norm_native_layer_norm_backward_sum_14.py
+14.005ms    0.973GB    69.50GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/alexnet_triton_poi_fused__to_copy_14.py
+0.011ms    0.004GB    365.93GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/BartForCausalLM_triton_per_fused__softmax_backward_data__to_copy_13.py
+0.701ms    0.537GB    765.91GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/BartForConditionalGeneration_triton_per_fused__softmax_backward_data_13.py
+0.337ms    0.201GB    598.05GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/BertForMaskedLM_triton_per_fused__softmax__to_copy_add_div_native_dropout_5.py
+0.828ms    0.453GB    547.30GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/BertForQuestionAnswering_triton_per_fused__softmax__to_copy_add_div_native_dropout_5.py
+0.828ms    0.453GB    547.40GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/BERT_pytorch_triton_red_fused__to_copy_add_div_mul_sub_sum_13.py
+0.139ms    0.022GB    160.39GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/BlenderbotForCausalLM_triton_poi_fused__to_copy_8.py
+0.255ms    0.157GB    615.94GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/BlenderbotForConditionalGeneration_triton_red_fused__to_copy_add_native_dropout_native_layer_norm_view_10.py
+0.334ms    0.068GB    204.00GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/BlenderbotSmallForCausalLM_triton_red_fused__log_softmax_backward_data_add_nll_loss_backward_nll_loss_forward_2.py
+7.379ms    4.941GB    669.69GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/BlenderbotSmallForConditionalGeneration_triton_red_fused__log_softmax_backward_data__to_copy_add_nll_loss_backward_nll_loss_forward_2.py
+8.515ms    5.765GB    677.05GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/botnet26t_256_triton_poi_fused_add_native_batch_norm_backward_threshold_backward_89.py
+2.058ms    1.879GB    913.26GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/cait_m36_384_triton_red_fused_sum_33.py
+0.135ms    0.021GB    157.71GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/CamemBert_triton_per_fused__softmax__to_copy_add_div_native_dropout_6.py
+0.827ms    0.453GB    547.51GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/coat_lite_mini_triton_poi_fused_gelu_gelu_backward_141.py
+1.331ms    1.234GB    927.07GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/convit_base_triton_red_fused__to_copy_add_div_mul_sum_36.py
+0.853ms    0.238GB    278.65GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/convmixer_768_32_triton_red_fused__native_batch_norm_legit_functional_add_native_batch_norm_backward_relu_10.py
+0.369ms    0.151GB    409.96GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/convnext_base_triton_poi_fused_gelu_gelu_backward_34.py
+0.204ms    0.154GB    753.82GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/crossvit_9_240_triton_per_fused__softmax_backward_data_35.py
+0.752ms    0.494GB    656.89GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/cspdarknet53_triton_red_fused_leaky_relu_backward_native_batch_norm_backward_123.py
+2.400ms    0.403GB    167.91GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/dcgan_triton_red_fused__native_batch_norm_legit_functional_4.py
+0.013ms    0.002GB    156.30GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/DebertaForMaskedLM_triton_red_fused__log_softmax_backward_data_add_masked_fill_nll_loss_backward_2.py
+3.845ms    2.471GB    642.52GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/DebertaForQuestionAnswering_triton_per_fused__softmax__to_copy_bernoulli_bitwise_not_masked_fill_mul_rsub_5.py
+0.792ms    0.352GB    444.76GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/DebertaV2ForMaskedLM_triton_red_fused__to_copy_add_bernoulli_masked_fill_mul_native_layer_norm_native_layer_norm_backward_rsub_view_13.py
+0.101ms    0.027GB    264.30GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/DebertaV2ForQuestionAnswering_triton_red_fused__to_copy_add_bernoulli_masked_fill_mul_native_layer_norm_native_layer_norm_backward_rsub_view_12.py
+0.070ms    0.013GB    190.29GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/deit_base_distilled_patch16_224_triton_per_fused__softmax_10.py
+0.290ms    0.120GB    415.64GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/densenet121_triton_poi_fused__to_copy_12.py
+0.007ms    0.000GB    32.15GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/DistilBertForMaskedLM_triton_red_fused__log_softmax_backward_data_add_nll_loss_backward_nll_loss_forward_2.py
+7.124ms    6.001GB    842.31GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/DistilBertForQuestionAnswering_triton_red_fused__softmax_masked_fill_native_dropout_7.py
+0.772ms    0.554GB    717.20GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/DistillGPT2_triton_red_fused__log_softmax__to_copy_21.py
+5.284ms    2.467GB    466.86GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/dla102_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_126.py
+1.176ms    0.617GB    524.84GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/dm_nfnet_f0_triton_red_fused_add_gelu_gelu_backward_mul_sigmoid_sum_26.py
+2.048ms    0.341GB    166.29GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/dpn107_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_161.py
+0.261ms    0.120GB    460.63GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/eca_botnext26ts_256_triton_poi_fused_add_mul_native_batch_norm_backward_82.py
+2.073ms    1.879GB    906.49GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/ElectraForCausalLM_triton_poi_fused_add_slice_backward_3.py
+5.825ms    5.993GB    1028.89GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/ElectraForQuestionAnswering_triton_per_fused__softmax__to_copy_add_div_native_dropout_6.py
+1.099ms    0.604GB    549.63GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/ese_vovnet19b_dw_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_95.py
+1.197ms    0.617GB    515.24GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/fbnetc_100_triton_red_fused__native_batch_norm_legit_functional_2.py
+0.476ms    0.051GB    108.05GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/fbnetv3_b_triton_red_fused__native_batch_norm_legit_functional_2.py
+0.472ms    0.051GB    109.15GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/gernet_l_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_12.py
+0.213ms    0.095GB    445.82GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/ghostnet_100_triton_red_fused__native_batch_norm_legit_functional_7.py
+0.496ms    0.026GB    51.91GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/gluon_inception_v3_triton_poi_fused__native_batch_norm_legit_functional_relu_threshold_backward_79.py
+0.157ms    0.036GB    226.85GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/gmixer_24_224_triton_red_fused_add_native_layer_norm_backward_13.py
+0.334ms    0.077GB    231.24GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/gmlp_s16_224_triton_red_fused_native_layer_norm_backward_12.py
+0.350ms    0.116GB    331.26GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/GoogleFnet_triton_red_fused__log_softmax_backward_data_add_nll_loss_backward_nll_loss_forward_2.py
+4.669ms    4.194GB    898.26GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/GPTNeoForCausalLM_triton_poi_fused__to_copy_add_mul_pow_tanh_backward_11.py
+0.489ms    0.336GB    686.47GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/GPTNeoForSequenceClassification_triton_poi_fused__to_copy_add_mul_pow_tanh_backward_6.py
+0.490ms    0.336GB    685.34GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/hf_Albert_triton_per_fused__softmax_backward_data__to_copy_div_14.py
+0.337ms    0.201GB    597.76GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/hf_Bart_triton_per_fused__softmax_native_dropout_8.py
+0.207ms    0.088GB    425.76GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/hf_Bert_triton_per_fused__softmax__to_copy_add_div_native_dropout_5.py
+0.215ms    0.113GB    527.22GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/hf_GPT2_triton_red_fused__softmax__to_copy_div_full_native_dropout_where_6.py
+0.233ms    0.139GB    599.47GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/hf_T5_triton_per_fused_embedding_dense_backward_sum_34.py
+26.227ms    0.277GB    10.55GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/hrnet_w18_triton_red_fused__native_batch_norm_legit_functional_16.py
+0.205ms    0.014GB    70.41GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/inception_v3_triton_poi_fused__native_batch_norm_legit_functional_relu_threshold_backward_79.py
+0.156ms    0.036GB    227.90GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/jx_nest_base_triton_red_fused__to_copy_add_native_layer_norm_native_layer_norm_backward_71.py
+0.338ms    0.032GB    95.35GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/LayoutLMForMaskedLM_triton_per_fused__softmax__to_copy_add_div_native_dropout_6.py
+0.827ms    0.453GB    547.51GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/LayoutLMForSequenceClassification_triton_per_fused__softmax__to_copy_add_div_native_dropout_6.py
+0.827ms    0.453GB    547.51GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/lcnet_050_triton_red_fused__native_batch_norm_legit_functional_hardswish_backward_native_batch_norm_backward_67.py
+1.038ms    0.077GB    74.29GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/levit_128_triton_red_fused__softmax__to_copy_add_index_mul_23.py
+0.351ms    0.158GB    449.54GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/M2M100ForConditionalGeneration_triton_red_fused__log_softmax_backward_data_add_nll_loss_backward_nll_loss_forward_2.py
+4.650ms    3.148GB    677.07GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/MBartForCausalLM_triton_per_fused__softmax_backward_data__to_copy_10.py
+0.710ms    0.537GB    755.73GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/MBartForConditionalGeneration_triton_per_fused__softmax__to_copy_clone_5.py
+0.345ms    0.277GB    803.23GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/MegatronBertForCausalLM_triton_per_fused__softmax__to_copy_add_div_native_dropout_6.py
+0.270ms    0.151GB    558.75GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/MegatronBertForQuestionAnswering_triton_per_fused__softmax__to_copy_add_div_native_dropout_6.py
+0.555ms    0.302GB    543.85GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/mixer_b16_224_triton_red_fused_add_native_layer_norm_backward_13.py
+0.659ms    0.154GB    234.20GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/mixnet_l_triton_poi_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_263.py
+2.198ms    2.158GB    981.68GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/mnasnet_100_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_127.py
+0.961ms    0.308GB    320.98GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/mnasnet1_0_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_127.py
+0.253ms    0.077GB    305.51GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/MobileBertForMaskedLM_triton_red_fused__log_softmax_backward_data_add_nll_loss_backward_nll_loss_forward_4.py
+7.143ms    6.001GB    840.18GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/MobileBertForQuestionAnswering_triton_poi_fused_relu_threshold_backward_33.py
+0.045ms    0.025GB    559.74GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/mobilenetv2_100_triton_red_fused__native_batch_norm_legit_functional_hardtanh_backward_native_batch_norm_backward_91.py
+0.596ms    0.289GB    485.10GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/mobilenet_v2_triton_red_fused__native_batch_norm_legit_functional_hardtanh_backward_native_batch_norm_backward_92.py
+0.497ms    0.217GB    437.04GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/mobilenetv3_large_100_triton_red_fused__native_batch_norm_legit_functional_2.py
+0.472ms    0.051GB    109.15GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/mobilenet_v3_large_triton_red_fused__native_batch_norm_legit_functional_2.py
+0.128ms    0.013GB    100.77GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/mobilevit_s_triton_red_fused__native_batch_norm_legit_functional_mul_native_batch_norm_backward_135.py
+0.700ms    0.403GB    574.83GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/MT5ForConditionalGeneration_triton_red_fused__log_softmax_backward_data_add_nll_loss_backward_nll_loss_forward_2.py
+8.774ms    6.147GB    700.55GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/nfnet_l0_triton_red_fused_add_avg_pool2d_backward_convolution_backward_mul_sigmoid_sigmoid_backward_sum_50.py
+1.594ms    0.874GB    548.07GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/OPTForCausalLM_triton_red_fused__softmax_backward_data__to_copy_add_div_eq_lift_fresh_lt_masked_fill_where_14.py
+1.182ms    1.040GB    880.20GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/PegasusForCausalLM_triton_red_fused__log_softmax_backward_data_add_nll_loss_backward_nll_loss_forward_2.py
+3.847ms    2.471GB    642.22GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/PegasusForConditionalGeneration_triton_red_fused__log_softmax_backward_data__to_copy_add_nll_loss_backward_nll_loss_forward_2.py
+4.406ms    2.882GB    654.23GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/pit_b_224_triton_per_fused__softmax_10.py
+2.048ms    0.948GB    462.65GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/PLBartForCausalLM_triton_per_fused__softmax__to_copy_native_dropout_5.py
+1.732ms    0.940GB    542.55GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/PLBartForConditionalGeneration_triton_red_fused__log_softmax_backward_data__to_copy_add_nll_loss_backward_nll_loss_forward_2.py
+4.366ms    2.868GB    656.76GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/pnasnet5large_triton_red_fused__native_batch_norm_legit_functional_68.py
+0.060ms    0.013GB    211.63GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/poolformer_m36_triton_red_fused_avg_pool2d_backward_native_group_norm_backward_105.py
+14.814ms    0.231GB    15.61GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/pytorch_unet_triton_poi_fused__to_copy__unsafe_index_put_constant_pad_nd_mul_new_zeros_rsub_10.py
+633.759ms    0.314GB    0.50GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/regnety_002_triton_red_fused__native_batch_norm_legit_functional_6.py
+1.012ms    0.077GB    76.16GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/repvgg_a2_triton_red_fused__native_batch_norm_legit_functional_add_native_batch_norm_backward_threshold_backward_53.py
+1.784ms    1.028GB    576.25GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/res2net101_26w_4s_triton_red_fused__native_batch_norm_legit_functional_60.py
+0.025ms    0.003GB    107.37GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/res2net50_14w_8s_triton_red_fused__native_batch_norm_legit_functional_13.py
+0.174ms    0.011GB    65.18GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/res2next50_triton_red_fused__native_batch_norm_legit_functional_add_native_batch_norm_backward_threshold_backward_113.py
+1.661ms    1.028GB    618.63GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/resmlp_12_224_triton_red_fused_add_gelu_gelu_backward_sum_13.py
+0.383ms    0.154GB    403.54GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/resnest101e_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_42.py
+0.198ms    0.042GB    211.95GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/resnet18_triton_red_fused__native_batch_norm_legit_functional_22.py
+0.046ms    0.002GB    36.51GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/resnet50_triton_poi_fused__native_batch_norm_legit_functional_add_convolution_backward_native_batch_norm_backward_threshold_backward_86.py
+0.541ms    0.360GB    664.68GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/resnext50_32x4d_triton_red_fused__native_batch_norm_legit_functional_7.py
+0.031ms    0.006GB    208.10GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/rexnet_100_triton_red_fused__native_batch_norm_legit_functional_mul_native_batch_norm_backward_302.py
+1.671ms    0.925GB    553.81GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/RobertaForCausalLM_triton_per_fused__softmax__to_copy_add_div_native_dropout_6.py
+0.828ms    0.453GB    547.30GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/RobertaForQuestionAnswering_triton_per_fused__softmax__to_copy_add_div_native_dropout_6.py
+0.827ms    0.453GB    547.61GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/sebotnet33ts_256_triton_red_fused__softmax_add_mul_59.py
+4.131ms    1.140GB    275.93GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/shufflenet_v2_x1_0_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_72.py
+0.977ms    0.231GB    236.71GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/Speech2Text2ForCausalLM_triton_red_fused__log_softmax_backward_data_add_nll_loss_backward_nll_loss_forward_2.py
+4.225ms    3.932GB    930.69GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/spnasnet_100_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_145.py
+0.942ms    0.308GB    327.52GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/squeezenet1_1_triton_poi_fused__to_copy_convolution_relu_threshold_backward_8.py
+0.063ms    0.031GB    495.14GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/swin_base_patch4_window7_224_triton_red_fused_constant_pad_nd_native_layer_norm_native_layer_norm_backward_roll_62.py
+0.334ms    0.026GB    78.36GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/swsl_resnext101_32x16d_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_21.py
+0.155ms    0.077GB    497.88GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/T5ForConditionalGeneration_triton_poi_fused_embedding_dense_backward_nll_loss_forward_37.py
+27.342ms    0.143GB    5.22GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/T5Small_triton_poi_fused_embedding_dense_backward_nll_loss_forward_37.py
+26.321ms    0.143GB    5.42GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/tf_efficientnet_b0_triton_red_fused__native_batch_norm_legit_functional_constant_pad_nd_mul_native_batch_norm_backward_164.py
+1.706ms    0.931GB    545.63GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/tf_mixnet_l_triton_red_fused_native_batch_norm_backward_threshold_backward_274.py
+9.157ms    0.925GB    101.06GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/timm_efficientnet_triton_red_fused__native_batch_norm_legit_functional_mul_native_batch_norm_backward_161.py
+0.539ms    0.232GB    429.44GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/timm_nfnet_triton_red_fused_add_gelu_gelu_backward_mul_sigmoid_sum_31.py
+1.759ms    0.284GB    161.40GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/timm_regnet_triton_red_fused__native_batch_norm_legit_functional_add_div_mul_native_batch_norm_backward_sigmoid_threshold_backward_24.py
+0.123ms    0.034GB    276.20GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/timm_resnest_triton_red_fused__native_batch_norm_legit_functional_add_avg_pool2d_backward_native_batch_norm_backward_threshold_backward_54.py
+0.852ms    0.218GB    256.36GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/timm_vision_transformer_triton_per_fused__softmax_backward_data_17.py
+0.070ms    0.045GB    639.42GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/timm_vovnet_triton_red_fused__native_batch_norm_legit_functional_native_batch_norm_backward_threshold_backward_98.py
+0.346ms    0.154GB    445.60GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/tinynet_a_triton_red_fused__native_batch_norm_legit_functional_2.py
+0.603ms    0.076GB    125.55GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/tnt_s_patch16_224_triton_per_fused__softmax_backward_data_mul_16.py
+0.317ms    0.179GB    563.64GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/TrOCRForCausalLM_triton_red_fused__log_softmax_backward_data_add_nll_loss_backward_nll_loss_forward_2.py
+7.383ms    4.941GB    669.31GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/twins_pcpvt_base_triton_poi_fused_gelu_gelu_backward_115.py
+0.732ms    0.617GB    842.21GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/vgg16_triton_poi_fused_convolution_backward_threshold_backward_19.py
+1.316ms    1.233GB    936.80GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/visformer_small_triton_poi_fused_convolution_backward_gelu_gelu_backward_67.py
+0.302ms    0.231GB    764.99GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/vit_base_patch16_224_triton_per_fused__softmax_backward_data_17.py
+0.314ms    0.179GB    569.38GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/volo_d1_224_triton_poi_fused_col2im_74.py
+4.948ms    0.088GB    17.70GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/xcit_large_24_p8_224_triton_red_fused_add_div_eq_ge_masked_fill_mul_neg_scalar_tensor_sum_where_56.py
+0.116ms    0.018GB    155.36GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/XGLMForCausalLM_triton_red_fused__log_softmax_backward_data_add_nll_loss_backward_nll_loss_forward_2.py
+4.827ms    3.146GB    651.75GB/s
+/home/liyang/liyang/triton/third_party/intel_xpu_backend/benchmark/inductor_kernels/YituTechConvBert_triton_poi_fused_col2im_25.py
+8.535ms    0.069GB    8.14GB/s
