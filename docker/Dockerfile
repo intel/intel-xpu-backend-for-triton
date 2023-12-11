@@ -59,7 +59,7 @@ RUN curl -fsSL -v -k -o ~/miniconda.sh -O https://repo.anaconda.com/miniconda/Mi
     future \
     libstdcxx-ng \
     mkl-include \
-    mkl \
+    mkl==2021.4.0 \
     ninja \
     numpy \
     requests \
