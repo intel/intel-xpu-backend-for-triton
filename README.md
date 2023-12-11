@@ -86,18 +86,18 @@ source triton/third_party/intel_xpu_backend/.github/ci_pins/version.txt
 # cd to docker folder and build image form Dockerfile
 cd triton/third_party/intel_xpu_backend/docker
 DOCKER_BUILDKIT=1 docker build \
-                     --build-arg http_proxy=${http_proxy} \
-                     --build-arg https_proxy=${https_proxy} \
-                     --build-arg PT_REPO=$torch_repo \
-                     --build-arg PT_BRANCH=$torch_branch \
-                     --build-arg PT_COMMIT=$torch_commit \
-                     --build-arg IPEX_REPO=$ipex_repo \
-                     --build-arg IPEX_BRANCH=$ipex_branch \
-                     --build-arg IPEX_COMMIT=$ipex_commit \
-                     --build-arg BASEKIT_URL=https://registrationcenter-download.intel.com/akdlm/IRC_NAS/20f4e6a1-6b0b-4752-b8c1-e5eacba10e01/l_BaseKit_p_2024.0.0.49564_offline.sh \
-                     -t triton:xpu \
-                     -f Dockerfile \
-                    --target image .
+                 --build-arg http_proxy=${http_proxy} \
+                 --build-arg https_proxy=${https_proxy} \
+                 --build-arg PT_REPO=$torch_repo \
+                 --build-arg PT_BRANCH=$torch_branch \
+                 --build-arg PT_COMMIT=$torch_commit \
+                 --build-arg IPEX_REPO=$ipex_repo \
+                 --build-arg IPEX_BRANCH=$ipex_branch \
+                 --build-arg IPEX_COMMIT=$ipex_commit \
+                 --build-arg BASEKIT_URL=https://registrationcenter-download.intel.com/akdlm/IRC_NAS/20f4e6a1-6b0b-4752-b8c1-e5eacba10e01/l_BaseKit_p_2024.0.0.49564_offline.sh \
+                 -t triton:xpu \
+                 -f Dockerfile \
+                 --target image .
 # creat e a container from the image
 docker run -id --name $USER --privileged --env https_proxy=${https_proxy} --env http_proxy=${http_proxy} --net host --shm-size 2G triton:xpu
 # env check in container
