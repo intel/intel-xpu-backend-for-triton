@@ -109,7 +109,7 @@ RUN chmod +r -R ${BASEKIT_ROOT}/intel/oneapi && \
     cd intel-extension-for-pytorch && git checkout ${IPEX_COMMIT} && \
     git submodule sync && git submodule update --init --recursive && \
     pip install -r requirements.txt && \
-    python setup.py develop && cd ..  
+    python setup.py develop && cd ..
 
 
 FROM dev-base AS image
