@@ -203,10 +203,7 @@ struct AssertOpSPIRVConversion
     SmallVector<Value> operands = {msgPtr, filePtr, lineNumber, funcPtr, gid0,
                                    gid1,   gid2,    lid0,       lid1,    lid2};
 
-    // rewriter.setInsertionPointToStart(ifBlock);
     auto ret = call(TypeRange(), funcName, operands);
-
-    // rewriter.restoreInsertionPoint(oldInsertPoint);
 
     // Split a block after the call.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
