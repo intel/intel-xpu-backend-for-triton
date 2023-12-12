@@ -56,6 +56,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     file(INSTALL
          ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf.spv
          ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-imf-fp64.spv
+         ${CMAKE_CURRENT_SOURCE_DIR}/lib/libsycl-fallback-cassert.spv
          DESTINATION ${PYTHON_THIRD_PARTY_PATH}/xpu/lib)
 
     file(INSTALL

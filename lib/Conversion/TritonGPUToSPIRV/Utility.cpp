@@ -300,37 +300,24 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
     auto cAttr = rewriter.getI8IntegerAttr(c);
     contentStr.push_back(cAttr);
   }
+  contentStr.push_back(rewriter.getI8IntegerAttr(0));
   size_t contentSize = contentStr.size();
   auto globalType = spirv::ArrayType::get(i8_ty, contentSize);
 
   spirv::ConstantOp globalString;
-  spirv::GlobalVariableOp globalVar;
+  spirv::VariableOp var;
   {
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
     VectorType _vec_type = VectorType::get({(int64_t)contentSize}, i8_ty);
     DenseElementsAttr dstElementsAttr =
         DenseElementsAttr::get(_vec_type, contentStr);
-    globalString = rewriter.create<spirv::ConstantOp>(
+    auto varString = rewriter.create<spirv::ConstantOp>(
         UnknownLoc::get(ctx), globalType, dstElementsAttr);
 
-    globalVar = rewriter.create<spirv::GlobalVariableOp>(
-        UnknownLoc::get(ctx),
-        ptr_ty(globalType, spirv::StorageClass::CrossWorkgroup),
-        stringConstName,
-        //        FlatSymbolRefAttr::get(globalString));
-        nullptr);
+    var = rewriter.create<spirv::VariableOp>(
+        UnknownLoc::get(ctx), ptr_ty(globalType, spirv::StorageClass::Function),
+        spirv::StorageClass::Function, varString);
   }
-
-  Value zero = i32_val(0);
-  Value globalPtr = rewriter.create<spirv::AddressOfOp>(
-      UnknownLoc::get(rewriter.getContext()), globalVar);
-  Value stringStart = rewriter.create<spirv::PtrAccessChainOp>(
-      UnknownLoc::get(ctx), ptr_ty(i8_ty, spirv::StorageClass::CrossWorkgroup),
-      globalPtr, zero, zero);
-  Value genericStringStart =
-      bitcast(stringStart, ptr_ty(i8_ty, spirv::StorageClass::Generic));
-  return genericStringStart;
+  return var;
 }
 
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
