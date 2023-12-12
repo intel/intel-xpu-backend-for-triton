@@ -8,6 +8,7 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [O
   - [Prerequisites](#prerequisites)
   - [Option 1: Install From whl Packages](#option-1-install-from-whl-packages)
   - [Option 2: Build From the Source](#option-2-build-from-the-source)
+  - [Option 3: Build in dockerfile](#option-3-build-in-dockerfile)
 - [Usage Guide](#usage-guide)
   - [Code Modifications](#code-modifications)
     - [Example 1 : Triton Kernel](#example-1--triton-kernel)
@@ -77,6 +78,36 @@ TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
 We also provide a detailed page for the overall building process. It includes all source building methods. You could refer to [build_from_source.md](docs/build_from_source.md) for more detail.
 If you encountered any problem, please refer to the [Possible-Build-Bugs](https://github.com/intel/intel-xpu-backend-for-triton/wiki/Possible-Build-Bugs) page first.
 
+## Option 3: Build in dockerfile
+
+```bash
+# activate dependencies version variables
+source triton/third_party/intel_xpu_backend/.github/ci_pins/version.txt
+# cd to docker folder and build image form Dockerfile
+cd triton/third_party/intel_xpu_backend/docker
+DOCKER_BUILDKIT=1 docker build \
+                 --build-arg http_proxy=${http_proxy} \
+                 --build-arg https_proxy=${https_proxy} \
+                 --build-arg PT_REPO=$torch_repo \
+                 --build-arg PT_BRANCH=$torch_branch \
+                 --build-arg PT_COMMIT=$torch_commit \
+                 --build-arg IPEX_REPO=$ipex_repo \
+                 --build-arg IPEX_BRANCH=$ipex_branch \
+                 --build-arg IPEX_COMMIT=$ipex_commit \
+                 --build-arg BASEKIT_URL=https://registrationcenter-download.intel.com/akdlm/IRC_NAS/20f4e6a1-6b0b-4752-b8c1-e5eacba10e01/l_BaseKit_p_2024.0.0.49564_offline.sh \
+                 -t triton:xpu \
+                 -f Dockerfile \
+                 --target image .
+# creat e a container from the image
+docker run -id --name $USER --privileged --env https_proxy=${https_proxy} --env http_proxy=${http_proxy} --net host --shm-size 2G triton:xpu
+# env check in container
+docker exec -ti $USER bash -c "source /opt/intel/oneapi/setvars.sh;python -c 'import torch,intel_extension_for_pytorch,triton'"
+## (optional) run E2E test in container
+docker exec -ti $USER bash -c "source /opt/intel/oneapi/setvars.sh ;\
+                              cd /workspace/pytorch && wget -O inductor_xpu_test.sh https://raw.githubusercontent.com/intel/intel-xpu-backend-for-triton/main/.github/scripts/inductor_xpu_test.sh ;\
+                               pip install pandas && bash inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 1 static 1 0 DebertaForMaskedLM
+                              "
+```
 
 # Usage Guide
 
