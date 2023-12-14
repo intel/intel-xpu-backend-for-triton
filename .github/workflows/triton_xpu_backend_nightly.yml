@@ -84,7 +84,7 @@ jobs:
           rm -rf ~/.triton/cache
           export TRITON_LIBDEVICE_PATH=${HOME}/triton-nightly/triton_src/python/triton/third_party/xpu/lib
           cd ${HOME}/triton-nightly/triton_src/python/test/unit/language
-          bash ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/scripts/case_update.sh triton-nightly
+          bash ${HOME}/triton-nightly/triton_src/third_party/intel_xpu_backend/.github/scripts/case_update.sh
           ZE_AFFINITY_MASK=1 pytest -n 32 -v -ra --tb=line . --device=xpu 2>&1 | tee ${HOME}/triton-nightly/triton_src/python/test/unit/ut_raw.log || true
           cd ${HOME}/triton-nightly/triton_src/python/test/unit
           ZE_AFFINITY_MASK=1 pytest -n 32 --ignore=hopper --ignore=language -v -ra --tb=line 2>&1 | tee -a ${HOME}/triton-nightly/triton_src/python/test/unit/ut_raw.log || true
