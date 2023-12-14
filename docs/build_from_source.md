@@ -1,21 +1,21 @@
 This BKC is for the full building process for Triton. It offers a guide to setup and run Triton models on XPU platform from the source.
 
-- [1. Overview:](#1-overview)
-- [2. Env Setting](#2-env-setting)
-  - [2.1. XPU Specific env setting](#21-xpu-specific-env-setting)
-- [3. Install Dependencies](#3-install-dependencies)
-  - [3.1. Install using pip](#31-install-using-pip)
-  - [3.2. Build Triton](#32-build-triton)
-- [4. Troubleshooting](#4-troubleshooting)
-- [5. Triton Test Process](#5-triton-test-process)
-- [6. Appendix](#6-appendix)
-  - [6.1. Build from the Source](#61-build-from-the-source)
-    - [6.1.1. Custom LLVM](#611-custom-llvm)
-      - [6.1.1.1. Other optional steps](#6111-other-optional-steps)
-    - [6.1.2. PyTorch](#612-pytorch)
-    - [6.1.3. Intel® Extension for PyTorch\*](#613-intel-extension-for-pytorch)
-  - [6.2. ToolChain](#62-toolchain)
-  - [6.3. Driver \& System Install](#63-driver--system-install)
+* [1. Overview:](#1-overview)
+* [2. Env Setting](#2-env-setting)
+  * [2.1. XPU Specific env setting](#21-xpu-specific-env-setting)
+* [3. Install Dependencies](#3-install-dependencies)
+  * [3.1. Install using pip](#31-install-using-pip)
+  * [3.2. Build Triton](#32-build-triton)
+* [4. Troubleshooting](#4-troubleshooting)
+* [5. Triton Test Process](#5-triton-test-process)
+* [6. Appendix](#6-appendix)
+  * [6.1. Build from the Source](#61-build-from-the-source)
+    * [6.1.1. Custom LLVM](#611-custom-llvm)
+      * [6.1.1.1. Other optional steps](#6111-other-optional-steps)
+    * [6.1.2. PyTorch](#612-pytorch)
+    * [6.1.3. Intel® Extension for PyTorch\*](#613-intel-extension-for-pytorch)
+  * [6.2. ToolChain](#62-toolchain)
+  * [6.3. Driver \& System Install](#63-driver--system-install)
 
 
 
@@ -52,7 +52,7 @@ export http_proxy=your_proxy
 ```
 
 ## 2.1. XPU Specific env setting
-You need to specify Intel's GPU toolchain. Normally they are in the Intel® oneAPI Base Toolkit. You could refer to the [Installation Guide](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide) for the latest updated version.
+You need to specify Intel's GPU toolchain. Normally they are in the Intel® oneAPI Base Toolkit. You could refer to the [Installation Guide](https://intel.github.io/intel-extension-for-pytorch/xpu/latest/tutorials/installation.html#installation-guide) for the latest updated version. Currently valid oneAPI version is 2024.0 and later.
 
 A sample env setting for oneAPI would be like this:
 
@@ -144,7 +144,7 @@ Note that there is no need to build LLVM by yourself. If you have something spec
 
 ```Bash
 # Use the custom llvm repo for now
-git clone -b xpu_llvm_rebase https://github.com/leizhenyuan/llvm-project.git
+git clone -b triton_rebase_5e5a22ca https://github.com/quintinwang5/llvm-project.git
 ```
 
 Before build, make sure the related dependencies are installed in your system. See [LLVM-requirements](https://llvm.org/docs/GettingStarted.html#requirements) for detail. One thing worth noticing is that zlib is required for Triton, thus you should install it first.
@@ -206,11 +206,11 @@ export PATH=/home/gta/tongsu/llvm/build/bin:${PATH}
 Note that if you build PyTorch from the source, all [torch patches](https://github.com/intel/intel-extension-for-pytorch/tree/xpu-master/torch_patches) must applied and built with `_GLIBCXX_USE_CXX11_ABI=1` enabled.
 
 
-First clone PyTorch with `v2.0.1` tag and intel-extension-for-pytorch repo with `xpu-master` branch:
+First clone PyTorch with `release/2.1` tag and intel-extension-for-pytorch repo with `xpu-main-pre` branch:
 
 ```Bash
-git clone -b v2.0.1 https://github.com/pytorch/pytorch/
-git clone -b xpu-master https://github.com/intel/intel-extension-for-pytorch
+git clone -b release/2.1 https://github.com/pytorch/pytorch.git
+git clone -b xpu-main-pre https://github.com/intel/intel-extension-for-pytorch.git
 ```
 **Important** : Apply the torch patches:
 
