@@ -12,6 +12,7 @@ void populateLoadStoreOpToLLVMPatterns(
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-    const TensorPtrMapT *tensorPtrMap, PatternBenefit benefit);
+    const TensorPtrMapT *tensorPtrMap, triton::Target target,
+    PatternBenefit benefit);
 
 #endif

@@ -113,6 +113,15 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
   return SmallVector<unsigned>();
 }
 
+unsigned getWarpSize(Attribute layout) {
+  unsigned size = 1;
+  auto threadsPerWarp = getThreadsPerWarp(layout);
+  for (auto e : threadsPerWarp) {
+    size *= e;
+  }
+  return size;
+}
+
 SmallVector<unsigned>
 getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape) {
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
@@ -153,6 +162,17 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     return getContigPerThread(parentLayout);
+  } else if (layout.isa<DpasEncodingAttr>()) {
+    // From the DPAS layout:
+    //                   warp 0
+    //    ----------------/\-----------------
+    //    [ 0   1   2   3   ......  14  15 ]
+    //    [ 0   1   2   3   ......  14  15 ]
+    //    ....
+    //    [ 0   1   2   3   ......  14  15 ]
+    //      ^
+    // Each thread operates on 1 element per row and 8 elements per column.
+    return {8, 1};
   } else {
     return getSizePerThread(layout);
   }
@@ -222,6 +242,8 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
                                  blockedLayout.getOrder().end());
   } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingTrait>()) {
+    return {1, 0};
+  } else if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
     return {1, 0};
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     return {1, 0};
@@ -338,6 +360,11 @@ unsigned getNumWarpsPerCTA(Attribute layout) {
     // Use the distributed layout interface to get the number of warps per CTA.
     auto distributedLayout = layout.cast<DistributedEncodingTrait>();
     warpsPerCTA = distributedLayout.getWarpsPerCTA();
+  } else if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+    // Use the distributed layout interface to get the number of warps per
+    // CTA.
+    auto distributedLayout = layout.cast<DistributedEncodingTrait>();
+    warpsPerCTA = distributedLayout.getWarpsPerCTA();
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
     return getNumWarpsPerCTA(dotLayout.getParent());
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
@@ -353,7 +380,7 @@ unsigned getNumCTAs(Attribute layout) {
 
 bool isaDistributedLayout(Attribute layout) {
   return layout.isa<BlockedEncodingAttr>() || layout.isa<MmaEncodingTrait>() ||
-         layout.isa<SliceEncodingAttr>();
+         layout.isa<DpasEncodingAttr>() || layout.isa<SliceEncodingAttr>();
 }
 
 template <typename T> bool hasEncoding(Value value) {
@@ -374,9 +401,9 @@ bool hasDotOperandEncoding(Value value) {
 }
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
-  // If the new elements per thread is less than the old one, we will need to do
-  // convert encoding that goes through shared memory anyway. So we consider it
-  // as expensive.
+  // If the new elements per thread is less than the old one, we will need to
+  // do convert encoding that goes through shared memory anyway. So we
+  // consider it as expensive.
   auto tensorTy = cat.getResult().getType().cast<RankedTensorType>();
   auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
   auto shape = tensorTy.getShape();
@@ -808,6 +835,114 @@ unsigned SharedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   return 0;
 }
 
+SmallVector<unsigned> DpasEncodingAttr::getCTAsPerCGA() const {
+  ArrayRef<unsigned> ref = getCTALayout().getCTAsPerCGA();
+  return SmallVector<unsigned>(ref.begin(), ref.end());
+}
+SmallVector<unsigned> DpasEncodingAttr::getCTAOrder() const {
+  ArrayRef<unsigned> ref = getCTALayout().getCTAOrder();
+  return SmallVector<unsigned>(ref.begin(), ref.end());
+}
+SmallVector<unsigned> DpasEncodingAttr::getCTASplitNum() const {
+  ArrayRef<unsigned> ref = getCTALayout().getCTASplitNum();
+  return SmallVector<unsigned>(ref.begin(), ref.end());
+}
+SmallVector<unsigned> DpasEncodingAttr::getWarpsPerCTA() const {
+  return SmallVector<unsigned>(getWarpsPerCTA__().begin(),
+                               getWarpsPerCTA__().end());
+}
+SmallVector<unsigned> DpasEncodingAttr::getWarpOrder() const {
+  return ::getOrder(*this);
+}
+SmallVector<unsigned> DpasEncodingAttr::getThreadsPerWarp() const {
+  // From the DPAS layout:
+  //                   warp 0
+  //    ----------------/\-----------------
+  //    [ 0   1   2   3   ......  14  15 ] <== 16 threads per row
+  //    [ 0   1   2   3   ......  14  15 ]
+  //    ....
+  //    [ 0   1   2   3   ......  14  15 ]
+  return {1, 16};
+}
+SmallVector<unsigned> DpasEncodingAttr::getThreadOrder() const {
+  return ::getOrder(*this);
+}
+SmallVector<unsigned> DpasEncodingAttr::getSizePerThread() const {
+  // From the DPAS layout:
+  //                   warp 0
+  //    ----------------/\-----------------
+  //    [ 0   1   2   3   ......  14  15 ]
+  //    [ 0   1   2   3   ......  14  15 ]
+  //    ....
+  //    [ 0   1   2   3   ......  14  15 ]
+  // Each thread operates on a column, each column has 8 elements.
+  return {8, 1};
+}
+SmallVector<unsigned>
+DpasEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
+  // Given by threadPerWarp ([1,16]) * warpsPerCTA ([8,1]) * warpsPerCTA.
+  return {8 * getWarpsPerCTA()[0], 16 * getWarpsPerCTA()[1]};
+}
+
+SmallVector<unsigned>
+DpasEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
+  size_t rank = shape.size();
+  assert(rank == 2 && "Unexpected rank of dpas layout");
+
+  SmallVector<unsigned> elemsPerThread(rank);
+  constexpr unsigned elemsPerThreadPerTile = 8;
+  unsigned elemsRow =
+      ceil<unsigned>(shape[0], 8 * getWarpsPerCTA()[0]) * elemsPerThreadPerTile;
+  unsigned elemsCol = ceil<unsigned>(shape[1], 16 * getWarpsPerCTA()[1]);
+  elemsPerThread[0] = elemsRow;
+  elemsPerThread[1] = elemsCol;
+  return elemsPerThread;
+}
+
+unsigned DpasEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
+                                                  Type eltTy) const {
+  return product<unsigned>(getElemsPerThread(shape, eltTy));
+}
+
+SmallVector<int64_t>
+DotOperandEncodingAttr::getDPASElemsPerInstr(unsigned bitWidth) const {
+  // Constraints on PVC for D[M,N] = A[M,K] * B[K,M] + C[M,N]
+  // M = RC = 1, 2, 4, 8
+  // N = exec_size = SIMD_width = 16
+  // SD = 8
+  // K = SD * number of packed operands in each Dword (OpsPerChannel)
+  unsigned RC = 8u;
+  unsigned execSize = 16u;
+  unsigned SD = 8u;
+  unsigned OpsPerChannel = std::max(1u, std::min(32u / bitWidth, 8u));
+  unsigned K = SD * OpsPerChannel;
+
+  if (getOpIdx() == 0)
+    return {RC, K};
+  else {
+    assert(getOpIdx() == 1);
+    return {K, execSize};
+  }
+}
+
+SmallVector<int64_t>
+DotOperandEncodingAttr::getDPASRep(ArrayRef<int64_t> operandShape,
+                                   Type elemType) const {
+  SmallVector<int64_t> operandTileShape =
+      getDPASElemsPerInstr(elemType.getIntOrFloatBitWidth());
+  auto warpsPerCTA = getParent().cast<DpasEncodingAttr>().getWarpsPerCTA();
+  if (getOpIdx() == 0)
+    return {std::max<int64_t>(1, operandShape[0] /
+                                     (operandTileShape[0] * warpsPerCTA[0])),
+            std::max<int64_t>(1, operandShape[1] / operandTileShape[1])};
+  else {
+    assert(getOpIdx() == 1);
+    return {std::max<int64_t>(1, operandShape[0] / operandTileShape[0]),
+            std::max<int64_t>(1, operandShape[1] /
+                                     (operandTileShape[1] * warpsPerCTA[1]))};
+  }
+}
+
 SmallVector<unsigned>
 DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                           Type eltTy) const {
@@ -817,6 +952,11 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 
 unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                         Type eltTy) const {
+  if (auto dpasParent = getParent().dyn_cast<DpasEncodingAttr>()) {
+    auto rep = getDPASRep(shape, eltTy);
+    return rep[0] * rep[1];
+  }
+
   if (auto mmaParent = getParent().dyn_cast<MmaEncodingTrait>()) {
     return mmaParent.getTotalElemsPerThreadForOperands(shape, eltTy,
                                                        getOpIdx());
@@ -1041,6 +1181,67 @@ void MmaEncodingAttr::print(AsmPrinter &printer) const {
           << "CTAOrder = [" << getCTALayout().getCTAOrder() << "], "
           << "instrShape = [" << getInstrShape() << "]"
           << "}>";
+}
+
+//===----------------------------------------------------------------------===//
+// DPAS encoding
+//===----------------------------------------------------------------------===//
+
+Attribute DpasEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+
+  unsigned repeatCount = 0;
+  SmallVector<unsigned> warpsPerCTA;
+  SmallVector<unsigned> CTAsPerCGA;
+  SmallVector<unsigned> CTASplitNum;
+  SmallVector<unsigned> CTAOrder;
+
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "repeatCount") {
+      if (parseUInt(parser, attr, repeatCount, "repeatCount").failed())
+        return {};
+      if (repeatCount < 1 || repeatCount > 8)
+        return {};
+    }
+    if (attr.getName() == "warpsPerCTA") {
+      if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
+        return {};
+    }
+    if (attr.getName() == "CTAsPerCGA") {
+      if (parseIntArrayAttr(parser, attr, CTAsPerCGA, "CTAsPerCGA").failed())
+        return {};
+    }
+    if (attr.getName() == "CTASplitNum") {
+      if (parseIntArrayAttr(parser, attr, CTASplitNum, "CTASplitNum").failed())
+        return {};
+    }
+    if (attr.getName() == "CTAOrder") {
+      if (parseIntArrayAttr(parser, attr, CTAOrder, "CTAOrder").failed())
+        return {};
+    }
+  }
+
+  auto CTALayout = CTALayoutAttr::get(parser.getContext(), CTAsPerCGA,
+                                      CTASplitNum, CTAOrder);
+
+  return parser.getChecked<DpasEncodingAttr>(parser.getContext(), repeatCount,
+                                             warpsPerCTA, CTALayout);
+}
+
+void DpasEncodingAttr::print(AsmPrinter &printer) const {
+  auto warpsPerCTA = getWarpsPerCTA();
+  printer << "<{"
+          << "repeatCount = " << getRepeatCount() << ", "
+          << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
+          << "CTAsPerCGA = [" << getCTALayout().getCTAsPerCGA() << "], "
+          << "CTASplitNum = [" << getCTALayout().getCTASplitNum() << "], "
+          << "CTAOrder = [" << getCTALayout().getCTAOrder() << "]}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -1544,6 +1745,9 @@ public:
     if (auto mmaAttr = attr.dyn_cast<MmaEncodingTrait>()) {
       os << "mma";
       return AliasResult::FinalAlias;
+    } else if (auto dpasAttr = attr.dyn_cast<DpasEncodingAttr>()) {
+      os << "dpas";
+      return AliasResult::FinalAlias;
     } else if (auto sharedAttr = attr.dyn_cast<SharedEncodingAttr>()) {
       os << "shared";
       return AliasResult::FinalAlias;
@@ -1695,7 +1899,8 @@ struct CanonicalizeConvertFromConvert
     auto srcType = op.getOperand().getType().cast<RankedTensorType>();
     auto dstType = op.getType().cast<RankedTensorType>();
     if (dstType.getEncoding().isa<triton::gpu::DotOperandEncodingAttr>() &&
-        srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>())
+        (srcType.getEncoding().isa<triton::gpu::MmaEncodingAttr>() ||
+         srcType.getEncoding().isa<triton::gpu::DpasEncodingAttr>()))
       return mlir::failure();
     // for hopper MMAv3
     if (!op.use_empty()) {

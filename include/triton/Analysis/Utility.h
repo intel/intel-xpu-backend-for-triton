@@ -129,6 +129,8 @@ bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
 
+bool supportDPAS(triton::DotOp op);
+
 bool isSingleValue(Value value);
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);

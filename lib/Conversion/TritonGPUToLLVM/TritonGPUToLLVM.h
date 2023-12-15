@@ -13,7 +13,7 @@ void populateTritonGPUToLLVMPatterns(
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit);
+    triton::Target target, PatternBenefit benefit);
 
 } // namespace mlir::triton
 

@@ -6,10 +6,12 @@ set(LLVM_OPTIONAL_SOURCES
   )
 
 add_mlir_conversion_library(TritonGPUToLLVM
+    ConvertLayoutOpToLLVM/SharedToDotOperandDPAS.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
     ConvertLayoutOpToLLVM.cpp
+    DotOpToLLVM/DPAS.cpp
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/MMAv1.cpp
     DotOpToLLVM/MMAv2.cpp
@@ -43,7 +45,9 @@ add_mlir_conversion_library(TritonGPUToLLVM
     ASMBuilder
     MLIRIR
     MLIRPass
+    MLIRGENXDialect
     MLIRGPUDialect
+    MLIRGPUToGENXTransforms
     MLIRGPUToNVVMTransforms
     MLIRGPUToROCDLTransforms
     MLIRGPUTransforms

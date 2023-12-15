@@ -1,5 +1,6 @@
 #include "Utility.h"
 #include "TypeConverter.h"
+#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 namespace mlir {
@@ -11,6 +12,18 @@ Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
   return rewriter.create<LLVM::ConstantOp>(loc, i32ty,
                                            IntegerAttr::get(i32ty, v));
+}
+
+Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v) {
+  auto i64ty = rewriter.getIntegerType(64);
+  return rewriter.create<LLVM::ConstantOp>(loc, i64ty,
+                                           IntegerAttr::get(i64ty, v));
+}
+
+Value createConstantF16(Location loc, OpBuilder &rewriter, float v) {
+  auto type = type::f16Ty(rewriter.getContext());
+  return rewriter.create<LLVM::ConstantOp>(loc, type,
+                                           rewriter.getF16FloatAttr(v));
 }
 
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v) {
@@ -162,7 +175,7 @@ getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
   return strides;
 }
 
-// Convert an \param index to a multi-dim coordinate given \param shape and
+// Convert an \param linear to a multi-dim coordinate given \param shape and
 // \param order.
 SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
                                Location loc, Value linear,
@@ -239,39 +252,69 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred) {
-  MLIRContext *ctx = rewriter.getContext();
-  unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
-  const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
+                  Value val, Value pred, triton::Target target) {
+  switch (target) {
+  case triton::Target::ROCDL:
+  case triton::Target::NVVM: {
+    MLIRContext *ctx = rewriter.getContext();
+    unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
+    const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
 
-  PTXBuilder builder;
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto *valOpr = builder.newOperand(val, c);
-  auto &st = builder.create<>("st")->shared().b(bits);
-  st(ptrOpr, valOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, void_ty(ctx));
+    PTXBuilder builder;
+    auto *ptrOpr = builder.newAddrOperand(ptr, "r");
+    auto *valOpr = builder.newOperand(val, c);
+    auto &st = builder.create<>("st")->shared().b(bits);
+    st(ptrOpr, valOpr).predicate(pred, "b");
+    return builder.launch(rewriter, loc, void_ty(ctx));
+  } break;
+  case triton::Target::GENX: {
+    createPredicatedBlock(rewriter, loc, pred, [&] {
+      store(val, ptr);
+      return ArrayRef<Value>();
+    });
+    return Value();
+  } break;
+  }
+  llvm_unreachable("unsupported triton::Target");
 }
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred) {
-  MLIRContext *ctx = rewriter.getContext();
-  auto ptrTy = ptr.getType().cast<LLVMPointerType>();
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
-  unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
+                 Type elemTy, Value pred, triton::Target target) {
+  switch (target) {
+  case triton::Target::ROCDL:
+  case triton::Target::NVVM: {
+    MLIRContext *ctx = rewriter.getContext();
+    auto ptrTy = ptr.getType().cast<LLVMPointerType>();
+    assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
+    unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
 
-  const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
+    const char *c = bitwidth == 64 ? "=l" : (bitwidth == 16 ? "=h" : "=r");
 
-  PTXBuilder builder;
-  auto *dOpr = builder.newOperand(c);
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-  auto &ld = builder.create<>("ld")->shared().b(bitwidth);
-  ld(dOpr, ptrOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, elemTy);
+    PTXBuilder builder;
+    auto *dOpr = builder.newOperand(c);
+    auto *ptrOpr = builder.newAddrOperand(ptr, "r");
+    auto &ld = builder.create<>("ld")->shared().b(bitwidth);
+    ld(dOpr, ptrOpr).predicate(pred, "b");
+    return builder.launch(rewriter, loc, elemTy);
+  } break;
+  case triton::Target::GENX: {
+    assert(ptr.getType().cast<LLVMPointerType>().getAddressSpace() == 3 &&
+           "Invalid addr space for loadShared");
+    Value undef = undef(elemTy);
+    Block &endBlock = createPredicatedBlock(rewriter, loc, pred,
+                                            SmallVector<Value, 1>{undef}, [&] {
+                                              Value ret = load(elemTy, ptr);
+                                              return SmallVector<Value, 1>{ret};
+                                            });
+    return *endBlock.args_begin();
+  } break;
+  }
+  llvm_unreachable("unsupported triton::Target");
 }
 
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value val, Value i, NVVM::ShflKind mode,
-                            Value clamp) {
+                            Value clamp, triton::Target target) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -279,51 +322,63 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = commonShflSync(loc, rewriter, val0, i, mode, clamp);
-    val1 = commonShflSync(loc, rewriter, val1, i, mode, clamp);
+    val0 = commonShflSync(loc, rewriter, val0, i, mode, clamp, target);
+    val1 = commonShflSync(loc, rewriter, val1, i, mode, clamp, target);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
     return bitcast(vec, val.getType());
   }
   Type type = val.getType();
-  if (type != i32_ty) {
-    val = bitcast(val, int_ty(bits));
-    if (bits < 32)
-      val = zext(i32_ty, val);
+
+  switch (target) {
+  case triton::Target::ROCDL:
+  case triton::Target::NVVM: {
+    if (type != i32_ty) {
+      val = bitcast(val, int_ty(bits));
+      if (bits < 32)
+        val = zext(i32_ty, val);
+    }
+    Value mask = i32_val(0xFFFFFFFF);
+    Value result = rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, val, i,
+                                                 clamp, mode, UnitAttr());
+    if (type != i32_ty) {
+      if (bits < 32)
+        result = trunc(int_ty(bits), result);
+      result = bitcast(result, type);
+    }
+
+    return result;
   }
-  Value mask = i32_val(0xFFFFFFFF);
-  Value result = rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, val, i, clamp,
-                                               mode, UnitAttr());
-  if (type != i32_ty) {
-    if (bits < 32)
-      result = trunc(int_ty(bits), result);
-    result = bitcast(result, type);
+  case triton::Target::GENX: {
+    return rewriter.create<GENX::SubGroupShuffleOp>(loc, type, val, i,
+                                                    GENX::ShflKind::XOR);
   }
-  return result;
+  }
+  llvm_unreachable("Invalid target");
 }
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i) {
+               int i, Target target) {
   return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
-                        i32_val(0x1f));
+                        i32_val(0x1f), target);
 }
 
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
+                 int i, Target target) {
   return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
-                        i32_val(0x0));
+                        i32_val(0x0), target);
 }
 
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i) {
-  return shflIdxSync(loc, rewriter, val, i32_val(i));
+                  int i, Target target) {
+  return shflIdxSync(loc, rewriter, val, i32_val(i), target);
 }
 
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i) {
+                  Value i, Target target) {
   return commonShflSync(loc, rewriter, val, i, NVVM::ShflKind::idx,
-                        i32_val(0x1f));
+                        i32_val(0x1f), target);
 }
 
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
@@ -337,7 +392,8 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
-                        StringRef key, StringRef content) {
+                        StringRef key, StringRef content,
+                        unsigned addressSpace) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto ctx = moduleOp.getContext();
   unsigned stringNumber = 0;
@@ -358,7 +414,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
     global = rewriter.create<LLVM::GlobalOp>(
         UnknownLoc::get(ctx), globalType,
         /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
-        rewriter.getStringAttr(contentStr));
+        rewriter.getStringAttr(contentStr), /*alignment=*/0, addressSpace);
   }
 
   Value zero = i32_val(0);

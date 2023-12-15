@@ -14,7 +14,7 @@ template <typename T> class OperationPass;
 
 namespace triton {
 
-enum Target { NVVM, ROCDL, Default = NVVM };
+enum Target { NVVM, ROCDL, GENX, Default = GENX };
 
 #define GEN_PASS_DECL
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"

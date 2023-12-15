@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from .._C.libtriton.triton import (ClusterInfo, TMAInfos, add_external_libs, compile_ptx_to_cubin, get_env_vars,
                                    get_num_warps, get_shared_memory_size, ir, runtime, translate_llvmir_to_ptx,
-                                   translate_triton_gpu_to_llvmir)
+                                   translate_llvmir_to_spirv, translate_triton_gpu_to_llvmir)
 from ..common.backend import get_backend, get_cuda_version_key, path_to_ptxas
 from ..common.build import is_hip
 # from ..runtime import driver, jit, JITFunction
@@ -21,7 +21,8 @@ from ..common.build import is_hip
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
-from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device, get_device_capability)
+from ..runtime.jit import (JITFunction, get_cuda_stream, get_current_device, get_dev_ctxt_queue_objs,
+                           get_device_capability, get_event_pool, get_imm_cmd_list)
 from ..tools.disasm import get_sass
 from .code_generator import ast_to_ttir
 from .make_launcher import make_stub
@@ -36,7 +37,7 @@ class CudaTargetDescriptor:
 
 
 def _is_cuda(target):
-    return isinstance(target, CudaTargetDescriptor)
+    return isinstance(target, CudaTargetDescriptor) and target.capability != 'spirv'
 
 
 class LazyDict(dict):
@@ -86,16 +87,15 @@ def optimize_ttir(mod, target):
 def ttir_to_ttgir(mod, num_warps, num_ctas, target):
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
-    pm.add_convert_triton_to_tritongpu_pass(num_warps, 32, num_ctas, target.capability)
+    pm.add_convert_triton_to_tritongpu_pass(num_warps, 32, num_ctas, _get_capability(target))
     pm.run(mod)
     return mod
 
 
 def optimize_ttgir(mod, num_stages, num_warps, num_ctas, target, cluster_info, enable_warp_specialization,
                    enable_persistent, optimize_epilogue):
+    capability = _get_capability(target)
     is_cuda = _is_cuda(target)
-    if is_cuda:
-        capability = target.capability
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     pm.add_tritongpu_coalesce_pass()
@@ -165,6 +165,8 @@ def ttgir_to_llir(mod, extern_libs, target, tma_infos):
     # TODO: separate tritongpu_to_llvmir for different backends
     if _is_cuda(target):
         return translate_triton_gpu_to_llvmir(mod, target.capability, tma_infos, runtime.TARGET.NVVM)
+    elif _is_spirv(target):
+        return translate_triton_gpu_to_llvmir(mod, 0, TMAInfos(), runtime.TARGET.GENX)
     else:
         return translate_triton_gpu_to_llvmir(mod, 0, TMAInfos(), runtime.TARGET.ROCDL)
 
@@ -211,6 +213,15 @@ def ptx_to_cubin(ptx: str, target: CudaTargetDescriptor):
     return compile_ptx_to_cubin(ptx, ptxas, target.capability, target.enable_fp_fusion)
 
 
+def llir_to_spv(mod: Any, arch: int = 0, ptx_version: int = 0):
+    '''
+    Translate TritonGPU module to SPIRV bitcode.
+    :param mod: a TritonGPU dialect module
+    :return: SPRIV bitcode
+    '''
+    return translate_llvmir_to_spirv(mod)
+
+
 # ------------------------------------------------------------------------------
 # compiler
 # ------------------------------------------------------------------------------
@@ -225,6 +236,19 @@ def get_kernel_name(src: str, pattern: str) -> str:
         line = line.strip()
         if line.startswith(pattern):
             return line.split()[-1]
+
+
+def get_ir_kernel_name(src: str, pattern: str) -> str:
+    '''
+    Get kernel name from the input source file.
+    This Kernel name is required when launching the kernel.
+    '''
+    # This is the original kernel names in Triton IR for SPIRV target.
+    assert src
+    for line in src.split('\n'):
+        line = line.strip()
+        if line.startswith(pattern):
+            return line.split('@', 1)[-1].split('(', 1)[0]
 
 
 def convert_type_repr(x):
@@ -345,16 +369,30 @@ instance_descriptor = namedtuple("instance_descriptor",
                                  defaults=[set(), set(), set(), set()])
 
 
+def _is_spirv(target):
+    return target.capability == 'spirv'
+
+
+def _get_capability(target):
+    is_cuda = _is_cuda(target)
+    if is_cuda:
+        return target.capability
+    return 0
+
+
 def get_cuda_capability(capability):
     if capability is None:
-        device = get_current_device()
-        capability = get_device_capability(device)
-        capability = capability[0] * 10 + capability[1]
+        if os.environ.get("TRITON_TARGET_NVVM", "0") == "1":
+            device = get_current_device()
+            capability = get_device_capability(device)
+            capability = capability[0] * 10 + capability[1]
+        else:
+            capability = "spirv"
     return capability
 
 
 def get_arch_default_num_warps(device_type):
-    if device_type in ["cuda", "hip"]:
+    if device_type in ["cuda", "hip", "xpu"]:
         num_warps = 4
     else:
         _device_backend = get_backend(device_type)
@@ -367,6 +405,8 @@ def get_arch_default_num_warps(device_type):
 def get_arch_default_num_stages(device_type, capability=None):
     if device_type == "cuda":
         num_stages = 3 if get_cuda_capability(capability) >= 75 else 2
+    elif device_type == "xpu":
+        num_stages = 2
     else:
         _device_backend = get_backend(device_type)
         assert _device_backend
@@ -374,6 +414,10 @@ def get_arch_default_num_stages(device_type, capability=None):
         num_stages = arch["num_stages"]
 
     return num_stages
+
+
+def add_spirv_stages(arch, extern_libs, stages):
+    stages["spv"] = (lambda path: Path(path).read_bytes(), lambda src: llir_to_spv(src))
 
 
 def add_cuda_stages(target, extern_libs, stages):
@@ -390,6 +434,7 @@ def compile(fn, **kwargs):
     if is_hip():
         device_type = "hip"
     is_cuda = device_type == "cuda"
+    is_spirv = device_type == "xpu"
     if is_hip():
         is_cuda = False
 
@@ -420,7 +465,7 @@ def compile(fn, **kwargs):
         cluster_info.clusterDimZ = kwargs["clusterDims"][2]
     tma_infos = TMAInfos()
     # build architecture descriptor
-    if device_type == "cuda":
+    if device_type in ["cuda", "xpu"]:
         _device_backend = get_backend(device_type)
         target = CudaTargetDescriptor(capability=get_cuda_capability(capability), num_warps=num_warps,
                                       enable_fp_fusion=enable_fp_fusion)
@@ -442,6 +487,13 @@ def compile(fn, **kwargs):
         add_cuda_stages(target, extern_libs, stages)
     elif device_type == "hip":
         _device_backend.add_stages(target, extern_libs, stages, num_warps=num_warps, num_stages=num_stages)
+    elif device_type == "xpu":
+        stages["ttgir"] = (lambda path: parse_mlir_module(path, context), lambda src: optimize_ttgir(
+            ttir_to_ttgir(src, num_warps, num_ctas, target), num_stages, num_warps, num_ctas, target, cluster_info,
+            enable_warp_specialization, enable_persistent, optimize_epilogue))
+        stages["llir"] = (lambda path: Path(path).read_text(),
+                          lambda src: ttgir_to_llir(src, extern_libs, target, tma_infos))
+        add_spirv_stages(target, extern_libs, stages)
     else:
         # pass the user's configuration to the backend device.
         target["num_warps"] = num_warps
@@ -566,6 +618,8 @@ def compile(fn, **kwargs):
             asm["sass"] = lambda: get_sass(next_module)
         elif ir_name == "amdgcn":
             asm[ir_name] = str(next_module[0])
+        elif ir_name == "spv":
+            asm[ir_name] = next_module
         else:
             asm[ir_name] = str(next_module)
         if ir_name == "llir" and "shared" not in metadata:
@@ -585,7 +639,10 @@ def compile(fn, **kwargs):
         if ir_name == "amdgcn":
             metadata["name"] = get_kernel_name(next_module[0], pattern='.globl')
             asm["hsaco_path"] = next_module[1]
-        if not is_cuda and not is_hip():
+        if is_spirv and (((ir_name == "ttgir" or ir_name == "llir") and
+                          (list(stages.keys())[first_stage] == ir_name)) or ir_name == "ttir"):
+            metadata["name"] = get_ir_kernel_name(str(next_module), pattern='tt.func public')
+        if not is_cuda and not is_hip() and not is_spirv:
             _device_backend.add_meta_info(ir_name, module, next_module, metadata, asm)
         module = next_module
 
@@ -610,7 +667,7 @@ def compile(fn, **kwargs):
         ids_of_const_exprs
     }
     # cache manager
-    if is_cuda:
+    if is_cuda or is_spirv:
         so_path = make_stub(name, signature, constants, ids, enable_warp_specialization=enable_warp_specialization)
     else:
         so_path = _device_backend.make_launcher_stub(name, signature, constants, ids)
@@ -660,14 +717,15 @@ class CompiledKernel:
         self.metadata = metadata
         self.cu_module = None
         self.cu_function = None
+        self.is_spirv = "spv" in asm
 
     def _init_handles(self):
         if self.cu_module is not None:
             return
 
-        if self.device_type in ["cuda"]:
-            device = get_current_device()
-            bin_path = {driver.HIP: "hsaco_path", driver.CUDA: "cubin"}[driver.backend]
+        if self.device_type in ["cuda", "xpu"]:
+            device = get_current_device(self.is_spirv)
+            bin_path = {driver.HIP: "hsaco_path", driver.CUDA: "cubin", driver.SPIRV: "spv"}[driver.backend]
             max_shared = driver.utils.get_device_properties(device)["max_shared_mem"]
             fn_load_binary = driver.utils.load_binary
         else:
@@ -694,6 +752,9 @@ class CompiledKernel:
 
     # capture args and expand args with cutensormap*
     def assemble_tensormap_to_arg(self, args):
+        if self.is_spirv:
+            args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
+            return args_ptr
         args_with_tma = list(args)
         if hasattr(self, 'tensormaps_info'):
             # tuple for hashable
@@ -707,13 +768,28 @@ class CompiledKernel:
 
         def runner(*args, stream=None):
             args_expand = self.assemble_tensormap_to_arg(args)
-            if stream is None:
-                if self.device_type in ["cuda"]:
-                    stream = get_cuda_stream()
-                else:
-                    stream = get_backend(self.device_type).get_stream(None)
-            self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.clusterDims[0],
-                           self.clusterDims[1], self.clusterDims[2], self.shared, stream, self.cu_function,
-                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
+            if self.is_spirv:
+                use_icl = 1
+                if stream is None:
+                    dev_obj, ctxt_obj, q_obj = get_dev_ctxt_queue_objs(self.is_spirv)
+                    if q_obj == 0:
+                        stream = get_imm_cmd_list()
+                    else:
+                        stream = 0
+                        use_icl = 0
+                event_pool = get_event_pool(self.is_spirv)
+                self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.clusterDims[0],
+                               self.clusterDims[1], self.clusterDims[2], self.shared, use_icl, stream, q_obj, dev_obj,
+                               ctxt_obj, self.cu_function, CompiledKernel.launch_enter_hook,
+                               CompiledKernel.launch_exit_hook, self, event_pool, *args_expand)
+            else:
+                if stream is None:
+                    if self.device_type in ["cuda"]:
+                        stream = get_cuda_stream()
+                    else:
+                        stream = get_backend(self.device_type).get_stream(None)
+                self.c_wrapper(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.clusterDims[0],
+                               self.clusterDims[1], self.clusterDims[2], self.shared, stream, self.cu_function,
+                               CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
 
         return runner

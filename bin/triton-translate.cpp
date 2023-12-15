@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
+#include "triton/Target/SPIRV/SPIRVTranslation.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
@@ -81,7 +82,7 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
 
   static llvm::cl::opt<std::string> targetKind(
       "target",
-      llvm::cl::desc("<translation target, options: llvmir/ptx/hsaco>"),
+      llvm::cl::desc("<translation target, options: llvmir/ptx/hsaco/spirv>"),
       llvm::cl::value_desc("target"), llvm::cl::init("llvmir"));
 
   static llvm::cl::opt<int> SMArch("sm", llvm::cl::desc("sm arch"),
@@ -141,6 +142,8 @@ LogicalResult tritonTranslateMain(int argc, char **argv,
     llvm::outs() << ::triton::translateLLVMIRToPTX(*llvmir, SMArch.getValue(),
                                                    ptxVersion.getValue(),
                                                    enableFpFusion.getValue());
+  } else if (targetKind == "spirv") {
+    llvm::outs() << ::triton::translateLLVMIRToSPIRV(*llvmir);
   } else {
     llvm::errs() << "Error: Unknown target specified: " << targetKind << "\n";
     return failure();

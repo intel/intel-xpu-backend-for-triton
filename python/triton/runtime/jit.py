@@ -10,40 +10,86 @@ from collections import defaultdict, namedtuple
 from functools import cached_property
 from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast, overload
 
+import torch
+import intel_extension_for_pytorch as ipex
+
 from .._C.libtriton.triton import TMAInfos
 from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
 
 
-def get_cuda_stream(idx=None):
-    if idx is None:
-        idx = get_current_device()
-    try:
-        from torch._C import _cuda_getCurrentRawStream
+def get_dev_ctxt_queue_objs(is_spirv=True):
+    if is_spirv:
+        from .driver import driver
+        context = driver.utils.get_l0_ctxt_ptr(ipex.xpu.current_stream().sycl_queue)[0]
+        device = driver.utils.get_l0_dev_ptr(ipex.xpu.current_stream().sycl_queue)[0]
+        queue = driver.utils.get_l0_queue(ipex.xpu.current_stream().sycl_queue)[0]
+        return device, context, queue
+    else:
+        return 0, 0, 0
 
-        return _cuda_getCurrentRawStream(idx)
-    except ImportError:
+
+def get_imm_cmd_list(is_spirv=True):
+    if is_spirv:
+        from .driver import driver
+        return driver.utils.get_l0_imm_cmd_list(ipex.xpu.current_stream().sycl_queue)[0]
+    else:
+        return 0
+
+
+def get_cuda_stream(idx=None, is_spirv=False):
+    if idx is None:
+        idx = get_current_device(is_spirv)
+    if is_spirv:
+        # Intentionally returning sycl-queue so that synchronization interfaces will be easy to use
+        return ipex.xpu.current_stream().sycl_queue
+    else:
+        try:
+            from torch._C import _cuda_getCurrentRawStream
+
+            return _cuda_getCurrentRawStream(idx)
+        except ImportError:
+            import torch
+
+            return torch.cuda.current_stream(idx).cuda_stream
+
+
+def get_event_pool(is_spirv=True):
+    if is_spirv:
+        from .driver import driver
+        return driver.utils.get_event_pool()
+    else:
+        return 0
+
+
+def get_current_device(is_spirv=False):
+    if is_spirv:
+        from .driver import driver
+        return driver.utils.get_current_device()
+    else:
         import torch
 
-        return torch.cuda.current_stream(idx).cuda_stream
+        return torch.cuda.current_device()
 
 
-def get_current_device():
-    import torch
+def set_current_device(idx, is_spirv=False):
+    if is_spirv:
+        from .driver import driver
+        return driver.utils.set_current_device(idx)
+    else:
+        import torch
 
-    return torch.cuda.current_device()
-
-
-def set_current_device(idx):
-    import torch
-
-    torch.cuda.set_device(idx)
+        torch.cuda.set_device(idx)
 
 
-def get_device_capability(idx):
-    import torch
+def get_device_capability(idx, is_spirv=False):
+    if is_spirv:
+        from .driver import driver
+        return driver.utils.get_device_capability(idx)
+    else:
+        import torch
 
-    return torch.cuda.get_device_capability(idx)
+        return torch.cuda.get_device_capability(idx)
 
 
 T = TypeVar("T")
@@ -383,7 +429,19 @@ class JITFunction(KernelInterface[T]):
             already_compiled=False,
         )
 
+    def _get_arg_data_ptr(self, arg) -> str:
+        arg_annotation = self.__annotations__.get(arg, None)
+        if not arg_annotation:
+            return arg.data_ptr() + (1 << 64) if hasattr(arg, "data_ptr") else arg
+        elif arg_annotation is torch.Tensor:
+            return arg.data_ptr() + (1 << 64)
+        else:
+            return arg
+
     def _conclude_device_type(self, device_types: List[str], pinned_memory_flags: List[bool]) -> str:
+        if self.is_spirv:
+            return 'xpu'
+
         device_types = [device_type for device_type in device_types if device_type != ""]
         # Return cuda if one of the input tensors is cuda
         if "cuda" in device_types:
@@ -430,6 +488,9 @@ class JITFunction(KernelInterface[T]):
         args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
 
         non_constexpr_arg_values = [arg.value for arg in args if not arg.param.is_constexpr]
+        data_ptr_arg_values = [
+            arg.value for arg in [self._get_arg_data_ptr(arg) for arg in args if not arg.param.is_constexpr]
+        ]
 
         sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
@@ -453,21 +514,29 @@ class JITFunction(KernelInterface[T]):
                                                      [self._pinned_memory_of(arg) for arg in non_constexpr_arg_values])
 
         device_backend = None
-        if device_type not in ["cuda"]:
+        if device_type not in ["cuda", "xpu"]:
             device_backend = get_backend(device_type)
             if device_backend is None:
                 raise ValueError("Cannot find backend for " + device_type)
 
         if device is None:
-            if device_type in ["cuda"]:
-                device = get_current_device()
-                set_current_device(device)
+            if device_type in ["cuda", "xpu"]:
+                device = get_current_device(self.is_spirv)
+                set_current_device(device, self.is_spirv)
             else:
                 device = device_backend.get_current_device()
                 device_backend.set_current_device(device)
+        use_icl = 1
         if stream is None and not warmup:
             if device_type in ["cuda"]:
                 stream = get_cuda_stream(device)
+            elif self.is_spirv:
+                dev_obj, ctxt_obj, q_obj = get_dev_ctxt_queue_objs(self.is_spirv)
+                if q_obj == 0:
+                    stream = get_imm_cmd_list()
+                else:
+                    stream = 0
+                    use_icl = 0
             else:
                 stream = device_backend.get_stream()
 
@@ -478,6 +547,9 @@ class JITFunction(KernelInterface[T]):
 
         if device_type in ["cuda"]:
             version_key = get_cuda_version_key()
+        elif device_type in ['xpu']:
+            # FIXME
+            version_key = ""
         else:
             version_key = device_backend.get_version_key()
         key = (
@@ -546,24 +618,49 @@ class JITFunction(KernelInterface[T]):
             )
 
         bin = self.cache[device][key]
+        event_pool = get_event_pool(self.is_spirv)
         if not warmup:
-            bin.c_wrapper(
-                grid_0,
-                grid_1,
-                grid_2,
-                bin.num_warps,
-                bin.num_ctas,
-                bin.clusterDims[0],
-                bin.clusterDims[1],
-                bin.clusterDims[2],
-                bin.shared,
-                stream,
-                bin.cu_function,
-                CompiledKernel.launch_enter_hook,
-                CompiledKernel.launch_exit_hook,
-                bin,
-                *bin.assemble_tensormap_to_arg(non_constexpr_arg_values),
-            )
+            if self.is_spirv:
+                bin.c_wrapper(
+                    grid_0,
+                    grid_1,
+                    grid_2,
+                    bin.num_warps,
+                    bin.num_ctas,
+                    bin.clusterDims[0],
+                    bin.clusterDims[1],
+                    bin.clusterDims[2],
+                    bin.shared,
+                    use_icl,
+                    stream,
+                    q_obj,
+                    dev_obj,
+                    ctxt_obj,
+                    bin.cu_function,
+                    CompiledKernel.launch_enter_hook,
+                    CompiledKernel.launch_exit_hook,
+                    bin,
+                    event_pool,
+                    *bin.assemble_tensormap_to_arg(data_ptr_arg_values),
+                )
+            else:
+                bin.c_wrapper(
+                    grid_0,
+                    grid_1,
+                    grid_2,
+                    bin.num_warps,
+                    bin.num_ctas,
+                    bin.clusterDims[0],
+                    bin.clusterDims[1],
+                    bin.clusterDims[2],
+                    bin.shared,
+                    stream,
+                    bin.cu_function,
+                    CompiledKernel.launch_enter_hook,
+                    CompiledKernel.launch_exit_hook,
+                    bin,
+                    *bin.assemble_tensormap_to_arg(non_constexpr_arg_values),
+                )
         return bin
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
@@ -572,6 +669,7 @@ class JITFunction(KernelInterface[T]):
         self.fn = fn
         self.module = fn.__module__
         self.version = version
+        self.is_spirv = os.environ.get("TRITON_TARGET_NVVM", "0") != "1"
         self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
         self.starting_line_number = inspect.getsourcelines(fn)[1]

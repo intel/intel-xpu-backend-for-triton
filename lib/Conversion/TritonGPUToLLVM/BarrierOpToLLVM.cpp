@@ -232,16 +232,20 @@ struct FenceAsyncSharedOpConversion
 void populateBarrierOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, PatternBenefit benefit) {
-  patterns.add<BarrierOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<AllocMBarrierOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<MBarrierArriveOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<MBarrierWaitOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<ExtractMBarrierOpConversion>(typeConverter, allocation, benefit);
+    ModuleAllocation &allocation, Target target, PatternBenefit benefit) {
+  patterns.add<BarrierOpConversion>(typeConverter, allocation, target, benefit);
+  patterns.add<AllocMBarrierOpConversion>(typeConverter, allocation, target,
+                                          benefit);
+  patterns.add<MBarrierArriveOpConversion>(typeConverter, allocation, target,
+                                           benefit);
+  patterns.add<MBarrierWaitOpConversion>(typeConverter, allocation, target,
+                                         benefit);
+  patterns.add<ExtractMBarrierOpConversion>(typeConverter, allocation, target,
+                                            benefit);
   patterns.add<NamedBarrierArriveOpConversion>(typeConverter, allocation,
-                                               benefit);
-  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, allocation,
+                                               target, benefit);
+  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, allocation, target,
                                              benefit);
-  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, allocation,
+  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, allocation, target,
                                              benefit);
 }

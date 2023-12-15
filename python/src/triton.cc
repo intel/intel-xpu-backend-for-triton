@@ -21,6 +21,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/Index/IR/IndexOps.h"
+#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/NVGPUToLLVM/NVGPUToLLVMPass.h"
@@ -36,6 +37,7 @@
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include "triton/Target/PTX/PTXTranslation.h"
 #include "triton/Target/PTX/TmaMetadata.h"
+#include "triton/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
@@ -73,6 +75,7 @@ enum backend_t {
   HOST,
   CUDA,
   ROCM,
+  SPIRV,
 };
 
 void init_triton_runtime(py::module &&m) {
@@ -81,11 +84,13 @@ void init_triton_runtime(py::module &&m) {
       .value("HOST", HOST)
       .value("CUDA", CUDA)
       .value("ROCM", ROCM)
+      .value("SPIRV", SPIRV)
       .export_values();
 
   py::enum_<mlir::triton::Target>(m, "TARGET")
-      .value("NVVM", mlir::triton::NVVM)
-      .value("ROCDL", mlir::triton::ROCDL)
+      .value("NVVM", mlir::triton::Target::NVVM)
+      .value("ROCDL", mlir::triton::Target::ROCDL)
+      .value("GENX", mlir::triton::Target::GENX)
       .export_values();
 }
 
@@ -1877,6 +1882,28 @@ void init_triton_translation(py::module &m) {
         return str;
       },
       ret::take_ownership);
+
+  m.def("translate_llvmir_to_spirv",
+        [](const std::string llvmIR) -> py::object {
+          py::gil_scoped_release allow_threads;
+          // create LLVM module from C++
+          llvm::LLVMContext context;
+          std::unique_ptr<llvm::MemoryBuffer> buffer =
+              llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+          llvm::SMDiagnostic error;
+          std::unique_ptr<llvm::Module> module =
+              llvm::parseIR(buffer->getMemBufferRef(), error, context);
+          if (!module) {
+            llvm::report_fatal_error(
+                "failed to parse IR: " + error.getMessage() +
+                "lineno: " + std::to_string(error.getLineNo()));
+          }
+
+          // translate module to SPIRV
+          std::string spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
+          py::bytes bytes(spirvBitcode);
+          return std::move(bytes);
+        });
 
   m.def(
       "translate_llvmir_to_ptx",

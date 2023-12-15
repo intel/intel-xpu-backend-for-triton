@@ -11,7 +11,9 @@
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Target/PTX/TmaMetadata.h"
 #include <set>
@@ -30,6 +32,7 @@ using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::DpasEncodingAttr;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::TMAMetadataTy;
@@ -186,29 +189,31 @@ public:
   };
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter)
-      : converter(&typeConverter) {}
+      TritonGPUToLLVMTypeConverter &typeConverter, Target target)
+      : converter(&typeConverter), target(target) {}
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
       TritonGPUToLLVMTypeConverter &typeConverter,
-      IndexCacheInfo indexCacheInfo)
-      : converter(&typeConverter), indexCacheInfo(indexCacheInfo) {}
-
-  explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation)
-      : converter(&typeConverter), allocation(&allocation) {}
+      IndexCacheInfo indexCacheInfo, Target target)
+      : converter(&typeConverter), indexCacheInfo(indexCacheInfo),
+        target(target) {}
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      IndexCacheInfo indexCacheInfo)
-      : converter(&typeConverter), allocation(&allocation),
-        indexCacheInfo(indexCacheInfo) {}
+      Target target)
+      : converter(&typeConverter), allocation(&allocation), target(target) {}
 
   explicit ConvertTritonGPUOpToLLVMPatternBase(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      TMAMetadataTy *tmaMetadata)
+      IndexCacheInfo indexCacheInfo, Target target)
       : converter(&typeConverter), allocation(&allocation),
-        tmaMetadata(tmaMetadata) {}
+        indexCacheInfo(indexCacheInfo), target(target) {}
+
+  explicit ConvertTritonGPUOpToLLVMPatternBase(
+      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
+      TMAMetadataTy *tmaMetadata, Target target)
+      : converter(&typeConverter), allocation(&allocation),
+        tmaMetadata(tmaMetadata), target(target) {}
 
   TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
 
@@ -717,6 +722,8 @@ public:
         if (mmaLayout.isAmpere() || mmaLayout.isHopper())
           result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter,
                                                           mmaLayout, type);
+      } else if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+        result = emitBaseIndexForDpasLayout(loc, rewriter, dpasLayout, type);
       } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
         auto parentLayout = sliceLayout.getParent();
         auto parentShape = sliceLayout.paddedShape(type.getShape());
@@ -756,9 +763,26 @@ public:
       if (mmaLayout.isHopper())
         return emitOffsetForMmaLayoutV3(mmaLayout, type);
     }
+    if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+      return emitOffsetForDpasLayout(dpasLayout, type);
+    }
     if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
       return emitOffsetForSliceLayout(sliceLayout, type);
     llvm_unreachable("unsupported emitOffsetForLayout");
+  }
+
+  void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
+                            SmallVector<SmallVector<unsigned>> &offsets,
+                            unsigned ctaOffsetX, unsigned ctaOffsetY) const {
+    unsigned elemsPerThreadPerGroup =
+        triton::gpu::getContigPerThread(dpasLayout)[0];
+    unsigned warpSize = getWarpSize(dpasLayout);
+    SmallVector<unsigned> shapePerCTA = getShapePerCTATile(dpasLayout);
+
+    for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
+      offsets.push_back(
+          {ctaOffsetX * shapePerCTA[0] + elem, ctaOffsetY * shapePerCTA[1]});
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -783,6 +807,9 @@ public:
       } else if (auto mma = layout.dyn_cast<MmaEncodingAttr>()) {
         result =
             emitIndicesForDistributedLayout(loc, b, mma, type, withCTAOffset);
+      } else if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+        result = emitIndicesForDistributedLayout(loc, b, dpasLayout, type,
+                                                 withCTAOffset);
       } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
         result =
             emitIndicesForDistributedLayout(loc, b, slice, type, withCTAOffset);
@@ -1051,6 +1078,47 @@ private:
     return ret;
   }
 
+  // -----------------------------------------------------------------------
+  // Dpas layout indices
+  // -----------------------------------------------------------------------
+
+  SmallVector<Value>
+  emitBaseIndexForDpasLayout(Location loc, ConversionPatternRewriter &rewriter,
+                             const DpasEncodingAttr &dpasLayout,
+                             RankedTensorType type) const {
+    Value threadId = getThreadId(rewriter, loc);
+    Value warpSize = i32_val(triton::gpu::getWarpSize(dpasLayout));
+    Value warpId = udiv(threadId, warpSize);
+    Value laneId = urem(threadId, warpSize);
+
+    SmallVector<Value> warpsPerCTA = {i32_val(dpasLayout.getWarpsPerCTA()[0]),
+                                      i32_val(dpasLayout.getWarpsPerCTA()[1])};
+    ArrayRef<int64_t> shape = type.getShape();
+
+    // Compute the 2-dim coordinates of the warp containing the tensor element
+    // operated on by this thread.
+    SmallVector<unsigned> warpShape = {8, 16};
+    Value rowWarpId =
+        urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / warpShape[0]));
+    Value colWarpId = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
+                           i32_val(shape[1] / warpShape[1]));
+    Value rowWarpOffset = mul(rowWarpId, i32_val(warpShape[0]));
+    Value colWarpOffset = mul(colWarpId, i32_val(warpShape[1]));
+
+    // Compute the 2-dim coordinates of the first element in the warp operated
+    // on by this thread.
+    SmallVector<unsigned> threadPerWarp = getThreadsPerWarp(dpasLayout);
+    SmallVector<unsigned> contigPerThread = getContigPerThread(dpasLayout);
+    SmallVector<Value> multiDimBase = {
+        add(mul(i32_val(contigPerThread[0]),
+                udiv(laneId, i32_val(threadPerWarp[1]))),
+            rowWarpOffset),
+        add(mul(i32_val(contigPerThread[1]),
+                urem(laneId, i32_val(threadPerWarp[1]))),
+            colWarpOffset)};
+    return multiDimBase;
+  }
+
   SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV2V3(
       Location loc, ConversionPatternRewriter &rewriter,
       const MmaEncodingAttr &mmaLayout, RankedTensorType type) const {
@@ -1105,6 +1173,22 @@ private:
     multiDimBase[0] = add(udiv(laneId, i32_val(4)), offWarp0);
     multiDimBase[1] = add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarp1);
     return multiDimBase;
+  }
+
+  SmallVector<SmallVector<unsigned>>
+  emitOffsetForDpasLayout(const DpasEncodingAttr &dpasLayout,
+                          RankedTensorType type) const {
+    ArrayRef<int64_t> shape = type.getShape();
+    SmallVector<SmallVector<unsigned>> offsets;
+    SmallVector<unsigned> shapePerCTA = getShapePerCTATile(dpasLayout);
+
+    for (unsigned i = 0; i < shape[0]; i += shapePerCTA[0]) {
+      for (unsigned j = 0; j < shape[1]; j += shapePerCTA[1]) {
+        emitDpasOffsetForCTA(dpasLayout, offsets, i, j);
+      }
+    }
+
+    return offsets;
   }
 
   SmallVector<SmallVector<unsigned>>
@@ -1184,6 +1268,7 @@ protected:
   ModuleAllocation *allocation;
   IndexCacheInfo indexCacheInfo;
   mlir::triton::gpu::TMAMetadataTy *tmaMetadata;
+  Target target;
 };
 
 template <typename SourceOp>
@@ -1194,35 +1279,39 @@ public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
+      TritonGPUToLLVMTypeConverter &typeConverter, Target target,
+      PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
+        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, target) {}
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      PatternBenefit benefit = 1)
+      Target target, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation) {}
+        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation, target) {
+  }
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter,
-      IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
+      IndexCacheInfo indexCacheInfo, Target target, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, indexCacheInfo) {}
+        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, indexCacheInfo,
+                                            target) {}
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      IndexCacheInfo indexCacheInfo, PatternBenefit benefit = 1)
+      IndexCacheInfo indexCacheInfo, Target target, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation,
-                                            indexCacheInfo) {}
+                                            indexCacheInfo, target) {}
 
   explicit ConvertTritonGPUOpToLLVMPattern(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      mlir::triton::gpu::TMAMetadataTy *tmaMetadata, PatternBenefit benefit = 1)
+      mlir::triton::gpu::TMAMetadataTy *tmaMetadata, Target target,
+      PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation,
-                                            tmaMetadata) {}
+                                            tmaMetadata, target) {}
 
 protected:
   TritonGPUToLLVMTypeConverter *getTypeConverter() const {

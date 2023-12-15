@@ -1,4 +1,5 @@
 #include "ReduceOpToLLVM.h"
+#include "TritonGPUToLLVMBase.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -21,9 +22,9 @@ public:
   ReduceOpConversion(
       TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
       ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-      int computeCapability, PatternBenefit benefit)
+      int computeCapability, Target target, PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::ReduceOp>(
-            typeConverter, allocation, indexCacheInfo, benefit),
+            typeConverter, allocation, indexCacheInfo, target, benefit),
         computeCapability(computeCapability) {}
 
   LogicalResult
@@ -281,7 +282,7 @@ private:
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned i = 0; i < acc.size(); ++i) {
-        shfl[i] = shflSync(loc, rewriter, acc[i], N * interleave);
+        shfl[i] = shflSync(loc, rewriter, acc[i], N * interleave, target);
       }
       accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
     }
@@ -408,7 +409,7 @@ private:
         auto elemTy = getElementType(op, i);
         Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
                              smemBases[i], writeOffset);
-        storeShared(rewriter, loc, writePtr, acc[i], laneZero);
+        storeShared(rewriter, loc, writePtr, acc[i], laneZero, target);
       }
     }
   }
@@ -443,7 +444,8 @@ private:
         auto elemTy = getElementType(op, i);
         Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
                             smemBases[i], readOffset);
-        acc[i] = loadShared(rewriter, loc, readPtr, elemTy, threadIsNeeded);
+        acc[i] =
+            loadShared(rewriter, loc, readPtr, elemTy, threadIsNeeded, target);
       }
       warpReduce(rewriter, loc, acc, op, sizeInterWarps, 1 /* interleave */);
       // only the first thread in each sizeInterWarps is writing
@@ -461,7 +463,7 @@ private:
       Value pred = and_(threadIsNeeded, laneIdModSizeInterWarpsIsZero);
 
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
+        storeShared(rewriter, loc, writePtrs[i], acc[i], pred, target);
       }
 
       if (round != elemsPerThread - 1) {
@@ -519,7 +521,7 @@ void populateReduceOpToLLVMPatterns(
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    int computeCapability, PatternBenefit benefit) {
+    int computeCapability, Target target, PatternBenefit benefit) {
   patterns.add<ReduceOpConversion>(typeConverter, allocation, indexCacheInfo,
-                                   computeCapability, benefit);
+                                   computeCapability, target, benefit);
 }

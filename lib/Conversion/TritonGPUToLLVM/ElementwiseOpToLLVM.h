@@ -11,6 +11,6 @@ void populateElementwiseOpToLLVMPatterns(
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    int computeCapability, PatternBenefit benefit);
+    int computeCapability, Target target, PatternBenefit benefit);
 
 #endif

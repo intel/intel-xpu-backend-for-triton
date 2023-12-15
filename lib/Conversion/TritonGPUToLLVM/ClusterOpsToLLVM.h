@@ -32,6 +32,6 @@ using namespace mlir::triton;
 void populateClusterOpsToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, PatternBenefit benefit);
+    ModuleAllocation &allocation, Target target, PatternBenefit benefit);
 
 #endif

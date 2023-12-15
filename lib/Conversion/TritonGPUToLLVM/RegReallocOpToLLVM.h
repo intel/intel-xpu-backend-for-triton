@@ -9,6 +9,6 @@ using namespace mlir::triton;
 void populateRegReallocOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    const ModuleAllocation &allocation, PatternBenefit benefit);
+    const ModuleAllocation &allocation, Target target, PatternBenefit benefit);
 
 #endif

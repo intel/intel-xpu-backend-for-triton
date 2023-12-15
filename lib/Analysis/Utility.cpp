@@ -212,6 +212,9 @@ bool ReduceOpHelper::isSupportedLayout() {
   if (auto mmaLayout = srcLayout.dyn_cast<triton::gpu::MmaEncodingTrait>()) {
     return mmaLayout.supportReduction();
   }
+  if (auto dpasLayout = srcLayout.dyn_cast<triton::gpu::DpasEncodingAttr>()) {
+    return true;
+  }
   if (auto sliceLayout = srcLayout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
     return true;
   }
@@ -433,6 +436,43 @@ bool supportMMA(Value value, int version) {
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
          (elemTy.isF32() && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);
+}
+
+bool supportDPAS(triton::DotOp op) {
+  auto ATy = op.getA().getType().cast<RankedTensorType>();
+  auto BTy = op.getB().getType().cast<RankedTensorType>();
+  auto CTy = op.getC().getType().cast<RankedTensorType>();
+  auto DTy = op.getResult().getType().cast<RankedTensorType>();
+
+  Type AElemTy = ATy.getElementType(), BElemTy = BTy.getElementType(),
+       CElemTy = CTy.getElementType(), DElemTy = DTy.getElementType();
+
+  if (AElemTy != BElemTy || CElemTy != DElemTy)
+    return false;
+
+  if (!AElemTy.isF16() && !AElemTy.isBF16() && !AElemTy.isF32() &&
+      !AElemTy.isInteger(8))
+    return false;
+
+  if (!CElemTy.isF32() && !CElemTy.isInteger(32))
+    return false;
+
+  // Supported types element types combinations are:
+  //   Operand  A     B     C    D
+  //  -------------------------------
+  //   elemTy   f16   f16   f32  f32
+  //   elemTy   bf16  bf16  f32  f32
+  //   elemTy   i8    i8    i32  i32
+  //   elemTy   tf32  tf32  f32  f32  Note: tf32 represented via f32
+
+  if ((AElemTy.isF16() || AElemTy.isBF16()) && !CElemTy.isF32())
+    return false;
+  if (AElemTy.isInteger(8) && !CElemTy.isInteger(32))
+    return false;
+  if (AElemTy.isF32() && !CElemTy.isF32())
+    return false;
+
+  return true;
 }
 
 static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
