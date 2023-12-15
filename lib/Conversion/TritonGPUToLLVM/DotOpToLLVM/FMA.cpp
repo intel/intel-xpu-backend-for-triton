@@ -1,5 +1,6 @@
 #include "../DotOpToLLVM.h"
 #include "../Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -24,6 +25,34 @@ static ValueTableFMA getValueTableFromStructFMA(
       }
   }
   return res;
+}
+
+static Value convertIfRequired(Value val, Type tgtTy, Location loc,
+                               ConversionPatternRewriter &rewriter) {
+  Type valTy = val.getType();
+  if (valTy == tgtTy)
+    return val;
+
+  assert(isa<FloatType>(tgtTy) && valTy.isIntOrFloat() &&
+         "Unexpected tgtTy or valTy types");
+  const unsigned tgtBitWidth = tgtTy.getIntOrFloatBitWidth(),
+                 valBitWidth = valTy.getIntOrFloatBitWidth();
+
+  return llvm::TypeSwitch<Type, Value>(valTy)
+      .Case<FloatType>([&](FloatType ty) {
+        Operation *castOp =
+            (valBitWidth <= tgtBitWidth)
+                ? rewriter.create<LLVM::FPExtOp>(loc, tgtTy, val)
+                : rewriter.create<LLVM::FPTruncOp>(loc, tgtTy, val);
+        return castOp->getResult(0);
+      })
+      .Case<IntegerType>([&](IntegerType ty) {
+        Operation *castOp =
+            (ty.isSigned() || ty.isSignless())
+                ? rewriter.create<LLVM::SIToFPOp>(loc, tgtTy, val)
+                : rewriter.create<LLVM::UIToFPOp>(loc, tgtTy, val);
+        return castOp->getResult(0);
+      });
 }
 
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
@@ -90,8 +119,11 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
             int z = isCRow
                         ? mIdx * N / nShapePerCTATile * mSizePerThread + nIdx
                         : nIdx * M / mShapePerCTATile * nSizePerThread + mIdx;
-            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
-                                                      hbs[{n + nn, k}], ret[z]);
+            Value opA = convertIfRequired(has[{m + mm, k}], ret[z].getType(),
+                                          loc, rewriter);
+            Value opB = convertIfRequired(hbs[{n + nn, k}], ret[z].getType(),
+                                          loc, rewriter);
+            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, opA, opB, ret[z]);
           }
   }
 

@@ -16,6 +16,11 @@ def is_hip():
     return torch.version.hip is not None
 
 
+# TODO: properly set is_spirv
+def is_spirv():
+    return True
+
+
 @functools.lru_cache()
 def libcuda_dirs():
     env_libcuda_path = os.getenv("TRITON_LIBCUDA_PATH")
@@ -43,6 +48,11 @@ def rocm_path_dir():
     return os.getenv("ROCM_PATH", default="/opt/rocm")
 
 
+@functools.lru_cache()
+def ze_path_dir():
+    return os.getenv("ZE_PATH", default="/usr/local")
+
+
 @contextlib.contextmanager
 def quiet():
     old_stdout, old_stderr = sys.stdout, sys.stderr
@@ -61,7 +71,10 @@ def cuda_include_dir():
 
 
 def _build(name, src, srcdir):
-    if is_hip():
+    if is_spirv():
+        ze_lib_dir = os.path.join(ze_path_dir(), "lib")
+        ze_include_dir = os.path.join(ze_path_dir(), "include/level_zero")
+    elif is_hip():
         hip_lib_dir = os.path.join(rocm_path_dir(), "lib")
         hip_include_dir = os.path.join(rocm_path_dir(), "include")
     else:
@@ -89,7 +102,25 @@ def _build(name, src, srcdir):
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
-    if is_hip():
+    if is_spirv():
+        cxx = os.environ.get("CXX")
+        if cxx is None:
+            clangpp = shutil.which("clang++")
+            icpx = shutil.which("icpx")
+            cxx = icpx if icpx is not None else clangpp
+        import numpy as np
+        numpy_include_dir = np.get_include()
+        if icpx is not None:
+            ret = subprocess.check_call([
+                cxx, src, "-fsycl", "-std=c++17", "-g", f"-I{ze_include_dir}", f"-I{py_include_dir}",
+                f"-I{numpy_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", f"-L{ze_lib_dir}", "-lze_loader", "-o", so
+            ])
+        else:
+            ret = subprocess.check_call([
+                cxx, src, "-std=c++17", "-g", f"-I{ze_include_dir}", f"-I{py_include_dir}", f"-I{numpy_include_dir}",
+                f"-I{srcdir}", "-shared", "-fPIC", f"-L{ze_lib_dir}", "-lze_loader", "-o", so
+            ])
+    elif is_hip():
         ret = subprocess.check_call([
             cc, src, f"-I{hip_include_dir}", f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC",
             f"-L{hip_lib_dir}", "-lamdhip64", "-o", so

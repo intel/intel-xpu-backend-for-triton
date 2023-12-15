@@ -13,6 +13,6 @@ void populateConvertLayoutOpToLLVMPatterns(
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit);
+    triton::Target target, PatternBenefit benefit);
 
 #endif

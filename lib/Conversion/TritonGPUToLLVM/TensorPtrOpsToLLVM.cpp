@@ -97,8 +97,8 @@ struct AdvanceOpConversion
 void populateTensorPtrOpsToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, PatternBenefit benefit) {
-  patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
-  patterns.add<AdvanceOpConversion>(typeConverter, benefit);
+    ModuleAllocation &allocation, Target target, PatternBenefit benefit) {
+  patterns.add<MakeTensorPtrOpConversion>(typeConverter, target, benefit);
+  patterns.add<AdvanceOpConversion>(typeConverter, target, benefit);
   return;
 }

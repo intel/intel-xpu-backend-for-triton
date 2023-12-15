@@ -23,6 +23,7 @@
 
 #include "../DotOpToLLVM.h"
 #include "../Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -174,7 +175,7 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
   // Workaround for a bug in ptxas 12.3 that cause a failure in
   // test_core.py::test_dot. The shuffle will force the compiler to treate the
   // value as uniform and prevent wrong optimizations.
-  warp = mlir::LLVM::shflIdxSync(loc, rewriter, warp, 0);
+  warp = mlir::LLVM::shflIdxSync(loc, rewriter, warp, 0, mlir::triton::NVVM);
   Value warpM = urem(warp, i32_val(wpt[0]));
   Value warpId = urem(warpM, i32_val(shapePerCTA[0] / instrShape[0]));
 

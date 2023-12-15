@@ -6,6 +6,7 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::DpasEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 
@@ -25,6 +26,9 @@ LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               TritonGPUToLLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter);
 
+LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                          TritonGPUToLLVMTypeConverter *typeConverter,
+                          ConversionPatternRewriter &rewriter);
 LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                            TritonGPUToLLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread);
@@ -70,6 +74,14 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
+    }
+
+    DpasEncodingAttr dpasLayout = D.getType()
+                                      .cast<RankedTensorType>()
+                                      .getEncoding()
+                                      .dyn_cast<DpasEncodingAttr>();
+    if (!isOuter && dpasLayout && supportDPAS(op)) {
+      return convertDPAS(op, adaptor, getTypeConverter(), rewriter);
     }
 
     if (D.getType()
@@ -187,9 +199,10 @@ struct DotWaitOpConversion
 void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns, int numWarps,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 ModuleAllocation &allocation,
+                                 ModuleAllocation &allocation, Target target,
                                  PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<DotAsyncOpConversion>(typeConverter, allocation, benefit);
-  patterns.add<DotWaitOpConversion>(typeConverter, allocation, benefit);
+  patterns.add<DotOpConversion>(typeConverter, allocation, target, benefit);
+  patterns.add<DotAsyncOpConversion>(typeConverter, allocation, target,
+                                     benefit);
+  patterns.add<DotWaitOpConversion>(typeConverter, allocation, target, benefit);
 }

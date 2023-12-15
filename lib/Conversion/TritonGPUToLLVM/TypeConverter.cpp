@@ -1,6 +1,7 @@
 #include "TypeConverter.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
 
 using namespace mlir;
@@ -8,6 +9,7 @@ using namespace mlir::triton;
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::DpasEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::MmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
@@ -125,6 +127,29 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
   if (!dotOpLayout)
     return elemTy;
+
+  if (auto dpasParent = dotOpLayout.getParent().dyn_cast<DpasEncodingAttr>()) {
+    unsigned RC = dpasParent.getRepeatCount();
+    unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
+
+    if (dotOpLayout.getOpIdx() == 0) {
+      //  Elem. Type | vector size
+      // ------------------------------
+      //  f16/bf16   | vector<8xf16/bf16>
+      //     i8      | vector<16xi8>
+      //     tf32    | vector<4xf32>
+      return vec_ty(elemTy, RC * ((8 * (float)(sizeof(int16_t)) / bitWidth)));
+    } else {
+      //  Elem. Type | vector size
+      // ------------------------------
+      //  f16/bf16   | vector<16xf16/bf16>
+      //     i8      | vector<32xi8>
+      //     tf32    | vector<8xf32>
+      assert(dotOpLayout.getOpIdx() == 1);
+      return vec_ty(elemTy, RC * ((8 * sizeof(int32_t)) / bitWidth));
+    }
+  }
+
   auto mmaParent = dotOpLayout.getParent().dyn_cast<MmaEncodingAttr>();
   if (!mmaParent || mmaParent.isHopper())
     return elemTy;
@@ -157,4 +182,66 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
   unsigned numElementsPerThread = getTotalElemsPerThread(type);
   SmallVector<Type, 4> types(numElementsPerThread, eltType);
   return LLVM::LLVMStructType::getLiteral(ctx, types);
+}
+
+TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
+    spirv::TargetEnvAttr &targetAttr, SPIRVConversionOptions &option)
+    : SPIRVTypeConverter(targetAttr, option) {
+  addConversion([&](triton::PointerType type) -> std::optional<Type> {
+    return convertTritonPointerType(type);
+  });
+  addSourceMaterialization([&](OpBuilder &builder, Type resultType,
+                               ValueRange inputs,
+                               Location loc) -> std::optional<Value> {
+    if (inputs.size() != 1)
+      return std::nullopt;
+
+    if (resultType.isa<IndexType>()) {
+      return builder.create<arith::TruncIOp>(loc, resultType, inputs);
+    }
+    return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
+        .getResult(0);
+  });
+  addTargetMaterialization([&](OpBuilder &builder, Type resultType,
+                               ValueRange inputs,
+                               Location loc) -> std::optional<Value> {
+    if (inputs.size() != 1)
+      return std::nullopt;
+
+    if (inputs[0].getType().isa<IndexType>()) {
+      return builder.create<arith::TruncIOp>(loc, resultType, inputs);
+    }
+    return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
+        .getResult(0);
+  });
+}
+
+std::optional<spirv::StorageClass>
+addressSpaceToStorageClass(unsigned AddrSpace) {
+  switch (AddrSpace) {
+  case 0:
+    return spirv::StorageClass::Function;
+  case 1:
+    return spirv::StorageClass::CrossWorkgroup;
+  case 2:
+    return spirv::StorageClass::UniformConstant;
+  case 3:
+    return spirv::StorageClass::Workgroup;
+  case 4:
+    return spirv::StorageClass::Generic;
+  case 7:
+    return spirv::StorageClass::Input;
+  default:
+    return std::nullopt;
+  }
+}
+
+Type TritonGPUToSPIRVTypeConverter::convertTritonPointerType(
+    triton::PointerType type) {
+  // Recursively translate pointee type
+  std::optional<spirv::StorageClass> storageClass =
+      addressSpaceToStorageClass(type.getAddressSpace());
+  assert(storageClass && "uncompatible pointer address type in SPIRV");
+  return spirv::PointerType::get(convertType(type.getPointeeType()),
+                                 *storageClass);
 }

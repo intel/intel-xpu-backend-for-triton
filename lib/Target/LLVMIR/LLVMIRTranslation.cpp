@@ -12,6 +12,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/GENX/GENXToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
@@ -105,13 +106,11 @@ makeOptimizingPipeline(unsigned optLevel, unsigned sizeLevel,
     tuningOptions.LoopUnrolling = true;
     tuningOptions.LoopInterleaving = true;
     tuningOptions.LoopVectorization = true;
-    // TODO: currently we run SLP vectorizer with an empty target machine. This
-    // cause the vectorizer to create larger vector which could be bad.
-    // Disabling it would currently cause regressions as this pass also applies
-    // some scheduling that helps performance in some cases. We should work on
-    // using NVPTX target instead and address the performance regressions with
-    // some scheduling solution.
-    tuningOptions.SLPVectorization = true;
+
+    // SLPVectorizer causes test_core_xpu.py::test_dot_mulbroadcastred to fail.
+    // It vectorizes @llvm.fmuladd.f32 with @llvm.fmuladd.v32f32. We can
+    // consider to reenable SLP vectorization when the failure is investigated.
+    tuningOptions.SLPVectorization = false;
 
     PassBuilder pb(targetMachine, tuningOptions);
 
@@ -151,6 +150,8 @@ struct NVVMMetadata {
 // Add the nvvm related metadata to LLVM IR.
 static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata,
                           Target target) {
+  assert(target == triton::Target::NVVM || target == triton::Target::ROCDL);
+
   auto *module = func->getParent();
   auto &ctx = func->getContext();
 
@@ -162,6 +163,7 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata,
         }));
 
     SmallVector<llvm::Metadata *> md_args = {llvm::ValueAsMetadata::get(func)};
+
     if (maxntid.size() > 0) {
       md_args.push_back(llvm::MDString::get(ctx, "maxntidx"));
       md_args.push_back(llvm::ValueAsMetadata::get(maxntid[0]));
@@ -193,6 +195,8 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata,
       func->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
       func->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
     } break;
+    default:
+      llvm_unreachable("Function should be called only for NVVM/ROCDL targets");
     }
   }
 }
@@ -250,7 +254,8 @@ static std::filesystem::path getThisLibraryPath() {
 #endif
 }
 
-static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
+static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module,
+                                                        Target target) {
   std::map<std::string, std::string> externLibs;
   SmallVector<LLVM::LLVMFuncOp> funcs;
   module.walk([&](LLVM::LLVMFuncOp func) {
@@ -279,7 +284,9 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
   }
 
   if (!funcs.empty()) {
-    static const std::string libdevice = "libdevice";
+    static const std::string libdevice = (target == Target::GENX)
+                                             ? "libsycl-spir64-unknown-unknown"
+                                             : "libdevice";
     // first search for environmental path
     std::string env_path = ::triton::tools::getenv("TRITON_LIBDEVICE_PATH");
     if (!env_path.empty()) {
@@ -291,8 +298,11 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
     // `triton/third_party/cuda/lib/libdevice.10.bc`
     static const auto this_library_path = getThisLibraryPath();
     static const auto runtime_path =
-        this_library_path.parent_path().parent_path() / "third_party" / "cuda" /
-        "lib" / "libdevice.10.bc";
+        (target == Target::GENX)
+            ? this_library_path.parent_path().parent_path() / "third_party" /
+                  "sycl" / "lib" / "libsycl-spir64-unknown-unknown.bc"
+            : this_library_path.parent_path().parent_path() / "third_party" /
+                  "cuda" / "lib" / "libdevice.10.bc";
     if (fs::exists(runtime_path)) {
       externLibs.try_emplace(libdevice, runtime_path.string());
     } else {
@@ -302,12 +312,20 @@ static std::map<std::string, std::string> getExternLibs(mlir::ModuleOp module) {
       // [triton root dir]/python/triton/language/libdevice.10.bc
       // TODO(Keren): handle external linkage other than libdevice?
       static const auto this_file_path = std::filesystem::path(__FILE__);
-      static const auto compiletime_path = this_file_path.parent_path()
-                                               .parent_path()
-                                               .parent_path()
-                                               .parent_path() /
-                                           "python" / "triton" / "third_party" /
-                                           "cuda" / "lib" / "libdevice.10.bc";
+      static const auto compiletime_path =
+          (target == Target::GENX)
+              ? this_file_path.parent_path()
+                        .parent_path()
+                        .parent_path()
+                        .parent_path() /
+                    "python" / "triton" / "third_party" / "sycl" / "lib" /
+                    "libsycl-spir64-unknown-unknown.bc"
+              : this_file_path.parent_path()
+                        .parent_path()
+                        .parent_path()
+                        .parent_path() /
+                    "python" / "triton" / "third_party" / "cuda" / "lib" /
+                    "libdevice.10.bc";
       if (!fs::exists(compiletime_path)) {
         std::string error_msg = "Can't find libdevice at neither " +
                                 runtime_path.string() + " nor " +
@@ -369,24 +387,45 @@ bool linkExternLib(llvm::Module &module, llvm::StringRef name,
   return false;
 }
 
+static void dumpLLVMIR(std::unique_ptr<llvm::Module> &llvmModule,
+                       StringRef banner) {
+  if (::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+    std::string mod_string;
+    std::unique_ptr<llvm::raw_string_ostream> ir_ss(
+        new llvm::raw_string_ostream(mod_string));
+    llvmModule->print(*ir_ss, nullptr);
+    std::cout << banner.str() << mod_string << std::endl;
+  }
+}
+
 std::unique_ptr<llvm::Module>
 translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
                       Target target) {
   DialectRegistry registry;
   mlir::registerBuiltinDialectTranslation(registry);
   mlir::registerLLVMDialectTranslation(registry);
-  mlir::registerROCDLDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
+  mlir::registerGENXDialectTranslation(registry);
 
   module->getContext()->appendDialectRegistry(registry);
 
   llvm::DenseMap<llvm::StringRef, NVVMMetadata> nvvmMetadata;
-  extractNVVMMetadata(module, &nvvmMetadata);
+  if (target == triton::Target::NVVM || target == triton::Target::ROCDL)
+    extractNVVMMetadata(module, &nvvmMetadata);
 
   auto llvmModule = mlir::translateModuleToLLVMIR(module, *llvmContext);
   if (!llvmModule) {
     llvm::errs() << "Failed to emit LLVM IR\n";
     return nullptr;
+  }
+
+  // Set SPIRV module properties
+  if (target == Target::GENX) {
+    std::string triple = "spir64-unknown-unknown";
+    std::string layout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:"
+                         "256-v256:256-v512:512-v1024:1024-n8:16:32:64";
+    llvmModule->setTargetTriple(triple);
+    llvmModule->setDataLayout(layout);
   }
 
   // Link external libraries before perform optimizations
@@ -397,11 +436,14 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
   // generation passes. This allows the optimizers to inline and perform
   // analyses on the used library functions, and eliminate any used functions as
   // dead code.
-  auto externLibs = getExternLibs(module);
+  auto externLibs = getExternLibs(module, target);
   for (auto &lib : externLibs) {
     if (linkExternLib(*llvmModule, lib.first, lib.second, target))
       return nullptr;
   }
+
+  dumpLLVMIR(llvmModule,
+             "// -----// LLVM IR Dump After Link External Lib //----- //\n");
 
   auto optPipeline = makeOptimizingPipeline(
       /*optLevel=*/3, /*sizeLevel=*/0,
@@ -412,10 +454,14 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
     return nullptr;
   }
 
-  for (auto &func : llvmModule->functions()) {
-    auto it = nvvmMetadata.find(func.getName());
-    if (it != nvvmMetadata.end())
-      amendLLVMFunc(&func, it->second, target);
+  dumpLLVMIR(llvmModule, "// -----// LLVM IR Dump After LLVM Opt //----- //\n");
+
+  if (target == triton::Target::NVVM || target == triton::Target::ROCDL) {
+    for (auto &func : llvmModule->functions()) {
+      auto it = nvvmMetadata.find(func.getName());
+      if (it != nvvmMetadata.end())
+        amendLLVMFunc(&func, it->second, target);
+    }
   }
 
   return llvmModule;
@@ -481,14 +527,7 @@ translateTritonGPUToLLVMIR(llvm::LLVMContext *llvmContext,
     return nullptr;
   }
 
-  if (::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-    std::string mod_string;
-    std::unique_ptr<llvm::raw_string_ostream> ir_ss(
-        new llvm::raw_string_ostream(mod_string));
-    llvmIR->print(*ir_ss, nullptr);
-    std::cout << "// -----// LLVM IR Dump //----- //\n"
-              << mod_string << std::endl;
-  }
+  dumpLLVMIR(llvmIR, "// -----// LLVM IR Dump //----- //\n");
 
   return llvmIR;
 }

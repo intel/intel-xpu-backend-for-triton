@@ -55,6 +55,14 @@ Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
                     ConversionPatternRewriter &rewriter);
 }
 
+namespace SharedToDotOperandDPAS {
+Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
+                    Location loc, Value tensor,
+                    DotOperandEncodingAttr bEncoding,
+                    const SharedMemoryObject &smemObj,
+                    TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
+} // namespace SharedToDotOperandDPAS
+
 struct ConvertLayoutOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
@@ -233,6 +241,18 @@ private:
       } else {
         llvm_unreachable("Unexpected MMALayout version");
       }
+      return multiDimOffset;
+    }
+    if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+      SmallVector<Value> multiDimBase =
+          emitBaseIndexForLayout(loc, rewriter, layout, type, false);
+      SmallVector<SmallVector<unsigned>> offsets;
+      emitDpasOffsetForCTA(dpasLayout, offsets, multiDimCTAInRepId[0],
+                           multiDimCTAInRepId[1]);
+
+      SmallVector<Value> multiDimOffset = {
+          add(multiDimBase[0], i32_val(offsets[elemId][0])),
+          add(multiDimBase[1], i32_val(offsets[elemId][1]))};
       return multiDimOffset;
     }
     llvm_unreachable("unexpected layout in getMultiDimOffset");
@@ -629,6 +649,7 @@ private:
       }
       if (srcLayout.isa<BlockedEncodingAttr>() ||
           srcLayout.isa<SliceEncodingAttr>() ||
+          srcLayout.isa<DpasEncodingAttr>() ||
           srcLayout.isa<MmaEncodingAttr>()) {
         if (isSrcMmaV1)
           processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ true, srcTy,
@@ -663,6 +684,7 @@ private:
       }
       if (dstLayout.isa<BlockedEncodingAttr>() ||
           dstLayout.isa<SliceEncodingAttr>() ||
+          dstLayout.isa<DpasEncodingAttr>() ||
           dstLayout.isa<MmaEncodingAttr>()) {
         if (isDstMmaV1)
           processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,
@@ -873,6 +895,10 @@ private:
             dotOperandLayout.getParent().dyn_cast_or_null<MmaEncodingAttr>()) {
       res = lowerSharedToDotOperandMMA(op, adaptor, rewriter, mmaLayout,
                                        dotOperandLayout, isOuter);
+    } else if (auto dpasLayout = dotOperandLayout.getParent()
+                                     .dyn_cast_or_null<DpasEncodingAttr>()) {
+      res = lowerSharedToDotOperandDPAS(op, adaptor, rewriter, dpasLayout,
+                                        dotOperandLayout, isOuter);
     } else if (auto blockedLayout =
                    dotOperandLayout.getParent()
                        .dyn_cast_or_null<BlockedEncodingAttr>()) {
@@ -1042,6 +1068,31 @@ private:
     }
     return res;
   }
+
+  // shared -> dot_operand if the result layout is dpas
+  Value lowerSharedToDotOperandDPAS(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter, const DpasEncodingAttr &dpasLayout,
+      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
+    auto loc = op.getLoc();
+    Value src = op.getSrc();
+    Value dst = op.getResult();
+
+    auto llvmElemTy = getTypeConverter()->convertType(
+        src.getType().cast<RankedTensorType>().getElementType());
+
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                   llvmElemTy, rewriter);
+    Value res;
+    if (!isOuter) {
+      res = SharedToDotOperandDPAS::convertLayout(
+          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
+          smemObj, getTypeConverter(), tid_val());
+    } else {
+      assert(false && "unsupported layout found");
+    }
+    return res;
+  }
 };
 
 void populateConvertLayoutOpToLLVMPatterns(
@@ -1049,7 +1100,7 @@ void populateConvertLayoutOpToLLVMPatterns(
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit) {
+    triton::Target target, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation,
-                                          indexCacheInfo, benefit);
+                                          indexCacheInfo, target, benefit);
 }

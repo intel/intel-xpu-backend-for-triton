@@ -1,0 +1,81 @@
+name: Triton DSE Pre Commit
+
+on:
+  pull_request:
+    branches:
+    - llvm-target
+
+jobs:
+  build:
+    name: Build + LIT
+    runs-on: self-hosted
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: 'true'
+
+      - name: Set XPU ENV
+        run: |
+          echo "LLVM_SYSPATH=/iusers/waihungt/packages/llvm" >> "${GITHUB_ENV}"
+          echo "BACKEND=XPU" >> "${GITHUB_ENV}"
+          echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Update PATH
+        run: |
+          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Check pre-commit
+        run: |
+          python3 -m pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files --verbose
+
+      - name: Install Triton
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          cd python
+          python3 -m pip install cmake==3.24 ninja pytest-xdist
+          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+
+      - name: Run lit tests
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          python3 -m pip install lit
+          python3 -m pip install intel_extension_for_pytorch
+          cd python
+          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
+          if [ ! -d "${LIT_TEST_DIR}" ]; then
+            echo "Could not find '${LIT_TEST_DIR}'" ; exit -1
+          fi
+          lit -v "${LIT_TEST_DIR}"
+
+      - name: Run core tests
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          cd python/test/unit/language
+          python3 -m pytest --verbose --device xpu test_core_xpu.py
+
+      - name: Run assert/print tests
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          cd python/test/unit/language
+          python3 assert_helper_xpu.py device_assert
+          python3 print_helper_xpu.py device_print float 1> /dev/null
+
+      - name: Run XPU python tests
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          cd python/test/backend/third_party_backends
+          python3 -m pytest --verbose test_xpu_backend.py
+
+      - name: Run CXX unittests
+        if: ${{ env.BACKEND == 'XPU'}}
+        run: |
+          cd python
+          cd "build/$(ls build | grep -i cmake)"
+          ctest

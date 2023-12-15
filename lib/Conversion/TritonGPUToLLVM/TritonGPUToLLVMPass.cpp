@@ -3,6 +3,7 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/GPUToGENX/GPUToGENXPass.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
@@ -10,6 +11,7 @@
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/Index/IR/IndexOps.h"
+#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -74,6 +76,9 @@ public:
       break;
     case Target::ROCDL:
       addLegalDialect<ROCDL::ROCDLDialect>();
+      break;
+    case Target::GENX:
+      addLegalDialect<GENX::GENXDialect>();
       break;
     }
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -151,9 +156,10 @@ struct ReturnOpConversion : public ConvertOpToLLVMPattern<triton::ReturnOp> {
 /// information.
 struct FuncOpConversion : public FuncOpConversionBase {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   ModuleAllocation &allocation, PatternBenefit benefit)
+                   ModuleAllocation &allocation, triton::Target target,
+                   PatternBenefit benefit)
       : FuncOpConversionBase(converter, benefit), numWarps(numWarps),
-        allocation(allocation) {}
+        allocation(allocation), target(target) {}
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter) const {
@@ -211,12 +217,32 @@ struct FuncOpConversion : public FuncOpConversionBase {
     }
 
     auto ctx = funcOp->getContext();
+    switch (target) {
+    case Target::NVVM:
+    case Target::ROCDL:
+      if (allocation.isRoot(funcOp))
+        // Set an attribute to indicate this function is a kernel entry.
+        newFuncOp->setAttr("nvvm.kernel",
+                           rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
 
-    if (allocation.isRoot(funcOp)) {
-      // Set an attribute to indicate this function is a kernel entry.
-      newFuncOp->setAttr("nvvm.kernel",
-                         rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-    } else {
+      // Set an attribute for maxntidx, it could be used in latter LLVM codegen
+      // for `nvvm.annotation` metadata.
+      newFuncOp->setAttr("nvvm.maxntid",
+                         rewriter.getI32ArrayAttr(32 * numWarps));
+      break;
+    case Target::GENX:
+      NamedAttrList attrs;
+      if (allocation.isRoot(funcOp))
+        attrs.append(GENX::GENXDialect::getKernelFuncAttrName(),
+                     rewriter.getI32IntegerAttr(1));
+      attrs.append(GENX::GENXDialect::getMaxWorkGroupSizeAttrName(),
+                   rewriter.getI32ArrayAttr({32 * numWarps, 1, 1}));
+      attrs.append(GENX::GENXDialect::getReqdSubGroupSizeAttrName(),
+                   rewriter.getI32ArrayAttr(32));
+      newFuncOp->setDialectAttrs(attrs);
+      break;
+    }
+    if (!allocation.isRoot(funcOp)) {
       // The noinline attribute will be used by the LLVM codegen to prevent
       // inlining.
       // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/LLVMIR/IR/LLVMInlining.cpp#L267
@@ -224,9 +250,6 @@ struct FuncOpConversion : public FuncOpConversionBase {
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       rewriter.eraseOp(amendedFuncOp);
     }
-    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
-    // for `nvvm.annotation` metadata.
-    newFuncOp->setAttr("nvvm.maxntid", rewriter.getI32ArrayAttr(32 * numWarps));
     // The call graph is updated by mapping the old function to the new one.
     allocation.mapFuncOp(funcOp, newFuncOp);
 
@@ -260,6 +283,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
 private:
   int numWarps{0};
   ModuleAllocation &allocation;
+  triton::Target target;
 };
 
 // CallOpInterfaceLowering is adapted from
@@ -285,7 +309,6 @@ struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
     return success();
   }
 
-private:
   SmallVector<Value, 4>
   promoteOperands(triton::CallOp callOp,
                   typename triton::CallOp::Adaptor adaptor,
@@ -300,6 +323,9 @@ private:
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
     auto base = allocation.getFunctionSharedMemoryBase(caller);
+    if (!base)
+      base = rewriter.create<LLVM::UndefOp>(callOp.getLoc(), ptrTy);
+
     auto *funcAllocation = allocation.getFuncData(caller);
     auto bufferId = funcAllocation->getBufferId(callOp);
     // function doesn't have a shared mem buffer
@@ -372,6 +398,9 @@ public:
     case Target::ROCDL:
       addLegalDialect<ROCDL::ROCDLDialect>();
       break;
+    case Target::GENX:
+      addLegalDialect<GENX::GENXDialect>();
+      break;
     }
     addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
@@ -388,8 +417,8 @@ struct ConvertTritonGPUToLLVM
       ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
-                    NVVM::NVVMDialect>();
+    registry.insert<GENX::GENXDialect, triton::nvgpu::NVGPUDialect,
+                    LLVM::LLVMDialect, NVVM::NVVMDialect>();
   }
 
   ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,
@@ -468,6 +497,7 @@ struct ConvertTritonGPUToLLVM
       TritonLLVMFunctionConversionTarget funcTarget(*context, target);
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, allocation,
+                                         target,
                                          /*benefit=*/1);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
@@ -479,7 +509,7 @@ struct ConvertTritonGPUToLLVM
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
-    initSharedMemory(allocation, typeConverter);
+    initSharedMemory(allocation, typeConverter, target);
 
     // Convert call and ret ops
     {
@@ -522,24 +552,24 @@ struct ConvertTritonGPUToLLVM
 
     auto populatePatterns1 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo,
+                   allocation, indexCacheInfo, target,
                    /*benefit*/ 10);
     };
 
     auto populatePatterns2 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, /*benefit*/ 10);
+                   allocation, target, /*benefit*/ 10);
     };
 
     auto populatePatterns3 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
                    allocation, indexCacheInfo, tmaMetadata, &tensorPtrMap,
-                   /*benefit*/ 10);
+                   target, /*benefit*/ 10);
     };
 
     auto populatePatterns4 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, indexCacheInfo, computeCapability,
+                   allocation, indexCacheInfo, computeCapability, target,
                    /*benefit*/ 10);
     };
 
@@ -571,6 +601,9 @@ struct ConvertTritonGPUToLLVM
       mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
                                                  mlir::gpu::amd::HIP);
       break;
+    case Target::GENX:
+      mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
+      break;
     }
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
@@ -597,33 +630,59 @@ private:
   mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
 
   void initSharedMemory(ModuleAllocation &allocation,
-                        TritonGPUToLLVMTypeConverter &typeConverter) {
+                        TritonGPUToLLVMTypeConverter &typeConverter,
+                        Target target) {
     ModuleOp mod = getOperation();
     OpBuilder b(mod.getBodyRegion());
     auto ctx = mod.getContext();
     auto loc = mod.getLoc();
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-    // Set array size 0 and external linkage indicates that we use dynamic
-    // shared allocation to allow a larger shared memory size for each kernel.
-    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-    auto global = b.create<LLVM::GlobalOp>(
-        loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
-        "global_smem", /*value=*/Attribute(), /*alignment=*/0,
-        // Add ROCm support.
-        static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
-    mod.walk([&](FunctionOpInterface funcOp) {
-      Value funcSmem;
-      b.setInsertionPointToStart(&funcOp.getFunctionBody().front());
-      if (allocation.isRoot(funcOp)) {
-        funcSmem = b.create<LLVM::AddressOfOp>(loc, global);
-      } else {
-        funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
-      }
-      auto ptrTy = LLVM::LLVMPointerType::get(
-          ctx, NVVM::NVVMMemorySpace::kSharedMemorySpace);
-      funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
-      allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
-    });
+    switch (target) {
+    case Target::NVVM:
+    case Target::ROCDL: {
+      // Set array size 0 and external linkage indicates that we use dynamic
+      // shared allocation to allow a larger shared memory size for each kernel.
+      auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
+      auto global = b.create<LLVM::GlobalOp>(
+          loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+          "global_smem", /*value=*/Attribute(), /*alignment=*/0,
+          // Add ROCm support.
+          static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
+      mod.walk([&](FunctionOpInterface funcOp) {
+        Value funcSmem;
+        b.setInsertionPointToStart(&funcOp.getFunctionBody().front());
+        if (allocation.isRoot(funcOp)) {
+          funcSmem = b.create<LLVM::AddressOfOp>(loc, global);
+        } else {
+          funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
+        }
+        auto ptrTy = LLVM::LLVMPointerType::get(
+            ctx, NVVM::NVVMMemorySpace::kSharedMemorySpace);
+        funcSmem = b.create<LLVM::BitcastOp>(loc, ptrTy, funcSmem);
+        allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
+      });
+    } break;
+    case Target::GENX: {
+      size_t sharedMemSize = allocation.getSharedMemorySize();
+      auto ptrTy =
+          LLVM::LLVMPointerType::get(ctx, GENX::GENXMemorySpace::kWorkgroup);
+      mod.walk([&](FunctionOpInterface funcOp) {
+        Value funcSmem;
+        b.setInsertionPointToStart(&funcOp.getFunctionBody().front());
+        if (allocation.isRoot(funcOp)) {
+          // Pass an additional pointer to the kernel pointing to dynamically
+          // allocated shared memory.
+          if (sharedMemSize) {
+            funcOp.insertArgument(funcOp.getNumArguments(), ptrTy, {},
+                                  funcOp.getLoc());
+            funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
+          }
+        } else
+          funcSmem = funcOp.getArgument(funcOp.getNumArguments() - 1);
+        allocation.setFunctionSharedMemoryValue(funcOp, funcSmem);
+      });
+    } break;
+    }
     mod->setAttr("triton_gpu.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
                                         allocation.getSharedMemorySize()));
@@ -763,6 +822,7 @@ private:
     // pipeline pass aware of the vectorization could introduce additional
     // dependencies on the AxisInfoAnalysis and the Coalesce analysis.
     bool decomposed = false;
+
     // insert_slice_async %src, %dst, %idx, %mask, %other
     // =>
     // %tmp = load %src, %mask, %other
@@ -886,6 +946,17 @@ private:
         if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
           return;
         promoteType = builder.getF16Type();
+      } else if (auto dpasLayout = D.getType()
+                                       .cast<RankedTensorType>()
+                                       .getEncoding()
+                                       .dyn_cast<DpasEncodingAttr>()) {
+        Type BElType =
+            dotOp.getB().getType().cast<RankedTensorType>().getElementType();
+
+        auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
+                                    BElType.getIntOrFloatBitWidth());
+
+        return;
       } else {
         // FMA case.
         Type AElType =

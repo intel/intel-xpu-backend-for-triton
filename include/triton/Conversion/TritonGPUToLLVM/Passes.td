@@ -21,6 +21,7 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                              "mlir::triton::gpu::TritonGPUDialect",
                              "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                              "mlir::ROCDL::ROCDLDialect",
+                             "mlir::GENX::GENXDialect",
                              "mlir::NVVM::NVVMDialect"];
 
     let options = [
@@ -33,7 +34,9 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                "clEnumValN(mlir::triton::Target::NVVM, \"nvvm\", \"compile for "
                "NVVM-compatible LLVM\"), "
                "clEnumValN(mlir::triton::Target::ROCDL, \"rocdl\", \"compile for "
-               "ROCDL-compatible LLVM\"))">,
+               "ROCDL-compatible LLVM\"), "
+               "clEnumValN(mlir::triton::Target::GENX, \"genx\", \"compile for "
+               "GENX-compatible LLVM\"))">,
     ];
 }
 

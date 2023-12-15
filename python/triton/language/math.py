@@ -1,6 +1,7 @@
 import functools
 import os
 
+from ..common.build import is_spirv
 from ..common.build import is_hip
 from . import core
 
@@ -8,6 +9,8 @@ from . import core
 @functools.lru_cache()
 def libdevice_path():
     third_party_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "third_party")
+    if is_spirv():
+        default = os.path.join(third_party_dir, "sycl", "lib", "libsycl-spir64-unknown-unknown.bc")
     if is_hip():
         default = os.path.join(third_party_dir, "hip", "lib", "bitcode", "cuda2gcn.bc")
     else:
@@ -124,11 +127,18 @@ def abs(arg0, _builder=None):
 
 @core.extern
 def floor(arg0, _builder=None):
-    return core.extern_elementwise(
-        "libdevice", libdevice_path(), [arg0], {
-            (core.dtype("fp32"), ): ("__nv_floorf", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("__nv_floor", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder)
+    if is_spirv():
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [arg0], {
+                (core.dtype("fp32"), ): ("__imf_floorf", core.dtype("fp32")),
+                (core.dtype("fp64"), ): ("__imf_floor", core.dtype("fp64")),
+            }, is_pure=True, _builder=_builder)
+    else:
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [arg0], {
+                (core.dtype("fp32"), ): ("__nv_floorf", core.dtype("fp32")),
+                (core.dtype("fp64"), ): ("__nv_floor", core.dtype("fp64")),
+            }, is_pure=True, _builder=_builder)
 
 
 @core.extern
@@ -1047,13 +1057,22 @@ def rsqrt_rn(arg0, _builder=None):
 
 @core.extern
 def ffs(arg0, _builder=None):
-    return core.extern_elementwise(
-        "libdevice", libdevice_path(), [
-            arg0,
-        ], {
-            (core.dtype("int32"), ): ("__nv_ffs", core.dtype("int32")),
-            (core.dtype("int64"), ): ("__nv_ffsll", core.dtype("int32")),
-        }, is_pure=True, _builder=_builder)
+    if is_spirv():
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [
+                arg0,
+            ], {
+                (core.dtype("int32"), ): ("__imf_ffs", core.dtype("int32")),
+                (core.dtype("int64"), ): ("__imf_ffsll", core.dtype("int32")),
+            }, is_pure=True, _builder=_builder)
+    else:
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [
+                arg0,
+            ], {
+                (core.dtype("int32"), ): ("__nv_ffs", core.dtype("int32")),
+                (core.dtype("int64"), ): ("__nv_ffsll", core.dtype("int32")),
+            }, is_pure=True, _builder=_builder)
 
 
 @core.extern
@@ -1192,11 +1211,18 @@ def tan(arg0, _builder=None):
 
 @core.extern
 def log2(arg0, _builder=None):
-    return core.extern_elementwise(
-        "libdevice", libdevice_path(), [arg0], {
-            (core.dtype("fp32"), ): ("__nv_log2f", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("__nv_log2", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder)
+    if is_spirv():
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [arg0], {
+                (core.dtype("fp32"), ): ("__imf_log2f", core.dtype("fp32")),
+                (core.dtype("fp64"), ): ("__imf_log2", core.dtype("fp64")),
+            }, is_pure=True, _builder=_builder)
+    else:
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [arg0], {
+                (core.dtype("fp32"), ): ("__nv_log2f", core.dtype("fp32")),
+                (core.dtype("fp64"), ): ("__nv_log2", core.dtype("fp64")),
+            }, is_pure=True, _builder=_builder)
 
 
 @core.extern
@@ -1381,13 +1407,22 @@ def rnorm3d(arg0, arg1, arg2, _builder=None):
 
 @core.extern
 def norm4d(arg0, arg1, arg2, arg3, _builder=None):
-    return core.extern_elementwise(
-        "libdevice", libdevice_path(), [arg0, arg1, arg2, arg3], {
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")):
-            ("__nv_norm4df", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")):
-            ("__nv_norm4d", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder)
+    if is_spirv():
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [arg0, arg1, arg2, arg3], {
+                (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")):
+                ("__imf_norm4df", core.dtype("fp32")),
+                (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")):
+                ("__imf_norm4d", core.dtype("fp64")),
+            }, is_pure=True, _builder=_builder)
+    else:
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [arg0, arg1, arg2, arg3], {
+                (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")):
+                ("__nv_norm4df", core.dtype("fp32")),
+                (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")):
+                ("__nv_norm4d", core.dtype("fp64")),
+            }, is_pure=True, _builder=_builder)
 
 
 @core.extern
@@ -1570,11 +1605,18 @@ def ldexp(arg0, arg1, _builder=None):
 
 @core.extern
 def scalbn(arg0, arg1, _builder=None):
-    return core.extern_elementwise(
-        "libdevice", libdevice_path(), [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("int32")): ("__nv_scalbnf", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("int32")): ("__nv_scalbn", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder)
+    if is_spirv():
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [arg0, arg1], {
+                (core.dtype("fp32"), core.dtype("int32")): ("__imf_scalbnf", core.dtype("fp32")),
+                (core.dtype("fp64"), core.dtype("int32")): ("__imf_scalbn", core.dtype("fp64")),
+            }, is_pure=True, _builder=_builder)
+    else:
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [arg0, arg1], {
+                (core.dtype("fp32"), core.dtype("int32")): ("__nv_scalbnf", core.dtype("fp32")),
+                (core.dtype("fp64"), core.dtype("int32")): ("__nv_scalbn", core.dtype("fp64")),
+            }, is_pure=True, _builder=_builder)
 
 
 @core.extern
@@ -1606,13 +1648,22 @@ def fma(arg0, arg1, arg2, _builder=None):
 
 @core.extern
 def pow(arg0, arg1, _builder=None):
-    return core.extern_elementwise(
-        "libdevice", libdevice_path(), [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("int32")): ("__nv_powif", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("int32")): ("__nv_powi", core.dtype("fp64")),
-            (core.dtype("fp32"), core.dtype("fp32")): ("__nv_powf", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("fp64")): ("__nv_pow", core.dtype("fp64")),
-        }, is_pure=True, _builder=_builder)
+    if is_spirv():
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [arg0, arg1], {
+                (core.dtype("fp32"), core.dtype("int32")): ("__imf_powif", core.dtype("fp32")),
+                (core.dtype("fp64"), core.dtype("int32")): ("__imf_powi", core.dtype("fp64")),
+                (core.dtype("fp32"), core.dtype("fp32")): ("__imf_powf", core.dtype("fp32")),
+                (core.dtype("fp64"), core.dtype("fp64")): ("__imf_pow", core.dtype("fp64")),
+            }, is_pure=True, _builder=_builder)
+    else:
+        return core.extern_elementwise(
+            "libdevice", libdevice_path(), [arg0, arg1], {
+                (core.dtype("fp32"), core.dtype("int32")): ("__nv_powif", core.dtype("fp32")),
+                (core.dtype("fp64"), core.dtype("int32")): ("__nv_powi", core.dtype("fp64")),
+                (core.dtype("fp32"), core.dtype("fp32")): ("__nv_powf", core.dtype("fp32")),
+                (core.dtype("fp64"), core.dtype("fp64")): ("__nv_pow", core.dtype("fp64")),
+            }, is_pure=True, _builder=_builder)
 
 
 @core.extern

@@ -145,6 +145,41 @@ if(NOT MLIR_DIR)
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
 
+# LLVM-SPIRV
+if(NOT DEFINED LLVM_SPIRV)
+  if(EXISTS "${LLVM_LIBRARY_DIR}/libLLVMSPIRVLib.a")
+    set(LLVM_SPIRV_INCLUDE_DIR "${LLVM_LIBRARY_DIR}/../include")
+    set(LLVM_SPRIV_LIB_DIR "${LLVM_LIBRARY_DIR}")
+  elseif(EXISTS "${LLVM_SPIRV_DIR}/lib/libLLVMSPIRVLib.a")
+    set(LLVM_SPIRV_INCLUDE_DIR "${LLVM_SPIRV_DIR}/include")
+    set(LLVM_SPIRV_LIB_DIR "${LLVM_SPIRV_DIR}/lib")
+  else()
+    message(FATAL_ERROR "Can't find libLLVMSPIRVLib.a at ${LLVM_LIBRARY_DIR}. Please install it into that directory, or provide explicit path with -DLLVM_SPIRV_DIR=")
+  endif()
+endif()
+include_directories(${LLVM_SPIRV_INCLUDE_DIR})
+set(LLVM_SPIRV_LDFLAGS "-L${LLVM_SPIRV_LIB_DIR}")
+set(LLVM_SPIRV_LIBRARY
+  libLLVMSPIRVLib.a
+)
+message(STATUS "LLVM_SPIRV_INCLUDE_DIR: ${LLVM_SPIRV_INCLUDE_DIR}")
+message(STATUS "LLVM_SPIRV_LIB_DIR: ${LLVM_SPIRV_LIB_DIR}")
+
+# GenISAIntrinsics
+if (NOT TARGET GenISAIntrinsics)
+  if (EXISTS "${GenISAIntrinsics_LIB_DIR}/libGenISAIntrinsics.a")
+    set(GenISAIntrinsics_LDFLAGS "-L${GenISAIntrinsics_LIB_DIR}")
+  elseif (EXISTS "${LLVM_LIBRARY_DIR}/libGenISAIntrinsics.a")
+    set(GenISAIntrinsics_LDFLAGS "-L${LLVM_LIBRARY_DIR}")
+  else()
+    message(FATAL_ERROR "Can't find libGenISAIntrinsics.a at ${LLVM_LIBRARY_DIR}. Please install it into that directory, or provide explicit path with -DGenISAIntrinsics_LIB_DIR=")
+  endif()
+endif()
+set(GenISAIntrinsics_LIBRARY
+  libGenISAIntrinsics.a
+)
+message(STATUS "GenISAIntrinsics_LDFLAGS: ${GenISAIntrinsics_LDFLAGS}")
+
 # Python module
 if(TRITON_BUILD_PYTHON_MODULE)
   message(STATUS "Adding Python module")
@@ -219,6 +254,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonNvidiaGPUTransforms
     TritonLLVMIR
     TritonPTX
+    TritonSPIRV
     ${dialect_libs}
     ${conversion_libs}
 
@@ -230,26 +266,30 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRSupport
     MLIRTargetLLVMIRExport
     MLIRMathToLLVM
+
     MLIRNVVMToLLVMIRTranslation
     MLIRROCDLToLLVMIRTranslation
+    MLIRGENXToLLVMIRTranslation
     MLIRIR
   )
 
   if(WIN32)
-    target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} ${CMAKE_DL_LIBS}
-      ${TRITON_LIBRARIES}
+    target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} ${LLVM_SPIRV_LIBRARY}
+      ${GenISAIntrinsics_LIBRARY}
+      ${CMAKE_DL_LIBS} ${TRITON_LIBRARIES}
     )
   elseif(APPLE)
-    target_link_libraries(triton ${LLVM_LIBRARIES} z
+    target_link_libraries(triton ${LLVM_LIBRARIES} ${LLVM_SPIRV_LIBRARY}
+      ${GenISAIntrinsics_LIBRARY} z
       ${TRITON_LIBRARIES}
     )
   else()
     target_link_libraries(triton ${LLVM_LIBRARIES} z
-      ${TRITON_LIBRARIES}
+      ${TRITON_LIBRARIES} ${LLVM_SPIRV_LIBRARY} ${GenISAIntrinsics_LIBRARY}
     )
   endif()
 
-  target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+  target_link_options(triton PRIVATE ${LLVM_LDFLAGS} ${LLVM_SPIRV_LDFLAGS} ${GenISAIntrinsics_LDFLAGS})
 endif()
 
 if(UNIX AND NOT APPLE)

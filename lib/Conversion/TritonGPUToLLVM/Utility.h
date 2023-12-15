@@ -2,16 +2,19 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
+#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators
 #define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
 #define ptrtoint(...) rewriter.create<LLVM::PtrToIntOp>(loc, __VA_ARGS__)
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
+#define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
 #define sext(...) rewriter.create<LLVM::SExtOp>(loc, __VA_ARGS__)
 #define fpext(...) rewriter.create<LLVM::FPExtOp>(loc, __VA_ARGS__)
 #define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
@@ -22,6 +25,7 @@
 #define fadd(...) rewriter.create<LLVM::FAddOp>(loc, __VA_ARGS__)
 #define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
 #define fmul(...) rewriter.create<LLVM::FMulOp>(loc, __VA_ARGS__)
+#define lshr(...) rewriter.create<LLVM::LShrOp>(loc, __VA_ARGS__)
 #define smax(...) rewriter.create<LLVM::SMaxOp>(loc, __VA_ARGS__)
 #define umax(...) rewriter.create<LLVM::UMaxOp>(loc, __VA_ARGS__)
 #define fmax(...) rewriter.create<LLVM::MaxNumOp>(loc, __VA_ARGS__)
@@ -91,6 +95,8 @@
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
+#define addrspacecast(...)                                                     \
+  rewriter.create<LLVM::AddrSpaceCastOp>(loc, __VA_ARGS__)
 
 // Types
 #define int_ty(width) rewriter.getIntegerType(width)
@@ -112,9 +118,11 @@
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
 // Constants
+#define f16_val(...) LLVM::createConstantF16(loc, rewriter, __VA_ARGS__)
 #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
 #define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
+#define i64_val(...) LLVM::createConstantI64(loc, rewriter, __VA_ARGS__)
 #define int_val(width, val)                                                    \
   LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
 #define tid_val() getThreadId(rewriter, loc)
@@ -189,7 +197,71 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
 namespace LLVM {
 using namespace mlir::triton;
 
+/// Create a predicated block, using \p cond as the condition and \p ops for the
+/// values supplied by the conditional branch to the exit block. The \p
+/// thenOpsFn function is used to inject operations in the 'then' branch:
+///   cf.cond_br %cond, ^br1, ^br2(%ops)
+///   ^br1:
+///     %then_ops = `thenOpsFn()`
+///     cf.br ^br2(%then_ops)
+///   ^br2(%block_ops):
+template <typename ThenOpsFn>
+Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
+                             Value cond, ArrayRef<Value> ops,
+                             ThenOpsFn &&thenOpsFn) {
+  Block *insertionBlock = rewriter.getInsertionBlock();
+  Block *thenBlock =
+      rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
+  Block *endBlock = rewriter.splitBlock(thenBlock, thenBlock->begin());
+
+  rewriter.setInsertionPointToEnd(insertionBlock);
+  rewriter.create<cf::CondBranchOp>(loc, cond, thenBlock, endBlock, ops);
+
+  rewriter.setInsertionPointToStart(thenBlock);
+  auto thenOps = thenOpsFn();
+  assert(thenOps.size() == ops.size() && "Inconsistent size");
+  assert(llvm::all_of(llvm::enumerate(ops, thenOps),
+                      [](const auto &enumerator) {
+                        auto [index, op, thenOp] = enumerator;
+                        llvm::errs() << "op: " << op << "\n";
+                        llvm::errs() << "thenOp: " << thenOp << "\n";
+                        return op.getType() == thenOp.getType();
+                      }) &&
+         "type mismatch found");
+
+  if (thenOps.empty())
+    rewriter.create<cf::BranchOp>(loc, endBlock);
+  else
+    rewriter.create<cf::BranchOp>(loc, endBlock, thenOps);
+
+  for (Value op : thenOps)
+    endBlock->addArgument(op.getType(), op.getLoc());
+
+  rewriter.setInsertionPointToStart(endBlock);
+  return *endBlock;
+}
+
+/// Create a predicated block, using \p cond as the condition and \p thenOpsFn
+/// to inject operations in the 'then' branch:
+///   cf.cond_br %cond, ^br1, ^br2
+///   ^br1:
+///     `thenOpsFn()`
+///     cf.br ^br2
+///   ^br2:
+template <typename ThenOpsFn>
+Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
+                             Value cond, ThenOpsFn &&thenOpsFn) {
+  return createPredicatedBlock(rewriter, loc, cond, {}, thenOpsFn);
+}
+
+/// Create a 32-bit integer constant.
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
+
+/// Create a 64-bit integer constant.
+Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v);
+
+/// Create a 16-bit float constant.
+Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
 
 /// Create a 32-bit float constant.
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
@@ -301,7 +373,7 @@ SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
                                 ConversionPatternRewriter &rewriter);
 
-// Convert an \param index to a multi-dim coordinate given \param shape and
+// Convert an \param linear to a multi-dim coordinate given \param shape and
 // \param order.
 SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
                                Location loc, Value linear,
@@ -324,22 +396,24 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                 ArrayRef<Value> multiDim, ArrayRef<unsigned> shape);
 
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred);
+                  Value val, Value pred, triton::Target target);
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred);
+                 Type elemTy, Value pred, triton::Target target);
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i);
+               int i, triton::Target target);
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i);
+                 int i, triton::Target target);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i);
+                  int i, triton::Target target);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i);
+                  Value i, triton::Target target);
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
+
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
-                        StringRef key, StringRef content);
+                        StringRef key, StringRef content,
+                        unsigned addressSpace);
 
 } // namespace LLVM
 } // namespace mlir

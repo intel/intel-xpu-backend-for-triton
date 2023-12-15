@@ -4,7 +4,6 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Dialect/Triton/IR/AttrInterfaces.h.inc"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"

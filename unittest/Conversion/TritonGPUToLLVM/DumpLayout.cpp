@@ -51,7 +51,7 @@ public:
       : context(context_), option(context), typeConverter(context, option),
         cacheInfo({&cache.baseIndexCache, &cache.indexCache,
                    &cache.indexInsertPoint}),
-        base(typeConverter, cacheInfo), rewriter(context),
+        base(typeConverter, cacheInfo, Target::Default), rewriter(context),
         loc(UnknownLoc::get(context)) {
     rewriter.setInsertionPointToStart(&block);
     cache.indexInsertPoint = rewriter.saveInsertionPoint();

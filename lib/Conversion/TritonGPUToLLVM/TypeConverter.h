@@ -3,6 +3,8 @@
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Dialect/SPIRV/Transforms/SPIRVConversion.h"
 #include "triton/Conversion/MLIRTypes.h"
 
 using namespace mlir;
@@ -26,6 +28,16 @@ public:
                                       Type type);
 
   Type convertTritonTensorType(RankedTensorType type);
+};
+
+class TritonGPUToSPIRVTypeConverter : public SPIRVTypeConverter {
+public:
+  using TypeConverter::convertType;
+
+  TritonGPUToSPIRVTypeConverter(spirv::TargetEnvAttr &targetAttr,
+                                SPIRVConversionOptions &option);
+
+  Type convertTritonPointerType(triton::PointerType type);
 };
 
 #endif

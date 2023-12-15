@@ -1,6 +1,7 @@
 #include "TritonGPUToLLVM.h"
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 
 namespace {
 
@@ -125,8 +126,33 @@ struct PrintOpConversion
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    Value prefixStr =
-        LLVM::addStringToModule(loc, rewriter, "printfPrefix_", op.getPrefix());
+    if (target == Target::GENX) {
+      SmallVector<Value, 16> operands;
+      for (size_t i = 0; i < op.getNumOperands(); i++) {
+        auto sub_operands = getTypeConverter()->unpackLLElements(
+            loc, adaptor.getOperands()[i], rewriter,
+            op.getOperand(i).getType());
+        for (auto elem : sub_operands) {
+          operands.push_back(elem);
+        }
+      }
+      std::string formatStr;
+      llvm::raw_string_ostream os(formatStr);
+      os << op.getPrefix();
+      if (!operands.empty()) {
+        os << getFormatSubstr(operands[0]);
+      }
+
+      for (size_t i = 1; i < operands.size(); ++i) {
+        os << ", " << getFormatSubstr(operands[i]);
+      }
+      llPrintf(formatStr, operands, rewriter, target);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    Value prefixStr = LLVM::addStringToModule(
+        loc, rewriter, "printfPrefix_", op.getPrefix(), /*AddressSpace*/ 0);
 
     auto getPid = [&](int axis) {
       return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
@@ -139,7 +165,8 @@ struct PrintOpConversion
       llvm::raw_string_ostream os(formatStr);
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
-      llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter);
+      llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter,
+               target);
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
@@ -260,9 +287,9 @@ struct PrintOpConversion
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
       if (i == 0) {
-        formatStrValue = llPrintf(formatStr, printfOperands, rewriter);
+        formatStrValue = llPrintf(formatStr, printfOperands, rewriter, target);
       } else {
-        llPrintf(formatStrValue, printfOperands, rewriter);
+        llPrintf(formatStrValue, printfOperands, rewriter, target);
       }
     }
   }
@@ -292,6 +319,28 @@ struct PrintOpConversion
     }
     assert(false && "not supported type");
     return "";
+  }
+
+  // declare __spirv_ocl_printf(i8*, ...) as external function
+  static LLVM::LLVMFuncOp
+  getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter) {
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    StringRef funcName("_Z18__spirv_ocl_printf");
+    Operation *funcOp = moduleOp.lookupSymbol(funcName);
+    if (funcOp)
+      return cast<LLVM::LLVMFuncOp>(*funcOp);
+
+    auto *context = rewriter.getContext();
+
+    SmallVector<Type> argsType{ptr_ty(context)};
+    auto funcType = LLVM::LLVMFunctionType::get(i32_ty, argsType, true);
+
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+
+    return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(context), funcName,
+                                             funcType);
   }
 
   // declare vprintf(i8*, i8*) as external function
@@ -345,25 +394,26 @@ struct PrintOpConversion
 
   // Returns a Value for the format string, which you can reuse.
   static Value llPrintf(StringRef msg, ValueRange args,
-                        ConversionPatternRewriter &rewriter) {
+                        ConversionPatternRewriter &rewriter, Target target) {
     assert(!msg.empty() && "printf with empty string not supported");
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
     msgNewline.push_back('\0');
-    Value msgValue =
-        LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()),
-                                rewriter, "printfFormat_", msgNewline);
-    llPrintf(msgValue, args, rewriter);
+    Value msgValue = LLVM::addStringToModule(
+        UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
+        msgNewline, /*AddressSpace*/ 0);
+    llPrintf(msgValue, args, rewriter, target);
     return msgValue;
   }
 
   static void llPrintf(Value msg, ValueRange args,
-                       ConversionPatternRewriter &rewriter) {
+                       ConversionPatternRewriter &rewriter, Target target) {
     auto *ctx = rewriter.getContext();
     Type ptr = ptr_ty(ctx);
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    auto funcOp = getVprintfDeclaration(rewriter);
+    auto funcOp = (target == Target::GENX) ? getSpirvPrintfDeclaration(rewriter)
+                                           : getVprintfDeclaration(rewriter);
     auto loc = UnknownLoc::get(ctx);
 
     Value one = i32_val(1);
@@ -371,33 +421,41 @@ struct PrintOpConversion
 
     Value bufferPtr = null(ptr);
 
-    SmallVector<Value, 16> newArgs;
-    if (args.size() >= 1) {
-      SmallVector<Type> argTypes;
+    SmallVector<Value> operands;
+    operands.push_back(msg);
+    if (target == Target::GENX) {
+      // __spirv_ocl_printf expects the value instead of pointer to value
       for (auto arg : args) {
-        Type newType;
-        Value newArg;
-        std::tie(newType, newArg) = promoteValue(rewriter, arg);
-        argTypes.push_back(newType);
-        newArgs.push_back(newArg);
+        operands.push_back(arg);
+      }
+    } else {
+      SmallVector<Value, 16> newArgs;
+      if (args.size() >= 1) {
+        SmallVector<Type> argTypes;
+        for (auto arg : args) {
+          Type newType;
+          Value newArg;
+          std::tie(newType, newArg) = promoteValue(rewriter, arg);
+          argTypes.push_back(newType);
+          newArgs.push_back(newArg);
+        }
+
+        Type structTy = LLVM::LLVMStructType::getLiteral(ctx, argTypes);
+        auto allocated =
+            rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(ctx), structTy, one,
+                                            /*alignment=*/0);
+
+        for (const auto &entry : llvm::enumerate(newArgs)) {
+          auto index = i32_val(entry.index());
+          auto fieldPtr = gep(ptr_ty(ctx), structTy, allocated,
+                              ArrayRef<Value>{zero, index});
+          store(entry.value(), fieldPtr);
+        }
+        bufferPtr = bitcast(allocated, ptr);
       }
 
-      Type structTy = LLVM::LLVMStructType::getLiteral(ctx, argTypes);
-      auto allocated =
-          rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(ctx), structTy, one,
-                                          /*alignment=*/0);
-
-      for (const auto &entry : llvm::enumerate(newArgs)) {
-        auto index = i32_val(entry.index());
-        auto fieldPtr =
-            gep(ptr_ty(ctx), structTy, allocated, ArrayRef<Value>{zero, index});
-        store(entry.value(), fieldPtr);
-      }
-      bufferPtr = bitcast(allocated, ptr);
+      call(funcOp, operands);
     }
-
-    SmallVector<Value> operands{msg, bufferPtr};
-    call(funcOp, operands);
   }
 };
 
@@ -427,7 +485,7 @@ struct AssertOpConversion
       }
     }
     llAssert(op, condition, adaptor.getMessage(), adaptor.getFile(),
-             adaptor.getFunc(), adaptor.getLine(), rewriter);
+             adaptor.getFunc(), adaptor.getLine(), rewriter, target);
     rewriter.eraseOp(op);
     return success();
   }
@@ -436,7 +494,7 @@ struct AssertOpConversion
   // know about the op to split the block.
   static void llAssert(Operation *op, Value condition, StringRef message,
                        StringRef file, StringRef func, int line,
-                       ConversionPatternRewriter &rewriter) {
+                       ConversionPatternRewriter &rewriter, Target target) {
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     auto ctx = rewriter.getContext();
     auto loc = op->getLoc();
@@ -451,21 +509,37 @@ struct AssertOpConversion
     Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
     rewriter.setInsertionPointToStart(ifBlock);
 
-    auto funcOp = getAssertfailDeclaration(rewriter);
+    auto funcOp = getAssertfailDeclaration(rewriter, target);
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    Value messageString =
-        LLVM::addStringToModule(loc, rewriter, "assertMessage_", message);
+    unsigned addrSpace =
+        (target == Target::GENX) ? GENX::GENXMemorySpace::kCrossWorkgroup : 0;
+    Value messageString = LLVM::addStringToModule(
+        loc, rewriter, "assertMessage_", message, addrSpace);
     Value fileString =
-        LLVM::addStringToModule(loc, rewriter, "assertFile_", file);
+        LLVM::addStringToModule(loc, rewriter, "assertFile_", file, addrSpace);
     Value funcString =
-        LLVM::addStringToModule(loc, rewriter, "assertFunc_", func);
+        LLVM::addStringToModule(loc, rewriter, "assertFunc_", func, addrSpace);
     Value lineNumber = i32_val(line);
-    Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
 
-    SmallVector<Value> operands = {messageString, fileString, lineNumber,
-                                   funcString, charSize};
-    auto ret = call(funcOp, operands);
+    SmallVector<Value> operands;
+    if (target == Target::GENX) {
+      Value messageStringPtr = addrspacecast(
+          ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric), messageString);
+      Value fileStringPtr = addrspacecast(
+          ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric), fileString);
+      Value funcStringPtr = addrspacecast(
+          ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric), funcString);
+      operands = {messageStringPtr, fileStringPtr, lineNumber, funcStringPtr};
+    } else {
+      operands = {messageString, fileString, lineNumber, funcString,
+                  int_val(sizeof(size_t) * 8, sizeof(char))};
+    }
+    LLVM::CallOp ret = call(funcOp, operands);
+
+    if (target == Target::GENX) {
+      ret.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    }
 
     // Split a block after the call.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
@@ -476,10 +550,11 @@ struct AssertOpConversion
   }
 
   static LLVM::LLVMFuncOp
-  getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
+  getAssertfailDeclaration(ConversionPatternRewriter &rewriter, Target target) {
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    StringRef funcName("__assertfail");
+    StringRef funcName =
+        (target == Target::GENX) ? "__assert_fail" : "__assertfail";
     Operation *funcOp = moduleOp.lookupSymbol(funcName);
     if (funcOp)
       return cast<LLVM::LLVMFuncOp>(*funcOp);
@@ -487,15 +562,27 @@ struct AssertOpConversion
     // void __assert_fail(const char * assertion, const char * file, unsigned
     // int line, const char * function);
     auto *ctx = rewriter.getContext();
-    SmallVector<Type> argsType{ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
-                               rewriter.getIntegerType(sizeof(size_t) * 8)};
+    SmallVector<Type> argsType;
+    if (target == Target::GENX) {
+      argsType = {ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric),
+                  ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric), i32_ty,
+                  ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric)};
+    } else {
+      argsType = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
+                  rewriter.getIntegerType(sizeof(size_t) * 8)};
+    }
     auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
 
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
 
-    return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
-                                             funcType);
+    auto func = rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx),
+                                                  funcName, funcType);
+    if (target == Target::GENX) {
+      func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    }
+
+    return func;
   }
 };
 
@@ -505,9 +592,9 @@ struct MakeRangeOpConversion
   MakeRangeOpConversion(
       TritonGPUToLLVMTypeConverter &converter,
       ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-      PatternBenefit benefit)
+      Target target, PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(
-            converter, indexCacheInfo, benefit) {}
+            converter, indexCacheInfo, target, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
@@ -545,11 +632,25 @@ struct GetProgramIdOpConversion
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (target == triton::Target::GENX) {
+      Location loc = op->getLoc();
+      assert(op.getAxisAsInt() < 3);
+
+      Value blockId =
+          rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxisAsInt()]);
+      rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
+      return success();
+    }
+
     Value programId = llGetPid(op.getAxisAsInt(), op->getLoc(),
                                op->getParentOfType<ModuleOp>(), rewriter);
     rewriter.replaceOp(op, programId);
     return success();
   }
+
+  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                                  mlir::gpu::Dimension::y,
+                                                  mlir::gpu::Dimension::z};
 };
 
 struct GetNumProgramsOpConversion
@@ -560,9 +661,22 @@ struct GetNumProgramsOpConversion
   LogicalResult
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+
+    if (target == triton::Target::GENX) {
+      Location loc = op->getLoc();
+      assert(op.getAxis() < 3);
+
+      Value blockId =
+          rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
+      rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
+
+      return success();
+    }
+
     // It is not easy to get the compute capability here, so we use numCTAs to
     // decide the semantic of GetNumProgramsOp. If numCTAs = 1, then
-    // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted to
+    // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted
+    // to
     // "%nclusterid".
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for GetProgramIdOp");
@@ -577,6 +691,10 @@ struct GetNumProgramsOpConversion
     rewriter.replaceOp(op, numPrograms);
     return success();
   }
+
+  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                                  mlir::gpu::Dimension::y,
+                                                  mlir::gpu::Dimension::z};
 };
 
 // TODO[goostavz]: GetThreadIdOp/GetClusterCTAIdOp is a temporary solution
@@ -859,26 +977,28 @@ void populateTritonGPUToLLVMPatterns(
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &moduleAllocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    PatternBenefit benefit) {
-  patterns.add<AddPtrOpConversion>(typeConverter, benefit);
-  patterns.add<AllocTensorOpConversion>(typeConverter, moduleAllocation,
+    triton::Target target, PatternBenefit benefit) {
+  patterns.add<AddPtrOpConversion>(typeConverter, target, benefit);
+  patterns.add<AllocTensorOpConversion>(typeConverter, moduleAllocation, target,
                                         benefit);
-  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncBulkWaitOpConversion>(typeConverter, benefit);
-  patterns.add<BroadcastOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, target, benefit);
+  patterns.add<AsyncWaitOpConversion>(typeConverter, target, benefit);
+  patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, target,
+                                                 benefit);
+  patterns.add<AsyncBulkWaitOpConversion>(typeConverter, target, benefit);
+  patterns.add<BroadcastOpConversion>(typeConverter, target, benefit);
   patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation,
-                                         benefit);
-  patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
-  patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
-  patterns.add<GetThreadIdOpConversion>(typeConverter, benefit);
-  patterns.add<GetCanonicalWarpIdConversion>(typeConverter, benefit);
-  patterns.add<GetClusterCTAIdOpConversion>(typeConverter, benefit);
-  patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, benefit);
+                                         target, benefit);
+  patterns.add<GetProgramIdOpConversion>(typeConverter, target, benefit);
+  patterns.add<GetNumProgramsOpConversion>(typeConverter, target, benefit);
+  patterns.add<GetThreadIdOpConversion>(typeConverter, target, benefit);
+  patterns.add<GetCanonicalWarpIdConversion>(typeConverter, target, benefit);
+  patterns.add<GetClusterCTAIdOpConversion>(typeConverter, target, benefit);
+  patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, target,
+                                      benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
-  patterns.add<PrintOpConversion>(typeConverter, benefit);
-  patterns.add<AssertOpConversion>(typeConverter, benefit);
+  patterns.add<PrintOpConversion>(typeConverter, target, benefit);
+  patterns.add<AssertOpConversion>(typeConverter, target, benefit);
 }
 
 } // namespace mlir::triton

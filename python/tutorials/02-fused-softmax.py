@@ -26,6 +26,8 @@ import torch
 import triton
 import triton.language as tl
 
+torch.xpu.enable_sync_mode()
+
 
 @torch.jit.script
 def naive_softmax(x):
@@ -136,7 +138,7 @@ def softmax(x):
 # This will allow us to verify that our padding mechanism works.
 
 torch.manual_seed(0)
-x = torch.randn(1823, 781, device='cuda')
+x = torch.randn(1823, 781, device='xpu')
 y_triton = softmax(x)
 y_torch = torch.softmax(x, axis=1)
 assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
@@ -173,7 +175,7 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
         args={'M': 4096},  # values for function arguments not in `x_names` and `y_name`
     ))
 def benchmark(M, N, provider):
-    x = torch.randn(M, N, device='cuda', dtype=torch.float32)
+    x = torch.randn(M, N, device='xpu', dtype=torch.float32)
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch-native':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles)
