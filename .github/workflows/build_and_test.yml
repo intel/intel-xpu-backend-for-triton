@@ -64,8 +64,8 @@ jobs:
         if: ${{ env.BACKEND == 'XPU'}}
         run: |
           cd python/test/unit/language
-          python3 assert_helper_xpu.py device_assert
-          python3 print_helper_xpu.py device_print float 1> /dev/null
+          python3 assert_helper.py device_assert
+          python3 print_helper.py device_print float 1> /dev/null
 
       - name: Run XPU python tests
         if: ${{ env.BACKEND == 'XPU'}}

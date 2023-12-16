@@ -7,6 +7,9 @@ from torch.testing import assert_close
 import triton
 import triton.language as tl
 
+#FIXME
+torch.xpu.enable_sync_mode()
+
 
 @triton.jit
 def kernel_device_print(X, Y, BLOCK: tl.constexpr):
@@ -69,8 +72,8 @@ def kernel_print_no_arg():
 
 def test_print(func: str, data_type: str):
     shape = (128, )
-    x = torch.arange(0, shape[0], dtype=torch.int32, device='cuda').to(getattr(torch, data_type))
-    y = torch.zeros(shape, dtype=x.dtype, device="cuda")
+    x = torch.arange(0, shape[0], dtype=torch.int32, device='xpu').to(getattr(torch, data_type))
+    y = torch.zeros(shape, dtype=x.dtype, device="xpu")
     if func == "device_print":
         kernel_device_print[(1, )](x, y, BLOCK=shape[0])
     elif func == "print":

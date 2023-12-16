@@ -1,7 +1,6 @@
 #include "TypeConverter.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
 
 using namespace mlir;
@@ -182,66 +181,4 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
   unsigned numElementsPerThread = getTotalElemsPerThread(type);
   SmallVector<Type, 4> types(numElementsPerThread, eltType);
   return LLVM::LLVMStructType::getLiteral(ctx, types);
-}
-
-TritonGPUToSPIRVTypeConverter::TritonGPUToSPIRVTypeConverter(
-    spirv::TargetEnvAttr &targetAttr, SPIRVConversionOptions &option)
-    : SPIRVTypeConverter(targetAttr, option) {
-  addConversion([&](triton::PointerType type) -> std::optional<Type> {
-    return convertTritonPointerType(type);
-  });
-  addSourceMaterialization([&](OpBuilder &builder, Type resultType,
-                               ValueRange inputs,
-                               Location loc) -> std::optional<Value> {
-    if (inputs.size() != 1)
-      return std::nullopt;
-
-    if (resultType.isa<IndexType>()) {
-      return builder.create<arith::TruncIOp>(loc, resultType, inputs);
-    }
-    return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
-        .getResult(0);
-  });
-  addTargetMaterialization([&](OpBuilder &builder, Type resultType,
-                               ValueRange inputs,
-                               Location loc) -> std::optional<Value> {
-    if (inputs.size() != 1)
-      return std::nullopt;
-
-    if (inputs[0].getType().isa<IndexType>()) {
-      return builder.create<arith::TruncIOp>(loc, resultType, inputs);
-    }
-    return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
-        .getResult(0);
-  });
-}
-
-std::optional<spirv::StorageClass>
-addressSpaceToStorageClass(unsigned AddrSpace) {
-  switch (AddrSpace) {
-  case 0:
-    return spirv::StorageClass::Function;
-  case 1:
-    return spirv::StorageClass::CrossWorkgroup;
-  case 2:
-    return spirv::StorageClass::UniformConstant;
-  case 3:
-    return spirv::StorageClass::Workgroup;
-  case 4:
-    return spirv::StorageClass::Generic;
-  case 7:
-    return spirv::StorageClass::Input;
-  default:
-    return std::nullopt;
-  }
-}
-
-Type TritonGPUToSPIRVTypeConverter::convertTritonPointerType(
-    triton::PointerType type) {
-  // Recursively translate pointee type
-  std::optional<spirv::StorageClass> storageClass =
-      addressSpaceToStorageClass(type.getAddressSpace());
-  assert(storageClass && "uncompatible pointer address type in SPIRV");
-  return spirv::PointerType::get(convertType(type.getPointeeType()),
-                                 *storageClass);
 }

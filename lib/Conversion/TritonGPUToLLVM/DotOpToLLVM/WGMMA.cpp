@@ -23,7 +23,6 @@
 
 #include "../DotOpToLLVM.h"
 #include "../Utility.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 
 using namespace mlir;
 using namespace mlir::triton;

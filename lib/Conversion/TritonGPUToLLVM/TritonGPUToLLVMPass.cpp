@@ -309,6 +309,7 @@ struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
     return success();
   }
 
+private:
   SmallVector<Value, 4>
   promoteOperands(triton::CallOp callOp,
                   typename triton::CallOp::Adaptor adaptor,
@@ -822,7 +823,6 @@ private:
     // pipeline pass aware of the vectorization could introduce additional
     // dependencies on the AxisInfoAnalysis and the Coalesce analysis.
     bool decomposed = false;
-
     // insert_slice_async %src, %dst, %idx, %mask, %other
     // =>
     // %tmp = load %src, %mask, %other

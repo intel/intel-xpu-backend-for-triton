@@ -42,4 +42,4 @@ bool linkExternLib(llvm::Module &module, llvm::StringRef name,
 } // namespace triton
 } // namespace mlir
 
-#endif // TRITON_TARGET_LLVM_IR_LLVM_IR_TRANSLATION_H
+#endif // TRITON_TARGET_LLVMIRTRANSLATION_H

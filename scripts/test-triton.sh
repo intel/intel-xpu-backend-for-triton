@@ -104,11 +104,11 @@ function run_core_tests {
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
-  python3 assert_helper_xpu.py device_assert
+  python3 assert_helper.py device_assert
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
-  python3 print_helper_xpu.py device_print float 1> /dev/null
+  python3 print_helper.py device_print float 1> /dev/null
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi

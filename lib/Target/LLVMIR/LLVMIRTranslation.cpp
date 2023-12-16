@@ -163,7 +163,6 @@ static void amendLLVMFunc(llvm::Function *func, const NVVMMetadata &metadata,
         }));
 
     SmallVector<llvm::Metadata *> md_args = {llvm::ValueAsMetadata::get(func)};
-
     if (maxntid.size() > 0) {
       md_args.push_back(llvm::MDString::get(ctx, "maxntidx"));
       md_args.push_back(llvm::ValueAsMetadata::get(maxntid[0]));
@@ -404,6 +403,7 @@ translateLLVMToLLVMIR(llvm::LLVMContext *llvmContext, mlir::ModuleOp module,
   DialectRegistry registry;
   mlir::registerBuiltinDialectTranslation(registry);
   mlir::registerLLVMDialectTranslation(registry);
+  mlir::registerROCDLDialectTranslation(registry);
   mlir::registerNVVMDialectTranslation(registry);
   mlir::registerGENXDialectTranslation(registry);
 

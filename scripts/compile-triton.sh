@@ -18,7 +18,7 @@ export PACKAGES_DIR=$BASE/packages
 export SPIRV_TOOLS=$PACKAGES_DIR/spirv-tools
 export LLVM_PROJ=$BASE/llvm
 export SPIRV_LLVM_TRANSLATOR_PROJ=$BASE/SPIRV-LLVM-Translator
-export TRITON_PROJ=$BASE/triton-dse
+export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 function check_rc {
@@ -29,7 +29,8 @@ function check_rc {
 }
 
 if [[ "$1" == "--clean" ]]; then
-  rm -rf $PACKAGES_DIR $LLVM_PROJ $SPIRV_LLVM_TRANSLATOR_PROJ $TRITON_PROJ_BUILD
+  rm -rf $PACKAGES_DIR $SPIRV_LLVM_TRANSLATOR_PROJ $TRITON_PROJ_BUILD
+  #rm -rf $PACKAGES_DIR $LLVM_PROJ $SPIRV_LLVM_TRANSLATOR_PROJ $TRITON_PROJ_BUILD
 fi
 
 if [ ! -d "$PACKAGES_DIR" ]; then
@@ -149,7 +150,7 @@ if [ ! -d "$TRITON_PROJ" ]
 then
   echo "****** Cloning $TRITON_PROJ ******"
   cd $BASE
-  git clone https://github.com/intel-sandbox/triton-dse.git -b spirv
+  git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
 fi
 
 ############################################################################

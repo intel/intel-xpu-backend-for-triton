@@ -1101,8 +1101,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     if is_xpu(device) and dtype_x_str == 'float16':
         pytest.skip("FIXME: llvm-spirv disallow AtomicRMWOp with f16")
 
+    check_cuda_only(device)
     if torch.cuda.is_available():
-        check_cuda_only(device)
         capability = torch.cuda.get_device_capability()
         if capability[0] < 7:
             if dtype_x_str == 'float16':
