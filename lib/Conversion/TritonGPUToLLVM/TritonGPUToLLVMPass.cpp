@@ -418,8 +418,8 @@ struct ConvertTritonGPUToLLVM
       ConvertTritonGPUToLLVM>::ConvertTritonGPUToLLVMBase;
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<GENX::GENXDialect, triton::nvgpu::NVGPUDialect,
-                    LLVM::LLVMDialect, NVVM::NVVMDialect>();
+    registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
+                    NVVM::NVVMDialect, GENX::GENXDialect>();
   }
 
   ConvertTritonGPUToLLVM(int32_t computeCapability, Target target,
