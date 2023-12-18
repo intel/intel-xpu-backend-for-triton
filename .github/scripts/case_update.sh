@@ -3,6 +3,7 @@ TRITON_SRC_ROOT_DIR=$(realpath -- $SCRIPTS_ROOT_DIR/../../../..)
 
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/assert_helper.py
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/print_helper.py
+sed -i 's/cuda/xpu/g' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/print_helper.py
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/test_annotations.py
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/test_block_pointer.py
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/test_line_info.py
@@ -23,7 +24,14 @@ sed -i -r '/pgm\.asm\["ptx"\]/,/(assert "shared" not in red_code)|(^$)/d' ${TRIT
 sed -i 's/slice_kernel\[(1,)](XBLOCK=32/slice_kernel\[(1,)](XBLOCK=32, device_type=device/g' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/test_core.py
 python ${SCRIPTS_ROOT_DIR}/case_update.py ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/test_core.py
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_blocksparse.py
+sed -i "s/device='cuda'/device='xpu'/g" ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_blocksparse.py
+sed -i '''s/device="cuda"/device="xpu"/g''' ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_blocksparse.py
+sed -i '/capability = torch.cuda.get_device_capability/,+2 s/^/#/' ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_blocksparse.py
+sed -i "s/cuda()/xpu()/g" ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_blocksparse.py
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_cross_entropy.py
+sed -i "s/device='cuda'/device='xpu'/g" ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_cross_entropy.py
+sed -i '''s/device="cuda"/device="xpu"/g''' ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_cross_entropy.py
+sed -i '/capability = torch.cuda.get_device_capability/,+2 s/^/#/' ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_cross_entropy.py
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_flash_attention.py
 sed -i '/import torch/ a\import intel_extension_for_pytorch' ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_inductor.py
 sed -i 's/cuda/xpu/g' ${TRITON_SRC_ROOT_DIR}/python/test/unit/operators/test_inductor.py
