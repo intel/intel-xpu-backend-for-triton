@@ -1,5 +1,5 @@
 set -e -x
-git clone https://github.com/leizhenyuan/llvm-project.git -b xpu_llvm_rebase ./private-llvm
+git clone https://github.com/quintinwang5/llvm-project.git -b triton_rebase_5e5a22ca ./private-llvm
 
 CURRENT_DIR="$(pwd)"
 
