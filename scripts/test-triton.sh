@@ -48,7 +48,7 @@ export https_proxy="http://proxy-us.intel.com:912"
 export ftp_proxy="http://proxy-us.intel.com:912"
 export socks_proxy="http://proxy-us.intel.com:1080"
 
-export TRITON_PROJ=$BASE/triton-dse
+export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 python3 -m pip install lit
@@ -114,11 +114,22 @@ function run_core_tests {
   fi
 }
 
+function run_tutorial_test {
+  echo
+  echo "****** Running $1 test ******"
+  echo
+  python $2
+  if [ $? -ne 0 ]; then
+    echo "FAILED: return code $?" ; exit $?
+  fi
+
+}
+
 function run_tutorial_tests {
   echo "***************************************************"
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
-  python3 -m pip install matplotlib pandas tabulate
+  python3 -m pip install matplotlib pandas tabulate -q
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
@@ -129,21 +140,9 @@ function run_tutorial_tests {
   fi
   cd $TUTORIAL_TEST_DIR
 
-  echo
-  echo "****** Running vector-add test ******"
-  echo
-  python 01-vector-add.py
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
-
-  echo
-  echo "****** Running fused-softmax test ******"
-  echo
-  python 02-fused-softmax.py
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
+  run_tutorial_test "01-vector-add" 01-vector-add.py
+  run_tutorial_test "02-fused-softmax" 02-fused-softmax.py
+  run_tutorial_test "03-matrix-multiplication" 03-matrix-multiplication.py
 }
 
 function test_triton {

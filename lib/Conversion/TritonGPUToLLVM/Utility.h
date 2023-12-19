@@ -223,8 +223,6 @@ Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
   assert(llvm::all_of(llvm::enumerate(ops, thenOps),
                       [](const auto &enumerator) {
                         auto [index, op, thenOp] = enumerator;
-                        llvm::errs() << "op: " << op << "\n";
-                        llvm::errs() << "thenOp: " << thenOp << "\n";
                         return op.getType() == thenOp.getType();
                       }) &&
          "type mismatch found");
