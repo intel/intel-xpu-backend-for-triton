@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     name: Build + LIT
-    runs-on: self-hosted
+    runs-on: [self-hosted, llvm-target]
     timeout-minutes: 40
     steps:
       - name: Checkout
