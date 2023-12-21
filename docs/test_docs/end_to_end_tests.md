@@ -79,7 +79,7 @@ If you wish to use the pinned commit, please refer every package commit in [ci_c
 ```Bash
 git clone --recursive https://github.com/pytorch/vision.git
 cd vision
-# git checkout {pinned_commit} 
+# Optionally `git checkout {pinned_commit}` 
 conda install libpng jpeg
 conda install -c conda-forge ffmpeg
 python setup.py install
@@ -89,7 +89,7 @@ python setup.py install
 ```Bash
 git clone --recursive https://github.com/pytorch/text
 cd text
-# git checkout {pinned_commit} 
+# Optionally `git checkout {pinned_commit}` 
 python setup.py clean install
 ```
 
@@ -104,7 +104,7 @@ error: torch 2.1.0a0+gitdd9913f is installed but torch==2.1.0 is required by {'t
 ```Bash
 git clone --recursive https://github.com/pytorch/audio.git
 cd audio
-# git checkout {pinned_commit} 
+# Optionally `git checkout {pinned_commit}` 
 python setup.py install
 ```
 
@@ -116,7 +116,8 @@ python -c "import torchvision,torchtext,torchaudio;print(torchvision.__version__
 ```
 
 Then install TorchBenchmark as a library:
-```
+
+```Bash
 conda install git-lfs pyyaml pandas scipy psutil
 pip install pyre_extensions
 pip install torchrec
@@ -124,7 +125,7 @@ pip install torchrec
 git clone --recursive https://github.com/pytorch/benchmark.git
 
 cd benchmark
-# git checkout {pinned_commit} 
+# Optionally `git checkout {pinned_commit}` 
 python install.py
 # Note that -e is necessary
 pip install -e .
