@@ -33,6 +33,7 @@ The PyTorch version should be the same as the one in [installation guide for int
 The scripts on [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) automatically download and install the transformers and timm packages.
 
 **Installation With Pinned Version**
+
 Normally, the pinned commit may be lack of main stream for a long time. You could also try using the latest version, but please be aware that there may have problems like "Failed to Load Model xxx". If you encountered this, please consider checking your package aligning the pinned commit.
 
 Please get the [transformer_pinned_commit](https://github.com/pytorch/pytorch/blob/main/.ci/docker/ci_commit_pins/huggingface.txt) 
@@ -40,7 +41,7 @@ Please get the [transformer_pinned_commit](https://github.com/pytorch/pytorch/bl
 
 ```Bash
 # Transformer for HuggingFace
-pip install "transformers==${pinned_version}"
+pip install "transformers==${pinned_commit}"
 # TIMM Models
 pip_install "git+https://github.com/huggingface/pytorch-image-models@${commit}"
 ```
@@ -157,7 +158,6 @@ By default, the cache dir is under `/tmp/torchinductor_{user}/`, It's advisable 
 LOG_DIR=${WORKSPACE}/inductor_log/${SUITE}/${MODEL}/${DT}
 mkdir -p ${LOG_DIR}
 export TORCHINDUCTOR_CACHE_DIR=${LOG_DIR}
-
 ```
 
 
