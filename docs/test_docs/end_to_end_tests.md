@@ -30,7 +30,22 @@ The PyTorch version should be the same as the one in [installation guide for int
 
 # Package Installation
 ## HuggingFace and TIMM Models Installation
-The scripts on [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) automatically download and install the transformers and timm packages. However, there are instances where the script may uninstall the XPU version of PyTorch and install the CUDA version instead. Therefore, verifying the PyTorch version before running is crucial.
+The scripts on [Torchdynamo Benchmarks](https://github.com/pytorch/pytorch/tree/main/benchmarks/dynamo) automatically download and install the transformers and timm packages.
+
+**Installation With Pinned Version**
+Normally, the pinned commit may be lack of main stream for a long time. You could also try using the latest version, but please be aware that there may have problems like "Failed to Load Model xxx". If you encountered this, please consider checking your package aligning the pinned commit.
+
+Please get the [transformer_pinned_commit](https://github.com/pytorch/pytorch/blob/main/.ci/docker/ci_commit_pins/huggingface.txt) 
+ and [timm_pinned_commit](https://github.com/pytorch/pytorch/blob/main/.ci/docker/ci_commit_pins/timm.txt) aligning with your pytorch version. Then install the package, use:
+
+```Bash
+# Transformer for HuggingFace
+pip install "transformers==${pinned_version}"
+# TIMM Models
+pip_install "git+https://github.com/huggingface/pytorch-image-models@${commit}"
+```
+
+There are instances where the script may uninstall the XPU version of PyTorch and install the CUDA version instead. Therefore, verifying the PyTorch version before running is crucial.
 
 ```Bash
 # Wrong one, it uses CUDA version
@@ -54,14 +69,16 @@ If the PyTorch version is incorrect, please reinstall the [XPU version of PyTorc
 ## TorchBench Installation
 TorchBench relies on [torchvision](https://github.com/pytorch/vision.git),[torchtext](https://github.com/pytorch/text) and [torchaudio](https://github.com/pytorch/audio.git). Since it by default build with CUDA support, for XPU support, all of these packages needs to be **BUILD FROM SOURCE**.
 
-Please follow the following command for building and installation dependencies:
+Please follow the following command for building and installation dependencies. 
 
+If you wish to use the pinned commit, please refer every package commit in [ci_commit_pins](https://github.com/pytorch/pytorch/tree/main/.github/ci_commit_pins) folder. Normally you are recommended to use the pinned commit.
 
 ### Install Torch Vision
 
 ```Bash
 git clone --recursive https://github.com/pytorch/vision.git
 cd vision
+# git checkout {pinned_commit} 
 conda install libpng jpeg
 conda install -c conda-forge ffmpeg
 python setup.py install
@@ -71,6 +88,7 @@ python setup.py install
 ```Bash
 git clone --recursive https://github.com/pytorch/text
 cd text
+# git checkout {pinned_commit} 
 python setup.py clean install
 ```
 
@@ -85,6 +103,7 @@ error: torch 2.1.0a0+gitdd9913f is installed but torch==2.1.0 is required by {'t
 ```Bash
 git clone --recursive https://github.com/pytorch/audio.git
 cd audio
+# git checkout {pinned_commit} 
 python setup.py install
 ```
 
@@ -104,6 +123,7 @@ pip install torchrec
 git clone --recursive https://github.com/pytorch/benchmark.git
 
 cd benchmark
+# git checkout {pinned_commit} 
 python install.py
 # Note that -e is necessary
 pip install -e .
