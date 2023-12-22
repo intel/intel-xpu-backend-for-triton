@@ -280,7 +280,6 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i) {
   return commonShflSync(loc, rewriter, val, i, "idx");
 }
-
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content) {
   auto funcOp =
@@ -295,29 +294,52 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
     (key + Twine(stringNumber++)).toStringRef(stringConstName);
   } while (moduleOp.lookupSymbol(stringConstName));
 
-  llvm::SmallVector<Attribute, 8> contentStr;
-  for (auto c : content) {
-    auto cAttr = rewriter.getI8IntegerAttr(c);
-    contentStr.push_back(cAttr);
-  }
-  contentStr.push_back(rewriter.getI8IntegerAttr(0));
-  size_t contentSize = contentStr.size();
-  auto globalType = spirv::ArrayType::get(i8_ty, contentSize);
-
   spirv::ConstantOp globalString;
-  spirv::VariableOp var;
+  spirv::GlobalVariableOp globalVar;
+  spirv::SpecConstantCompositeOp specCstComposite;
   {
-    VectorType _vec_type = VectorType::get({(int64_t)contentSize}, i8_ty);
-    DenseElementsAttr dstElementsAttr =
-        DenseElementsAttr::get(_vec_type, contentStr);
-    auto varString = rewriter.create<spirv::ConstantOp>(
-        UnknownLoc::get(ctx), globalType, dstElementsAttr);
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+    llvm::SmallVector<Attribute, 8> contentStr;
+    SmallString<25> specCstName;
+    SmallString<15> contentWithNull(content);
+    // must ends with null
+    contentWithNull.push_back('\0');
+    unsigned specConstIdx = 0;
+    for (auto c : contentWithNull) {
+      auto cAttr = rewriter.getI8IntegerAttr(c);
+      (llvm::Twine(key) + "_speccst" + llvm::Twine(specConstIdx++))
+          .toStringRef(specCstName);
+      auto sc = rewriter.create<mlir::spirv::SpecConstantOp>(
+          loc, rewriter.getStringAttr(specCstName), cAttr);
+      contentStr.push_back(mlir::SymbolRefAttr::get(sc));
+      specCstName.clear();
+    }
 
-    var = rewriter.create<spirv::VariableOp>(
-        UnknownLoc::get(ctx), ptr_ty(globalType, spirv::StorageClass::Function),
-        spirv::StorageClass::Function, varString);
+    size_t contentSize = contentStr.size();
+    auto globalType = spirv::ArrayType::get(i8_ty, contentSize);
+    mlir::SmallString<20> specCstCompositeName;
+    (llvm::Twine(key) + "_speccstcomp").toStringRef(specCstCompositeName);
+    specCstComposite = rewriter.create<mlir::spirv::SpecConstantCompositeOp>(
+        loc, mlir::TypeAttr::get(globalType),
+        rewriter.getStringAttr(specCstCompositeName),
+        rewriter.getArrayAttr(contentStr));
+
+    globalVar = rewriter.create<spirv::GlobalVariableOp>(
+        UnknownLoc::get(ctx),
+        ptr_ty(globalType, spirv::StorageClass::CrossWorkgroup),
+        stringConstName, FlatSymbolRefAttr::get(specCstComposite));
   }
-  return var;
+
+  Value zero = i32_val(0);
+  Value globalPtr = rewriter.create<spirv::AddressOfOp>(
+      UnknownLoc::get(rewriter.getContext()), globalVar);
+  Value stringStart = rewriter.create<spirv::PtrAccessChainOp>(
+      UnknownLoc::get(ctx), ptr_ty(i8_ty, spirv::StorageClass::CrossWorkgroup),
+      globalPtr, zero, zero);
+  Value genericStringStart =
+      bitcast(stringStart, ptr_ty(i8_ty, spirv::StorageClass::Generic));
+  return genericStringStart;
 }
 
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
