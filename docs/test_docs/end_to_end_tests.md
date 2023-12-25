@@ -41,7 +41,7 @@ Please get the [transformer_pinned_commit](https://github.com/pytorch/pytorch/bl
 
 ```Bash
 # Transformer for HuggingFace
-pip install "transformers==${pinned_commit}"
+pip_install "git+https://github.com/huggingface/transformers@${commit}"
 # TIMM Models
 pip_install "git+https://github.com/huggingface/pytorch-image-models@${commit}"
 ```
