@@ -5,6 +5,7 @@ for file in ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/*.py; do
   sed -i '/import torch/ a\import intel_extension_for_pytorch' "$file"
 done
 sed -i 's/cuda/xpu/g' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/print_helper.py
+sed -i 's/cuda/xpu/g' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/assert_helper.py
 sed -i -E 's/device=["'\'']cuda["'\'']/device="xpu"/g' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/test_core.py
 sed -i '/def test_abs_fp8(in_dtype, device):/ a\    pytest.skip("fp8 is not supported for xpu")' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/test_core.py
 sed -i 's/MmaLayout(/# &/' ${TRITON_SRC_ROOT_DIR}/python/test/unit/language/test_core.py

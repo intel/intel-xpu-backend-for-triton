@@ -6,6 +6,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::spirv::getSharedMemoryObjectFromStruct;
+using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
@@ -105,6 +106,11 @@ struct AssertOpSPIRVConversion
     auto elems = getTypeConverter()->unpackLLElements(
         loc, adaptor.getCondition(), rewriter, op.getCondition().getType());
     auto elemTy = elems[0].getType();
+    auto numPerThread = getTotalElemsPerThread(op.getCondition().getType());
+    auto shapePerCTA = getShapePerCTA(op.getCondition().getType());
+    auto sizePerCTA = 1;
+    for (auto s : shapePerCTA)
+      sizePerCTA *= s;
     Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto &elem : elems) {
       if (elemTy.isSignedInteger() || elemTy.isSignlessInteger()) {
@@ -112,6 +118,8 @@ struct AssertOpSPIRVConversion
             condition,
             logic_cmp_eq(elem, rewriter.create<spirv::ConstantOp>(
                                    loc, elemTy, rewriter.getZeroAttr(elemTy))));
+        condition = and_(
+            condition, icmp_slt(tid_val(), i32_val(sizePerCTA / numPerThread)));
       } else {
         assert(false && "Unsupported type for assert");
         return failure();
@@ -143,7 +151,7 @@ struct AssertOpSPIRVConversion
     rewriter.setInsertionPointToStart(ifBlock);
 
     auto funcOp = getAssertfailDeclaration(rewriter);
-    StringRef funcName("__assert_fail");
+    StringRef funcName("__devicelib_assert_fail");
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     Value messageString =
@@ -154,9 +162,46 @@ struct AssertOpSPIRVConversion
         spirv::addStringToModule(loc, rewriter, "assertFunc_", func);
     Value lineNumber = i32_val(line);
     Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
+    Value gidVec = getBuiltinVariableValue(
+        op, spirv::BuiltIn::GlobalInvocationId, i64_ty, rewriter);
+    Value lidVec = getBuiltinVariableValue(
+        op, spirv::BuiltIn::LocalInvocationId, i64_ty, rewriter);
+    Value gid0 = rewriter.create<spirv::CompositeExtractOp>(
+        op->getLoc(), i64_ty, gidVec,
+        rewriter.getI32ArrayAttr({static_cast<int32_t>(0)}));
+    Value gid1 = rewriter.create<spirv::CompositeExtractOp>(
+        op->getLoc(), i64_ty, gidVec,
+        rewriter.getI32ArrayAttr({static_cast<int32_t>(1)}));
+    Value gid2 = rewriter.create<spirv::CompositeExtractOp>(
+        op->getLoc(), i64_ty, gidVec,
+        rewriter.getI32ArrayAttr({static_cast<int32_t>(2)}));
 
-    SmallVector<Value> operands = {messageString, fileString, lineNumber,
-                                   funcString, charSize};
+    Value lid0 = rewriter.create<spirv::CompositeExtractOp>(
+        op->getLoc(), i64_ty, lidVec,
+        rewriter.getI32ArrayAttr({static_cast<int32_t>(0)}));
+    Value lid1 = rewriter.create<spirv::CompositeExtractOp>(
+        op->getLoc(), i64_ty, lidVec,
+        rewriter.getI32ArrayAttr({static_cast<int32_t>(1)}));
+    Value lid2 = rewriter.create<spirv::CompositeExtractOp>(
+        op->getLoc(), i64_ty, lidVec,
+        rewriter.getI32ArrayAttr({static_cast<int32_t>(2)}));
+    gid0 = bitcast(gid0, ui64_ty);
+    gid1 = bitcast(gid1, ui64_ty);
+    gid2 = bitcast(gid2, ui64_ty);
+    lid0 = bitcast(lid0, ui64_ty);
+    lid1 = bitcast(lid1, ui64_ty);
+    lid2 = bitcast(lid2, ui64_ty);
+
+    // auto oldInsertPoint = rewriter.saveInsertionPoint();
+    // rewriter.setInsertionPointAfter(op);
+    auto msgPtr =
+        bitcast(messageString, ptr_ty(i8_ty, spirv::StorageClass::Generic));
+    auto filePtr =
+        bitcast(funcString, ptr_ty(i8_ty, spirv::StorageClass::Generic));
+    auto funcPtr =
+        bitcast(funcString, ptr_ty(i8_ty, spirv::StorageClass::Generic));
+    SmallVector<Value> operands = {msgPtr, filePtr, lineNumber, funcPtr, gid0,
+                                   gid1,   gid2,    lid0,       lid1,    lid2};
 
     auto ret = call(TypeRange(), funcName, operands);
 
@@ -172,28 +217,42 @@ struct AssertOpSPIRVConversion
   getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    StringRef funcName("__assert_fail");
+    StringRef funcName("__devicelib_assert_fail");
     Operation *funcOp = moduleOp.lookupSymbol(funcName);
     if (funcOp)
       return cast<spirv::FuncOp>(*funcOp);
 
-    // void __assert_fail(const char * assertion, const char * file, unsigned
-    // int line, const char * function);
+    // void __devicelib_assert_fail(const char *expr, const char *file,
+    //                                         int32_t line, const char *func,
+    //                                         uint64_t gid0, uint64_t gid1,
+    //                                         uint64_t gid2, uint64_t lid0,
+    //                                         uint64_t lid1, uint64_t lid2)
     auto *ctx = rewriter.getContext();
     SmallVector<Type> argsType{ptr_ty(i8_ty, spirv::StorageClass::Generic),
                                ptr_ty(i8_ty, spirv::StorageClass::Generic),
                                i32_ty,
                                ptr_ty(i8_ty, spirv::StorageClass::Generic),
-                               rewriter.getIntegerType(sizeof(size_t) * 8)};
+                               ui64_ty,
+                               ui64_ty,
+                               ui64_ty,
+                               ui64_ty,
+                               ui64_ty,
+                               ui64_ty};
 
     mlir::FunctionType funcType =
         mlir::FunctionType::get(rewriter.getContext(), argsType, {});
 
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
+    spirv::FuncOp func = rewriter.create<spirv::FuncOp>(UnknownLoc::get(ctx),
+                                                        funcName, funcType);
+    auto linkageTypeAttr = rewriter.getAttr<::mlir::spirv::LinkageTypeAttr>(
+        spirv::LinkageType::Import);
+    auto linkageAttr = rewriter.getAttr<::mlir::spirv::LinkageAttributesAttr>(
+        funcName.str(), linkageTypeAttr);
+    func.getOperation()->setAttr("linkage_attributes", linkageAttr);
 
-    return rewriter.create<spirv::FuncOp>(UnknownLoc::get(ctx), funcName,
-                                          funcType);
+    return func;
   }
 };
 

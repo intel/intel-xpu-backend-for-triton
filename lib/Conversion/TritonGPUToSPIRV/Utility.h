@@ -114,6 +114,7 @@
 // Types
 #define int_ty(width) rewriter.getIntegerType(width)
 #define i64_ty rewriter.getIntegerType(64)
+#define ui64_ty rewriter.getIntegerType(64, false)
 #define i32_ty rewriter.getIntegerType(32)
 #define i16_ty rewriter.getIntegerType(16)
 #define ui32_ty rewriter.getIntegerType(32, false)

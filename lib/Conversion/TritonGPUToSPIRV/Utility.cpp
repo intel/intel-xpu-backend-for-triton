@@ -280,7 +280,6 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i) {
   return commonShflSync(loc, rewriter, val, i, "idx");
 }
-
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content) {
   auto funcOp =
@@ -295,31 +294,41 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
     (key + Twine(stringNumber++)).toStringRef(stringConstName);
   } while (moduleOp.lookupSymbol(stringConstName));
 
-  llvm::SmallVector<Attribute, 8> contentStr;
-  for (auto c : content) {
-    auto cAttr = rewriter.getI8IntegerAttr(c);
-    contentStr.push_back(cAttr);
-  }
-  size_t contentSize = contentStr.size();
-  auto globalType = spirv::ArrayType::get(i8_ty, contentSize);
-
   spirv::ConstantOp globalString;
   spirv::GlobalVariableOp globalVar;
+  spirv::SpecConstantCompositeOp specCstComposite;
   {
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
-    VectorType _vec_type = VectorType::get({(int64_t)contentSize}, i8_ty);
-    DenseElementsAttr dstElementsAttr =
-        DenseElementsAttr::get(_vec_type, contentStr);
-    globalString = rewriter.create<spirv::ConstantOp>(
-        UnknownLoc::get(ctx), globalType, dstElementsAttr);
+    llvm::SmallVector<Attribute, 8> contentStr;
+    SmallString<25> specCstName;
+    SmallString<15> contentWithNull(content);
+    // must ends with null
+    contentWithNull.push_back('\0');
+    unsigned specConstIdx = 0;
+    for (auto c : contentWithNull) {
+      auto cAttr = rewriter.getI8IntegerAttr(c);
+      (llvm::Twine(key) + "_speccst" + llvm::Twine(specConstIdx++))
+          .toStringRef(specCstName);
+      auto sc = rewriter.create<mlir::spirv::SpecConstantOp>(
+          loc, rewriter.getStringAttr(specCstName), cAttr);
+      contentStr.push_back(mlir::SymbolRefAttr::get(sc));
+      specCstName.clear();
+    }
+
+    size_t contentSize = contentStr.size();
+    auto globalType = spirv::ArrayType::get(i8_ty, contentSize);
+    mlir::SmallString<20> specCstCompositeName;
+    (llvm::Twine(key) + "_speccstcomp").toStringRef(specCstCompositeName);
+    specCstComposite = rewriter.create<mlir::spirv::SpecConstantCompositeOp>(
+        loc, mlir::TypeAttr::get(globalType),
+        rewriter.getStringAttr(specCstCompositeName),
+        rewriter.getArrayAttr(contentStr));
 
     globalVar = rewriter.create<spirv::GlobalVariableOp>(
         UnknownLoc::get(ctx),
         ptr_ty(globalType, spirv::StorageClass::CrossWorkgroup),
-        stringConstName,
-        //        FlatSymbolRefAttr::get(globalString));
-        nullptr);
+        stringConstName, FlatSymbolRefAttr::get(specCstComposite));
   }
 
   Value zero = i32_val(0);
