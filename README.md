@@ -80,7 +80,14 @@ If you encountered any problem, please refer to the [Possible-Build-Bugs](https:
 
 ## Option 3: Build in dockerfile
 
+Before start, you should make sure docker install and available, sometimes [configure the proxy ](https://docs.docker.com/config/daemon/systemd/#httphttps-proxy) needed.
 ```bash
+# prepare latest xpu-backend-for-triton src
+git clone https://github.com/openai/triton.git && cd triton
+git submodule sync && git submodule update --init --recursive --jobs 0
+cd third_party/intel_xpu_backend
+git checkout main && git pull && cd ../..
+git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
 # activate dependencies version variables
 source triton/third_party/intel_xpu_backend/.github/ci_pins/version.txt
 # cd to docker folder and build image form Dockerfile

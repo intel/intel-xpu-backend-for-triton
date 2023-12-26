@@ -10,16 +10,12 @@ RUN apt-get update && \
     build-essential \
     ca-certificates \
     ccache \
-    cmake \
     curl \
     git \
     gnupg2 \
     gpg-agent \
-    libsm6 \
-    libxext6 \
     pybind11-dev \
     wget \
-    vim \
     zlib1g-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
