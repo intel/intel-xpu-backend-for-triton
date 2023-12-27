@@ -1098,15 +1098,12 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
-    if is_xpu(device) and dtype_x_str == 'float16':
-        pytest.skip("FIXME: llvm-spirv disallow AtomicRMWOp with f16")
-
     check_cuda_only(device)
-    if torch.cuda.is_available():
-        capability = torch.cuda.get_device_capability()
-        if capability[0] < 7:
-            if dtype_x_str == 'float16':
-                pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
+
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 7:
+        if dtype_x_str == 'float16':
+            pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
     n_programs = 5
 
     # triton kernel
@@ -2661,9 +2658,6 @@ def test_constexpr(literal, dtype_str, device):
 
 @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 def test_dot_without_load(dtype_str, device):
-    if is_xpu(device) and dtype_str == 'float16':
-        pytest.skip("FIXME: Incorrect result on XPU")
-
     if torch.cuda.is_available():
         capability = torch.cuda.get_device_capability()
         allow_tf32 = capability[0] > 7
@@ -2770,7 +2764,7 @@ def test_masked_load_shared_memory(dtype, device):
     # Note: fails in getConversionFunc
     # Note: also fails for NVIDIA in the same way, we need handle conversion of an
     # fp_to_fp operation where the input and output tensors have element type f16.
-    if is_xpu(device) and dtype in [torch.float16, torch.bfloat16]:
+    if is_xpu(device) and dtype in [torch.bfloat16]:
         pytest.skip("FIXME: Incorrect result on XPU")
 
     M = 32
