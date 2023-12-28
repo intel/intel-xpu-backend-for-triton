@@ -1,5 +1,6 @@
 add_mlir_conversion_library(TritonGPUToSPIRV
     TritonGPUToSPIRV.cpp
+    TritonGPUToVC.cpp
     ReshapeOpToSPIRV.cpp
     ElementwiseOpToSPIRV.cpp
     TritonGPUToSPIRVPass.cpp

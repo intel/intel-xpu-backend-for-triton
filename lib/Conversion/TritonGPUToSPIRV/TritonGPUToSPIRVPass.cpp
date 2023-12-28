@@ -7,6 +7,7 @@
 #include "mlir/Conversion/GPUToSPIRV/GPUToSPIRV.h"
 #include "mlir/Conversion/MathToSPIRV/MathToSPIRV.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Conversion/SCFToSPIRV/SCFToSPIRV.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
@@ -25,6 +26,7 @@
 #include "ReshapeOpToSPIRV.h"
 #include "ScanOpToSPIRV.h"
 #include "TritonGPUToSPIRV.h"
+#include "TritonGPUToVC.h"
 #include "TypeConverter.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -361,7 +363,9 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    spirv::Capability caps_opencl[] = {
+    mod.dump();
+    auto enableSIMD = getenv("ENABLE_SIMD_PATH");
+    SmallVector<spirv::Capability> caps_opencl = {
         spirv::Capability::Addresses,
         spirv::Capability::Float16Buffer,
         spirv::Capability::Int64,
@@ -377,9 +381,15 @@ public:
         spirv::Capability::AtomicFloat32AddEXT,
         spirv::Capability::ExpectAssumeKHR,
     };
-    spirv::Extension exts_opencl[] = {
+    SmallVector<spirv::Extension> exts_opencl = {
         spirv::Extension::SPV_EXT_shader_atomic_float_add,
         spirv::Extension::SPV_KHR_expect_assume};
+    if (enableSIMD) {
+      caps_opencl.append({spirv::Capability::SubgroupDispatch,
+                          spirv::Capability::VectorComputeINTEL,
+                          spirv::Capability::VectorAnyINTEL});
+      exts_opencl.append({spirv::Extension::SPV_INTEL_vector_compute});
+    }
     auto triple = spirv::VerCapExtAttr::get(spirv::Version::V_1_4, caps_opencl,
                                             exts_opencl, context);
     auto targetAttr = spirv::TargetEnvAttr::get(
@@ -401,26 +411,29 @@ public:
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-    // Preprocess
-    decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
-    decomposeBlockedToDotOperand(mod);
-    decomposeInsertSliceAsyncOp(mod);
-
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation);
-    membarPass.run();
+    if (!enableSIMD) {
+      // Preprocess
+      decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
+      decomposeBlockedToDotOperand(mod);
+      decomposeInsertSliceAsyncOp(mod);
 
-    // Step 4
-    RewritePatternSet scf_patterns(context);
-    mlir::populateSCFToControlFlowConversionPatterns(scf_patterns);
-    mlir::ConversionTarget scf_target(*context);
-    scf_target.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
-                            scf::WhileOp, scf::ExecuteRegionOp>();
-    scf_target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    if (failed(
-            applyPartialConversion(mod, scf_target, std::move(scf_patterns))))
-      return signalPassFailure();
+      ModuleMembarAnalysis membarPass(&allocation);
+      membarPass.run();
+
+      // Step 4
+      RewritePatternSet scf_patterns(context);
+      mlir::populateSCFToControlFlowConversionPatterns(scf_patterns);
+      mlir::ConversionTarget scf_target(*context);
+      scf_target.addIllegalOp<scf::ForOp, scf::IfOp, scf::ParallelOp,
+                              scf::WhileOp, scf::ExecuteRegionOp>();
+      scf_target.markUnknownOpDynamicallyLegal(
+          [](Operation *) { return true; });
+      if (failed(
+              applyPartialConversion(mod, scf_target, std::move(scf_patterns))))
+        return signalPassFailure();
+    }
 
     // Lower functions
     RewritePatternSet func_patterns(context);
@@ -445,6 +458,10 @@ public:
             applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
       return signalPassFailure();
 
+    llvm::outs()
+        << "after add module attributes and change to spirv.func/return\n";
+    mod.dump();
+
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     // Rewrite ops
     RewritePatternSet patterns(context);
@@ -456,40 +473,71 @@ public:
     if (axisInfoAnalysis.getNumFunctions() > 1) {
       indexCacheInfo = {nullptr, nullptr, nullptr};
     }
-    // Normal conversions
-    populateTritonGPUToSPIRVPatterns(spirvTypeConverter, context, patterns,
-                                     numWarps, axisInfoAnalysis, allocation,
-                                     indexCacheInfo, /*benefit=*/10);
-    // ConvertLayoutOp
-    populateConvertLayoutOpToSPIRVPatterns(
-        spirvTypeConverter, context, patterns, numWarps, axisInfoAnalysis,
-        allocation, indexCacheInfo, /*benefit=*/10);
-    // DotOp
-    populateDotOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
-                                 allocation,
-                                 /*benefit=*/10);
-    // ElementwiseOp
-    populateElementwiseOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
-                                         numWarps, axisInfoAnalysis,
-                                         &allocation, nullptr,
-                                         /*benefit=*/10, computeCapability);
-    // LoadStoreOp
-    populateLoadStoreOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+
+    if (!enableSIMD) {
+      // Normal conversions
+      populateTritonGPUToSPIRVPatterns(spirvTypeConverter, context, patterns,
                                        numWarps, axisInfoAnalysis, allocation,
                                        indexCacheInfo, /*benefit=*/10);
-    // ReduceOp
-    populateReduceOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+      // ConvertLayoutOp
+      populateConvertLayoutOpToSPIRVPatterns(
+          spirvTypeConverter, context, patterns, numWarps, axisInfoAnalysis,
+          allocation, indexCacheInfo, /*benefit=*/10);
+      // DotOp
+      populateDotOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                   allocation,
+                                   /*benefit=*/10);
+      // ElementwiseOp
+      populateElementwiseOpToSPIRVPatterns(spirvTypeConverter, context,
+                                           patterns, numWarps, axisInfoAnalysis,
+                                           &allocation, nullptr,
+                                           /*benefit=*/10, computeCapability);
+      // LoadStoreOp
+      populateLoadStoreOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                         numWarps, axisInfoAnalysis, allocation,
+                                         indexCacheInfo, /*benefit=*/10);
+      // ReduceOp
+      populateReduceOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                      numWarps, axisInfoAnalysis, allocation,
+                                      indexCacheInfo, /*benefit=*/10);
+      // ScanOp
+      populateScanOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
                                     numWarps, axisInfoAnalysis, allocation,
                                     indexCacheInfo, /*benefit=*/10);
-    // ScanOp
-    populateScanOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
-                                  numWarps, axisInfoAnalysis, allocation,
-                                  indexCacheInfo, /*benefit=*/10);
-    // ViewOp
-    populateViewOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
-                                  numWarps, axisInfoAnalysis, &allocation,
-                                  nullptr,
-                                  /*benefit=*/10, computeCapability);
+      // ViewOp
+      populateViewOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
+                                    numWarps, axisInfoAnalysis, &allocation,
+                                    nullptr,
+                                    /*benefit=*/10, computeCapability);
+    } else {
+      /// add type conversion for VC-spirv
+      // tt::pointer to v8i32
+      spirvTypeConverter.addConversion([&](PointerType type) -> mlir::Type {
+        if (isa<RankedTensorType>(type.getPointeeType())) {
+          auto i32Type = mlir::IntegerType::get(context, 32);
+          return mlir::VectorType::get(8, i32Type);
+        }
+        return spirvTypeConverter.convertTritonPointerType(type);
+      });
+      // tensor type is flattened
+      spirvTypeConverter.addConversion(
+          [&](mlir::RankedTensorType type) -> mlir::Type {
+            return mlir::VectorType::get(type.getNumElements(),
+                                         type.getElementType());
+          });
+      spirvTypeConverter.addConversion(
+          [&](mlir::VectorType type) -> mlir::Type {
+            return mlir::VectorType::get(type.getNumElements(),
+                                         type.getElementType());
+          });
+
+      // tt.get_program_id, make_tensor_ptr, advance, prefetch/load/store, dot
+      populateTritonGPUToVCPatterns(spirvTypeConverter, context, patterns,
+                                    numWarps, /*benefit=*/10);
+      mlir::ScfToSPIRVContext scfToSpirvCtx;
+      mlir::populateSCFToSPIRVPatterns(spirvTypeConverter, scfToSpirvCtx,
+                                       patterns);
+    }
 
     // Add arith/math's patterns to help convert scalar expression to SPIRV.
     mlir::arith::populateArithToSPIRVPatterns(spirvTypeConverter, patterns);
@@ -503,6 +551,9 @@ public:
     if (failed(applyPartialConversion(mod, spirvTarget, std::move(patterns))))
       return signalPassFailure();
     //    ::llvm::DebugFlag = false;
+
+    llvm::outs() << "after lowering to spirv\n";
+    mod.dump();
   }
 
 private:
