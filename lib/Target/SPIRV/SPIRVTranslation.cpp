@@ -19,8 +19,13 @@
 #include "spirv-tools/optimizer.hpp"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "mlir/Parser/Parser.h"
+#include "mlir/Support/FileUtilities.h"
 #include <dlfcn.h>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <sstream>
 
 namespace mlir {
 namespace triton {
@@ -61,6 +66,7 @@ LogicalResult disassembleSPIRV(uint32_t *binary_ptr, size_t binary_size,
   std::string spriv_code;
   if (!SpvTool.Disassemble(binary_ptr, binary_size, &spriv_code)) {
     // return failure("SPIRV: Failed to generate textual assembly");
+    std::cout << "SPIRV: Failed to generate textual assembly" << std::endl;
     return failure();
   }
   output << spriv_code;
@@ -280,6 +286,8 @@ getExternLibs(spirv::ModuleOp module) {
 
 static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
                                                    raw_ostream &output) {
+  std::cout << __LINE__ << std::endl;
+  module.dump();
   if (!module)
     return failure();
 
@@ -288,6 +296,7 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
   SmallVector<spirv::ModuleOp, 1> spirvModules;
   OpBuilder builder(module->getContext());
 
+  std::cout << __LINE__ << std::endl;
   module.walk([&](ModuleOp op) {
     auto newModuleOp =
         builder.create<spirv::ModuleOp>(op.getLoc(), op.getName());
@@ -338,15 +347,20 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
             spirv::Capability::ExpectAssumeKHR,
             spirv::Capability::SubgroupDispatch,
             spirv::Capability::GroupNonUniformShuffle,
+            spirv::Capability::VectorComputeINTEL,
+            spirv::Capability::VectorAnyINTEL
         // clang-format on
     };
     spirv::Extension exts_opencl[] = {
         spirv::Extension::SPV_EXT_shader_atomic_float_add,
-        spirv::Extension::SPV_KHR_expect_assume};
+        spirv::Extension::SPV_KHR_expect_assume,
+        spirv::Extension::SPV_INTEL_vector_compute};
     newModuleOp->setAttr("vce_triple", spirv::VerCapExtAttr::get(
                                            spirv::Version::V_1_4, caps_opencl,
                                            exts_opencl, builder.getContext()));
 
+    std::cout << __LINE__ << std::endl;
+    newModuleOp.dump();
     spirvModules.push_back(newModuleOp);
   });
 
@@ -395,9 +409,12 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
     });
   }
 
+  std::cout << __LINE__ << std::endl;
+  spirvModules[0].dump();
   if (failed(spirv::serialize(spirvModules[0], binary)))
     return failure();
 
+  std::cout << __LINE__ << std::endl;
   // Link external libraries before perform optimizations.
   // This allows the optimizers to inline and perform
   // analyses on the used library functions, and eliminate any unused functions
@@ -405,15 +422,19 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
   auto externLibs = getExternLibs(spirvModules[0]);
   std::vector<uint32_t> linked_binary(binary.data(),
                                       binary.data() + binary.size());
+  if (!getenv("ENABLE_SIMD_PATH")) {
   if (!linkExternLib(linked_binary, externLibs))
     return failure();
 
   if (!optimizeSPIRVModule(linked_binary))
     return failure();
+  }
 
+  std::cout << __LINE__ << std::endl;
   if (failed(
           disassembleSPIRV(linked_binary.data(), linked_binary.size(), output)))
     return failure();
+  std::cout << __LINE__ << std::endl;
 
   return mlir::success();
 }
@@ -421,45 +442,64 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
 std::string
 translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
                             std::map<std::string, int> computeCapability) {
-  mlir::PassManager pm(module->getContext());
-  mlir::registerPassManagerCLOptions();
-  if (failed(applyPassManagerCLOptions(pm))) {
-    llvm::errs() << "failed to apply pass manager CL options\n";
-    return nullptr;
-  }
-  auto printingFlags = mlir::OpPrintingFlags();
-  printingFlags.elideLargeElementsAttrs(16);
-  pm.enableIRPrinting(
-      /*shouldPrintBeforePass=*/nullptr,
-      /*shouldPrintAfterPass=*/
-      [](mlir::Pass *pass, mlir::Operation *) {
-        return ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
-      },
-      /*printModuleScope=*/false,
-      /*printAfterOnlyOnChange=*/true,
-      /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
-
-  pm.addPass(mlir::createConvertSCFToCFPass());
-  pm.addPass(createConvertTritonGPUToSPIRVPass(std::move(computeCapability)));
-  //  pm.addPass(mlir::arith::createConvertArithToSPIRVPass());
-  // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
-  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
-  // pm.addPass(mlir::createCanonicalizerPass());
-  // Simplify the IR
-  pm.addPass(mlir::createCSEPass());
-  pm.addPass(mlir::createSymbolDCEPass());
-  // pm.addPass(mlir::createCanonicalizerPass());
-
   std::string spirvModule;
-  if (failed(pm.run(module))) {
-    llvm::errs() << "Pass execution failed";
-    return spirvModule;
-  }
+  if (!getenv("ENABLE_SIMD_PATH")) {
+    mlir::PassManager pm(module->getContext());
+    mlir::registerPassManagerCLOptions();
+    if (failed(applyPassManagerCLOptions(pm))) {
+      llvm::errs() << "failed to apply pass manager CL options\n";
+      return nullptr;
+    }
+    auto printingFlags = mlir::OpPrintingFlags();
+    printingFlags.elideLargeElementsAttrs(16);
+    pm.enableIRPrinting(
+        /*shouldPrintBeforePass=*/nullptr,
+        /*shouldPrintAfterPass=*/
+        [](mlir::Pass *pass, mlir::Operation *) {
+          return ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
+        },
+        /*printModuleScope=*/false,
+        /*printAfterOnlyOnChange=*/true,
+        /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
-  llvm::raw_string_ostream os(spirvModule);
-  if (failed(translateTritonSPIRVToSPIRVIR(module, os))) {
-    llvm::errs() << "Translate to SPIRV IR failed";
-    return spirvModule;
+    pm.addPass(mlir::createConvertSCFToCFPass());
+    pm.addPass(createConvertTritonGPUToSPIRVPass(std::move(computeCapability)));
+    //  pm.addPass(mlir::arith::createConvertArithToSPIRVPass());
+    // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
+    pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+    // pm.addPass(mlir::createCanonicalizerPass());
+    // Simplify the IR
+    pm.addPass(mlir::createCSEPass());
+    pm.addPass(mlir::createSymbolDCEPass());
+    // pm.addPass(mlir::createCanonicalizerPass());
+
+    if (failed(pm.run(module))) {
+      llvm::errs() << "Pass execution failed";
+      return spirvModule;
+    }
+    llvm::raw_string_ostream os(spirvModule);
+    if (failed(translateTritonSPIRVToSPIRVIR(module, os))) {
+      llvm::errs() << "Translate to SPIRV IR failed";
+      return spirvModule;
+    }
+  } else {
+
+    std::ifstream inFile;
+    inFile.open("/home/gta/deweiwang/xpu/triton/python/gemm.spirv.mlir");
+    std::stringstream strStream;
+    strStream << inFile.rdbuf();
+    std::string str = strStream.str();
+    std::cout << "output spirv module" << std::endl;
+    std::cout << str << std::endl;
+    mlir::OwningOpRef<mlir::ModuleOp> newMod =
+        mlir::parseSourceString<mlir::ModuleOp>(str, module.getContext());
+    if (!newMod)
+      std::cout << "output spirv Error" << std::endl;
+    llvm::raw_string_ostream os(spirvModule);
+    if (failed(translateTritonSPIRVToSPIRVIR(*newMod, os))) {
+      llvm::errs() << "Translate to SPIRV IR failed";
+      return spirvModule;
+    }
   }
 
   return spirvModule;

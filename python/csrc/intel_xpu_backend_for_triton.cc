@@ -1,5 +1,6 @@
 
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -174,13 +175,17 @@ void init_triton_translation(py::module &m) {
                         mlir::triton::gpu::TritonGPUDialect,
                         mlir::math::MathDialect, mlir::arith::ArithDialect,
                         mlir::index::IndexDialect, mlir::scf::SCFDialect,
-                        mlir::cf::ControlFlowDialect>();
+                        mlir::cf::ControlFlowDialect, mlir::spirv::SPIRVDialect,
+                        mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect>();
         context.appendDialectRegistry(registry);
         context.loadAllAvailableDialects();
+        context.allowUnregisteredDialects();
 
         auto capabilities =
             computeCapability.cast<std::map<std::string, int>>();
 
+        std::cout << "ttgir source" << std::endl;
+        std::cout << ttgir << std::endl;
         // parse module
         mlir::OwningOpRef<mlir::ModuleOp> module =
             mlir::parseSourceString<mlir::ModuleOp>(ttgir, &context);
@@ -188,6 +193,8 @@ void init_triton_translation(py::module &m) {
           throw std::runtime_error("Parse MLIR file failed.");
         auto spirvModule = ::mlir::triton::translateTritonGPUToSPIRVIR(
             *module, std::move(capabilities));
+        std::cout << "spirv source raw" << std::endl;
+        std::cout << spirvModule << std::endl;
         if (spirvModule.empty())
           throw std::runtime_error(
               "Failed to translate TritonGPU to SPIRV IR.");

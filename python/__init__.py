@@ -449,13 +449,27 @@ class XPUBackend(BaseBackend):
             stages.pop(filter_out_key)
 
         context = _triton.context()
+        enableSIMD = os.getenv("ENABLE_SIMD_PATH")
 
-        stages["ttgir"] = (lambda path: _triton.parse_mlir_module(Path(path).read_text(), context),
+        if enableSIMD:
+            print("in simd")
+            # file="/home/gta/deweiwang/xpu/triton/python/gemm.spirv.mlir"
+            # stages["spvbin"] = (lambda path: _triton.parse_mlir_module(Path(file).read_text(), context),
+            #                 lambda src: spirv_to_spvbin(src, arch))
+            stages["ttgir"] = (lambda path: _triton.parse_mlir_module(Path(path).read_text(), context),
                            lambda src: optimize_ttgir(ttir_to_ttgir(src, arch["num_warps"]), arch["num_stages"], arch))
-        stages["spirv"] = (lambda path: Path(path).read_text(),
+            stages["spirv"] = (lambda path: Path(path).read_text(),
                            lambda src: ttgir_to_spirv(src, extern_libs, arch))
-        stages["spvbin"] = (lambda path: Path(path).read_bytes(),
-                            lambda src: spirv_to_spvbin(src, arch))
+            stages["spvbin"] = (lambda path: Path(path).read_bytes(),
+                             lambda src: spirv_to_spvbin(src, arch))
+        else:
+            print("in simt")
+            stages["ttgir"] = (lambda path: _triton.parse_mlir_module(Path(path).read_text(), context),
+                           lambda src: optimize_ttgir(ttir_to_ttgir(src, arch["num_warps"]), arch["num_stages"], arch))
+            stages["spirv"] = (lambda path: Path(path).read_text(),
+                           lambda src: ttgir_to_spirv(src, extern_libs, arch))
+            stages["spvbin"] = (lambda path: Path(path).read_bytes(),
+                             lambda src: spirv_to_spvbin(src, arch))
 
     def add_meta_info(self, ir, module, next_module, metadata, asm):
         if ir == "spirv":
