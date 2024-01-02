@@ -21,6 +21,7 @@ def is_spirv():
     import torch
     return torch.xpu.is_available()
 
+
 @functools.lru_cache()
 def libcuda_dirs():
     env_libcuda_path = os.getenv("TRITON_LIBCUDA_PATH")
