@@ -1161,17 +1161,12 @@ struct AtomicCASOpConversion
               // casPtr = bitcast(casPtr, ptr_ty(ctx, 1));
               casCmp = bitcast(casCmp, zero.getType());
               casVal = bitcast(casVal, zero.getType());
-              llvm::errs() << "casPtr: " << casPtr << "\n";
-              llvm::errs() << "casCmp: " << casCmp << "\n";
-              llvm::errs() << "casVal: " << casVal << "\n";
 
               auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
                   loc, casPtr, casCmp, casVal, LLVM::AtomicOrdering::acq_rel,
                   LLVM::AtomicOrdering::monotonic);
-              llvm::errs() << "cmpxchg: " << cmpxchg << "\n";
               Value newLoaded =
                   rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
-              llvm::errs() << "newLoaded: " << newLoaded << "\n";
               return SmallVector<Value, 1>{newLoaded};
             });
 

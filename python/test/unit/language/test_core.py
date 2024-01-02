@@ -4005,7 +4005,10 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
             f.write(ir)
             f.flush()
-            kernel = triton.compile(f.name, device_type=device)
+            capability = 0
+            if torch.cuda.is_available():
+                capability = torch.cuda.get_device_capability()
+            kernel = triton.compile(f.name, target=(device, capability))
         kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
         assert torch.equal(z, x)
