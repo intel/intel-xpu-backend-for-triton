@@ -107,7 +107,7 @@ makeOptimizingPipeline(unsigned optLevel, unsigned sizeLevel,
     tuningOptions.LoopInterleaving = true;
     tuningOptions.LoopVectorization = true;
 
-    // SLPVectorizer causes test_core_xpu.py::test_dot_mulbroadcastred to fail.
+    // SLPVectorizer causes test_core.py::test_dot_mulbroadcastred to fail.
     // It vectorizes @llvm.fmuladd.f32 with @llvm.fmuladd.v32f32. We can
     // consider to reenable SLP vectorization when the failure is investigated.
     tuningOptions.SLPVectorization = false;
