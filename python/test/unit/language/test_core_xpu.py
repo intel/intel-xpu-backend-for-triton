@@ -1923,7 +1923,10 @@ def test_scan_layouts(M, N, src_layout, axis, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name, device_type=device)
+        capability = 0
+        if torch.cuda.is_available():
+            capability = torch.cuda.get_device_capability()
+        kernel = triton.compile(f.name, target=(device, capability))
     rs = RandomState(17)
     x = rs.randint(-100, 100, (M, N)).astype('int32')
 
@@ -2023,7 +2026,10 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name, device_type=device)
+        capability = 0
+        if torch.cuda.is_available():
+            capability = torch.cuda.get_device_capability()
+        kernel = triton.compile(f.name, target=(device, capability))
 
     rs = RandomState(17)
     x = numpy_random((M, N), dtype_str=dtype_str, rs=rs, low=0, high=10)
@@ -2078,7 +2084,10 @@ def test_store_op(M, src_layout, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        store_kernel = triton.compile(f.name, device_type=device)
+        capability = 0
+        if torch.cuda.is_available():
+            capability = torch.cuda.get_device_capability()
+        store_kernel = triton.compile(f.name, target=(device, capability))
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, 1)).astype('float32')
@@ -2129,7 +2138,10 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name, device_type=device)
+        capability = 0
+        if torch.cuda.is_available():
+            capability = torch.cuda.get_device_capability()
+        kernel = triton.compile(f.name, target=(device, capability))
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, )).astype('int32')
@@ -2219,7 +2231,10 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name, device_type=device)
+        capability = 0
+        if torch.cuda.is_available():
+            capability = torch.cuda.get_device_capability()
+        kernel = triton.compile(f.name, target=(device, capability))
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, N)).astype('int32')
@@ -3886,7 +3901,10 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name, device_type=device)
+        capability = 0
+        if torch.cuda.is_available():
+            capability = torch.cuda.get_device_capability()
+        kernel = triton.compile(f.name, target=(device, capability))
     kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
     assert torch.equal(z, x)
@@ -3982,7 +4000,10 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
             f.write(ir)
             f.flush()
-            kernel = triton.compile(f.name, device_type=device)
+            capability = 0
+            if torch.cuda.is_available():
+                capability = torch.cuda.get_device_capability()
+            kernel = triton.compile(f.name, target=(device, capability))
         kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
         assert torch.equal(z, x)
