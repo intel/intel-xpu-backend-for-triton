@@ -262,21 +262,17 @@ public:
 
   Value getClusterCTAId(ConversionPatternRewriter &rewriter,
                         Location loc) const {
-    Value CTAId;
     switch (target) {
     case triton::Target::NVVM:
-      CTAId = rewriter.create<triton::nvgpu::ClusterCTAIdOp>(
+      return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(
           loc, rewriter.getI32Type());
-      break;
     case triton::Target::ROCDL:
     case triton::Target::GENX:
       // Clusters of thread blocks aren't supported.
-      CTAId = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-      break;
+      return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     default:
       llvm_unreachable("Unexpected target");
     }
-    return CTAId;
   }
 
   // -----------------------------------------------------------------------
