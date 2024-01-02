@@ -18,7 +18,8 @@ def is_hip():
 
 # TODO: properly set is_spirv
 def is_spirv():
-    return True
+    import torch
+    return torch.xpu.is_available()
 
 
 @functools.lru_cache()

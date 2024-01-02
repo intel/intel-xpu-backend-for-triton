@@ -10,7 +10,7 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.common.build import is_hip
+from triton.common.build import is_hip, is_spirv
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -32,8 +32,9 @@ else:
     GPU_DIALECT = "triton_gpu"
     THREADS_PER_WARP = 32
 
-# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
-torch.xpu.enable_sync_mode()
+if is_spirv():
+    # FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
+    torch.xpu.enable_sync_mode()
 
 
 def _bitwidth(dtype: str) -> int:
@@ -117,6 +118,10 @@ def patch_kernel(template, to_replace):
     for key, value in to_replace.items():
         kernel.src = kernel.src.replace(key, value)
     return kernel
+
+
+def is_cuda(device):
+    return device in ['cuda']
 
 
 def is_xpu(device):
@@ -1147,7 +1152,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     else:
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
     sem_str = "acq_rel" if sem is None else sem
-    if is_hip() or is_xpu(device):
+    if not is_cuda(device):
         return
 
     assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
@@ -1247,7 +1252,7 @@ def test_atomic_cas(sem, num_ctas, device):
     h = serialized_add[(64, )](data, Lock, SEM=sem, num_ctas=num_ctas)
     sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
-    if is_hip() or is_xpu(device):
+    if not is_cuda(device):
         return
     assert f"atom.global.{sem_str}" in h.asm["ptx"]
 
@@ -2326,7 +2331,7 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     np.testing.assert_allclose(to_numpy(z_tri), z_ref)
     np.testing.assert_allclose(to_numpy(z_tri_contiguous), z_ref)
 
-    if is_hip() or is_xpu(device):
+    if not is_cuda(device):
         return
 
     # parse ptx to make sure ld/st are vectorized
@@ -2534,7 +2539,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     else:
         # added atol, to loose precision for float16xfloat16->float32 case
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
-    if is_hip():
+    if not is_cuda(device):
         return
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
@@ -2604,7 +2609,7 @@ def test_dot_mulbroadcastred(in_dtype, device):
     z_ref = np.matmul(x, y)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), atol=0.01)
 
-    if is_hip() or is_xpu(device):
+    if not is_cuda(device):
         return
     assert "tt.dot" in h.asm['ttir']
     # when using MMAv3, we will not pipeline the load op for Y
@@ -2831,7 +2836,7 @@ def test_load_cache_modifier(cache, device):
         tl.store(dst + offsets, x)
 
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
-    if is_hip() or is_xpu(device):
+    if not is_cuda(device):
         return
 
     ptx = pgm.asm['ptx']
@@ -2861,7 +2866,7 @@ def test_vectorization(N, num_ctas, device):
 
     pgm = _kernel[(1, )](dst, src, N=N, BLOCK_SIZE=block_size)
 
-    if is_hip() or is_xpu(device):
+    if not is_cuda(device):
         return
 
     ptx = pgm.asm["ptx"]
@@ -2888,7 +2893,7 @@ def test_vectorization_hints(has_hints, device):
         tl.store(dst + offsets, x, mask=offsets < N)
 
     pgm = _kernel[(1, )](dst, src, off, N=1024, BLOCK_SIZE=src.shape[0], HINT=has_hints)
-    if is_hip() or is_xpu(device):
+    if not is_cuda(device):
         return
 
     ptx = pgm.asm["ptx"]
@@ -2918,7 +2923,7 @@ def test_store_cache_modifier(cache, device):
         return
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
-    if is_xpu(device):
+    if not is_cuda(device):
         return
 
     ptx = pgm.asm['ptx']
@@ -4169,7 +4174,7 @@ def test_enable_fp_fusion(enable_fp_fusion, device):
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)
 
-    if is_xpu(device):
+    if not is_cuda(device):
         return
 
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
