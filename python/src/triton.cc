@@ -466,7 +466,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpState &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             self->print(os);
+             auto printingFlags = mlir::OpPrintingFlags();
+             printingFlags.enableDebugInfo();
+             self->print(os, printingFlags);
              return str;
            })
       .def("append_operand",
@@ -503,7 +505,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::ModuleOp &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             self.print(os);
+             auto printingFlags = mlir::OpPrintingFlags();
+             printingFlags.enableDebugInfo();
+             self.print(os, printingFlags);
              return str;
            })
       .def("bytecode",
@@ -1690,9 +1694,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::triton::createReorderBroadcastPass());
            })
       .def("add_rewrite_tensor_pointer_pass",
-           [](mlir::PassManager &self, int computeCapability) {
-             self.addPass(mlir::triton::createRewriteTensorPointerPass(
-                 computeCapability));
+           [](mlir::PassManager &self, int capability) {
+             self.addPass(
+                 mlir::triton::createRewriteTensorPointerPass(capability));
            })
       .def("add_tritongpu_ws_feasibility_checking_pass",
            [](mlir::PassManager &self, int computeCapability) {
@@ -1766,9 +1770,9 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::createTritonGPUReorderInstructionsPass());
            })
       .def("add_tritongpu_rewrite_tensor_pointer_pass",
-           [](mlir::PassManager &self, int computeCapability) {
-             self.addPass(mlir::createTritonGPURewriteTensorPointerPass(
-                 computeCapability));
+           [](mlir::PassManager &self, int capability) {
+             self.addPass(
+                 mlir::createTritonGPURewriteTensorPointerPass(capability));
            })
       .def("add_tritongpu_decompose_conversions_pass",
            [](mlir::PassManager &self) {
