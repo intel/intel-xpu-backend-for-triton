@@ -466,7 +466,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::OpState &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             self->print(os);
+             auto printingFlags = mlir::OpPrintingFlags();
+             printingFlags.enableDebugInfo();
+             self->print(os, printingFlags);
              return str;
            })
       .def("append_operand",
@@ -503,7 +505,9 @@ void init_triton_ir(py::module &&m) {
            [](mlir::ModuleOp &self) -> std::string {
              std::string str;
              llvm::raw_string_ostream os(str);
-             self.print(os);
+             auto printingFlags = mlir::OpPrintingFlags();
+             printingFlags.enableDebugInfo();
+             self.print(os, printingFlags);
              return str;
            })
       .def("bytecode",
