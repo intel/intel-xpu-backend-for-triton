@@ -84,11 +84,11 @@ def extract_file_lines(spv):
     lines = spv.splitlines()
 
     # Collect string variables (pairs of [varname, string]). One should contain the file name.
-    id_and_strings = [] 
+    id_and_strings = []
     for line in lines:
         if "OpString" not in line:
             continue
-        entries = line[line.index("%"):].split(" ")            
+        entries = line[line.index("%"):].split(" ")
         id_and_strings.append((entries[0].strip(), entries[3].strip()))
 
     # Collect pairs of [fileName, lineNo].
@@ -96,7 +96,7 @@ def extract_file_lines(spv):
     for line in lines:
         if "OpLine" not in line:
             continue
-        entries = line[line.index("OpLine"):].split(" ")            
+        entries = line[line.index("OpLine"):].split(" ")
         var, lineNo = (entries[1].strip(), entries[2].strip())
         for id, string in id_and_strings:
             if var == id:
