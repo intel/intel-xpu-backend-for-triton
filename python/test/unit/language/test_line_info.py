@@ -6,7 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.common.backend import path_to_nvdisasm, path_to_spirvdis
+from triton.common.backend import path_to_spirvdis
 
 
 @triton.jit
@@ -75,7 +75,7 @@ def kernel_dot_combine(x):
     tl.device_print("", d)
 
 
-def extract_file_lines_spirv(spv):
+def extract_file_lines(spv):
     dis = path_to_spirvdis()
     fd, path = tempfile.mkstemp()
     with open(fd, 'wb') as spvbin:
@@ -106,21 +106,6 @@ def extract_file_lines_spirv(spv):
     return file_and_lines
 
 
-def extract_file_lines(asm):
-    nvdisasm, _ = path_to_nvdisasm()
-    fd, path = tempfile.mkstemp()
-    with open(fd, 'wb') as cubin:
-        cubin.write(asm)
-    asm = subprocess.check_output([nvdisasm, "-g", path]).decode("utf-8")
-    file_lines = []
-    lines = asm.splitlines()
-    for line in lines:
-        if "## File" in line:
-            entries = line[line.index("## File"):].split(",")
-            file_lines.append((entries[0].strip(), entries[1].strip()))
-    return file_lines
-
-
 def check_file_lines(file_lines, file_name, lineno, should_contain=True):
     """
     Check if the file name and line number is in the file_lines
@@ -147,9 +132,9 @@ func_types = ["single", "call", "call_noinline", "multi_files", "autotune"]
 @pytest.mark.parametrize("func", func_types)
 def test_line_info(func: str):
     try:
-        _, _ = path_to_nvdisasm()
+        _ = path_to_spirvdis()
     except BaseException:
-        pytest.skip("nvdisasm is not available")
+        pytest.skip("spirv-dis is not available")
 
     shape = (128, )
     kernel_info = {}
@@ -166,11 +151,7 @@ def test_line_info(func: str):
     elif func == "dot_combine":
         kernel_info = kernel_dot_combine.warmup(20, grid=(1,))
 
-    file_lines = []
-    if kernel_info.is_spirv:
-        file_lines = extract_file_lines_spirv(kernel_info.asm["spv"])
-    else:
-        file_lines = extract_file_lines(kernel_info.asm["cubin"])
+    file_lines = extract_file_lines(kernel_info.asm["spv"])
 
     if func == "single":
         assert (check_file_lines(file_lines, "test_line_info.py", 16))
