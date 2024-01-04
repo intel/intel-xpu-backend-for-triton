@@ -3,6 +3,7 @@ import hashlib
 import os
 import tempfile
 from pathlib import Path
+import functools
 
 from ..common.build import _build
 from .cache import get_cache_manager
@@ -104,6 +105,23 @@ class CudaDriver(DriverBase):
         self.utils = CudaUtils()
         self.backend = self.CUDA
         self.binary_ext = "cubin"
+        # TODO: support other frameworks than torch
+        import torch
+        self.get_device_capability = torch.cuda.get_device_capability
+        try:
+            from torch._C import _cuda_getCurrentRawStream
+            self.get_current_stream = _cuda_getCurrentRawStream
+        except ImportError:
+            self.get_current_stream = lambda idx: torch.cuda.current_stream(idx).cuda_stream
+        self.get_current_device = torch.cuda.current_device
+        self.set_current_device = torch.cuda.set_device
+
+    @functools.lru_cache()
+    def get_current_target(self):
+        device = self.get_current_device()
+        capability = self.get_device_capability(device)
+        capability = capability[0] * 10 + capability[1]
+        return ("cuda", capability)
 
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         args_with_tma = list(args)
@@ -547,6 +565,16 @@ class SpirvDriver(DriverBase):
         self.utils = SpirvUtils()
         self.backend = self.SPIRV
         self.binary_ext = "spv"
+        self.get_current_stream = self.get_current_stream
+        self.get_current_device = self.utils.get_current_device
+
+    def get_current_stream(self, device):
+        # FIXME
+        return 0
+
+    @functools.lru_cache()
+    def get_current_target(self):
+        return ("xpu", 0)
 
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
