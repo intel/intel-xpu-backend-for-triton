@@ -534,9 +534,6 @@ public:
       // tt.get_program_id, make_tensor_ptr, advance, prefetch/load/store, dot
       populateTritonGPUToVCPatterns(spirvTypeConverter, context, patterns,
                                     numWarps, /*benefit=*/10);
-      mlir::ScfToSPIRVContext scfToSpirvCtx;
-      mlir::populateSCFToSPIRVPatterns(spirvTypeConverter, scfToSpirvCtx,
-                                       patterns);
     }
 
     // Add arith/math's patterns to help convert scalar expression to SPIRV.
@@ -544,13 +541,16 @@ public:
     mlir::populateMathToSPIRVPatterns(spirvTypeConverter, patterns);
     mlir::populateFuncToSPIRVPatterns(spirvTypeConverter, patterns);
     mlir::populateGPUToSPIRVPatterns(spirvTypeConverter, patterns);
+    mlir::ScfToSPIRVContext scfToSpirvCtx;
+    mlir::populateSCFToSPIRVPatterns(spirvTypeConverter, scfToSpirvCtx,
+                                     patterns);
     mlir::cf::populateControlFlowToSPIRVPatterns(spirvTypeConverter, patterns);
 
-    //    ::llvm::DebugFlag = true;
-    //    ::llvm::setCurrentDebugType("dialect-conversion");
+    ::llvm::DebugFlag = true;
+    ::llvm::setCurrentDebugType("dialect-conversion");
     if (failed(applyPartialConversion(mod, spirvTarget, std::move(patterns))))
       return signalPassFailure();
-    //    ::llvm::DebugFlag = false;
+    ::llvm::DebugFlag = false;
 
     llvm::outs() << "after lowering to spirv\n";
     mod.dump();

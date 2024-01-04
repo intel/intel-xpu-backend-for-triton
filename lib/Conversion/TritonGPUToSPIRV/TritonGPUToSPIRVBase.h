@@ -163,6 +163,8 @@ protected:
                                            &result)))
       return nullptr;
 
+    if (getenv("ENABLE_SIMD_PATH"))
+      newFuncOp->setAttr("VectorComputeFunctionINTEL", rewriter.getUnitAttr());
     return newFuncOp;
   }
 };

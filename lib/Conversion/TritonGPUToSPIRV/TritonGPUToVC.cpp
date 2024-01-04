@@ -162,10 +162,17 @@ void lookupOrInsertIntrinsic(ConversionPatternRewriter &rewriter, Operation *op,
     auto linkageTypeAttr =
         rewriter.getAttr<spirv::LinkageTypeAttr>(spirv::LinkageType::Import);
     std::replace(name.begin(), name.end(), '_', '.');
+    // auto nameAttr = StringAttr::get(rewriter.getContext(), name);
+    // auto linkage = spirv::LinkageAttributesAttr::get(rewriter.getContext(),
+    //                                                  nameAttr,
+    //                                                  linkageTypeAttr);
+
+    // std::string tmpName("\"");
+    // tmpName += name;
+    // tmpName += "\"";
     auto nameAttr = StringAttr::get(rewriter.getContext(), name);
     auto linkage = spirv::LinkageAttributesAttr::get(rewriter.getContext(),
                                                      name, linkageTypeAttr);
-    //  nameAttr, linkageTypeAttr);
     func.setLinkageAttributesAttr(linkage);
     if (isVC)
       func->setAttr("VectorComputeFunctionINTEL", rewriter.getUnitAttr());
@@ -184,6 +191,8 @@ public:
   LogicalResult
   matchAndRewrite(MakeTensorPtrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << "make tensor ptr \n";
+    op->dump();
     auto loc = op.getLoc();
     auto i32Type = rewriter.getI32Type();
     auto i64Type = rewriter.getI64Type();
@@ -275,6 +284,8 @@ public:
   LogicalResult
   matchAndRewrite(AdvanceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << "advance \n";
+    op->dump();
     auto loc = op.getLoc();
     auto i32Type = rewriter.getI32Type();
     auto offsets = adaptor.getOffsets();
@@ -298,6 +309,8 @@ public:
       desc = rewriter.create<spirv::VectorInsertDynamicOp>(loc, desc, newOffset,
                                                            idx);
     }
+    desc.dump();
+    op->getParentOp()->dump();
     rewriter.replaceOp(op, desc);
     return success();
   }
@@ -310,6 +323,8 @@ public:
   LogicalResult
   matchAndRewrite(OpType op, typename OpType::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << "lsc \n";
+    op->dump();
     auto ptrType = cast<PointerType>(op.getPtr().getType());
     auto tType = cast<RankedTensorType>(ptrType.getPointeeType());
     auto rank = tType.getRank();
@@ -437,6 +452,8 @@ public:
   LogicalResult
   matchAndRewrite(DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << "dot \n";
+    op->dump();
     auto loc = op.getLoc();
     auto aType =
         convertAndKeepShape(op.getA().getType().cast<RankedTensorType>());
@@ -517,6 +534,8 @@ public:
   LogicalResult
   matchAndRewrite(GlueOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << "glue \n";
+    op->dump();
     auto loc = op.getLoc();
     auto operands = adaptor.getOperands();
     // only tensor type be left
@@ -557,6 +576,8 @@ public:
   LogicalResult
   matchAndRewrite(ExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << "extract \n";
+    op->dump();
     auto loc = op.getLoc();
     auto base = adaptor.getBase();
     auto idx = op.getIdx();
@@ -774,6 +795,81 @@ struct ConstantCompositeOpPattern final
   }
 };
 
+template <typename Op>
+struct GenericOpToVC final : public OpConversionPattern<Op> {
+  using OpConversionPattern<Op>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(Op op, typename Op::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << "generic\n";
+    op->dump();
+    auto loc = op.getLoc();
+    Type dstType = this->template getTypeConverter()->convertType(op.getType());
+    if (!dstType)
+      return failure();
+
+    SmallVector<Value> args(adaptor.getOperands());
+    auto funcType =
+        rewriter.getFunctionType(ValueRange(args).getTypes(), dstType);
+    Operation *opPtr = op;
+
+    constexpr bool isSMin = std::is_same_v<Op, arith::MinSIOp>;
+    constexpr bool isAbsI = std::is_same_v<Op, math::AbsIOp>;
+    std::string funcName;
+    if constexpr (isSMin)
+      funcName = "llvm.genx.smin.i32";
+    if constexpr (isAbsI)
+      funcName = "llvm.genx.absi.i32";
+
+    lookupOrInsertIntrinsic(rewriter, opPtr, funcName, funcType);
+    auto funcOp =
+        rewriter.create<spirv::FunctionCallOp>(loc, dstType, funcName, args);
+    rewriter.replaceOp(op, funcOp);
+    return success();
+  }
+};
+
+template <typename SignedAbsOp>
+static Value emulateSignedRemainder(Location loc, Value lhs, Value rhs,
+                                    Value signOperand, OpBuilder &builder) {
+  assert(lhs.getType() == rhs.getType());
+  assert(lhs == signOperand || rhs == signOperand);
+
+  Type type = lhs.getType();
+
+  // Calculate the remainder with spirv.UMod.
+  Value lhsAbs = builder.create<SignedAbsOp>(loc, type, lhs);
+  Value rhsAbs = builder.create<SignedAbsOp>(loc, type, rhs);
+  Value abs = builder.create<spirv::UModOp>(loc, lhsAbs, rhsAbs);
+
+  // Fix the sign.
+  Value isPositive;
+  if (lhs == signOperand)
+    isPositive = builder.create<spirv::IEqualOp>(loc, lhs, lhsAbs);
+  else
+    isPositive = builder.create<spirv::IEqualOp>(loc, rhs, rhsAbs);
+  Value absNegate = builder.create<spirv::SNegateOp>(loc, type, abs);
+  return builder.create<spirv::SelectOp>(loc, type, isPositive, abs, absNegate);
+}
+
+struct RemSIOpPattern final : public OpConversionPattern<arith::RemSIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(arith::RemSIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    llvm::outs() << "remsi\n";
+    op->dump();
+    Value result = emulateSignedRemainder<math::AbsIOp>(
+        op.getLoc(), adaptor.getOperands()[0], adaptor.getOperands()[1],
+        adaptor.getOperands()[0], rewriter);
+    rewriter.replaceOp(op, result);
+
+    return success();
+  }
+};
+
 } // namespace
 
 void populateTritonGPUToVCPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
@@ -789,10 +885,14 @@ void populateTritonGPUToVCPatterns(TritonGPUToSPIRVTypeConverter &typeConverter,
   patterns.add<LoadStorePrefetchToRawSend<StoreOp>>(typeConverter, context,
                                                     benefit);
   patterns.add<DotToVC>(typeConverter, context, benefit);
+  patterns.add<GlueToVC>(typeConverter, context, benefit);
+  patterns.add<ExtractToVC>(typeConverter, context, benefit);
   patterns.add<GetProgramIdOpToSPIRVConversion>(typeConverter, context,
                                                 benefit);
   patterns.add<ReturnOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<ConstantCompositeOpPattern>(typeConverter, context, benefit);
-  patterns.add<GlueToVC>(typeConverter, context, benefit);
-  patterns.add<ExtractToVC>(typeConverter, context, benefit);
+  // only support integer for now
+  patterns.add<GenericOpToVC<arith::MinSIOp>>(typeConverter, context, benefit);
+  patterns.add<GenericOpToVC<math::AbsIOp>>(typeConverter, context, benefit);
+  patterns.add<RemSIOpPattern>(typeConverter, context, benefit);
 }

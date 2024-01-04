@@ -286,8 +286,8 @@ getExternLibs(spirv::ModuleOp module) {
 
 static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
                                                    raw_ostream &output) {
-  std::cout << __LINE__ << std::endl;
-  module.dump();
+  // std::cout << __LINE__ << std::endl;
+  // module.dump();
   if (!module)
     return failure();
 
@@ -296,7 +296,6 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
   SmallVector<spirv::ModuleOp, 1> spirvModules;
   OpBuilder builder(module->getContext());
 
-  std::cout << __LINE__ << std::endl;
   module.walk([&](ModuleOp op) {
     auto newModuleOp =
         builder.create<spirv::ModuleOp>(op.getLoc(), op.getName());
@@ -359,8 +358,8 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
                                            spirv::Version::V_1_4, caps_opencl,
                                            exts_opencl, builder.getContext()));
 
-    std::cout << __LINE__ << std::endl;
-    newModuleOp.dump();
+    // std::cout << __LINE__ << std::endl;
+    // newModuleOp.dump();
     spirvModules.push_back(newModuleOp);
   });
 
@@ -414,7 +413,7 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
   if (failed(spirv::serialize(spirvModules[0], binary)))
     return failure();
 
-  std::cout << __LINE__ << std::endl;
+  // std::cout << __LINE__ << std::endl;
   // Link external libraries before perform optimizations.
   // This allows the optimizers to inline and perform
   // analyses on the used library functions, and eliminate any unused functions
@@ -430,11 +429,11 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
     return failure();
   }
 
-  std::cout << __LINE__ << std::endl;
+  // std::cout << __LINE__ << std::endl;
   if (failed(
           disassembleSPIRV(linked_binary.data(), linked_binary.size(), output)))
     return failure();
-  std::cout << __LINE__ << std::endl;
+  // std::cout << __LINE__ << std::endl;
 
   return mlir::success();
 }
@@ -443,7 +442,9 @@ std::string
 translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
                             std::map<std::string, int> computeCapability) {
   std::string spirvModule;
-  if (!getenv("ENABLE_SIMD_PATH")) {
+  auto enableSIMD = getenv("ENABLE_SIMD_PATH");
+  auto fromSpirv = enableSIMD && getenv("FROM_SPIRV");
+  if (!fromSpirv) {
     mlir::PassManager pm(module->getContext());
     mlir::registerPassManagerCLOptions();
     if (failed(applyPassManagerCLOptions(pm))) {
@@ -462,7 +463,8 @@ translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
         /*printAfterOnlyOnChange=*/true,
         /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
-    pm.addPass(mlir::createConvertSCFToCFPass());
+    if (!enableSIMD)
+      pm.addPass(mlir::createConvertSCFToCFPass());
     pm.addPass(createConvertTritonGPUToSPIRVPass(std::move(computeCapability)));
     //  pm.addPass(mlir::arith::createConvertArithToSPIRVPass());
     // Canonicalize to eliminate the remaining UnrealizedConversionCastOp

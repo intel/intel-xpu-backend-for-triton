@@ -327,9 +327,10 @@ PYBIND11_MODULE(__triton_launcher, m) {{
                        py::object &launch_exit_hook,
                        py::object &compiled_kernel{', ' if signature.items() else ''}
                        {', '.join([f"{_extracted_type_pybind11(ty)} _arg{i}" for i, ty in signature.items()])}){{
-      int threads_per_warp = 32;
+      int threads_per_warp = 16;
       if(py::hasattr(compiled_kernel, "threads_per_warp"))
         threads_per_warp = compiled_kernel.attr("threads_per_warp").cast<int>();
+      threads_per_warp = 1;
       sycl::queue* stream = static_cast<sycl::queue*>(_stream);
       sycl::kernel* kernel = static_cast<sycl::kernel*>(_kernel);
       sycl_kernel_launch(grid_x, grid_y, grid_z, num_warps, threads_per_warp, shared_memory, *stream, *kernel{', ' if signature.items() else ''}
@@ -453,22 +454,14 @@ class XPUBackend(BaseBackend):
 
         if enableSIMD:
             print("in simd")
-            # file="/home/gta/deweiwang/xpu/triton/python/gemm.spirv.mlir"
-            # stages["spvbin"] = (lambda path: _triton.parse_mlir_module(Path(file).read_text(), context),
-            #                 lambda src: spirv_to_spvbin(src, arch))
-            stages["ttgir"] = (lambda path: _triton.parse_mlir_module(Path(path).read_text(), context),
-                           lambda src: optimize_ttgir(ttir_to_ttgir(src, arch["num_warps"]), arch["num_stages"], arch))
-            stages["spirv"] = (lambda path: Path(path).read_text(),
-                           lambda src: ttgir_to_spirv(src, extern_libs, arch))
-            stages["spvbin"] = (lambda path: Path(path).read_bytes(),
-                             lambda src: spirv_to_spvbin(src, arch))
         else:
             print("in simt")
-            stages["ttgir"] = (lambda path: _triton.parse_mlir_module(Path(path).read_text(), context),
-                           lambda src: optimize_ttgir(ttir_to_ttgir(src, arch["num_warps"]), arch["num_stages"], arch))
-            stages["spirv"] = (lambda path: Path(path).read_text(),
-                           lambda src: ttgir_to_spirv(src, extern_libs, arch))
-            stages["spvbin"] = (lambda path: Path(path).read_bytes(),
+
+        stages["ttgir"] = (lambda path: _triton.parse_mlir_module(Path(path).read_text(), context),
+                       lambda src: optimize_ttgir(ttir_to_ttgir(src, arch["num_warps"]), arch["num_stages"], arch))
+        stages["spirv"] = (lambda path: Path(path).read_text(),
+                       lambda src: ttgir_to_spirv(src, extern_libs, arch))
+        stages["spvbin"] = (lambda path: Path(path).read_bytes(),
                              lambda src: spirv_to_spvbin(src, arch))
 
     def add_meta_info(self, ir, module, next_module, metadata, asm):

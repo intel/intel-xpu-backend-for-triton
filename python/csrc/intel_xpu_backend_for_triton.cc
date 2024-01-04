@@ -184,11 +184,20 @@ void init_triton_translation(py::module &m) {
         auto capabilities =
             computeCapability.cast<std::map<std::string, int>>();
 
+        auto enableSIMD = getenv("ENABLE_SIMD_PATH");
+        std::ifstream inFile;
+        inFile.open("/home/gta/deweiwang/xpu/triton/python/gemm.ttg.mlir");
+        std::stringstream strStream;
+        strStream << inFile.rdbuf();
+        std::string str = strStream.str();
+
         std::cout << "ttgir source" << std::endl;
         std::cout << ttgir << std::endl;
         // parse module
         mlir::OwningOpRef<mlir::ModuleOp> module =
-            mlir::parseSourceString<mlir::ModuleOp>(ttgir, &context);
+            enableSIMD
+                ? mlir::parseSourceString<mlir::ModuleOp>(str, &context)
+                : mlir::parseSourceString<mlir::ModuleOp>(ttgir, &context);
         if (!module)
           throw std::runtime_error("Parse MLIR file failed.");
         auto spirvModule = ::mlir::triton::translateTritonGPUToSPIRVIR(
@@ -199,10 +208,12 @@ void init_triton_translation(py::module &m) {
           throw std::runtime_error(
               "Failed to translate TritonGPU to SPIRV IR.");
 
-        auto shared =
-            (*module)->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared");
+        // auto shared =
+        //     (*module)->getAttrOfType<mlir::IntegerAttr>("triton_gpu.shared");
+        // return py::make_tuple<py::return_value_policy::take_ownership>(
+        //     spirvModule, shared.getInt());
         return py::make_tuple<py::return_value_policy::take_ownership>(
-            spirvModule, shared.getInt());
+            spirvModule, 0);
       },
       ret::take_ownership);
 
