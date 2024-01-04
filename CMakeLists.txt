@@ -166,19 +166,7 @@ message(STATUS "LLVM_SPIRV_INCLUDE_DIR: ${LLVM_SPIRV_INCLUDE_DIR}")
 message(STATUS "LLVM_SPIRV_LIB_DIR: ${LLVM_SPIRV_LIB_DIR}")
 
 # GenISAIntrinsics
-if (NOT TARGET GenISAIntrinsics)
-  if (EXISTS "${GenISAIntrinsics_LIB_DIR}/libGenISAIntrinsics.a")
-    set(GenISAIntrinsics_LDFLAGS "-L${GenISAIntrinsics_LIB_DIR}")
-  elseif (EXISTS "${LLVM_LIBRARY_DIR}/libGenISAIntrinsics.a")
-    set(GenISAIntrinsics_LDFLAGS "-L${LLVM_LIBRARY_DIR}")
-  else()
-    message(FATAL_ERROR "Can't find libGenISAIntrinsics.a at ${LLVM_LIBRARY_DIR}. Please install it into that directory, or provide explicit path with -DGenISAIntrinsics_LIB_DIR=")
-  endif()
-endif()
-set(GenISAIntrinsics_LIBRARY
-  libGenISAIntrinsics.a
-)
-message(STATUS "GenISAIntrinsics_LDFLAGS: ${GenISAIntrinsics_LDFLAGS}")
+add_subdirectory(GenISAIntrinsics)
 
 # Python module
 if(TRITON_BUILD_PYTHON_MODULE)
@@ -274,21 +262,20 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   if(WIN32)
     target_link_libraries(triton PRIVATE ${LLVM_LIBRARIES} ${LLVM_SPIRV_LIBRARY}
-      ${GenISAIntrinsics_LIBRARY}
-      ${CMAKE_DL_LIBS} ${TRITON_LIBRARIES}
+      ${CMAKE_DL_LIBS} ${TRITON_LIBRARIES} GenISAIntrinsics
     )
   elseif(APPLE)
     target_link_libraries(triton ${LLVM_LIBRARIES} ${LLVM_SPIRV_LIBRARY}
-      ${GenISAIntrinsics_LIBRARY} z
-      ${TRITON_LIBRARIES}
+      z
+      ${TRITON_LIBRARIES} GenISAIntrinsics
     )
   else()
     target_link_libraries(triton ${LLVM_LIBRARIES} z
-      ${TRITON_LIBRARIES} ${LLVM_SPIRV_LIBRARY} ${GenISAIntrinsics_LIBRARY}
+      ${TRITON_LIBRARIES} ${LLVM_SPIRV_LIBRARY} GenISAIntrinsics
     )
   endif()
 
-  target_link_options(triton PRIVATE ${LLVM_LDFLAGS} ${LLVM_SPIRV_LDFLAGS} ${GenISAIntrinsics_LDFLAGS})
+  target_link_options(triton PRIVATE ${LLVM_LDFLAGS} ${LLVM_SPIRV_LDFLAGS})
 endif()
 
 if(UNIX AND NOT APPLE)
