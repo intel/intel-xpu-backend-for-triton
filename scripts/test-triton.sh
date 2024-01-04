@@ -100,7 +100,7 @@ function run_core_tests {
     echo "Not found '${CORE_TEST_DIR}'. Build Triton please" ; exit 3
   fi
   cd $CORE_TEST_DIR
-  python3 -m pytest --verbose --device xpu --ignore=test_line_info.py --ignore=test_block_pointer.py --ignore=test_subprocess.py
+  python3 -m pytest --verbose --device xpu --ignore=test_block_pointer.py --ignore=test_subprocess.py
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
