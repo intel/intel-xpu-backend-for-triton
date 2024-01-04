@@ -125,8 +125,8 @@ def check_file_lines(file_lines, file_name, lineno, should_contain=True):
     return not should_contain
 
 
-#TODO: dot_combine fails to compile.
-#func_types = ["single", "call", "call_noinline", "multi_files", "autotune", "dot_combine"]
+# TODO: dot_combine fails to compile.
+# func_types = ["single", "call", "call_noinline", "multi_files", "autotune", "dot_combine"]
 func_types = ["single", "call", "call_noinline", "multi_files", "autotune"]
 
 @pytest.mark.parametrize("func", func_types)
