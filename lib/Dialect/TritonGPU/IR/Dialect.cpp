@@ -1875,7 +1875,7 @@ struct CanonicalizeConvertFromView
       return failure();
     if (isExpensiveView(convert.getOperand().getType(), op.getType()))
       return failure();
-    if (!op.getAllowReorder())
+    if (!op.getAllowReorder() || op.getEfficientLayout().has_value())
       return failure();
     // reshape(cvt)->reshape
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
@@ -1928,6 +1928,7 @@ struct CanonicalizeConvertFromConvert
     // cvt(reshape) -> reshape
     if (auto reshape = dyn_cast<triton::ReshapeOp>(arg)) {
       if (!reshape.getAllowReorder() ||
+          reshape.getEfficientLayout().has_value() ||
           isExpensiveView(reshape.getOperand().getType(), op.getType()))
         return failure();
       // In TritonGPUToLLVM phase, ViewOp is converted to unpacking and packing
