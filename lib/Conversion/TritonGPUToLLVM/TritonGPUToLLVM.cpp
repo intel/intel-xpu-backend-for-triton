@@ -824,6 +824,19 @@ struct AllocTensorOpConversion
   }
 };
 
+struct DeallocTensorOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::DeallocTensorOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::DeallocTensorOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::DeallocTensorOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct ExtractSliceOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ExtractSliceOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -981,6 +994,7 @@ void populateTritonGPUToLLVMPatterns(
   patterns.add<AddPtrOpConversion>(typeConverter, target, benefit);
   patterns.add<AllocTensorOpConversion>(typeConverter, moduleAllocation, target,
                                         benefit);
+  patterns.add<DeallocTensorOpConversion>(typeConverter, target, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, target, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, target, benefit);
   patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, target,

@@ -807,6 +807,20 @@ def test_where_broadcast(num_ctas, device):
 
 
 # ---------------
+# test maximum/minimum ops
+# ---------------
+
+
+# TODO: Tests with unsigned integers failed at compilation stage.
+@pytest.mark.parametrize("dtype", int_dtypes + float_dtypes + ["bfloat16"])
+@pytest.mark.parametrize("op", ["maximum", "minimum"])
+def test_maximum_minium(dtype, op, device):
+    expr = f'tl.{op}(x, y)'
+    numpy_expr = f'np.{op}(x, y)'
+    _test_binary(dtype, dtype, expr, numpy_expr, device=device)
+
+
+# ---------------
 # test unary ops
 # ---------------
 
@@ -4308,6 +4322,37 @@ def test_enable_fp_fusion(enable_fp_fusion, device):
 
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
     assert found_fma == enable_fp_fusion
+
+
+# -----------------------
+# test propagate_nan
+# -----------------------
+
+
+@pytest.mark.parametrize("propagate_nan", ['tl.PropagateNan.NONE', 'tl.PropagateNan.ALL'])
+@pytest.mark.parametrize("func", ['tl.minimum', 'tl.maximum'])
+def test_propagate_nan(propagate_nan, func, device):
+    if is_xpu(device) and propagate_nan == 'tl.PropagateNan.ALL':
+        pytest.skip("FIXME: Incorrect result on XPU")
+
+    @triton.jit
+    def kernel(A, B, C):
+        tl.store(C, FUNC(tl.load(A), tl.load(B), propagate_nan=PROPAGATE_NAN))
+
+    kernel = patch_kernel(kernel, {'FUNC': func, 'PROPAGATE_NAN': propagate_nan})
+
+    for mode in ['A', 'B', 'both']:
+        A = torch.randn((1, ), device=device, dtype=torch.float32)
+        if mode == 'A' or mode == 'both': A[0] = torch.nan
+        B = torch.randn((1, ), device=device, dtype=torch.float32)
+        if mode == 'B' or mode == 'both': B[0] = torch.nan
+        C = torch.zeros_like(A, device=device, dtype=torch.float32)
+        kernel[(1, )](A, B, C)
+
+        if mode == 'both' or eval(propagate_nan) == tl.PropagateNan.ALL:
+            assert torch.isnan(C[0])
+        else:
+            assert not torch.isnan(C[0])
 
 
 # -----------------------
