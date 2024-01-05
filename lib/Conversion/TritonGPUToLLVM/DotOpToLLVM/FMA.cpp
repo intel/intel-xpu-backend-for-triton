@@ -33,26 +33,54 @@ static Value convertIfRequired(Value val, Type tgtTy, Location loc,
   if (valTy == tgtTy)
     return val;
 
-  assert(isa<FloatType>(tgtTy) && valTy.isIntOrFloat() &&
+  assert(tgtTy.isIntOrFloat() && valTy.isIntOrFloat() &&
          "Unexpected tgtTy or valTy types");
-  const unsigned tgtBitWidth = tgtTy.getIntOrFloatBitWidth(),
-                 valBitWidth = valTy.getIntOrFloatBitWidth();
 
-  return llvm::TypeSwitch<Type, Value>(valTy)
-      .Case<FloatType>([&](FloatType ty) {
-        Operation *castOp =
-            (valBitWidth <= tgtBitWidth)
-                ? rewriter.create<LLVM::FPExtOp>(loc, tgtTy, val)
-                : rewriter.create<LLVM::FPTruncOp>(loc, tgtTy, val);
-        return castOp->getResult(0);
-      })
-      .Case<IntegerType>([&](IntegerType ty) {
-        Operation *castOp =
-            (ty.isSigned() || ty.isSignless())
-                ? rewriter.create<LLVM::SIToFPOp>(loc, tgtTy, val)
-                : rewriter.create<LLVM::UIToFPOp>(loc, tgtTy, val);
-        return castOp->getResult(0);
-      });
+  auto convertToFloat = [&](Type valTy, FloatType tgtTy) -> Value {
+    unsigned tgtBitWidth = tgtTy.getIntOrFloatBitWidth(),
+             valBitWidth = valTy.getIntOrFloatBitWidth();
+
+    return llvm::TypeSwitch<Type, Value>(valTy)
+        .Case<FloatType>([&](FloatType ty) {
+          Operation *castOp =
+              (valBitWidth <= tgtBitWidth)
+                  ? rewriter.create<LLVM::FPExtOp>(loc, tgtTy, val)
+                  : rewriter.create<LLVM::FPTruncOp>(loc, tgtTy, val);
+          return castOp->getResult(0);
+        })
+        .Case<IntegerType>([&](IntegerType ty) {
+          Operation *castOp =
+              (ty.isSigned() || ty.isSignless())
+                  ? rewriter.create<LLVM::SIToFPOp>(loc, tgtTy, val)
+                  : rewriter.create<LLVM::UIToFPOp>(loc, tgtTy, val);
+          return castOp->getResult(0);
+        });
+  };
+
+  auto convertToInteger = [&](Type valTy, IntegerType tgtTy) -> Value {
+    unsigned tgtBitWidth = tgtTy.getIntOrFloatBitWidth(),
+             valBitWidth = valTy.getIntOrFloatBitWidth();
+
+    return llvm::TypeSwitch<Type, Value>(valTy)
+        .Case<FloatType>([&](FloatType ty) {
+          Operation *castOp =
+              (tgtTy.isSigned() || tgtTy.isSignless())
+                  ? rewriter.create<LLVM::FPToSIOp>(loc, tgtTy, val)
+                  : rewriter.create<LLVM::FPToUIOp>(loc, tgtTy, val);
+          return castOp->getResult(0);
+        })
+        .Case<IntegerType>([&](IntegerType ty) {
+          Operation *castOp =
+              (valBitWidth <= tgtBitWidth)
+                  ? rewriter.create<LLVM::SExtOp>(loc, tgtTy, val)
+                  : rewriter.create<LLVM::TruncOp>(loc, tgtTy, val);
+          return castOp->getResult(0);
+        });
+  };
+
+  return llvm::TypeSwitch<Type, Value>(tgtTy)
+      .Case<FloatType>([&](auto ty) { return convertToFloat(valTy, ty); })
+      .Case<IntegerType>([&](auto ty) { return convertToInteger(valTy, ty); });
 }
 
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
@@ -119,11 +147,21 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
             int z = isCRow
                         ? mIdx * N / nShapePerCTATile * mSizePerThread + nIdx
                         : nIdx * M / mShapePerCTATile * nSizePerThread + mIdx;
-            Value opA = convertIfRequired(has[{m + mm, k}], ret[z].getType(),
-                                          loc, rewriter);
-            Value opB = convertIfRequired(hbs[{n + nn, k}], ret[z].getType(),
-                                          loc, rewriter);
-            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, opA, opB, ret[z]);
+            Type tgtTy = ret[z].getType();
+            Value opA =
+                convertIfRequired(has[{m + mm, k}], tgtTy, loc, rewriter);
+            Value opB =
+                convertIfRequired(hbs[{n + nn, k}], tgtTy, loc, rewriter);
+
+            llvm::TypeSwitch<Type>(tgtTy)
+                .Case<FloatType>([&](auto) {
+                  ret[z] =
+                      rewriter.create<LLVM::FMulAddOp>(loc, opA, opB, ret[z]);
+                })
+                .Case<IntegerType>([&](auto) {
+                  ret[z] = rewriter.create<LLVM::AddOp>(
+                      loc, rewriter.create<LLVM::MulOp>(loc, opA, opB), ret[z]);
+                });
           }
   }
 

@@ -42,6 +42,7 @@
 #include "ViewOpToLLVM.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir {
 namespace triton {
@@ -395,6 +396,7 @@ public:
     switch (target) {
     case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
+      addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
       break;
     case Target::ROCDL:
       addLegalDialect<ROCDL::ROCDLDialect>();
@@ -403,7 +405,6 @@ public:
       addLegalDialect<GENX::GENXDialect>();
       break;
     }
-    addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
@@ -919,10 +920,29 @@ private:
 
   static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                               Type promotedType) {
-    Type tensorPromotedType =
+    auto tensorPromotedType =
         operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
                                                              promotedType);
-    return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
+    Type elemType = tensorPromotedType.getElementType();
+    return llvm::TypeSwitch<Type, Value>(elemType)
+        .Case<FloatType>([&](auto) {
+          assert(isa<FloatType>(elemType) && "Expecting a floating point type");
+          return builder.create<triton::FpToFpOp>(loc, tensorPromotedType,
+                                                  operand);
+        })
+        .Case<IntegerType>([&](auto) {
+          assert(isa<IntegerType>(elemType) && "Expecting an integer type");
+          unsigned tgtBitWidth = elemType.getIntOrFloatBitWidth(),
+                   valBitWidth = operand.getType()
+                                     .cast<RankedTensorType>()
+                                     .getElementTypeBitWidth();
+          Operation *castOp = (valBitWidth <= tgtBitWidth)
+                                  ? builder.create<arith::ExtSIOp>(
+                                        loc, tensorPromotedType, operand)
+                                  : builder.create<arith::TruncIOp>(
+                                        loc, tensorPromotedType, operand);
+          return castOp->getResult(0);
+        });
   }
 
   // promote operands of dot op if the existing combination is not natively
