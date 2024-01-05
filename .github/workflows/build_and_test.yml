@@ -58,7 +58,7 @@ jobs:
         if: ${{ env.BACKEND == 'XPU'}}
         run: |
           cd python/test/unit/language
-          python3 -m pytest --verbose --device xpu --ignore=test_line_info.py --ignore=test_block_pointer.py --ignore=test_subprocess.py
+          python3 -m pytest --verbose --device xpu --ignore=test_line_info.py --ignore=test_subprocess.py
 
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu test_line_info.py
