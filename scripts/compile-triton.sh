@@ -17,7 +17,6 @@ CMAKE=/usr/bin/cmake
 export PACKAGES_DIR=$BASE/packages
 export SPIRV_TOOLS=$PACKAGES_DIR/spirv-tools
 export LLVM_PROJ=$BASE/llvm
-export SPIRV_LLVM_TRANSLATOR_PROJ=$BASE/SPIRV-LLVM-Translator
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
@@ -29,7 +28,7 @@ function check_rc {
 }
 
 if [[ "$1" == "--clean" ]]; then
-  rm -rf $PACKAGES_DIR $LLVM_PROJ $SPIRV_LLVM_TRANSLATOR_PROJ $TRITON_PROJ_BUILD
+  rm -rf $PACKAGES_DIR $LLVM_PROJ $TRITON_PROJ_BUILD
 fi
 
 if [ ! -d "$PACKAGES_DIR" ]; then
@@ -104,43 +103,6 @@ build_llvm
 # Install libGenISAIntrinsics.a
 
 cp $LLVM_PROJ/mlir/lib/Target/LLVMIR/Dialect/GENX/libGenISAIntrinsics.a $PACKAGES_DIR/llvm/lib
-
-############################################################################
-# Clone the SPIRV-LLVM translator fork if it does not exists.
-
-export SPIRV_LLVM_TRANSLATOR_PROJ_BUILD=$SPIRV_LLVM_TRANSLATOR_PROJ/build
-
-if [ ! -d "$SPIRV_LLVM_TRANSLATOR_PROJ" ]; then
-  echo "****** Cloning $SPIRV_LLVM_TRANSLATOR_PROJ ******"
-  cd $BASE
-  git clone https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git
-fi
-
-############################################################################
-## Configure and build the SPIRV-LLVM translator project.
-
-if [ ! -d "$SPIRV_LLVM_TRANSLATOR_PROJ_BUILD" ]
-then
-  mkdir $SPIRV_LLVM_TRANSLATOR_PROJ_BUILD
-fi
-
-function build_spirv_translator {
-  echo "**** Configuring $SPIRV_LLVM_TRANSLATOR_PROJ ****"
-
-  cd $SPIRV_LLVM_TRANSLATOR_PROJ_BUILD
-  PKG_CONFIG_PATH=$SPIRV_TOOLS/lib/pkgconfig/ $CMAKE -G Ninja ..\
-    -DLLVM_DIR=$PACKAGES_DIR/llvm/lib/cmake/llvm \
-    -DLLVM_SPIRV_BUILD_EXTERNAL=YES \
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-    -DCMAKE_INSTALL_PREFIX=$PACKAGES_DIR/llvm-spirv ..
-
-  echo "**** Building $SPIRV_LLVM_TRANSLATOR_PROJ ****"
-  ninja
-  check_rc
-  ninja install
-  check_rc
-}
-build_spirv_translator
 
 ############################################################################
 # Clone the Triton project fork if it does not exists.
