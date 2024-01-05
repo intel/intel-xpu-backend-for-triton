@@ -123,6 +123,22 @@ def _path_to_binary(binary: str):
     raise RuntimeError(f"Cannot find {binary}")
 
 
+def _path_to_spirv_binary(binary: str):
+    base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
+    paths = [
+        os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
+        os.path.join(base_dir, "third_party", "spirv", "bin", binary)
+    ]
+
+    for p in paths:
+        bin = p.split(" ")[0]
+        if os.path.exists(bin) and os.path.isfile(bin):
+            result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
+            if result is not None:
+                return p
+    raise RuntimeError(f"Cannot find {binary}")
+
+
 @functools.lru_cache()
 def path_to_ptxas():
     return _path_to_binary("ptxas")
@@ -136,6 +152,11 @@ def path_to_cuobjdump():
 @functools.lru_cache()
 def path_to_nvdisasm():
     return _path_to_binary("nvdisasm")
+
+
+@functools.lru_cache()
+def path_to_spirvdis():
+    return _path_to_spirv_binary("spirv-dis")
 
 
 @functools.lru_cache()
