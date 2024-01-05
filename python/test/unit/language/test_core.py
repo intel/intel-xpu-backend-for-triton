@@ -3302,7 +3302,21 @@ def test_num_warps_pow2(device):
 @pytest.mark.parametrize("dtype_str, expr, lib_path", [('int32', 'math.ffs', ''), ('float32', 'math.log2', ''),
                                                        ('float32', 'math.scalbn', ''),
                                                        ('float32', 'math.pow', tl.math.libdevice_path()),
+                                                       ('float32', 'math.sqrt', tl.math.libdevice_path()),
+                                                       ('float64', 'math.sqrt', tl.math.libdevice_path()),
+                                                       ('float32', 'math.ceil', tl.math.libdevice_path()),
+                                                       ('float64', 'math.ceil', tl.math.libdevice_path()),
+                                                       ('float32', 'math.trunc', tl.math.libdevice_path()),
+                                                       ('float64', 'math.trunc', tl.math.libdevice_path()),
+                                                       ('float32', 'math.exp2', tl.math.libdevice_path()),
+                                                       ('float64', 'math.exp2', tl.math.libdevice_path()),
+                                                       ('float32', 'math.remainder', tl.math.libdevice_path()),
+                                                       ('float64', 'math.remainder', tl.math.libdevice_path()),
                                                        ('float64', 'math.pow_dtype', tl.math.libdevice_path()),
+                                                       ('float32', 'math.sin', tl.math.libdevice_path()),
+                                                       ('float64', 'math.sin', tl.math.libdevice_path()),
+                                                       ('float32', 'math.cos', tl.math.libdevice_path()),
+                                                       ('float64', 'math.cos', tl.math.libdevice_path()),
                                                        ('float64', 'math.norm4d', '')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
@@ -3348,6 +3362,27 @@ def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
     elif expr == 'math.norm4d':
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x, x, x, x)'})
         y_ref = np.sqrt(4 * np.power(x, 2))
+    elif expr == 'math.sqrt':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x)'})
+        y_ref = np.sqrt(x)
+    elif expr == 'math.remainder':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x,x)'})
+        y_ref = np.remainder(x, x)
+    elif expr == 'math.ceil':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x)'})
+        y_ref = np.ceil(x)
+    elif expr == 'math.trunc':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x)'})
+        y_ref = np.trunc(x)
+    elif expr == 'math.exp2':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x)'})
+        y_ref = np.exp2(x)
+    elif expr == 'math.sin':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x)'})
+        y_ref = np.sin(x)
+    elif expr == 'math.cos':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.{expr}(x)'})
+        y_ref = np.cos(x)
 
     x_tri = to_triton(x, device=device)
     # triton result
@@ -3361,6 +3396,20 @@ def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path", [('float32', 'math.pow', ''), ('float64', 'math.pow_dtype', ''),
+                                                       ('float32', 'math.sqrt', tl.math.libdevice_path()),
+                                                       ('float64', 'math.sqrt', tl.math.libdevice_path()),
+                                                       ('float32', 'math.ceil', tl.math.libdevice_path()),
+                                                       ('float64', 'math.ceil', tl.math.libdevice_path()),
+                                                       ('float32', 'math.trunc', tl.math.libdevice_path()),
+                                                       ('float64', 'math.trunc', tl.math.libdevice_path()),
+                                                       ('float32', 'math.exp2', tl.math.libdevice_path()),
+                                                       ('float64', 'math.exp2', tl.math.libdevice_path()),
+                                                       ('float32', 'math.remainder', tl.math.libdevice_path()),
+                                                       ('float64', 'math.remainder', tl.math.libdevice_path()),
+                                                       ('float32', 'math.sin', tl.math.libdevice_path()),
+                                                       ('float64', 'math.sin', tl.math.libdevice_path()),
+                                                       ('float32', 'math.cos', tl.math.libdevice_path()),
+                                                       ('float64', 'math.cos', tl.math.libdevice_path()),
                                                        ('float64', 'math.pow', tl.math.libdevice_path())])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
@@ -3386,6 +3435,27 @@ def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
         x = np.abs(x)
         kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.pow(x, 0.5)'})
         y_ref[:] = np.power(x, 0.5)
+    elif expr == 'math.sqrt':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.sqrt(x)'})
+        y_ref[:] = np.sqrt(x)
+    elif expr == 'math.remainder':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.remainder(x,x)'})
+        y_ref[:] = np.remainder(x, x)
+    elif expr == 'math.ceil':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.ceil(x)'})
+        y_ref[:] = np.ceil(x)
+    elif expr == 'math.trunc':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.trunc(x)'})
+        y_ref[:] = np.trunc(x)
+    elif expr == 'math.exp2':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.exp2(x)'})
+        y_ref[:] = np.exp2(x)
+    elif expr == 'math.sin':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.sin(x)'})
+        y_ref[:] = np.sin(x)
+    elif expr == 'math.cos':
+        kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': 'tl.math.cos(x)'})
+        y_ref[:] = np.cos(x)
 
     # triton result
     x_tri = to_triton(x, device=device)[0].item()
