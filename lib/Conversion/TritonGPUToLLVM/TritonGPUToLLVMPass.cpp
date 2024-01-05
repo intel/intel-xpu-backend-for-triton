@@ -90,13 +90,13 @@ class FoldSplatMaskInInsertAsync : public mlir::RewritePattern {
 public:
   FoldSplatMaskInInsertAsync(mlir::MLIRContext *context)
       : mlir::RewritePattern(
-            triton::nvidia_gpu::InsertSliceAsyncV2Op::getOperationName(), 1,
+            triton::nvidia_gpu::InsertSliceTMAOp::getOperationName(), 1,
             context) {}
 
   LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto insertOp = cast<triton::nvidia_gpu::InsertSliceAsyncV2Op>(op);
+    auto insertOp = cast<triton::nvidia_gpu::InsertSliceTMAOp>(op);
     if (!insertOp.getMask())
       return failure();
     auto splatOp = insertOp.getMask().getDefiningOp<triton::SplatOp>();
@@ -202,7 +202,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // Collect TMA informations.
     unsigned numTMALoad = 0;
     funcOp.walk(
-        [&numTMALoad](triton::nvidia_gpu::InsertSliceAsyncV2Op insertSliceOp) {
+        [&numTMALoad](triton::nvidia_gpu::InsertSliceTMAOp insertSliceOp) {
           numTMALoad++;
         });
     unsigned numTMAStore = 0;
@@ -460,15 +460,15 @@ struct ConvertTritonGPUToLLVM
 
     /* Get tensorPtrMap before conversion */
     TensorPtrMapT tensorPtrMap;
-    mod.walk([&tensorPtrMap](
-                 mlir::triton::nvidia_gpu::InsertSliceAsyncV2Op insertOp) {
-      auto src = insertOp.getSrc();
-      auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
-      if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
-        auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
-        tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
-      }
-    });
+    mod.walk(
+        [&tensorPtrMap](mlir::triton::nvidia_gpu::InsertSliceTMAOp insertOp) {
+          auto src = insertOp.getSrc();
+          auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
+          if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
+            auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
+            tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
+          }
+        });
 
     mod.walk([&tensorPtrMap](mlir::triton::nvidia_gpu::StoreAsyncOp storeOp) {
       auto dst = storeOp.getDst();
@@ -484,7 +484,7 @@ struct ConvertTritonGPUToLLVM
       RewritePatternSet patterns(context);
       patterns.add<FoldSplatMaskInInsertAsync>(context);
       SmallVector<Operation *> insertSlices;
-      mod.walk([&insertSlices](triton::nvidia_gpu::InsertSliceAsyncV2Op op) {
+      mod.walk([&insertSlices](triton::nvidia_gpu::InsertSliceTMAOp op) {
         insertSlices.push_back(op);
       });
       if (applyOpPatternsAndFold(insertSlices, std::move(patterns)).failed())
