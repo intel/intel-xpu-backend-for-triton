@@ -145,26 +145,6 @@ if(NOT MLIR_DIR)
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
 
-# LLVM-SPIRV
-if(NOT DEFINED LLVM_SPIRV)
-  if(EXISTS "${LLVM_LIBRARY_DIR}/libLLVMSPIRVLib.a")
-    set(LLVM_SPIRV_INCLUDE_DIR "${LLVM_LIBRARY_DIR}/../include")
-    set(LLVM_SPRIV_LIB_DIR "${LLVM_LIBRARY_DIR}")
-  elseif(EXISTS "${LLVM_SPIRV_DIR}/lib/libLLVMSPIRVLib.a")
-    set(LLVM_SPIRV_INCLUDE_DIR "${LLVM_SPIRV_DIR}/include")
-    set(LLVM_SPIRV_LIB_DIR "${LLVM_SPIRV_DIR}/lib")
-  else()
-    message(FATAL_ERROR "Can't find libLLVMSPIRVLib.a at ${LLVM_LIBRARY_DIR}. Please install it into that directory, or provide explicit path with -DLLVM_SPIRV_DIR=")
-  endif()
-endif()
-include_directories(${LLVM_SPIRV_INCLUDE_DIR})
-set(LLVM_SPIRV_LDFLAGS "-L${LLVM_SPIRV_LIB_DIR}")
-set(LLVM_SPIRV_LIBRARY
-  libLLVMSPIRVLib.a
-)
-message(STATUS "LLVM_SPIRV_INCLUDE_DIR: ${LLVM_SPIRV_INCLUDE_DIR}")
-message(STATUS "LLVM_SPIRV_LIB_DIR: ${LLVM_SPIRV_LIB_DIR}")
-
 # GenISAIntrinsics
 if (NOT TARGET GenISAIntrinsics)
   if (EXISTS "${GenISAIntrinsics_LIB_DIR}/libGenISAIntrinsics.a")
