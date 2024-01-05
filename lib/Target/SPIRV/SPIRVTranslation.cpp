@@ -2,7 +2,7 @@
 #include "triton/Target/LLVMIR/LLVMIRTranslation.h"
 #include <optional>
 
-#include "LLVMSPIRVLib/LLVMSPIRVLib.h"
+#include "LLVMSPIRVLib.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
