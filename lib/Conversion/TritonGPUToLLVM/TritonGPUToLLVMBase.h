@@ -33,7 +33,7 @@ using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::DpasEncodingAttr;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::TMAMetadataTy;
 namespace ttng = ::mlir::triton::nvidia_gpu;
@@ -474,7 +474,8 @@ public:
            "Unexpected rank of loadSharedToDistributed");
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto dstDistributedLayout = dstTy.getEncoding();
-    if (auto mmaLayout = dstDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
+    if (auto mmaLayout =
+            dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
       assert((!mmaLayout.isVolta()) &&
              "ConvertLayout Shared->MMAv1 is not supported yet");
     }
@@ -525,7 +526,8 @@ public:
            "Unexpected rank of storeDistributedToShared");
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto srcDistributedLayout = srcTy.getEncoding();
-    if (auto mmaLayout = srcDistributedLayout.dyn_cast<MmaEncodingAttr>()) {
+    if (auto mmaLayout =
+            srcDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
       assert((!mmaLayout.isVolta()) &&
              "ConvertLayout MMAv1->Shared is not supported yet");
     }
@@ -724,7 +726,7 @@ public:
       if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
         result = emitBaseIndexWithinCTAForBlockedLayout(loc, rewriter,
                                                         blockedLayout, type);
-      } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+      } else if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
         if (mmaLayout.isVolta())
           result = emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter,
                                                         mmaLayout, type);
@@ -764,7 +766,7 @@ public:
   emitOffsetForLayout(Attribute layout, RankedTensorType type) const {
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
       return emitOffsetForBlockedLayout(blockedLayout, type);
-    if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
+    if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
       if (mmaLayout.isVolta())
         return emitOffsetForMmaLayoutV1(mmaLayout, type);
       if (mmaLayout.isAmpere())
@@ -813,7 +815,7 @@ public:
       if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
         result = emitIndicesForDistributedLayout(loc, b, blocked, type,
                                                  withCTAOffset);
-      } else if (auto mma = layout.dyn_cast<MmaEncodingAttr>()) {
+      } else if (auto mma = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
         result =
             emitIndicesForDistributedLayout(loc, b, mma, type, withCTAOffset);
       } else if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
@@ -954,7 +956,7 @@ private:
 
   SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV1(
       Location loc, ConversionPatternRewriter &rewriter,
-      const MmaEncodingAttr &mmaLayout, RankedTensorType type) const {
+      const NvidiaMmaEncodingAttr &mmaLayout, RankedTensorType type) const {
     auto shape = type.getShape();
     auto wpt = mmaLayout.getWarpsPerCTA();
     static constexpr std::array<int, 3> fpw{{2, 2, 1}};
@@ -1021,7 +1023,7 @@ private:
   }
 
   SmallVector<SmallVector<unsigned>>
-  emitOffsetForMmaLayoutV1(const MmaEncodingAttr &mmaLayout,
+  emitOffsetForMmaLayoutV1(const NvidiaMmaEncodingAttr &mmaLayout,
                            RankedTensorType type) const {
     auto shape = type.getShape();
 
@@ -1068,7 +1070,7 @@ private:
   }
 
   SmallVector<SmallVector<unsigned>>
-  emitOffsetForMmaLayoutV2(const MmaEncodingAttr &mmaLayout,
+  emitOffsetForMmaLayoutV2(const NvidiaMmaEncodingAttr &mmaLayout,
                            RankedTensorType type) const {
     auto shape = type.getShape();
     auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
@@ -1130,7 +1132,7 @@ private:
 
   SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV2V3(
       Location loc, ConversionPatternRewriter &rewriter,
-      const MmaEncodingAttr &mmaLayout, RankedTensorType type) const {
+      const NvidiaMmaEncodingAttr &mmaLayout, RankedTensorType type) const {
     auto shape = type.getShape();
     auto _warpsPerCTA = mmaLayout.getWarpsPerCTA();
     assert(_warpsPerCTA.size() == 2);
@@ -1201,7 +1203,7 @@ private:
   }
 
   SmallVector<SmallVector<unsigned>>
-  emitOffsetForMmaLayoutV3(const MmaEncodingAttr &mmaLayout,
+  emitOffsetForMmaLayoutV3(const NvidiaMmaEncodingAttr &mmaLayout,
                            RankedTensorType type) const {
     auto shape = type.getShape();
     auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
