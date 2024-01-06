@@ -1,0 +1,26 @@
+name: Docker image runner-base
+
+on:
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker-registry.docker-registry.svc.cluster.local:5000
+
+jobs:
+  build:
+    runs-on:
+      - glados
+      - docker
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build .github/dockerfiles/runner-base/ \
+            --tag $REGISTRY/triton-runner-base:0.0.1 \
+            --build-arg INSTALLER_IMAGE=$REGISTRY/oneapi-basekit:2023.2.0
+
+      - name: Push image
+        run: |
+          docker push $REGISTRY/triton-runner-base:0.0.1

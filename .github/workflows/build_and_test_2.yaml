@@ -1,0 +1,94 @@
+name: Build and test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - llvm-target
+
+env:
+  BASE: /home/runner
+  LLVM_SYSPATH: /home/runner/packages/llvm
+  BACKEND: XPU
+  TRITON_DISABLE_LINE_INFO: 1
+
+jobs:
+  build:
+    runs-on:
+      - glados
+      - spr
+      - pvc
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+          cache-dependency-path: |
+            python/pyproject.toml
+            python/setup.py
+
+      - name: Read packages from cache
+        id: packages-cache
+        uses: actions/cache@v3
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        with:
+          path: /home/runner/packages
+          key: ${{ hashFiles('scripts/compile-triton.sh') }}
+
+      - name: Build packages
+        if: steps.packages-cache.outputs.cache-hit != 'true'
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          ./scripts/compile-triton.sh
+
+      - name: Run pre-commit checks
+        run: |
+          pip install --upgrade pre-commit
+          python3 -m pre_commit run --all-files --verbose
+
+      - name: Build Triton
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          cd python
+          pip install wheel
+          pip install --no-build-isolation '.[tests]'
+
+      - name: Run lit tests
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          pip install lit
+          cd python
+          lit -v build/*/test
+
+      - name: Run core tests
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          pip install pytest pytest-xdist
+          pip install torch==1.13.0a0+git6c9b55e intel_extension_for_pytorch==1.13.120+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
+          cd python/test/unit/language
+          python3 -m pytest -n auto --verbose --device xpu --ignore=test_line_info.py --ignore=test_block_pointer.py --ignore=test_subprocess.py
+
+      - name: Run assert/print tests
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          cd python/test/unit/language
+          python3 assert_helper.py device_assert
+          python3 print_helper.py device_print float 1> /dev/null
+
+      - name: Run XPU python tests
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          cd python/test/backend/third_party_backends
+          python3 -m pytest -n auto --verbose test_xpu_backend.py
+
+      - name: Run CXX unittests
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          cd python/build/*cmake*
+          ctest
