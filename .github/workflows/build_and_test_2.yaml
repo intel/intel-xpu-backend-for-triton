@@ -50,6 +50,8 @@ jobs:
       - name: Run pre-commit checks
         run: |
           pip install --upgrade pre-commit
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf || true
           python3 -m pre_commit run --all-files --verbose
 
       - name: Build Triton
