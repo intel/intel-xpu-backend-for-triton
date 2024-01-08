@@ -39,7 +39,7 @@ jobs:
           CACHE_NUMBER: 1
         with:
           path: /home/runner/packages
-          key: ${{ hashFiles('scripts/compile-triton.sh') }}
+          key: packages-${{ hashFiles('scripts/compile-triton.sh', 'cmake/llvm-hash.txt') }}-${{ env.CACHE_NUMBER }}
 
       - name: Build packages
         if: steps.packages-cache.outputs.cache-hit != 'true'
