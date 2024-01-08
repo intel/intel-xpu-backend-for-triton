@@ -70,26 +70,22 @@ jobs:
       - name: Build packages
         if: steps.packages-cache.outputs.cache-hit != 'true'
         run: |
-          source ~/intel/oneapi/setvars.sh
           ./scripts/compile-triton.sh
 
       - name: Build Triton
         run: |
-          source ~/intel/oneapi/setvars.sh
           cd python
           pip install wheel
           pip install --no-build-isolation '.[tests]'
 
       - name: Run lit tests
         run: |
-          source ~/intel/oneapi/setvars.sh
           pip install lit
           cd python
           lit -v build/*/test
 
       - name: Run core tests
         run: |
-          source ~/intel/oneapi/setvars.sh
           pip install pytest pytest-xdist
           pip install torch==1.13.0a0+git6c9b55e intel_extension_for_pytorch==1.13.120+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
           cd python/test/unit/language
@@ -99,19 +95,16 @@ jobs:
 
       - name: Run assert/print tests
         run: |
-          source ~/intel/oneapi/setvars.sh
           cd python/test/unit/language
           python3 assert_helper.py device_assert
           python3 print_helper.py device_print float 1> /dev/null
 
       - name: Run XPU python tests
         run: |
-          source ~/intel/oneapi/setvars.sh
           cd python/test/backend/third_party_backends
           python3 -m pytest -n auto --verbose test_xpu_backend.py
 
       - name: Run CXX unittests
         run: |
-          source ~/intel/oneapi/setvars.sh
           cd python/build/*cmake*
           ctest
