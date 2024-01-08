@@ -13,7 +13,7 @@ from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, 
 import torch
 import intel_extension_for_pytorch as ipex
 
-from .._C.libtriton.triton import TMAInfos
+from .._C.libtriton.translation import TMAInfos
 from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
 from ..runtime.driver import driver

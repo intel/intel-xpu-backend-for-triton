@@ -1,8 +1,8 @@
 from triton.common.backend import BaseBackend
 from dataclasses import dataclass
-from ..._C.libtriton.triton import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, add_external_libs, translate_llvmir_to_spirv
+from ..._C.libtriton.translation import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, add_external_libs, translate_llvmir_to_spirv
 from ...common.backend import get_cuda_version_key
-from ..._C.libtriton.triton import ir, runtime
+from ..._C.libtriton import ir, runtime
 import functools
 from typing import Any
 from ..utils import get_ids_of_tensormaps, parse_tma_info
