@@ -15,7 +15,10 @@ env:
 jobs:
   pre-commit:
     name: Pre-commit checks
-    runs-on: ubuntu-latest
+    runs-on:
+      - glados
+      - spr
+      - cpu
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,6 +27,9 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+          cache: 'pip'
+          cache-dependency-path: |
+            .pre-commit-config.yaml
 
       - name: Run pre-commit checks
         run: |
