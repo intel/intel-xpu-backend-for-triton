@@ -2,25 +2,12 @@ from triton.common.backend import BaseBackend
 from dataclasses import dataclass
 from ..._C.libtriton.translation import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, add_external_libs, translate_llvmir_to_spirv
 from ...common.backend import get_cuda_version_key
-from ..._C.libtriton import ir, runtime
+from ..._C.libtriton import ir, passes
 import functools
 from typing import Any
 from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
 import hashlib
-
-
-def get_kernel_name(src: str, pattern: str) -> str:
-    '''
-    Get kernel name from PTX code.
-    This Kernel name is required when launching the kernel.
-    '''
-    # There is a name mangling in PTX codegen, so the original kernel names in Triton IR are not available in PTX/cubin.
-    assert src
-    for line in src.split('\n'):
-        line = line.strip()
-        if line.startswith(pattern):
-            return line.split()[-1]
 
 
 def get_ir_kernel_name(src: str, pattern: str) -> str:
@@ -98,13 +85,13 @@ class XPUBackend(BaseBackend):
     def make_ttir(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        pm.add_inliner_pass()
-        pm.add_triton_combine_pass()
-        pm.add_canonicalizer_pass()
-        pm.add_reorder_broadcast_pass()
-        pm.add_cse_pass()
-        pm.add_licm_pass()
-        pm.add_symbol_dce_pass()
+        passes.common.add_inliner(pm)
+        passes.ttir.add_combine(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.ttir.add_reorder_broadcast(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_licm(pm)
+        passes.common.add_symbol_dce(pm)
         pm.run(mod)
         return mod
 
@@ -118,63 +105,63 @@ class XPUBackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        pm.add_convert_triton_to_tritongpu_pass(opt.num_warps, 32, opt.num_ctas, capability)
+        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, 32, opt.num_ctas, capability)
         # optimize TTGIR
-        pm.add_tritongpu_coalesce_pass()
+        passes.ttgpuir.add_coalesce(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        pm.add_plan_cta_pass(cluster_info)
-        pm.add_tritongpu_rewrite_tensor_pointer_pass(capability)
-        pm.add_plan_cta_pass(cluster_info)
-        pm.add_tritongpu_remove_layout_conversions_pass()
-        pm.add_tritongpu_optimize_thread_locality_pass()
-        pm.add_tritongpu_accelerate_matmul_pass(capability)
-        pm.add_tritongpu_remove_layout_conversions_pass()
+        passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
+        passes.ttnvgpuir.add_rewrite_tensor_pointer(pm, capability)
+        passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_optimize_thread_locality(pm)
+        passes.ttgpuir.add_accelerate_matmul(pm, capability)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         if opt.optimize_epilogue:
-            pm.add_tritongpu_optimize_epilogue_pass()
-        pm.add_tritongpu_optimize_dot_operands_pass()
-        pm.add_cse_pass()
-        ws_enabled = False
+            passes.ttgpuir.add_optimize_epilogue(pm)
+        passes.ttgpuir.add_optimize_dot_operands(pm)
+        passes.common.add_cse(pm)
         # `num_warps` does not mean the total number of warps of a CTA when
         # warp specialization is enabled.
         # it's the responsibility of the compiler to figure out the exact
         # `num_warps` to use.
         # TODO: support the case where `num_warps` from user is not 4.
+        ws_enabled = False
         if capability // 10 >= 9 and opt.enable_warp_specialization and opt.num_warps == 4:
-            pm.add_tritongpu_ws_feasibility_checking_pass(capability)
+            passes.ttnvgpuir.add_wsfeasibility_checking(pm, capability)
             pm.run(mod)
-            ws_enabled = ir.is_ws_supported(mod)
+            ws_enabled = passes.ttnvgpuir.is_ws_supported(mod)
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
         if ws_enabled:
-            pm.add_tritongpu_wsdecomposing_pass(capability)
-            pm.add_tritongpu_wspipeline_pass(opt.num_stages, opt.num_warps, capability)
-            pm.add_tritongpu_wsmutex_pass(capability)
-            pm.add_tritongpu_wsmaterialization_pass(capability)
-            pm.add_licm_pass()
-            pm.add_cse_pass()
+            passes.ttnvgpuir.add_wsdecomposing(pm, capability)
+            passes.ttnvgpuir.add_wspipeline(pm, opt.num_stages, opt.num_warps, capability)
+            passes.ttnvgpuir.add_wsmutex(pm, capability)
+            passes.ttnvgpuir.add_wsmaterialization(pm, capability)
+            passes.common.add_licm(pm)
+            passes.common.add_cse(pm)
         else:
-            pm.add_tritongpu_pipeline_pass(opt.num_stages, opt.num_warps, opt.num_ctas, capability)
-        pm.add_tritongpu_materialize_load_store_pass(opt.num_warps, capability)
+            passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, capability)
+        passes.ttnvgpuir.add_materialize_load_store(pm, opt.num_warps, capability)
         if capability // 10 <= 8:
-            pm.add_tritongpu_prefetch_pass()
-        pm.add_tritongpu_optimize_dot_operands_pass()
-        pm.add_tritongpu_remove_layout_conversions_pass()
-        pm.add_tritongpu_decompose_conversions_pass()
-        pm.add_tritongpu_ws_fixup_missing_attrs_pass()
-        pm.add_tritongpu_reorder_instructions_pass()
-        pm.add_cse_pass()
-        pm.add_symbol_dce_pass()
+            passes.ttgpuir.add_prefetch(pm)
+        passes.ttgpuir.add_optimize_dot_operands(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_decompose_conversions(pm)
+        passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
+        passes.ttgpuir.add_reorder_instructions(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
         if capability // 10 >= 9:
-            pm.add_tritongpu_fence_insertion_pass()
-        pm.add_tritongpu_ws_fixup_missing_attrs_pass()
-        pm.add_canonicalizer_pass()
+            passes.ttnvgpuir.add_fence_insertion(pm)
+        passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
+        passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
-        metadata["enable_warp_specialization"] = ir.is_ws_supported(src)
+        metadata["enable_warp_specialization"] = passes.ttnvgpuir.is_ws_supported(src)
         metadata["num_warps"] = get_num_warps(src)
         tma_infos = TMAInfos()
         # link libraries
@@ -183,7 +170,7 @@ class XPUBackend(BaseBackend):
             paths = [lib[1] for lib in options.extern_libs]
             add_external_libs(src, names, paths)
         # TritonGPU -> LLVM-IR
-        ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos, runtime.TARGET.GENX)
+        ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos)
         if len(tma_infos) > 0:
             metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
             for i, _ in enumerate(metadata["tensormaps_info"]):
