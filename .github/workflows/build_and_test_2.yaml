@@ -13,7 +13,27 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
 
 jobs:
-  build:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Run pre-commit checks
+        run: |
+          pip install --upgrade pre-commit
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf || true
+          python3 -m pre_commit run --all-files --verbose
+
+  integration-tests:
+    name: Integration tests
     runs-on:
       - glados
       - spr
@@ -46,13 +66,6 @@ jobs:
         run: |
           source ~/intel/oneapi/setvars.sh
           ./scripts/compile-triton.sh
-
-      - name: Run pre-commit checks
-        run: |
-          pip install --upgrade pre-commit
-          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
-          python3 -m pre_commit run --all-files --verbose yapf || true
-          python3 -m pre_commit run --all-files --verbose
 
       - name: Build Triton
         run: |
