@@ -46,7 +46,7 @@ jobs:
       - pvc
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh; {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
