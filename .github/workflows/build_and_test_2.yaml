@@ -44,6 +44,9 @@ jobs:
       - glados
       - spr
       - pvc
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c 'source /home/runner/intel/oneapi/setvars.sh --force > /dev/null; {0}'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
