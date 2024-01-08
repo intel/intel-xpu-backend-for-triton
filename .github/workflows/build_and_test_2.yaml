@@ -74,7 +74,9 @@ jobs:
           pip install pytest pytest-xdist
           pip install torch==1.13.0a0+git6c9b55e intel_extension_for_pytorch==1.13.120+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
           cd python/test/unit/language
-          python3 -m pytest -n auto --verbose --device xpu --ignore=test_line_info.py --ignore=test_block_pointer.py --ignore=test_subprocess.py
+          python3 -m pytest -n auto --verbose --device xpu --ignore=test_line_info.py --ignore=test_subprocess.py
+          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -n auto test_line_info.py
 
       - name: Run assert/print tests
         run: |
