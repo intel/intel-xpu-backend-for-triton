@@ -46,4 +46,3 @@ RUN \
   /bin/sh l_BaseKit*.sh -a --silent --eula accept; \
   rm l_BaseKit*.sh; \
   echo "source $HOME/intel/oneapi/setvars.sh --force > /dev/null" > $HOME/.bashrc
-

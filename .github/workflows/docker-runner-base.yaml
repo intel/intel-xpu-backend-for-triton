@@ -25,4 +25,3 @@ jobs:
       - name: Push image
         run: |
           docker push $REGISTRY/$TAG
-
