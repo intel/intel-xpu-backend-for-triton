@@ -5,6 +5,7 @@ on:
 
 env:
   REGISTRY: docker-registry.docker-registry.svc.cluster.local:5000
+  TAG: triton-runner-base:0.0.2
 
 jobs:
   build:
@@ -18,9 +19,10 @@ jobs:
       - name: Build image
         run: |
           docker build .github/dockerfiles/runner-base/ \
-            --tag $REGISTRY/triton-runner-base:0.0.1 \
+            --tag $REGISTRY/$TAG \
             --build-arg INSTALLER_IMAGE=$REGISTRY/oneapi-basekit:2023.2.0
 
       - name: Push image
         run: |
-          docker push $REGISTRY/triton-runner-base:0.0.1
+          docker push $REGISTRY/$TAG
+
