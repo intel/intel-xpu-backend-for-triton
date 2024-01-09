@@ -64,7 +64,7 @@ jobs:
         env:
           # Increase this value to reset cache
           CACHE_NUMBER: 1
-        run:
+        run: |
           PACKAGES_CACHE_KEY="packages-${{ hashFiles('scripts/compile-triton.sh', 'cmake/llvm-hash.txt') }}-${{ env.CACHE_NUMBER }}"
           PACKAGES_CACHE = "/cache/$PACKAGES_CACHE_KEY"
           echo "PACKAGES_CACHE=$PACKAGES_CACHE" >> "${GITHUB_ENV}"
