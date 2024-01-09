@@ -104,6 +104,7 @@ def _build(name, src, srcdir):
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
     if is_spirv():
+        icpx = None
         cxx = os.environ.get("CXX")
         if cxx is None:
             clangpp = shutil.which("clang++")
