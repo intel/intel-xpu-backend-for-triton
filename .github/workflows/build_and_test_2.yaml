@@ -60,20 +60,30 @@ jobs:
             python/pyproject.toml
             python/setup.py
 
-      - name: Read packages from cache
-        id: packages-cache
-        uses: actions/cache@v3
+      - name: Check if packages cache exists
         env:
           # Increase this value to reset cache
           CACHE_NUMBER: 1
-        with:
-          path: /home/runner/packages
-          key: packages-${{ hashFiles('scripts/compile-triton.sh', 'cmake/llvm-hash.txt') }}-${{ env.CACHE_NUMBER }}
+        run:
+          PACKAGES_CACHE_KEY="packages-${{ hashFiles('scripts/compile-triton.sh', 'cmake/llvm-hash.txt') }}-${{ env.CACHE_NUMBER }}"
+          PACKAGES_CACHE = "/cache/$PACKAGES_CACHE_KEY"
+          echo "PACKAGES_CACHE=$PACKAGES_CACHE" >> "${GITHUB_ENV}"
+          if [[ -d $PACKAGES_CACHE ]]; then
+            echo "Packages cache found for key $PACKAGES_CACHE_KEY"
+            ln -s $PACKAGES_CACHE $HOME/packages
+            echo $PACKAGES_CACHE > .packages-cache
+          else
+            echo "Packages cache not found for key $PACKAGES_CACHE_KEY"
+          fi
 
       - name: Build packages
-        if: steps.packages-cache.outputs.cache-hit != 'true'
+        if: ${{ hashFiles('.packages-cache') == '' }}
         run: |
-          ./scripts/compile-triton.sh
+          if [[ ! -h $HOME/packages ]]; then
+            ./scripts/compile-triton.sh
+            mkdir $PACKAGES_CACHE
+            cp -r $HOME/packages/* $PACKAGES_CACHE/
+          fi
 
       - name: Build Triton
         run: |
