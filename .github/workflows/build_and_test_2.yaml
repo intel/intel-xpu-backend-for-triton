@@ -60,7 +60,7 @@ jobs:
         run: |
           TMPDIR=/cache/${{ github.run_id }}-$RANDOM
           mkdir $TMPDIR
-          cp -r $HOME/.cache/pip/* mkdir $TMPDIR/
+          cp -r $HOME/.cache/pip/* $TMPDIR/
           mv $TMPDIR $PIP_CACHE
 
   integration-tests:
@@ -169,5 +169,5 @@ jobs:
         run: |
           TMPDIR=/cache/${{ github.run_id }}-$RANDOM
           mkdir $TMPDIR
-          cp -r $HOME/.cache/pip/* mkdir $TMPDIR/
+          cp -r $HOME/.cache/pip/* $TMPDIR/
           mv $TMPDIR $PIP_CACHE
