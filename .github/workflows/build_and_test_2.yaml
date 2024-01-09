@@ -66,7 +66,7 @@ jobs:
           CACHE_NUMBER: 1
         run: |
           PACKAGES_CACHE_KEY="packages-${{ hashFiles('scripts/compile-triton.sh', 'cmake/llvm-hash.txt') }}-${{ env.CACHE_NUMBER }}"
-          PACKAGES_CACHE = "/cache/$PACKAGES_CACHE_KEY"
+          PACKAGES_CACHE="/cache/$PACKAGES_CACHE_KEY"
           echo "PACKAGES_CACHE=$PACKAGES_CACHE" >> "${GITHUB_ENV}"
           if [[ -d $PACKAGES_CACHE ]]; then
             echo "Packages cache found for key $PACKAGES_CACHE_KEY"
