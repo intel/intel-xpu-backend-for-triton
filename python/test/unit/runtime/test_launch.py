@@ -29,8 +29,8 @@ def test_memory_leak() -> None:
 
     tracemalloc.start()
     try:
-        inp = torch.randn(10, device='cuda')
-        out = torch.randn(10, device='cuda')
+        inp = torch.randn(10, device='xpu')
+        out = torch.randn(10, device='xpu')
         kernel[(10, )](inp, out, 10, XBLOCK=16)
         gc.collect()
         begin, _ = tracemalloc.get_traced_memory()

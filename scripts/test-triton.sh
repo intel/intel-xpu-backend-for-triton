@@ -96,11 +96,12 @@ function run_core_tests {
   echo "***************************************************"
   echo "******      Running Triton Core tests        ******"
   echo "***************************************************"
-  CORE_TEST_DIR=$TRITON_PROJ/python/test/unit/language
+  CORE_TEST_DIR=$TRITON_PROJ/python/test/unit
   if [ ! -d "${CORE_TEST_DIR}" ]; then
     echo "Not found '${CORE_TEST_DIR}'. Build Triton please" ; exit 3
   fi
-  cd $CORE_TEST_DIR
+
+  cd $CORE_TEST_DIR/language
   TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu --ignore=test_line_info.py --ignore=test_subprocess.py
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
@@ -108,12 +109,21 @@ function run_core_tests {
 
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu test_line_info.py
+  if [ $? -ne 0 ]; then
+    echo "FAILED: return code $?" ; exit $?
+  fi
 
   python3 assert_helper.py device_assert
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
   python3 print_helper.py device_print float 1> /dev/null
+  if [ $? -ne 0 ]; then
+    echo "FAILED: return code $?" ; exit $?
+  fi
+
+  cd $CORE_TEST_DIR/runtime
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
