@@ -327,7 +327,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 
     globalVar = rewriter.create<spirv::GlobalVariableOp>(
         UnknownLoc::get(ctx),
-        ptr_ty(globalType, spirv::StorageClass::CrossWorkgroup),
+        ptr_ty(globalType, spirv::StorageClass::UniformConstant),
         stringConstName, FlatSymbolRefAttr::get(specCstComposite));
   }
 
@@ -335,10 +335,10 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   Value globalPtr = rewriter.create<spirv::AddressOfOp>(
       UnknownLoc::get(rewriter.getContext()), globalVar);
   Value stringStart = rewriter.create<spirv::PtrAccessChainOp>(
-      UnknownLoc::get(ctx), ptr_ty(i8_ty, spirv::StorageClass::CrossWorkgroup),
+      UnknownLoc::get(ctx), ptr_ty(i8_ty, spirv::StorageClass::UniformConstant),
       globalPtr, zero, zero);
   Value genericStringStart =
-      bitcast(stringStart, ptr_ty(i8_ty, spirv::StorageClass::Generic));
+      bitcast(stringStart, ptr_ty(i8_ty, spirv::StorageClass::UniformConstant));
   return genericStringStart;
 }
 
