@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .._C.libtriton.triton import (get_env_vars, ir)
+from .._C.libtriton import get_env_vars, ir
 # from ..runtime import driver, jit, JITFunction
 # TODO: runtime.errors
 from ..runtime.autotuner import OutOfResources
@@ -11,8 +11,7 @@ from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
 from ..runtime.jit import (get_dev_ctxt_queue_objs, get_event_pool, get_imm_cmd_list)
 from .utils import InfoFromBackendForTensorMap
-from .backends.cuda import CUDABackend
-from .backends.xpu import XPUBackend
+from .backends import make_backend
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
@@ -160,10 +159,7 @@ class IRSource:
 def compile(src, target=None, options=None):
     if target is None:
         target = driver.get_current_target()
-    if target[0] in ['xpu']:
-        backend = XPUBackend(target)
-    else:
-        backend = CUDABackend(target)
+    backend = make_backend(target)
     # create backend
     if not isinstance(src, ASTSource):
         assert isinstance(src, str), "source must be either AST or a filepath"
@@ -171,7 +167,7 @@ def compile(src, target=None, options=None):
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
-    key = f"{src.hash()}-{backend.hash()}-{options.hash()}-{frozenset(sorted(get_env_vars().items()))}"
+    key = f"{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(get_env_vars().items()))}"
     hash = hashlib.md5(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     metadata_filename = f"{src.name}.json"
@@ -181,7 +177,7 @@ def compile(src, target=None, options=None):
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
         so_path = backend.make_launcher_stub(src, metadata)
-        return CompiledKernel(so_path, metadata_path)
+        return CompiledKernel(so_path, metadata_group)
     # initialize metadata
     metadata = {
         "target": target,
@@ -204,7 +200,7 @@ def compile(src, target=None, options=None):
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     so_path = backend.make_launcher_stub(src, metadata)
     # return handle to compiled kernel
-    return CompiledKernel(so_path, metadata_group.get(metadata_filename))
+    return CompiledKernel(so_path, metadata_group)
 
 
 class CompiledKernel:
@@ -214,8 +210,8 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, so_path, metadata_path):
-        metadata_path = Path(metadata_path)
+    def __init__(self, so_path, metadata_group):
+        metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         # initialize launcher
         import importlib.util
         spec = importlib.util.spec_from_file_location("__triton_launcher", so_path)
@@ -228,10 +224,11 @@ class CompiledKernel:
                                             ] if 'tensormaps_info' in self.metadata else []
         for i, _ in enumerate(self.metadata["tensormaps_info"]):
             self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(self.metadata["ids_of_folded_args"])
+        self.name = self.metadata["name"]
         for key, val in self.metadata.items():
             setattr(self, key, val)
         # stores the text of each level of IR that was generated during compilation
-        asm_files = [file for file in metadata_path.parent.glob(f'{metadata_path.stem}.*') if file.suffix != '.json']
+        asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         self.asm = {
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == driver.binary_ext else file.read_text()
             for file in asm_files

@@ -90,13 +90,13 @@ class FoldSplatMaskInInsertAsync : public mlir::RewritePattern {
 public:
   FoldSplatMaskInInsertAsync(mlir::MLIRContext *context)
       : mlir::RewritePattern(
-            triton::nvidia_gpu::InsertSliceAsyncV2Op::getOperationName(), 1,
+            triton::nvidia_gpu::InsertSliceTMAOp::getOperationName(), 1,
             context) {}
 
   LogicalResult
   matchAndRewrite(mlir::Operation *op,
                   mlir::PatternRewriter &rewriter) const override {
-    auto insertOp = cast<triton::nvidia_gpu::InsertSliceAsyncV2Op>(op);
+    auto insertOp = cast<triton::nvidia_gpu::InsertSliceTMAOp>(op);
     if (!insertOp.getMask())
       return failure();
     auto splatOp = insertOp.getMask().getDefiningOp<triton::SplatOp>();
@@ -202,7 +202,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     // Collect TMA informations.
     unsigned numTMALoad = 0;
     funcOp.walk(
-        [&numTMALoad](triton::nvidia_gpu::InsertSliceAsyncV2Op insertSliceOp) {
+        [&numTMALoad](triton::nvidia_gpu::InsertSliceTMAOp insertSliceOp) {
           numTMALoad++;
         });
     unsigned numTMAStore = 0;
@@ -460,15 +460,15 @@ struct ConvertTritonGPUToLLVM
 
     /* Get tensorPtrMap before conversion */
     TensorPtrMapT tensorPtrMap;
-    mod.walk([&tensorPtrMap](
-                 mlir::triton::nvidia_gpu::InsertSliceAsyncV2Op insertOp) {
-      auto src = insertOp.getSrc();
-      auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
-      if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
-        auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
-        tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
-      }
-    });
+    mod.walk(
+        [&tensorPtrMap](mlir::triton::nvidia_gpu::InsertSliceTMAOp insertOp) {
+          auto src = insertOp.getSrc();
+          auto ptrTy = src.getType().dyn_cast<triton::PointerType>();
+          if (ptrTy && ptrTy.getPointeeType().isa<RankedTensorType>()) {
+            auto makeTensorPtrOp = getMakeTensorPtrOp(insertOp.getSrc());
+            tensorPtrMap[insertOp.getOperation()] = makeTensorPtrOp;
+          }
+        });
 
     mod.walk([&tensorPtrMap](mlir::triton::nvidia_gpu::StoreAsyncOp storeOp) {
       auto dst = storeOp.getDst();
@@ -484,7 +484,7 @@ struct ConvertTritonGPUToLLVM
       RewritePatternSet patterns(context);
       patterns.add<FoldSplatMaskInInsertAsync>(context);
       SmallVector<Operation *> insertSlices;
-      mod.walk([&insertSlices](triton::nvidia_gpu::InsertSliceAsyncV2Op op) {
+      mod.walk([&insertSlices](triton::nvidia_gpu::InsertSliceTMAOp op) {
         insertSlices.push_back(op);
       });
       if (applyOpPatternsAndFold(insertSlices, std::move(patterns)).failed())
@@ -714,6 +714,8 @@ private:
       addWSNamedAttrs(newCvt, cvtOp->getAttrs());
       auto newRet = builder.create<mlir::triton::FpToFpOp>(
           cvtOp.getLoc(), cvtOp.getType(), newCvt.getResult());
+      newRet.setRounding(
+          triton::RoundingMode::RTNE); // Downcast requires rounding mode
       addWSNamedAttrs(newRet, cvtOp->getAttrs());
       cvtOp.replaceAllUsesWith(newRet.getResult());
       cvtOp.erase();
@@ -754,7 +756,7 @@ private:
       auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
       auto dstType = cvtOp.getType().cast<RankedTensorType>();
       auto srcMma =
-          srcType.getEncoding().dyn_cast<triton::gpu::MmaEncodingAttr>();
+          srcType.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (srcMma && dstDotOp && !isMmaToDotShortcut(srcType, dstType)) {
@@ -934,10 +936,10 @@ private:
       Type AElType =
           dotOp.getA().getType().cast<RankedTensorType>().getElementType();
       Type promoteType;
-      MmaEncodingAttr mmaLayout = D.getType()
-                                      .cast<RankedTensorType>()
-                                      .getEncoding()
-                                      .dyn_cast<MmaEncodingAttr>();
+      NvidiaMmaEncodingAttr mmaLayout = D.getType()
+                                            .cast<RankedTensorType>()
+                                            .getEncoding()
+                                            .dyn_cast<NvidiaMmaEncodingAttr>();
       if (mmaLayout) {
         bool isNativeHopperFP8 =
             AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();

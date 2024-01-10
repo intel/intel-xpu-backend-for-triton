@@ -5,7 +5,7 @@ from enum import Enum
 from functools import partial, wraps
 from typing import Union, Callable, List, Sequence, TypeVar, cast
 
-from .._C.libtriton.triton import ir
+from .._C.libtriton import ir
 from . import semantic
 
 T = TypeVar('T')
@@ -778,12 +778,26 @@ class tensor:
         assert False, "Transposition must be created by the AST Visitor"
 
     @builtin
-    def to(self, dtype, bitcast=False, _builder=None):
+    def to(self, dtype, fp_downcast_rounding: str = None, bitcast=False, _builder=None):
+        """
+        Casts the tensor to the given :code:`dtype`.
+        :param dtype: The target data type.
+        :type dtype: DType
+        :param fp_downcast_rounding: The rounding mode for downcasting floating-point values. \
+            This parameter is only used when self is a floating-point tensor and dtype is a floating-point type \
+            with a smaller bitwidth. Supported values are :code:`"rtne"` (round to nearest, ties to even) and \
+            :code:`"rtz"` (round towards zero).
+        :type fp_downcast_rounding: str
+        :param bitcast: If true, the tensor is bitcasted to the given :code:`dtype`, instead of being casted.
+        :type bitcast: bool
+        :param _builder: The IR builder.
+        :type _builder: ir.builder
+        """
         if isinstance(bitcast, constexpr):
             bitcast = bitcast.value
         if bitcast:
             return semantic.bitcast(self, dtype, _builder)
-        return semantic.cast(self, dtype, _builder)
+        return semantic.cast(self, dtype, _builder, fp_downcast_rounding)
 
 
 # -----------------------
@@ -933,6 +947,28 @@ def cat(input, other, can_reorder=False, _builder=None):
         order does not matter (e.g., result is only used in reduction ops)
     """
     return semantic.cat(input, other, can_reorder, _builder)
+
+
+@builtin
+def _experimental_interleave(a, b, _builder=None):
+    """
+    Interleave the given tensors in their minor dimension.
+
+    For example, given :code:`a=[1,2,3]` and :code:`b=[4,5,6]`, the result is
+    :code:`[1,4,2,5,3,6]`.
+
+    The two inputs are broadcasted to be the same shape.
+
+    If you want to interleave more than two elements, you can use multiple calls
+    to this function.  This reflects the constraint in Triton that tensors must
+    have power-of-two sizes.
+
+    :param a: The first input tensor.
+    :type a: Tensor
+    :param b: The second input tensor.
+    :type b: Tensor
+    """
+    return semantic.interleave(a, b, _builder)
 
 
 @builtin
@@ -1447,7 +1483,7 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
 
 
 @builtin
-def _promote_reduction_input(t, _builder=None):
+def _promote_bfloat16_to_float32(t, _builder=None):
     scalar_ty = t.type.scalar
 
     # hardware doesn't support FMAX, FMIN, CMP for bfloat16
@@ -1715,8 +1751,10 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
         Input elements of size less than 4 bytes are packed into 4-byte
         registers.
 
-        This op does not currently support empty :code:`dtype` -- the inline asm
-        must return a tensor, even if you don't need it.
+        This op does not support empty :code:`dtype` -- the inline asm must
+        return at least one tensor, even if you don't need it.  You can work
+        around this by returning a dummy tensor of arbitrary type; it shouldn't
+        cost you anything if you don't use it.
 
         Example using
         [PTX](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html)

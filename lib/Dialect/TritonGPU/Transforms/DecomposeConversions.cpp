@@ -41,7 +41,7 @@ public:
       if (!dstDotOp)
         return;
       if (auto srcMmaEncoding =
-              srcEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>()) {
+              srcEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>()) {
 
         if (srcMmaEncoding.getVersionMajor() == 1 ||
             (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
@@ -65,6 +65,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUDecomposeConversionsPass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createDecomposeConversionsPass() {
   return std::make_unique<TritonGPUDecomposeConversionsPass>();
 }

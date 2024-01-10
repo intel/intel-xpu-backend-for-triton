@@ -7,6 +7,8 @@ from . import core, math
 # Standard library
 # -----------------------
 
+from .math import PropagateNan
+
 
 @jit
 def cdiv(x, div):
@@ -99,29 +101,37 @@ def zeros_like(input):
 
 
 @jit
-def minimum(x, y):
+def minimum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
     """
     Computes the element-wise minimum of :code:`x` and :code:`y`.
 
-    :param input: the first input tensor
-    :type input: Block
-    :param other: the second input tensor
-    :type other: Block
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
     """
-    return math.min(x, y)
+    return math.min(x, y, propagate_nan)
 
 
 @jit
-def maximum(x, y):
+def maximum(x, y, propagate_nan: core.constexpr = PropagateNan.NONE):
     """
     Computes the element-wise maximum of :code:`x` and :code:`y`.
 
-    :param input: the first input tensor
-    :type input: Block
-    :param other: the second input tensor
-    :type other: Block
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param propagate_nan: whether to propagate NaN values.
+    :type propagate_nan: tl.PropagateNan
+
+    .. seealso:: :class:`tl.PropagateNan`
     """
-    return math.max(x, y)
+    return math.max(x, y, propagate_nan)
 
 
 # max and argmax
@@ -153,7 +163,7 @@ def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
-    input = core._promote_reduction_input(input)
+    input = core._promote_bfloat16_to_float32(input)
     if return_indices:
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left)
@@ -205,7 +215,7 @@ def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True):
-    input = core._promote_reduction_input(input)
+    input = core._promote_bfloat16_to_float32(input)
     if return_indices:
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left)
@@ -239,7 +249,7 @@ def _sum_combine(a, b):
 @jit
 @core._add_reduction_docstr("sum")
 def sum(input, axis=None):
-    input = core._promote_reduction_input(input)
+    input = core._promote_bfloat16_to_float32(input)
     return core.reduce(input, axis, _sum_combine)
 
 
@@ -258,7 +268,7 @@ def xor_sum(input, axis=None, _builder=None, _generator=None):
     if not scalar_ty.is_int():
         raise ValueError("xor_sum only supported for integers")
 
-    input = core._promote_reduction_input(input, _builder=_builder)
+    input = core._promote_bfloat16_to_float32(input, _builder=_builder)
     return core.reduce(input, axis, _xor_combine, _builder=_builder, _generator=_generator)
 
 
@@ -269,7 +279,7 @@ def xor_sum(input, axis=None, _builder=None, _generator=None):
 @core._add_scan_docstr("cumsum")
 def cumsum(input, axis=0):
     # todo rename this to a generic function name
-    input = core._promote_reduction_input(input)
+    input = core._promote_bfloat16_to_float32(input)
     return core.associative_scan(input, axis, _sum_combine)
 
 
@@ -285,7 +295,7 @@ def _prod_combine(a, b):
 @core._add_scan_docstr("cumprod")
 def cumprod(input, axis=0):
     # todo rename this to a generic function name
-    input = core._promote_reduction_input(input)
+    input = core._promote_bfloat16_to_float32(input)
     return core.associative_scan(input, axis, _prod_combine)
 
 

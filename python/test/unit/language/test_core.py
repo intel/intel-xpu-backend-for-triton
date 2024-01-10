@@ -156,7 +156,7 @@ class MmaLayout:
         self.instr_shape = str(instr_shape)
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={str(self.warps_per_cta)}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
+        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={str(self.warps_per_cta)}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
 
 
 class DpasLayout:
@@ -807,6 +807,20 @@ def test_where_broadcast(num_ctas, device):
 
 
 # ---------------
+# test maximum/minimum ops
+# ---------------
+
+
+# TODO: Tests with unsigned integers failed at compilation stage.
+@pytest.mark.parametrize("dtype", int_dtypes + float_dtypes + ["bfloat16"])
+@pytest.mark.parametrize("op", ["maximum", "minimum"])
+def test_maximum_minium(dtype, op, device):
+    expr = f'tl.{op}(x, y)'
+    numpy_expr = f'np.{op}(x, y)'
+    _test_binary(dtype, dtype, expr, numpy_expr, device=device)
+
+
+# ---------------
 # test unary ops
 # ---------------
 
@@ -1423,6 +1437,43 @@ def test_load_store_same_ptr(device):
         assert torch.all(x == 2)
 
 
+def test_interleave(device):
+
+    @triton.jit
+    def kernel(X, Y, Z, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        z = tl._experimental_interleave(x, y)
+        tl.store(Z + tl.arange(0, 2 * N), z)
+
+    x = torch.arange(0, 128, device=device).to(torch.int32)
+    y = torch.arange(-128, 0, device=device).to(torch.int32)
+    z_ref = torch.stack([x, y], dim=-1).reshape((256, ))
+    z = torch.zeros_like(z_ref)
+    kernel[(1, )](x, y, z, N=128)
+
+    np.testing.assert_equal(to_numpy(z_ref), to_numpy(z))
+
+
+def test_interleave_with_mma(device):
+
+    @triton.jit
+    def kernel(X, Z):
+        x = tl.load(X + 16 * tl.arange(0, 32)[:, None] + tl.arange(0, 16)[None, :])  # (32,16)
+        x2 = tl._experimental_interleave(x, 2 * x)  # (32,32)
+        z = tl.dot(x2, x2)  # (32,32)
+        tl.store(Z + 32 * tl.arange(0, 32)[:, None] + tl.arange(0, 32)[None, :], z)
+
+    x = torch.arange(0, 32 * 16, device=device, dtype=torch.float32).reshape((32, 16))
+    r = torch.stack([x, 2 * x], dim=-1).reshape((32, 32))
+    z_ref = torch.matmul(r, r)
+    z = torch.zeros_like(z_ref)
+    kernel[(1, )](x, z)
+
+    torch.testing.assert_close(z, z_ref)
+
+
 def convert_float_to_float32(fp: torch.tensor, dtype=None):
     if not dtype:
         dtype = getattr(tl, torch_dtype_name(fp.dtype))
@@ -1518,7 +1569,7 @@ def test_fp8_fpN_roundtrip(in_dtype, out_dtype, device):
     check_type_supported(in_dtype, device)
     check_type_supported(out_dtype, device)
     if is_hip():
-        pytest.skip('test_abs_fp8 not supported on HIP.')
+        pytest.skip('test_fp8_fpN_roundtrip not supported on HIP.')
 
     @triton.jit
     def copy_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -2375,7 +2426,7 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
                                                                                                     'float32')]] +
     [(64, 64, 64, 4, col_a, col_b, 'none', False, 'float32', 'float32')
      for col_a in [True, False]
-     for col_b in [True, False]])
+     for col_b in [True, False]] + [(64, 64, 64, 4, False, False, 'chain-dot', False, 'bfloat16', 'float32')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, num_ctas, device):
     check_cuda_only(device)
@@ -2574,6 +2625,37 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         else:
             assert 'wgmma.mma_async.sync.aligned' in ptx or\
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
+
+
+def test_max_num_imprecise_acc(device):
+    if torch.cuda.is_available():
+        capability = torch.cuda.get_device_capability()
+        if capability != (9, 0):
+            return
+
+    if is_xpu(device):
+        pytest.skip("FIXME: module 'torch' has no attribute 'float8_e5m2'")
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+               MAX_NUM_IMPRECISE_ACC: tl.constexpr):
+        off_m = tl.arange(0, BLOCK_M)
+        off_n = tl.arange(0, BLOCK_N)
+        off_k = tl.arange(0, BLOCK_K)
+        x = tl.load(X + off_m[:, None] * BLOCK_K + off_k[None, :])
+        y = tl.load(Y + off_k[:, None] * BLOCK_N + off_n[None, :])
+        z = tl.load(Z + off_m[:, None] * BLOCK_N + off_n[None, :])
+        z = tl.dot(x, y, acc=z, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC)
+        tl.store(Z + off_m[:, None] * BLOCK_N + off_n[None, :], z)
+
+    M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 128, 128, 128, 4, 64
+    x = torch.zeros((M, K), dtype=torch.float8_e5m2, device=device)
+    y = torch.zeros((K, N), dtype=torch.float8_e5m2, device=device)
+    z = torch.zeros((M, N), dtype=torch.float32, device=device)
+    h = kernel[(1, 1)](x, y, z, M, N, K, MAX_NUM_IMPRECISE_ACC, num_warps=num_warps)
+    if not is_cuda(device):
+        return
+    assert h.asm["ptx"].count("add.f32") == (M * N) // (32 * num_warps) * (K / MAX_NUM_IMPRECISE_ACC)
 
 
 @pytest.mark.parametrize('in_dtype', ['float32'])
@@ -4311,6 +4393,37 @@ def test_enable_fp_fusion(enable_fp_fusion, device):
 
 
 # -----------------------
+# test propagate_nan
+# -----------------------
+
+
+@pytest.mark.parametrize("propagate_nan", ['tl.PropagateNan.NONE', 'tl.PropagateNan.ALL'])
+@pytest.mark.parametrize("func", ['tl.minimum', 'tl.maximum'])
+def test_propagate_nan(propagate_nan, func, device):
+    if is_xpu(device) and propagate_nan == 'tl.PropagateNan.ALL':
+        pytest.skip("FIXME: Incorrect result on XPU")
+
+    @triton.jit
+    def kernel(A, B, C):
+        tl.store(C, FUNC(tl.load(A), tl.load(B), propagate_nan=PROPAGATE_NAN))
+
+    kernel = patch_kernel(kernel, {'FUNC': func, 'PROPAGATE_NAN': propagate_nan})
+
+    for mode in ['A', 'B', 'both']:
+        A = torch.randn((1, ), device=device, dtype=torch.float32)
+        if mode == 'A' or mode == 'both': A[0] = torch.nan
+        B = torch.randn((1, ), device=device, dtype=torch.float32)
+        if mode == 'B' or mode == 'both': B[0] = torch.nan
+        C = torch.zeros_like(A, device=device, dtype=torch.float32)
+        kernel[(1, )](A, B, C)
+
+        if mode == 'both' or eval(propagate_nan) == tl.PropagateNan.ALL:
+            assert torch.isnan(C[0])
+        else:
+            assert not torch.isnan(C[0])
+
+
+# -----------------------
 # test sort
 # -----------------------
 
@@ -4330,7 +4443,7 @@ def test_sort(M, N, descending, dtype_str, device):
         tl.store(Z + off2d, x)
 
     x = numpy_random((N, M), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to("xpu")
+    x = torch.from_numpy(x).to(device)
     y = torch.sort(x, descending=descending)[0]
     z = torch.empty_like(x)
     sort_kernel[(1, )](x, z, N, M, descending, num_warps=8)

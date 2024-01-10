@@ -145,26 +145,6 @@ if(NOT MLIR_DIR)
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
 
-# LLVM-SPIRV
-if(NOT DEFINED LLVM_SPIRV)
-  if(EXISTS "${LLVM_LIBRARY_DIR}/libLLVMSPIRVLib.a")
-    set(LLVM_SPIRV_INCLUDE_DIR "${LLVM_LIBRARY_DIR}/../include")
-    set(LLVM_SPRIV_LIB_DIR "${LLVM_LIBRARY_DIR}")
-  elseif(EXISTS "${LLVM_SPIRV_DIR}/lib/libLLVMSPIRVLib.a")
-    set(LLVM_SPIRV_INCLUDE_DIR "${LLVM_SPIRV_DIR}/include")
-    set(LLVM_SPIRV_LIB_DIR "${LLVM_SPIRV_DIR}/lib")
-  else()
-    message(FATAL_ERROR "Can't find libLLVMSPIRVLib.a at ${LLVM_LIBRARY_DIR}. Please install it into that directory, or provide explicit path with -DLLVM_SPIRV_DIR=")
-  endif()
-endif()
-include_directories(${LLVM_SPIRV_INCLUDE_DIR})
-set(LLVM_SPIRV_LDFLAGS "-L${LLVM_SPIRV_LIB_DIR}")
-set(LLVM_SPIRV_LIBRARY
-  libLLVMSPIRVLib.a
-)
-message(STATUS "LLVM_SPIRV_INCLUDE_DIR: ${LLVM_SPIRV_INCLUDE_DIR}")
-message(STATUS "LLVM_SPIRV_LIB_DIR: ${LLVM_SPIRV_LIB_DIR}")
-
 # GenISAIntrinsics
 if (NOT TARGET GenISAIntrinsics)
   if (EXISTS "${GenISAIntrinsics_LIB_DIR}/libGenISAIntrinsics.a")
@@ -184,7 +164,12 @@ message(STATUS "GenISAIntrinsics_LDFLAGS: ${GenISAIntrinsics_LDFLAGS}")
 if(TRITON_BUILD_PYTHON_MODULE)
   message(STATUS "Adding Python module")
   set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
-  set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc ${PYTHON_SRC_PATH}/triton.cc)
+  set(PYTHON_SRC ${PYTHON_SRC_PATH}/main.cc
+                ${PYTHON_SRC_PATH}/ir.cc
+                ${PYTHON_SRC_PATH}/passes.cc
+                ${PYTHON_SRC_PATH}/interpreter.cc
+                ${PYTHON_SRC_PATH}/llvm.cc
+                ${PYTHON_SRC_PATH}/nvidia.cc)
   include_directories("." ${PYTHON_SRC_PATH})
 
   if(PYTHON_INCLUDE_DIRS)
@@ -229,7 +214,6 @@ include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 # link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
-add_subdirectory(bin)
 
 # find_package(PythonLibs REQUIRED)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -253,7 +237,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
     TritonLLVMIR
-    TritonPTX
     TritonSPIRV
     ${dialect_libs}
     ${conversion_libs}
@@ -314,6 +297,6 @@ if (${CODEGEN_BACKENDS_LEN} GREATER 0)
   endforeach()
 endif()
 
+add_subdirectory(bin)
 add_subdirectory(test)
-
 add_subdirectory(unittest)

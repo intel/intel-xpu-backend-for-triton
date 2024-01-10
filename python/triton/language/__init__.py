@@ -4,6 +4,7 @@
 from . import math
 from . import extra
 from .standard import (
+    PropagateNan,
     argmax,
     argmin,
     cdiv,
@@ -96,6 +97,7 @@ from .core import (
     view,
     void,
     where,
+    _experimental_interleave,
 )
 from .random import (
     pair_uniform_to_normal,
@@ -111,6 +113,7 @@ from .random import (
 )
 
 __all__ = [
+    "PropagateNan",
     "TRITON_MAX_TENSOR_NUMEL",
     "abs",
     "advance",
@@ -215,4 +218,5 @@ __all__ = [
     "xor_sum",
     "zeros",
     "zeros_like",
+    _experimental_interleave,
 ]

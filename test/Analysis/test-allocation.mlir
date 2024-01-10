@@ -6,7 +6,7 @@
 #A_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #A_SHARED_T = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #B_SHARED = #triton_gpu.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#C = #triton_gpu.mma<{versionMajor = 2, warpsPerCTA = [4, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#C = #triton_gpu.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #A_DOT = #triton_gpu.dot_op<{opIdx = 0, parent = #C}>
 #B_DOT = #triton_gpu.dot_op<{opIdx = 1, parent = #C}>
 
@@ -239,6 +239,18 @@ tt.func @alloc(%A : !tt.ptr<f16>) {
   %cst2 = triton_gpu.alloc_tensor : tensor<16x16xf16, #A_SHARED>
   tt.return
   // CHECK-NEXT: size = 512
+}
+
+
+// CHECK-LABEL: dealloc
+tt.func @dealloc(%A : !tt.ptr<f16>) {
+  // CHECK: offset = 0, size = 1024
+  %cst0 = triton_gpu.alloc_tensor : tensor<32x16xf16, #A_SHARED>
+  // CHECK: offset = 1024, size = 1024
+  %cst1 = triton_gpu.alloc_tensor : tensor<32x16xf16, #A_SHARED>
+  triton_gpu.dealloc_tensor %cst0 : tensor<32x16xf16, #A_SHARED>
+  tt.return
+  // CHECK-NEXT: size = 2048
 }
 
 // mbarrier's shared memory cannot be reused

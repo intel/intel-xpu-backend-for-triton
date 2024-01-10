@@ -109,7 +109,7 @@ def _path_to_binary(binary: str):
     base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
     paths = [
         os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
-        os.path.join(base_dir, "third_party", "cuda", "bin", binary)
+        os.path.join(base_dir, "third_party", "cuda", "bin", binary),
     ]
 
     for p in paths:
@@ -120,6 +120,22 @@ def _path_to_binary(binary: str):
                 version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
                 if version is not None:
                     return p, version.group(1)
+    raise RuntimeError(f"Cannot find {binary}")
+
+
+def _path_to_spirv_binary(binary: str):
+    base_dir = os.path.join(os.path.dirname(__file__), os.pardir)
+    paths = [
+        os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
+        os.path.join(base_dir, "third_party", "spirv", "bin", binary)
+    ]
+
+    for p in paths:
+        bin = p.split(" ")[0]
+        if os.path.exists(bin) and os.path.isfile(bin):
+            result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
+            if result is not None:
+                return p
     raise RuntimeError(f"Cannot find {binary}")
 
 
@@ -139,6 +155,11 @@ def path_to_nvdisasm():
 
 
 @functools.lru_cache()
+def path_to_spirvdis():
+    return _path_to_spirv_binary("spirv-dis")
+
+
+@functools.lru_cache()
 def compute_core_version_key():
     import pkgutil
     contents = []
@@ -147,7 +168,8 @@ def compute_core_version_key():
         contents += [hashlib.sha1(f.read()).hexdigest()]
     # compiler
     compiler_path = os.path.join(TRITON_PATH, 'compiler')
-    for lib in pkgutil.iter_modules([compiler_path]):
+    backends_path = os.path.join(TRITON_PATH, 'compiler', 'backends')
+    for lib in pkgutil.iter_modules([compiler_path, backends_path]):
         with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
             contents += [hashlib.sha1(f.read()).hexdigest()]
     # backend

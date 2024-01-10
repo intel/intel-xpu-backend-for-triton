@@ -79,7 +79,6 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
     // TODO: Add verifier
 }
 
-// FIXME: Not elementwise because scalars are not supported
 def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
                                      SameOperandsAndResultEncoding,
                                      Pure,
@@ -87,18 +86,18 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let summary = "Floating point casting for custom types";
 
     let description = [{
-        Floating point casting for custom types (F8).
+        Floating point casting for custom types (F8), and non-default rounding modes.
 
         F8 <-> FP16, BF16, FP32, FP64
     }];
 
-    let arguments = (ins TT_FloatLike:$from);
+    let arguments = (ins TT_FloatTensor:$from, OptionalAttr<TT_RoundingModeAttr>:$rounding);
 
-    let results = (outs TT_FloatLike:$result);
+    let results = (outs TT_FloatTensor:$result);
 
     let assemblyFormat = "$from attr-dict `:` type($from) `->` type($result)";
 
-    // TODO: We need a verifier here.
+    let hasVerifier = 1;
 }
 
 //
@@ -305,12 +304,26 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
 def TT_ReshapeOp : TT_Op<"reshape", [Pure,
                                      SameOperandsAndResultElementType]> {
     let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
-    let arguments = (ins TT_Tensor:$src, BoolAttr:$allow_reorder);
+    let description = [{
+        reinterpret a tensor to a different shape.
+
+        If allow_reorder is set the compiler is free to change the order of
+        elements to generate more efficient code.
+
+        If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
+        The compiler is still free to change it for better performance.
+    }];
+    let arguments = (ins TT_Tensor:$src, BoolAttr:$allow_reorder, OptionalAttr<UnitAttr>:$efficient_layout);
     let results = (outs TT_Tensor:$result);
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
+    let builders = [
+      OpBuilder<(ins "Type":$type, "Value":$src, "bool":$allow_reorder),
+        [{
+        build($_builder, $_state, type, src, allow_reorder, /*efficient_layout=*/UnitAttr());
+        }]>];
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
@@ -338,6 +351,19 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` functional-type(operands, results)";
+}
+
+def TT_ExperimentalInterleaveOp : TT_Op<"experimental_interleave", [NoMemoryEffect, SameTypeOperands, SameOperandsAndResultElementType]> {
+    let summary = "interleave two tensors in their minor dimension";
+    let description = [{
+        For example, if the two input tensors are [1,2,3] and [4,5,6],
+        interleaving them returns [1,4,2,5,3,6].
+    }];
+
+    let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
+    let results = (outs TT_Tensor:$result);
+    let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
+    let hasVerifier = 1;
 }
 
 def TT_TransOp : TT_Op<"trans", [Pure,

@@ -381,11 +381,10 @@ bool maybeSharedAllocationOp(Operation *op) {
 }
 
 bool maybeAliasOp(Operation *op) {
-  return isa<triton::gpu::ExtractSliceOp>(op) || isa<triton::TransOp>(op) ||
-         isa<triton::gpu::InsertSliceAsyncOp>(op) ||
-         isa<triton::nvidia_gpu::InsertSliceAsyncV2Op>(op) ||
-         isa<triton::nvidia_gpu::StoreAsyncOp>(op) ||
-         isa<tensor::InsertSliceOp>(op);
+  return isa<triton::gpu::ExtractSliceOp, triton::TransOp,
+             triton::gpu::InsertSliceAsyncOp,
+             triton::nvidia_gpu::InsertSliceTMAOp,
+             triton::nvidia_gpu::StoreAsyncOp, tensor::InsertSliceOp>(op);
 }
 
 bool supportMMA(triton::DotOp op, int version) {
@@ -476,12 +475,10 @@ bool supportDPAS(triton::DotOp op) {
 }
 
 static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
-  auto src = srcEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>();
-  auto dst = dstEncoding.dyn_cast<triton::gpu::MmaEncodingAttr>();
+  auto src = srcEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
+  auto dst = dstEncoding.dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
   if (!src || !dst)
     return false;
-  auto srcInstrShape = src.getInstrShape();
-  auto dstInstrShape = dst.getInstrShape();
   // when #mma = MmaEncoding<version=3, warpsPerCTA=[..., 1]>
   return src && dst && src.getVersionMajor() == 3 &&
          src.getWarpsPerCTA()[1] == 1 && dst.getVersionMajor() == 3 &&
@@ -492,16 +489,18 @@ bool isMmaToMmaShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   return isMmaToMmaShortcut(srcTy.getEncoding(), dstTy.getEncoding());
 }
 
-// For MMAV3 dotOperand layout matches mma operand for f16 case.
+// For MMAV3 dotOperand layout matches mma operand for f16 and bf16 cases.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mmaLayout = srcLayout.cast<triton::gpu::MmaEncodingAttr>();
+  auto mmaLayout = srcLayout.cast<triton::gpu::NvidiaMmaEncodingAttr>();
   auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
-  return mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
-         isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
-         srcTy.getElementType().isF16();
+  auto ans =
+      mmaLayout.getVersionMajor() == 3 && dotOperandLayout.getOpIdx() == 0 &&
+      isMmaToMmaShortcut(dotOperandLayout.getParent(), srcLayout) &&
+      (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
+  return ans;
 }
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
@@ -511,7 +510,7 @@ bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-  auto mmaLayout = srcLayout.cast<triton::gpu::MmaEncodingAttr>();
+  auto mmaLayout = srcLayout.cast<triton::gpu::NvidiaMmaEncodingAttr>();
   auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
   return mmaLayout.getVersionMajor() == 2 &&
          mmaLayout.getWarpsPerCTA()[1] == 1 &&
@@ -797,35 +796,29 @@ triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
     }
   });
 
-  if (Operation *definingOp = v.getDefiningOp()) {
+  if (Operation *definingOp = v.getDefiningOp())
     return getMakeTensorPtrOpImpl(definingOp, v);
-  } else if (BlockArgument arg = v.cast<BlockArgument>()) {
-    unsigned argNum = arg.getArgNumber();
-    Operation *argOwner = arg.getOwner()->getParentOp();
 
-    if (auto forOp = dyn_cast<scf::ForOp>(argOwner)) {
-      return getMakeTensorPtrOp(
-          forOp.getOperand(argNum + forOp.getNumControlOperands() - 1));
-    } else if (auto funcOp = dyn_cast<mlir::triton::FuncOp>(argOwner)) {
-      Block *block = arg.getOwner();
-      Operation *op;
-      int tOrF;
-      std::tie(op, tOrF) = blockToCFOps[block][0];
-      if (auto br = dyn_cast<cf::BranchOp>(op)) {
-        return getMakeTensorPtrOp(br.getDestOperands()[argNum]);
-      }
-      if (auto condBr = dyn_cast<cf::CondBranchOp>(op)) {
-        if (tOrF) {
-          return getMakeTensorPtrOp(condBr.getTrueDestOperands()[argNum]);
-        } else {
-          return getMakeTensorPtrOp(condBr.getFalseDestOperands()[argNum]);
-        }
-      }
-    } else {
-      return getMakeTensorPtrOp(argOwner->getOperand(argNum));
-    }
+  // If there is no defining op, v must be a BlockArgument.
+  BlockArgument arg = v.cast<BlockArgument>();
+  unsigned argNum = arg.getArgNumber();
+  Operation *argOwner = arg.getOwner()->getParentOp();
+
+  if (auto forOp = dyn_cast<scf::ForOp>(argOwner))
+    return getMakeTensorPtrOp(
+        forOp.getOperand(argNum + forOp.getNumControlOperands() - 1));
+  if (auto funcOp = dyn_cast<mlir::triton::FuncOp>(argOwner)) {
+    Block *block = arg.getOwner();
+    Operation *op;
+    int tOrF;
+    std::tie(op, tOrF) = blockToCFOps[block][0];
+    if (auto br = dyn_cast<cf::BranchOp>(op))
+      return getMakeTensorPtrOp(br.getDestOperands()[argNum]);
+    if (auto condBr = dyn_cast<cf::CondBranchOp>(op))
+      return getMakeTensorPtrOp(tOrF ? condBr.getTrueDestOperands()[argNum]
+                                     : condBr.getFalseDestOperands()[argNum]);
+    return getMakeTensorPtrOp(argOwner->getOperand(argNum));
   }
-
   llvm_unreachable("Unable to getMakeTensorPtr()");
 }
 

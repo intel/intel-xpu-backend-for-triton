@@ -52,6 +52,7 @@ export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 python3 -m pip install lit
+python3 -m pip install pytest
 python3 -m pip install torch==1.13.0a0+git6c9b55e intel_extension_for_pytorch==1.13.120+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
 if [ $? -ne 0 ]; then
   echo "FAILED: return code $?"
@@ -85,7 +86,7 @@ function run_unit_tests {
   if [ ! -d "${LIT_TEST_DIR}" ]; then
     echo "Not found '${LIT_TEST_DIR}'. Build Triton please" ; exit 4
   fi
-  ~/.local/bin/lit -v "${LIT_TEST_DIR}"
+  lit -v "${LIT_TEST_DIR}"
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
@@ -100,10 +101,14 @@ function run_core_tests {
     echo "Not found '${CORE_TEST_DIR}'. Build Triton please" ; exit 3
   fi
   cd $CORE_TEST_DIR
-  python3 -m pytest --verbose --device xpu --ignore=test_line_info.py --ignore=test_block_pointer.py --ignore=test_subprocess.py
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu --ignore=test_line_info.py --ignore=test_subprocess.py
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
+
+  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+  TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu test_line_info.py
+
   python3 assert_helper.py device_assert
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?

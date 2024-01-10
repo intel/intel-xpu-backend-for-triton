@@ -1,39 +1,14 @@
 from triton.common.backend import BaseBackend
 from dataclasses import dataclass
-from ..._C.libtriton.triton import ClusterInfo, get_num_warps, TMAInfos, translate_triton_gpu_to_llvmir, get_shared_memory_size, add_external_libs, translate_llvmir_to_spirv
 from ...common.backend import get_cuda_version_key
-from ..._C.libtriton.triton import ir, runtime
+from ..._C.libtriton import ir, passes, nvidia, llvm
 import functools
 from typing import Any
-from ..utils import get_ids_of_tensormaps, parse_tma_info
 from ..make_launcher import make_stub
+from ..utils import get_ids_of_tensormaps, parse_tma_info
 import hashlib
-
-
-def get_kernel_name(src: str, pattern: str) -> str:
-    '''
-    Get kernel name from PTX code.
-    This Kernel name is required when launching the kernel.
-    '''
-    # There is a name mangling in PTX codegen, so the original kernel names in Triton IR are not available in PTX/cubin.
-    assert src
-    for line in src.split('\n'):
-        line = line.strip()
-        if line.startswith(pattern):
-            return line.split()[-1]
-
-
-def get_ir_kernel_name(src: str, pattern: str) -> str:
-    '''
-    Get kernel name from the input source file.
-    This Kernel name is required when launching the kernel.
-    '''
-    # This is the original kernel names in Triton IR for SPIRV target.
-    assert src
-    for line in src.split('\n'):
-        line = line.strip()
-        if line.startswith(pattern):
-            return line.split('@', 1)[-1].split('(', 1)[0]
+import os
+from pathlib import Path
 
 
 @functools.lru_cache()
@@ -69,10 +44,11 @@ class XPUOptions:
     debug: bool = False
 
     def __post_init__(self):
-        # TODO: change API
-        if isinstance(self.extern_libs, dict):
-            extern_libs = tuple([(k, v) for k, v in self.extern_libs.items() if v])
-            object.__setattr__(self, 'extern_libs', extern_libs)
+        default_libdir = Path(__file__).parent.parent.parent / 'third_party' / 'sycl' / 'lib'
+        extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
+        if not extern_libs.get('libdevice', None):
+            extern_libs['libdevice'] = str(default_libdir / 'libsycl-spir64-unknown-unknown.bc')
+        object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
 
@@ -91,26 +67,26 @@ class XPUBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = True
-        args["max_num_imprecise_acc_default"] = 0 if self.capability >= 89 else None
+        args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return XPUOptions(**args)
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        pm.add_inliner_pass()
-        pm.add_triton_combine_pass()
-        pm.add_canonicalizer_pass()
-        pm.add_reorder_broadcast_pass()
-        pm.add_cse_pass()
-        pm.add_licm_pass()
-        pm.add_symbol_dce_pass()
+        passes.common.add_inliner(pm)
+        passes.ttir.add_combine(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.ttir.add_reorder_broadcast(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_licm(pm)
+        passes.common.add_symbol_dce(pm)
         pm.run(mod)
         return mod
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, capability):
-        cluster_info = ClusterInfo()
+        cluster_info = nvidia.ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
@@ -118,84 +94,111 @@ class XPUBackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        pm.add_convert_triton_to_tritongpu_pass(opt.num_warps, 32, opt.num_ctas, capability)
+        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, 32, opt.num_ctas, capability)
         # optimize TTGIR
-        pm.add_tritongpu_coalesce_pass()
+        passes.ttgpuir.add_coalesce(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        pm.add_plan_cta_pass(cluster_info)
-        pm.add_tritongpu_rewrite_tensor_pointer_pass(capability)
-        pm.add_plan_cta_pass(cluster_info)
-        pm.add_tritongpu_remove_layout_conversions_pass()
-        pm.add_tritongpu_accelerate_matmul_pass(capability)
-        pm.add_tritongpu_remove_layout_conversions_pass()
+        nvidia.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
+        nvidia.passes.ttgpuir.add_rewrite_tensor_pointer(pm, capability)
+        nvidia.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_optimize_thread_locality(pm)
+        passes.ttgpuir.add_accelerate_matmul(pm, capability)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         if opt.optimize_epilogue:
-            pm.add_tritongpu_optimize_epilogue_pass()
-        pm.add_tritongpu_optimize_dot_operands_pass()
-        pm.add_cse_pass()
-        ws_enabled = False
+            passes.ttgpuir.add_optimize_epilogue(pm)
+        passes.ttgpuir.add_optimize_dot_operands(pm)
+        passes.common.add_cse(pm)
         # `num_warps` does not mean the total number of warps of a CTA when
         # warp specialization is enabled.
         # it's the responsibility of the compiler to figure out the exact
         # `num_warps` to use.
         # TODO: support the case where `num_warps` from user is not 4.
+        ws_enabled = False
         if capability // 10 >= 9 and opt.enable_warp_specialization and opt.num_warps == 4:
-            pm.add_tritongpu_ws_feasibility_checking_pass(capability)
+            nvidia.passes.ttnvgpuir.add_wsfeasibility_checking(pm, capability)
             pm.run(mod)
-            ws_enabled = ir.is_ws_supported(mod)
+            ws_enabled = nvidia.passes.ttnvgpuir.is_ws_supported(mod)
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
+        metadata["ws_enabled"] = ws_enabled
         if ws_enabled:
-            pm.add_tritongpu_wsdecomposing_pass(capability)
-            pm.add_tritongpu_wspipeline_pass(opt.num_stages, opt.num_warps, capability)
-            pm.add_tritongpu_wsmutex_pass(capability)
-            pm.add_tritongpu_wsmaterialization_pass(capability)
-            pm.add_licm_pass()
-            pm.add_cse_pass()
+            nvidia.passes.ttnvgpuir.add_wsdecomposing(pm, capability)
+            nvidia.passes.ttnvgpuir.add_wspipeline(pm, opt.num_stages, opt.num_warps, capability)
+            nvidia.passes.ttnvgpuir.add_wsmutex(pm, capability)
+            nvidia.passes.ttnvgpuir.add_wsmaterialization(pm, capability)
+            passes.common.add_licm(pm)
+            passes.common.add_cse(pm)
         else:
-            pm.add_tritongpu_pipeline_pass(opt.num_stages, opt.num_warps, opt.num_ctas, capability)
-        pm.add_tritongpu_materialize_load_store_pass(opt.num_warps, capability)
+            passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, capability)
+        nvidia.passes.ttnvgpuir.add_materialize_load_store(pm, opt.num_warps, capability)
         if capability // 10 <= 8:
-            pm.add_tritongpu_prefetch_pass()
-        pm.add_tritongpu_optimize_dot_operands_pass()
-        pm.add_tritongpu_remove_layout_conversions_pass()
-        pm.add_tritongpu_decompose_conversions_pass()
-        pm.add_tritongpu_ws_fixup_missing_attrs_pass()
-        pm.add_tritongpu_reorder_instructions_pass()
-        pm.add_cse_pass()
-        pm.add_symbol_dce_pass()
+            passes.ttgpuir.add_prefetch(pm)
+        passes.ttgpuir.add_optimize_dot_operands(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_decompose_conversions(pm)
+        nvidia.passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
+        passes.ttgpuir.add_reorder_instructions(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
         if capability // 10 >= 9:
-            pm.add_tritongpu_fence_insertion_pass()
-        pm.add_tritongpu_ws_fixup_missing_attrs_pass()
-        pm.add_tritongpu_optimize_thread_locality_pass()
-        pm.add_canonicalizer_pass()
+            nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
+        nvidia.passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
+        passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
     @staticmethod
     def make_llir(src, metadata, options, capability):
-        metadata["enable_warp_specialization"] = ir.is_ws_supported(src)
-        metadata["num_warps"] = get_num_warps(src)
-        tma_infos = TMAInfos()
-        # link libraries
+        # warp-specialization mutates num_warps
+        num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
+        if num_warp_groups is not None:
+            metadata["num_warps"] *= num_warp_groups
+        mod = src
+        # TritonGPU -> LLVM-IR (MLIR)
+        tma_infos = nvidia.TMAInfos()
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        passes.convert.add_scf_to_cf(pm)
+        passes.convert.add_index_to_llvmir(pm)
+        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
+        if metadata["ws_enabled"]:
+            passes.common.add_licm(pm)
+            passes.common.add_cse(pm)
+        nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
+        passes.convert.add_arith_to_llvmir(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
+        if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
+            passes.llvmir.add_di_scope(pm)
+        pm.run(mod)
+        # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
+        context = llvm.context()
+        llvm_mod = llvm.to_module(mod, context, "LLVMModule")
+        llvm.set_spv_target_triple(llvm_mod)
         if options.extern_libs:
-            names = [lib[0] for lib in options.extern_libs]
-            paths = [lib[1] for lib in options.extern_libs]
-            add_external_libs(src, names, paths)
-        # TritonGPU -> LLVM-IR
-        ret = translate_triton_gpu_to_llvmir(src, capability, tma_infos, runtime.TARGET.GENX)
+            for name, path in options.extern_libs:
+                llvm.link_extern_lib(llvm_mod, path)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        # Get some metadata
         if len(tma_infos) > 0:
             metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
             for i, _ in enumerate(metadata["tensormaps_info"]):
                 metadata["tensormaps_info"][i].ids_of_folded_args = metadata["ids_of_folded_args"]
         metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
-        metadata["shared"] = get_shared_memory_size(src)
+        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+        ret = str(llvm_mod)
+        del llvm_mod
+        del context
         return ret
 
     @staticmethod
     def make_spv(src, metadata):
-        metadata["name"] = get_ir_kernel_name(src, pattern='define spir_kernel void')
-        return translate_llvmir_to_spirv(src)
+        ret, name = llvm.translate_to_spirv(src)
+        metadata["name"] = name
+        return ret
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
