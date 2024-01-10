@@ -312,6 +312,20 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   llvm_unreachable("unsupported triton::Target");
 }
 
+static GENX::ShflKind toGenXShuffleMode(NVVM::ShflKind mode) {
+  switch (mode) {
+  case NVVM::ShflKind::bfly:
+    return GENX::ShflKind::XOR;
+  case NVVM::ShflKind::up:
+    return GENX::ShflKind::UP;
+  case NVVM::ShflKind::down:
+    return GENX::ShflKind::DOWN;
+  case NVVM::ShflKind::idx:
+    return GENX::ShflKind::IDX;
+  }
+  llvm_unreachable("unsupported NVVM::ShflKind");
+}
+
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value val, Value i, NVVM::ShflKind mode,
                             Value clamp, triton::Target target) {
@@ -352,7 +366,7 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
   }
   case triton::Target::GENX: {
     return rewriter.create<GENX::SubGroupShuffleOp>(loc, type, val, i,
-                                                    GENX::ShflKind::XOR);
+                                                    toGenXShuffleMode(mode));
   }
   }
   llvm_unreachable("Invalid target");

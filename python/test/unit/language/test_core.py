@@ -1832,8 +1832,6 @@ def get_first_element(a, b):
 def test_scan2d(op, dtype_str, shape, axis, num_warps, device):
     if is_hip():
         pytest.skip("test_scan2d is not supported in HIP")
-    if is_xpu(device) and op in ['cumsum', 'cumprod'] and (axis == 1 or num_warps == 4 or shape in [(1024, 2)]):
-        pytest.skip("FIXME: Incorrect result on XPU")
 
     check_type_supported(dtype_str, device)
 
