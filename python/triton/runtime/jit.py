@@ -12,8 +12,6 @@ from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, 
 
 import torch
 import intel_extension_for_pytorch as ipex
-
-from .._C.libtriton.translation import TMAInfos
 from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
 from ..runtime.driver import driver
@@ -505,9 +503,6 @@ class JITFunction(KernelInterface[T]):
         self.kernel = None
         self.debug = True if os.environ.get("TRITON_DEBUG", "0") == "1" else debug
         self.noinline = noinline
-
-        # tma info
-        self.tensormaps_info = TMAInfos()
 
         # TODO(jlebar): Remove uses of these fields outside this file, then
         # remove the fields here.
