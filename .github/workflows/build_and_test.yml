@@ -1,9 +1,7 @@
 name: Triton DSE Pre Commit
 
 on:
-  pull_request:
-    branches:
-    - llvm-target
+  workflow_dispatch:
 
 jobs:
   build:
