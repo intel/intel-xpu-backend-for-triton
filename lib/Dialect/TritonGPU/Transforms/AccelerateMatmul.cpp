@@ -17,6 +17,7 @@ using tt::DotOp;
 using ttg::BlockedEncodingAttr;
 using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
+using ttg::DpasEncodingAttr;
 using ttg::NvidiaMmaEncodingAttr;
 using ttg::SliceEncodingAttr;
 
@@ -334,6 +335,63 @@ public:
 };
 } // namespace
 
+static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
+                            Type promotedType) {
+  Type tensorPromotedType =
+      operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
+                                                           promotedType);
+  return builder.create<tt::FpToFpOp>(loc, tensorPromotedType, operand);
+}
+
+// promote operands of dot op if the existing combination is not natively
+// supported.
+static void decomposeMixedModeDotOp(ModuleOp mod) {
+  mod.walk([](tt::DotOp dotOp) -> void {
+    Value D = dotOp.getResult();
+    OpBuilder builder(dotOp);
+    Type AElType =
+        dotOp.getA().getType().cast<RankedTensorType>().getElementType();
+    Type promoteType;
+    NvidiaMmaEncodingAttr mmaLayout = D.getType()
+                                          .cast<RankedTensorType>()
+                                          .getEncoding()
+                                          .dyn_cast<NvidiaMmaEncodingAttr>();
+    if (mmaLayout) {
+      bool isNativeHopperFP8 =
+          AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
+      bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
+                   AElType.isFloat8E4M3FN() || AElType.isFloat8E4M3B11FNUZ();
+      if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
+        return;
+      promoteType = builder.getF16Type();
+    } else if (auto dpasLayout = D.getType()
+                                     .cast<RankedTensorType>()
+                                     .getEncoding()
+                                     .dyn_cast<DpasEncodingAttr>()) {
+      Type BElType =
+          dotOp.getB().getType().cast<RankedTensorType>().getElementType();
+
+      auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
+                                  BElType.getIntOrFloatBitWidth());
+
+      return;
+    } else {
+      // FMA case.
+      Type AElType =
+          dotOp.getA().getType().cast<RankedTensorType>().getElementType();
+      Type DElType = D.getType().cast<RankedTensorType>().getElementType();
+      if (AElType == DElType)
+        return;
+      promoteType = DElType;
+    }
+    Location loc = dotOp.getLoc();
+    Value promotedA = promoteOperand(builder, loc, dotOp.getA(), promoteType);
+    Value promotedB = promoteOperand(builder, loc, dotOp.getB(), promoteType);
+    dotOp.setOperand(0, promotedA);
+    dotOp.setOperand(1, promotedB);
+  });
+}
+
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
@@ -353,6 +411,9 @@ public:
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
+    // now that we pick the mma type decompose dot that are not natively
+    // supported.
+    decomposeMixedModeDotOp(m);
   }
 };
 
