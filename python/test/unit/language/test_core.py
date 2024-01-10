@@ -1948,8 +1948,6 @@ def test_locality(op, BLOCK_N, N, num_pid_n, device):
 def test_scan_layouts(M, N, src_layout, axis, device):
     if is_hip():
         pytest.skip("test_scan_layouts is not supported in HIP")
-    if is_xpu(device):
-        pytest.skip("FIXME: Incorrect result on XPU")
 
     ir = f"""
     #blocked = {src_layout}
