@@ -6,7 +6,7 @@ from typing import Optional, Union
 import numpy as np
 import pytest
 import torch
-import intel_extension_for_pytorch
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 from numpy.random import RandomState
 
 import triton
