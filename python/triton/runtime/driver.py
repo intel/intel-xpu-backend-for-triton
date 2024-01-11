@@ -606,6 +606,8 @@ class SpirvUtils(object):
             if(!PyArg_ParseTuple(args, "O", &queue_obj))
                 return NULL;
             queue = PyCapsule_GetPointer(queue_obj, "torch.xpu.Stream.sycl_queue");
+            if(queue == nullptr) return NULL;
+
             sycl::queue* sycl_queue = static_cast<sycl::queue*>(queue);
             if(sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
                 update(*sycl_queue);
@@ -634,6 +636,8 @@ class SpirvUtils(object):
             if(!PyArg_ParseTuple(args, "O", &queue_obj))
                 return NULL;
             queue = PyCapsule_GetPointer(queue_obj, "torch.xpu.Stream.sycl_queue");
+            if(queue == nullptr) return NULL;
+
             sycl::queue* sycl_queue = static_cast<sycl::queue*>(queue);
 
             auto sycl_context = sycl_queue->get_context();
@@ -781,8 +785,9 @@ class SpirvUtils(object):
         self.get_l0_dev_ptr = mod.get_l0_dev_ptr
         self.get_l0_ctxt_ptr = mod.get_l0_ctxt_ptr
         self.is_using_icl = mod.is_using_icl
-        self.context = mod.init_context(ipex.xpu.current_stream().sycl_queue)
-        self.device_count = mod.init_devices(ipex.xpu.current_stream().sycl_queue)
+        import torch
+        self.context = mod.init_context(torch.xpu.current_stream().sycl_queue)
+        self.device_count = mod.init_devices(torch.xpu.current_stream().sycl_queue)
         self.event_pool = mod.init_event_pool()[0]
         self.current_device = 0 if self.device_count[0] > 0 else -1
 
