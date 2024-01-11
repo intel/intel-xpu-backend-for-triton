@@ -1,4 +1,4 @@
-ARG INSTALLER_IMAGE=docker-registry.docker-registry.svc.cluster.local:5000/oneapi-basekit:2023.2.0
+ARG INSTALLER_IMAGE=docker-registry.docker-registry.svc.cluster.local:5000/oneapi-basekit:2024.0
 
 FROM $INSTALLER_IMAGE as installer
 
