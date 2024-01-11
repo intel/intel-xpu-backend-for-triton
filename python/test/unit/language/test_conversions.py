@@ -3,6 +3,7 @@
 
 import numpy as np
 import torch
+import intel_extension_for_pytorch
 import pytest
 import triton
 import triton.language as tl

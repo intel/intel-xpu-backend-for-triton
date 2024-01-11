@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 import scipy.stats
 import torch
+import intel_extension_for_pytorch
 
 import triton
 import triton.language as tl

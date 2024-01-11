@@ -6,6 +6,7 @@ from typing import Optional, Union
 import numpy as np
 import pytest
 import torch
+import intel_extension_for_pytorch
 from numpy.random import RandomState
 
 import triton
