@@ -389,7 +389,7 @@ class SpirvUtils(object):
                 }
             }
         }
-        
+
         ze_kernel_handle_t create_function(ze_module_handle_t module,
                                         ze_kernel_flags_t flag,
                                         std::string func_name) {
@@ -410,14 +410,14 @@ class SpirvUtils(object):
             return kernel;
         }
 
-        
+
         ze_kernel_handle_t create_function(ze_module_handle_t module,
                                         std::string func_name) {
         return create_function(module, 0, func_name);
         }
 
         std::vector<std::unique_ptr<sycl::kernel>> compiled_kernel;
-     
+
         static PyObject* loadSyclBinary(PyObject* self, PyObject* args) {
             //std::cout<<"Inside loadSyclBinary"<<std::endl;
             const char* name;
@@ -437,7 +437,7 @@ class SpirvUtils(object):
             int32_t n_regs = 0;
             int32_t n_spills = 0;
             void * pdevID = PyCapsule_GetPointer(py_dev, "torch.xpu.device.sycl_device");
-            
+
             //error;
             if(pdevID == nullptr) return NULL;
 

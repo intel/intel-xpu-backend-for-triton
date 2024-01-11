@@ -299,15 +299,15 @@ def generate_launcher(constants, signature, ids):
     //std::cout<<"sycl_kernel_launch entry"<<std::endl;
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
     //std::cout<<"Kernel name :"<<kernel_name<<std::endl;
-    
+
     void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
     uint32_t num_params = sizeof(params)/sizeof(params[0]);
     uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
-    
+
     //std::cout<<"num_params          :"<<num_params<<std::endl;
     //std::cout<<"expected_num_params :"<<expected_num_params<<std::endl;
     //std::cout<<"shared_memory       :"<<shared_memory<<std::endl;
-    
+
     size_t global_range_x = gridX*threads_per_warp*num_warps;
     size_t global_range_y = gridY;
     size_t global_range_z = gridZ;
@@ -339,7 +339,7 @@ def generate_launcher(constants, signature, ids):
       }} else {{
           cgh.parallel_for(parallel_work_size, kernel_ptr);
       }}
-    
+
       }};
 
     auto event = stream.submit(cgf);
@@ -389,7 +389,7 @@ def generate_launcher(constants, signature, ids):
       auto threads_per_warp = 32;
       //std::cout<<"_launch : going to call sycl_kernel_launch"<<std::endl;
       sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel, {', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
-/*      
+/*
       // raise exception asap
       // {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
       if (_is_icl == 0) {{
