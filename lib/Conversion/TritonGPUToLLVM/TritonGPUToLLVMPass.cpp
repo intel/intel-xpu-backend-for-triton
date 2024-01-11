@@ -5,7 +5,6 @@
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToGENX/GPUToGENXPass.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
-#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
@@ -14,7 +13,6 @@
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Allocation.h"
@@ -73,9 +71,6 @@ public:
     switch (target) {
     case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
-      break;
-    case Target::ROCDL:
-      addLegalDialect<ROCDL::ROCDLDialect>();
       break;
     case Target::GENX:
       addLegalDialect<GENX::GENXDialect>();
@@ -396,9 +391,6 @@ public:
     case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
       break;
-    case Target::ROCDL:
-      addLegalDialect<ROCDL::ROCDLDialect>();
-      break;
     case Target::GENX:
       addLegalDialect<GENX::GENXDialect>();
       break;
@@ -596,10 +588,6 @@ struct ConvertTritonGPUToLLVM
     switch (target) {
     case Target::NVVM:
       mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-      break;
-    case Target::ROCDL:
-      mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
-                                                 mlir::gpu::amd::HIP);
       break;
     case Target::GENX:
       mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
