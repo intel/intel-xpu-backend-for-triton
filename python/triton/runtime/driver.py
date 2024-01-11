@@ -605,6 +605,9 @@ class SpirvUtils(object):
             PyObject* queue_obj;
             if(!PyArg_ParseTuple(args, "O", &queue_obj))
                 return NULL;
+
+            std::cout<<PyCapsule_GetName(queue_obj)<<std::endl;
+
             queue = PyCapsule_GetPointer(queue_obj, "torch.xpu.Stream.sycl_queue");
             if(queue == nullptr) return NULL;
 
