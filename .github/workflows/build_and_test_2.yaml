@@ -107,7 +107,10 @@ jobs:
           # Increase this value to reset cache
           CACHE_NUMBER: 1
         run: |
-          PACKAGES_CACHE_KEY="packages-${{ hashFiles('scripts/compile-triton.sh', 'cmake/llvm-hash.txt') }}-${{ env.CACHE_NUMBER }}"
+          LLVM_COMMIT_ID=$(git ls-remote https://github.com/intel/llvm.git refs/heads/genx | cut -f1)
+          echo "Latest llvm genx commit id: $LLVM_COMMIT_ID"
+          COMPOSITE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
+          PACKAGES_CACHE_KEY="packages-$COMPOSITE_KEY-${{ env.CACHE_NUMBER }}"
           PACKAGES_CACHE="/cache/$PACKAGES_CACHE_KEY"
           echo "PACKAGES_CACHE=$PACKAGES_CACHE" >> "${GITHUB_ENV}"
           if [[ -d $PACKAGES_CACHE ]]; then
