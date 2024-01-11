@@ -5,7 +5,6 @@
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToGENX/GPUToGENXPass.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
-#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
@@ -14,7 +13,6 @@
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Allocation.h"
@@ -73,9 +71,6 @@ public:
     switch (target) {
     case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
-      break;
-    case Target::ROCDL:
-      addLegalDialect<ROCDL::ROCDLDialect>();
       break;
     case Target::GENX:
       addLegalDialect<GENX::GENXDialect>();
@@ -199,7 +194,7 @@ struct FuncOpConversion : public FuncOpConversionBase {
     if (!allocation.isRoot(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
-    // Collect TMA informations.
+    // Collect TMA information.
     unsigned numTMALoad = 0;
     funcOp.walk(
         [&numTMALoad](triton::nvidia_gpu::InsertSliceTMAOp insertSliceOp) {
@@ -396,9 +391,6 @@ public:
     case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
       break;
-    case Target::ROCDL:
-      addLegalDialect<ROCDL::ROCDLDialect>();
-      break;
     case Target::GENX:
       addLegalDialect<GENX::GENXDialect>();
       break;
@@ -451,7 +443,6 @@ struct ConvertTritonGPUToLLVM
     decomposeMmaToDotOperand(mod, numWarps, threadsPerWarp, numCTAs);
     decomposeBlockedToDotOperand(mod);
     decomposeInsertSliceAsyncOp(mod);
-    decomposeMixedModeDotOp(mod);
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
@@ -597,10 +588,6 @@ struct ConvertTritonGPUToLLVM
     switch (target) {
     case Target::NVVM:
       mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-      break;
-    case Target::ROCDL:
-      mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
-                                                 mlir::gpu::amd::HIP);
       break;
     case Target::GENX:
       mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
@@ -925,55 +912,6 @@ private:
         operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
                                                              promotedType);
     return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
-  }
-
-  // promote operands of dot op if the existing combination is not natively
-  // supported.
-  void decomposeMixedModeDotOp(ModuleOp mod) const {
-    mod.walk([](triton::DotOp dotOp) -> void {
-      Value D = dotOp.getResult();
-      OpBuilder builder(dotOp);
-      Type AElType =
-          dotOp.getA().getType().cast<RankedTensorType>().getElementType();
-      Type promoteType;
-      NvidiaMmaEncodingAttr mmaLayout = D.getType()
-                                            .cast<RankedTensorType>()
-                                            .getEncoding()
-                                            .dyn_cast<NvidiaMmaEncodingAttr>();
-      if (mmaLayout) {
-        bool isNativeHopperFP8 =
-            AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
-        bool isFP8 = isNativeHopperFP8 || AElType.isFloat8E5M2FNUZ() ||
-                     AElType.isFloat8E4M3FN() || AElType.isFloat8E4M3B11FNUZ();
-        if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
-          return;
-        promoteType = builder.getF16Type();
-      } else if (auto dpasLayout = D.getType()
-                                       .cast<RankedTensorType>()
-                                       .getEncoding()
-                                       .dyn_cast<DpasEncodingAttr>()) {
-        Type BElType =
-            dotOp.getB().getType().cast<RankedTensorType>().getElementType();
-
-        auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
-                                    BElType.getIntOrFloatBitWidth());
-
-        return;
-      } else {
-        // FMA case.
-        Type AElType =
-            dotOp.getA().getType().cast<RankedTensorType>().getElementType();
-        Type DElType = D.getType().cast<RankedTensorType>().getElementType();
-        if (AElType == DElType)
-          return;
-        promoteType = DElType;
-      }
-      Location loc = dotOp.getLoc();
-      Value promotedA = promoteOperand(builder, loc, dotOp.getA(), promoteType);
-      Value promotedB = promoteOperand(builder, loc, dotOp.getB(), promoteType);
-      dotOp.setOperand(0, promotedA);
-      dotOp.setOperand(1, promotedB);
-    });
   }
 };
 
