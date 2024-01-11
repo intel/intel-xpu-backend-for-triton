@@ -310,6 +310,215 @@ class SpirvUtils(object):
                                        "mem_clock_rate", mem_clock_rate,
                                        "mem_bus_width", mem_bus_width);
         }
+/*Sycl code Start*/
+        bool getBoolEnv(const std::string &env) {
+            const char *s = std::getenv(env.c_str());
+            std::string str(s ? s : "");
+            std::transform(str.begin(), str.end(), str.begin(),
+                        [](unsigned char c) { return std::tolower(c); });
+            return (str == "on" || str == "true" || str == "1");
+        }
+
+        #define EXPECT_EQ(value1, value2)                                              \
+        {                                                                            \
+            auto result = (value2);                                                    \
+            if ((value1) != (result)) {                                                \
+            std::string err_log("L0 API error code: ");                              \
+            std::stringstream ss;                                                    \
+            ss << std::hex << result << std::endl;                                   \
+            throw std::runtime_error(err_log + ss.str());                            \
+            }                                                                          \
+        }
+
+        #define EXPECT_TRUE(value1) EXPECT_EQ(true, value1)
+
+        ze_module_handle_t create_module(ze_context_handle_t context,
+                                        ze_device_handle_t device,
+                                        uint32_t *binary_ptr, size_t binary_size) {
+
+            //std::cout<<"Inside create_module 1"<<std::endl;
+
+            const char *build_flags = "";
+            const ze_module_format_t format = ZE_MODULE_FORMAT_IL_SPIRV;
+
+            ze_module_desc_t module_description = {};
+            module_description.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
+
+            module_description.format = format;
+            module_description.inputSize = static_cast<uint32_t>(binary_size * sizeof(uint32_t));
+            module_description.pInputModule = (uint8_t *)binary_ptr;
+            module_description.pBuildFlags = build_flags;
+
+            ze_module_build_log_handle_t buildlog;
+            ze_module_handle_t module;
+            auto context_initial = context;
+            auto device_initial = device;
+            auto error_no = ZE_RESULT_SUCCESS;
+            //std::cout<<context<<" | "<<device<<" | "<<module<<" | "<<module_description.inputSize<<std::endl;
+            error_no = zeModuleCreate(context, device, &module_description, &module, &buildlog);
+
+            if (error_no != ZE_RESULT_SUCCESS) {
+                size_t szLog = 0;
+                EXPECT_EQ(ZE_RESULT_SUCCESS,
+                        zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
+
+                char *strLog = (char *)malloc(szLog);
+                EXPECT_EQ(ZE_RESULT_SUCCESS,
+                        zeModuleBuildLogGetString(buildlog, &szLog, strLog));
+
+                std::cerr<<"L0 build module failed. Log: "<<strLog<<std::endl;
+                free(strLog);
+                EXPECT_EQ(ZE_RESULT_SUCCESS, zeModuleBuildLogDestroy(buildlog));
+            }
+
+            EXPECT_EQ(ZE_RESULT_SUCCESS, error_no);
+
+            return module;
+        }
+
+        void printModuleKernelName(ze_module_handle_t hModule) {
+            uint32_t Count = 0;
+            auto ret = zeModuleGetKernelNames(hModule, &Count, nullptr);
+            assert(ret == ZE_RESULT_SUCCESS);
+            std::unique_ptr<const char *[]> PNames(new const char *[Count]);
+            ret = zeModuleGetKernelNames(hModule, &Count, PNames.get());
+            assert(ret == ZE_RESULT_SUCCESS);
+            if (getBoolEnv("MLIR_ENABLE_DUMP")) {
+                for (uint32_t i = 0; i < Count; ++i) {
+                std::cout << std::string(PNames[i]) << std::endl;
+                }
+            }
+        }
+        
+        ze_kernel_handle_t create_function(ze_module_handle_t module,
+                                        ze_kernel_flags_t flag,
+                                        std::string func_name) {
+            ze_kernel_handle_t kernel;
+            ze_kernel_desc_t kernel_description = {};
+            kernel_description.stype = ZE_STRUCTURE_TYPE_KERNEL_DESC;
+
+            kernel_description.pNext = nullptr;
+            kernel_description.flags = flag;
+            kernel_description.pKernelName = func_name.c_str();
+            auto module_initial = module;
+            if (getBoolEnv("MLIR_ENABLE_DUMP")) {
+                std::cout << "create kernel:" << func_name << std::endl;
+            }
+            EXPECT_EQ(ZE_RESULT_SUCCESS,
+                        zeKernelCreate(module, &kernel_description, &kernel));
+            //  EXPECT_EQ(module, module_initial);
+            return kernel;
+        }
+
+        
+        ze_kernel_handle_t create_function(ze_module_handle_t module,
+                                        std::string func_name) {
+        return create_function(module, 0, func_name);
+        }
+
+        std::vector<std::unique_ptr<sycl::kernel>> compiled_kernel;
+     
+        static PyObject* loadSyclBinary(PyObject* self, PyObject* args) {
+            //std::cout<<"Inside loadSyclBinary"<<std::endl;
+            const char* name;
+            int shared;
+            PyObject *py_bytes;
+            PyObject *py_dev;
+
+            if(!PyArg_ParseTuple(args, "sSiO", &name, &py_bytes, &shared, &py_dev)) {
+                std::cout << "loadBloadSyclBinaryinary arg parse failed" << std::endl;
+                return NULL;
+            }
+
+            //std::cout<<"------------------"<<std::endl;
+            //std::cout<<PyCapsule_GetName(py_dev)<<std::endl;
+            //std::cout<<"------------------"<<std::endl;
+
+            int32_t n_regs = 0;
+            int32_t n_spills = 0;
+            void * pdevID = PyCapsule_GetPointer(py_dev, "torch.xpu.device.sycl_device");
+            
+            //error;
+            if(pdevID == nullptr) return NULL;
+
+            //module_desc.inputSize = PyBytes_Size(py_bytes);
+            //module_desc.pInputModule = (uint8_t*) PyBytes_AsString(py_bytes);
+
+            sycl::device device = *(static_cast<sycl::device*>(pdevID));
+            std::string kernel_name = name;
+            size_t binary_size = PyBytes_Size(py_bytes);
+            binary_size = binary_size/ sizeof(uint32_t);
+
+            //std::string binary; binary.reserve(binary_size);
+            uint32_t *binary_ptr = (uint32_t *)PyBytes_AsString(py_bytes);;
+
+            //std::cout<<"Kernle name "<<kernel_name<<std::endl;
+
+            auto ctx = device.get_platform().ext_oneapi_get_default_context();
+            auto l0_device =
+                sycl::get_native<sycl::backend::ext_oneapi_level_zero>(device);
+            auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
+
+            auto l0_module =
+                create_module(l0_context, l0_device, binary_ptr, binary_size);
+            //printModuleKernelName(l0_module);
+
+            auto l0_kernel = create_function(l0_module, kernel_name);
+            ze_kernel_properties_t props;
+            props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
+            props.pNext = nullptr;
+
+            EXPECT_EQ(ZE_RESULT_SUCCESS, zeKernelGetProperties(l0_kernel, &props));
+
+            n_spills = props.spillMemSize;
+
+            auto mod = sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
+                                                sycl::bundle_state::executable>(
+                {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer}, ctx);
+
+            auto fun = sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
+                {mod, l0_kernel, sycl::ext::oneapi::level_zero::ownership::transfer},
+                ctx);
+            if (getBoolEnv("MLIR_ENABLE_DUMP")) {
+                //  auto kernel_ids = mod.get_kernel_ids();
+                //  std::cout << "num_kernels:" << kernel_ids.size() << std::endl;
+                //  for (auto& kernel_id : kernel_ids) {
+                //    std::cout << "fun name: " << kernel_id.get_name() << std::endl;
+                //  }
+            }
+
+            compiled_kernel.push_back(std::make_unique<sycl::kernel>(fun));
+            sycl::kernel *ptr = compiled_kernel[compiled_kernel.size() - 1].get();
+            if (getBoolEnv("MLIR_ENABLE_DUMP")) {
+                std::cout << "compiled kernel ptr: " << ptr << std::endl;
+                std::cout << "total kernels:" << compiled_kernel.size() << std::endl;
+                for (auto &k : compiled_kernel) {
+                std::cout << "  kernel:"
+                            << k->get_info<sycl::info::kernel::function_name>() << " @"
+                            << k.get() << std::endl;
+                }
+            }
+
+            sycl::kernel *k = new sycl::kernel(*ptr);
+            /*py::capsule kernel_capsulle(k, [](void *f) {
+                auto kk = static_cast<sycl::kernel *>(f);
+                delete kk;
+            });*/
+            sycl::kernel_bundle<sycl::bundle_state::executable> *kb =
+                new sycl::kernel_bundle<sycl::bundle_state::executable>(mod);
+            /*py::capsule module_capsulle(kb, [](void *f) {
+                auto kk =
+                    static_cast<sycl::kernel_bundle<sycl::bundle_state::executable> *>(f);
+                delete kk;
+            });*/
+
+            /*py::tuple tup =
+                py::make_tuple(module_capsulle, kernel_capsulle, n_regs, n_spills);
+            return tup;*/
+
+            return Py_BuildValue("(KKii)", (uint64_t)kb, (uint64_t)k, n_regs, n_spills);
+        }
+/*Sycl code end*/
 
         static PyObject* loadBinary(PyObject* self, PyObject* args) {
             const char* name;
@@ -393,8 +602,10 @@ class SpirvUtils(object):
 
         static PyObject* initContext(PyObject* self, PyObject* args) {
             void* queue;
-            if(!PyArg_ParseTuple(args, "K", &queue))
+            PyObject* queue_obj;
+            if(!PyArg_ParseTuple(args, "O", &queue_obj))
                 return NULL;
+            queue = PyCapsule_GetPointer(queue_obj, "torch.xpu.Stream.sycl_queue");
             sycl::queue* sycl_queue = static_cast<sycl::queue*>(queue);
             if(sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
                 update(*sycl_queue);
@@ -419,8 +630,10 @@ class SpirvUtils(object):
 
         static PyObject* initDevices(PyObject* self, PyObject *args) {
             void* queue;
-            if(!PyArg_ParseTuple(args, "K", &queue))
+            PyObject* queue_obj;
+            if(!PyArg_ParseTuple(args, "O", &queue_obj))
                 return NULL;
+            queue = PyCapsule_GetPointer(queue_obj, "torch.xpu.Stream.sycl_queue");
             sycl::queue* sycl_queue = static_cast<sycl::queue*>(queue);
 
             auto sycl_context = sycl_queue->get_context();
@@ -448,8 +661,10 @@ class SpirvUtils(object):
 
         static PyObject* getL0ImmCommandList(PyObject* self, PyObject* args) {
             void* queue;
-            if(!PyArg_ParseTuple(args, "K", &queue))
+            PyObject* queue_obj;
+            if(!PyArg_ParseTuple(args, "O", &queue_obj))
                 return NULL;
+            queue = PyCapsule_GetPointer(queue_obj, "torch.xpu.Stream.sycl_queue");
             sycl::queue* sycl_queue = static_cast<sycl::queue*>(queue);
 
             if(sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
@@ -459,8 +674,10 @@ class SpirvUtils(object):
         }
         static PyObject* getL0Queue(PyObject* self, PyObject* args) {
             void* queue;
-            if(!PyArg_ParseTuple(args, "K", &queue))
+            PyObject* queue_obj;
+            if(!PyArg_ParseTuple(args, "O", &queue_obj))
                 return NULL;
+            queue = PyCapsule_GetPointer(queue_obj, "torch.xpu.Stream.sycl_queue");
             sycl::queue* sycl_queue = static_cast<sycl::queue*>(queue);
             if(sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
                 update(*sycl_queue);
@@ -469,8 +686,10 @@ class SpirvUtils(object):
         }
         static PyObject* getL0DevPtr(PyObject* self, PyObject* args) {
             void* queue;
-            if(!PyArg_ParseTuple(args, "K", &queue))
+            PyObject* queue_obj;
+            if(!PyArg_ParseTuple(args, "O", &queue_obj))
                 return NULL;
+            queue = PyCapsule_GetPointer(queue_obj, "torch.xpu.Stream.sycl_queue");
             sycl::queue* sycl_queue = static_cast<sycl::queue*>(queue);
             if(sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
                 update(*sycl_queue);
@@ -479,8 +698,10 @@ class SpirvUtils(object):
         }
         static PyObject* getL0CtxtPtr(PyObject* self, PyObject* args) {
             void* queue;
-            if(!PyArg_ParseTuple(args, "K", &queue))
+            PyObject* queue_obj;
+            if(!PyArg_ParseTuple(args, "O", &queue_obj))
                 return NULL;
+            queue = PyCapsule_GetPointer(queue_obj, "torch.xpu.Stream.sycl_queue");
             sycl::queue* sycl_queue = static_cast<sycl::queue*>(queue);
             if(sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
                 update(*sycl_queue);
@@ -489,8 +710,10 @@ class SpirvUtils(object):
         }
         static PyObject* isUsingICL(PyObject* self, PyObject* args) {
             void* queue;
-            if(!PyArg_ParseTuple(args, "K", &queue))
+            PyObject* queue_obj;
+            if(!PyArg_ParseTuple(args, "O", &queue_obj))
                 return NULL;
+            queue = PyCapsule_GetPointer(queue_obj, "torch.xpu.Stream.sycl_queue");
             sycl::queue* sycl_queue = static_cast<sycl::queue*>(queue);
             if(sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
                 update(*sycl_queue);
@@ -501,6 +724,7 @@ class SpirvUtils(object):
 
         static PyMethodDef ModuleMethods[] = {
           {"load_binary", loadBinary, METH_VARARGS, "Load provided SPV into ZE driver"},
+          {"load_sycl_binary", loadSyclBinary, METH_VARARGS, "Load provided SPV into ZE driver"},
           {"get_device_properties", getDeviceProperties, METH_VARARGS, "Get the properties for a given device"},
           {"init_context", initContext, METH_VARARGS, "Initialize the ZE GPU context"},
           {"init_devices", initDevices, METH_VARARGS, "Initialize the ZE GPU devices and return device count"},
@@ -550,6 +774,7 @@ class SpirvUtils(object):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.load_binary = mod.load_binary
+        self.load_sycl_binary = mod.load_sycl_binary
         self.get_device_properties = mod.get_device_properties
         self.get_l0_queue = mod.get_l0_queue
         self.get_l0_imm_cmd_list = mod.get_l0_imm_cmd_list

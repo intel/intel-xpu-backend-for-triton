@@ -454,12 +454,16 @@ class JITFunction(KernelInterface[T]):
             if self.is_spirv:
                 event_pool = get_event_pool(self.is_spirv)
                 use_icl = 1
-                dev_obj, ctxt_obj, q_obj = get_dev_ctxt_queue_objs(self.is_spirv)
-                if q_obj == 0:
-                    stream = get_imm_cmd_list()
-                else:
-                    stream = 0
-                    use_icl = 0
+                stream = torch.xpu.current_stream().sycl_queue
+                dev_obj=0
+                ctxt_obj=0
+                q_obj = 0
+                #dev_obj, ctxt_obj, q_obj = get_dev_ctxt_queue_objs(self.is_spirv)
+                #if q_obj == 0:
+                #    stream = get_imm_cmd_list()
+                #else:
+                #    stream = 0
+                #    use_icl = 0
                 kernel.run(grid_0, grid_1, grid_2, kernel.num_warps,
                            kernel.num_ctas,  # number of warps/ctas per instance
                            kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],  # cluster

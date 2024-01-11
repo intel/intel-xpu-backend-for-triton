@@ -250,8 +250,11 @@ class CompiledKernel:
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_binary(
-            self.name, self.kernel, self.shared, device)
+        #self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_binary(
+        #    self.name, self.kernel, self.shared, device)
+        import torch
+        self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_sycl_binary(
+            self.name, self.kernel, self.shared, torch.xpu.device(device).sycl_device)
 
     def __getattribute__(self, name):
         if name == 'run':
