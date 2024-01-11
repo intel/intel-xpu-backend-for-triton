@@ -164,4 +164,6 @@ Supported Platforms:
 
 Supported Hardware:
   * NVIDIA GPUs (Compute Capability 7.0+)
+  * Intel GPUs
   * Under development: AMD GPUs, CPUs
+
