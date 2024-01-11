@@ -455,8 +455,8 @@ class JITFunction(KernelInterface[T]):
                 event_pool = get_event_pool(self.is_spirv)
                 use_icl = 1
                 stream = torch.xpu.current_stream().sycl_queue
-                dev_obj=0
-                ctxt_obj=0
+                dev_obj = 0
+                ctxt_obj = 0
                 q_obj = 0
                 #dev_obj, ctxt_obj, q_obj = get_dev_ctxt_queue_objs(self.is_spirv)
                 #if q_obj == 0:

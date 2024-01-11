@@ -254,7 +254,8 @@ class CompiledKernel:
         #    self.name, self.kernel, self.shared, device)
         import torch
         self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_sycl_binary(
-            self.name, self.kernel, self.shared, torch.xpu.device(device).sycl_device)
+            self.name, self.kernel, self.shared,
+            torch.xpu.device(device).sycl_device)
 
     def __getattribute__(self, name):
         if name == 'run':
