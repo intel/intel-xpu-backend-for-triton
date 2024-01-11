@@ -249,10 +249,10 @@ class SpirvUtils(object):
            if (code != ZE_RESULT_SUCCESS)
            {
               const char* prefix = "Triton Error [ZE]: ";
-              const char* str = std::to_string(code).c_str();
+              std::string str = std::to_string(code);
               char err[1024] = {0};
               strcat(err, prefix);
-              strcat(err, str);
+              strcat(err, str.c_str());
               PyErr_SetString(PyExc_RuntimeError, err);
            }
         }

@@ -19,6 +19,7 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getUniqueContigPerThread;
+using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -106,6 +107,12 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   auto dstTy = op.getResult().getType().cast<RankedTensorType>();
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
+
+  if (srcLayout.isa<MfmaEncodingAttr>() &&
+      srcLayout.dyn_cast<MfmaEncodingAttr>().getIsTransposed() &&
+      dstLayout.isa<DotOperandEncodingAttr>())
+    if (isMfmaToDotShortcut(srcTy, dstTy))
+      return {};
 
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
   unsigned srcContigPerThread =
@@ -404,7 +411,7 @@ private:
   /// allocated, but is used to store intermediate results.
   void resolveScratchBufferLiveness(
       const DenseMap<Operation *, size_t> &operationId) {
-    // Analyze liveness of scratch buffers and vritual buffers.
+    // Analyze liveness of scratch buffers and virtual buffers.
     auto processScratchMemory = [&](const auto &container) {
       for (auto opScratchIter : container) {
         // Any scratch memory's live range is the current operation's live

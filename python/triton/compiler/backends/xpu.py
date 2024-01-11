@@ -71,6 +71,10 @@ class XPUBackend(BaseBackend):
         return XPUOptions(**args)
 
     @staticmethod
+    def load_dialects(ctx):
+        nvidia.load_dialects(ctx)
+
+    @staticmethod
     def make_ttir(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -176,7 +180,7 @@ class XPUBackend(BaseBackend):
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         context = llvm.context()
-        llvm_mod = llvm.to_module(mod, context, "LLVMModule")
+        llvm_mod = llvm.to_module(mod, context)
         llvm.set_spv_target_triple(llvm_mod)
         if options.extern_libs:
             for name, path in options.extern_libs:

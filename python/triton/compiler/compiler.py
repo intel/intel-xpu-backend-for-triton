@@ -114,8 +114,8 @@ class ASTSource:
         key = f"{self.fn.cache_key}-{self.attrs.hash()}-{self.signature.values()}-{self.constants}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options):
-        return ast_to_ttir(self.fn, self, options=options)
+    def make_ir(self, options, context):
+        return ast_to_ttir(self.fn, self, context=context, options=options)
 
     def metadata(self):
         # TODO: remove once TMA support is cleaned up
@@ -141,8 +141,7 @@ class IRSource:
     def hash(self):
         return hashlib.md5(self.src.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options):
-        context = ir.context()
+    def make_ir(self, options, context):
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
         return module
@@ -189,7 +188,10 @@ def compile(src, target=None, options=None):
     stages = dict()
     backend.add_stages(stages, options)
     first_stage = list(stages.keys()).index(src.ext)
-    module = src.make_ir(options)
+    context = ir.context()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
+    module = src.make_ir(options, context)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         metadata_group[f"{src.name}.{ext}"] = fn_cache_manager.put(next_module, f"{src.name}.{ext}")
