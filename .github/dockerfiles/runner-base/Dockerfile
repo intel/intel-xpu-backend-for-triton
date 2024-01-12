@@ -8,20 +8,15 @@ USER root
 
 RUN set -ex; \
     export DEBIAN_FRONTEND=noninteractive; \
-    echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/graphics/ubuntu jammy max' > /etc/apt/sources.list.d/intel-graphics.list; \
-    curl -s https://repositories.intel.com/graphics/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg; \
+    echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy unified' > /etc/apt/sources.list.d/intel-gpu-jammy.list; \
+    curl -s https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg; \
     apt-get update -y; \
     apt-get install -y --no-install-recommends --fix-missing \
       intel-opencl-icd \
       clinfo \
-    ; \
-    echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/intel-oneapi.list; \
-    curl -s https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor --output /usr/share/keyrings/oneapi-archive-keyring.gpg; \
-    apt-get update -y; \
-    apt-get install -y --no-install-recommends --fix-missing \
-      intel-level-zero-gpu=1.3.27191.42-775~22.04 \
-      level-zero=1.14.0-744~22.04 \
-      level-zero-dev=1.14.0-744~22.04 \
+      intel-level-zero-gpu \
+      level-zero \
+      level-zero-dev \
     ; \
     apt-get install -y --no-install-recommends --fix-missing \
       build-essential \
