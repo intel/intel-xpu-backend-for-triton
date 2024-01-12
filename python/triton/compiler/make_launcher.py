@@ -295,7 +295,7 @@ def generate_launcher(constants, signature, ids):
       }}
   }}
 
-  static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr, {arg_decls}) {{
+  static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
     //std::cout<<"sycl_kernel_launch entry"<<std::endl;
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
     //std::cout<<"Kernel name :"<<kernel_name<<std::endl;
@@ -388,7 +388,7 @@ def generate_launcher(constants, signature, ids):
 
       auto threads_per_warp = 32;
       //std::cout<<"_launch : going to call sycl_kernel_launch"<<std::endl;
-      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel, {', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
+      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
 /*
       // raise exception asap
       // {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
