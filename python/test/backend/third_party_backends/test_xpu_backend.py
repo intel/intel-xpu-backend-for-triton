@@ -1,8 +1,4 @@
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
-import triton
-import triton.language as tl
 
 
 def test_xpu_backend(cmdopt):
@@ -14,6 +10,9 @@ def test_xpu_backend(cmdopt):
             has_ipex = True if hasattr(torch, "xpu") else False
         except Exception:
             has_ipex = False
+
+        import triton
+        import triton.language as tl
 
         @triton.jit()
         def kernel(x_ptr, y_ptr, out_ptr):
