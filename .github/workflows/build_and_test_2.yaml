@@ -5,6 +5,9 @@ on:
   pull_request:
     branches:
       - llvm-target
+  push:
+    branches:
+      - llvm-target
 
 env:
   BASE: /home/runner
