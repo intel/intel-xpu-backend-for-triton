@@ -4,6 +4,9 @@ import torch
 import triton
 import triton.language as tl
 
+# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
+torch.xpu.enable_sync_mode()
+
 
 def test_normalization_with_remat():
 
@@ -47,12 +50,12 @@ def test_normalization_with_remat():
 
     torch.manual_seed(123)
 
-    buf14 = torch.rand(8, 64, 64, 64, device="cuda")
-    buf16 = torch.rand(8, 1, 64, device="cuda")
-    arg114_1 = torch.rand(64, device="cuda")
-    arg115_1 = torch.rand(64, device="cuda")
-    arg8_1 = torch.rand(64, device="cuda")
-    arg9_1 = torch.rand(64, device="cuda")
+    buf14 = torch.rand(8, 64, 64, 64, device="xpu")
+    buf16 = torch.rand(8, 1, 64, device="xpu")
+    arg114_1 = torch.rand(64, device="xpu")
+    arg115_1 = torch.rand(64, device="xpu")
+    arg8_1 = torch.rand(64, device="xpu")
+    arg9_1 = torch.rand(64, device="xpu")
     triton_[(512, )](buf14, buf16, arg114_1, arg115_1, arg8_1, arg9_1, 512, 4096, 1, 2048)
     torch.testing.assert_close(buf16.mean().item(), buf14.mean().item(), atol=1e-7, rtol=0)
 
@@ -146,7 +149,7 @@ def test_avg_pool_bw():
         tmp76 = tl.where(tmp74, tmp75, tmp71)
         tl.store(out_ptr0 + (x5 + tl.zeros([XBLOCK], tl.int32)), tmp76, None)
 
-    inp = torch.ones(8, 2048, 8, 8, device="cuda", dtype=torch.half)
+    inp = torch.ones(8, 2048, 8, 8, device="xpu", dtype=torch.half)
     out = torch.ones_like(inp) * 3
     numel = inp.numel()
     triton_[(numel // 1024, )](inp, out, 1024)
@@ -172,8 +175,8 @@ def test_scan2d_broadcast(RBLOCK, num_warps):
         tl.store(out_ptr + xindex * RBLOCK + rindex, scan)
 
     XBLOCK = 4
-    input = torch.randint(0, 10, (1, RBLOCK), dtype=torch.int64, device='cuda')
-    output = torch.empty((XBLOCK, RBLOCK), dtype=torch.int64, device='cuda')
+    input = torch.randint(0, 10, (1, RBLOCK), dtype=torch.int64, device='xpu')
+    output = torch.empty((XBLOCK, RBLOCK), dtype=torch.int64, device='xpu')
     fn[(1, )](input, output, XBLOCK, RBLOCK, num_warps=num_warps)
     ref = input.cumsum(1).broadcast_to((XBLOCK, RBLOCK))
     torch.testing.assert_close(output, ref)
@@ -192,7 +195,7 @@ def test_scan2d_for():
             tl.store(out_ptr0 + rindex, tmp6, rmask)
 
     RBLOCK = 8
-    out0 = torch.empty(RBLOCK, device="cuda", dtype=torch.int64)
+    out0 = torch.empty(RBLOCK, device="xpu", dtype=torch.int64)
     fn[(1, )](out0, RBLOCK, RBLOCK)
-    ref = torch.arange(RBLOCK, device="cuda", dtype=torch.int64) + 1
+    ref = torch.arange(RBLOCK, device="xpu", dtype=torch.int64) + 1
     torch.testing.assert_close(out0, ref)

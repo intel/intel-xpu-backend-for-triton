@@ -161,6 +161,23 @@ jobs:
           python3 assert_helper.py device_assert
           python3 print_helper.py device_print float 1> /dev/null
 
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Run interpreter tests
+        env:
+          # TRITON_INTERPRET: "1"
+          CUA_VISIBLE_DEVICES: ""
+        run: |
+          cd python/test/unit
+          python3 -m pytest -vs operators/test_flash_attention.py
+
+      - name: Run partial operators tests
+        run: |
+          cd python/test/unit
+          python3 -m pytest -n auto --verbose operators
+
       - name: Run XPU python tests
         run: |
           cd python/test/backend/third_party_backends
