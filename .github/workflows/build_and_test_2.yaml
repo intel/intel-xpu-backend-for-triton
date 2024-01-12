@@ -57,7 +57,7 @@ jobs:
           # If first run of yapf worked and made changes reset the tree to the original state
           git reset --hard
 
-          python3 -m pre_commit run --all-files --verbose
+          python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
 
       - name: Save pip cache
         if: ${{ hashFiles('.pip-cache') == '' }}
