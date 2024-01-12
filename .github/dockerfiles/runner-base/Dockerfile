@@ -20,8 +20,8 @@ RUN set -ex; \
     apt-get update -y; \
     apt-get install -y --no-install-recommends --fix-missing \
       intel-level-zero-gpu=1.3.27191.42-775~22.04 \
-      level-zero \
-      level-zero-dev \
+      level-zero=1.14.0-744~22.04 \
+      level-zero-dev=1.14.0-744~22.04 \
     ; \
     apt-get install -y --no-install-recommends --fix-missing \
       build-essential \
