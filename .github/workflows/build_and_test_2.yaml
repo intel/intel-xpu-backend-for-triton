@@ -65,7 +65,8 @@ jobs:
           TMPDIR=/cache/${{ github.run_id }}-$RANDOM
           mkdir $TMPDIR
           cp -r $HOME/.cache/pip/* $TMPDIR/
-          mv $TMPDIR $PIP_CACHE
+          # ignore error if other job created a cache with the same key already
+          mv $TMPDIR $PIP_CACHE || true
 
   integration-tests:
     name: Integration tests
@@ -73,6 +74,11 @@ jobs:
       - glados
       - spr
       - pvc
+    strategy:
+      matrix:
+        python:
+          - "3.9"
+          - "3.10"
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -85,7 +91,7 @@ jobs:
           # Increase this value to reset cache
           CACHE_NUMBER: 1
         run: |
-          PIP_CACHE_KEY="pip-3.9-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}"
+          PIP_CACHE_KEY="pip-${{ matrix.python }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}"
           PIP_CACHE="/cache/$PIP_CACHE_KEY"
           echo "PIP_CACHE=$PIP_CACHE" >> "${GITHUB_ENV}"
           if [[ -d $PIP_CACHE ]]; then
@@ -97,10 +103,10 @@ jobs:
             echo "Python cache not found for key $PIP_CACHE_KEY"
           fi
 
-      - name: Install Python 3.9
+      - name: Install Python ${{ matrix.python }}
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: ${{ matrix.python }}
 
       - name: Check if packages cache exists
         env:
@@ -132,7 +138,8 @@ jobs:
           TMPDIR=/cache/${{ github.run_id }}-$RANDOM
           mkdir $TMPDIR
           cp -r $HOME/packages/* $TMPDIR/
-          mv $TMPDIR $PACKAGES_CACHE
+          # ignore error if other job created a cache with the same key already
+          mv $TMPDIR $PACKAGES_CACHE || true
 
       - name: Build Triton
         run: |
@@ -177,4 +184,5 @@ jobs:
           TMPDIR=/cache/${{ github.run_id }}-$RANDOM
           mkdir $TMPDIR
           cp -r $HOME/.cache/pip/* $TMPDIR/
-          mv $TMPDIR $PIP_CACHE
+          # ignore error if other job created a cache with the same key already
+          mv $TMPDIR $PIP_CACHE || true
