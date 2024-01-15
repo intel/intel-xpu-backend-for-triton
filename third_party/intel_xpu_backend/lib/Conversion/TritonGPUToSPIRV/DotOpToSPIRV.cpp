@@ -5,7 +5,6 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::MmaEncodingAttr;
 
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToSPIRVTypeConverter *typeConverter,

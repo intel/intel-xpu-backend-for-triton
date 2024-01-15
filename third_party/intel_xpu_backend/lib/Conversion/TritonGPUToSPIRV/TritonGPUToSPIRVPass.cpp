@@ -45,7 +45,7 @@ using ::mlir::triton::gpu::getElemsPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
-using ::mlir::triton::gpu::MmaEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
@@ -352,9 +352,8 @@ class ConvertTritonGPUToSPIRV
     : public ConvertTritonGPUToSPIRVBase<ConvertTritonGPUToSPIRV> {
 
 public:
-  explicit ConvertTritonGPUToSPIRV(
-      std::map<std::string, int> computeCapability) {
-    this->computeCapability = std::move(computeCapability);
+  explicit ConvertTritonGPUToSPIRV(bool supportBFConvOp) {
+    this->supportBFConvOp = supportBFConvOp;
   }
 
   void runOnOperation() override {
@@ -472,7 +471,7 @@ public:
     populateElementwiseOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
                                          numWarps, axisInfoAnalysis,
                                          &allocation, nullptr,
-                                         /*benefit=*/10, computeCapability);
+                                         /*benefit=*/10, supportBFConvOp);
     // LoadStoreOp
     populateLoadStoreOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
                                        numWarps, axisInfoAnalysis, allocation,
@@ -489,7 +488,7 @@ public:
     populateViewOpToSPIRVPatterns(spirvTypeConverter, context, patterns,
                                   numWarps, axisInfoAnalysis, &allocation,
                                   nullptr,
-                                  /*benefit=*/10, computeCapability);
+                                  /*benefit=*/10, supportBFConvOp);
 
     // Add arith/math's patterns to help convert scalar expression to SPIRV.
     mlir::arith::populateArithToSPIRVPatterns(spirvTypeConverter, patterns);
@@ -551,7 +550,7 @@ private:
       auto srcType = cvtOp.getOperand().getType().cast<RankedTensorType>();
       auto dstType = cvtOp.getType().cast<RankedTensorType>();
       auto srcMma =
-          srcType.getEncoding().dyn_cast<triton::gpu::MmaEncodingAttr>();
+          srcType.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (srcMma && dstDotOp && !isMmaToDotShortcut(srcType, dstType)) {
@@ -709,8 +708,10 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToSPIRVPass(
-    std::map<std::string, int> computeCapability) {
-  return std::make_unique<::ConvertTritonGPUToSPIRV>(computeCapability);
+    const std::map<std::string, std::any> &computeCapability) {
+  auto supportBFConvOp =
+      mlir::spirv::checkOpSupported(computeCapability, "INTELConvertFToBF16Op");
+  return std::make_unique<::ConvertTritonGPUToSPIRV>(supportBFConvOp);
 }
 
 } // namespace triton

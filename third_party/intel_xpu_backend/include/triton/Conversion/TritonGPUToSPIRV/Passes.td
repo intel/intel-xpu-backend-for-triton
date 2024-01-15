@@ -21,9 +21,9 @@ def ConvertTritonGPUToSPIRV : Pass<"convert-triton-gpu-to-spriv", "mlir::ModuleO
                             "mlir::spirv::SPIRVDialect"];
 
     let options = [
-        Option<"computeCapability", "compute-capability",
-                "std::map<std::string, int>", /*default*/"std::map<std::string, int>{}",
-                "device compute capability">
+        Option<"supportBFConvOp", "support-bf16-convert-op",
+                "bool", /*default*/"false",
+                "support bf16 convert op">
     ];
 }
 

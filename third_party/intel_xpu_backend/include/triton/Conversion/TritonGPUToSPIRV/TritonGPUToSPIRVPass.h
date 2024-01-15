@@ -7,6 +7,7 @@
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include <any>
 #include <memory>
 
 namespace mlir {
@@ -17,7 +18,7 @@ template <typename T> class OperationPass;
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToSPIRVPass(
-    std::map<std::string, int> computeCapability = {});
+    const std::map<std::string, std::any> &computeCapability = {});
 
 } // namespace triton
 

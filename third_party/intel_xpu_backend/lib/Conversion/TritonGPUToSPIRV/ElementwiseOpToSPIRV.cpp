@@ -100,7 +100,7 @@ inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
     return inValues;
   auto encoding =
       tensorTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-  if (!(encoding && encoding.getParent().isa<MmaEncodingAttr>()))
+  if (!(encoding && encoding.getParent().isa<triton::gpu::MmaEncodingTrait>()))
     return inValues;
   SmallVector<Value> outValues;
   for (auto &v : inValues) {
@@ -124,7 +124,7 @@ inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
     return inValues;
   auto encoding =
       tensorTy.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
-  if (!(encoding && encoding.getParent().isa<MmaEncodingAttr>()))
+  if (!(encoding && encoding.getParent().isa<triton::gpu::MmaEncodingTrait>()))
     return inValues;
   SmallVector<Value> outValues;
   auto eltType = typeConverter->convertType(tensorTy.getElementType());
@@ -985,8 +985,7 @@ void populateElementwiseOpToSPIRVPatterns(
     TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
     RewritePatternSet &patterns, int numWarps,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation *allocation,
-    Value smem, PatternBenefit benefit,
-    std::map<std::string, int> &computeCapability) {
+    Value smem, PatternBenefit benefit, bool supportBFConvOp) {
 
 #define POPULATE_TERNARY_OP(SRC_OP, DST_OP)                                    \
   patterns.add<ElementwiseOpSPIRVConversion<SRC_OP, DST_OP>>(                  \
@@ -1055,39 +1054,23 @@ void populateElementwiseOpToSPIRVPatterns(
   patterns.add<BitcastOpSPIRVConversion>(typeConverter, context, benefit);
 
   patterns.add<AbsFOpConversion>(typeConverter, context, benefit);
-  patterns.add<FDivOpSPIRVConversion>(
-      typeConverter, context, benefit,
-      mlir::spirv::checkOpSupported(computeCapability,
-                                    "INTELConvertFToBF16Op"));
-  patterns.add<FSubOpSPIRVConversion>(
-      typeConverter, context, benefit,
-      mlir::spirv::checkOpSupported(computeCapability,
-                                    "INTELConvertFToBF16Op"));
-  patterns.add<FAddOpSPIRVConversion>(
-      typeConverter, context, benefit,
-      mlir::spirv::checkOpSupported(computeCapability,
-                                    "INTELConvertFToBF16Op"));
-  patterns.add<FMulOpSPIRVConversion>(
-      typeConverter, context, benefit,
-      mlir::spirv::checkOpSupported(computeCapability,
-                                    "INTELConvertFToBF16Op"));
+  patterns.add<FDivOpSPIRVConversion>(typeConverter, context, benefit,
+                                      supportBFConvOp);
+  patterns.add<FSubOpSPIRVConversion>(typeConverter, context, benefit,
+                                      supportBFConvOp);
+  patterns.add<FAddOpSPIRVConversion>(typeConverter, context, benefit,
+                                      supportBFConvOp);
+  patterns.add<FMulOpSPIRVConversion>(typeConverter, context, benefit,
+                                      supportBFConvOp);
 
-  patterns.add<ExtFOpSPIRVConversion>(
-      typeConverter, context, benefit,
-      mlir::spirv::checkOpSupported(computeCapability,
-                                    "INTELConvertFToBF16Op"));
-  patterns.add<TruncFOpSPIRVConversion>(
-      typeConverter, context, benefit,
-      mlir::spirv::checkOpSupported(computeCapability,
-                                    "INTELConvertFToBF16Op"));
-  patterns.add<FPToSIOpSPIRVConversion>(
-      typeConverter, context, benefit,
-      mlir::spirv::checkOpSupported(computeCapability,
-                                    "INTELConvertFToBF16Op"));
-  patterns.add<SIToFPOpSPIRVConversion>(
-      typeConverter, context, benefit,
-      mlir::spirv::checkOpSupported(computeCapability,
-                                    "INTELConvertFToBF16Op"));
+  patterns.add<ExtFOpSPIRVConversion>(typeConverter, context, benefit,
+                                      supportBFConvOp);
+  patterns.add<TruncFOpSPIRVConversion>(typeConverter, context, benefit,
+                                        supportBFConvOp);
+  patterns.add<FPToSIOpSPIRVConversion>(typeConverter, context, benefit,
+                                        supportBFConvOp);
+  patterns.add<SIToFPOpSPIRVConversion>(typeConverter, context, benefit,
+                                        supportBFConvOp);
 
   patterns.add<FpToFpOpSPIRVConversion>(typeConverter, context, benefit);
 

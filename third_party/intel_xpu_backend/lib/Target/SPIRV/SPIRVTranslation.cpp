@@ -1,4 +1,5 @@
 #include "mlir/Conversion/Passes.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
@@ -21,6 +22,8 @@
 
 #include <dlfcn.h>
 #include <filesystem>
+
+#include "triton/Target/SPIRV/SPIRVTranslation.h"
 
 namespace mlir {
 namespace triton {
@@ -161,8 +164,7 @@ static bool optimizeSPIRVModule(std::vector<uint32_t> &binary) {
   auto runOptimizer = [&](const std::vector<std::string> &flags,
                           std::vector<uint32_t> &binary) {
     if (!optimizer.RegisterPassesFromFlags(flags)) {
-      llvm::errs() << " spirv opt error: pass register failed"
-                   << "\n";
+      llvm::errs() << " spirv opt error: pass register failed" << "\n";
       return false;
     }
 
@@ -419,9 +421,9 @@ static LogicalResult translateTritonSPIRVToSPIRVIR(ModuleOp module,
   return mlir::success();
 }
 
-std::string
-translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
-                            std::map<std::string, int> computeCapability) {
+std::string translateTritonGPUToSPIRVIR(
+    mlir::ModuleOp module,
+    const std::map<std::string, std::any> &computeCapability) {
   mlir::PassManager pm(module->getContext());
   mlir::registerPassManagerCLOptions();
   if (failed(applyPassManagerCLOptions(pm))) {
@@ -431,7 +433,8 @@ translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
   auto printingFlags = mlir::OpPrintingFlags();
   printingFlags.elideLargeElementsAttrs(16);
   pm.enableIRPrinting(
-      /*shouldPrintBeforePass=*/nullptr,
+      /*shouldPrintBeforePass=*/
+      nullptr,
       /*shouldPrintAfterPass=*/
       [](mlir::Pass *pass, mlir::Operation *) {
         return ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
@@ -441,7 +444,7 @@ translateTritonGPUToSPIRVIR(mlir::ModuleOp module,
       /*printAfterOnlyOnFailure*/ false, llvm::dbgs(), printingFlags);
 
   pm.addPass(mlir::createConvertSCFToCFPass());
-  pm.addPass(createConvertTritonGPUToSPIRVPass(std::move(computeCapability)));
+  pm.addPass(createConvertTritonGPUToSPIRVPass(computeCapability));
   //  pm.addPass(mlir::arith::createConvertArithToSPIRVPass());
   // Canonicalize to eliminate the remaining UnrealizedConversionCastOp
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());

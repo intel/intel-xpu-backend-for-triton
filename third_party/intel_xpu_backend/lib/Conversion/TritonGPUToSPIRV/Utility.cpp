@@ -53,13 +53,11 @@ Value createSPIRVIntegerConstant(OpBuilder &builder, Location loc, short width,
                                            builder.getIntegerAttr(ty, value));
 }
 
-bool checkOpSupported(std::map<std::string, int> computeCapability,
-                      std::string dtype) {
-  // TODO: For now, we define the computeCapability with {dtype, int}.
-  // If it is >= 1, then the special op is supported.
-  if (computeCapability.find(dtype) != computeCapability.end() &&
-      computeCapability.at(dtype) >= 1) {
-    return true;
+bool checkOpSupported(const std::map<std::string, std::any> &computeCapability,
+                      std::string key) {
+  auto option = computeCapability.find(key);
+  if (option != computeCapability.end()) {
+    return std::any_cast<bool>(option->second);
   }
   return false;
 }

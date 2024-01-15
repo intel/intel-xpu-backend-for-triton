@@ -4,6 +4,7 @@
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
+#include <any>
 
 // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
 // Operators
@@ -296,7 +297,7 @@ struct SharedMemoryObject {
   }
 };
 // Check specific <string, int> pair of function is supported for this device.
-bool checkOpSupported(std::map<std::string, int> computeCapability,
+bool checkOpSupported(const std::map<std::string, std::any> &computeCapability,
                       std::string dtype);
 
 SharedMemoryObject

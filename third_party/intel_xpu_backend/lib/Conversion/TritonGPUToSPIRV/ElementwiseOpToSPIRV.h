@@ -10,7 +10,6 @@ void populateElementwiseOpToSPIRVPatterns(
     TritonGPUToSPIRVTypeConverter &typeConverter, mlir::MLIRContext *context,
     RewritePatternSet &patterns, int numWarps,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation *allocation,
-    Value smem, PatternBenefit benefit,
-    std::map<std::string, int> &computeCapability);
+    Value smem, PatternBenefit benefit, bool supportBFConvOp);
 
 #endif

@@ -252,15 +252,12 @@ void populateViewOpToSPIRVPatterns(
     mlir::RewritePatternSet &patterns, int numWarps,
     mlir::ModuleAxisInfoAnalysis &axisInfoAnalysis,
     mlir::ModuleAllocation *allocation, mlir::Value smem,
-    mlir::PatternBenefit benefit,
-    std::map<std::string, int> &computeCapability) {
+    mlir::PatternBenefit benefit, bool supportBFConvOp) {
   patterns.add<ReshapeOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<ExpandDimsOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<SplatOpSPIRVConversion>(typeConverter, context, benefit);
-  patterns.add<ArithConstantSplatOpSPIRVConversion>(
-      typeConverter, context, benefit,
-      mlir::spirv::checkOpSupported(computeCapability,
-                                    "INTELConvertFToBF16Op"));
+  patterns.add<ArithConstantSplatOpSPIRVConversion>(typeConverter, context,
+                                                    benefit, supportBFConvOp);
   patterns.add<CatOpSPIRVConversion>(typeConverter, context, benefit);
   patterns.add<TransOpSPIRVConversion>(typeConverter, context, benefit);
 }

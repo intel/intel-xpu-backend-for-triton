@@ -5,11 +5,12 @@ import re
 import sysconfig
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import setuptools
 import torch
 import triton._C.libintel_xpu_backend_for_triton.triton as _triton  # noqa:E402
-from triton._C.libtriton.triton import ir as triton_ir
+from dataclasses import asdict, dataclass
 from triton.common.backend import (TRITON_PATH, TRITON_VERSION,  # noqa:E402
                                    BaseBackend, register_backend)
 from triton.compiler.make_launcher import make_so_cache_key  # noqa:E402
@@ -44,69 +45,11 @@ def version_key():
     return '-'.join(TRITON_VERSION) + '-' + '-'.join(contents)
 
 
-def is_ws_supported(module):
-    # Override triton's `is_ws_supported` function, so that
-    # the module id is kept the same within the overall context.
-    if isinstance(module, _triton.module):
-        return False
-    else:
-        return triton_ir.is_ws_supported
-
-
-triton_ir.is_ws_supported = is_ws_supported
-
-
 def _add_external_libs(mod, libs):
     for name, path in libs.items():
         if len(name) == 0 or len(path) == 0:
             return
     _triton.add_external_libs(mod, list(libs.keys()), list(libs.values()))
-
-
-def ttir_to_ttgir(mod, num_warps):
-    context = _triton.context()
-    mod = _triton.parse_mlir_module(str(mod), context)
-    mod.context = context
-    pm = _triton.pass_manager(mod.context)
-    pm.enable_debug()
-    pm.add_convert_triton_to_tritongpu_pass(num_warps)
-    pm.run(mod)
-    return mod
-
-
-def optimize_ttgir(mod, num_stages, arch):
-    pm = _triton.pass_manager(mod.context)
-    pm.enable_debug()
-    pm.add_tritongpu_coalesce_pass()
-    pm.add_tritongpu_remove_layout_conversions_pass()
-    # pm.add_triton_intel_gpu_accelerate_matmul_pass(arch)
-    pm.add_tritongpu_remove_layout_conversions_pass()
-    pm.add_tritongpu_optimize_dot_operands_pass()
-    pm.add_tritongpu_pipeline_pass(num_stages)
-    pm.add_tritongpu_prefetch_pass()
-    pm.add_tritongpu_optimize_dot_operands_pass()
-    pm.add_tritongpu_remove_layout_conversions_pass()
-    pm.add_tritongpu_decompose_conversions_pass()
-    pm.add_tritongpu_reorder_instructions_pass()
-    pm.add_cse_pass()
-    pm.add_symbol_dce_pass()
-    pm.run(mod)
-    return mod
-
-
-# SPIRV translation
-
-def ttgir_to_spirv(mod, extern_libs, arch):
-    if extern_libs:
-        _add_external_libs(mod, extern_libs)
-    spirv_code, share_memory_size = _triton.translate_triton_gpu_to_spirv(str(mod), arch)  # noqa: E501
-    mod.share_memory_size = share_memory_size
-    return spirv_code
-
-
-def spirv_to_spvbin(spirv: str, compute_capability: int):
-    # return _triton.compile_spirv_to_spvbin(spirv, compute_capability)
-    return _triton.compile_spirv_to_spvbin(spirv, 80)
 
 
 def spirv_get_kernel_name(spirv: str) -> str:
@@ -150,7 +93,7 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def generate_launcher(constants, signature):
+def generate_launcher(signature, constants, ids):
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())  # noqa: E501
 
     def _extracted_type_pybind11(ty):
@@ -166,6 +109,12 @@ def generate_launcher(constants, signature):
             'f32': 'float',
             'fp64': 'double',
         }[ty]
+
+    folded_without_constexprs = [c for c in ids['ids_of_folded_args'] if c not in ids['ids_of_const_exprs']]
+    params = [
+        i for i in signature.keys()
+        if (i not in constants and i not in folded_without_constexprs)
+    ]
 
     # Ipex available src
     return f"""
@@ -241,12 +190,12 @@ static void set_scalar_arg(
     }}
 }}
 
-static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr{', ' if signature.items() else ''} {arg_decls}) {{
+static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
 #ifdef TRITON_XPU_PROFILE
 RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
 #endif
-  void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
+  void *params[] = {{ {', '.join(f"&arg{i}" for i in params)} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
   uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
 
@@ -428,8 +377,67 @@ class SYCLDriver(DriverBase):
 
     def __init__(self):
         self.utils = SYCLUtils()
-        # self.backend = self.SYCL
         self.backend = "SYCL"
+        self.binary_ext = "spvbin"
+        self.get_current_device = torch.xpu.current_device
+        self.set_current_device = torch.xpu.set_device
+        self.get_current_stream = lambda idx: torch.xpu.current_stream(idx).sycl_queue
+        self.get_device_capability = lambda idx: self.utils.get_device_properties(torch.xpu.device(idx).sycl_device)  # noqa: E501
+        self.get_device_properties = self.get_device_capability
+        self.device_id_mapping = dict()
+
+    def load_binary(self, name, kernel, shared, device):
+        return self.utils.load_binary(
+            name, kernel, shared, torch.xpu.device(device).sycl_device)
+
+    def get_current_target(self):
+        device = self.get_current_device()
+        capability = self.get_device_capability(device)
+        return ("xpu", capability)
+
+    def assemble_tensormap_to_arg(self, tensormaps_info, args):
+        args_with_tma = list(args)
+        return args_with_tma
+
+
+@dataclass
+class XPULinkerOptions:
+    libs: dict = None
+
+    def __post_init__(self):
+        if self.libs is not None:
+            self.libs = {k: v for k, v in self.libs.items() if v}
+
+
+@dataclass(frozen=True)
+class XPUOptions:
+    num_warps: int = 4
+    num_ctas: int = 1
+    num_stages: int = 3
+    # cluster_dims: tuple = (1, 1, 1)
+    spirv_version: int = None
+    dev_type: str = 'GPU'
+    dev_id: int = None
+    threads_per_warp: int = 16
+    enable_warp_specialization: bool = False
+    enable_persistent: bool = False
+    optimize_epilogue: bool = False
+    enable_fp_fusion: bool = True
+    allow_fp8e4nv: bool = False
+    max_num_imprecise_acc_default: bool = None
+    extern_libs: dict = None
+    debug: bool = False
+
+    def __post_init__(self):
+        if isinstance(self.extern_libs, dict):
+            extern_libs = tuple([(k, v) for k, v in self.extern_libs.items() if v])
+            object.__setattr__(self, 'extern_libs', extern_libs)
+        assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
+            "num_warps must be a power of 2"
+
+    def hash(self):
+        key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
+        return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
 class XPUBackend(BaseBackend):
@@ -439,23 +447,118 @@ class XPUBackend(BaseBackend):
         super(XPUBackend, self).__init__(device_type)
         self.driver = SYCLDriver()
 
-    def add_stages(self, arch, extern_libs, stages):
-        filter_in_stages = ["ast", "ttir"]
-        filter_out_stages = []
-        for key, _ in stages.items():
-            if key not in filter_in_stages:
-                filter_out_stages.append(key)
-        for filter_out_key in filter_out_stages:
-            stages.pop(filter_out_key)
+    def parse_options(self, _opts, target) -> Any:
+        args = {k: _opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in _opts}
+        assert isinstance(target, tuple), "the target must be tuple of (dev_type, capability)"
+        capability = target[1]
+        threads_per_warp = args['threads_per_warp'] if 'threads_per_warp' in args else 16
+        sub_group_sizes = capability['sub_group_sizes']
+        assert threads_per_warp in sub_group_sizes, "Device '{}' does not support threads_per_warp {}".format(
+            capability['dev_name'],
+            threads_per_warp)  # noqa: E501
 
+        max_work_group_size = capability['max_work_group_size']
+        num_warps = args['num_warps'] if 'num_warps' in args else max_work_group_size // threads_per_warp
+
+        max_num_sub_groups = capability['max_num_sub_groups']
+        assert num_warps <= max_num_sub_groups, \
+            "invalid setting. max_work_group_size {}, max_num_subgroup {}, subgroup_sizes {}".format(  # noqa: E501
+                max_work_group_size,
+                max_num_sub_groups,
+                threads_per_warp)
+
+        args['num_warps'] = num_warps
+        args['threads_per_warp'] = threads_per_warp
+        args['dev_type'] = 'GPU'
+        # args['dev_id'] = capability['dev_id']
+        args['dev_id'] = self.get_device_properties(self.get_current_device())['dev_id']
+        return XPUOptions(**args)
+
+    def parse_linker_options(self, opts, capability):
+        return XPULinkerOptions(**opts)
+
+    @staticmethod
+    def make_ttir(mod, metadata, opt):
         context = _triton.context()
+        mod = _triton.parse_mlir_module(str(mod), context)
+        mod.context = context
+        pm = _triton.pass_manager(mod.context)
+        pm.enable_debug()
+        pm.add_inliner_pass()
+        pm.add_triton_combine_pass()
+        pm.add_canonicalizer_pass()
+        pm.add_reorder_broadcast_pass()
+        pm.add_cse_pass()
+        pm.add_licm_pass()
+        pm.add_symbol_dce_pass()
+        pm.run(mod)
+        return mod
 
-        stages["ttgir"] = (lambda path: _triton.parse_mlir_module(Path(path).read_text(), context),
-                           lambda src: optimize_ttgir(ttir_to_ttgir(src, arch["num_warps"]), arch["num_stages"], arch))
-        stages["spirv"] = (lambda path: Path(path).read_text(),
-                           lambda src: ttgir_to_spirv(src, extern_libs, arch))
-        stages["spvbin"] = (lambda path: Path(path).read_bytes(),
-                            lambda src: spirv_to_spvbin(src, arch))
+    @staticmethod
+    def make_ttgir(mod, metadata, opt):
+        # TTIR -> TTGIR
+        pm = _triton.pass_manager(mod.context)
+        pm.enable_debug()
+        pm.add_convert_triton_to_tritongpu_pass(opt.num_warps, opt.threads_per_warp, opt.num_ctas, asdict(opt))
+        # optimize TTGIR
+        pm.add_tritongpu_coalesce_pass()
+        # TODO: add 2d block load/store optimize passes.
+        pm.add_tritongpu_rewrite_tensor_pointer_pass(asdict(opt))
+        pm.add_tritongpu_remove_layout_conversions_pass()
+        if opt.optimize_epilogue:
+            pm.add_tritongpu_optimize_epilogue_pass()
+        pm.add_tritongpu_optimize_dot_operands_pass()
+        pm.add_cse_pass()
+        pm.add_tritongpu_pipeline_pass(opt.num_stages, opt.num_warps, opt.num_ctas, asdict(opt))
+        # pm.add_tritongpu_materialize_load_store_pass(opt.num_warps, capability)
+        # if capability // 10 <= 8:
+        #     pm.add_tritongpu_prefetch_pass()
+        pm.add_tritongpu_optimize_dot_operands_pass()
+        pm.add_tritongpu_remove_layout_conversions_pass()
+        pm.add_tritongpu_decompose_conversions_pass()
+        # pm.add_tritongpu_ws_fixup_missing_attrs_pass()
+        pm.add_tritongpu_reorder_instructions_pass()
+        pm.add_cse_pass()
+        pm.add_symbol_dce_pass()
+        # if capability // 10 >= 9:
+        #     pm.add_tritongpu_fence_insertion_pass()
+        # pm.add_tritongpu_optimize_thread_locality_pass()
+        pm.add_canonicalizer_pass()
+        pm.run(mod)
+
+        return mod
+
+    @staticmethod
+    def make_llir(src, metadata, opt):
+        metadata["enable_warp_specialization"] = False
+        metadata["num_warps"] = _triton.get_num_warps(src)
+        # link libraries
+        if opt.extern_libs:
+            names = [lib[0] for lib in opt.extern_libs]
+            paths = [lib[1] for lib in opt.extern_libs]
+            _add_external_libs(src, names, paths)
+        # TritonGPU -> LLVM-IR
+        ret = _triton.translate_triton_gpu_to_spirv(src, asdict(opt))
+        metadata["shared"] = _triton.get_shared_memory_size(src)
+        metadata["threads_per_warp"] = _triton.get_threads_per_warp(src)
+        metadata["name"] = spirv_get_kernel_name(ret)
+        metadata["cluster_dims"] = (1, 1, 1)
+        return ret
+
+    @staticmethod
+    def make_spirv(src, metadata, opt):
+        return _triton.translate_llvmir_to_spirv(src, asdict(opt))
+
+    @staticmethod
+    def make_spvbin(src, metadata, opt):
+        metadata["name"] = spirv_get_kernel_name(src)
+        return _triton.compile_spirv_to_spvbin(src, asdict(opt))
+
+    def add_stages(self, stages, options):
+        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
+        stages["spvbin"] = lambda src, metadata: self.make_spvbin(src, metadata, options)
 
     def add_meta_info(self, ir, module, next_module, metadata, asm):
         if ir == "spirv":
@@ -513,8 +616,16 @@ class XPUBackend(BaseBackend):
         capability = {"num_warps": num_warps, "threads_per_warp": threads_per_warp, "num_stages": 2}  # noqa: E501
         return capability
 
-    def make_launcher_stub(self, name, signature, constants, ids):
+    def make_launcher_stub(self, src, metadata):
         # name of files that are cached
+        name = src.name
+        signature = src.signature
+        ids = {
+            "ids_of_tensormaps": metadata.get("ids_of_tensormaps", tuple()), "ids_of_folded_args":
+                metadata.get("ids_of_folded_args",
+                             tuple()), "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
+        }
+        constants = src.constants if hasattr(src, "constants") else dict()
         so_cache_key = make_so_cache_key(version_key(), signature, constants, ids)
         so_cache_manager = get_cache_manager(so_cache_key)
         so_name = f"{name}.so"
@@ -522,7 +633,7 @@ class XPUBackend(BaseBackend):
         cache_path = so_cache_manager.get_file(so_name)
         if cache_path is None:
             with tempfile.TemporaryDirectory() as tmpdir:
-                src = generate_launcher(constants, signature)
+                src = generate_launcher(signature, constants, ids)
                 src_path = os.path.join(tmpdir, "main.cpp")
                 with open(src_path, "w") as f:
                     f.write(src)
@@ -534,6 +645,10 @@ class XPUBackend(BaseBackend):
 
     def get_version_key(self):
         return version_key()
+
+    def hash(self):
+        # return f'{get_version_key()}-{self.capability}'
+        return f'{self.get_version_key()}'
 
 
 register_backend("xpu", XPUBackend)
