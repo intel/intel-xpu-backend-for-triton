@@ -2,7 +2,6 @@ import multiprocessing
 import os
 import shutil
 
-import pytest
 import torch
 
 import triton
@@ -38,10 +37,11 @@ def compile_fn(attrs, capability):
 
 
 def test_compile_in_subproc() -> None:
-    pytest.skip("FIXME: Port get_device_capability to XPU")
+    cc = 0
+    if torch.cuda.is_available():
+        major, minor = torch.cuda.get_device_capability(0)
+        cc = major * 10 + minor
 
-    major, minor = torch.cuda.get_device_capability(0)
-    cc = major * 10 + minor
     config = triton.compiler.AttrsDescriptor(tuple(range(4)), (), (), ())
 
     multiprocessing.set_start_method('fork')
@@ -65,11 +65,11 @@ def compile_fn_dot(attrs, capability):
 
 
 def test_compile_in_forked_subproc() -> None:
-    pytest.skip("FIXME: Port get_device_capability to XPU")
+    capability = 0
+    if torch.cuda.is_available():
+        major, minor = torch.cuda.get_device_capability(0)
+        capability = major * 10 + minor
 
-    reset_tmp_dir()
-    major, minor = torch.cuda.get_device_capability(0)
-    capability = major * 10 + minor
     config = triton.compiler.AttrsDescriptor(tuple(range(1)), (), (), ())
 
     assert multiprocessing.get_start_method() == 'fork'
@@ -77,3 +77,5 @@ def test_compile_in_forked_subproc() -> None:
     proc.start()
     proc.join()
     assert proc.exitcode == 0
+
+    reset_tmp_dir()
