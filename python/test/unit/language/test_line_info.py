@@ -6,7 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.common.backend import path_to_spirvdis
+from triton.backends.xpu.compiler import _path_to_binary
 
 
 @triton.jit
@@ -76,7 +76,7 @@ def kernel_dot_combine(x):
 
 
 def extract_file_lines(spv):
-    dis = path_to_spirvdis()
+    dis, _ = _path_to_binary("spirv-dis")
     fd, path = tempfile.mkstemp()
     with open(fd, 'wb') as spvbin:
         spvbin.write(spv)
@@ -132,7 +132,7 @@ func_types = ["single", "call", "call_noinline", "multi_files", "autotune"]
 @pytest.mark.parametrize("func", func_types)
 def test_line_info(func: str):
     try:
-        _ = path_to_spirvdis()
+        _, _ = _path_to_binary("spirv-dis")
     except BaseException:
         pytest.skip("spirv-dis is not available")
 
