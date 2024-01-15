@@ -915,12 +915,10 @@ private:
     Type elemType = tensorPromotedType.getElementType();
     return llvm::TypeSwitch<Type, Value>(elemType)
         .Case<FloatType>([&](auto) {
-          assert(isa<FloatType>(elemType) && "Expecting a floating point type");
           return builder.create<triton::FpToFpOp>(loc, tensorPromotedType,
                                                   operand);
         })
         .Case<IntegerType>([&](auto) {
-          assert(isa<IntegerType>(elemType) && "Expecting an integer type");
           unsigned tgtBitWidth = elemType.getIntOrFloatBitWidth(),
                    valBitWidth = operand.getType()
                                      .cast<RankedTensorType>()
