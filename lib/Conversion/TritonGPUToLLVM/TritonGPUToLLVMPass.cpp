@@ -390,12 +390,12 @@ public:
     switch (target) {
     case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
+      addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
       break;
     case Target::GENX:
       addLegalDialect<GENX::GENXDialect>();
       break;
     }
-    addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
@@ -904,14 +904,6 @@ private:
         asyncWaitOp.erase();
       }
     });
-  }
-
-  static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
-                              Type promotedType) {
-    Type tensorPromotedType =
-        operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
-                                                             promotedType);
-    return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
   }
 };
 

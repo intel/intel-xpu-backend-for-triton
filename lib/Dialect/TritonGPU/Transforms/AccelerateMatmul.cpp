@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include <memory>
 
@@ -337,10 +338,26 @@ public:
 
 static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                             Type promotedType) {
-  Type tensorPromotedType =
+  auto tensorPromotedType =
       operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
                                                            promotedType);
-  return builder.create<tt::FpToFpOp>(loc, tensorPromotedType, operand);
+  Type elemType = tensorPromotedType.getElementType();
+  return llvm::TypeSwitch<Type, Value>(elemType)
+      .Case<FloatType>([&](auto) {
+        return builder.create<tt::FpToFpOp>(loc, tensorPromotedType, operand);
+      })
+      .Case<IntegerType>([&](auto) {
+        unsigned tgtBitWidth = elemType.getIntOrFloatBitWidth(),
+                 valBitWidth = operand.getType()
+                                   .cast<RankedTensorType>()
+                                   .getElementTypeBitWidth();
+        Operation *castOp = (valBitWidth <= tgtBitWidth)
+                                ? builder.create<arith::ExtSIOp>(
+                                      loc, tensorPromotedType, operand)
+                                : builder.create<arith::TruncIOp>(
+                                      loc, tensorPromotedType, operand);
+        return castOp->getResult(0);
+      });
 }
 
 // promote operands of dot op if the existing combination is not natively
