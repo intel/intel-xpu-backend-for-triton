@@ -40,7 +40,6 @@
 #include "ViewOpToLLVM.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir {
 namespace triton {
@@ -905,31 +904,6 @@ private:
         asyncWaitOp.erase();
       }
     });
-  }
-
-  static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
-                              Type promotedType) {
-    auto tensorPromotedType =
-        operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
-                                                             promotedType);
-    Type elemType = tensorPromotedType.getElementType();
-    return llvm::TypeSwitch<Type, Value>(elemType)
-        .Case<FloatType>([&](auto) {
-          return builder.create<triton::FpToFpOp>(loc, tensorPromotedType,
-                                                  operand);
-        })
-        .Case<IntegerType>([&](auto) {
-          unsigned tgtBitWidth = elemType.getIntOrFloatBitWidth(),
-                   valBitWidth = operand.getType()
-                                     .cast<RankedTensorType>()
-                                     .getElementTypeBitWidth();
-          Operation *castOp = (valBitWidth <= tgtBitWidth)
-                                  ? builder.create<arith::ExtSIOp>(
-                                        loc, tensorPromotedType, operand)
-                                  : builder.create<arith::TruncIOp>(
-                                        loc, tensorPromotedType, operand);
-          return castOp->getResult(0);
-        });
   }
 };
 
