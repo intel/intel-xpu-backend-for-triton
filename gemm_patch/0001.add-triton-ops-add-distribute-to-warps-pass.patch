@@ -1,0 +1,1283 @@
+diff --git a/include/triton/Dialect/Triton/IR/TritonOps.td b/include/triton/Dialect/Triton/IR/TritonOps.td
+index 992532dba..84967e3db 100644
+--- a/include/triton/Dialect/Triton/IR/TritonOps.td
++++ b/include/triton/Dialect/Triton/IR/TritonOps.td
+@@ -807,4 +807,45 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
+   let hasVerifier = 1;
+ }
+ 
++def TT_PrefetchOp : TT_Op<"prefetch",
++                      [MemoryEffects<[MemWrite, MemRead]>
++                                      ]> {
++    let summary = "prefetch  from a tensor pointer";
++
++    let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
++                         TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
++
++    let results = (outs);
++
++    let assemblyFormat = [{
++      $ptr attr-dict `:` type($ptr)
++    }];
++
++    let hasCanonicalizer = 0;
++}
++
++
++def TT_TensorRelated : AnyTypeOf<[TT_Tensor, TT_TensorPtr]>;
++
++def TT_GlueOp : TT_Op<"glue", [// operands have same type: SameOperandsType,
++                               Pure]> {
++    let summary = "glue/concat opearands to a larger size";
++
++    let arguments = (ins Variadic<TT_TensorRelated>:$operands);
++
++    let results = (outs TT_TensorRelated:$result);
++
++    let assemblyFormat = "$operands attr-dict `:` type($operands) `->` type($result)";
++}
++
++def TT_ExtractOp : TT_Op<"extract", [Pure]> {
++    let summary = "extract a sub value from base at idx";
++
++    let arguments = (ins TT_TensorRelated:$base, I32Attr:$idx);
++
++    let results = (outs TT_TensorRelated:$result);
++
++    let assemblyFormat = "$base `,` $idx attr-dict `:` type($base) `->` type($result)";
++}
++
+ #endif // Triton_OPS
+diff --git a/include/triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td b/include/triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td
+index fba3ef752..0d32b796a 100644
+--- a/include/triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td
++++ b/include/triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td
+@@ -554,6 +554,33 @@ for
+   let hasCustomAssemblyFormat = 1;
+ }
+ 
++//===----------------------------------------------------------------------===//
++// Warp Encoding
++//===----------------------------------------------------------------------===//
++
++def WarpEncodingAttr : TritonGPU_Attr<"WarpEncoding"> {
++  let mnemonic = "warp";
++
++  let description = [{
++only have 3 items: sizePerThread, threadsPerWarp, order
++all their meaning remain the same as above blocked encoding
++  }];
++
++  let parameters = (
++    ins
++    ArrayRefParameter<"unsigned">:$sizePerThread,
++    ArrayRefParameter<"unsigned">:$threadsPerWarp,
++    ArrayRefParameter<"unsigned">:$order // the fastest-changing axis first
++  );
++
++  let extraClassDeclaration = [{
++    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
++    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
++  }];
++
++  let hasCustomAssemblyFormat = 1;
++}
++
+ //===----------------------------------------------------------------------===//
+ // MMA Layout Encoding
+ //===----------------------------------------------------------------------===//
+diff --git a/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td b/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td
+index 213dba85c..e48e5aadc 100644
+--- a/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td
++++ b/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td
+@@ -348,4 +348,18 @@ def TTG_AllocTensorOp : TTG_Op<"alloc_tensor", [MemoryEffects<[MemAlloc]>,  // A
+   let results = (outs TT_Tensor:$result);
+ }
+ 
++def TTG_AllocOp : TTG_Op<"alloc", [MemoryEffects<[MemAlloc]>  // Allocate shared memory
++                                                ]> {
++  let summary = "allocate tensor in memory, return the pointer";
++
++  let description = [{
++    This operation defines a tensor of a particular shape.
++    The contents of the tensor are supposed to be in shared memory.
++  }];
++
++  let assemblyFormat = [{attr-dict `:` type($result)}];
++
++  let results = (outs TT_Ptr:$result);
++}
++
+ #endif
+diff --git a/include/triton/Dialect/TritonGPU/Transforms/Passes.h b/include/triton/Dialect/TritonGPU/Transforms/Passes.h
+index 2ee5643cd..2d745b8d3 100644
+--- a/include/triton/Dialect/TritonGPU/Transforms/Passes.h
++++ b/include/triton/Dialect/TritonGPU/Transforms/Passes.h
+@@ -18,6 +18,8 @@ std::unique_ptr<Pass> createTritonGPUPrefetchPass();
+ 
+ std::unique_ptr<Pass> createTritonGPUCanonicalizeLoopsPass();
+ 
++std::unique_ptr<Pass> createTritonGPUDistributeToWarpsPass();
++
+ std::unique_ptr<Pass> createTritonGPUCoalescePass();
+ 
+ std::unique_ptr<Pass> createTritonGPUReorderInstructionsPass();
+diff --git a/include/triton/Dialect/TritonGPU/Transforms/Passes.td b/include/triton/Dialect/TritonGPU/Transforms/Passes.td
+index 0476fd8de..c552c427e 100644
+--- a/include/triton/Dialect/TritonGPU/Transforms/Passes.td
++++ b/include/triton/Dialect/TritonGPU/Transforms/Passes.td
+@@ -49,6 +49,21 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
+                            "mlir::arith::ArithDialect"];
+ }
+ 
++def TritonGPUDistributeToWarps : Pass<"tritongpu-distribute-to-warps", "mlir::ModuleOp"> {
++  let summary = "distribute the thread block workload to the warps";
++
++  let description = [{
++  }];
++
++  let constructor = "mlir::createTritonGPUDistributeToWarpsPass()";
++
++  let dependentDialects = ["mlir::triton::TritonDialect",
++                           "mlir::triton::gpu::TritonGPUDialect",
++                           "mlir::scf::SCFDialect",
++                           "mlir::gpu::GPUDialect",
++                           "mlir::arith::ArithDialect"];
++}
++
+ def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::ModuleOp"> {
+   let summary = "accelerate matmul";
+ 
+diff --git a/lib/Dialect/TritonGPU/IR/Dialect.cpp b/lib/Dialect/TritonGPU/IR/Dialect.cpp
+index 1a5a47a26..4935489d4 100644
+--- a/lib/Dialect/TritonGPU/IR/Dialect.cpp
++++ b/lib/Dialect/TritonGPU/IR/Dialect.cpp
+@@ -39,6 +39,18 @@ namespace gpu {
+ 
+ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
+                                 Type eltTy) {
++  // if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
++  //   return blockedLayout.getTotalElemsPerThread(shape, eltTy);
++  // } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
++  //   return sliceLayout.getTotalElemsPerThread(shape, eltTy);
++  // } else if (auto mmaLayout = layout.dyn_cast<MmaEncodingAttr>()) {
++  //   return mmaLayout.getTotalElemsPerThread(shape, eltTy);
++  // } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
++  //   return sharedLayout.getTotalElemsPerThread(shape, eltTy);
++  // } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
++  //   return dotLayout.getTotalElemsPerThread(shape, eltTy);
++  // } else if (auto warpLayout = layout.dyn_cast<WarpEncodingAttr>()) {
++  //   return warpLayout.getTotalElemsPerThread(shape, eltTy);
+   if (auto tritonGPUAttr = layout.dyn_cast<TritonGPU_AttrTrait>()) {
+     return tritonGPUAttr.getTotalElemsPerThread(shape, eltTy);
+   } else {
+@@ -105,10 +117,12 @@ getThreadsPerWarpWithUniqueData(Attribute layout,
+ }
+ 
+ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
++  if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
++    return getWarpsPerCTA(dotLayout.getParent());
++  }
+   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
+     return distributedLayout.getWarpsPerCTA();
+   }
+-
+   llvm::report_fatal_error("getWarpsPerCTA not implemented");
+   return SmallVector<unsigned>();
+ }
+@@ -607,6 +621,25 @@ BlockedEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
+   return shape;
+ }
+ 
++SmallVector<unsigned>
++WarpEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
++  size_t rank = shape.size();
++  auto sizePerThread = getSizePerThread();
++  auto threadsPerWarp = getThreadsPerWarp();
++  assert(rank == sizePerThread.size() &&
++         "unexpected rank in WarpEncodingAttr::getElemsPerThread");
++  SmallVector<unsigned> elemsPerThread(rank);
++  for (size_t i = 0; i < rank; ++i) {
++    unsigned t = sizePerThread[i] * threadsPerWarp[i];
++    elemsPerThread[i] = t;
++  }
++  return elemsPerThread;
++}
++unsigned WarpEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
++                                                  Type eltTy) const {
++  return product<unsigned>(getElemsPerThread(shape, eltTy));
++}
++
+ template <class T>
+ SmallVector<T> SliceEncodingAttr::paddedShape(ArrayRef<T> shape) const {
+   size_t rank = shape.size();
+@@ -969,6 +1002,57 @@ void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
+           << "}>";
+ }
+ 
++//===----------------------------------------------------------------------===//
++// Warp encoding
++//===----------------------------------------------------------------------===//
++
++Attribute WarpEncodingAttr::parse(AsmParser &parser, Type type) {
++  if (parser.parseLess().failed())
++    return {};
++  // Parse the data as a dictionary
++  DictionaryAttr dict;
++  if (parser.parseAttribute(dict).failed())
++    return {};
++  if (parser.parseGreater().failed())
++    return {};
++
++  SmallVector<unsigned> sizePerThread;
++  SmallVector<unsigned> threadsPerWarp;
++  SmallVector<unsigned> order;
++
++  for (const NamedAttribute &attr : dict) {
++    if (attr.getName() == "sizePerThread") {
++      if (parseIntArrayAttr(parser, attr, sizePerThread,
++                            "number of elements per thread")
++              .failed())
++        return {};
++    } else if (attr.getName() == "threadsPerWarp") {
++      if (parseIntArrayAttr(parser, attr, threadsPerWarp,
++                            "number of threads per warp")
++              .failed())
++        return {};
++    } else if (attr.getName() == "order") {
++      if (parseIntArrayAttr(parser, attr, order, "order").failed())
++        return {};
++    } else {
++      parser.emitError(parser.getNameLoc(), "unexpected key: ")
++          << attr.getName().strref();
++      return {};
++    }
++  }
++  return parser.getChecked<WarpEncodingAttr>(parser.getContext(), sizePerThread,
++                                             threadsPerWarp, order);
++}
++
++void WarpEncodingAttr::print(mlir::AsmPrinter &printer) const {
++  auto threadsPerWarp = getThreadsPerWarp();
++  auto sizePerThread = getSizePerThread();
++  printer << "<{" << "sizePerThread = ["
++          << llvm::ArrayRef<unsigned>(sizePerThread) << "]"
++          << ", threadsPerWarp = [" << llvm::ArrayRef<unsigned>(threadsPerWarp)
++          << "]" << ", order = [" << getOrder() << "]" << "}>";
++}
++
+ //===----------------------------------------------------------------------===//
+ // MMA encoding
+ //===----------------------------------------------------------------------===//
+@@ -1550,6 +1634,9 @@ public:
+     } else if (auto blockedAttr = attr.dyn_cast<BlockedEncodingAttr>()) {
+       os << "blocked";
+       return AliasResult::FinalAlias;
++    } else if (auto warpAttr = attr.dyn_cast<WarpEncodingAttr>()) {
++      os << "warp";
++      return AliasResult::FinalAlias;
+     } /* else if (auto sliceAttr = attr.dyn_cast<SliceEncodingAttr>()) {
+       os << "slice";
+       return AliasResult::FinalAlias;
+diff --git a/lib/Dialect/TritonGPU/Transforms/CMakeLists.txt b/lib/Dialect/TritonGPU/Transforms/CMakeLists.txt
+index 2cd6e2672..d34eb9b56 100644
+--- a/lib/Dialect/TritonGPU/Transforms/CMakeLists.txt
++++ b/lib/Dialect/TritonGPU/Transforms/CMakeLists.txt
+@@ -2,6 +2,7 @@ add_mlir_dialect_library(TritonGPUTransforms
+   AccelerateMatmul.cpp
+   Coalesce.cpp
+   DecomposeConversions.cpp
++  DistributeToWarps.cpp
+   OptimizeDotOperands.cpp
+   OptimizeEpilogue.cpp
+   OptimizeThreadLocality.cpp
+diff --git a/lib/Dialect/TritonGPU/Transforms/DistributeToWarps.cpp b/lib/Dialect/TritonGPU/Transforms/DistributeToWarps.cpp
+new file mode 100644
+index 000000000..99943e8f5
+--- /dev/null
++++ b/lib/Dialect/TritonGPU/Transforms/DistributeToWarps.cpp
+@@ -0,0 +1,321 @@
++#include "mlir/Dialect/Arith/IR/Arith.h"
++#include "mlir/Dialect/GPU/IR/GPUDialect.h"
++#include "mlir/Dialect/SCF/IR/SCF.h"
++#include "mlir/IR/TypeUtilities.h"
++#include "mlir/Support/LogicalResult.h"
++#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
++#include "triton/Analysis/Utility.h"
++#include "triton/Dialect/Triton/IR/Dialect.h"
++#include "triton/Dialect/TritonGPU/IR/Dialect.h"
++#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
++#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
++#include "triton/Tools/Sys/GetEnv.hpp"
++#include "llvm/Support/Debug.h"
++#include <memory>
++
++using namespace mlir;
++namespace tt = mlir::triton;
++namespace ttg = mlir::triton::gpu;
++namespace {
++// pass named attrs (e.g., tt.contiguity) from Triton to Triton
++static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
++  for (const NamedAttribute attr : dictAttrs.getValue())
++    if (!op->hasAttr(attr.getName()))
++      op->setAttr(attr.getName(), attr.getValue());
++}
++
++// fixme: maybe set sizePerWarp in the attr directly
++SmallVector<long> getSizePerWarp(RankedTensorType type, Attribute layout) {
++  llvm::SmallVector<long> sizePerWarp;
++  if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
++    auto sizePerThread = blockedLayout.getSizePerThread();
++    auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
++    for (auto [lhs, rhs] : llvm::zip(sizePerThread, threadsPerWarp)) {
++      sizePerWarp.push_back(lhs * rhs);
++    }
++  } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
++    auto idx = dotLayout.getOpIdx();
++    assert(isa<ttg::BlockedEncodingAttr>(dotLayout.getParent()) &&
++           "at this stage, parent layout should be blocked layout.");
++    auto parentSizePerWarp = getSizePerWarp(
++        type, cast<ttg::BlockedEncodingAttr>(dotLayout.getParent()));
++    if (idx == 0) { // dot operand A
++      sizePerWarp.assign({parentSizePerWarp[0], type.getShape()[1]});
++    } else { // idx == 1, dot operand B
++      sizePerWarp.assign({type.getShape()[0], parentSizePerWarp[1]});
++    }
++  } else {
++    llvm::report_fatal_error(
++        "getSizePerWarp not implemented for this attribute");
++  }
++  return sizePerWarp;
++}
++
++Attribute getWarpLayout(Attribute layout) {
++  auto *ctx = layout.getContext();
++  if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
++    auto warpLayout = ttg::WarpEncodingAttr::get(
++        ctx, blockedLayout.getSizePerThread(),
++        blockedLayout.getThreadsPerWarp(), blockedLayout.getOrder());
++    return warpLayout;
++  } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
++    auto parentLayout = getWarpLayout(dotLayout.getParent());
++    auto newDotLayout = ttg::DotOperandEncodingAttr::get(
++        ctx, dotLayout.getOpIdx(), parentLayout, dotLayout.getKWidth());
++    return newDotLayout;
++  }
++  return layout;
++}
++
++template <typename T> static T convertType(T type) { return type; }
++
++template <>
++RankedTensorType convertType<RankedTensorType>(RankedTensorType type) {
++  auto layout = type.getEncoding();
++  auto sizePerWarp = getSizePerWarp(type, layout);
++  auto warpLayout = getWarpLayout(layout);
++  auto newType =
++      RankedTensorType::get(sizePerWarp, type.getElementType(), warpLayout);
++  return newType;
++}
++
++template <> tt::PointerType convertType<tt::PointerType>(tt::PointerType type) {
++  auto pointeeType = type.getPointeeType();
++  auto tensorType = dyn_cast<RankedTensorType>(pointeeType);
++  if (!tensorType)
++    return type;
++  auto newTensorType = convertType(tensorType);
++  auto newType = tt::PointerType::get(newTensorType, type.getAddressSpace());
++  return newType;
++}
++
++/// @brief get each warp's offset
++/// warpsPerDim = blockShape / warpShape
++/// assert(warpsPerDim <= warpsPerCTA)
++/// warpId.x = warpId % warpPerCTA.x
++/// warpId.y = warpId / warpPerCTA.x
++/// incX = (warpId.x % warpsPerDim.x) * SizePerWarp.x
++/// incY = (warpId.y % warpsPerDim.y) * SizePerWarp.y
++/// newX = oldX + incX
++/// newY = oldY + incY
++SmallVector<Value, 4> distributeOffset(SmallVector<Value> oldOffsets,
++                                       RankedTensorType tensorType,
++                                       Value warpId, OpBuilder b,
++                                       Location loc) {
++  auto layout = tensorType.getEncoding();
++  auto warpsPerCTA = ttg::getWarpsPerCTA(layout);
++  auto dims = warpsPerCTA.size();
++  assert(dims <= 2 && "no more than 2D shape");
++  // same to the module attribute num-warps
++  auto numWarps = product<unsigned>(warpsPerCTA);
++  auto newTensorType = convertType(tensorType);
++  auto blockShape = tensorType.getShape();
++  auto warpShape = newTensorType.getShape();
++  SmallVector<unsigned> warpsPerDim;
++  for (auto [lhs, rhs] : llvm::zip(blockShape, warpShape)) {
++    if (lhs % rhs != 0)
++      return oldOffsets;
++    warpsPerDim.push_back(lhs / rhs);
++  }
++  SmallVector<Value> newOffsets;
++  for (auto i = 0; i < dims; i++) {
++    auto oldOffset = oldOffsets[i];
++    Value warpIdPerDim;
++    if (i == 1) { // warpId.x
++      if (warpsPerCTA[dims - 1] == 1) {
++        newOffsets.push_back(oldOffset);
++        continue;
++      } else if (warpsPerCTA[dims - 1] == numWarps) {
++        warpIdPerDim = warpId;
++      } else {
++        warpIdPerDim = b.create<arith::RemSIOp>(
++            loc, warpId,
++            b.create<arith::ConstantIntOp>(loc, warpsPerCTA[dims - 1], 32));
++      }
++    } else { // i == 0, warpId.y
++      if (warpsPerCTA[dims - 1] == 1) {
++        warpIdPerDim = warpId;
++      } else if (warpsPerCTA[dims - 1] == numWarps) {
++        newOffsets.push_back(oldOffset);
++        continue;
++      } else {
++        warpIdPerDim = b.create<arith::DivSIOp>(
++            loc, warpId,
++            b.create<arith::ConstantIntOp>(loc, warpsPerCTA[dims - 1], 32));
++      }
++    }
++    Value step;
++    if (warpsPerDim[i] == 1) {
++      newOffsets.push_back(oldOffset);
++      continue;
++    } else if (warpsPerDim[i] == numWarps) {
++      step = warpIdPerDim;
++    } else {
++      step = b.create<arith::RemSIOp>(
++          loc, warpIdPerDim,
++          b.create<arith::ConstantIntOp>(loc, warpsPerDim[i], 32));
++    }
++    auto inc = b.create<arith::MulIOp>(
++        loc, step, b.create<arith::ConstantIntOp>(loc, warpShape[i], 32));
++    auto newOffset = b.create<arith::AddIOp>(loc, inc, oldOffset);
++    newOffsets.push_back(newOffset);
++  }
++  return newOffsets;
++}
++
++void distributeGenericOp(Operation *op) {
++  OpBuilder b(op);
++  auto newOp = b.clone(*op);
++  for (auto result : newOp->getResults()) {
++    if (auto castType = dyn_cast<RankedTensorType>(result.getType()))
++      result.setType(convertType(castType));
++    else if (auto castType = dyn_cast<tt::PointerType>(result.getType()))
++      result.setType(convertType(castType));
++  }
++  op->replaceAllUsesWith(newOp->getResults());
++  op->erase();
++  return;
++}
++
++void distributeArithConstantOp(arith::ConstantOp op) {
++  auto type = dyn_cast<RankedTensorType>(op.getType());
++  if (!type)
++    return;
++  auto newType = convertType(type);
++  auto value = cast<DenseElementsAttr>(op.getValue());
++  value = value.resizeSplat(newType);
++  OpBuilder b(op);
++  auto newOp = b.create<arith::ConstantOp>(op.getLoc(), newType, value);
++  addNamedAttrs(newOp, op->getAttrDictionary());
++  op->replaceAllUsesWith(newOp->getResults());
++  op->erase();
++  return;
++}
++
++void distributeMakeTensorPtrOp(tt::MakeTensorPtrOp op, Value warpId) {
++  auto loc = op.getLoc();
++  tt::PointerType type = op.getType();
++  OpBuilder b(op);
++  auto tensorType = dyn_cast<RankedTensorType>(type.getPointeeType());
++  if (!tensorType)
++    return;
++  auto newOffsets =
++      distributeOffset(op.getOffsets(), tensorType, warpId, b, loc);
++  auto newOp = b.clone(*op.getOperation());
++  auto newType = convertType(type);
++  auto newPtrOp = cast<tt::MakeTensorPtrOp>(newOp);
++  newPtrOp.getOffsetsMutable().assign(newOffsets);
++  newPtrOp.getResult().setType(newType);
++  op->replaceAllUsesWith(newPtrOp->getResults());
++  op->erase();
++  return;
++}
++
++void distributeConvertLayoutOp(ttg::ConvertLayoutOp op, Value warpId,
++                               RankedTensorType oldSrcType) {
++  auto loc = op.getLoc();
++  OpBuilder b(op);
++  auto dstType = cast<RankedTensorType>(op.getResult().getType());
++  auto convertedDstType = convertType(dstType);
++  auto dstPtrType = tt::PointerType::get(convertedDstType, 3 /* shared mem*/);
++  auto srcPtrType =
++      tt::PointerType::get(op.getSrc().getType(), 3 /* shared mem*/);
++
++  // fixme: allocOp may carry the size info, tt::PointerType::get(oldSrcType)
++  // fixme: set addrspace 1 instead of 3 to avoid makeTensorOp type match
++  // error
++  auto baseType = tt::PointerType::get(oldSrcType.getElementType(), 1);
++  auto base = b.create<ttg::AllocOp>(loc, baseType);
++  SmallVector<Value> shape;
++  shape.push_back(
++      b.create<arith::ConstantIntOp>(loc, oldSrcType.getShape()[0], 64));
++  shape.push_back(
++      b.create<arith::ConstantIntOp>(loc, oldSrcType.getShape()[1], 64));
++  SmallVector<Value> strides;
++  strides.push_back(
++      b.create<arith::ConstantIntOp>(loc, oldSrcType.getShape()[1], 64));
++  strides.push_back(b.create<arith::ConstantIntOp>(loc, 1, 64));
++  SmallVector<Value> offsets;
++  offsets.push_back(b.create<arith::ConstantIntOp>(loc, 0, 32));
++  offsets.push_back(b.create<arith::ConstantIntOp>(loc, 0, 32));
++  auto srcOffsets = distributeOffset(offsets, oldSrcType, warpId, b, loc);
++  Value storePtr =
++      b.create<tt::MakeTensorPtrOp>(loc, srcPtrType, base, shape, strides,
++                                    srcOffsets, b.getDenseI32ArrayAttr({1, 0}));
++  b.create<tt::StoreOp>(loc, storePtr, op.getSrc(), tt::CacheModifier::NONE,
++                        tt::EvictionPolicy::NORMAL);
++  b.create<gpu::BarrierOp>(loc);
++  auto dstOffsets = distributeOffset(offsets, dstType, warpId, b, loc);
++  Value loadPtr =
++      b.create<tt::MakeTensorPtrOp>(loc, dstPtrType, base, shape, strides,
++                                    dstOffsets, b.getDenseI32ArrayAttr({1, 0}));
++  auto load = b.create<tt::LoadOp>(loc, loadPtr, tt::CacheModifier::NONE,
++                                   tt::EvictionPolicy::NORMAL, false);
++  op->replaceAllUsesWith(load->getResults());
++  op->erase();
++  return;
++}
++
++void distributeScfForOp(scf::ForOp op) {
++  auto body = op.getBody();
++  for (auto [lhs, rhs] :
++       llvm::zip(body->getArguments().drop_front(1), op.getInitArgs()))
++    lhs.setType(rhs.getType());
++  for (auto result : op->getResults()) {
++    if (auto castType = dyn_cast<RankedTensorType>(result.getType()))
++      result.setType(convertType(castType));
++    else if (auto castType = dyn_cast<tt::PointerType>(result.getType()))
++      result.setType(convertType(castType));
++  }
++  return;
++}
++
++} // namespace
++
++#define GEN_PASS_CLASSES
++#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
++
++class TritonGPUDistributeToWarpsPass
++    : public TritonGPUDistributeToWarpsBase<TritonGPUDistributeToWarpsPass> {
++public:
++  void runOnOperation() override {
++    MLIRContext *context = &getContext();
++    ModuleOp m = getOperation();
++    for (auto func : m.getOps<tt::FuncOp>()) {
++      auto b = OpBuilder::atBlockBegin(&func.getBody().front());
++      auto loc = func.getLoc();
++      auto subgroupId = b.create<gpu::SubgroupIdOp>(loc);
++      auto warpId =
++          b.create<arith::IndexCastOp>(loc, b.getI32Type(), subgroupId);
++      // record old type before transform
++      DenseMap<Operation *, RankedTensorType> typeMap;
++      func.walk([&](ttg::ConvertLayoutOp op) {
++        typeMap[op] = op.getSrc().getType().cast<RankedTensorType>();
++      });
++      func.walk<WalkOrder::PreOrder>([&](Operation *op) {
++        if (llvm::all_of(op->getResultTypes(), [&](Type type) {
++              return !isa<RankedTensorType>(type) &&
++                     !isa<tt::PointerType>(type);
++            }))
++          ;
++        else if (auto forOp = dyn_cast<scf::ForOp>(op))
++          distributeScfForOp(forOp);
++        else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
++          distributeMakeTensorPtrOp(ptrOp, warpId);
++        else if (auto cstOp = dyn_cast<arith::ConstantOp>(op))
++          distributeArithConstantOp(cstOp);
++        else if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op))
++          distributeConvertLayoutOp(convertOp, warpId, typeMap[convertOp]);
++        else if (isa<tt::LoadOp, tt::DotOp, tt::AdvanceOp, arith::TruncFOp>(op))
++          distributeGenericOp(op);
++        else
++          assert(0 && "op not considered");
++        return WalkResult::advance();
++      });
++    }
++  }
++};
++
++std::unique_ptr<Pass> mlir::createTritonGPUDistributeToWarpsPass() {
++  return std::make_unique<TritonGPUDistributeToWarpsPass>();
++}
+diff --git a/python/gemm.16x32.spirv.mlir b/python/gemm.16x32.spirv.mlir
+new file mode 100644
+index 000000000..93644cc77
+--- /dev/null
++++ b/python/gemm.16x32.spirv.mlir
+@@ -0,0 +1,180 @@
++module attributes {spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Addresses, Float16Buffer, Int64, Int16, Int8, Kernel, Linkage, Vector16, GenericPointer, Groups, Float16, Float64, AtomicFloat32AddEXT, ExpectAssumeKHR, SubgroupDispatch, VectorComputeINTEL, VectorAnyINTEL], [SPV_EXT_shader_atomic_float_add, SPV_KHR_expect_assume, SPV_INTEL_vector_compute]>, api=OpenCL, #spirv.resource_limits<>>, "triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, triton_gpu.shared = 0 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
++  spirv.GlobalVariable @__builtin__WorkgroupId__ built_in("WorkgroupId") : !spirv.ptr<vector<3xi64>, Input>
++  spirv.func @llvm.genx.smin.i32(i32, i32) -> i32 "None" attributes {VectorComputeFunctionINTEL, linkage_attributes = #spirv.linkage_attributes<linkage_name = "llvm.genx.smin.i32", linkage_type = <Import>>}
++  spirv.func @llvm.genx.absi.i32(i32) -> i32 "None" attributes {VectorComputeFunctionINTEL, linkage_attributes = #spirv.linkage_attributes<linkage_name = "llvm.genx.absi.i32", linkage_type = <Import>>}
++  spirv.func @llvm_genx_raw_send2_v128i32_i1_v8i32(i8, i8, i1, i8, i8, i8, i32, i32, vector<8xi32>, vector<128xi32>) -> vector<128xi32> "None" attributes {VectorComputeFunctionINTEL, linkage_attributes = #spirv.linkage_attributes<linkage_name = "llvm.genx.raw.send2.v128i32.i1.v8i32", linkage_type = <Import>>}
++  spirv.func @llvm_genx_dpas2_v128f32_v128i32_v64i32(vector<128xf32>, vector<128xi32>, vector<64xi32>, i32, i32, i32, i32, i32, i32) -> vector<128xf32> "None" attributes {VectorComputeFunctionINTEL, linkage_attributes = #spirv.linkage_attributes<linkage_name = "llvm.genx.dpas2.v128f32.v128i32.v64i32", linkage_type = <Import>>}
++  spirv.func @llvm_genx_raw_sends2_noresult_i1_v8i32_v128i32(i8, i8, i1, i8, i8, i8, i32, i32, vector<8xi32>, vector<256xf16>) "None" attributes {VectorComputeFunctionINTEL, linkage_attributes = #spirv.linkage_attributes<linkage_name = "llvm.genx.raw.sends2.noresult.i1.v8i32.v128i32", linkage_type = <Import>>}
++  spirv.func @matmul_kernel_with_block_pointers_0d1d2d3de4de5de6de7c8de9c10de11c(%arg0: !spirv.ptr<f16, CrossWorkgroup> {tt.divisibility = 16 : i32}, %arg1: !spirv.ptr<f16, CrossWorkgroup> {tt.divisibility = 16 : i32}, %arg2: !spirv.ptr<f16, CrossWorkgroup> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) "None" attributes {VectorComputeFunctionINTEL, noinline = false, spirv.entry_point_abi = #spirv.entry_point_abi<>, sym_visibility = "public"} {
++    %cst33686023_i32 = spirv.Constant 33686023 : i32
++    %cst8_i32 = spirv.Constant 8 : i32
++    %cst10_i32 = spirv.Constant 10 : i32
++    %cst42074755_i32 = spirv.Constant 42074755 : i32
++    %cst42074627_i32 = spirv.Constant 42074627 : i32
++    %cst15_i8 = spirv.Constant 15 : i8
++    %cst8_i8 = spirv.Constant 8 : i8
++    %cst1_i8 = spirv.Constant 1 : i8
++    %true = spirv.Constant true
++    %cst0_i8 = spirv.Constant 0 : i8
++    %cst3855_i32 = spirv.Constant 3855 : i32
++    %cst7_i32 = spirv.Constant 7 : i32
++    %cst6_i32 = spirv.Constant 6 : i32
++    %cst5_i32 = spirv.Constant 5 : i32
++    %cst4_i32 = spirv.Constant 4 : i32
++    %cst3_i32 = spirv.Constant 3 : i32
++    %cst2_i32 = spirv.Constant 2 : i32
++    %cst_vec_256xf32 = spirv.Constant dense<0.000000e+00> : vector<256xf32>
++    %cst32_i32 = spirv.Constant 32 : i32
++    %cst0_i32 = spirv.Constant 0 : i32
++    %cst16_i32 = spirv.Constant 16 : i32
++    %cst15_i32 = spirv.Constant 15 : i32
++    %cst31_i32 = spirv.Constant 31 : i32
++    %cst1_i32 = spirv.Constant 1 : i32
++    %__builtin__WorkgroupId___addr = spirv.mlir.addressof @__builtin__WorkgroupId__ : !spirv.ptr<vector<3xi64>, Input>
++    %0 = spirv.Load "Input" %__builtin__WorkgroupId___addr : vector<3xi64>
++    %1 = spirv.CompositeExtract %0[0 : i32] : vector<3xi64>
++    %2 = spirv.SConvert %1 : i64 to i32
++    %3 = spirv.IAdd %arg3, %cst15_i32 : i32
++    %4 = spirv.SDiv %3, %cst16_i32 : i32
++    %5 = spirv.IAdd %arg4, %cst31_i32 : i32
++    %6 = spirv.SDiv %5, %cst32_i32 : i32
++    %7 = spirv.SDiv %2, %6 : i32
++    %8 = spirv.ISub %4, %7 : i32
++    %9 = spirv.FunctionCall @llvm.genx.smin.i32(%8, %cst1_i32) : (i32, i32) -> i32
++    %10 = spirv.FunctionCall @llvm.genx.absi.i32(%2) : (i32) -> i32
++    %11 = spirv.FunctionCall @llvm.genx.absi.i32(%9) : (i32) -> i32
++    %12 = spirv.UMod %10, %11 : i32
++    %13 = spirv.IEqual %2, %10 : i32
++    %14 = spirv.SNegate %12 : i32
++    %15 = spirv.Select %13, %12, %14 : i1, i32
++    %16 = spirv.IAdd %7, %15 : i32
++    %17 = spirv.FunctionCall @llvm.genx.absi.i32(%2) : (i32) -> i32
++    %18 = spirv.FunctionCall @llvm.genx.absi.i32(%6) : (i32) -> i32
++    %19 = spirv.UMod %17, %18 : i32
++    %20 = spirv.IEqual %2, %17 : i32
++    %21 = spirv.SNegate %19 : i32
++    %22 = spirv.Select %20, %19, %21 : i1, i32
++    %23 = spirv.SDiv %22, %9 : i32
++    %24 = spirv.IMul %16, %cst16_i32 : i32
++    %25 = spirv.Undef : vector<4xi64>
++    %26 = spirv.ConvertPtrToU %arg0 : !spirv.ptr<f16, CrossWorkgroup> to i64
++    %27 = spirv.VectorInsertDynamic %26, %25[%cst0_i32] : vector<4xi64>, i32
++    %28 = spirv.Bitcast %27 : vector<4xi64> to vector<8xi32>
++    %29 = spirv.IMul %arg5, %cst2_i32 : i32
++    %30 = spirv.ISub %29, %cst1_i32 : i32
++    %31 = spirv.ISub %arg3, %cst1_i32 : i32
++    %32 = spirv.IMul %arg6, %cst2_i32 : i32
++    %33 = spirv.ISub %32, %cst1_i32 : i32
++    %34 = spirv.VectorInsertDynamic %30, %28[%cst2_i32] : vector<8xi32>, i32
++    %35 = spirv.VectorInsertDynamic %31, %34[%cst3_i32] : vector<8xi32>, i32
++    %36 = spirv.VectorInsertDynamic %33, %35[%cst4_i32] : vector<8xi32>, i32
++    %37 = spirv.VectorInsertDynamic %cst0_i32, %36[%cst5_i32] : vector<8xi32>, i32
++    %38 = spirv.VectorInsertDynamic %24, %37[%cst6_i32] : vector<8xi32>, i32
++    %39 = spirv.VectorInsertDynamic %cst3855_i32, %38[%cst7_i32] : vector<8xi32>, i32
++    %40 = spirv.IMul %23, %cst32_i32 : i32
++    %41 = spirv.ConvertPtrToU %arg1 : !spirv.ptr<f16, CrossWorkgroup> to i64
++    %42 = spirv.VectorInsertDynamic %41, %25[%cst0_i32] : vector<4xi64>, i32
++    %43 = spirv.Bitcast %42 : vector<4xi64> to vector<8xi32>
++    %44 = spirv.IMul %arg4, %cst2_i32 : i32
++    %45 = spirv.ISub %44, %cst1_i32 : i32
++    %46 = spirv.ISub %arg5, %cst1_i32 : i32
++    %47 = spirv.IMul %arg7, %cst2_i32 : i32
++    %48 = spirv.ISub %47, %cst1_i32 : i32
++    %49 = spirv.VectorInsertDynamic %45, %43[%cst2_i32] : vector<8xi32>, i32
++    %50 = spirv.VectorInsertDynamic %46, %49[%cst3_i32] : vector<8xi32>, i32
++    %51 = spirv.VectorInsertDynamic %48, %50[%cst4_i32] : vector<8xi32>, i32
++    %52 = spirv.VectorInsertDynamic %40, %51[%cst5_i32] : vector<8xi32>, i32
++    %53 = spirv.VectorInsertDynamic %cst0_i32, %52[%cst6_i32] : vector<8xi32>, i32
++    %54 = spirv.VectorInsertDynamic %cst3855_i32, %53[%cst7_i32] : vector<8xi32>, i32
++    %55 = spirv.IAdd %40, %cst16_i32 : i32
++    %56 = spirv.ConvertPtrToU %arg1 : !spirv.ptr<f16, CrossWorkgroup> to i64
++    %57 = spirv.VectorInsertDynamic %56, %25[%cst0_i32] : vector<4xi64>, i32
++    %58 = spirv.Bitcast %57 : vector<4xi64> to vector<8xi32>
++    %59 = spirv.VectorInsertDynamic %45, %58[%cst2_i32] : vector<8xi32>, i32
++    %60 = spirv.VectorInsertDynamic %46, %59[%cst3_i32] : vector<8xi32>, i32
++    %61 = spirv.VectorInsertDynamic %48, %60[%cst4_i32] : vector<8xi32>, i32
++    %62 = spirv.VectorInsertDynamic %55, %61[%cst5_i32] : vector<8xi32>, i32
++    %63 = spirv.VectorInsertDynamic %cst0_i32, %62[%cst6_i32] : vector<8xi32>, i32
++    %64 = spirv.VectorInsertDynamic %cst3855_i32, %63[%cst7_i32] : vector<8xi32>, i32
++    %65 = spirv.Variable : !spirv.ptr<vector<256xf32>, Function>
++    %66 = spirv.Variable : !spirv.ptr<vector<256xf32>, Function>
++    %67 = spirv.Variable : !spirv.ptr<vector<8xi32>, Function>
++    %68 = spirv.Variable : !spirv.ptr<vector<8xi32>, Function>
++    %69 = spirv.Variable : !spirv.ptr<vector<8xi32>, Function>
++    spirv.mlir.loop {
++      spirv.Branch ^bb1(%cst0_i32, %cst_vec_256xf32, %cst_vec_256xf32, %39, %54, %64 : i32, vector<256xf32>, vector<256xf32>, vector<8xi32>, vector<8xi32>, vector<8xi32>)
++    ^bb1(%97: i32, %98: vector<256xf32>, %99: vector<256xf32>, %100: vector<8xi32>, %101: vector<8xi32>, %102: vector<8xi32>):  // 2 preds: ^bb0, ^bb2
++      %103 = spirv.SLessThan %97, %arg5 : i32
++      spirv.BranchConditional %103, ^bb2, ^bb3
++    ^bb2:  // pred: ^bb1
++      %104 = spirv.Undef : vector<128xi32>
++      %105 = spirv.FunctionCall @llvm_genx_raw_send2_v128i32_i1_v8i32(%cst0_i8, %cst0_i8, %true, %cst1_i8, %cst8_i8, %cst15_i8, %cst0_i32, %cst42074627_i32, %100, %104) : (i8, i8, i1, i8, i8, i8, i32, i32, vector<8xi32>, vector<128xi32>) -> vector<128xi32>
++      %106 = spirv.Bitcast %105 : vector<128xi32> to vector<256xf16>
++      %107 = spirv.FunctionCall @llvm_genx_raw_send2_v128i32_i1_v8i32(%cst0_i8, %cst0_i8, %true, %cst1_i8, %cst8_i8, %cst15_i8, %cst0_i32, %cst42074755_i32, %101, %104) : (i8, i8, i1, i8, i8, i8, i32, i32, vector<8xi32>, vector<128xi32>) -> vector<128xi32>
++      %108 = spirv.FunctionCall @llvm_genx_raw_send2_v128i32_i1_v8i32(%cst0_i8, %cst0_i8, %true, %cst1_i8, %cst8_i8, %cst15_i8, %cst0_i32, %cst42074755_i32, %102, %104) : (i8, i8, i1, i8, i8, i8, i32, i32, vector<8xi32>, vector<128xi32>) -> vector<128xi32>
++      %109 = spirv.VectorShuffle [0 : i32, 1 : i32, 2 : i32, 3 : i32, 4 : i32, 5 : i32, 6 : i32, 7 : i32, 8 : i32, 9 : i32, 10 : i32, 11 : i32, 12 : i32, 13 : i32, 14 : i32, 15 : i32, 16 : i32, 17 : i32, 18 : i32, 19 : i32, 20 : i32, 21 : i32, 22 : i32, 23 : i32, 24 : i32, 25 : i32, 26 : i32, 27 : i32, 28 : i32, 29 : i32, 30 : i32, 31 : i32, 32 : i32, 33 : i32, 34 : i32, 35 : i32, 36 : i32, 37 : i32, 38 : i32, 39 : i32, 40 : i32, 41 : i32, 42 : i32, 43 : i32, 44 : i32, 45 : i32, 46 : i32, 47 : i32, 48 : i32, 49 : i32, 50 : i32, 51 : i32, 52 : i32, 53 : i32, 54 : i32, 55 : i32, 56 : i32, 57 : i32, 58 : i32, 59 : i32, 60 : i32, 61 : i32, 62 : i32, 63 : i32, 64 : i32, 65 : i32, 66 : i32, 67 : i32, 68 : i32, 69 : i32, 70 : i32, 71 : i32, 72 : i32, 73 : i32, 74 : i32, 75 : i32, 76 : i32, 77 : i32, 78 : i32, 79 : i32, 80 : i32, 81 : i32, 82 : i32, 83 : i32, 84 : i32, 85 : i32, 86 : i32, 87 : i32, 88 : i32, 89 : i32, 90 : i32, 91 : i32, 92 : i32, 93 : i32, 94 : i32, 95 : i32, 96 : i32, 97 : i32, 98 : i32, 99 : i32, 100 : i32, 101 : i32, 102 : i32, 103 : i32, 104 : i32, 105 : i32, 106 : i32, 107 : i32, 108 : i32, 109 : i32, 110 : i32, 111 : i32, 112 : i32, 113 : i32, 114 : i32, 115 : i32, 116 : i32, 117 : i32, 118 : i32, 119 : i32, 120 : i32, 121 : i32, 122 : i32, 123 : i32, 124 : i32, 125 : i32, 126 : i32, 127 : i32] %98, %98 : vector<256xf32>, vector<256xf32> -> vector<128xf32>
++      %110 = spirv.VectorShuffle [0 : i32, 1 : i32, 2 : i32, 3 : i32, 4 : i32, 5 : i32, 6 : i32, 7 : i32, 8 : i32, 9 : i32, 10 : i32, 11 : i32, 12 : i32, 13 : i32, 14 : i32, 15 : i32, 16 : i32, 17 : i32, 18 : i32, 19 : i32, 20 : i32, 21 : i32, 22 : i32, 23 : i32, 24 : i32, 25 : i32, 26 : i32, 27 : i32, 28 : i32, 29 : i32, 30 : i32, 31 : i32, 32 : i32, 33 : i32, 34 : i32, 35 : i32, 36 : i32, 37 : i32, 38 : i32, 39 : i32, 40 : i32, 41 : i32, 42 : i32, 43 : i32, 44 : i32, 45 : i32, 46 : i32, 47 : i32, 48 : i32, 49 : i32, 50 : i32, 51 : i32, 52 : i32, 53 : i32, 54 : i32, 55 : i32, 56 : i32, 57 : i32, 58 : i32, 59 : i32, 60 : i32, 61 : i32, 62 : i32, 63 : i32, 64 : i32, 65 : i32, 66 : i32, 67 : i32, 68 : i32, 69 : i32, 70 : i32, 71 : i32, 72 : i32, 73 : i32, 74 : i32, 75 : i32, 76 : i32, 77 : i32, 78 : i32, 79 : i32, 80 : i32, 81 : i32, 82 : i32, 83 : i32, 84 : i32, 85 : i32, 86 : i32, 87 : i32, 88 : i32, 89 : i32, 90 : i32, 91 : i32, 92 : i32, 93 : i32, 94 : i32, 95 : i32, 96 : i32, 97 : i32, 98 : i32, 99 : i32, 100 : i32, 101 : i32, 102 : i32, 103 : i32, 104 : i32, 105 : i32, 106 : i32, 107 : i32, 108 : i32, 109 : i32, 110 : i32, 111 : i32, 112 : i32, 113 : i32, 114 : i32, 115 : i32, 116 : i32, 117 : i32, 118 : i32, 119 : i32, 120 : i32, 121 : i32, 122 : i32, 123 : i32, 124 : i32, 125 : i32, 126 : i32, 127 : i32] %106, %106 : vector<256xf16>, vector<256xf16> -> vector<128xf16>
++      %111 = spirv.Bitcast %110 : vector<128xf16> to vector<64xi32>
++      %112 = spirv.FunctionCall @llvm_genx_dpas2_v128f32_v128i32_v64i32(%109, %107, %111, %cst10_i32, %cst10_i32, %cst8_i32, %cst8_i32, %cst0_i32, %cst0_i32) : (vector<128xf32>, vector<128xi32>, vector<64xi32>, i32, i32, i32, i32, i32, i32) -> vector<128xf32>
++      %113 = spirv.VectorShuffle [128 : i32, 129 : i32, 130 : i32, 131 : i32, 132 : i32, 133 : i32, 134 : i32, 135 : i32, 136 : i32, 137 : i32, 138 : i32, 139 : i32, 140 : i32, 141 : i32, 142 : i32, 143 : i32, 144 : i32, 145 : i32, 146 : i32, 147 : i32, 148 : i32, 149 : i32, 150 : i32, 151 : i32, 152 : i32, 153 : i32, 154 : i32, 155 : i32, 156 : i32, 157 : i32, 158 : i32, 159 : i32, 160 : i32, 161 : i32, 162 : i32, 163 : i32, 164 : i32, 165 : i32, 166 : i32, 167 : i32, 168 : i32, 169 : i32, 170 : i32, 171 : i32, 172 : i32, 173 : i32, 174 : i32, 175 : i32, 176 : i32, 177 : i32, 178 : i32, 179 : i32, 180 : i32, 181 : i32, 182 : i32, 183 : i32, 184 : i32, 185 : i32, 186 : i32, 187 : i32, 188 : i32, 189 : i32, 190 : i32, 191 : i32, 192 : i32, 193 : i32, 194 : i32, 195 : i32, 196 : i32, 197 : i32, 198 : i32, 199 : i32, 200 : i32, 201 : i32, 202 : i32, 203 : i32, 204 : i32, 205 : i32, 206 : i32, 207 : i32, 208 : i32, 209 : i32, 210 : i32, 211 : i32, 212 : i32, 213 : i32, 214 : i32, 215 : i32, 216 : i32, 217 : i32, 218 : i32, 219 : i32, 220 : i32, 221 : i32, 222 : i32, 223 : i32, 224 : i32, 225 : i32, 226 : i32, 227 : i32, 228 : i32, 229 : i32, 230 : i32, 231 : i32, 232 : i32, 233 : i32, 234 : i32, 235 : i32, 236 : i32, 237 : i32, 238 : i32, 239 : i32, 240 : i32, 241 : i32, 242 : i32, 243 : i32, 244 : i32, 245 : i32, 246 : i32, 247 : i32, 248 : i32, 249 : i32, 250 : i32, 251 : i32, 252 : i32, 253 : i32, 254 : i32, 255 : i32] %98, %98 : vector<256xf32>, vector<256xf32> -> vector<128xf32>
++      %114 = spirv.VectorShuffle [128 : i32, 129 : i32, 130 : i32, 131 : i32, 132 : i32, 133 : i32, 134 : i32, 135 : i32, 136 : i32, 137 : i32, 138 : i32, 139 : i32, 140 : i32, 141 : i32, 142 : i32, 143 : i32, 144 : i32, 145 : i32, 146 : i32, 147 : i32, 148 : i32, 149 : i32, 150 : i32, 151 : i32, 152 : i32, 153 : i32, 154 : i32, 155 : i32, 156 : i32, 157 : i32, 158 : i32, 159 : i32, 160 : i32, 161 : i32, 162 : i32, 163 : i32, 164 : i32, 165 : i32, 166 : i32, 167 : i32, 168 : i32, 169 : i32, 170 : i32, 171 : i32, 172 : i32, 173 : i32, 174 : i32, 175 : i32, 176 : i32, 177 : i32, 178 : i32, 179 : i32, 180 : i32, 181 : i32, 182 : i32, 183 : i32, 184 : i32, 185 : i32, 186 : i32, 187 : i32, 188 : i32, 189 : i32, 190 : i32, 191 : i32, 192 : i32, 193 : i32, 194 : i32, 195 : i32, 196 : i32, 197 : i32, 198 : i32, 199 : i32, 200 : i32, 201 : i32, 202 : i32, 203 : i32, 204 : i32, 205 : i32, 206 : i32, 207 : i32, 208 : i32, 209 : i32, 210 : i32, 211 : i32, 212 : i32, 213 : i32, 214 : i32, 215 : i32, 216 : i32, 217 : i32, 218 : i32, 219 : i32, 220 : i32, 221 : i32, 222 : i32, 223 : i32, 224 : i32, 225 : i32, 226 : i32, 227 : i32, 228 : i32, 229 : i32, 230 : i32, 231 : i32, 232 : i32, 233 : i32, 234 : i32, 235 : i32, 236 : i32, 237 : i32, 238 : i32, 239 : i32, 240 : i32, 241 : i32, 242 : i32, 243 : i32, 244 : i32, 245 : i32, 246 : i32, 247 : i32, 248 : i32, 249 : i32, 250 : i32, 251 : i32, 252 : i32, 253 : i32, 254 : i32, 255 : i32] %106, %106 : vector<256xf16>, vector<256xf16> -> vector<128xf16>
++      %115 = spirv.Bitcast %114 : vector<128xf16> to vector<64xi32>
++      %116 = spirv.FunctionCall @llvm_genx_dpas2_v128f32_v128i32_v64i32(%113, %107, %115, %cst10_i32, %cst10_i32, %cst8_i32, %cst8_i32, %cst0_i32, %cst0_i32) : (vector<128xf32>, vector<128xi32>, vector<64xi32>, i32, i32, i32, i32, i32, i32) -> vector<128xf32>
++      %117 = spirv.VectorShuffle [0 : i32, 1 : i32, 2 : i32, 3 : i32, 4 : i32, 5 : i32, 6 : i32, 7 : i32, 8 : i32, 9 : i32, 10 : i32, 11 : i32, 12 : i32, 13 : i32, 14 : i32, 15 : i32, 16 : i32, 17 : i32, 18 : i32, 19 : i32, 20 : i32, 21 : i32, 22 : i32, 23 : i32, 24 : i32, 25 : i32, 26 : i32, 27 : i32, 28 : i32, 29 : i32, 30 : i32, 31 : i32, 32 : i32, 33 : i32, 34 : i32, 35 : i32, 36 : i32, 37 : i32, 38 : i32, 39 : i32, 40 : i32, 41 : i32, 42 : i32, 43 : i32, 44 : i32, 45 : i32, 46 : i32, 47 : i32, 48 : i32, 49 : i32, 50 : i32, 51 : i32, 52 : i32, 53 : i32, 54 : i32, 55 : i32, 56 : i32, 57 : i32, 58 : i32, 59 : i32, 60 : i32, 61 : i32, 62 : i32, 63 : i32, 64 : i32, 65 : i32, 66 : i32, 67 : i32, 68 : i32, 69 : i32, 70 : i32, 71 : i32, 72 : i32, 73 : i32, 74 : i32, 75 : i32, 76 : i32, 77 : i32, 78 : i32, 79 : i32, 80 : i32, 81 : i32, 82 : i32, 83 : i32, 84 : i32, 85 : i32, 86 : i32, 87 : i32, 88 : i32, 89 : i32, 90 : i32, 91 : i32, 92 : i32, 93 : i32, 94 : i32, 95 : i32, 96 : i32, 97 : i32, 98 : i32, 99 : i32, 100 : i32, 101 : i32, 102 : i32, 103 : i32, 104 : i32, 105 : i32, 106 : i32, 107 : i32, 108 : i32, 109 : i32, 110 : i32, 111 : i32, 112 : i32, 113 : i32, 114 : i32, 115 : i32, 116 : i32, 117 : i32, 118 : i32, 119 : i32, 120 : i32, 121 : i32, 122 : i32, 123 : i32, 124 : i32, 125 : i32, 126 : i32, 127 : i32, 128 : i32, 129 : i32, 130 : i32, 131 : i32, 132 : i32, 133 : i32, 134 : i32, 135 : i32, 136 : i32, 137 : i32, 138 : i32, 139 : i32, 140 : i32, 141 : i32, 142 : i32, 143 : i32, 144 : i32, 145 : i32, 146 : i32, 147 : i32, 148 : i32, 149 : i32, 150 : i32, 151 : i32, 152 : i32, 153 : i32, 154 : i32, 155 : i32, 156 : i32, 157 : i32, 158 : i32, 159 : i32, 160 : i32, 161 : i32, 162 : i32, 163 : i32, 164 : i32, 165 : i32, 166 : i32, 167 : i32, 168 : i32, 169 : i32, 170 : i32, 171 : i32, 172 : i32, 173 : i32, 174 : i32, 175 : i32, 176 : i32, 177 : i32, 178 : i32, 179 : i32, 180 : i32, 181 : i32, 182 : i32, 183 : i32, 184 : i32, 185 : i32, 186 : i32, 187 : i32, 188 : i32, 189 : i32, 190 : i32, 191 : i32, 192 : i32, 193 : i32, 194 : i32, 195 : i32, 196 : i32, 197 : i32, 198 : i32, 199 : i32, 200 : i32, 201 : i32, 202 : i32, 203 : i32, 204 : i32, 205 : i32, 206 : i32, 207 : i32, 208 : i32, 209 : i32, 210 : i32, 211 : i32, 212 : i32, 213 : i32, 214 : i32, 215 : i32, 216 : i32, 217 : i32, 218 : i32, 219 : i32, 220 : i32, 221 : i32, 222 : i32, 223 : i32, 224 : i32, 225 : i32, 226 : i32, 227 : i32, 228 : i32, 229 : i32, 230 : i32, 231 : i32, 232 : i32, 233 : i32, 234 : i32, 235 : i32, 236 : i32, 237 : i32, 238 : i32, 239 : i32, 240 : i32, 241 : i32, 242 : i32, 243 : i32, 244 : i32, 245 : i32, 246 : i32, 247 : i32, 248 : i32, 249 : i32, 250 : i32, 251 : i32, 252 : i32, 253 : i32, 254 : i32, 255 : i32] %112, %116 : vector<128xf32>, vector<128xf32> -> vector<256xf32>
++      %118 = spirv.VectorShuffle [0 : i32, 1 : i32, 2 : i32, 3 : i32, 4 : i32, 5 : i32, 6 : i32, 7 : i32, 8 : i32, 9 : i32, 10 : i32, 11 : i32, 12 : i32, 13 : i32, 14 : i32, 15 : i32, 16 : i32, 17 : i32, 18 : i32, 19 : i32, 20 : i32, 21 : i32, 22 : i32, 23 : i32, 24 : i32, 25 : i32, 26 : i32, 27 : i32, 28 : i32, 29 : i32, 30 : i32, 31 : i32, 32 : i32, 33 : i32, 34 : i32, 35 : i32, 36 : i32, 37 : i32, 38 : i32, 39 : i32, 40 : i32, 41 : i32, 42 : i32, 43 : i32, 44 : i32, 45 : i32, 46 : i32, 47 : i32, 48 : i32, 49 : i32, 50 : i32, 51 : i32, 52 : i32, 53 : i32, 54 : i32, 55 : i32, 56 : i32, 57 : i32, 58 : i32, 59 : i32, 60 : i32, 61 : i32, 62 : i32, 63 : i32, 64 : i32, 65 : i32, 66 : i32, 67 : i32, 68 : i32, 69 : i32, 70 : i32, 71 : i32, 72 : i32, 73 : i32, 74 : i32, 75 : i32, 76 : i32, 77 : i32, 78 : i32, 79 : i32, 80 : i32, 81 : i32, 82 : i32, 83 : i32, 84 : i32, 85 : i32, 86 : i32, 87 : i32, 88 : i32, 89 : i32, 90 : i32, 91 : i32, 92 : i32, 93 : i32, 94 : i32, 95 : i32, 96 : i32, 97 : i32, 98 : i32, 99 : i32, 100 : i32, 101 : i32, 102 : i32, 103 : i32, 104 : i32, 105 : i32, 106 : i32, 107 : i32, 108 : i32, 109 : i32, 110 : i32, 111 : i32, 112 : i32, 113 : i32, 114 : i32, 115 : i32, 116 : i32, 117 : i32, 118 : i32, 119 : i32, 120 : i32, 121 : i32, 122 : i32, 123 : i32, 124 : i32, 125 : i32, 126 : i32, 127 : i32] %99, %99 : vector<256xf32>, vector<256xf32> -> vector<128xf32>
++      %119 = spirv.FunctionCall @llvm_genx_dpas2_v128f32_v128i32_v64i32(%118, %108, %111, %cst10_i32, %cst10_i32, %cst8_i32, %cst8_i32, %cst0_i32, %cst0_i32) : (vector<128xf32>, vector<128xi32>, vector<64xi32>, i32, i32, i32, i32, i32, i32) -> vector<128xf32>
++      %120 = spirv.VectorShuffle [128 : i32, 129 : i32, 130 : i32, 131 : i32, 132 : i32, 133 : i32, 134 : i32, 135 : i32, 136 : i32, 137 : i32, 138 : i32, 139 : i32, 140 : i32, 141 : i32, 142 : i32, 143 : i32, 144 : i32, 145 : i32, 146 : i32, 147 : i32, 148 : i32, 149 : i32, 150 : i32, 151 : i32, 152 : i32, 153 : i32, 154 : i32, 155 : i32, 156 : i32, 157 : i32, 158 : i32, 159 : i32, 160 : i32, 161 : i32, 162 : i32, 163 : i32, 164 : i32, 165 : i32, 166 : i32, 167 : i32, 168 : i32, 169 : i32, 170 : i32, 171 : i32, 172 : i32, 173 : i32, 174 : i32, 175 : i32, 176 : i32, 177 : i32, 178 : i32, 179 : i32, 180 : i32, 181 : i32, 182 : i32, 183 : i32, 184 : i32, 185 : i32, 186 : i32, 187 : i32, 188 : i32, 189 : i32, 190 : i32, 191 : i32, 192 : i32, 193 : i32, 194 : i32, 195 : i32, 196 : i32, 197 : i32, 198 : i32, 199 : i32, 200 : i32, 201 : i32, 202 : i32, 203 : i32, 204 : i32, 205 : i32, 206 : i32, 207 : i32, 208 : i32, 209 : i32, 210 : i32, 211 : i32, 212 : i32, 213 : i32, 214 : i32, 215 : i32, 216 : i32, 217 : i32, 218 : i32, 219 : i32, 220 : i32, 221 : i32, 222 : i32, 223 : i32, 224 : i32, 225 : i32, 226 : i32, 227 : i32, 228 : i32, 229 : i32, 230 : i32, 231 : i32, 232 : i32, 233 : i32, 234 : i32, 235 : i32, 236 : i32, 237 : i32, 238 : i32, 239 : i32, 240 : i32, 241 : i32, 242 : i32, 243 : i32, 244 : i32, 245 : i32, 246 : i32, 247 : i32, 248 : i32, 249 : i32, 250 : i32, 251 : i32, 252 : i32, 253 : i32, 254 : i32, 255 : i32] %99, %99 : vector<256xf32>, vector<256xf32> -> vector<128xf32>
++      %121 = spirv.FunctionCall @llvm_genx_dpas2_v128f32_v128i32_v64i32(%120, %108, %115, %cst10_i32, %cst10_i32, %cst8_i32, %cst8_i32, %cst0_i32, %cst0_i32) : (vector<128xf32>, vector<128xi32>, vector<64xi32>, i32, i32, i32, i32, i32, i32) -> vector<128xf32>
++      %122 = spirv.VectorShuffle [0 : i32, 1 : i32, 2 : i32, 3 : i32, 4 : i32, 5 : i32, 6 : i32, 7 : i32, 8 : i32, 9 : i32, 10 : i32, 11 : i32, 12 : i32, 13 : i32, 14 : i32, 15 : i32, 16 : i32, 17 : i32, 18 : i32, 19 : i32, 20 : i32, 21 : i32, 22 : i32, 23 : i32, 24 : i32, 25 : i32, 26 : i32, 27 : i32, 28 : i32, 29 : i32, 30 : i32, 31 : i32, 32 : i32, 33 : i32, 34 : i32, 35 : i32, 36 : i32, 37 : i32, 38 : i32, 39 : i32, 40 : i32, 41 : i32, 42 : i32, 43 : i32, 44 : i32, 45 : i32, 46 : i32, 47 : i32, 48 : i32, 49 : i32, 50 : i32, 51 : i32, 52 : i32, 53 : i32, 54 : i32, 55 : i32, 56 : i32, 57 : i32, 58 : i32, 59 : i32, 60 : i32, 61 : i32, 62 : i32, 63 : i32, 64 : i32, 65 : i32, 66 : i32, 67 : i32, 68 : i32, 69 : i32, 70 : i32, 71 : i32, 72 : i32, 73 : i32, 74 : i32, 75 : i32, 76 : i32, 77 : i32, 78 : i32, 79 : i32, 80 : i32, 81 : i32, 82 : i32, 83 : i32, 84 : i32, 85 : i32, 86 : i32, 87 : i32, 88 : i32, 89 : i32, 90 : i32, 91 : i32, 92 : i32, 93 : i32, 94 : i32, 95 : i32, 96 : i32, 97 : i32, 98 : i32, 99 : i32, 100 : i32, 101 : i32, 102 : i32, 103 : i32, 104 : i32, 105 : i32, 106 : i32, 107 : i32, 108 : i32, 109 : i32, 110 : i32, 111 : i32, 112 : i32, 113 : i32, 114 : i32, 115 : i32, 116 : i32, 117 : i32, 118 : i32, 119 : i32, 120 : i32, 121 : i32, 122 : i32, 123 : i32, 124 : i32, 125 : i32, 126 : i32, 127 : i32, 128 : i32, 129 : i32, 130 : i32, 131 : i32, 132 : i32, 133 : i32, 134 : i32, 135 : i32, 136 : i32, 137 : i32, 138 : i32, 139 : i32, 140 : i32, 141 : i32, 142 : i32, 143 : i32, 144 : i32, 145 : i32, 146 : i32, 147 : i32, 148 : i32, 149 : i32, 150 : i32, 151 : i32, 152 : i32, 153 : i32, 154 : i32, 155 : i32, 156 : i32, 157 : i32, 158 : i32, 159 : i32, 160 : i32, 161 : i32, 162 : i32, 163 : i32, 164 : i32, 165 : i32, 166 : i32, 167 : i32, 168 : i32, 169 : i32, 170 : i32, 171 : i32, 172 : i32, 173 : i32, 174 : i32, 175 : i32, 176 : i32, 177 : i32, 178 : i32, 179 : i32, 180 : i32, 181 : i32, 182 : i32, 183 : i32, 184 : i32, 185 : i32, 186 : i32, 187 : i32, 188 : i32, 189 : i32, 190 : i32, 191 : i32, 192 : i32, 193 : i32, 194 : i32, 195 : i32, 196 : i32, 197 : i32, 198 : i32, 199 : i32, 200 : i32, 201 : i32, 202 : i32, 203 : i32, 204 : i32, 205 : i32, 206 : i32, 207 : i32, 208 : i32, 209 : i32, 210 : i32, 211 : i32, 212 : i32, 213 : i32, 214 : i32, 215 : i32, 216 : i32, 217 : i32, 218 : i32, 219 : i32, 220 : i32, 221 : i32, 222 : i32, 223 : i32, 224 : i32, 225 : i32, 226 : i32, 227 : i32, 228 : i32, 229 : i32, 230 : i32, 231 : i32, 232 : i32, 233 : i32, 234 : i32, 235 : i32, 236 : i32, 237 : i32, 238 : i32, 239 : i32, 240 : i32, 241 : i32, 242 : i32, 243 : i32, 244 : i32, 245 : i32, 246 : i32, 247 : i32, 248 : i32, 249 : i32, 250 : i32, 251 : i32, 252 : i32, 253 : i32, 254 : i32, 255 : i32] %119, %121 : vector<128xf32>, vector<128xf32> -> vector<256xf32>
++      %123 = spirv.VectorExtractDynamic %100[%cst5_i32] : vector<8xi32>, i32
++      %124 = spirv.IAdd %123, %cst16_i32 : i32
++      %125 = spirv.VectorInsertDynamic %124, %100[%cst5_i32] : vector<8xi32>, i32
++      %126 = spirv.VectorExtractDynamic %101[%cst6_i32] : vector<8xi32>, i32
++      %127 = spirv.IAdd %126, %cst16_i32 : i32
++      %128 = spirv.VectorInsertDynamic %127, %101[%cst6_i32] : vector<8xi32>, i32
++      %129 = spirv.VectorExtractDynamic %102[%cst6_i32] : vector<8xi32>, i32
++      %130 = spirv.IAdd %129, %cst16_i32 : i32
++      %131 = spirv.VectorInsertDynamic %130, %102[%cst6_i32] : vector<8xi32>, i32
++      spirv.Store "Function" %65, %117 : vector<256xf32>
++      spirv.Store "Function" %66, %122 : vector<256xf32>
++      spirv.Store "Function" %67, %125 : vector<8xi32>
++      spirv.Store "Function" %68, %128 : vector<8xi32>
++      spirv.Store "Function" %69, %131 : vector<8xi32>
++      %132 = spirv.IAdd %97, %cst16_i32 : i32
++      spirv.Branch ^bb1(%132, %117, %122, %125, %128, %131 : i32, vector<256xf32>, vector<256xf32>, vector<8xi32>, vector<8xi32>, vector<8xi32>)
++    ^bb3:  // pred: ^bb1
++      spirv.mlir.merge
++    }
++    %70 = spirv.Load "Function" %69 : vector<8xi32>
++    %71 = spirv.Load "Function" %68 : vector<8xi32>
++    %72 = spirv.Load "Function" %67 : vector<8xi32>
++    %73 = spirv.Load "Function" %66 : vector<256xf32>
++    %74 = spirv.Load "Function" %65 : vector<256xf32>
++    %75 = spirv.FConvert %74 : vector<256xf32> to vector<256xf16>
++    %76 = spirv.FConvert %73 : vector<256xf32> to vector<256xf16>
++    %77 = spirv.ConvertPtrToU %arg2 : !spirv.ptr<f16, CrossWorkgroup> to i64
++    %78 = spirv.VectorInsertDynamic %77, %25[%cst0_i32] : vector<4xi64>, i32
++    %79 = spirv.Bitcast %78 : vector<4xi64> to vector<8xi32>
++    %80 = spirv.IMul %arg8, %cst2_i32 : i32
++    %81 = spirv.ISub %80, %cst1_i32 : i32
++    %82 = spirv.VectorInsertDynamic %45, %79[%cst2_i32] : vector<8xi32>, i32
++    %83 = spirv.VectorInsertDynamic %31, %82[%cst3_i32] : vector<8xi32>, i32
++    %84 = spirv.VectorInsertDynamic %81, %83[%cst4_i32] : vector<8xi32>, i32
++    %85 = spirv.VectorInsertDynamic %40, %84[%cst5_i32] : vector<8xi32>, i32
++    %86 = spirv.VectorInsertDynamic %24, %85[%cst6_i32] : vector<8xi32>, i32
++    %87 = spirv.VectorInsertDynamic %cst3855_i32, %86[%cst7_i32] : vector<8xi32>, i32
++    %88 = spirv.ConvertPtrToU %arg2 : !spirv.ptr<f16, CrossWorkgroup> to i64
++    %89 = spirv.VectorInsertDynamic %88, %25[%cst0_i32] : vector<4xi64>, i32
++    %90 = spirv.Bitcast %89 : vector<4xi64> to vector<8xi32>
++    %91 = spirv.VectorInsertDynamic %45, %90[%cst2_i32] : vector<8xi32>, i32
++    %92 = spirv.VectorInsertDynamic %31, %91[%cst3_i32] : vector<8xi32>, i32
++    %93 = spirv.VectorInsertDynamic %81, %92[%cst4_i32] : vector<8xi32>, i32
++    %94 = spirv.VectorInsertDynamic %55, %93[%cst5_i32] : vector<8xi32>, i32
++    %95 = spirv.VectorInsertDynamic %24, %94[%cst6_i32] : vector<8xi32>, i32
++    %96 = spirv.VectorInsertDynamic %cst3855_i32, %95[%cst7_i32] : vector<8xi32>, i32
++    spirv.FunctionCall @llvm_genx_raw_sends2_noresult_i1_v8i32_v128i32(%cst0_i8, %cst0_i8, %true, %cst1_i8, %cst8_i8, %cst15_i8, %cst0_i32, %cst33686023_i32, %87, %75) : (i8, i8, i1, i8, i8, i8, i32, i32, vector<8xi32>, vector<256xf16>) -> ()
++    spirv.FunctionCall @llvm_genx_raw_sends2_noresult_i1_v8i32_v128i32(%cst0_i8, %cst0_i8, %true, %cst1_i8, %cst8_i8, %cst15_i8, %cst0_i32, %cst33686023_i32, %96, %76) : (i8, i8, i1, i8, i8, i8, i32, i32, vector<8xi32>, vector<256xf16>) -> ()
++    spirv.Return
++  }
++}
++
+diff --git a/python/gemm.16x32.tt.mlir b/python/gemm.16x32.tt.mlir
+new file mode 100644
+index 000000000..5280a5075
+--- /dev/null
++++ b/python/gemm.16x32.tt.mlir
+@@ -0,0 +1,47 @@
++// -----// IR Dump Before ConvertTritonToTritonGPU (convert-triton-to-tritongpu) ('builtin.module' operation) //----- //
++module {
++  tt.func public @matmul_kernel_with_block_pointers_0d1d2d3de4de5de6de7c8de9c10de11c(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32} , %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32} , %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32} , %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32} , %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32} , %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32} , %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32} , %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32} , %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32} ) attributes {noinline = false} {
++    %c1_i32 = arith.constant 1 : i32
++    %c31_i32 = arith.constant 31 : i32
++    %c15_i32 = arith.constant 15 : i32
++    %c16_i32 = arith.constant 16 : i32
++    %c0_i32 = arith.constant 0 : i32
++    %cst = arith.constant dense<0.000000e+00> : tensor<16x32xf32>
++    %c32_i32 = arith.constant 32 : i32
++    %c1_i64 = arith.constant 1 : i64
++    %0 = tt.get_program_id x : i32
++    %1 = arith.addi %arg3, %c15_i32 : i32
++    %2 = arith.divsi %1, %c16_i32 : i32
++    %3 = arith.addi %arg4, %c31_i32 : i32
++    %4 = arith.divsi %3, %c32_i32 : i32
++    %5 = arith.divsi %0, %4 : i32
++    %6 = arith.subi %2, %5 : i32
++    %7 = arith.minsi %6, %c1_i32 : i32
++    %8 = arith.remsi %0, %7 : i32
++    %9 = arith.addi %5, %8 : i32
++    %10 = arith.remsi %0, %4 : i32
++    %11 = arith.divsi %10, %7 : i32
++    %12 = arith.muli %9, %c16_i32 : i32
++    %13 = arith.extsi %arg3 : i32 to i64
++    %14 = arith.extsi %arg5 : i32 to i64
++    %15 = arith.extsi %arg6 : i32 to i64
++    %16 = tt.make_tensor_ptr %arg0, [%13, %14], [%15, %c1_i64], [%12, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %17 = arith.muli %11, %c32_i32 : i32
++    %18 = arith.extsi %arg4 : i32 to i64
++    %19 = arith.extsi %arg7 : i32 to i64
++    %20 = tt.make_tensor_ptr %arg1, [%14, %18], [%19, %c1_i64], [%c0_i32, %17] {order = array<i32: 1, 0>} : <tensor<16x32xf16>, 1>
++    %21:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c16_i32 iter_args(%arg10 = %cst, %arg11 = %16, %arg12 = %20) -> (tensor<16x32xf32>, !tt.ptr<tensor<16x16xf16>, 1>, !tt.ptr<tensor<16x32xf16>, 1>)  : i32 {
++      %25 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<16x16xf16>, 1> -> tensor<16x16xf16>
++      %26 = tt.load %arg12 {DotB = true, boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<16x32xf16>, 1> -> tensor<16x32xf16>
++      %27 = tt.dot %25, %26, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<16x16xf16> * tensor<16x32xf16> -> tensor<16x32xf32>
++      %28 = tt.advance %arg11, [%c0_i32, %c16_i32] : <tensor<16x16xf16>, 1>
++      %29 = tt.advance %arg12, [%c16_i32, %c0_i32] : <tensor<16x32xf16>, 1>
++      scf.yield %27, %28, %29 : tensor<16x32xf32>, !tt.ptr<tensor<16x16xf16>, 1>, !tt.ptr<tensor<16x32xf16>, 1>
++    }
++    %22 = arith.truncf %21#0 : tensor<16x32xf32> to tensor<16x32xf16>
++    %23 = arith.extsi %arg8 : i32 to i64
++    %24 = tt.make_tensor_ptr %arg2, [%13, %18], [%23, %c1_i64], [%12, %17] {order = array<i32: 1, 0>} : <tensor<16x32xf16>, 1>
++    tt.store %24, %22 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x32xf16>, 1>, tensor<16x32xf16>
++    tt.return
++  }
++}
+diff --git a/python/gemm.16x32.ttg.mlir b/python/gemm.16x32.ttg.mlir
+new file mode 100644
+index 000000000..6dac6abf3
+--- /dev/null
++++ b/python/gemm.16x32.ttg.mlir
+@@ -0,0 +1,64 @@
++module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
++  tt.func public @matmul_kernel_with_block_pointers_0d1d2d3de4de5de6de7c8de9c10de11c(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) attributes {noinline = false} {
++    %c1_i32 = arith.constant 1 : i32
++    %c31_i32 = arith.constant 31 : i32
++    %c15_i32 = arith.constant 15 : i32
++    %c16_i32 = arith.constant 16 : i32
++    %c0_i32 = arith.constant 0 : i32
++    %c1_i64 = arith.constant 1 : i64
++    %c32_i32 = arith.constant 32 : i32
++    %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
++    %0 = tt.get_program_id x : i32
++    %1 = arith.addi %arg3, %c15_i32 : i32
++    %2 = arith.divsi %1, %c16_i32 : i32
++    %3 = arith.addi %arg4, %c31_i32 : i32
++    %4 = arith.divsi %3, %c32_i32 : i32
++    %5 = arith.divsi %0, %4 : i32
++    %6 = arith.subi %2, %5 : i32
++    %7 = arith.minsi %6, %c1_i32 : i32
++    %8 = arith.remsi %0, %7 : i32
++    %9 = arith.addi %5, %8 : i32
++    %10 = arith.remsi %0, %4 : i32
++    %11 = arith.divsi %10, %7 : i32
++    %12 = arith.muli %9, %c16_i32 : i32
++    %13 = arith.extsi %arg3 : i32 to i64
++    %14 = arith.extsi %arg5 : i32 to i64
++    %15 = arith.extsi %arg6 : i32 to i64
++    %16 = tt.make_tensor_ptr %arg0, [%13, %14], [%15, %c1_i64], [%12, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %17 = arith.muli %11, %c32_i32 : i32
++    %18 = arith.extsi %arg4 : i32 to i64
++    %19 = arith.extsi %arg7 : i32 to i64
++    %20 = tt.make_tensor_ptr %arg1, [%14, %18], [%19, %c1_i64], [%c0_i32, %17] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %21 = arith.addi %17, %c16_i32 : i32
++    %22 = tt.make_tensor_ptr %arg1, [%14, %18], [%19, %c1_i64], [%c0_i32, %21] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %23:5 = scf.for %arg9 = %c0_i32 to %arg5 step %c16_i32 iter_args(%arg10 = %cst, %arg11 = %cst, %arg12 = %16, %arg13 = %20, %arg14 = %22) -> (tensor<16x16xf32>, tensor<16x16xf32>, !tt.ptr<tensor<16x16xf16>, 1>, !tt.ptr<tensor<16x16xf16>, 1>, !tt.ptr<tensor<16x16xf16>, 1>)  : i32 {
++      %29 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<16x16xf16>, 1> -> tensor<16x16xf16>
++      %30 = tt.load %arg13 {DotB = true, boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<16x16xf16>, 1> -> tensor<16x16xf16>
++      %31 = tt.load %arg14 {DotB = true, boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<16x16xf16>, 1> -> tensor<16x16xf16>
++      %32 = tt.extract %arg10, 0 : tensor<16x16xf32> -> tensor<8x16xf32>
++      %33 = tt.extract %29, 0 : tensor<16x16xf16> -> tensor<8x16xf16>
++      %34 = tt.dot %33, %30, %32 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %35 = tt.extract %arg10, 1 : tensor<16x16xf32> -> tensor<8x16xf32>
++      %36 = tt.extract %29, 1 : tensor<16x16xf16> -> tensor<8x16xf16>
++      %37 = tt.dot %36, %30, %35 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %38 = tt.glue %34, %37 : tensor<8x16xf32>, tensor<8x16xf32> -> tensor<16x16xf32>
++      %39 = tt.extract %arg11, 0 : tensor<16x16xf32> -> tensor<8x16xf32>
++      %40 = tt.dot %33, %31, %39 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %41 = tt.extract %arg11, 1 : tensor<16x16xf32> -> tensor<8x16xf32>
++      %42 = tt.dot %36, %31, %41 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %43 = tt.glue %40, %42 : tensor<8x16xf32>, tensor<8x16xf32> -> tensor<16x16xf32>
++      %44 = tt.advance %arg12, [%c0_i32, %c16_i32] : <tensor<16x16xf16>, 1>
++      %45 = tt.advance %arg13, [%c16_i32, %c0_i32] : <tensor<16x16xf16>, 1>
++      %46 = tt.advance %arg14, [%c16_i32, %c0_i32] : <tensor<16x16xf16>, 1>
++      scf.yield %38, %43, %44, %45, %46 : tensor<16x16xf32>, tensor<16x16xf32>, !tt.ptr<tensor<16x16xf16>, 1>, !tt.ptr<tensor<16x16xf16>, 1>, !tt.ptr<tensor<16x16xf16>, 1>
++    }
++    %24 = arith.truncf %23#0 : tensor<16x16xf32> to tensor<16x16xf16>
++    %25 = arith.truncf %23#1 : tensor<16x16xf32> to tensor<16x16xf16>
++    %26 = arith.extsi %arg8 : i32 to i64
++    %27 = tt.make_tensor_ptr %arg2, [%13, %18], [%26, %c1_i64], [%12, %17] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %28 = tt.make_tensor_ptr %arg2, [%13, %18], [%26, %c1_i64], [%12, %21] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    tt.store %27, %24 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>, 1>, tensor<16x16xf16>
++    tt.store %28, %25 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>, 1>, tensor<16x16xf16>
++    tt.return
++  }
++}
+diff --git a/python/tutorials/08-experimental-block-pointer.py b/python/tutorials/08-experimental-block-pointer.py
+index 4486349fb..968cc4e54 100644
+--- a/python/tutorials/08-experimental-block-pointer.py
++++ b/python/tutorials/08-experimental-block-pointer.py
+@@ -92,28 +92,35 @@ Note that this feature is still experimental and may change in the future.
+ 
+ import torch
+ 
++import intel_extension_for_pytorch
++
+ import triton
+ import triton.language as tl
+ 
+ 
+ @triton.autotune(
+     configs=[
+-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
+-                      num_warps=4),
+-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+-                      num_warps=4),
+-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+-                      num_warps=4),
+-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+-                      num_warps=4),
+-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+-                      num_warps=4),
+-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
+-                      num_warps=4),
+-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
+-                      num_warps=2),
+-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
+-                      num_warps=2),
++        #triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1}, num_stages=4,
++        #              num_warps=1),
++        triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1}, num_stages=4,
++                      num_warps=1),
++
++        #triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
++        #              num_warps=4),
++        #triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
++        #              num_warps=4),
++        #triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
++        #              num_warps=4),
++        #triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
++        #              num_warps=4),
++        #triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
++        #              num_warps=4),
++        #triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
++        #              num_warps=4),
++        #triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
++        #              num_warps=2),
++        #triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
++        #              num_warps=2),
+     ],
+     key=['M', 'N', 'K'],
+ )
+@@ -139,12 +146,15 @@ def matmul_kernel_with_block_pointers(
+     # This is done in a grouped ordering to promote L2 data reuse.
+     # See the matrix multiplication tutorial for details.
+     pid = tl.program_id(axis=0)
+-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+-    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
++    #num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
++    #num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
++    num_pid_m = 1
++    num_pid_n = 1
+     num_pid_in_group = GROUP_SIZE_M * num_pid_n
+     group_id = pid // num_pid_in_group
+     first_pid_m = group_id * GROUP_SIZE_M
+-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
++    #group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
++    group_size_m = 1
+     pid_m = first_pid_m + (pid % group_size_m)
+     pid_n = (pid % num_pid_in_group) // group_size_m
+ 
+@@ -219,8 +229,15 @@ def matmul(a, b):
+ # Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
+ 
+ torch.manual_seed(0)
+-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
++
++#a = torch.randn((8, 1024), device='xpu', dtype=torch.float16)
++#b = torch.randn((1024, 16), device='xpu', dtype=torch.float16)
++
++a = torch.randn((16, 1024), device='xpu', dtype=torch.float16)
++b = torch.randn((1024, 32), device='xpu', dtype=torch.float16)
++
++#a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
++#b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+ triton_output = matmul(a, b)
+ torch_output = torch.matmul(a, b)
+ print(f"triton_output={triton_output}")
+diff --git a/test/TritonGPU/distribute-to-warps.mlir b/test/TritonGPU/distribute-to-warps.mlir
+new file mode 100644
+index 000000000..7c7a82a83
+--- /dev/null
++++ b/test/TritonGPU/distribute-to-warps.mlir
+@@ -0,0 +1,107 @@
++// RUN: triton-opt %s -split-input-file -tritongpu-distribute-to-warps -canonicalize -cse | FileCheck %s
++#blocked1 = #triton_gpu.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
++#blocked2 = #triton_gpu.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
++#blockedC = #triton_gpu.blocked<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
++#blockedA = #triton_gpu.dot_op<{opIdx = 0, parent = #blockedC}>
++#blockedB = #triton_gpu.dot_op<{opIdx = 1, parent = #blockedC}>
++//#blockedA = #triton_gpu.blocked<{sizePerThread = [64, 32], threadsPerWarp = [1, 1], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
++//#blockedB = #triton_gpu.blocked<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
++
++// in the loop body:
++// thread block works on 128x128xf32 = 128x32xf16 * 32x128xf16
++//    each warp works on   64x64xf32 =  64x32xf16 *  32x64xf16
++module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
++  tt.func public @matmul_kernel_with_block_pointers_with_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
++    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blockedC>
++    %c8_i32 = arith.constant 8 : i32
++    %c128_i32 = arith.constant 128 : i32
++    %c1_i64 = arith.constant 1 : i64
++    %c127_i32 = arith.constant 127 : i32
++    %c32_i32 = arith.constant 32 : i32
++    %c0_i32 = arith.constant 0 : i32
++    %0 = tt.get_program_id x : i32
++    %1 = arith.addi %arg3, %c127_i32 : i32
++    %2 = arith.divsi %1, %c128_i32 : i32
++    %3 = arith.addi %arg4, %c127_i32 : i32
++    %4 = arith.divsi %3, %c128_i32 : i32
++    %5 = arith.muli %4, %c8_i32 : i32
++    %6 = arith.divsi %0, %5 : i32
++    %7 = arith.muli %6, %c8_i32 : i32
++    %8 = arith.subi %2, %7 : i32
++    %9 = arith.minsi %8, %c8_i32 : i32
++    %10 = arith.remsi %0, %9 : i32
++    %11 = arith.addi %7, %10 : i32
++    %12 = arith.remsi %0, %5 : i32
++    %13 = arith.divsi %12, %9 : i32
++    %14 = arith.muli %11, %c128_i32 : i32
++    %15 = arith.extsi %arg3 : i32 to i64
++    %16 = arith.extsi %arg5 : i32 to i64
++    %17 = arith.extsi %arg6 : i32 to i64
++    %18 = tt.make_tensor_ptr %arg0, [%15, %16], [%17, %c1_i64], [%14, %c0_i32] {order = array<i32: 1, 0>} : <tensor<128x32xf16, #blocked1>, 1>
++    %19 = arith.muli %13, %c128_i32 : i32
++    %20 = arith.extsi %arg4 : i32 to i64
++    %21 = arith.extsi %arg7 : i32 to i64
++    %22 = tt.make_tensor_ptr %arg1, [%16, %20], [%21, %c1_i64], [%c0_i32, %19] {order = array<i32: 1, 0>} : <tensor<32x128xf16, #blocked2>, 1>
++    %23:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %18, %arg12 = %22) -> (tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blocked1>, 1>, !tt.ptr<tensor<32x128xf16, #blocked2>, 1>)  : i32 {
++      %28 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<128x32xf16, #blocked1>, 1> -> tensor<128x32xf16, #blocked1>
++      %29 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x128xf16, #blocked2>, 1> -> tensor<32x128xf16, #blocked2>
++      %30 = triton_gpu.convert_layout %28 : (tensor<128x32xf16, #blocked1>) -> tensor<128x32xf16, #blockedA>
++      %31 = triton_gpu.convert_layout %29 : (tensor<32x128xf16, #blocked2>) -> tensor<32x128xf16, #blockedB>
++      %32 = tt.dot %30, %31, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #blockedA> * tensor<32x128xf16, #blockedB> -> tensor<128x128xf32, #blockedC>
++      %33 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<128x32xf16, #blocked1>, 1>
++      %34 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x128xf16, #blocked2>, 1>
++      scf.yield %32, %33, %34 : tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blocked1>, 1>, !tt.ptr<tensor<32x128xf16, #blocked2>, 1>
++    }
++    %24 = arith.truncf %23#0 : tensor<128x128xf32, #blockedC> to tensor<128x128xf16, #blockedC>
++    %25 = arith.extsi %arg8 : i32 to i64
++    %26 = tt.make_tensor_ptr %arg2, [%15, %20], [%25, %c1_i64], [%14, %19] {order = array<i32: 1, 0>} : <tensor<128x128xf16, #blockedC>, 1>
++    tt.store %26, %24 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<128x128xf16, #blockedC>, 1>, tensor<128x128xf16, #blockedC>
++    tt.return
++  }
++
++  tt.func public @matmul_kernel_with_block_pointers_without_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
++    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blockedC>
++    %c8_i32 = arith.constant 8 : i32
++    %c128_i32 = arith.constant 128 : i32
++    %c1_i64 = arith.constant 1 : i64
++    %c127_i32 = arith.constant 127 : i32
++    %c32_i32 = arith.constant 32 : i32
++    %c0_i32 = arith.constant 0 : i32
++    %0 = tt.get_program_id x : i32
++    %1 = arith.addi %arg3, %c127_i32 : i32
++    %2 = arith.divsi %1, %c128_i32 : i32
++    %3 = arith.addi %arg4, %c127_i32 : i32
++    %4 = arith.divsi %3, %c128_i32 : i32
++    %5 = arith.muli %4, %c8_i32 : i32
++    %6 = arith.divsi %0, %5 : i32
++    %7 = arith.muli %6, %c8_i32 : i32
++    %8 = arith.subi %2, %7 : i32
++    %9 = arith.minsi %8, %c8_i32 : i32
++    %10 = arith.remsi %0, %9 : i32
++    %11 = arith.addi %7, %10 : i32
++    %12 = arith.remsi %0, %5 : i32
++    %13 = arith.divsi %12, %9 : i32
++    %14 = arith.muli %11, %c128_i32 : i32
++    %15 = arith.extsi %arg3 : i32 to i64
++    %16 = arith.extsi %arg5 : i32 to i64
++    %17 = arith.extsi %arg6 : i32 to i64
++    %18 = tt.make_tensor_ptr %arg0, [%15, %16], [%17, %c1_i64], [%14, %c0_i32] {order = array<i32: 1, 0>} : <tensor<128x32xf16, #blockedA>, 1>
++    %19 = arith.muli %13, %c128_i32 : i32
++    %20 = arith.extsi %arg4 : i32 to i64
++    %21 = arith.extsi %arg7 : i32 to i64
++    %22 = tt.make_tensor_ptr %arg1, [%16, %20], [%21, %c1_i64], [%c0_i32, %19] {order = array<i32: 1, 0>} : <tensor<32x128xf16, #blockedB>, 1>
++    %23:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %18, %arg12 = %22) -> (tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blockedA>, 1>, !tt.ptr<tensor<32x128xf16, #blockedB>, 1>)  : i32 {
++      %28 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<128x32xf16, #blockedA>, 1> -> tensor<128x32xf16, #blockedA>
++      %29 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x128xf16, #blockedB>, 1> -> tensor<32x128xf16, #blockedB>
++      %32 = tt.dot %28, %29, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #blockedA> * tensor<32x128xf16, #blockedB> -> tensor<128x128xf32, #blockedC>
++      %33 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<128x32xf16, #blockedA>, 1>
++      %34 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x128xf16, #blockedB>, 1>
++      scf.yield %32, %33, %34 : tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blockedA>, 1>, !tt.ptr<tensor<32x128xf16, #blockedB>, 1>
++    }
++    %24 = arith.truncf %23#0 : tensor<128x128xf32, #blockedC> to tensor<128x128xf16, #blockedC>
++    %25 = arith.extsi %arg8 : i32 to i64
++    %26 = tt.make_tensor_ptr %arg2, [%15, %20], [%25, %c1_i64], [%14, %19] {order = array<i32: 1, 0>} : <tensor<128x128xf16, #blockedC>, 1>
++    tt.store %26, %24 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<128x128xf16, #blockedC>, 1>, tensor<128x128xf16, #blockedC>
++    tt.return
++  }
++}
+diff --git a/test/TritonGPU/distribute-to-warps.output.mlir b/test/TritonGPU/distribute-to-warps.output.mlir
+new file mode 100644
+index 000000000..8d0e3063c
+--- /dev/null
++++ b/test/TritonGPU/distribute-to-warps.output.mlir
+@@ -0,0 +1,142 @@
++#warp = #triton_gpu.warp<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
++#warp1 = #triton_gpu.warp<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
++module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
++  tt.func public @matmul_kernel_with_block_pointers_with_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
++    %c64_i32 = arith.constant 64 : i32
++    %c2_i32 = arith.constant 2 : i32
++    %c32_i64 = arith.constant 32 : i64
++    %c128_i64 = arith.constant 128 : i64
++    %c0_i32 = arith.constant 0 : i32
++    %c32_i32 = arith.constant 32 : i32
++    %c127_i32 = arith.constant 127 : i32
++    %c1_i64 = arith.constant 1 : i64
++    %c128_i32 = arith.constant 128 : i32
++    %c8_i32 = arith.constant 8 : i32
++    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #warp>
++    %0 = gpu.subgroup_id : index
++    %1 = arith.index_cast %0 : index to i32
++    %2 = tt.get_program_id x : i32
++    %3 = arith.addi %arg3, %c127_i32 : i32
++    %4 = arith.divsi %3, %c128_i32 : i32
++    %5 = arith.addi %arg4, %c127_i32 : i32
++    %6 = arith.divsi %5, %c128_i32 : i32
++    %7 = arith.muli %6, %c8_i32 : i32
++    %8 = arith.divsi %2, %7 : i32
++    %9 = arith.muli %8, %c8_i32 : i32
++    %10 = arith.subi %4, %9 : i32
++    %11 = arith.minsi %10, %c8_i32 : i32
++    %12 = arith.remsi %2, %11 : i32
++    %13 = arith.addi %9, %12 : i32
++    %14 = arith.remsi %2, %7 : i32
++    %15 = arith.divsi %14, %11 : i32
++    %16 = arith.muli %13, %c128_i32 : i32
++    %17 = arith.extsi %arg3 : i32 to i64
++    %18 = arith.extsi %arg5 : i32 to i64
++    %19 = arith.extsi %arg6 : i32 to i64
++    %20 = arith.muli %1, %c32_i32 : i32
++    %21 = arith.addi %20, %16 : i32
++    %22 = tt.make_tensor_ptr %arg0, [%17, %18], [%19, %c1_i64], [%21, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #warp1>, 1>
++    %23 = arith.muli %15, %c128_i32 : i32
++    %24 = arith.extsi %arg4 : i32 to i64
++    %25 = arith.extsi %arg7 : i32 to i64
++    %26 = arith.addi %20, %23 : i32
++    %27 = tt.make_tensor_ptr %arg1, [%18, %24], [%25, %c1_i64], [%c0_i32, %26] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #warp1>, 1>
++    %28:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %22, %arg12 = %27) -> (tensor<64x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #warp1>, 1>, !tt.ptr<tensor<32x32xf16, #warp1>, 1>)  : i32 {
++      %40 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16, #warp1>, 1> -> tensor<32x32xf16, #warp1>
++      %41 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16, #warp1>, 1> -> tensor<32x32xf16, #warp1>
++      %42 = triton_gpu.alloc : <f16, 1>
++      %43 = tt.make_tensor_ptr %42, [%c128_i64, %c32_i64], [%c32_i64, %c1_i64], [%20, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #warp1>, 3>
++      tt.store %43, %40 {cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<32x32xf16, #warp1>, 3>, tensor<32x32xf16, #warp1>
++      gpu.barrier
++      %44 = arith.divsi %1, %c2_i32 : i32
++      %45 = arith.remsi %44, %c2_i32 : i32
++      %46 = arith.muli %45, %c64_i32 : i32
++      %47 = tt.make_tensor_ptr %42, [%c128_i64, %c32_i64], [%c32_i64, %c1_i64], [%46, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 3>
++      %48 = tt.load %47 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 3> -> tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>
++      %49 = triton_gpu.alloc : <f16, 1>
++      %50 = tt.make_tensor_ptr %49, [%c32_i64, %c128_i64], [%c128_i64, %c1_i64], [%c0_i32, %20] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #warp1>, 3>
++      tt.store %50, %41 {cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<32x32xf16, #warp1>, 3>, tensor<32x32xf16, #warp1>
++      gpu.barrier
++      %51 = arith.remsi %1, %c2_i32 : i32
++      %52 = arith.remsi %51, %c2_i32 : i32
++      %53 = arith.muli %52, %c64_i32 : i32
++      %54 = tt.make_tensor_ptr %49, [%c32_i64, %c128_i64], [%c128_i64, %c1_i64], [%c0_i32, %53] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 3>
++      %55 = tt.load %54 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 3> -> tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>
++      %56 = tt.dot %48, %55, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>> * tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<64x64xf32, #warp>
++      %57 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<32x32xf16, #warp1>, 1>
++      %58 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x32xf16, #warp1>, 1>
++      scf.yield %56, %57, %58 : tensor<64x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #warp1>, 1>, !tt.ptr<tensor<32x32xf16, #warp1>, 1>
++    }
++    %29 = arith.truncf %28#0 : tensor<64x64xf32, #warp> to tensor<64x64xf16, #warp>
++    %30 = arith.extsi %arg8 : i32 to i64
++    %31 = arith.divsi %1, %c2_i32 : i32
++    %32 = arith.remsi %31, %c2_i32 : i32
++    %33 = arith.muli %32, %c64_i32 : i32
++    %34 = arith.addi %33, %16 : i32
++    %35 = arith.remsi %1, %c2_i32 : i32
++    %36 = arith.remsi %35, %c2_i32 : i32
++    %37 = arith.muli %36, %c64_i32 : i32
++    %38 = arith.addi %37, %23 : i32
++    %39 = tt.make_tensor_ptr %arg2, [%17, %24], [%30, %c1_i64], [%34, %38] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #warp>, 1>
++    tt.store %39, %29 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<64x64xf16, #warp>, 1>, tensor<64x64xf16, #warp>
++    tt.return
++  }
++  tt.func public @matmul_kernel_with_block_pointers_without_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
++    %c64_i32 = arith.constant 64 : i32
++    %c2_i32 = arith.constant 2 : i32
++    %c0_i32 = arith.constant 0 : i32
++    %c32_i32 = arith.constant 32 : i32
++    %c127_i32 = arith.constant 127 : i32
++    %c1_i64 = arith.constant 1 : i64
++    %c128_i32 = arith.constant 128 : i32
++    %c8_i32 = arith.constant 8 : i32
++    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #warp>
++    %0 = gpu.subgroup_id : index
++    %1 = arith.index_cast %0 : index to i32
++    %2 = tt.get_program_id x : i32
++    %3 = arith.addi %arg3, %c127_i32 : i32
++    %4 = arith.divsi %3, %c128_i32 : i32
++    %5 = arith.addi %arg4, %c127_i32 : i32
++    %6 = arith.divsi %5, %c128_i32 : i32
++    %7 = arith.muli %6, %c8_i32 : i32
++    %8 = arith.divsi %2, %7 : i32
++    %9 = arith.muli %8, %c8_i32 : i32
++    %10 = arith.subi %4, %9 : i32
++    %11 = arith.minsi %10, %c8_i32 : i32
++    %12 = arith.remsi %2, %11 : i32
++    %13 = arith.addi %9, %12 : i32
++    %14 = arith.remsi %2, %7 : i32
++    %15 = arith.divsi %14, %11 : i32
++    %16 = arith.muli %13, %c128_i32 : i32
++    %17 = arith.extsi %arg3 : i32 to i64
++    %18 = arith.extsi %arg5 : i32 to i64
++    %19 = arith.extsi %arg6 : i32 to i64
++    %20 = arith.divsi %1, %c2_i32 : i32
++    %21 = arith.remsi %20, %c2_i32 : i32
++    %22 = arith.muli %21, %c64_i32 : i32
++    %23 = arith.addi %22, %16 : i32
++    %24 = tt.make_tensor_ptr %arg0, [%17, %18], [%19, %c1_i64], [%23, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 1>
++    %25 = arith.muli %15, %c128_i32 : i32
++    %26 = arith.extsi %arg4 : i32 to i64
++    %27 = arith.extsi %arg7 : i32 to i64
++    %28 = arith.remsi %1, %c2_i32 : i32
++    %29 = arith.remsi %28, %c2_i32 : i32
++    %30 = arith.muli %29, %c64_i32 : i32
++    %31 = arith.addi %30, %25 : i32
++    %32 = tt.make_tensor_ptr %arg1, [%18, %26], [%27, %c1_i64], [%c0_i32, %31] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 1>
++    %33:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %24, %arg12 = %32) -> (tensor<64x64xf32, #warp>, !tt.ptr<tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 1>, !tt.ptr<tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 1>)  : i32 {
++      %37 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 1> -> tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>
++      %38 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 1> -> tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>
++      %39 = tt.dot %37, %38, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>> * tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<64x64xf32, #warp>
++      %40 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 1>
++      %41 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 1>
++      scf.yield %39, %40, %41 : tensor<64x64xf32, #warp>, !tt.ptr<tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 1>, !tt.ptr<tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 1>
++    }
++    %34 = arith.truncf %33#0 : tensor<64x64xf32, #warp> to tensor<64x64xf16, #warp>
++    %35 = arith.extsi %arg8 : i32 to i64
++    %36 = tt.make_tensor_ptr %arg2, [%17, %26], [%35, %c1_i64], [%23, %31] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #warp>, 1>
++    tt.store %36, %34 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<64x64xf16, #warp>, 1>, tensor<64x64xf16, #warp>
++    tt.return
++  }
++}
++
