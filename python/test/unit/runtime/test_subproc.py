@@ -79,4 +79,3 @@ def test_compile_in_forked_subproc() -> None:
     assert proc.exitcode == 0
 
     reset_tmp_dir()
-    
