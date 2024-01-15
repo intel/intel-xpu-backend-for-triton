@@ -65,8 +65,6 @@ def compile_fn_dot(attrs, capability):
 
 
 def test_compile_in_forked_subproc() -> None:
-    reset_tmp_dir()
-
     capability = 0
     if torch.cuda.is_available():
         major, minor = torch.cuda.get_device_capability(0)
@@ -79,3 +77,6 @@ def test_compile_in_forked_subproc() -> None:
     proc.start()
     proc.join()
     assert proc.exitcode == 0
+
+    reset_tmp_dir()
+    
