@@ -57,11 +57,12 @@ jobs:
       - name: Run core tests
         if: ${{ env.BACKEND == 'XPU'}}
         run: |
-          cd python/test/unit/language
-          python3 -m pytest --verbose --device xpu --ignore=test_line_info.py --ignore=test_subprocess.py
-
+          cd python/test/unit
+          python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          # run runtime tests serially to avoid race condition with cache handling.
+          python3 -m pytest runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
 
       - name: Run assert/print tests
         if: ${{ env.BACKEND == 'XPU'}}
