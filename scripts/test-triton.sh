@@ -118,7 +118,7 @@ function run_core_tests {
     echo "FAILED: return code $?" ; exit $?
   fi
   cd $CORE_TEST_DIR/operators
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n auto --verbose
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi

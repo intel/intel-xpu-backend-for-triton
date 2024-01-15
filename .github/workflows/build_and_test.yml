@@ -78,7 +78,6 @@ jobs:
         env:
           # TRITON_INTERPRET: "1"
           CUA_VISIBLE_DEVICES: ""
-        if: ${{ env.BACKEND == 'XPU'}}
         run: |
           cd python/test/unit
           python3 -m pytest -vs operators/test_flash_attention.py
@@ -87,7 +86,7 @@ jobs:
         if: ${{ env.BACKEND == 'XPU'}}
         run: |
           cd python/test/unit
-          python3 -m pytest -n auto --verbose operators
+          python3 -m pytest -n 8 --verbose operators
 
       - name: Run XPU python tests
         if: ${{ env.BACKEND == 'XPU'}}
