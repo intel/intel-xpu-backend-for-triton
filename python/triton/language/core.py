@@ -5,7 +5,7 @@ from enum import Enum
 from functools import partial, wraps
 from typing import Union, Callable, List, Sequence, TypeVar, cast
 
-from .._C.libtriton.triton import ir
+from .._C.libtriton import ir
 from . import semantic
 
 T = TypeVar('T')
@@ -778,12 +778,26 @@ class tensor:
         assert False, "Transposition must be created by the AST Visitor"
 
     @builtin
-    def to(self, dtype, bitcast=False, _builder=None):
+    def to(self, dtype, fp_downcast_rounding: str = None, bitcast=False, _builder=None):
+        """
+        Casts the tensor to the given :code:`dtype`.
+        :param dtype: The target data type.
+        :type dtype: DType
+        :param fp_downcast_rounding: The rounding mode for downcasting floating-point values. \
+            This parameter is only used when self is a floating-point tensor and dtype is a floating-point type \
+            with a smaller bitwidth. Supported values are :code:`"rtne"` (round to nearest, ties to even) and \
+            :code:`"rtz"` (round towards zero).
+        :type fp_downcast_rounding: str
+        :param bitcast: If true, the tensor is bitcasted to the given :code:`dtype`, instead of being casted.
+        :type bitcast: bool
+        :param _builder: The IR builder.
+        :type _builder: ir.builder
+        """
         if isinstance(bitcast, constexpr):
             bitcast = bitcast.value
         if bitcast:
             return semantic.bitcast(self, dtype, _builder)
-        return semantic.cast(self, dtype, _builder)
+        return semantic.cast(self, dtype, _builder, fp_downcast_rounding)
 
 
 # -----------------------
@@ -1015,7 +1029,7 @@ def expand_dims(input, axis, _builder=None):
     axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
 
     if len(set(axes)) != len(axes):
-        raise ValueError(f"expand_dims recieved duplicate axes, normalized axes = {axes}")
+        raise ValueError(f"expand_dims received duplicate axes, normalized axes = {axes}")
 
     ret = input
     for a in sorted(axes):
@@ -1463,8 +1477,9 @@ def reduce(input, axis, combine_fn, _builder=None, _generator=None):
                 handles = [r.handle for r in results]
             _builder.create_reduce_ret(*handles)
 
+    axis = _constexpr_to_value(axis)
     if axis is not None:
-        axis = _constexpr_to_value(axis)
+        axis = _wrap_axis(axis, len(input[0].shape))
     return semantic.reduction(input, axis, make_combine_region, _builder)
 
 
@@ -1543,6 +1558,8 @@ def associative_scan(input, axis, combine_fn, _builder=None, _generator=None):
             _builder.create_scan_ret(*handles)
 
     axis = _constexpr_to_value(axis)
+    if axis is not None:
+        axis = _wrap_axis(axis, len(input[0].shape))
     return semantic.associative_scan(input, axis, make_combine_region, _builder)
 
 

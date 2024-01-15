@@ -3,8 +3,7 @@ from __future__ import annotations  # remove after python 3.11
 from functools import wraps
 from typing import List, Optional, Sequence, Tuple, TypeVar
 
-from .._C.libtriton.triton import ir
-from ..common.build import is_hip
+from .._C.libtriton import ir
 from . import core as tl
 
 T = TypeVar('T')
@@ -623,6 +622,16 @@ def broadcast_impl_value(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) ->
 #######
 
 
+def _str_to_rounding_mode(rounding_mode: str):
+    if rounding_mode is None:
+        return None
+    if rounding_mode == 'rtne':
+        return ir.ROUNDING_MODE.RTNE
+    if rounding_mode == 'rtz':
+        return ir.ROUNDING_MODE.RTZ
+    raise ValueError(f"Invalid rounding mode: {rounding_mode}. Supported rounding modes are 'rtne' and 'rtz'.")
+
+
 def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
     src_ty = input.type
     if src_ty.is_block():
@@ -642,10 +651,12 @@ def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tenso
     return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)), dst_ty)
 
 
-def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
+def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_rounding: str = None) -> tl.tensor:
     src_ty = input.type
     if isinstance(dst_ty, tl.constexpr):
         dst_ty = dst_ty.value
+    if isinstance(fp_downcast_rounding, tl.constexpr):
+        fp_downcast_rounding = fp_downcast_rounding.value
     if src_ty.is_block():
         dst_ty = tl.block_type(dst_ty.scalar, input.type.get_block_shapes())
     if src_ty == dst_ty:
@@ -654,13 +665,28 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
     src_sca_ty = src_ty.scalar
     dst_sca_ty = dst_ty.scalar
 
+    # For fp downcasting default rounding mode should be RTNE, for all other conversions it should
+    # not be set
+    fp_downcast_rounding = _str_to_rounding_mode(fp_downcast_rounding)
+    use_custom_rounding = False
+    if dst_sca_ty.is_floating() and src_sca_ty.is_floating(
+    ) and dst_sca_ty.primitive_bitwidth < src_sca_ty.primitive_bitwidth:
+        if fp_downcast_rounding is None: fp_downcast_rounding = ir.ROUNDING_MODE.RTNE
+        elif fp_downcast_rounding != ir.ROUNDING_MODE.RTNE: use_custom_rounding = True
+    else:
+        if fp_downcast_rounding is not None:
+            raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
+                             "Source scalar type is " + str(src_sca_ty) + " and destination type is " + str(dst_sca_ty))
+
     if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
         assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
 
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
+    # and non-default rounding modes for downcasting
     if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
-       (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()):
-        return tl.tensor(builder.create_fp_to_fp(input.handle, dst_ty.to_ir(builder)), dst_ty)
+       (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()) or \
+       use_custom_rounding:
+        return tl.tensor(builder.create_fp_to_fp(input.handle, dst_ty.to_ir(builder), fp_downcast_rounding), dst_ty)
 
     # bf16 <=> (not fp32)
     if (src_sca_ty.is_fp16() and not dst_sca_ty.is_fp32()) or \
@@ -950,6 +976,9 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
     # Check `boundary_check` argument
     boundary_check = _canonicalize_boundary_check(boundary_check, block_shape)
 
+    # Cast to target data type
+    val = cast(val, elt_ty, builder)
+
     # Build IR
     return tl.tensor(builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction),
                      tl.void)
@@ -1171,19 +1200,6 @@ def atomic_xchg(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope
 # ===----------------------------------------------------------------------===//
 
 
-def gpu_has_mfma() -> bool:
-    if not is_hip():
-        return False
-    return True  # mfma supported in ['gfx908', 'gfx90a']
-
-
-def mfma_supported(M, N, K, allow_tf32, ret_scalar_ty) -> bool:
-    if not gpu_has_mfma():
-        return False
-    # TODO: Add check for configurations and types.
-    return True
-
-
 def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_num_imprecise_acc: int,
         out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
 
@@ -1246,28 +1262,29 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
     N = rhs.type.shape[1]
 
     # Cast operands of types f16 and i8 for configurations where FMA only supported.
-    if is_hip() and not mfma_supported(M, N, lhs.type.shape[1], allow_tf32, ret_scalar_ty):
-        ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
-        lhs = cast(lhs, ret_cast_scalar_ty, builder)
-        rhs = cast(rhs, ret_cast_scalar_ty, builder)
-        if ret_cast_scalar_ty == tl.float16:
-            _0 = builder.create_splat(builder.get_fp16(0), [M, N])
-        else:
-            _0 = builder.create_splat(builder.get_fp32(0), [M, N])
-        ret_ty = tl.block_type(ret_cast_scalar_ty, [M, N])
-        ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
-        return cast(ret, ret_scalar_ty, builder)
-    if is_hip() and mfma_supported(M, N, lhs.type.shape[1], allow_tf32,
-                                   ret_scalar_ty) and ret_scalar_ty.primitive_bitwidth < 32:
-        if lhs.type.scalar.is_int():
-            ret_dot_scalar_ty = tl.int32
-            _0 = builder.create_splat(builder.get_int32(0), [M, N])
-        else:
-            ret_dot_scalar_ty = tl.float32
-            _0 = builder.create_splat(builder.get_fp32(0), [M, N])
-        ret_ty = tl.block_type(ret_dot_scalar_ty, [M, N])
-        ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
-        return cast(ret, ret_scalar_ty, builder)
+    # TODO: builder should contain target information
+    # if is_hip() and not mfma_supported(M, N, lhs.type.shape[1], allow_tf32, ret_scalar_ty):
+    #     ret_cast_scalar_ty = tl.float32 if lhs.type.scalar.is_int() else ret_scalar_ty
+    #     lhs = cast(lhs, ret_cast_scalar_ty, builder)
+    #     rhs = cast(rhs, ret_cast_scalar_ty, builder)
+    #     if ret_cast_scalar_ty == tl.float16:
+    #         _0 = builder.create_splat(builder.get_fp16(0), [M, N])
+    #     else:
+    #         _0 = builder.create_splat(builder.get_fp32(0), [M, N])
+    #     ret_ty = tl.block_type(ret_cast_scalar_ty, [M, N])
+    #     ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
+    #     return cast(ret, ret_scalar_ty, builder)
+    # if is_hip() and mfma_supported(M, N, lhs.type.shape[1], allow_tf32,
+    #                                ret_scalar_ty) and ret_scalar_ty.primitive_bitwidth < 32:
+    #     if lhs.type.scalar.is_int():
+    #         ret_dot_scalar_ty = tl.int32
+    #         _0 = builder.create_splat(builder.get_int32(0), [M, N])
+    #     else:
+    #         ret_dot_scalar_ty = tl.float32
+    #         _0 = builder.create_splat(builder.get_fp32(0), [M, N])
+    #     ret_ty = tl.block_type(ret_dot_scalar_ty, [M, N])
+    #     ret = tl.tensor(builder.create_dot(lhs.handle, rhs.handle, _0, allow_tf32), ret_ty)
+    #     return cast(ret, ret_scalar_ty, builder)
     ret_ty = tl.block_type(ret_scalar_ty, [M, N])
     if acc is None:
         acc_handle = builder.create_splat(_0, [M, N])
@@ -1276,11 +1293,11 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, allow_tf32: bool, max_nu
         assert acc.type == ret_ty
 
     # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
-    max_num_imprecise_acc = 0
-    if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
-        max_num_imprecise_acc = builder.options.max_num_imprecise_acc_default
-        if max_num_imprecise_acc is None:
-            max_num_imprecise_acc = 2**30
+    if max_num_imprecise_acc is None:
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+            max_num_imprecise_acc = builder.options.max_num_imprecise_acc_default
+        else:
+            max_num_imprecise_acc = 0
 
     return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, allow_tf32, max_num_imprecise_acc), ret_ty)
 
@@ -1499,14 +1516,22 @@ def _convert_elem_to_ir_value(builder, elem, require_i64):
     if isinstance(elem, int):
         elem = tl.constexpr(elem)
     if isinstance(elem, tl.constexpr):
-        return builder.get_int64(elem.value) if require_i64 else builder.get_int32(elem.value)
+        if require_i64:
+            assert -2**63 <= elem.value < 2**63, f"Block pointers only support 64 bit `shape/strides`, " \
+                f"got a value {elem.value} which is out of the range"
+            return builder.get_int64(elem.value)
+        else:
+            assert -2**31 <= elem.value < 2**31, f"Block pointers only support 32 bit `offsets/block_shape`, " \
+                f"got a value {elem.value} which is out of the range"
+            return builder.get_int32(elem.value)
     elif isinstance(elem, tl.tensor):
         assert elem.numel.value == 1, "Expected a scalar in shape/strides/offsets"
         assert elem.dtype.is_int(), "Expected an integer scalar type in shape/strides/offsets"
         if elem.dtype != tl.int64 and require_i64:
             return builder.create_int_cast(elem.handle, builder.get_int64_ty(), elem.dtype.is_int_signed())
-        elif elem.dtype != tl.int32:
-            return builder.create_int_cast(elem.handle, builder.get_int32_ty(), elem.dtype.is_int_signed())
+        elif elem.dtype != tl.int32 and not require_i64:
+            assert False, "Block pointers only support 32 bit `offsets/block_shape`, " \
+                "add a `.to(tl.int32)` or use regular indexing for 64 bit support"
         return elem.handle
     assert False, f"Unsupported element type in shape/strides/offsets: {type(elem)}"
 

@@ -1,5 +1,4 @@
 from __future__ import annotations, division
-
 import ast
 import functools
 import hashlib
@@ -12,9 +11,6 @@ from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, 
 
 import torch
 import intel_extension_for_pytorch as ipex
-
-from .._C.libtriton.triton import TMAInfos
-from ..common.backend import get_backend, get_cuda_version_key
 from .interpreter import InterpretedFunction
 from ..runtime.driver import driver
 
@@ -46,6 +42,8 @@ def get_event_pool(is_spirv=True):
         return 0
 
 
+TRITON_MODULE = __name__[:-len(".runtime.jit")]
+
 T = TypeVar("T")
 
 # -----------------------------------------------------------------------------
@@ -72,8 +70,7 @@ class DependenciesFinder(ast.NodeVisitor):
         lhs = self.visit(node.value)
         while isinstance(lhs, ast.Attribute):
             lhs = self.visit(lhs.value)
-        if lhs is None or (getattr(lhs, "__name__", "") == "triton"
-                           or getattr(lhs, "__name__", "").endswith(".triton")):
+        if lhs is None or (getattr(lhs, "__name__", "") == TRITON_MODULE):
             return None
         return getattr(lhs, node.attr)
 
@@ -83,7 +80,7 @@ class DependenciesFinder(ast.NodeVisitor):
             return
         if inspect.isbuiltin(func):
             return
-        if func.__module__ and (func.__module__.startswith("triton.") or ".triton." in func.__module__):
+        if func.__module__ and (func.__module__.startswith(TRITON_MODULE)):
             return
         assert isinstance(
             func, JITFunction
@@ -377,8 +374,7 @@ class JITFunction(KernelInterface[T]):
             return arg
 
     def run(self, *args, grid, warmup, **kwargs):
-        from ..compiler import CompiledKernel, compile, ASTSource
-        from ..compiler.backends.cuda import CUDABackend
+        from ..compiler import CompiledKernel, compile, ASTSource, make_backend
         # deprecated arguments
         assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
         assert "device" not in kwargs, "device option is deprecated; current device will be used"
@@ -387,7 +383,7 @@ class JITFunction(KernelInterface[T]):
         device = driver.get_current_device()
         stream = driver.get_current_stream(device)
         target = driver.get_current_target()
-        backend = CUDABackend(target)
+        backend = make_backend(target)
         kwargs["debug"] = self.debug
         options = backend.parse_options(kwargs)
         # bind non-reserved keyword args and set defaults
@@ -414,11 +410,7 @@ class JITFunction(KernelInterface[T]):
         sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
-        version_key = get_cuda_version_key()
-        if target[0] in ["xpu"]:
-            # FIXME
-            version_key = ""
-        key = (version_key, sig_key, constexpr_key, spec_key, options)
+        key = (sig_key, constexpr_key, spec_key, options)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )
@@ -505,15 +497,12 @@ class JITFunction(KernelInterface[T]):
         self.debug = True if os.environ.get("TRITON_DEBUG", "0") == "1" else debug
         self.noinline = noinline
 
-        # tma info
-        self.tensormaps_info = TMAInfos()
-
         # TODO(jlebar): Remove uses of these fields outside this file, then
         # remove the fields here.
         self.arg_names = [p.name for p in self.params]
         self.constexprs = [p.num for p in self.params if p.is_constexpr]
 
-        # re-use docs of wrapped function
+        # reuse docs of wrapped function
         self.__doc__ = fn.__doc__
         self.__name__ = fn.__name__
         self.__globals__ = fn.__globals__
@@ -652,7 +641,6 @@ class TensorWrapper:
     def __init__(self, base, dtype):
         self.dtype = dtype
         self.base = base
-        self.is_cuda = base.is_cuda
         self.device = base.device
         self.shape = self.base.shape
 

@@ -12,7 +12,7 @@
 
 using namespace mlir;
 namespace {
-// Change the destination layout of reshape ops allowing reoder when used by a
+// Change the destination layout of reshape ops allowing reorder when used by a
 // reduction in order to minimize the amount of cross thread communication for
 // the reduction.
 struct OptimizeReshapeLayoutPattern
@@ -425,6 +425,6 @@ private:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonGPUOptimizeThreadLocalityPass() {
+std::unique_ptr<Pass> mlir::triton::gpu::createOptimizeThreadLocalityPass() {
   return std::make_unique<TritonGPUOptimizeThreadLocalityPass>();
 }
