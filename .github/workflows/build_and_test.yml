@@ -1,62 +1,162 @@
-name: Triton DSE Pre Commit
+name: Build and test
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
-    - llvm-target
+      - llvm-target
+  push:
+    branches:
+      - llvm-target
+
+env:
+  BASE: /home/runner
+  LLVM_SYSPATH: /home/runner/packages/llvm
+  BACKEND: XPU
+  TRITON_DISABLE_LINE_INFO: 1
 
 jobs:
-  build:
-    name: Build + LIT
-    runs-on: [self-hosted, llvm-target]
-    timeout-minutes: 40
+  pre-commit:
+    name: Pre-commit checks
+    runs-on:
+      - glados
+      - spr
+      - cpu
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check if pip cache exists
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        run: |
+          PIP_CACHE_KEY="pip-3.9-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}"
+          PIP_CACHE="/cache/$PIP_CACHE_KEY"
+          echo "PIP_CACHE=$PIP_CACHE" >> "${GITHUB_ENV}"
+          if [[ -d $PIP_CACHE ]]; then
+            echo "Python cache found for key $PIP_CACHE_KEY"
+            echo $PIP_CACHE > .pip-cache
+            mkdir -p $HOME/.cache
+            ln -s $PIP_CACHE $HOME/.cache/pip
+          else
+            echo "Python cache not found for key $PIP_CACHE_KEY"
+          fi
+
+      - name: Install Python 3.9
+        uses: actions/setup-python@v4
         with:
-          submodules: 'true'
+          python-version: '3.9'
 
-      - name: Set XPU ENV
+      - name: Run pre-commit checks
         run: |
-          echo "LLVM_SYSPATH=/iusers/waihungt/packages/llvm" >> "${GITHUB_ENV}"
-          echo "BACKEND=XPU" >> "${GITHUB_ENV}"
-          echo "TRITON_DISABLE_LINE_INFO=1" >> "${GITHUB_ENV}"
+          pip install --upgrade pre-commit
 
-      - name: Clear cache
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
+          # If first run of yapf worked and made changes reset the tree to the original state
+          git reset --hard
+
+          python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
+
+      - name: Save pip cache
+        if: ${{ hashFiles('.pip-cache') == '' }}
         run: |
-          rm -rf ~/.triton
+          TMPDIR=/cache/${{ github.run_id }}-$RANDOM
+          mkdir $TMPDIR
+          cp -r $HOME/.cache/pip/* $TMPDIR/
+          # ignore error if other job created a cache with the same key already
+          mv $TMPDIR $PIP_CACHE || true
 
-      - name: Update PATH
+  integration-tests:
+    name: Integration tests
+    runs-on:
+      - glados
+      - spr
+      - pvc
+    strategy:
+      matrix:
+        python:
+          - "3.9"
+          - "3.10"
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check if pip cache exists
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
         run: |
-          echo "PATH=${HOME}/.local/bin:${PATH}" >> "${GITHUB_ENV}"
+          PIP_CACHE_KEY="pip-${{ matrix.python }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}"
+          PIP_CACHE="/cache/$PIP_CACHE_KEY"
+          echo "PIP_CACHE=$PIP_CACHE" >> "${GITHUB_ENV}"
+          if [[ -d $PIP_CACHE ]]; then
+            echo "Python cache found for key $PIP_CACHE_KEY"
+            echo $PIP_CACHE > .pip-cache
+            mkdir -p $HOME/.cache
+            ln -s $PIP_CACHE $HOME/.cache/pip
+          else
+            echo "Python cache not found for key $PIP_CACHE_KEY"
+          fi
 
-      - name: Check pre-commit
+      - name: Install Python ${{ matrix.python }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Check if packages cache exists
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
         run: |
-          python3 -m pip install --upgrade pre-commit
-          python3 -m pre_commit run --all-files --verbose
+          LLVM_COMMIT_ID=$(git ls-remote https://github.com/intel/llvm.git refs/heads/genx | cut -f1)
+          echo "Latest llvm genx commit id: $LLVM_COMMIT_ID"
+          COMPOSITE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
+          PACKAGES_CACHE_KEY="packages-$COMPOSITE_KEY-${{ env.CACHE_NUMBER }}"
+          PACKAGES_CACHE="/cache/$PACKAGES_CACHE_KEY"
+          echo "PACKAGES_CACHE=$PACKAGES_CACHE" >> "${GITHUB_ENV}"
+          if [[ -d $PACKAGES_CACHE ]]; then
+            echo "Packages cache found for key $PACKAGES_CACHE_KEY"
+            echo $PACKAGES_CACHE > .packages-cache
+            ln -s $PACKAGES_CACHE $HOME/packages
+          else
+            echo "Packages cache not found for key $PACKAGES_CACHE_KEY"
+          fi
 
-      - name: Install Triton
-        if: ${{ env.BACKEND == 'XPU'}}
+      - name: Build packages
+        if: ${{ hashFiles('.packages-cache') == '' }}
+        run: |
+          ./scripts/compile-triton.sh
+
+      - name: Save packages cache
+        if: ${{ hashFiles('.packages-cache') == '' }}
+        run: |
+          TMPDIR=/cache/${{ github.run_id }}-$RANDOM
+          mkdir $TMPDIR
+          cp -r $HOME/packages/* $TMPDIR/
+          # ignore error if other job created a cache with the same key already
+          mv $TMPDIR $PACKAGES_CACHE || true
+
+      - name: Build Triton
         run: |
           cd python
-          python3 -m pip install cmake==3.24 ninja pytest-xdist
-          python3 -m pip install --no-build-isolation -vvv '.[tests]'
+          pip install wheel
+          pip install --no-build-isolation '.[tests]'
 
       - name: Run lit tests
-        if: ${{ env.BACKEND == 'XPU'}}
         run: |
-          python3 -m pip install lit
-          python3 -m pip install intel_extension_for_pytorch
+          pip install lit
           cd python
-          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
-          if [ ! -d "${LIT_TEST_DIR}" ]; then
-            echo "Could not find '${LIT_TEST_DIR}'" ; exit -1
-          fi
-          lit -v "${LIT_TEST_DIR}"
+          lit -v build/*/test
 
       - name: Run core tests
-        if: ${{ env.BACKEND == 'XPU'}}
         run: |
+          pip install pytest pytest-xdist
+          pip install torch==1.13.0a0+git6c9b55e intel_extension_for_pytorch==1.13.120+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
           cd python/test/unit
           python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           # run runtime tests serially to avoid race condition with cache handling.
@@ -65,7 +165,6 @@ jobs:
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
 
       - name: Run assert/print tests
-        if: ${{ env.BACKEND == 'XPU'}}
         run: |
           cd python/test/unit/language
           python3 assert_helper.py device_assert
@@ -84,20 +183,25 @@ jobs:
           python3 -m pytest -vs operators/test_flash_attention.py
 
       - name: Run partial operators tests
-        if: ${{ env.BACKEND == 'XPU'}}
         run: |
           cd python/test/unit
           python3 -m pytest -n 8 --verbose operators
 
       - name: Run XPU python tests
-        if: ${{ env.BACKEND == 'XPU'}}
         run: |
           cd python/test/backend/third_party_backends
-          python3 -m pytest --verbose test_xpu_backend.py
+          python3 -m pytest -n auto --verbose test_xpu_backend.py
 
       - name: Run CXX unittests
-        if: ${{ env.BACKEND == 'XPU'}}
         run: |
-          cd python
-          cd "build/$(ls build | grep -i cmake)"
+          cd python/build/*cmake*
           ctest
+
+      - name: Save pip cache
+        if: ${{ hashFiles('.pip-cache') == '' }}
+        run: |
+          TMPDIR=/cache/${{ github.run_id }}-$RANDOM
+          mkdir $TMPDIR
+          cp -r $HOME/.cache/pip/* $TMPDIR/
+          # ignore error if other job created a cache with the same key already
+          mv $TMPDIR $PIP_CACHE || true
