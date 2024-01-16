@@ -29,6 +29,7 @@
 #include "ConvertLayoutOpToLLVM.h"
 #include "DotOpToLLVM.h"
 #include "ElementwiseOpToLLVM.h"
+#include "HistogramOpToLLVM.h"
 #include "LoadStoreOpToLLVM.h"
 #include "ReduceOpToLLVM.h"
 #include "RegReallocOpToLLVM.h"
@@ -390,12 +391,12 @@ public:
     switch (target) {
     case Target::NVVM:
       addLegalDialect<NVVM::NVVMDialect>();
+      addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
       break;
     case Target::GENX:
       addLegalDialect<GENX::GENXDialect>();
       break;
     }
-    addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
@@ -577,6 +578,7 @@ struct ConvertTritonGPUToLLVM
     populatePatterns2(populateTensorPtrOpsToLLVMPatterns);
     populatePatterns2(populateClusterOpsToLLVMPatterns);
     populatePatterns2(populateRegReallocOpToLLVMPatterns);
+    populatePatterns1(populateHistogramOpToLLVMPatterns);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
@@ -904,14 +906,6 @@ private:
         asyncWaitOp.erase();
       }
     });
-  }
-
-  static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
-                              Type promotedType) {
-    Type tensorPromotedType =
-        operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
-                                                             promotedType);
-    return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
   }
 };
 

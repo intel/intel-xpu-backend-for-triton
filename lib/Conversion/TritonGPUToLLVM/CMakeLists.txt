@@ -17,6 +17,7 @@ add_mlir_conversion_library(TritonGPUToLLVM
     DotOpToLLVM/WGMMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
+    HistogramOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp

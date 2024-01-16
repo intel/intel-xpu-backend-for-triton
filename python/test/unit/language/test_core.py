@@ -10,8 +10,17 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.common.build import is_hip, is_spirv
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
+
+
+def is_hip():
+    return triton.runtime.driver.get_current_target()[0] == "hip"
+
+
+def is_spirv():
+    import torch
+    return torch.xpu.is_available()
+
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
@@ -1893,6 +1902,31 @@ scan_layouts = [
     BlockedLayout([2, 2], [8, 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
 ]
 
+# ---------------
+# test histogram
+# ---------------
+
+
+@pytest.mark.parametrize("M, N", [[2048, 2], [1024, 8], [1024, 128], [256, 512], [32, 512], [8, 512], [8, 2]])
+def test_histogram(M, N, device):
+    if is_xpu(device):
+        pytest.skip("RuntimeError: \"histc\" not implemented for 'Int'")
+
+    @triton.jit
+    def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr):
+        offset1 = tl.arange(0, M)
+        offset2 = tl.arange(0, N)
+        x = tl.load(x_ptr + offset1)
+        z = tl.histogram(x, N)
+        tl.store(z_ptr + offset2, z)
+
+    torch.manual_seed(17)
+    x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
+    z = torch.empty(N, dtype=torch.int32, device=device)
+    z_torch = torch.histc(x, bins=N, min=0, max=N - 1)
+    histogram_kernel[(1, )](x, z, M=M, N=N)
+    assert (z_torch == z).all()
+
 
 @pytest.mark.parametrize("op", ['sum', 'max', 'min'])
 @pytest.mark.parametrize("BLOCK_N", [32, 64, 128])
@@ -3380,9 +3414,8 @@ def test_num_warps_pow2(device):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path", [('int32', 'math.ffs', ''), ('float32', 'math.log2', ''),
-                                                       ('float32', 'math.scalbn', ''),
-                                                       ('float32', 'math.pow', tl.math.libdevice_path()),
-                                                       ('float64', 'math.pow_dtype', tl.math.libdevice_path()),
+                                                       ('float32', 'math.scalbn', ''), ('float32', 'math.pow', ''),
+                                                       ('float64', 'math.pow_dtype', ''),
                                                        ('float64', 'math.norm4d', '')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
@@ -3441,7 +3474,7 @@ def test_math_tensor(dtype_str, expr, lib_path, num_ctas, device):
 
 
 @pytest.mark.parametrize("dtype_str, expr, lib_path", [('float32', 'math.pow', ''), ('float64', 'math.pow_dtype', ''),
-                                                       ('float64', 'math.pow', tl.math.libdevice_path())])
+                                                       ('float64', 'math.pow', '')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_math_scalar(dtype_str, expr, lib_path, num_ctas, device):
 
