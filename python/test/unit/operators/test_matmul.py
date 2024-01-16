@@ -7,6 +7,9 @@ import triton
 import triton.language as tl
 import triton.ops
 
+# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
+torch.xpu.enable_sync_mode()
+
 
 @pytest.mark.parametrize(
     "BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE, ALLOW_TF32, F8_FASTACCUM, ACC_DTYPE, OUTPUT_DTYPE",
@@ -102,6 +105,7 @@ import triton.ops
 )
 def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE, ALLOW_TF32,
             F8_FASTACCUM, ACC_DTYPE, OUTPUT_DTYPE):
+    pytest.skip("FIXME: Port get_device_capability to XPU")
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
@@ -152,15 +156,15 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     def init_input(m, n, dtype, acc_dtype):
         if 'float8' in dtype:
             ewidth = {'float8e4b15': 4, 'float8e4nv': 4, 'float8e5': 5}[dtype]
-            sign = torch.randint(2, size=(m, n), device="cuda", dtype=torch.int8) * 128
-            val = torch.randint(2**3 - 1, size=(m, n), device="cuda", dtype=torch.int8) << 7 - ewidth
+            sign = torch.randint(2, size=(m, n), device="xpu", dtype=torch.int8) * 128
+            val = torch.randint(2**3 - 1, size=(m, n), device="xpu", dtype=torch.int8) << 7 - ewidth
             return sign | val
         if dtype == "int8":
-            return torch.randint(-128, 127, (m, n), device="cuda", dtype=torch.int8)
+            return torch.randint(-128, 127, (m, n), device="xpu", dtype=torch.int8)
         # Use small range of values to prevent numerical issues.
         min_exp = -4 if acc_dtype == "float16" else -10
         exponents = torch.randint(min_exp, 0, size=(m, n))
-        ret = (2.**exponents).to(getattr(torch, dtype)).to("cuda")
+        ret = (2.**exponents).to(getattr(torch, dtype)).to("xpu")
         return ret
 
     # allocate/transpose inputs

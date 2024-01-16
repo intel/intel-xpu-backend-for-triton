@@ -10,6 +10,9 @@ import triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction
 
+# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
+torch.xpu.enable_sync_mode()
+
 tmpdir = ".tmp"
 
 
@@ -111,7 +114,7 @@ def test_reuse():
 
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    x = torch.empty(1, dtype=torch.int32, device='xpu')
     for i in range(10):
         kernel[(1, )](x, 1, BLOCK=1024)
     assert counter == 1
@@ -127,7 +130,7 @@ def test_specialize(mode):
 
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    x = torch.empty(1, dtype=torch.int32, device='xpu')
     function = {'enable': kernel, 'disable': kernel_nospec}[mode]
     target = {'enable': 4, 'disable': 1}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
@@ -141,9 +144,9 @@ def test_annotation():
     def kernel(X, i: tl.int32):
         tl.store(X, i)
 
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    x = torch.empty(1, dtype=torch.int32, device='xpu')
 
-    device = torch.cuda.current_device()
+    device = torch.xpu.current_device()
     kernel[(1, )](x, 1)
     kernel[(1, )](x, 8)
     kernel[(1, )](x, 16)
@@ -157,7 +160,7 @@ def test_constexpr_not_callable() -> None:
     def kernel(X, c: tl.constexpr):
         tl.store(X, 2)
 
-    x = torch.empty(1, dtype=torch.int32, device='cuda')
+    x = torch.empty(1, dtype=torch.int32, device='xpu')
     error = False
     try:
         kernel[(1, )](x, c="str")
@@ -180,12 +183,12 @@ def test_jit_warmup_cache() -> None:
         tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
     args = [
-        torch.randn(32, dtype=torch.float32, device="cuda"),
-        torch.randn(32, dtype=torch.float32, device="cuda"),
-        torch.randn(32, dtype=torch.float32, device="cuda"),
+        torch.randn(32, dtype=torch.float32, device="xpu"),
+        torch.randn(32, dtype=torch.float32, device="xpu"),
+        torch.randn(32, dtype=torch.float32, device="xpu"),
         32,
     ]
-    device = torch.cuda.current_device()
+    device = torch.xpu.current_device()
     assert len(kernel_add.cache[device]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
@@ -203,7 +206,7 @@ def test_jit_debug() -> None:
         tl.device_assert(idx < 32, "idx < 32")
         tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
-    device = torch.cuda.current_device()
+    device = torch.xpu.current_device()
     assert len(kernel_add.cache[device]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
@@ -229,7 +232,7 @@ def test_jit_noinline() -> None:
     def kernel_add_device(a, b, o, N: tl.constexpr):
         add_fn(a, b, o, N)
 
-    device = torch.cuda.current_device()
+    device = torch.xpu.current_device()
     assert len(kernel_add_device.cache[device]) == 0
     kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add_device.cache[device]) == 1

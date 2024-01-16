@@ -15,6 +15,7 @@
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
@@ -104,6 +105,14 @@ void init_triton_llvm(py::module &&m) {
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
       .def(py::init<>());
 
+  py::class_<llvm::Module::FunctionListType>(m, "function_list")
+      .def(
+          "__iter__",
+          [](llvm::Module::FunctionListType &s) {
+            return py::make_iterator(s.begin(), s.end());
+          },
+          py::keep_alive<0, 1>());
+
   py::class_<llvm::Module>(m, "module", py::module_local())
       .def(
           "__str__",
@@ -113,7 +122,23 @@ void init_triton_llvm(py::module &&m) {
             os << *self;
             return os.str();
           },
-          ret::take_ownership);
+          ret::take_ownership)
+      .def(
+          "get_functions",
+          [](llvm::Module *mod) -> llvm::Module::FunctionListType & {
+            return mod->getFunctionList();
+          },
+          ret::reference_internal);
+
+  py::class_<llvm::Function>(m, "function", py::module_local())
+      .def("set_calling_conv", &llvm::Function::setCallingConv)
+      .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
+                             std::string &val) { fn->addFnAttr(name, val); })
+      .def("has_public_visibility",
+           [](llvm::Function *fn) {
+             return fn->getVisibility() == llvm::GlobalValue::DefaultVisibility;
+           })
+      .def("is_declaration", &llvm::Function::isDeclaration);
 
   // optimization levels
   py::class_<llvm::OptimizationLevel>(m, "optimization_level",
@@ -125,9 +150,12 @@ void init_triton_llvm(py::module &&m) {
   m.attr("OPTIMIZE_Os") = (llvm::OptimizationLevel::Os);
   m.attr("OPTIMIZE_Oz") = (llvm::OptimizationLevel::Oz);
 
-  m.def("to_module", [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
-    return mlir::translateModuleToLLVMIR(mod, ctx);
-  });
+  m.def(
+      "to_module",
+      [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
+        return mlir::translateModuleToLLVMIR(mod, ctx);
+      },
+      py::keep_alive<0, 2>());
 
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt) {
@@ -225,6 +253,17 @@ void init_triton_llvm(py::module &&m) {
                          "256-v256:256-v512:512-v1024:1024-n8:16:32:64";
     mod->setTargetTriple(triple);
     mod->setDataLayout(layout);
+  });
+
+  m.def("init_targets", []() {
+    static std::once_flag init_flag;
+    std::call_once(init_flag, []() {
+      llvm::InitializeAllTargetInfos();
+      llvm::InitializeAllTargets();
+      llvm::InitializeAllTargetMCs();
+      llvm::InitializeAllAsmParsers();
+      llvm::InitializeAllAsmPrinters();
+    });
   });
 
   m.def("link_extern_lib", [](llvm::Module *mod, std::string path) {

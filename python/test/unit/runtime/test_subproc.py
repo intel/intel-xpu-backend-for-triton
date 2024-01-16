@@ -8,6 +8,9 @@ import triton
 import triton.language as tl
 from triton.compiler import ASTSource
 
+# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
+torch.xpu.enable_sync_mode()
+
 tmpdir = ".tmp"
 
 
@@ -30,12 +33,15 @@ def compile_fn(attrs, capability):
         signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
         attrs=attrs,
     )
-    triton.compile(src=src, target=("cuda", capability))
+    triton.compile(src=src, target=("xpu", capability))
 
 
 def test_compile_in_subproc() -> None:
-    major, minor = torch.cuda.get_device_capability(0)
-    cc = major * 10 + minor
+    cc = 0
+    if torch.cuda.is_available():
+        major, minor = torch.cuda.get_device_capability(0)
+        cc = major * 10 + minor
+
     config = triton.compiler.AttrsDescriptor(tuple(range(4)), (), (), ())
 
     multiprocessing.set_start_method('fork')
@@ -55,13 +61,15 @@ def compile_fn_dot(attrs, capability):
         tl.store(Z + offs, z)
 
     src = ASTSource(fn=kernel_dot, signature={0: "*fp32"}, attrs=attrs, constants=dict())
-    triton.compile(src=src, target=("cuda", capability))
+    triton.compile(src=src, target=("xpu", capability))
 
 
 def test_compile_in_forked_subproc() -> None:
-    reset_tmp_dir()
-    major, minor = torch.cuda.get_device_capability(0)
-    capability = major * 10 + minor
+    capability = 0
+    if torch.cuda.is_available():
+        major, minor = torch.cuda.get_device_capability(0)
+        capability = major * 10 + minor
+
     config = triton.compiler.AttrsDescriptor(tuple(range(1)), (), (), ())
 
     assert multiprocessing.get_start_method() == 'fork'
@@ -69,3 +77,5 @@ def test_compile_in_forked_subproc() -> None:
     proc.start()
     proc.join()
     assert proc.exitcode == 0
+
+    reset_tmp_dir()
