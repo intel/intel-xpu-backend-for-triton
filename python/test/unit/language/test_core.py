@@ -2228,13 +2228,6 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     if is_hip():
         pytest.skip("test_chain_reduce is not supported in HIP")
 
-    # Merge db5c793 regression
-    if is_xpu(device) and op in ["sum", 'max'] and [M, N] in [[128, 256], [256, 256]]:
-        pytest.skip("FIXME: Incorrect result on XPU")
-    # Merge 726bdb9 regression
-    if is_xpu(device) and first_axis == 0 and op == "max" and [M, N] in [[128, 128], [256, 128]]:
-        pytest.skip("FIXME: Incorrect result on XPU")
-
     op_str = ""
     if op == "sum":
         op_str = """
