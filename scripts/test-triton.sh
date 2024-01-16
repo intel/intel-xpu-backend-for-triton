@@ -112,7 +112,7 @@ function run_core_tests {
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
-  
+
   TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose operators/
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
@@ -128,7 +128,7 @@ function run_core_tests {
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
-  
+
   python3 language/print_helper.py device_print float 1> /dev/null
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
