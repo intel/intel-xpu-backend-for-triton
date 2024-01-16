@@ -2939,14 +2939,6 @@ def test_masked_load_shared_memory(dtype, device):
 
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
 
-    # Merge 1c45836 regression from
-    # if is_xpu(device) and dtype == torch.bfloat16:
-    # Note: fails in getConversionFunc
-    # Note: also fails for NVIDIA in the same way, we need handle conversion of an
-    # fp_to_fp operation where the input and output tensors have element type f16.
-    if is_xpu(device) and dtype in [torch.bfloat16]:
-        pytest.skip("FIXME: Incorrect result on XPU")
-
     M = 32
     N = 32
     K = 16

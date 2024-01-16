@@ -790,6 +790,43 @@ Bf16_to_Fp8E4M3Nv_func(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(i8_ty, fp8x4Vec, i32_val(3))};
 }
 
+static SmallVector<Value> Bf16_to_Fp16_func(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) {
+  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+
+  Value bf16x2Vec = undef(bf16x2VecTy);
+  bf16x2Vec = insert_element(bf16x2VecTy, bf16x2Vec, v[0], i32_val(0));
+  bf16x2Vec = insert_element(bf16x2VecTy, bf16x2Vec, v[1], i32_val(1));
+  bf16x2Vec = bitcast(bf16x2Vec, i32_ty);
+
+  Value sign = and_(i32_ty, bf16x2Vec, i32_val(0x80008000));
+  Value nosign = and_(i32_ty, bf16x2Vec, i32_val(0x7fff7fff));
+
+  // BF16 exp range is 0..255 with bias 127
+  // FP16 exp range is 0..31 with bias 15
+  // So, BF16 exp values has to be adjusted by subtracting 112.
+  // Min BF16 value we can convert is 112 << 7 = 0x3800
+  // Max BF16 value we can convert is 143 << 7 + <max fraction> =
+  // 0x4780 + 0x7F = 0x47FF
+  Value nosign_0 = and_(i32_ty, nosign, i32_val(0xffff0000));
+  nosign_0 = umax(i32_ty, nosign_0, i32_val(0x38000000));
+  nosign_0 = umin(i32_ty, nosign_0, i32_val(0x47ff0000));
+  Value nosign_1 = and_(i32_ty, nosign, i32_val(0xffff));
+  nosign_1 = umax(i32_ty, nosign_1, i32_val(0x3800));
+  nosign_1 = umin(i32_ty, nosign_1, i32_val(0x47ff));
+  nosign = or_(i32_ty, nosign_0, nosign_1);
+
+  nosign = sub(i32_ty, nosign, i32_val(0x38003800));
+  nosign = shl(i32_ty, nosign, i32_val(3));
+
+  auto fp16x2VecTy = vec_ty(f16_ty, 2);
+  Value fp16x2Vec = or_(i32_ty, nosign, sign);
+  fp16x2Vec = bitcast(fp16x2Vec, fp16x2VecTy);
+  return {extract_element(f16_ty, fp16x2Vec, i32_val(0)),
+          extract_element(f16_ty, fp16x2Vec, i32_val(1))};
+}
+
 // Bf16 (x2) -> Fp8E4M3 (x2) (packed)
 static const Fp8ConversionDesc Bf16_to_Fp8E4M3Nv = {
     "{                                       \n"
@@ -1483,6 +1520,8 @@ struct FpToFpOpConversion
               // BF16 -> F8
               {{BF16TyID, F8E5M2TyID}, {Bf16_to_Fp8E5M2_func, 4}},
               {{BF16TyID, F8E4M3TyID}, {Bf16_to_Fp8E4M3Nv_func, 4}},
+              // BF16 -> F16
+              {{BF16TyID, F16TyID}, {Bf16_to_Fp16_func, 2}},
           };
 
       std::pair<TypeID, TypeID> key = {srcTy.getTypeID(), dstTy.getTypeID()};
