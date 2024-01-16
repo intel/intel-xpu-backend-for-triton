@@ -19,6 +19,8 @@ if(NOT WIN32)
   list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 endif()
 
+
+
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
@@ -82,8 +84,41 @@ include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
 
+# Utilities
+function(add_triton_object name)
+  cmake_parse_arguments(ARG "" "" "DEPENDS;LINK_LIBS" ${ARGN})
+  add_library(${name} OBJECT)
+  target_sources(${name}
+    PRIVATE ${ARG_UNPARSED_ARGUMENTS}
+    INTERFACE $<TARGET_OBJECTS:${name}>
+  )
+
+
+  # add_library(${name} OBJECT ${ARG_UNPARSED_ARGUMENTS})
+  if(ARG_DEPENDS)
+    add_dependencies(${name} ${ARG_DEPENDS})
+  endif()
+  if(ARG_LINK_LIBS)
+    target_link_libraries(${name} PUBLIC ${ARG_LINK_LIBS})
+  endif()
+endfunction(add_triton_object)
+
+set_property(GLOBAL PROPERTY TRITON_LIBS "")
+function(add_triton_library name)
+  set_property(GLOBAL APPEND PROPERTY TRITON_LIBS ${name})
+  add_triton_object(${name} ${ARGN})
+  llvm_update_compile_flags(${name})
+endfunction()
+
+set_property(GLOBAL PROPERTY TRITON_PLUGINS "")
+function(add_triton_plugin name)
+  set_property(GLOBAL APPEND PROPERTY TRITON_PLUGINS ${name})
+  add_triton_object(${name} ${ARGN})
+endfunction()
+
+
 # Disable warnings that show up in external code (gtest;pybind11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
 
 include_directories(".")
 include_directories(${MLIR_INCLUDE_DIRS})
@@ -98,9 +133,6 @@ add_subdirectory(lib)
 # find_package(PythonLibs REQUIRED)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(TRITON_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
-
-get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
-get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 
 # TODO: Figure out which target is sufficient to fix errors; triton is
 # apparently not enough. Currently set linking libstdc++fs for all targets
@@ -128,33 +160,26 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_link_options(${Python3_LINK_OPTIONS})
   endif()
 
-  set(TRITON_CODEGEN_BACKENDS "xpu")
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
 
+
+  get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
+  get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
   set(TRITON_LIBRARIES
-    TritonIR
-    TritonAnalysis
-    TritonTransforms
-    TritonToTritonGPU
-    TritonGPUIR
-    TritonGPUTransforms
-    TritonLLVMIR
-    TritonNvidiaGPUIR
-    MLIRAMDGPUDialect
-    TritonAnalysis
-    NVGPUToLLVM
-    TritonNvidiaGPUTransforms
-    TritonGPUToLLVM
+    ${triton_libs}
+    ${triton_plugins}
     TritonSPIRV
+
+    # mlir
+    MLIRAMDGPUDialect
     MLIRNVVMDialect
     MLIRNVVMToLLVMIRTranslation
     MLIRGPUToNVVMTransforms
     MLIRGPUToGPURuntimeTransforms
     MLIRGPUTransforms
-
-    # optimizations
+    MLIRIR
     MLIRControlFlowToLLVM
     MLIRBytecodeWriter
     MLIRPass
@@ -166,7 +191,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRROCDLToLLVMIRTranslation
     MLIRGENXToLLVMIRTranslation
     MLIRGPUDialect
-    MLIRIR
+    MLIRSCFToControlFlow
+    MLIRIndexToLLVM
+    MLIRGPUToROCDLTransforms
 
     # LLVM
     LLVMPasses
@@ -180,12 +207,14 @@ if(TRITON_BUILD_PYTHON_MODULE)
   )
 
   # Define triton library
+  string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_CODEGEN_BACKENDS})
+  set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
+  add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
                   ${PYTHON_SRC_PATH}/ir.cc
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
-                  ${PYTHON_SRC_PATH}/llvm.cc
-                  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/xpu/triton_xpu.cc)
+                  ${PYTHON_SRC_PATH}/llvm.cc)
 
   # Link triton with its dependencies
   target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})
@@ -195,7 +224,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE z)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS} ${GenISAIntrinsics_LDFLAGS})
-  set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
 endif()
 
 if(UNIX AND NOT APPLE)
@@ -210,7 +238,7 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
     set(PYTHON_LDFLAGS "-undefined dynamic_lookup -flto")
   endif()
 
-  target_link_libraries(triton ${PYTHON_LDFLAGS})
+  target_link_libraries(triton PRIVATE ${PYTHON_LDFLAGS})
 endif()
 
 add_subdirectory(bin)

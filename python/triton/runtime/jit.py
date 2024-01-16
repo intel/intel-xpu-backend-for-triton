@@ -11,7 +11,6 @@ from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, 
 
 import torch
 import intel_extension_for_pytorch as ipex
-from .interpreter import InterpretedFunction
 from ..runtime.driver import driver
 
 
@@ -594,6 +593,7 @@ def jit(
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
         if os.getenv("TRITON_INTERPRET", "0") == "1":
+            from .interpreter import InterpretedFunction
             return InterpretedFunction(fn)
         else:
             return JITFunction(
