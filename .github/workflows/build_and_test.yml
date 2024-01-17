@@ -162,8 +162,8 @@ jobs:
           sudo dpkg -i ./intel-igc-core_1.0.14828.8_amd64.deb ./intel-igc-opencl_1.0.14828.8_amd64.deb
           rm ./intel-igc-core_1.0.14828.8_amd64.deb ./intel-igc-opencl_1.0.14828.8_amd64.deb
           echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy unified' | sudo tee -a /etc/apt/sources.list.d/intel-gpu-jammy.list
-          sudo apt update
-          sudo apt install libigc1=1.0.14828.26-736~22.04
+          sudo apt update -y
+          sudo apt-get install -y --no-install-recommends --fix-missing libigc1=1.0.14828.26-736~22.04
           echo "---------------------- debug info -------------------"
           dpkg -l | grep igc
           echo "-----------------------debug info ------------------"
