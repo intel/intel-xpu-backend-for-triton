@@ -42,12 +42,6 @@ if [ ! -d "$BASE" ]; then
   BASE=/iusers/$USER
 fi
 
-export RSYNC_PROXY="proxy-us.intel.com:912"
-export http_proxy="http://proxy-us.intel.com:912"
-export https_proxy="http://proxy-us.intel.com:912"
-export ftp_proxy="http://proxy-us.intel.com:912"
-export socks_proxy="http://proxy-us.intel.com:1080"
-
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
