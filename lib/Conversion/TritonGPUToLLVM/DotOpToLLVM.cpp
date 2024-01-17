@@ -1,4 +1,4 @@
-#include "DotOpToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
 using namespace mlir;
@@ -38,7 +38,7 @@ LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                                 TritonGPUToLLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread);
-
+namespace {
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   using ConvertTritonGPUOpToLLVMPattern<
       triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
@@ -195,12 +195,12 @@ struct DotWaitOpConversion
     return success();
   }
 };
+} // namespace
 
-void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                 RewritePatternSet &patterns, int numWarps,
-                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 ModuleAllocation &allocation, Target target,
-                                 PatternBenefit benefit) {
+void mlir::triton::populateDotOpToLLVMPatterns(
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    ModuleAllocation &allocation, Target target, PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, allocation, target, benefit);
   patterns.add<DotAsyncOpConversion>(typeConverter, allocation, target,
                                      benefit);

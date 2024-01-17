@@ -1,5 +1,4 @@
-#include "ReduceOpToLLVM.h"
-#include "TritonGPUToLLVMBase.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -16,6 +15,7 @@ using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
+namespace {
 struct ReduceOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::ReduceOp> {
 public:
@@ -515,8 +515,9 @@ private:
     rewriter.replaceOp(op, results);
   }
 };
+} // namespace
 
-void populateReduceOpToLLVMPatterns(
+void mlir::triton::populateReduceOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,
