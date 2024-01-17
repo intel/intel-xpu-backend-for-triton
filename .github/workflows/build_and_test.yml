@@ -159,12 +159,14 @@ jobs:
           pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
           wget https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.14828.8/intel-igc-core_1.0.14828.8_amd64.deb
           wget https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.14828.8/intel-igc-opencl_1.0.14828.8_amd64.deb
+          sudo dpkg -i ./intel-igc-core_1.0.14828.8_amd64.deb ./intel-igc-opencl_1.0.14828.8_amd64.deb
+          rm ./intel-igc-core_1.0.14828.8_amd64.deb ./intel-igc-opencl_1.0.14828.8_amd64.deb
+          echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy unified' | sudo tee -a /etc/apt/sources.list.d/intel-gpu-jammy.list
+          sudo apt update
           sudo apt install libigc1=1.0.14828.26-736~22.04
           echo "---------------------- debug info -------------------"
           dpkg -l | grep igc
           echo "-----------------------debug info ------------------"
-          sudo dpkg -i ./intel-igc-core_1.0.14828.8_amd64.deb ./intel-igc-opencl_1.0.14828.8_amd64.deb
-          rm ./intel-igc-core_1.0.14828.8_amd64.deb ./intel-igc-opencl_1.0.14828.8_amd64.deb
           cd python/test/unit
           python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           # run runtime tests serially to avoid race condition with cache handling.
