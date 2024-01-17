@@ -1,6 +1,7 @@
 import sys
 
 import torch
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 from torch.testing import assert_close
 
 import triton
