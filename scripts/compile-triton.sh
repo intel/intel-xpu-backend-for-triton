@@ -7,12 +7,6 @@ if [ ! -d "$BASE" ]; then
   BASE=/iusers/$USER
 fi
 
-export RSYNC_PROXY="proxy-us.intel.com:912"
-export http_proxy="http://proxy-us.intel.com:912"
-export https_proxy="http://proxy-us.intel.com:912"
-export ftp_proxy="http://proxy-us.intel.com:912"
-export socks_proxy="http://proxy-us.intel.com:1080"
-
 CMAKE=/usr/bin/cmake
 export PACKAGES_DIR=$BASE/packages
 export SPIRV_TOOLS=$PACKAGES_DIR/spirv-tools
