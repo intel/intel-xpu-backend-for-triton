@@ -49,7 +49,7 @@ fi
 
 if [ "$VENV" = true ]; then
   source .venv/bin/activate
-fi 
+fi
 
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build

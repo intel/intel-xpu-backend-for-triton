@@ -135,7 +135,7 @@ fi
 function build_triton {
   echo "**** Configuring $TRITON_PROJ ****"
   cd $TRITON_PROJ
-  
+
   if [ "$VENV" = true ]; then
     echo "**** Creating Python virtualenv ****"
     python3 -m venv .venv --prompt triton
