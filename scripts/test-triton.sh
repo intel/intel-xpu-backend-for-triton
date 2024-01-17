@@ -4,6 +4,7 @@
 TEST_CORE=false
 TEST_TUTORIAL=false
 TEST_UNIT=false
+VENV=false
 for arg in "$@"; do
   case $arg in
     --core)
@@ -18,8 +19,12 @@ for arg in "$@"; do
       TEST_UNIT=true
       shift
       ;;
+    --venv)
+      VENV=true
+      shift
+      ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv]"
       exit 1
       ;;
     *)
@@ -41,6 +46,10 @@ if [ ! -d "$BASE" ]; then
   echo "**** Default BASE is set to /iusers/$USER ****"
   BASE=/iusers/$USER
 fi
+
+if [ "$VENV" = true ]; then
+  source .venv/bin/activate
+fi 
 
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
