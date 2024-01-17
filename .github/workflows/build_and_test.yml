@@ -164,9 +164,6 @@ jobs:
           echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy unified' | sudo tee -a /etc/apt/sources.list.d/intel-gpu-jammy.list
           sudo apt update -y
           sudo apt-get install -y --no-install-recommends --allow-downgrades --fix-missing libigc1=1.0.14828.26-736~22.04
-          echo "---------------------- debug info -------------------"
-          dpkg -l | grep igc
-          echo "-----------------------debug info ------------------"
           cd python/test/unit
           python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           # run runtime tests serially to avoid race condition with cache handling.
