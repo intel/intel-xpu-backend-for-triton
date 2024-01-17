@@ -456,8 +456,6 @@ class XPUBackend(BaseBackend):
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
-        print('----------------- llir src -------------------')
-        print(src)
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         tma_infos = xpu.TMAInfos()
@@ -494,10 +492,6 @@ class XPUBackend(BaseBackend):
         metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
         ret = str(llvm_mod)
-        print('----------------- llir modified src-------------------')
-        print(src)
-        print('----------------- llir llvm_mod -------------------')
-        print(ret)
         del llvm_mod
         del context
         return ret
