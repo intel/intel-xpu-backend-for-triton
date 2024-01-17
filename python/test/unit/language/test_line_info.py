@@ -165,8 +165,8 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "test_line_info.py", 38))
         assert (check_file_lines(file_lines, "test_line_info.py", 39))
     elif func == "multi_files":
-        assert (check_file_lines(file_lines, "test_line_info.py", 48))
-        assert (check_file_lines(file_lines, "test_line_info.py", 50))
+        assert (check_file_lines(file_lines, "test_line_info.py", 49))
+        assert (check_file_lines(file_lines, "test_line_info.py", 51))
         assert (check_file_lines(file_lines, "standard.py", 33))
         assert (check_file_lines(file_lines, "standard.py", 34))
         assert (check_file_lines(file_lines, "standard.py", 36))
