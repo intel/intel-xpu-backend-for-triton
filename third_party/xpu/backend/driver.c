@@ -144,15 +144,15 @@ bool update(sycl::queue sycl_queue) {
   // Get l0-context
   auto sycl_context = sycl_queue.get_context();
   ze_context_handle_t hCtxt =
-      get_native<sycl::backend::level_zero>(sycl_context);
+      get_native<sycl::backend::ext_oneapi_level_zero>(sycl_context);
   // Get l0-device
   std::vector<sycl::device> sycl_devices = sycl_context.get_devices();
   ze_device_handle_t hDev =
-      get_native<sycl::backend::level_zero>(sycl_devices[0]);
+      get_native<sycl::backend::ext_oneapi_level_zero>(sycl_devices[0]);
   // Get l0-queue
   bool immediate_cmd_list = false;
   std::variant<ze_command_queue_handle_t, ze_command_list_handle_t> queue_var =
-      get_native<sycl::backend::level_zero>(sycl_queue);
+      get_native<sycl::backend::ext_oneapi_level_zero>(sycl_queue);
   auto l0_queue = std::get_if<ze_command_queue_handle_t>(&queue_var);
   if (l0_queue == nullptr) {
     auto imm_cmd_list = std::get_if<ze_command_list_handle_t>(&queue_var);
@@ -170,15 +170,19 @@ bool update(sycl::queue sycl_queue) {
   context = sycl_queue_map[sycl_queue].context;
   uint32_t deviceCount = std::min(sycl_devices.size(), devices.size());
   for (uint32_t i = 0; i < deviceCount; ++i) {
-    devices[i] = sycl::get_native<sycl::backend::level_zero>(sycl_devices[i]);
+    devices[i] =
+        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_devices[i]);
   }
 
   return true;
 }
 
 static PyObject *initContext(PyObject *self, PyObject *args) {
-  void *queue;
-  if (!PyArg_ParseTuple(args, "K", &queue))
+  PyObject *cap;
+  void *queue = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
@@ -202,8 +206,11 @@ static PyObject *initEventPool(PyObject *self, PyObject *args) {
 }
 
 static PyObject *initDevices(PyObject *self, PyObject *args) {
-  void *queue;
-  if (!PyArg_ParseTuple(args, "K", &queue))
+  PyObject *cap;
+  void *queue = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
 
@@ -215,16 +222,19 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   // Retrieve devices
   uint32_t deviceCount = sycl_devices.size();
   for (uint32_t i = 0; i < deviceCount; ++i) {
-    devices.push_back(
-        sycl::get_native<sycl::backend::level_zero>(sycl_devices[i]));
+    devices.push_back(sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+        sycl_devices[i]));
   }
 
   return Py_BuildValue("(i)", deviceCount);
 }
 
 static PyObject *getL0ImmCommandList(PyObject *self, PyObject *args) {
-  void *queue;
-  if (!PyArg_ParseTuple(args, "K", &queue))
+  PyObject *cap;
+  void *queue = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
 
@@ -234,8 +244,11 @@ static PyObject *getL0ImmCommandList(PyObject *self, PyObject *args) {
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].cmd_list));
 }
 static PyObject *getL0Queue(PyObject *self, PyObject *args) {
-  void *queue;
-  if (!PyArg_ParseTuple(args, "K", &queue))
+  PyObject *cap;
+  void *queue = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
@@ -244,8 +257,11 @@ static PyObject *getL0Queue(PyObject *self, PyObject *args) {
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].queue));
 }
 static PyObject *getL0DevPtr(PyObject *self, PyObject *args) {
-  void *queue;
-  if (!PyArg_ParseTuple(args, "K", &queue))
+  PyObject *cap;
+  void *queue = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
@@ -254,8 +270,11 @@ static PyObject *getL0DevPtr(PyObject *self, PyObject *args) {
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].device));
 }
 static PyObject *getL0CtxtPtr(PyObject *self, PyObject *args) {
-  void *queue;
-  if (!PyArg_ParseTuple(args, "K", &queue))
+  PyObject *cap;
+  void *queue = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
@@ -264,8 +283,11 @@ static PyObject *getL0CtxtPtr(PyObject *self, PyObject *args) {
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].context));
 }
 static PyObject *isUsingICL(PyObject *self, PyObject *args) {
-  void *queue;
-  if (!PyArg_ParseTuple(args, "K", &queue))
+  PyObject *cap;
+  void *queue = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
