@@ -2228,13 +2228,6 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     if is_hip():
         pytest.skip("test_chain_reduce is not supported in HIP")
 
-    # Merge db5c793 regression
-    if is_xpu(device) and op in ["sum", 'max'] and [M, N] in [[128, 256], [256, 256]]:
-        pytest.skip("FIXME: Incorrect result on XPU")
-    # Merge 726bdb9 regression
-    if is_xpu(device) and first_axis == 0 and op == "max" and [M, N] in [[128, 128], [256, 128]]:
-        pytest.skip("FIXME: Incorrect result on XPU")
-
     op_str = ""
     if op == "sum":
         op_str = """
@@ -4397,6 +4390,9 @@ def test_propagate_nan(dtype, propagate_nan, func, device):
                      getattr(tl, func)(tl.load(A), tl.load(B), propagate_nan=getattr(tl.PropagateNan, propagate_nan)))
 
     for mode in ['A', 'B', 'both']:
+        if func == 'clamp' and mode == 'B':
+            # clamp does not guarantee propagation from 'min' and 'max' args
+            continue
         A = torch.randn((1, ), device=device, dtype=getattr(torch, dtype))
         if mode == 'A' or mode == 'both': A[0] = torch.nan
         B = torch.randn((1, ), device=device, dtype=getattr(torch, dtype))
