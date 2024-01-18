@@ -5,7 +5,7 @@ on:
 
 env:
   REGISTRY: docker-registry.docker-registry.svc.cluster.local:5000
-  TAG: triton-runner-base:0.0.2
+  TAG: triton-runner-base:0.0.4
 
 jobs:
   build:
