@@ -123,9 +123,8 @@ function run_core_tests {
     echo "FAILED: return code $?" ; exit $?
   fi
 
-  python3 language/print_helper.py device_print float 1> /dev/null
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
+  if [ `python3 language/print_helper.py device_print float | wc -l` -eq 0 ]; then
+    echo "FAILED: print_helper.py return code $?" ; exit $?
   fi
 }
 
