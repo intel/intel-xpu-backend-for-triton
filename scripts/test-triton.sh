@@ -166,7 +166,7 @@ function run_tutorial_tests {
 
   run_tutorial_test "01-vector-add" 01-vector-add.py
   run_tutorial_test "02-fused-softmax" 02-fused-softmax.py
-  run_tutorial_test "03-matrix-multiplication" 03-matrix-multiplication.py
+  run_tutorial_test "04-low-memory-dropout" 04-low-memory-dropout.py
 }
 
 function test_triton {
