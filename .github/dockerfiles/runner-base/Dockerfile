@@ -16,8 +16,9 @@ RUN set -ex; \
       clinfo \
       intel-level-zero-gpu \
       level-zero \
-      level-zero-dev \
+      level-zero-dev libigc-dev intel-igc-cm libigdfcl-dev libigfxcmrt-dev \
     ; \
+    apt install -y --no-install-recommends --allow-downgrades --fix-missing libigc1=1.0.14828.26-736~22.04; \
     apt-get install -y --no-install-recommends --fix-missing \
       build-essential \
       zlib1g-dev \
