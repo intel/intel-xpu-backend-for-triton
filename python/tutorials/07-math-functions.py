@@ -15,9 +15,12 @@ Triton automatically selects the correct underlying device function to invoke ba
 # ------------
 
 import torch
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
+
+torch.xpu.enable_sync_mode()
 
 
 @triton.jit
@@ -43,10 +46,9 @@ def asin_kernel(
 
 torch.manual_seed(0)
 size = 98432
-x = torch.rand(size, device='cuda')
-output_triton = torch.zeros(size, device='cuda')
+x = torch.rand(size, device='xpu')
+output_triton = torch.zeros(size, device='xpu')
 output_torch = torch.asin(x)
-assert x.is_cuda and output_triton.is_cuda
 n_elements = output_torch.numel()
 grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
 asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024)
@@ -61,8 +63,7 @@ print(f'The maximum difference between torch and triton is '
 # We can also customize the libdevice library path by passing the path to the `libdevice` library to the `asin` kernel.
 
 output_triton = torch.empty_like(x)
-asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024,
-                  extern_libs={'libdevice': '/usr/local/cuda/nvvm/libdevice/libdevice.10.bc'})
+asin_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024)
 print(output_torch)
 print(output_triton)
 print(f'The maximum difference between torch and triton is '
