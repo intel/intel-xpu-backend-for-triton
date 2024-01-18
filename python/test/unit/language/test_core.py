@@ -6,6 +6,7 @@ from typing import Optional, Union
 import numpy as np
 import pytest
 import torch
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 from numpy.random import RandomState
 
 import triton
@@ -1883,8 +1884,6 @@ def test_histogram(M, N, device):
 @pytest.mark.parametrize("N", [512, 1024, 2048])
 @pytest.mark.parametrize("num_pid_n", [2, 4])
 def test_locality(op, BLOCK_N, N, num_pid_n, device):
-    if is_xpu(device):
-        pytest.skip("FIXME: Does run correctly on XPU")
 
     @triton.jit
     def kernel(X, Y, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
@@ -4390,6 +4389,9 @@ def test_propagate_nan(dtype, propagate_nan, func, device):
                      getattr(tl, func)(tl.load(A), tl.load(B), propagate_nan=getattr(tl.PropagateNan, propagate_nan)))
 
     for mode in ['A', 'B', 'both']:
+        if func == 'clamp' and mode == 'B':
+            # clamp does not guarantee propagation from 'min' and 'max' args
+            continue
         A = torch.randn((1, ), device=device, dtype=getattr(torch, dtype))
         if mode == 'A' or mode == 'both': A[0] = torch.nan
         B = torch.randn((1, ), device=device, dtype=getattr(torch, dtype))

@@ -73,7 +73,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - pvc
+      - runner-0.0.4
     strategy:
       matrix:
         python:
@@ -156,7 +156,7 @@ jobs:
       - name: Run core tests
         run: |
           pip install pytest pytest-xdist
-          pip install torch==1.13.0a0+git6c9b55e intel_extension_for_pytorch==1.13.120+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
+          pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
           cd python/test/unit
           python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           # run runtime tests serially to avoid race condition with cache handling.
@@ -191,6 +191,13 @@ jobs:
         run: |
           cd python/test/backend/third_party_backends
           python3 -m pytest -n auto --verbose test_xpu_backend.py
+
+      - name: Run Tutorials
+        run: |
+          pip install matplotlib pandas
+          cd python/tutorials
+          python3 01-vector-add.py
+          python3 02-fused-softmax.py
 
       - name: Run CXX unittests
         run: |
