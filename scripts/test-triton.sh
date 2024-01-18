@@ -4,6 +4,7 @@
 TEST_CORE=false
 TEST_TUTORIAL=false
 TEST_UNIT=false
+VENV=false
 for arg in "$@"; do
   case $arg in
     --core)
@@ -18,8 +19,12 @@ for arg in "$@"; do
       TEST_UNIT=true
       shift
       ;;
+    --venv)
+      VENV=true
+      shift
+      ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv]"
       exit 1
       ;;
     *)
@@ -42,12 +47,16 @@ if [ ! -d "$BASE" ]; then
   BASE=/iusers/$USER
 fi
 
+if [ "$VENV" = true ]; then
+  source .venv/bin/activate
+fi
+
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 python3 -m pip install lit
 python3 -m pip install pytest
-python3 -m pip install torch==1.13.0a0+git6c9b55e intel_extension_for_pytorch==1.13.120+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
+python3 -m pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
 if [ $? -ne 0 ]; then
   echo "FAILED: return code $?"
   exit $?

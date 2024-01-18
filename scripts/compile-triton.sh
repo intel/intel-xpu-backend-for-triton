@@ -21,7 +21,23 @@ function check_rc {
   fi
 }
 
-if [[ "$1" == "--clean" ]]; then
+CLEAN=false
+VENV=false
+for arg in "$@"; do
+  case $arg in
+    --clean)
+      CLEAN=true
+      shift
+      ;;
+    --venv)
+      VENV=true
+      shift
+      ;;
+  esac
+done
+
+if [ "$CLEAN" = true ]; then
+  echo "**** Cleaning $PACKAGES_DIR , $LLVM_PROJ , and $TRITON_PROJ_BUILD before build ****"
   rm -rf $PACKAGES_DIR $LLVM_PROJ $TRITON_PROJ_BUILD
 fi
 
@@ -119,6 +135,14 @@ fi
 function build_triton {
   echo "**** Configuring $TRITON_PROJ ****"
   cd $TRITON_PROJ
+
+  if [ "$VENV" = true ]; then
+    echo "**** Creating Python virtualenv ****"
+    python3 -m venv .venv --prompt triton
+    source .venv/bin/activate
+    pip install ninja cmake wheel
+  fi
+
   export LLVM_SYSPATH=$PACKAGES_DIR/llvm
   export DEBUG=1
   cd python

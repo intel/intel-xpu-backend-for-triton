@@ -1,4 +1,5 @@
 import sys
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 
