@@ -2,13 +2,14 @@ from __future__ import annotations
 import hashlib
 import json
 from .._C.libtriton import get_env_vars, ir
+from ..backends import backends
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
 from ..runtime.jit import (get_event_pool)
-from .utils import InfoFromBackendForTensorMap
-from .backends import make_backend
+# TODO: this shouldn't be here
+from ..backends.xpu.compiler import InfoFromBackendForTensorMap
 
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
@@ -234,12 +235,12 @@ def compile(src, target=None, options=None):
     return CompiledKernel(src, metadata_group)
 
 
-#def make_backend(target):
-#    actives = [x.compiler for x in backends.values() if x.compiler.supports_target(target)]
-#    if len(actives) != 1:
-#        raise RuntimeError(
-#            f"{len(actives)} compatible backends for target ({target[0]}) ({actives}). There should only be one.")
-#    return actives[0](target)
+def make_backend(target):
+    actives = [x.compiler for x in backends.values() if x.compiler.supports_target(target)]
+    if len(actives) != 1:
+        raise RuntimeError(
+            f"{len(actives)} compatible backends for target ({target[0]}) ({actives}). There should only be one.")
+    return actives[0](target)
 
 
 class CompiledKernel:
