@@ -7,7 +7,6 @@ from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager
 from ..runtime.driver import driver
-from ..runtime.jit import (get_dev_ctxt_queue_objs, get_event_pool, get_imm_cmd_list)
 # TODO: this shouldn't be here
 from ..backends.xpu.compiler import InfoFromBackendForTensorMap
 from dataclasses import dataclass
@@ -273,7 +272,6 @@ class CompiledKernel:
         # (e.g., checking amount of shared memory on current device)
         self.module = None
         self.function = None
-        self.is_spirv = "spv" in self.asm
 
     def _init_handles(self):
         if self.module is not None:
@@ -297,24 +295,17 @@ class CompiledKernel:
 
         def runner(*args, stream=None):
             args_expand = driver.assemble_tensormap_to_arg(self.tensormaps_info, args)
-            if self.is_spirv:
-                use_icl = 1
-                if stream is None:
-                    dev_obj, ctxt_obj, q_obj = get_dev_ctxt_queue_objs(self.is_spirv)
-                    if q_obj == 0:
-                        stream = get_imm_cmd_list()
-                    else:
-                        stream = 0
-                        use_icl = 0
-                event_pool = get_event_pool(self.is_spirv)
-                self.run(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
-                         self.cluster_dims[1], self.cluster_dims[2], self.shared, use_icl, stream, q_obj, dev_obj,
-                         ctxt_obj, self.function, CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook,
-                         self, event_pool, *args_expand)
+            if stream is None:
+                device = driver.get_current_device()
+                stream = driver.get_current_stream(device)
+            if driver.get_current_target()[0] == "xpu":
+                dev_obj, ctxt_obj, q_obj = driver.utils.get_dev_ctxt_queue_objs()
+                self.run(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas,
+                         self.cluster_dims[0], self.cluster_dims[1], self.cluster_dims[2], self.shared,
+                         driver.utils.use_icl(), stream, q_obj, dev_obj, ctxt_obj, self.function,
+                         CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self,
+                         driver.utils.get_event_pool(), *args_expand)
             else:
-                if stream is None:
-                    device = driver.get_current_device()
-                    stream = driver.get_current_stream(device)
                 self.run(grid[0], grid[1], grid[2], self.num_warps, self.num_ctas, self.cluster_dims[0],
                          self.cluster_dims[1], self.cluster_dims[2], self.shared, stream, self.function,
                          CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, self, *args_expand)
