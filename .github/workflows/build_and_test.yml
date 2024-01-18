@@ -194,10 +194,11 @@ jobs:
 
       - name: Run Tutorials
         run: |
-          pip install matplotlib pandas
+          pip install matplotlib pandas tabulate
           cd python/tutorials
           python3 01-vector-add.py
           python3 02-fused-softmax.py
+          python3 04-low-memory-dropout.py
 
       - name: Run CXX unittests
         run: |
