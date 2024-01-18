@@ -4,6 +4,7 @@
 TEST_CORE=false
 TEST_TUTORIAL=false
 TEST_UNIT=false
+VENV=false
 for arg in "$@"; do
   case $arg in
     --core)
@@ -18,8 +19,12 @@ for arg in "$@"; do
       TEST_UNIT=true
       shift
       ;;
+    --venv)
+      VENV=true
+      shift
+      ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv]"
       exit 1
       ;;
     *)
@@ -40,6 +45,10 @@ if [ ! -d "$BASE" ]; then
   echo "**** BASE is not given *****"
   echo "**** Default BASE is set to /iusers/$USER ****"
   BASE=/iusers/$USER
+fi
+
+if [ "$VENV" = true ]; then
+  source .venv/bin/activate
 fi
 
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
@@ -111,6 +120,12 @@ function run_core_tests {
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
+
+  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+  TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose language/test_line_info.py
+  if [ $? -ne 0 ]; then
+    echo "FAILED: return code $?" ; exit $?
+  fi
 }
 
 function run_tutorial_test {
@@ -141,7 +156,8 @@ function run_tutorial_tests {
 
   run_tutorial_test "01-vector-add" 01-vector-add.py
   run_tutorial_test "02-fused-softmax" 02-fused-softmax.py
-  run_tutorial_test "03-matrix-multiplication" 03-matrix-multiplication.py
+  run_tutorial_test "04-low-memory-dropout" 04-low-memory-dropout.py
+  run_tutorial_test "07-math-functions" 07-math-functions.py
 }
 
 function test_triton {

@@ -1,6 +1,5 @@
-#include "ElementwiseOpToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -12,6 +11,7 @@ static SmallVector<Value> identity_func(Location loc,
   return v;
 }
 
+namespace {
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 static SmallVector<Value>
@@ -2522,8 +2522,9 @@ struct SelectOpConversion
         adaptor.getAttributes().getValue())};
   }
 };
+} // namespace
 
-void populateElementwiseOpToLLVMPatterns(
+void mlir::triton::populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &allocation,

@@ -1,4 +1,4 @@
-#include "TritonGPUToLLVM.h"
+#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
@@ -1021,9 +1021,7 @@ struct AsyncBulkCommitGroupOpConversion
 
 } // namespace
 
-namespace mlir::triton {
-
-void populateTritonGPUToLLVMPatterns(
+void mlir::triton::populateTritonGPUToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleAllocation &moduleAllocation,
@@ -1052,5 +1050,3 @@ void populateTritonGPUToLLVMPatterns(
   patterns.add<PrintOpConversion>(typeConverter, target, benefit);
   patterns.add<AssertOpConversion>(typeConverter, target, benefit);
 }
-
-} // namespace mlir::triton
