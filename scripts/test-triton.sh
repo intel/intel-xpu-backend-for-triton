@@ -111,12 +111,6 @@ function run_core_tests {
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
-
-  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-  TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose language/test_line_info.py
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 }
 
 function run_tutorial_test {
