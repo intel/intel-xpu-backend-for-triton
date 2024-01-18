@@ -194,6 +194,7 @@ jobs:
 
       - name: Run Tutorials
         run: |
+          pip install matplotlib
           cd python/tutorials
           python3 01-vector-add.py
           python3 02-fused-softmax.py
