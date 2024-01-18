@@ -126,59 +126,8 @@ struct PrintOpConversion
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    if (0 && target == Target::GENX) {
-      StringRef msg = op.getPrefix();
-      llvm::SmallString<64> msgNewline(msg);
-      msgNewline.push_back('\n');
-      msgNewline.push_back('\0');
-
-      Value prefixStr = LLVM::addStringToModule(
-          loc, rewriter, "printfPrefix_", msgNewline,
-          (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant
-                                   : 0);
-
-      auto getPid = [&](int axis) {
-        return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
-      };
-      std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
-
-      std::string formatStr;
-      llvm::raw_string_ostream os(formatStr);
-      os << "pid (" << getFormatSubstr(pid[0]) << ", "
-         << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
-
-      llvm::errs() << "formatStr: " << formatStr << "\n";
-      llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter,
-               target);
-
-      if (0) {
-        SmallVector<Value, 16> operands;
-        for (size_t i = 0; i < op.getNumOperands(); i++) {
-          auto sub_operands = getTypeConverter()->unpackLLElements(
-              loc, adaptor.getOperands()[i], rewriter);
-          for (auto elem : sub_operands) {
-            operands.push_back(elem);
-          }
-        }
-        std::string formatStr;
-        llvm::raw_string_ostream os(formatStr);
-        os << op.getPrefix();
-        if (!operands.empty()) {
-          os << getFormatSubstr(operands[0]);
-        }
-
-        for (size_t i = 1; i < operands.size(); ++i) {
-          os << ", " << getFormatSubstr(operands[i]);
-        }
-        llPrintf(formatStr, operands, rewriter, target);
-      }
-
-      rewriter.eraseOp(op);
-      return success();
-    }
 
     llvm::SmallString<64> msgNewline(op.getPrefix());
-    //    msgNewline.push_back('\n');
     msgNewline.push_back('\0');
 
     Value prefixStr = LLVM::addStringToModule(
