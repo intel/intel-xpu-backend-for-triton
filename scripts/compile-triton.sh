@@ -7,12 +7,6 @@ if [ ! -d "$BASE" ]; then
   BASE=/iusers/$USER
 fi
 
-export RSYNC_PROXY="proxy-us.intel.com:912"
-export http_proxy="http://proxy-us.intel.com:912"
-export https_proxy="http://proxy-us.intel.com:912"
-export ftp_proxy="http://proxy-us.intel.com:912"
-export socks_proxy="http://proxy-us.intel.com:1080"
-
 CMAKE=/usr/bin/cmake
 export PACKAGES_DIR=$BASE/packages
 export SPIRV_TOOLS=$PACKAGES_DIR/spirv-tools
@@ -82,7 +76,6 @@ function build_llvm {
     -DLLVM_ENABLE_ASSERTIONS=true \
     -DLLVM_ENABLE_PROJECTS="mlir" \
     -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU" \
-    -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="SPIRV" \
     -DLLVM_INSTALL_UTILS=true \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DCMAKE_INSTALL_PREFIX=$PACKAGES_DIR/llvm \

@@ -1,5 +1,4 @@
 from __future__ import annotations, division
-
 import ast
 import functools
 import hashlib
@@ -12,8 +11,6 @@ from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, 
 
 import torch
 import intel_extension_for_pytorch as ipex
-from ..common.backend import get_backend, get_cuda_version_key
-from .interpreter import InterpretedFunction
 from ..runtime.driver import driver
 
 
@@ -376,8 +373,7 @@ class JITFunction(KernelInterface[T]):
             return arg
 
     def run(self, *args, grid, warmup, **kwargs):
-        from ..compiler import CompiledKernel, compile, ASTSource
-        from ..compiler.backends import make_backend
+        from ..compiler import CompiledKernel, compile, ASTSource, make_backend
         # deprecated arguments
         assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
         assert "device" not in kwargs, "device option is deprecated; current device will be used"
@@ -413,11 +409,7 @@ class JITFunction(KernelInterface[T]):
         sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
-        version_key = get_cuda_version_key()
-        if target[0] in ["xpu"]:
-            # FIXME
-            version_key = ""
-        key = (version_key, sig_key, constexpr_key, spec_key, options)
+        key = (sig_key, constexpr_key, spec_key, options)
         # Kernel is not cached; we have to compile.
         if key not in self.cache[device]:
             configs = (self._get_config(*[arg.value for arg in args]), )
@@ -605,6 +597,7 @@ def jit(
     def decorator(fn: T) -> JITFunction[T]:
         assert callable(fn)
         if os.getenv("TRITON_INTERPRET", "0") == "1":
+            from .interpreter import InterpretedFunction
             return InterpretedFunction(fn)
         else:
             return JITFunction(
@@ -652,7 +645,6 @@ class TensorWrapper:
     def __init__(self, base, dtype):
         self.dtype = dtype
         self.base = base
-        self.is_cuda = base.is_cuda
         self.device = base.device
         self.shape = self.base.shape
 

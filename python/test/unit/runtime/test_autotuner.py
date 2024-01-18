@@ -4,11 +4,14 @@ import triton
 import triton.language as tl
 import pytest
 
+# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
+torch.xpu.enable_sync_mode()
+
 
 def test_kwargs():
     N = 1024
-    src = torch.empty(N, device='cuda')
-    dst = torch.empty(N, device='cuda')
+    src = torch.empty(N, device='xpu')
+    dst = torch.empty(N, device='xpu')
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
@@ -26,7 +29,7 @@ def test_kwargs():
 
 def test_restore():
     N = 1024
-    src = torch.zeros(N, device='cuda')
+    src = torch.zeros(N, device='xpu')
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
@@ -45,8 +48,8 @@ def test_restore():
 @pytest.mark.parametrize('with_perf_model', [False, True])
 def test_prune_configs(with_perf_model: bool):
     N = 1024
-    src = torch.empty(N, device='cuda')
-    dst = torch.empty(N, device='cuda')
+    src = torch.empty(N, device='xpu')
+    dst = torch.empty(N, device='xpu')
     records = {}
 
     def early_config_prune(configs, named_args):
