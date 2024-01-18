@@ -164,18 +164,13 @@ jobs:
           echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy unified' | sudo tee -a /etc/apt/sources.list.d/intel-gpu-jammy.list
           sudo apt update -y
           sudo apt-get install -y --no-install-recommends --allow-downgrades --fix-missing libigc1=1.0.14828.26-736~22.04
+          
           cd python/test/unit
-          python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
-
-      - name: Run assert/print tests
-        run: |
-          cd python/test/unit/language
-          python3 assert_helper.py device_assert
-          python3 print_helper.py device_print float 1> /dev/null
 
       - name: Clear cache
         run: |
