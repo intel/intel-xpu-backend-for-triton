@@ -33,8 +33,6 @@ def test_print(func_type: str, data_type: str):
     proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE, shell=False)
     outs, _ = proc.communicate()
     outs = [line for line in outs.decode("UTF-8").split("\n") if line]
-    for out in outs:
-        print("out:", out)
 
     # Format is
     #   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...) <prefix> (operand <n>) <elem>

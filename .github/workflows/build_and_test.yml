@@ -157,7 +157,6 @@ jobs:
         run: |
           pip install pytest pytest-xdist
           pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
-          
           cd python/test/unit
           python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
