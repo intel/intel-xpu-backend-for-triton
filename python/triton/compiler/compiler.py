@@ -284,8 +284,6 @@ class CompiledKernel:
         if self.shared > max_shared:
             raise OutOfResources(self.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        #self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_binary(
-        #    self.name, self.kernel, self.shared, device)
         import torch
         self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_sycl_binary(
             self.name, self.kernel, self.shared,
@@ -302,13 +300,6 @@ class CompiledKernel:
         def runner(*args, stream=None):
             args_expand = driver.assemble_tensormap_to_arg(self.tensormaps_info, args)
             if self.is_spirv:
-                #if stream is None:
-                #    dev_obj, ctxt_obj, q_obj = get_dev_ctxt_queue_objs(self.is_spirv)
-                #    if q_obj == 0:
-                #        stream = get_imm_cmd_list()
-                #    else:
-                #        stream = 0
-                #        use_icl = 0
                 use_icl = 1
                 import torch
                 stream = torch.xpu.current_stream().sycl_queue

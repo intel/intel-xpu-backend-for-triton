@@ -51,14 +51,16 @@ class XPUUtils(object):
         dirname = os.path.dirname(os.path.realpath(__file__))
         mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
         self.load_binary = mod.load_binary
+        self.load_sycl_binary = mod.load_sycl_binary
         self.get_device_properties = mod.get_device_properties
         self.get_l0_queue = mod.get_l0_queue
         self.get_l0_imm_cmd_list = mod.get_l0_imm_cmd_list
         self.get_l0_dev_ptr = mod.get_l0_dev_ptr
         self.get_l0_ctxt_ptr = mod.get_l0_ctxt_ptr
         self.is_using_icl = mod.is_using_icl
-        self.context = mod.init_context(ipex.xpu.current_stream().sycl_queue)
-        self.device_count = mod.init_devices(ipex.xpu.current_stream().sycl_queue)
+        import torch
+        self.context = mod.init_context(torch.xpu.current_stream().sycl_queue)
+        self.device_count = mod.init_devices(torch.xpu.current_stream().sycl_queue)
         self.event_pool = mod.init_event_pool()[0]
         self.current_device = 0 if self.device_count[0] > 0 else -1
 
@@ -144,7 +146,7 @@ def make_launcher(constants, signature, ids):
             "int64_t": "L",
         }[ty]
 
-    format = "iiiiiiiiiiKKKKKOOOK" + ''.join(
+    format = "iiiiiiiiiiOKKKKOOOK" + ''.join(
         [format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
@@ -154,6 +156,7 @@ def make_launcher(constants, signature, ids):
     #include <iostream>
     #include <iomanip>
     #include <level_zero/ze_api.h>
+    #include <sycl/sycl.hpp>
 
     #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
     #include <Python.h>
@@ -307,7 +310,68 @@ def make_launcher(constants, signature, ids):
       PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
       return ptr_info;
     }}
-
+// start sycl
+  static void set_scalar_arg(
+          sycl::handler& cgh,
+          int index,
+          size_t size,
+          const void* value) {{
+      switch (size) {{
+      case sizeof(uint8_t):
+      cgh.set_arg(index, *static_cast<const uint8_t*>(value));
+      break;
+      case sizeof(uint16_t):
+      cgh.set_arg(index, *static_cast<const uint16_t*>(value));
+      break;
+      case sizeof(uint32_t):
+      cgh.set_arg(index, *static_cast<const uint32_t*>(value));
+      break;
+      case sizeof(uint64_t):
+      cgh.set_arg(index, *static_cast<const uint64_t*>(value));
+      break;
+      default:
+      assert(false && "wrong scalar size in sycl gen.");
+      }}
+  }}
+  static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+    //std::cout<<"sycl_kernel_launch entry"<<std::endl;
+    std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
+    //std::cout<<"Kernel name :"<<kernel_name<<std::endl;
+    void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
+    uint32_t num_params = sizeof(params)/sizeof(params[0]);
+    uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
+    //std::cout<<"num_params          :"<<num_params<<std::endl;
+    //std::cout<<"expected_num_params :"<<expected_num_params<<std::endl;
+    //std::cout<<"shared_memory       :"<<shared_memory<<std::endl;
+    size_t global_range_x = gridX*threads_per_warp*num_warps;
+    size_t global_range_y = gridY;
+    size_t global_range_z = gridZ;
+    size_t local_range_x = num_warps*threads_per_warp;
+    size_t local_range_y = 1;
+    size_t local_range_z = 1;
+    sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
+    sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
+    sycl::nd_range<3> parallel_work_size(global_range, local_range);
+    if (shared_memory) {{
+      expected_num_params -= 1;
+    }}
+    assert(num_params == expected_num_params && "number of kernel param not matched");
+    // Submit the imported kernel.
+    auto cgf = [&](sycl::handler &cgh) {{
+      {" ".join(f'set_scalar_arg(cgh, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
+      if (shared_memory) {{
+          using share_mem_t = sycl::accessor<int8_t, 1, sycl::access::mode::read_write, sycl::access::target::local>;
+          share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
+          cgh.set_arg(num_params, local_buffer);
+          //cgh.parallel_for(sycl::nd_range{{sycl::range{{(uint32_t)gridX*threads_per_warp*num_warps}}, sycl::range{{work_group_size}}}}, kernel_ptr);
+          cgh.parallel_for(parallel_work_size, kernel_ptr);
+      }} else {{
+          cgh.parallel_for(parallel_work_size, kernel_ptr);
+      }}
+      }};
+    auto event = stream.submit(cgf);
+  }}
+// end sycl
     static PyObject* launch(PyObject* self, PyObject* args) {{
 
       int gridX, gridY, gridZ;
@@ -327,12 +391,13 @@ def make_launcher(constants, signature, ids):
       PyObject *launch_enter_hook = NULL;
       PyObject *launch_exit_hook = NULL;
       PyObject *compiled_kernel = NULL;
-
+      PyObject *py_obj_stream;
+      void* pKrnl;
 
       {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
       if (!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &num_ctas,
-                            &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &_is_icl, &_stream,
-                            &_queue, &_dev, &_ctxt, &_function, &launch_enter_hook, &launch_exit_hook,
+                            &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &_is_icl, &py_obj_stream,
+                            &_queue, &_dev, &_ctxt, &pKrnl, &launch_enter_hook, &launch_exit_hook,
                             &compiled_kernel, &_event_pool
                             {', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
         return NULL;
@@ -341,7 +406,17 @@ def make_launcher(constants, signature, ids):
       if (launch_enter_hook != Py_None) {{
         PyObject_CallObject(launch_enter_hook, args);
       }}
+      
+      void * pStream = PyCapsule_GetPointer(py_obj_stream, "torch.xpu.Stream.sycl_queue");
+      //error;
+      if(pStream == nullptr) return NULL;
 
+      sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
+      sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
+      auto threads_per_warp = 32;
+      //std::cout<<"_launch : going to call sycl_kernel_launch"<<std::endl;
+      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
+/*
       // raise exception asap
       // {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
       if (_is_icl == 0) {{
@@ -354,7 +429,7 @@ def make_launcher(constants, signature, ids):
                 (ze_kernel_handle_t)_function, (ze_event_pool_handle_t)_event_pool
                 {', ' + ', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
       }}
-
+*/
       if (launch_exit_hook != Py_None) {{
         PyObject_CallObject(launch_exit_hook, args);
       }}
