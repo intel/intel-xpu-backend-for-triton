@@ -5,6 +5,8 @@ on:
   schedule:
     - cron: "0 14 * * *" # run at 2 PM UTC
 
+permissions: read-all
+
 jobs:
 
   Tests-Env-Prepare:
@@ -150,7 +152,7 @@ jobs:
           echo "amp_fp16_tra_acc_pass_rate: $amp_fp16_tra_acc_pass_rate" | tee -a ./e2e_summary.log
 
       - name: Upload Triton Inductor E2E Nightly Data
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Triton-Inductor-E2E-Nightly-Data
           path: /home/gta/triton-nightly/pytorch/inductor_log/
@@ -211,13 +213,15 @@ jobs:
           python inductor_perf_summary.py -s huggingface -p amp_bf16 amp_fp16
 
       - name: Upload Triton Inductor E2E Nightly Data
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Triton-Inductor-E2E-Nightly-Data
           path: /home/gta/triton-nightly/pytorch/inductor_log/
 
   Tests-Failure-And-Report:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
     env:
       GH_TOKEN: ${{ github.token }}
     needs: [Tests-Env-Prepare, Accuracy-Test, Performance-Test]

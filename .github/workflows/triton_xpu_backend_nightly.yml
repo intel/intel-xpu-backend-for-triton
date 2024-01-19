@@ -5,6 +5,8 @@ on:
   schedule:
     - cron: "0 14 * * *"
 
+permissions: read-all
+
 jobs:
 
   Nightly-Tests:
@@ -170,13 +172,15 @@ jobs:
           cat ut_summary.log
 
       - name: Upload Triton PVC nightly Data
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Triton-nightly-data
           path: /home/sdp/triton-nightly/triton_src/python/test/unit/*.log
 
   Tests-Failure-And-Report:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
     env:
       GH_TOKEN: ${{ github.token }}
     needs: Nightly-Tests

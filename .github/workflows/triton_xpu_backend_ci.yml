@@ -8,6 +8,8 @@ on:
     branches: [main]
     types: [checks_requested]
 
+permissions: read-all
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -24,7 +26,7 @@ jobs:
     steps:
 
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Create conda environment
         run: |
@@ -195,7 +197,7 @@ jobs:
           cat ut_summary.log
 
       - name: Upload Triton PVC CI Data
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Triton-ci-data
           path: /home/sdp/triton-preci/triton_src/python/test/unit/*.log
