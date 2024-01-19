@@ -8,6 +8,8 @@ on:
     branches: [main]
     types: [checks_requested]
 
+permissions: read-all
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -21,7 +23,7 @@ jobs:
     steps:
 
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Create conda environment
         run: |
@@ -136,7 +138,7 @@ jobs:
           echo "amp_fp16_inf_acc_pass_rate: $amp_fp16_inf_acc_pass_rate" | tee -a ./e2e_summary.log
 
       - name: Upload Triton Inductor E2E CI Data
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Triton-Inductor-E2E-CI-Data
           path: /home/gta/triton-preci/pytorch/inductor_log/
