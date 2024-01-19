@@ -2623,8 +2623,18 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
                                       benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, target, benefit);
+  PatternBenefit benefitForPropNan = benefit;
+  if (target == mlir::triton::Target::GENX) {
+    // TODO(FIXME): spirv's OpenCL extension (fmin/fmax) does not support
+    // nan propagation. Set these conversion benefit to the max benefit:
+    // PatternBenefit::ImpossibleToMatchSentinel - 1 to make sure the
+    // correctness
+    benefitForPropNan = 65534;
+  }
   patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability, target, benefit);
+      typeConverter, axisInfoAnalysis, computeCapability, target,
+      benefitForPropNan);
   patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability, target, benefit);
+      typeConverter, axisInfoAnalysis, computeCapability, target,
+      benefitForPropNan);
 }
