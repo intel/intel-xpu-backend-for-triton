@@ -1,6 +1,5 @@
 from __future__ import annotations, division
 import ast
-import functools
 import hashlib
 import inspect
 import os
@@ -8,38 +7,7 @@ import textwrap
 from collections import defaultdict, namedtuple
 from functools import cached_property
 from typing import Callable, Generic, Iterable, List, Optional, TypeVar, Union, cast, overload
-
-import torch
-import intel_extension_for_pytorch as ipex
 from ..runtime.driver import driver
-
-
-def get_dev_ctxt_queue_objs(is_spirv=True):
-    if is_spirv:
-        from .driver import driver
-        context = driver.utils.get_l0_ctxt_ptr(ipex.xpu.current_stream().sycl_queue)[0]
-        device = driver.utils.get_l0_dev_ptr(ipex.xpu.current_stream().sycl_queue)[0]
-        queue = driver.utils.get_l0_queue(ipex.xpu.current_stream().sycl_queue)[0]
-        return device, context, queue
-    else:
-        return 0, 0, 0
-
-
-def get_imm_cmd_list(is_spirv=True):
-    if is_spirv:
-        from .driver import driver
-        return driver.utils.get_l0_imm_cmd_list(ipex.xpu.current_stream().sycl_queue)[0]
-    else:
-        return 0
-
-
-def get_event_pool(is_spirv=True):
-    if is_spirv:
-        from .driver import driver
-        return driver.utils.get_event_pool()
-    else:
-        return 0
-
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
@@ -189,8 +157,8 @@ class KernelInterface(Generic[T]):
         Hence JITFunction.__getitem__ returns a callable proxy that
         memorizes the grid.
         """
-        # return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-        return cast(T, functools.partial(cast(Callable, self.run), grid=grid, warmup=False))
+        return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+        # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
 class JITFunction(KernelInterface[T]):
@@ -363,15 +331,6 @@ class JITFunction(KernelInterface[T]):
             already_compiled=False,
         )
 
-    def _get_arg_data_ptr(self, arg) -> str:
-        arg_annotation = self.__annotations__.get(arg, None)
-        if not arg_annotation:
-            return arg.data_ptr() + (1 << 64) if hasattr(arg, "data_ptr") else arg
-        elif arg_annotation is torch.Tensor:
-            return arg.data_ptr() + (1 << 64)
-        else:
-            return arg
-
     def run(self, *args, grid, warmup, **kwargs):
         from ..compiler import CompiledKernel, compile, ASTSource, make_backend
         # deprecated arguments
@@ -403,9 +362,6 @@ class JITFunction(KernelInterface[T]):
         grid_2 = grid[2] if grid_size > 2 else 1
         # compute cache key
         args = [KernelArg(arg_value, param) for (_, arg_value), param in zip(bound_args.arguments.items(), self.params)]
-        data_ptr_arg_values = [
-            arg.value for arg in [self._get_arg_data_ptr(arg) for arg in args if not arg.param.is_constexpr]
-        ]
         sig_key = tuple(arg.signature_key() for arg in args if not arg.param.is_constexpr)
         spec_key = tuple(arg.specialization_key() for arg in args if not arg.param.do_not_specialize)
         constexpr_key = tuple(arg.value for arg in args if arg.param.is_constexpr)
@@ -443,27 +399,28 @@ class JITFunction(KernelInterface[T]):
 
         kernel = self.cache[device][key]
         if not warmup:
-            if self.is_spirv:
-                event_pool = get_event_pool(self.is_spirv)
+            args = [arg.value for arg in args if not arg.param.is_constexpr]
+            metadata = kernel.metadata
+            if driver.get_current_target()[0] == "xpu":
                 use_icl = 1
                 stream = torch.xpu.current_stream().sycl_queue
                 dev_obj = 0
                 ctxt_obj = 0
                 q_obj = 0
-                kernel.run(grid_0, grid_1, grid_2, kernel.num_warps,
-                           kernel.num_ctas,  # number of warps/ctas per instance
-                           kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],  # cluster
-                           kernel.shared, use_icl, stream, q_obj, dev_obj, ctxt_obj, kernel.function,
-                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, kernel, event_pool,
-                           *driver.assemble_tensormap_to_arg(kernel.metadata["tensormaps_info"], data_ptr_arg_values))
+                kernel.run(grid_0, grid_1, grid_2, metadata.num_warps,
+                           metadata.num_ctas,  # number of warps/ctas per instance
+                           metadata.cluster_dims[0], metadata.cluster_dims[1], metadata.cluster_dims[2],  # cluster
+                           metadata.shared, use_icl, stream, q_obj, dev_obj, ctxt_obj, kernel.function,
+                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, metadata,
+                           driver.utils.get_event_pool(),
+                           *driver.assemble_tensormap_to_arg(metadata.tensormaps_info, args))
             else:
-                args = [arg.value for arg in args if not arg.param.is_constexpr]
-                kernel.run(grid_0, grid_1, grid_2, kernel.num_warps,
-                           kernel.num_ctas,  # number of warps/ctas per instance
-                           kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],  # cluster
-                           kernel.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
-                           CompiledKernel.launch_exit_hook, kernel,
-                           *driver.assemble_tensormap_to_arg(kernel.metadata["tensormaps_info"], args))
+                kernel.run(grid_0, grid_1, grid_2, metadata.num_warps,
+                           metadata.num_ctas,  # number of warps/ctas per instance
+                           metadata.cluster_dims[0], metadata.cluster_dims[1], metadata.cluster_dims[2],  # cluster
+                           metadata.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
+                           CompiledKernel.launch_exit_hook, metadata,
+                           *driver.assemble_tensormap_to_arg(metadata.tensormaps_info, args))
         return kernel
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
@@ -472,7 +429,6 @@ class JITFunction(KernelInterface[T]):
         self.fn = fn
         self.module = fn.__module__
         self.version = version
-        self.is_spirv = os.environ.get("TRITON_TARGET_NVVM", "0") != "1"
         self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
         self.starting_line_number = inspect.getsourcelines(fn)[1]

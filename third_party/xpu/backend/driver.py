@@ -64,19 +64,23 @@ class XPUUtils(object):
         self.event_pool = mod.init_event_pool()[0]
         self.current_device = 0 if self.device_count[0] > 0 else -1
 
-    def get_current_device(instance):
-        return instance.current_device
+    def get_current_device(self):
+        return self.current_device
 
-    def get_event_pool(instance):
-        return instance.event_pool
+    def get_event_pool(self):
+        return self.event_pool
 
-    def set_current_device(instance, idx):
-        assert instance.device_count[0] > idx, "Device id not found"
-        instance.current_device = idx
+    def get_sycl_queue(self):
+        return ipex.xpu.current_stream().sycl_queue
 
-    def get_device_capability(instance, idx):
-        return (0, 0)
+    def get_dev_ctxt_queue_objs(self):
+        context = self.get_l0_ctxt_ptr(self.get_sycl_queue())[0]
+        device = self.get_l0_dev_ptr(self.get_sycl_queue())[0]
+        queue = self.get_l0_queue(self.get_sycl_queue())[0]
+        return device, context, queue
 
+    def use_icl(self):
+        return self.get_l0_queue(self.get_sycl_queue())[0] == 0
 
 # ------------------------
 # Launcher
@@ -471,9 +475,9 @@ class XPULauncher(object):
 
     def __init__(self, src, metadata):
         ids = {
-            "ids_of_tensormaps": metadata.get("ids_of_tensormaps", tuple()), "ids_of_folded_args":
-            metadata.get("ids_of_folded_args",
-                         tuple()), "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
+            "ids_of_tensormaps": metadata.ids_of_tensormaps, 
+            "ids_of_folded_args": metadata.ids_of_folded_args,
+            "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
         constants = src.constants if hasattr(src, "constants") else dict()
         enable_warp_specialization = False
@@ -495,8 +499,10 @@ class XPUDriver(DriverBase):
         self.get_current_device = self.utils.get_current_device
 
     def get_current_stream(self, device):
-        # FIXME
-        return 0
+        if self.utils.get_l0_queue(self.utils.get_sycl_queue())[0] == 0:
+            return self.utils.get_l0_imm_cmd_list(self.utils.get_sycl_queue())[0]
+        else:
+            return 0
 
     def get_current_target(self):
         return ("xpu", 0)

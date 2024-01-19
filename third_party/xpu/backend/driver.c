@@ -420,21 +420,6 @@ static PyObject *getL0CtxtPtr(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].context));
 }
-static PyObject *isUsingICL(PyObject *self, PyObject *args) {
-  PyObject *cap;
-  void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
-  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
-    return NULL;
-  sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
-  if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
-    update(*sycl_queue);
-  }
-  uint32_t using_icl = sycl_queue_map[*sycl_queue].cmd_list != 0 ? 1 : 0;
-  return Py_BuildValue("(i)", using_icl);
-}
-
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
@@ -455,8 +440,6 @@ static PyMethodDef ModuleMethods[] = {
      "Extract l0 device pointer from sycl queue"},
     {"get_l0_ctxt_ptr", getL0CtxtPtr, METH_VARARGS,
      "Extract l0 context pointer from sycl queue"},
-    {"is_using_icl", isUsingICL, METH_VARARGS,
-     "Extract sycl queue info, if it is using ICL"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 
