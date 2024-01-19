@@ -126,32 +126,13 @@ struct PrintOpConversion
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    if (target == Target::GENX) {
-      SmallVector<Value, 16> operands;
-      for (size_t i = 0; i < op.getNumOperands(); i++) {
-        auto sub_operands = getTypeConverter()->unpackLLElements(
-            loc, adaptor.getOperands()[i], rewriter);
-        for (auto elem : sub_operands) {
-          operands.push_back(elem);
-        }
-      }
-      std::string formatStr;
-      llvm::raw_string_ostream os(formatStr);
-      os << op.getPrefix();
-      if (!operands.empty()) {
-        os << getFormatSubstr(operands[0]);
-      }
 
-      for (size_t i = 1; i < operands.size(); ++i) {
-        os << ", " << getFormatSubstr(operands[i]);
-      }
-      llPrintf(formatStr, operands, rewriter, target);
-      rewriter.eraseOp(op);
-      return success();
-    }
+    llvm::SmallString<64> msgNewline(op.getPrefix());
+    msgNewline.push_back('\0');
 
     Value prefixStr = LLVM::addStringToModule(
-        loc, rewriter, "printfPrefix_", op.getPrefix(), /*AddressSpace*/ 0);
+        loc, rewriter, "printfPrefix_", msgNewline,
+        (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant : 0);
 
     auto getPid = [&](int axis) {
       return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
@@ -329,16 +310,23 @@ struct PrintOpConversion
     if (funcOp)
       return cast<LLVM::LLVMFuncOp>(*funcOp);
 
-    auto *context = rewriter.getContext();
-
-    SmallVector<Type> argsType{ptr_ty(context)};
-    auto funcType = LLVM::LLVMFunctionType::get(i32_ty, argsType, true);
+    MLIRContext *context = rewriter.getContext();
+    auto ptrTy = LLVM::LLVMPointerType::get(
+        context, GENX::GENXMemorySpace::kUniformConstant);
+    SmallVector<Type> argsType{ptrTy};
+    auto retType = i32_ty;
+    auto funcType =
+        LLVM::LLVMFunctionType::get(retType, argsType, /*isVarArg*/ true);
 
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
 
-    return rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(context), funcName,
-                                             funcType);
+    auto printFunc = rewriter.create<LLVM::LLVMFuncOp>(
+        UnknownLoc::get(context), funcName, funcType, LLVM::Linkage::External,
+        /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC, /*comdat=*/SymbolRefAttr{});
+    printFunc->setAttr("nounwind", rewriter.getUnitAttr());
+
+    return printFunc;
   }
 
   // declare vprintf(i8*, i8*) as external function
@@ -399,7 +387,8 @@ struct PrintOpConversion
     msgNewline.push_back('\0');
     Value msgValue = LLVM::addStringToModule(
         UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
-        msgNewline, /*AddressSpace*/ 0);
+        msgNewline,
+        (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant : 0);
     llPrintf(msgValue, args, rewriter, target);
     return msgValue;
   }
@@ -451,9 +440,9 @@ struct PrintOpConversion
         }
         bufferPtr = bitcast(allocated, ptr);
       }
-
-      call(funcOp, operands);
     }
+
+    call(funcOp, operands);
   }
 };
 

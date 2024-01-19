@@ -54,24 +54,22 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
             clangpp = shutil.which("clang++")
             icpx = shutil.which("icpx")
             cxx = icpx if icpx is not None else clangpp
+            if cxx is None:
+                raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         import numpy as np
         numpy_include_dir = np.get_include()
         include_dirs = include_dirs + [numpy_include_dir]
-        cxx_cmd = [cxx, src]
+        cc_cmd = [cxx]
         if icpx is not None:
-            cxx_cmd += ["-fsycl"]
-        cxx_cmd += ["-std=c++17", "-g", "-shared", "-fPIC", "-o", so]
-        cxx_cmd += [f'-l{lib}' for lib in libraries]
-        cxx_cmd += [f"-L{dir}" for dir in library_dirs]
-        cxx_cmd += [f"-I{dir}" for dir in include_dirs]
-        ret = subprocess.check_call(cxx_cmd)
+            cc_cmd += ["-fsycl"]
     else:
-        cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-o", so]
-        cc_cmd += [f'-l{lib}' for lib in libraries]
-        cc_cmd += [f"-L{dir}" for dir in library_dirs]
-        cc_cmd += [f"-I{dir}" for dir in include_dirs]
-        ret = subprocess.check_call(cc_cmd)
+        cc_cmd = [cc, "-O3"]
 
+    cc_cmd += [src, "-shared", "-fPIC", "-o", so]
+    cc_cmd += [f'-l{lib}' for lib in libraries]
+    cc_cmd += [f"-L{dir}" for dir in library_dirs]
+    cc_cmd += [f"-I{dir}" for dir in include_dirs]
+    ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
     # fallback on setuptools
