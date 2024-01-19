@@ -2,6 +2,7 @@
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Target/SPIRV/SPIRVTranslation.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -159,6 +160,8 @@ void init_triton_llvm(py::module &&m) {
 
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt) {
+    if (triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
+      return;
     using namespace llvm;
     LoopAnalysisManager lam;
     FunctionAnalysisManager fam;
