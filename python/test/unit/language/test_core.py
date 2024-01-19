@@ -4448,9 +4448,6 @@ def test_propagate_nan(dtype, propagate_nan, func, device):
             'test_propagate_nan for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
         )
 
-    if is_xpu(device) and propagate_nan == 'ALL':
-        pytest.skip("FIXME: Incorrect result on XPU")
-
     @triton.jit
     def kernel(A, B, C, propagate_nan: tl.constexpr, func: tl.constexpr):
         if func == 'clamp':
