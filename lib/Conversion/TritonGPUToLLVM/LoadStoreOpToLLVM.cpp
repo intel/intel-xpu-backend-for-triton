@@ -500,22 +500,22 @@ struct StoreOpConversion
   }
 };
 // TODO: refactor to save common logic with insertsliceasyncv2
-struct StoreAsyncOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::StoreAsyncOp> {
+struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
+                                       triton::nvidia_gpu::StoreAsyncTMAOp> {
   using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::StoreAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
+      triton::nvidia_gpu::StoreAsyncTMAOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  StoreAsyncOpConversion(TritonGPUToLLVMTypeConverter &converter,
-                         ModuleAllocation &allocation,
-                         mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-                         const TensorPtrMapT *tensorPtrMap, Target target,
-                         PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::StoreAsyncOp>(
+  StoreAsyncTMAOpConversion(TritonGPUToLLVMTypeConverter &converter,
+                            ModuleAllocation &allocation,
+                            mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
+                            const TensorPtrMapT *tensorPtrMap, Target target,
+                            PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::StoreAsyncTMAOp>(
             converter, allocation, tmaMetadata, target, benefit),
         tensorPtrMap(tensorPtrMap) {}
 
   LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::StoreAsyncOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::nvidia_gpu::StoreAsyncTMAOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto srcEncoding = srcTy.getEncoding();
@@ -526,7 +526,7 @@ struct StoreAsyncOpConversion
     }
   }
 
-  LogicalResult lowerStoreAsync(triton::nvidia_gpu::StoreAsyncOp op,
+  LogicalResult lowerStoreAsync(triton::nvidia_gpu::StoreAsyncTMAOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
@@ -544,10 +544,10 @@ struct StoreAsyncOpConversion
     assert(rank > 0 && rank <= 5);
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for StoreAsyncOp");
+    assert(moduleOp && "Parent ModuleOp not found for StoreAsyncTMAOp");
 
     auto llFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>();
-    assert(llFuncOp && "LLVMFuncOp not found for StoreAsyncOp");
+    assert(llFuncOp && "LLVMFuncOp not found for StoreAsyncTMAOp");
 
     int numTMADescs = getNumTMADescs(llFuncOp);
     assert(numTMADescs > 0);
@@ -624,7 +624,7 @@ struct StoreAsyncOpConversion
         ((elemTy.getIntOrFloatBitWidth() == 16 && sharedLayout.getVec() == 8) or
          (elemTy.getIntOrFloatBitWidth() == 32 &&
           sharedLayout.getVec() == 4)) &&
-        "Unexpected shared layout for StoreAsyncOp");
+        "Unexpected shared layout for StoreAsyncTMAOp");
     if (sharedLayout.getPerPhase() == 4 && sharedLayout.getMaxPhase() == 2)
       swizzle = CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_32B;
     else if (sharedLayout.getPerPhase() == 2 && sharedLayout.getMaxPhase() == 4)
@@ -632,7 +632,7 @@ struct StoreAsyncOpConversion
     else if (sharedLayout.getPerPhase() == 1 && sharedLayout.getMaxPhase() == 8)
       swizzle = CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_128B;
     else
-      llvm::report_fatal_error("Unsupported shared layout for StoreAsyncOp");
+      llvm::report_fatal_error("Unsupported shared layout for StoreAsyncTMAOp");
     tmaInfo.swizzle = swizzle;
     tmaInfo.interleave = CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE;
     tmaInfo.l2Promotion =
@@ -703,7 +703,7 @@ struct StoreAsyncOpConversion
   }
 
   LogicalResult
-  lowerStoreAsyncWithSlice(triton::nvidia_gpu::StoreAsyncOp op,
+  lowerStoreAsyncWithSlice(triton::nvidia_gpu::StoreAsyncTMAOp op,
                            OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
@@ -729,10 +729,10 @@ struct StoreAsyncOpConversion
     assert(rank > 0 && rank <= 5);
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for StoreAsyncOp");
+    assert(moduleOp && "Parent ModuleOp not found for StoreAsyncTMAOp");
 
     auto llFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>();
-    assert(llFuncOp && "LLVMFuncOp not found for StoreAsyncOp");
+    assert(llFuncOp && "LLVMFuncOp not found for StoreAsyncTMAOp");
 
     int numTMADescs = getNumTMADescs(llFuncOp);
     assert(numTMADescs > 0);
@@ -821,7 +821,7 @@ struct StoreAsyncOpConversion
              sharedLayout.getVec() == 8) or
             (dstElemTy.getIntOrFloatBitWidth() == 32 &&
              sharedLayout.getVec() == 4)) &&
-           "Unexpected shared layout for StoreAsyncOp");
+           "Unexpected shared layout for StoreAsyncTMAOp");
     if (sharedLayout.getPerPhase() == 4 && sharedLayout.getMaxPhase() == 2)
       swizzle = CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_32B;
     else if (sharedLayout.getPerPhase() == 2 && sharedLayout.getMaxPhase() == 4)
@@ -829,7 +829,7 @@ struct StoreAsyncOpConversion
     else if (sharedLayout.getPerPhase() == 1 && sharedLayout.getMaxPhase() == 8)
       swizzle = CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_128B;
     else
-      llvm::report_fatal_error("Unsupported shared layout for StoreAsyncOp");
+      llvm::report_fatal_error("Unsupported shared layout for StoreAsyncTMAOp");
     tmaInfo.swizzle = swizzle;
     tmaInfo.interleave = CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE;
     tmaInfo.l2Promotion =
@@ -2072,6 +2072,6 @@ void mlir::triton::populateLoadStoreOpToLLVMPatterns(
                                              target, benefit);
   patterns.add<InsertSliceTMAOpConversion>(
       typeConverter, allocation, tmaMetadata, tensorPtrMap, target, benefit);
-  patterns.add<StoreAsyncOpConversion>(typeConverter, allocation, tmaMetadata,
-                                       tensorPtrMap, target, benefit);
+  patterns.add<StoreAsyncTMAOpConversion>(
+      typeConverter, allocation, tmaMetadata, tensorPtrMap, target, benefit);
 }

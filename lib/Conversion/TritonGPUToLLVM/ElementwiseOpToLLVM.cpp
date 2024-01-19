@@ -2547,10 +2547,6 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
   POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
   POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
-  POPULATE_BINARY_OP(arith::MinimumFOp,
-                     LLVM::MinimumOp) // min (return NaN if either op is Nan)
-  POPULATE_BINARY_OP(arith::MaximumFOp,
-                     LLVM::MaximumOp) // max  (return NaN if either op is Nan)
   POPULATE_BINARY_OP(
       arith::MinNumFOp,
       LLVM::MinNumOp) // fmin (return non-NaN if either op is non-NaN)
@@ -2626,9 +2622,19 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, target,
                                       benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
-                                   computeCapability, target);
+                                   computeCapability, target, benefit);
+  PatternBenefit benefitForPropNan = benefit;
+  if (target == mlir::triton::Target::GENX) {
+    // TODO(FIXME): spirv's OpenCL extension (fmin/fmax) does not support
+    // nan propagation. Set these conversion benefit to the max benefit:
+    // PatternBenefit::ImpossibleToMatchSentinel - 1 to make sure the
+    // correctness
+    benefitForPropNan = 65534;
+  }
   patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability, target);
+      typeConverter, axisInfoAnalysis, computeCapability, target,
+      benefitForPropNan);
   patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability, target);
+      typeConverter, axisInfoAnalysis, computeCapability, target,
+      benefitForPropNan);
 }

@@ -400,22 +400,23 @@ class JITFunction(KernelInterface[T]):
         kernel = self.cache[device][key]
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
+            metadata = kernel.metadata
             if driver.get_current_target()[0] == "xpu":
                 dev_obj, ctxt_obj, q_obj = driver.utils.get_dev_ctxt_queue_objs()
-                kernel.run(grid_0, grid_1, grid_2, kernel.num_warps,
-                           kernel.num_ctas,  # number of warps/ctas per instance
-                           kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],  # cluster
-                           kernel.shared, driver.utils.use_icl(), stream, q_obj, dev_obj, ctxt_obj, kernel.function,
-                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, kernel,
+                kernel.run(grid_0, grid_1, grid_2, metadata.num_warps,
+                           metadata.num_ctas,  # number of warps/ctas per instance
+                           metadata.cluster_dims[0], metadata.cluster_dims[1], metadata.cluster_dims[2],  # cluster
+                           metadata.shared, driver.utils.use_icl(), stream, q_obj, dev_obj, ctxt_obj, kernel.function,
+                           CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, metadata,
                            driver.utils.get_event_pool(),
-                           *driver.assemble_tensormap_to_arg(kernel.metadata["tensormaps_info"], args))
+                           *driver.assemble_tensormap_to_arg(metadata.tensormaps_info, args))
             else:
-                kernel.run(grid_0, grid_1, grid_2, kernel.num_warps,
-                           kernel.num_ctas,  # number of warps/ctas per instance
-                           kernel.cluster_dims[0], kernel.cluster_dims[1], kernel.cluster_dims[2],  # cluster
-                           kernel.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
-                           CompiledKernel.launch_exit_hook, kernel,
-                           *driver.assemble_tensormap_to_arg(kernel.metadata["tensormaps_info"], args))
+                kernel.run(grid_0, grid_1, grid_2, metadata.num_warps,
+                           metadata.num_ctas,  # number of warps/ctas per instance
+                           metadata.cluster_dims[0], metadata.cluster_dims[1], metadata.cluster_dims[2],  # cluster
+                           metadata.shared, stream, kernel.function, CompiledKernel.launch_enter_hook,
+                           CompiledKernel.launch_exit_hook, metadata,
+                           *driver.assemble_tensormap_to_arg(metadata.tensormaps_info, args))
         return kernel
 
     def __init__(self, fn, version=None, do_not_specialize=None, debug=None, noinline=None):
