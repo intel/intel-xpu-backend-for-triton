@@ -110,7 +110,7 @@ function run_core_tests {
     echo "FAILED: return code $?" ; exit $?
   fi
 
-  # run runtime tests serially to avoid issues with print buffer handling.
+  # run test_subprocess serially to avoid issues with print buffer handling.
   TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu language/test_subprocess.py
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
