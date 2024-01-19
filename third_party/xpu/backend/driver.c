@@ -107,17 +107,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
                         [](unsigned char c) { return std::tolower(c); });
             return (str == "on" || str == "true" || str == "1");
         }
-        #define EXPECT_EQ(value1, value2)                                              \
-        {                                                                            \
-            auto result = (value2);                                                    \
-            if ((value1) != (result)) {                                                \
-            std::string err_log("L0 API error code: ");                              \
-            std::stringstream ss;                                                    \
-            ss << std::hex << result << std::endl;                                   \
-            throw std::runtime_error(err_log + ss.str());                            \
-            }                                                                          \
-        }
-        #define EXPECT_TRUE(value1) EXPECT_EQ(true, value1)
+
         ze_module_handle_t create_module(ze_context_handle_t context,
                                         ze_device_handle_t device,
                                         uint32_t *binary_ptr, size_t binary_size) {
@@ -139,16 +129,14 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
             error_no = zeModuleCreate(context, device, &module_description, &module, &buildlog);
             if (error_no != ZE_RESULT_SUCCESS) {
                 size_t szLog = 0;
-                EXPECT_EQ(ZE_RESULT_SUCCESS,
-                        zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
+                ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
                 char *strLog = (char *)malloc(szLog);
-                EXPECT_EQ(ZE_RESULT_SUCCESS,
-                        zeModuleBuildLogGetString(buildlog, &szLog, strLog));
+                ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog));
                 std::cerr<<"L0 build module failed. Log: "<<strLog<<std::endl;
                 free(strLog);
-                EXPECT_EQ(ZE_RESULT_SUCCESS, zeModuleBuildLogDestroy(buildlog));
+                ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
             }
-            EXPECT_EQ(ZE_RESULT_SUCCESS, error_no);
+            ZE_CHECK(error_no);
             return module;
         }
         void printModuleKernelName(ze_module_handle_t hModule) {
@@ -177,55 +165,49 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
             if (getBoolEnv("MLIR_ENABLE_DUMP")) {
                 std::cout << "create kernel:" << func_name << std::endl;
             }
-            EXPECT_EQ(ZE_RESULT_SUCCESS,
-                        zeKernelCreate(module, &kernel_description, &kernel));
-            //  EXPECT_EQ(module, module_initial);
+            ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel));
             return kernel;
         }
         ze_kernel_handle_t create_function(ze_module_handle_t module,
                                         std::string func_name) {
-        return create_function(module, 0, func_name);
+        return create_function(module, ZE_KERNEL_FLAG_FORCE_RESIDENCY, func_name);
         }
-        std::vector<std::unique_ptr<sycl::kernel>> compiled_kernel;
+
+        std::vector<std::unique_ptr<sycl::kernel>> compiled_kernels;
+        
         static PyObject* loadSyclBinary(PyObject* self, PyObject* args) {
-            //std::cout<<"Inside loadSyclBinary"<<std::endl;
             const char* name;
             int shared;
             PyObject *py_bytes;
             PyObject *py_dev;
             if(!PyArg_ParseTuple(args, "sSiO", &name, &py_bytes, &shared, &py_dev)) {
-                std::cout << "loadBloadSyclBinaryinary arg parse failed" << std::endl;
+                std::cout << "loadSyclBinary arg parse failed" << std::endl;
                 return NULL;
             }
-            //std::cout<<"------------------"<<std::endl;
-            //std::cout<<PyCapsule_GetName(py_dev)<<std::endl;
-            //std::cout<<"------------------"<<std::endl;
             int32_t n_regs = 0;
             int32_t n_spills = 0;
-            void * pdevID = PyCapsule_GetPointer(py_dev, "torch.xpu.device.sycl_device");
+            void * pdevID = PyCapsule_GetPointer(py_dev, PyCapsule_GetName(py_dev));
             //error;
             if(pdevID == nullptr) return NULL;
-            //module_desc.inputSize = PyBytes_Size(py_bytes);
-            //module_desc.pInputModule = (uint8_t*) PyBytes_AsString(py_bytes);
+
             sycl::device device = *(static_cast<sycl::device*>(pdevID));
             std::string kernel_name = name;
             size_t binary_size = PyBytes_Size(py_bytes);
             binary_size = binary_size/ sizeof(uint32_t);
-            //std::string binary; binary.reserve(binary_size);
+
             uint32_t *binary_ptr = (uint32_t *)PyBytes_AsString(py_bytes);;
-            //std::cout<<"Kernle name "<<kernel_name<<std::endl;
             auto ctx = device.get_platform().ext_oneapi_get_default_context();
             auto l0_device =
                 sycl::get_native<sycl::backend::ext_oneapi_level_zero>(device);
             auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
             auto l0_module =
                 create_module(l0_context, l0_device, binary_ptr, binary_size);
-            //printModuleKernelName(l0_module);
+
             auto l0_kernel = create_function(l0_module, kernel_name);
             ze_kernel_properties_t props;
             props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
             props.pNext = nullptr;
-            EXPECT_EQ(ZE_RESULT_SUCCESS, zeKernelGetProperties(l0_kernel, &props));
+            ZE_CHECK(zeKernelGetProperties(l0_kernel, &props));
             n_spills = props.spillMemSize;
             auto mod = sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
                                                 sycl::bundle_state::executable>(
@@ -233,19 +215,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
             auto fun = sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
                 {mod, l0_kernel, sycl::ext::oneapi::level_zero::ownership::transfer},
                 ctx);
-            if (getBoolEnv("MLIR_ENABLE_DUMP")) {
-                //  auto kernel_ids = mod.get_kernel_ids();
-                //  std::cout << "num_kernels:" << kernel_ids.size() << std::endl;
-                //  for (auto& kernel_id : kernel_ids) {
-                //    std::cout << "fun name: " << kernel_id.get_name() << std::endl;
-                //  }
-            }
-            compiled_kernel.push_back(std::make_unique<sycl::kernel>(fun));
-            sycl::kernel *ptr = compiled_kernel[compiled_kernel.size() - 1].get();
+            compiled_kernels.push_back(std::make_unique<sycl::kernel>(fun));
+            sycl::kernel *ptr = compiled_kernels[compiled_kernels.size() - 1].get();
             if (getBoolEnv("MLIR_ENABLE_DUMP")) {
                 std::cout << "compiled kernel ptr: " << ptr << std::endl;
-                std::cout << "total kernels:" << compiled_kernel.size() << std::endl;
-                for (auto &k : compiled_kernel) {
+                std::cout << "total kernels:" << compiled_kernels.size() << std::endl;
+                for (auto &k : compiled_kernels) {
                 std::cout << "  kernel:"
                             << k->get_info<sycl::info::kernel::function_name>() << " @"
                             << k.get() << std::endl;
@@ -258,14 +233,6 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
             });*/
             sycl::kernel_bundle<sycl::bundle_state::executable> *kb =
                 new sycl::kernel_bundle<sycl::bundle_state::executable>(mod);
-            /*py::capsule module_capsulle(kb, [](void *f) {
-                auto kk =
-                    static_cast<sycl::kernel_bundle<sycl::bundle_state::executable> *>(f);
-                delete kk;
-            });*/
-            /*py::tuple tup =
-                py::make_tuple(module_capsulle, kernel_capsulle, n_regs, n_spills);
-            return tup;*/
             return Py_BuildValue("(KKii)", (uint64_t)kb, (uint64_t)k, n_regs, n_spills);
         }
 /*Sycl code end*/

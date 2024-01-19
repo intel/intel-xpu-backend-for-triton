@@ -333,7 +333,7 @@ def make_launcher(constants, signature, ids):
       assert(false && "wrong scalar size in sycl gen.");
       }}
   }}
-  static void sycl_kernel_launch(int gridX, int gridY, int gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+  static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
     //std::cout<<"sycl_kernel_launch entry"<<std::endl;
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
     //std::cout<<"Kernel name :"<<kernel_name<<std::endl;
@@ -409,7 +409,7 @@ def make_launcher(constants, signature, ids):
       
       void * pStream = PyCapsule_GetPointer(py_obj_stream, "torch.xpu.Stream.sycl_queue");
       //error;
-      if(pStream == nullptr) return NULL;
+      if(pStream == nullptr || pKrnl == nullptr) return NULL;
 
       sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
       sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
