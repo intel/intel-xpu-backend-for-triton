@@ -23,6 +23,7 @@ function check_rc {
 
 CLEAN=false
 VENV=false
+SKIP_TRITON=false
 for arg in "$@"; do
   case $arg in
     --clean)
@@ -31,6 +32,10 @@ for arg in "$@"; do
       ;;
     --venv)
       VENV=true
+      shift
+      ;;
+    --skip-triton)
+      SKIP_TRITON=true
       shift
       ;;
   esac
@@ -125,6 +130,10 @@ fi
 
 ############################################################################
 ## Configure and build the Triton project.
+
+if [ "$SKIP_TRITON" = true ]; then
+  exit 0
+fi
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then
