@@ -35,14 +35,16 @@ pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/
 # Install from source
 
 ```
-git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target;
+git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
+cd intel-xpu-backend-for-triton
 scripts/compile-triton.sh
 ```
 
 Or with a virtualenv:
 
 ```
-git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target;
+git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
+cd intel-xpu-backend-for-triton
 scripts/compile-triton.sh --venv
 ```
 
