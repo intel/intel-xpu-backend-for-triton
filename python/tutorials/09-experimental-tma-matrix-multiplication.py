@@ -29,13 +29,12 @@ performance on parallel with cuBLAS.
 import torch
 from torch.testing import assert_close
 
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
+
 import triton
 import triton.language as tl
 
-if torch.cuda.get_device_capability()[0] < 9:
-    import sys
-    print("Skipping TMA benchmark for GPU with compute capability < 9")
-    sys.exit(0)
+torch.xpu.enable_sync_mode()
 
 
 @triton.autotune(
@@ -131,17 +130,17 @@ def test_matmul():
         M, N, K, TRANS_A, TRANS_B = case
         print(M, N, K, TRANS_A, TRANS_B)
         if (TRANS_A):
-            a = torch.randn((K, M), device='cuda', dtype=torch.float16).T
+            a = torch.randn((K, M), device='xpu', dtype=torch.float16).T
             a_order = [0, 1]
         else:
-            a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+            a = torch.randn((M, K), device='xpu', dtype=torch.float16)
             a_order = [1, 0]
 
         if (TRANS_B):
-            b = torch.randn((N, K), device='cuda', dtype=torch.float16).T
+            b = torch.randn((N, K), device='xpu', dtype=torch.float16).T
             b_order = [0, 1]
         else:
-            b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+            b = torch.randn((K, N), device='xpu', dtype=torch.float16)
             b_order = [1, 0]
 
         golden = torch.matmul(a, b)
@@ -173,17 +172,17 @@ def test_matmul():
     ))
 def benchmark(M, N, K, TRANS_A, TRANS_B, provider):
     if (TRANS_A):
-        a = torch.randn((K, M), device='cuda', dtype=torch.float16).T
+        a = torch.randn((K, M), device='xpu', dtype=torch.float16).T
         a_order = [0, 1]
     else:
-        a = torch.randn((M, K), device='cuda', dtype=torch.float16)
+        a = torch.randn((M, K), device='xpu', dtype=torch.float16)
         a_order = [1, 0]
 
     if (TRANS_B):
-        b = torch.randn((N, K), device='cuda', dtype=torch.float16).T
+        b = torch.randn((N, K), device='xpu', dtype=torch.float16).T
         b_order = [0, 1]
     else:
-        b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+        b = torch.randn((K, N), device='xpu', dtype=torch.float16)
         b_order = [1, 0]
 
     quantiles = [0.5, 0.2, 0.8]
