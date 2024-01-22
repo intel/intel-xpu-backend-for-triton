@@ -216,7 +216,8 @@ struct FuncOpConversion : public FuncOpConversionBase {
     case Target::GENX:
       NamedAttrList attrs;
       auto mod = funcOp->getParentOfType<ModuleOp>();
-      int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      int threadsPerWarp =
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
       if (allocation.isRoot(funcOp))
         attrs.append(GENX::GENXDialect::getKernelFuncAttrName(),
                      rewriter.getI32IntegerAttr(1));
