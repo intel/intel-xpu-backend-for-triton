@@ -54,6 +54,8 @@ pip install triton-2.1.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.
 # Clone OpenAI/Triton
 git clone https://github.com/openai/triton.git
 cd triton
+# checkout to old commit first
+git checkout 56c284cf7e39f249cdf1d8d5dba7892deb0286d6
 # Clone submodules
 git submodule sync && git submodule update --init --recursive --jobs 0
 ```
@@ -61,17 +63,15 @@ Since we are at the active development stage, it is recommended to check to late
 
 ```Bash
 cd third_party/intel_xpu_backend
-git checkout main && git pull
+git checkout spirv-target && git pull
 ```
 
 Now Build Triton with Intel XPU backend enabled, note that it is important to make sure that the `triton` repo is checked to the pinned commit. This commit is the latest tested working commit.
 
 ```Bash
-# cd to triton root folder and checkout to pinned commit
-cd ../..
-git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
+# cd to python folder
+cd ../../python
 # Build triton with XPU backend enabled
-cd python
 TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
 ```
 
