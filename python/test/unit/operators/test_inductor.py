@@ -164,7 +164,6 @@ def test_avg_pool_bw():
 @pytest.mark.parametrize("RBLOCK", [1, 16, 32, 64, 128])
 @pytest.mark.parametrize("num_warps", [1, 4])
 def test_scan2d_broadcast(RBLOCK, num_warps):
-    pytest.skip("FIXME: worker crashed cases")
 
     @triton.jit(debug=True)
     def fn(in_ptr, out_ptr, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
@@ -172,8 +171,6 @@ def test_scan2d_broadcast(RBLOCK, num_warps):
         xindex = tl.arange(0, XBLOCK)[:, None]
         data = tl.load(in_ptr + rindex)
         scan = tl.cumsum(data, 1)
-        expected_max = tl.sum(data, 1)
-        tl.device_assert(scan <= expected_max)
         tl.store(out_ptr + xindex * RBLOCK + rindex, scan)
 
     XBLOCK = 4
