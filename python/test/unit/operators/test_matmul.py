@@ -57,16 +57,13 @@ torch.xpu.enable_sync_mode()
             (128, 64, 16, 1, 4, STAGES, 256, 128, 80, AT, BT, DTYPE, DTYPE, True, True, None, None),
             #FIXME(256, 128, 32, 1, 8, STAGES, 512, 256, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
             #FIXME(128, 128, 32, 1, 4, STAGES, 256, 256, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
-        ]
-          for DTYPE in ["float16", "bfloat16", "float32"]
-          for AT in [False, True]
-          for BT in [False, True]
-          for STAGES in [4]],
+        ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in
+          [4]],
         # mixed-precision
         *[[
-         (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
-         #FIXME(128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
-         (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
+            (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
+            #FIXME(128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
+            (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
         ] for ADTYPE, BDTYPE in [
             ("float8e4nv", "float8e5"),
             ("float8e4nv", "float8e4nv"),
@@ -84,9 +81,9 @@ torch.xpu.enable_sync_mode()
         ] for AT in [False, True] for BT in [False, True] for FASTACCUM in [True, False]],
         # mixed-precision block layout
         *[[
-         (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, False, True, None, None),
-         #FIXME(128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, False, True, None, None),
-         (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE, False, True, None, None),
+            (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, False, True, None, None),
+            #FIXME(128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, False, True, None, None),
+            (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE, False, True, None, None),
         ] for ADTYPE, BDTYPE in [
             ("float8e4nv", "float16"),
             ("float16", "float8e5"),
@@ -106,7 +103,7 @@ torch.xpu.enable_sync_mode()
 )
 def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE, ALLOW_TF32,
             F8_FASTACCUM, ACC_DTYPE, OUTPUT_DTYPE):
-    if torch.cuda.is_available():    
+    if torch.cuda.is_available():
         capability = torch.cuda.get_device_capability()
         if capability[0] < 7:
             pytest.skip("Only test tl.dot() on devices with sm >= 70")
