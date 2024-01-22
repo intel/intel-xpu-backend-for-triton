@@ -928,7 +928,7 @@ SmallVector<unsigned> DpasEncodingAttr::getSizePerThread() const {
 }
 SmallVector<unsigned>
 DpasEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
-  // Given by threadPerWarp ([1,16]) * warpsPerCTA ([8,1]) * warpsPerCTA.
+  // Given by threadsPerWarp ([1,16]) * warpsPerCTA ([8,1]) * warpsPerCTA.
   return {8 * getWarpsPerCTA()[0], 16 * getWarpsPerCTA()[1]};
 }
 
