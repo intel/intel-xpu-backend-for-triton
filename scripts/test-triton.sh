@@ -105,7 +105,13 @@ function run_core_tests {
   fi
   cd ${CORE_TEST_DIR}
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+  if [ $? -ne 0 ]; then
+    echo "FAILED: return code $?" ; exit $?
+  fi
+
+  # run test_subprocess serially to avoid issues with print buffer handling.
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu language/test_subprocess.py
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
@@ -125,15 +131,6 @@ function run_core_tests {
   TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose language/test_line_info.py
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
-  fi
-
-  python3 language/assert_helper.py device_assert
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
-
-  if [ `python3 language/print_helper.py device_print float | wc -l` -eq 0 ]; then
-    echo "FAILED: print_helper.py return code $?" ; exit $?
   fi
 }
 
