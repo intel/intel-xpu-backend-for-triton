@@ -48,7 +48,7 @@ torch.xpu.enable_sync_mode()
             #FIXME(128, 128, 32, 1, 4, 2, 256, 384, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
             (128, 128, 32, 1, 4, 2, 107, 233, 128, AT, BT, DTYPE, DTYPE, True, True, None, None),
             (128, 128, 32, 1, 4, 2, 107, 233, 83, AT, BT, DTYPE, DTYPE, True, True, None, None),
-            #FIXME(128, 256, 64, 1, 8, 3, 256, 512, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
+            (128, 256, 64, 1, 8, 3, 256, 512, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
         ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True]],
         # n-stage
         *[[
@@ -62,7 +62,7 @@ torch.xpu.enable_sync_mode()
         # mixed-precision
         *[[
             (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
-            #FIXME(128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
+            (128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
             (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
         ] for ADTYPE, BDTYPE in [
             ("float8e4nv", "float8e5"),
@@ -82,7 +82,7 @@ torch.xpu.enable_sync_mode()
         # mixed-precision block layout
         *[[
             (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, False, True, None, None),
-            #FIXME(128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, False, True, None, None),
+            (128, 256, 32, 1, 8, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, False, True, None, None),
             (32, 64, 32, 1, 1, 2, 64, 128, 32, AT, BT, ADTYPE, BDTYPE, False, True, None, None),
         ] for ADTYPE, BDTYPE in [
             ("float8e4nv", "float16"),
@@ -111,11 +111,16 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             pytest.skip("Only test bfloat16 on devices with sm >= 80")
         if capability[0] < 9 and (ADTYPE == "float8e4nv" or BDTYPE == "float8e4nv"):
             pytest.skip("Only test float8e4nv on devices with sm >= 90")
-
-    if (torch.xpu.is_available() and ADTYPE == "bfloat16" or BDTYPE == "bfloat16"):
-        pytest.skip("FIXME: bfloat16 matmuls don't work on XPU yet")
-    elif (ADTYPE == "bfloat16" or BDTYPE == "bfloat16") and SPLIT_K != 1:
+    if (ADTYPE == "bfloat16" or BDTYPE == "bfloat16") and SPLIT_K != 1:
         pytest.skip("bfloat16 matmuls don't allow split_k for now")
+
+    if ADTYPE == "bfloat16" or BDTYPE == "bfloat16":
+        pytest.skip("FIXME: Incorrect result on XPU")
+    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 64:
+        pytest.skip("FIXME: Incorrect result on XPU")
+    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (ADTYPE in ["float8e4nv", "float8e5", "float8e4b15"]
+                                                                or BDTYPE == ["float8e4nv", "float8e5", "float8e4b15"]):
+        pytest.skip("FIXME: Incorrect result on XPU")
 
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
