@@ -35,24 +35,17 @@ pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/
 # Install from source
 
 ```
-git clone https://github.com/openai/triton.git;
-cd triton;
-
-pip install ninja cmake wheel; # build-time dependencies
-pip install -e python
+git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
+cd intel-xpu-backend-for-triton
+scripts/compile-triton.sh
 ```
 
 Or with a virtualenv:
 
 ```
-git clone https://github.com/openai/triton.git;
-cd triton;
-
-python -m venv .venv --prompt triton;
-source .venv/bin/activate;
-
-pip install ninja cmake wheel; # build-time dependencies
-pip install -e python
+git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
+cd intel-xpu-backend-for-triton
+scripts/compile-triton.sh --venv
 ```
 
 # Building with a custom LLVM
@@ -126,22 +119,11 @@ There currently isn't a turnkey way to run all the Triton tests, but you can
 follow the following recipe.
 
 ```shell
-# One-time setup.  Note we have to reinstall local Triton because torch
-# overwrites it with the public version.
-$ pip install scipy numpy torch pytest lit && pip install -e python
-
-# Run Python tests using your local GPU.
-$ python3 -m pytest python/test/unit
-
-# Move to builddir.  Fill in <...> with the full path, e.g.
-# `cmake.linux-x86_64-cpython-3.11`.
-$ cd python/build/cmake<...>
-
-# Run C++ unit tests.
-$ ninja test
-
-# Run lit tests.
-$ lit test
+scripts/test-triton.sh
+```
+Or with a virtualenv:
+```shell
+scripts/test-triton.sh --venv
 ```
 
 # Changelog
