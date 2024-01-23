@@ -91,9 +91,12 @@ Note that this feature is still experimental and may change in the future.
 # ------------
 
 import torch
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
+
+torch.xpu.enable_sync_mode()
 
 
 @triton.autotune(
@@ -219,8 +222,8 @@ def matmul(a, b):
 # Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+a = torch.randn((512, 512), device='xpu', dtype=torch.float16)
+b = torch.randn((512, 512), device='xpu', dtype=torch.float16)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")

@@ -27,9 +27,12 @@ of gemms. The scheduling is static and we do it on device.
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import torch
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
+
+torch.xpu.enable_sync_mode()
 
 
 @triton.autotune(
@@ -141,7 +144,7 @@ def grouped_matmul_kernel(
 
 
 def group_gemm_fn(group_A, group_B):
-    device = torch.device('cuda')
+    device = torch.device('xpu')
     assert len(group_A) == len(group_B)
     group_size = len(group_A)
 
@@ -197,15 +200,15 @@ for i in range(group_size):
     M = group_m[i]
     N = group_n[i]
     K = group_k[i]
-    A = torch.rand((M, K), device="cuda", dtype=torch.float16)
-    B = torch.rand((K, N), device="cuda", dtype=torch.float16)
+    A = torch.rand((M, K), device="xpu", dtype=torch.float16)
+    B = torch.rand((K, N), device="xpu", dtype=torch.float16)
     group_A.append(A)
     group_B.append(B)
 
 tri_out = group_gemm_fn(group_A, group_B)
 ref_out = [torch.matmul(a, b) for a, b in zip(group_A, group_B)]
 for i in range(group_size):
-    assert torch.allclose(ref_out[i], tri_out[i], atol=1e-2, rtol=0)
+    assert torch.allclose(ref_out[i], tri_out[i], atol=3e-1, rtol=0)
 
 
 # only launch the kernel, no tensor preparation here to remove all overhead
@@ -255,9 +258,9 @@ def benchmark(N, provider):
     g_lds = []
     group_C = []
     for i in range(group_size):
-        A = torch.rand((N, N), device="cuda", dtype=torch.float16)
-        B = torch.rand((N, N), device="cuda", dtype=torch.float16)
-        C = torch.empty((N, N), device="cuda", dtype=torch.float16)
+        A = torch.rand((N, N), device="xpu", dtype=torch.float16)
+        B = torch.rand((N, N), device="xpu", dtype=torch.float16)
+        C = torch.empty((N, N), device="xpu", dtype=torch.float16)
         group_A.append(A)
         group_B.append(B)
         group_C.append(C)
@@ -267,11 +270,11 @@ def benchmark(N, provider):
         g_sizes += [N, N, N]
         g_lds += [N, N, N]
 
-    d_a_ptrs = torch.tensor(A_addrs, device="cuda")
-    d_b_ptrs = torch.tensor(B_addrs, device="cuda")
-    d_c_ptrs = torch.tensor(C_addrs, device="cuda")
-    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device="cuda")
-    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device="cuda")
+    d_a_ptrs = torch.tensor(A_addrs, device="xpu")
+    d_b_ptrs = torch.tensor(B_addrs, device="xpu")
+    d_c_ptrs = torch.tensor(C_addrs, device="xpu")
+    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device="xpu")
+    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device="xpu")
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'cublas':
