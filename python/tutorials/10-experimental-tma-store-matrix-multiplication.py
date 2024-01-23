@@ -29,13 +29,10 @@ performance on parallel with cuBLAS.
 import torch
 from torch.testing import assert_close
 
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
+
 import triton
 import triton.language as tl
-
-if torch.cuda.get_device_capability()[0] < 9:
-    import sys
-    print("Skipping TMA benchmark for GPU with compute capability < 9")
-    sys.exit(0)
 
 
 @triton.autotune(
@@ -108,8 +105,8 @@ def matmul(a, b):
     return c
 
 
-a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-b = torch.randn((512, 512), device='cuda', dtype=torch.float16).T
+a = torch.randn((512, 512), device='xpu', dtype=torch.float16)
+b = torch.randn((512, 512), device='xpu', dtype=torch.float16).T
 c = matmul(a, b)
 c = torch.nn.functional.normalize(c)
 
@@ -144,8 +141,8 @@ assert_close(c, golden, rtol=1e-2, atol=1e-3, check_dtype=False)
         args={},
     ))
 def benchmark(M, N, K, provider):
-    a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-    b = torch.randn((N, K), device='cuda', dtype=torch.float16).T
+    a = torch.randn((M, K), device='xpu', dtype=torch.float16)
+    b = torch.randn((N, K), device='xpu', dtype=torch.float16).T
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'cublas':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100, quantiles=quantiles,
