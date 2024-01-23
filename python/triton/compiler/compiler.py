@@ -316,7 +316,7 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         import torch
         self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_sycl_binary(
-            self.name, self.kernel, self.shared,
+            self.name, self.kernel, self.metadata.shared,
             torch.xpu.device(device).sycl_device)
 
     def __getattribute__(self, name):
