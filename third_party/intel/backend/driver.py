@@ -2,18 +2,12 @@ import os
 import hashlib
 import tempfile
 from pathlib import Path
-from triton.runtime.build import _build
+from triton.backends.intel.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import DriverBase
 
 
 import intel_extension_for_pytorch as ipex
-
-
-dirname = os.getenv("ZE_PATH", default="/usr/local")
-include_dir = [os.path.join(dirname, "include/level_zero")]
-library_dir = [os.path.join(dirname, "lib")]
-libraries = ['ze_loader']
 
 
 def compile_module_from_src(src, name):
@@ -25,7 +19,7 @@ def compile_module_from_src(src, name):
             src_path = os.path.join(tmpdir, "main.cpp")
             with open(src_path, "w") as f:
                 f.write(src)
-            so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
+            so = _build(name, src_path, tmpdir)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
     import importlib.util
@@ -399,7 +393,7 @@ class XPULauncher(object):
 
     def __init__(self, src, metadata):
         ids = {
-            "ids_of_tensormaps": metadata.ids_of_tensormaps, 
+            "ids_of_tensormaps": metadata.ids_of_tensormaps,
             "ids_of_folded_args": metadata.ids_of_folded_args,
             "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
