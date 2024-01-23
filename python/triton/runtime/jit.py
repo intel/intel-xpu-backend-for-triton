@@ -403,6 +403,7 @@ class JITFunction(KernelInterface[T]):
             metadata = kernel.metadata
             if driver.get_current_target()[0] == "xpu":
                 use_icl = 1
+                import torch
                 stream = torch.xpu.current_stream().sycl_queue
                 dev_obj = 0
                 ctxt_obj = 0
