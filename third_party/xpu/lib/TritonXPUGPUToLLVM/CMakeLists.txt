@@ -1,0 +1,25 @@
+add_triton_library(TritonXPUGPUToLLVM
+    ConvertLayoutOpToLLVM/SharedToDotOperandDPAS.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
+    ConvertLayoutOpToLLVM.cpp
+    DotOpToLLVM/DPAS.cpp
+    DotOpToLLVM/FMA.cpp
+    DotOpToLLVM.cpp
+    HistogramOpToLLVM.cpp
+    ElementwiseOpToLLVM.cpp
+    LoadStoreOpToLLVM.cpp
+    BarrierOpToLLVM.cpp
+    TritonGPUToLLVM.cpp
+    TritonGPUToLLVMPass.cpp
+    ReduceOpToLLVM.cpp
+    ScanOpToLLVM.cpp
+    TypeConverter.cpp
+    Utility.cpp
+    ViewOpToLLVM.cpp
+    TensorPtrOpsToLLVM.cpp
+    ClusterOpsToLLVM.cpp
+    RegReallocOpToLLVM.cpp
+
+    DEPENDS
+    TritonXPUGPUConversionPassIncGen
+)

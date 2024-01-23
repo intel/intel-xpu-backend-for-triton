@@ -1,10 +1,10 @@
-﻿#include "mlir/Pass/Pass.h"
+﻿#include "TritonXPUGPUToLLVM/Passes.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/GENX/GENXToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "passes.h"
 #include "triton/Conversion/NVGPUToLLVM/Passes.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -26,8 +26,7 @@ void init_triton_xpu_passes_ttgpuir(py::module &&m) {
   // nvidia-specificontext
   m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability,
                             mlir::triton::gpu::TMAMetadataTy *tmaMetadata) {
-    pm.addPass(createConvertTritonGPUToLLVMPass(capability, mlir::triton::GENX,
-                                                tmaMetadata));
+    pm.addPass(mlir::triton::createConvertTritonXPUGPUToLLVMPass());
   });
 }
 
