@@ -54,17 +54,10 @@ downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
-1. Find the version of LLVM that Triton builds against.  Check
-`cmake/llvm-hash.txt` to see the current version. For example, if it says:
-       49af6502c6dcb4a7f7520178bd14df396f78240c
+1. `git checkout` LLVM at https://github.com/intel/llvm/tree/genx.  Optionally,
+   make additional modifications to LLVM.
 
-   This means that the version of Triton you have builds against
-   [LLVM](https://github.com/llvm/llvm-project) 49af6502.
-
-2. `git checkout` LLVM at this revision.  Optionally, make additional
-   modifications to LLVM.
-
-3. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
+2. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
 
        $ cd $HOME/llvm-project  # your clone of LLVM.
        $ mkdir build
@@ -72,9 +65,9 @@ arbitrary LLVM version.
        $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON  ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm"
        $ ninja
 
-4. Grab a snack, this will take a while.
+3. Grab a snack, this will take a while.
 
-5. Build Triton as above, but set the following environment variables.
+4. Build Triton as above, but set the following environment variables.
 
        # Modify as appropriate to point to your LLVM build.
        $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
@@ -134,7 +127,7 @@ Version 2.0 is out! New features include:
 
 # Contributing
 
-Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/openai/triton/). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
+Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/intel/intel-xpu-backend-for-triton). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
 
 
 # Compatibility
@@ -143,5 +136,4 @@ Supported Platforms:
   * Linux
 
 Supported Hardware:
-  * NVIDIA GPUs (Compute Capability 7.0+)
-  * Under development: AMD GPUs, CPUs
+  * Under developement: Intel PVC GPU
