@@ -2702,9 +2702,6 @@ def test_max_num_imprecise_acc(device):
         if capability != (9, 0):
             return
 
-    if is_xpu(device):
-        pytest.skip("FIXME: module 'torch' has no attribute 'float8_e5m2'")
-
     @triton.jit
     def kernel(X, Y, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
                MAX_NUM_IMPRECISE_ACC: tl.constexpr):
@@ -2717,7 +2714,12 @@ def test_max_num_imprecise_acc(device):
         z = tl.dot(x, y, acc=z, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC)
         tl.store(Z + off_m[:, None] * BLOCK_N + off_n[None, :], z)
 
-    M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 128, 128, 128, 4, 64
+    if torch.xpu.is_available():
+        # FIXME: revisit problem size once tl.dot is lowered to DPAS.
+        M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 64, 64, 64, 4, 64
+    else:
+        M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 128, 128, 128, 4, 64
+
     x = torch.zeros((M, K), dtype=torch.float8_e5m2, device=device)
     y = torch.zeros((K, N), dtype=torch.float8_e5m2, device=device)
     z = torch.zeros((M, N), dtype=torch.float32, device=device)
