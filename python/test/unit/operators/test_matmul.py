@@ -114,12 +114,11 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     if (ADTYPE == "bfloat16" or BDTYPE == "bfloat16") and SPLIT_K != 1:
         pytest.skip("bfloat16 matmuls don't allow split_k for now")
 
-    if ADTYPE == "bfloat16" or BDTYPE == "bfloat16":
-        pytest.skip("FIXME: Incorrect result on XPU")
     if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 64:
         pytest.skip("FIXME: Incorrect result on XPU")
-    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (ADTYPE in ["float8e4nv", "float8e5", "float8e4b15"]
-                                                                or BDTYPE == ["float8e4nv", "float8e5", "float8e4b15"]):
+    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (
+            ADTYPE in ["float8e4nv", "float8e5", "float8e4b15", "bfloat16"]
+            or BDTYPE in ["float8e4nv", "float8e5", "float8e4b15", "bfloat16"]):
         pytest.skip("FIXME: Incorrect result on XPU")
 
     torch.manual_seed(0)
