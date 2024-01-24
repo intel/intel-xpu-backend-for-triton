@@ -1,5 +1,5 @@
 from triton.backends.compiler import BaseBackend
-from triton._C.libtriton import ir, passes, llvm, xpu
+from triton._C.libtriton import ir, passes, llvm, intel
 from triton.runtime import driver
 from dataclasses import dataclass
 import functools
@@ -369,7 +369,7 @@ class XPUBackend(BaseBackend):
         return XPUOptions(**args)
 
     def load_dialects(self, ctx):
-        xpu.load_dialects(ctx)
+        intel.load_dialects(ctx)
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
@@ -387,7 +387,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, capability):
-        cluster_info = xpu.ClusterInfo()
+        cluster_info = intel.ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
@@ -399,9 +399,9 @@ class XPUBackend(BaseBackend):
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        xpu.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
-        xpu.passes.ttgpuir.add_rewrite_tensor_pointer(pm, capability)
-        xpu.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
+        intel.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
+        intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm, capability)
+        intel.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_accelerate_matmul(pm, capability)
@@ -417,34 +417,34 @@ class XPUBackend(BaseBackend):
         # TODO: support the case where `num_warps` from user is not 4.
         ws_enabled = False
         if capability // 10 >= 9 and opt.enable_warp_specialization and opt.num_warps == 4:
-            xpu.passes.ttnvgpuir.add_wsfeasibility_checking(pm, capability)
+            intel.passes.ttnvgpuir.add_wsfeasibility_checking(pm, capability)
             pm.run(mod)
-            ws_enabled = xpu.passes.ttnvgpuir.is_ws_supported(mod)
+            ws_enabled = intel.passes.ttnvgpuir.is_ws_supported(mod)
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
         metadata["ws_enabled"] = ws_enabled
         if ws_enabled:
-            xpu.passes.ttnvgpuir.add_wsdecomposing(pm, capability)
-            xpu.passes.ttnvgpuir.add_wspipeline(pm, opt.num_stages, opt.num_warps, capability)
-            xpu.passes.ttnvgpuir.add_wsmutex(pm, capability)
-            xpu.passes.ttnvgpuir.add_wsmaterialization(pm, capability)
+            intel.passes.ttnvgpuir.add_wsdecomposing(pm, capability)
+            intel.passes.ttnvgpuir.add_wspipeline(pm, opt.num_stages, opt.num_warps, capability)
+            intel.passes.ttnvgpuir.add_wsmutex(pm, capability)
+            intel.passes.ttnvgpuir.add_wsmaterialization(pm, capability)
             passes.common.add_licm(pm)
             passes.common.add_cse(pm)
         else:
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, capability)
-        xpu.passes.ttnvgpuir.add_materialize_load_store(pm, opt.num_warps, capability)
+        intel.passes.ttnvgpuir.add_materialize_load_store(pm, opt.num_warps, capability)
         if capability // 10 <= 8:
             passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_decompose_conversions(pm)
-        xpu.passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
+        intel.passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         if capability // 10 >= 9:
-            xpu.passes.ttnvgpuir.add_fence_insertion(pm)
-        xpu.passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
+            intel.passes.ttnvgpuir.add_fence_insertion(pm)
+        intel.passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
@@ -458,16 +458,16 @@ class XPUBackend(BaseBackend):
             metadata["num_warps"] *= num_warp_groups
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
-        tma_infos = xpu.TMAInfos()
+        tma_infos = intel.TMAInfos()
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        xpu.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
+        intel.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
         if metadata["ws_enabled"]:
             passes.common.add_licm(pm)
             passes.common.add_cse(pm)
-        xpu.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
+        intel.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)

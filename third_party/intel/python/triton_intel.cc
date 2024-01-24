@@ -18,7 +18,7 @@ namespace py = pybind11;
 
 PYBIND11_MAKE_OPAQUE(mlir::triton::gpu::TMAMetadataTy);
 
-void init_triton_xpu_passes_ttgpuir(py::module &&m) {
+void init_triton_intel_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton::gpu;
   ADD_PASS_WRAPPER_1("add_rewrite_tensor_pointer",
                      mlir::createTritonGPURewriteTensorPointerPass, int);
@@ -30,7 +30,7 @@ void init_triton_xpu_passes_ttgpuir(py::module &&m) {
   });
 }
 
-void init_triton_xpu_passes_ttnvgpuir(py::module &&m) {
+void init_triton_intel_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_1("add_plan_cta", mlir::createTritonNvidiaGPUPlanCTAPass,
                      mlir::triton::nvidia_gpu::ClusterInfo *);
   ADD_PASS_WRAPPER_1("add_wsfeasibility_checking",
@@ -59,10 +59,10 @@ void init_triton_xpu_passes_ttnvgpuir(py::module &&m) {
   });
 }
 
-void init_triton_xpu(py::module &&m){
+void init_triton_intel(py::module &&m){
   auto passes = m.def_submodule("passes");
-  init_triton_xpu_passes_ttgpuir(passes.def_submodule("ttgpuir"));
-  init_triton_xpu_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
+  init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
+  init_triton_intel_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
 
   // cluster info
   py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo")
