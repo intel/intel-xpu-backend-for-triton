@@ -11,7 +11,7 @@
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
