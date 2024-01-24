@@ -381,7 +381,7 @@ download_and_copy(
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
-backends = _copy_backends(["xpu"])
+backends = _copy_backends(["intel"])
 
 package_data = dict()
 package_data["triton/tools"] = ["compile.h", "compile.c"]
