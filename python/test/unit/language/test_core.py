@@ -2717,7 +2717,7 @@ def test_max_num_imprecise_acc(device):
     if torch.xpu.is_available():
         # FIXME: revisit problem size once tl.dot is lowered to DPAS.
         M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 64, 64, 64, 4, 64
-    else:  
+    else:
         M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 128, 128, 128, 4, 64
 
     x = torch.zeros((M, K), dtype=torch.float8_e5m2, device=device)
