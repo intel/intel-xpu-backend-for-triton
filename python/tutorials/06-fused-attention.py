@@ -568,7 +568,7 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 # FIXME: change back once tl.dot uses DPAS instruction.
 if torch.cuda.is_available():
     BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
-else:    
+else:
     BATCH, N_HEADS, N_CTX, D_HEAD = 1, 4, 32, 32
 # vary seq length for fixed head and batch=4
 configs = []
