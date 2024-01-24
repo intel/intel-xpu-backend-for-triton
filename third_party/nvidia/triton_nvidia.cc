@@ -65,7 +65,7 @@ void init_triton_nvidia(py::module &&m){
   init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
 
   // cluster info
-  py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo")
+  py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo", py::module_local())
       .def(py::init<>())
       .def_readwrite("clusterDimX",
                      &mlir::triton::nvidia_gpu::ClusterInfo::clusterDimX)
@@ -81,7 +81,7 @@ void init_triton_nvidia(py::module &&m){
       });
 
   // tma info
-  py::class_<mlir::triton::gpu::TMAInfo>(m, "TMAInfo")
+  py::class_<mlir::triton::gpu::TMAInfo>(m, "TMAInfo", py::module_local())
       .def(py::init<>())
       .def_readwrite("tensorDataType",
                      &mlir::triton::gpu::TMAInfo::tensorDataType)

@@ -40,17 +40,30 @@ def _copy_backends(active):
             pass
         # check conditions
         assert backend in os.listdir(root_dir), f"{backend} is requested for install but not present in {root_dir}"
-        assert os.path.exists(backend_path), f"{backend_path} does not exist!"
-        for file in ["compiler.py", "driver.py"]:
-            assert os.path.exists(os.path.join(backend_path, file))
-        # copy backend over
         dst_path = os.path.join(os.path.dirname(__file__), "triton", "backends", backend)
         if os.path.exists(dst_path):
             shutil.rmtree(dst_path)
-        shutil.copytree(backend_path, dst_path)
-        # update
-        package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
-        ret.append(Backend(name=backend, package_data=package_data, src_dir=curr_path))
+
+        # check whether the third party plug-in is in a formal hierachy.
+        formal_hierachy = False
+        if os.path.exists(backend_path):
+            for file in ["compiler.py", "driver.py"]:
+                if not os.path.exists(os.path.join(backend_path, file)):
+                    break
+            else:
+                formal_hierachy = True
+
+        if formal_hierachy:
+            # copy the backend direct if exists. Otherwise the backend cmake file should take care of contructing the direct
+            shutil.copytree(backend_path, dst_path)
+            # update
+            package_data = [f"{os.path.relpath(p, backend_path)}/*" for p, _, _, in os.walk(backend_path)]
+            ret.append(Backend(name=backend, package_data=package_data, src_dir=curr_path))
+        else:
+            # backend cmake should take care of constructing the 3p plug-in director to the triton/backends
+            os.makedirs(dst_path)
+            package_data = ['./*', 'lib/*', 'bin/*']
+            ret.append(Backend(name=backend, package_data=package_data, src_dir=curr_path))
     return ret
 
 
@@ -381,7 +394,7 @@ download_and_copy(
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/12.3.52/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
-backends = _copy_backends(["xpu"])
+backends = _copy_backends([("intel")])
 
 package_data = dict()
 package_data["triton/tools"] = ["compile.h", "compile.c"]

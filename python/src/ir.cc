@@ -448,6 +448,30 @@ void init_triton_ir(py::module &&m) {
       },
       ret::take_ownership);
 
+  m.def(
+      "parse_mlir_source",
+      [](const std::string &mlir, mlir::MLIRContext &context) {
+        // initialize registry
+        // note: we initialize llvm for undef
+        mlir::DialectRegistry registry;
+        registry.insert<
+            mlir::triton::TritonDialect, mlir::triton::gpu::TritonGPUDialect,
+            mlir::math::MathDialect, mlir::arith::ArithDialect,
+            mlir::index::IndexDialect, mlir::scf::SCFDialect,
+            mlir::cf::ControlFlowDialect, mlir::LLVM::LLVMDialect>();
+        context.appendDialectRegistry(registry);
+        context.loadAllAvailableDialects();
+
+        // parse module
+        mlir::OwningOpRef<mlir::ModuleOp> module =
+            mlir::parseSourceString<mlir::ModuleOp>(mlir, &context);
+        if (!module)
+          throw std::runtime_error("Parse MLIR file failed.");
+
+        return module->clone();
+      },
+      ret::take_ownership);
+
   py::class_<mlir::triton::FuncOp, mlir::OpState>(m, "function",
                                                   py::module_local())
       // .def_property_readonly("attrs", &ir::function::attrs)

@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend
-from triton._C.libtriton import ir, passes, llvm, xpu
+from triton._C.lib@TRITON_LIB_NAME@ import ir, passes, llvm
+from triton._C.lib@TRITON_LIB_NAME@ import intel as xpu
 from triton.runtime import driver
 from dataclasses import dataclass
 import functools
@@ -369,10 +370,16 @@ class XPUBackend(BaseBackend):
         return XPUOptions(**args)
 
     def load_dialects(self, ctx):
-        xpu.load_dialects(ctx)
+        pass
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
+        context = ir.context()
+        ir.load_dialects(context)
+        xpu.load_dialects(context)
+        mod = ir.parse_mlir_source(str(mod), context)
+        mod.context = context
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -387,11 +394,6 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, capability):
-        cluster_info = xpu.ClusterInfo()
-        if opt.cluster_dims is not None:
-            cluster_info.clusterDimX = opt.cluster_dims[0]
-            cluster_info.clusterDimY = opt.cluster_dims[1]
-            cluster_info.clusterDimZ = opt.cluster_dims[2]
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -399,9 +401,7 @@ class XPUBackend(BaseBackend):
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        xpu.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         xpu.passes.ttgpuir.add_rewrite_tensor_pointer(pm, capability)
-        xpu.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_accelerate_matmul(pm, capability)
@@ -447,7 +447,7 @@ class XPUBackend(BaseBackend):
         xpu.passes.ttnvgpuir.add_wsfixup_missing_attrs(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
-        metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
+        metadata["cluster_dims"] = (1, 1, 1)
         return mod
 
     @staticmethod
@@ -458,12 +458,11 @@ class XPUBackend(BaseBackend):
             metadata["num_warps"] *= num_warp_groups
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
-        tma_infos = xpu.TMAInfos()
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        xpu.passes.ttgpuir.add_to_llvmir(pm, capability, tma_infos)
+        xpu.passes.ttgpuir.add_to_llvmir(pm, capability)
         if metadata["ws_enabled"]:
             passes.common.add_licm(pm)
             passes.common.add_cse(pm)
@@ -485,10 +484,6 @@ class XPUBackend(BaseBackend):
                 llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Get some metadata
-        if len(tma_infos) > 0:
-            metadata["tensormaps_info"] = parse_tma_info(tma_infos, metadata["ids_of_folded_args"])
-            for i, _ in enumerate(metadata["tensormaps_info"]):
-                metadata["tensormaps_info"][i].ids_of_folded_args = metadata["ids_of_folded_args"]
         metadata["ids_of_tensormaps"] = get_ids_of_tensormaps(metadata.get("tensormaps_info", None))
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
         ret = str(llvm_mod)

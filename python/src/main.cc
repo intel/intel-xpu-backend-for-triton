@@ -39,7 +39,10 @@ void init_triton_interpreter(pybind11::module &&m);
 void init_triton_passes(pybind11::module &&m);
 FOR_EACH_P(DECLARE_BACKEND, TRITON_BACKENDS_TUPLE)
 
-PYBIND11_MODULE(libtriton, m) {
+#define EXT_LIB(str) lib##str
+#define EXTENDS_LIB_NAME(name) EXT_LIB(name)
+
+PYBIND11_MODULE( EXTENDS_LIB_NAME(TRITON_LIB_NAME), m) {
   m.doc() = "Python bindings to the C++ Triton API";
   init_triton_env_vars(m);
   init_triton_ir(m.def_submodule("ir"));
