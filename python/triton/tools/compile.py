@@ -8,7 +8,7 @@ from typing import List
 
 import triton
 from triton.compiler.code_generator import kernel_suffix
-from triton.backends.xpu.driver import ty_to_cpp
+from triton.backends.intel.driver import ty_to_cpp
 
 desc = """
 Triton ahead-of-time compiler:

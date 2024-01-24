@@ -11,7 +11,7 @@
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Conversion/TritonGPUToLLVM/TritonGPUToLLVMPass.h"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -1101,14 +1101,14 @@ private:
 
     // Compute the 2-dim coordinates of the first element in the warp operated
     // on by this thread.
-    SmallVector<unsigned> threadPerWarp = getThreadsPerWarp(dpasLayout);
+    SmallVector<unsigned> threadsPerWarp = getThreadsPerWarp(dpasLayout);
     SmallVector<unsigned> contigPerThread = getContigPerThread(dpasLayout);
     SmallVector<Value> multiDimBase = {
         add(mul(i32_val(contigPerThread[0]),
-                udiv(laneId, i32_val(threadPerWarp[1]))),
+                udiv(laneId, i32_val(threadsPerWarp[1]))),
             rowWarpOffset),
         add(mul(i32_val(contigPerThread[1]),
-                urem(laneId, i32_val(threadPerWarp[1]))),
+                urem(laneId, i32_val(threadsPerWarp[1]))),
             colWarpOffset)};
     return multiDimBase;
   }
