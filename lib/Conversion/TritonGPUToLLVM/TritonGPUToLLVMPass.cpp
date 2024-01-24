@@ -215,13 +215,16 @@ struct FuncOpConversion : public FuncOpConversionBase {
       break;
     case Target::GENX:
       NamedAttrList attrs;
+      auto mod = funcOp->getParentOfType<ModuleOp>();
+      int threadsPerWarp =
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
       if (allocation.isRoot(funcOp))
         attrs.append(GENX::GENXDialect::getKernelFuncAttrName(),
                      rewriter.getI32IntegerAttr(1));
       attrs.append(GENX::GENXDialect::getMaxWorkGroupSizeAttrName(),
-                   rewriter.getI32ArrayAttr({32 * numWarps, 1, 1}));
+                   rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
       attrs.append(GENX::GENXDialect::getReqdSubGroupSizeAttrName(),
-                   rewriter.getI32ArrayAttr(32));
+                   rewriter.getI32ArrayAttr(threadsPerWarp));
       newFuncOp->setDialectAttrs(attrs);
       break;
     }

@@ -7,7 +7,7 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
-from triton.backends.xpu.compiler import _path_to_binary
+from triton.backends.intel.compiler import _path_to_binary
 
 
 @triton.jit
