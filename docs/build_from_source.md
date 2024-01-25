@@ -107,17 +107,18 @@ pip install pybind11
 Build Triton
 
 ```Bash
+# Clone OpenAI/Triton
+git clone https://github.com/openai/triton.git
 cd triton
-git submodule sync
-git submodule update --init --recursive --jobs 0
-# check to latest third_party backend if needed
+# checkout to old commit first
+git checkout 56c284cf7e39f249cdf1d8d5dba7892deb0286d6
+# Clone submodules
+git submodule sync && git submodule update --init --recursive --jobs 0
 cd third_party/intel_xpu_backend
-git checkout main && git pull
-# check triton commit to verified working commit
-cd ../..
-git checkout `cat third_party/intel_xpu_backend/triton_hash.txt`
+git checkout spirv-target && git pull
 # cd to python folder
-cd python
+cd ../../python
+# Build triton with XPU backend enabled
 TRITON_CODEGEN_INTEL_XPU_BACKEND=1 python setup.py develop
 ```
 
