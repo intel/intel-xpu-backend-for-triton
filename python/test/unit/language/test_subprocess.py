@@ -27,9 +27,6 @@ torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", 
     ("device_print_multiple_args", "int32"),
 ])
 def test_print(func_type: str, data_type: str):
-    if (func_type == "device_print_large"):
-        pytest.skip("FIXME: Incorrect result on XPU")
-
     proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE, shell=False)
     outs, _ = proc.communicate()
     outs = [line for line in outs.decode("UTF-8").split("\n") if line]
