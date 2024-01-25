@@ -57,9 +57,8 @@ class XPUUtils(object):
         self.get_l0_imm_cmd_list = mod.get_l0_imm_cmd_list
         self.get_l0_dev_ptr = mod.get_l0_dev_ptr
         self.get_l0_ctxt_ptr = mod.get_l0_ctxt_ptr
-        import torch
-        self.context = mod.init_context(torch.xpu.current_stream().sycl_queue)
-        self.device_count = mod.init_devices(torch.xpu.current_stream().sycl_queue)
+        self.context = mod.init_context(self.get_sycl_queue())
+        self.device_count = mod.init_devices(self.get_sycl_queue())
         self.event_pool = mod.init_event_pool()[0]
         self.current_device = 0 if self.device_count[0] > 0 else -1
 
