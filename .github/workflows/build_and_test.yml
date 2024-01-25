@@ -212,7 +212,10 @@ jobs:
 
       - name: Print test stats
         run: |
-          cd ~
+          set +e
+          cd $HOME
+          total_passed=0
+          total_number=0
           for report in *.xml; do
             skipped=$(grep -Fo 'skipped type="pytest.skip"' $report | wc -l)
             xfailed=$(grep -Fo 'skipped type="pytest.xfail"' $report | wc -l)
@@ -220,4 +223,8 @@ jobs:
             passed=$(( $total - $xfailed - $skipped ))
             rate=$(( 100 * $passed / ($passed + $skipped) ))
             echo "$report: passed: $passed ($rate%), skipped: $skipped, xfailed: $xfailed, total: $total"
+            (( total_passed += $passed ))
+            (( total_number += ($passed + $skipped) ))
           done
+          rate=$(( 100 * $total_passed / $total_number ))
+          echo "Total passed: $rate% (excluding xfailed)"
