@@ -102,6 +102,8 @@ class CudaDriver(DriverBase):
         self.utils = CudaUtils()
         self.backend = self.CUDA
         self.binary_ext = "cubin"
+        self.get_device_properties = self.utils.get_device_properties
+        self.load_binary = self.utils.load_binary
         # TODO: support other frameworks than torch
         import torch
         self.get_device_capability = torch.cuda.get_device_capability
