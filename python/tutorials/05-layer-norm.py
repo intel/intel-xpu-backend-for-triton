@@ -318,6 +318,7 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='xpu'):
     assert torch.allclose(y_tri, y_ref, atol=1e-2, rtol=0)
     assert torch.allclose(dx_tri, dx_ref, atol=1e-2, rtol=0)
     assert torch.allclose(db_tri, db_ref, atol=1e-2, rtol=0)
+    # FIXME: tolerance was increased from 1e-2 to 2e-2 to allow test to run
     assert torch.allclose(dw_tri, dw_ref, atol=2e-2, rtol=0)
 
 
