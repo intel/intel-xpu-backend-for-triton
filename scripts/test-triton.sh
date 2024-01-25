@@ -55,7 +55,7 @@ export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 python3 -m pip install lit
-python3 -m pip install pytest
+python3 -m pip install pytest pytest-xdist
 python3 -m pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
 if [ $? -ne 0 ]; then
   echo "FAILED: return code $?"
@@ -165,6 +165,7 @@ function run_tutorial_tests {
   run_tutorial_test "04-low-memory-dropout" 04-low-memory-dropout.py
   run_tutorial_test "05-layer-norm" 05-layer-norm.py
   run_tutorial_test "07-math-functions" 07-math-functions.py
+  run_tutorial_test "11-grouped-gemm" 11-grouped-gemm.py
 }
 
 function test_triton {

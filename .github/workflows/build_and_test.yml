@@ -44,7 +44,7 @@ jobs:
           fi
 
       - name: Install Python 3.9
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
@@ -104,7 +104,7 @@ jobs:
           fi
 
       - name: Install Python ${{ matrix.python }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
 
@@ -159,8 +159,6 @@ jobs:
           pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
           cd python/test/unit
           python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
-          # run test_subprocess serially to avoid issues with print buffer handling.
-          python3 -m pytest --verbose --device xpu language/test_subprocess.py
           # run runtime tests serially to avoid race condition with cache handling.
           python3 -m pytest runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
@@ -197,6 +195,7 @@ jobs:
           python3 04-low-memory-dropout.py
           python3 05-layer-norm.py
           python3 07-math-functions.py
+          python3 11-grouped-gemm.py
 
       - name: Run CXX unittests
         run: |

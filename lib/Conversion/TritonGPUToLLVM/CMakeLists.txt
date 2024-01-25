@@ -16,6 +16,7 @@ add_triton_library(TritonGPUToLLVM
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     TritonGPUToLLVMPass.cpp
+    DecomposeUnsupportedConversions.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
     TypeConverter.cpp
