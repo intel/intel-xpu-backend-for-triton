@@ -426,6 +426,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   } while (moduleOp.lookupSymbol(stringConstName));
 
   llvm::SmallString<64> contentStr(content);
+  contentStr.push_back('\0');
   size_t contentSize = contentStr.size_in_bytes();
   auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
 
