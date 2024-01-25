@@ -3,7 +3,7 @@
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>)
   // Here the 128 comes from the 4 in module attribute multiples 32
-  // CHECK-SAME: attributes {genx.intel_reqd_sub_group_size = [32 : i32], genx.kernel = 1 : i32, genx.max_work_group_size = [128 : i32, 1 : i32, 1 : i32], {{.*}}} {
+  // CHECK-SAME: attributes {genx.intel_reqd_sub_group_size = [32 : i32], genx.kernel = 1 : i32, genx.max_work_group_size = [128 : i32, 1 : i32, 1 : i32]} {
   tt.func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
     // CHECK:  llvm.return
     tt.return
