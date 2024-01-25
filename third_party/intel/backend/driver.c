@@ -184,7 +184,6 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
         std::vector<std::unique_ptr<sycl::kernel>> compiled_kernels;
         
         static PyObject* loadSyclBinary(PyObject* self, PyObject* args) {
-            std::cout<<"Inside loadSyclBinary"<<std::endl;
             const char* name;
             int shared;
             PyObject *py_bytes;
