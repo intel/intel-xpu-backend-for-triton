@@ -411,7 +411,7 @@ def make_launcher(constants, signature, ids):
         PyObject_CallObject(launch_enter_hook, args);
       }}
       
-      void * pStream = PyCapsule_GetPointer(py_obj_stream, "torch.xpu.Stream.sycl_queue");
+      void * pStream = PyCapsule_GetPointer(py_obj_stream, PyCapsule_GetName(py_obj_stream));
       //error;
       if(pStream == nullptr || pKrnl == nullptr) return NULL;
 
@@ -420,6 +420,11 @@ def make_launcher(constants, signature, ids):
       auto threads_per_warp = 32;
       //std::cout<<"_launch : going to call sycl_kernel_launch"<<std::endl;
       sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
+
+      // Freeing the memory allocated during kernel load
+      sycl::kernel* krnlPtr = static_cast<sycl::kernel*>(pKrnl);
+      delete krnlPtr;
+
 /*
       // raise exception asap
       // {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
