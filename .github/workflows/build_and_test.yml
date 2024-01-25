@@ -158,11 +158,11 @@ jobs:
           pip install pytest pytest-xdist
           pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
           cd python/test/unit
-          python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -n 8 --verbose --junitxml=~/language.xml --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest runtime/
+          python3 -m pytest --junitxml=~/runtime.xml runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --junitxml=~/line_info.xml --device xpu language/test_line_info.py
 
       - name: Clear cache
         run: |
@@ -179,7 +179,7 @@ jobs:
       - name: Run partial operators tests
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --verbose operators
+          python3 -m pytest -n 8 --verbose --junitxml=~/operators.xml operators
 
       - name: Run XPU python tests
         run: |
@@ -209,3 +209,15 @@ jobs:
           cp -r $HOME/.cache/pip/* $TMPDIR/
           # ignore error if other job created a cache with the same key already
           mv $TMPDIR $PIP_CACHE || true
+
+      - name: Print test stats
+        run: |
+          cd ~
+          for report in *.xml; do
+            skipped=$(grep -Fo 'skipped type="pytest.skip"' $report | wc -l)
+            xfailed=$(grep -Fo 'skipped type="pytest.xfail"' $report | wc -l)
+            total=$(grep -Fo 'testcase classname' $report | wc -l)
+            passed=$(( $total - $xfailed - $skipped ))
+            rate=$(( 100 * $passed / ($passed + $skipped) ))
+            echo "$report: passed: $passed ($rate%), skipped: $skipped, xfailed: $xfailed, total: $total"
+          done
