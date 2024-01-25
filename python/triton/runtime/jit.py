@@ -402,16 +402,11 @@ class JITFunction(KernelInterface[T]):
             args = [arg.value for arg in args if not arg.param.is_constexpr]
             metadata = kernel.metadata
             if driver.get_current_target()[0] == "xpu":
-                use_icl = 1
-                import torch
-                stream = torch.xpu.current_stream().sycl_queue
-                dev_obj = 0
-                ctxt_obj = 0
-                q_obj = 0
+                dev_obj, ctxt_obj, q_obj = driver.utils.get_dev_ctxt_queue_objs()
                 kernel.run(grid_0, grid_1, grid_2, metadata.num_warps,
                            metadata.num_ctas,  # number of warps/ctas per instance
                            metadata.cluster_dims[0], metadata.cluster_dims[1], metadata.cluster_dims[2],  # cluster
-                           metadata.shared, use_icl, stream, q_obj, dev_obj, ctxt_obj, kernel.function,
+                           metadata.shared, driver.utils.use_icl(), stream, q_obj, dev_obj, ctxt_obj, kernel.function,
                            CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, metadata,
                            driver.utils.get_event_pool(),
                            *driver.assemble_tensormap_to_arg(metadata.tensormaps_info, args))

@@ -32,6 +32,7 @@ static ze_driver_handle_t driverHandle = {nullptr};
 static ze_event_pool_handle_t eventPoolHandle = {nullptr};
 
 static std::vector<ze_device_handle_t> devices;
+std::unordered_map<sycl::device, ze_device_handle_t> sycl_l0_device_map;
 
 static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   if (code != ZE_RESULT_SUCCESS) {
@@ -52,17 +53,24 @@ static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   }
 
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
-  int device_id;
-  if (!PyArg_ParseTuple(args, "i", &device_id))
+  PyObject* sycl_dev;
+  if (!PyArg_ParseTuple(args, "O", &sycl_dev))
     return NULL;
 
-  if (device_id > devices.size()) {
-    std::cerr << "Device ID not found: " << device_id << std::endl;
+  void* obj;
+  if (!(obj = PyCapsule_GetPointer(sycl_dev, PyCapsule_GetName(sycl_dev))))
+    return NULL;
+
+  sycl::device* device = static_cast<sycl::device*>(obj);
+
+  if (device == nullptr ||
+      sycl_l0_device_map.find(*device) == sycl_l0_device_map.end()) {
+    std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
 
   // Get device handle
-  ze_device_handle_t phDevice = devices[device_id];
+  ze_device_handle_t phDevice = sycl_l0_device_map[*device];
 
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
@@ -176,6 +184,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
         std::vector<std::unique_ptr<sycl::kernel>> compiled_kernels;
         
         static PyObject* loadSyclBinary(PyObject* self, PyObject* args) {
+            std::cout<<"Inside loadSyclBinary"<<std::endl;
             const char* name;
             int shared;
             PyObject *py_bytes;
@@ -354,12 +363,14 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
 
   auto sycl_context = sycl_queue->get_context();
 
-  // Get l0-device
+  // Get sycl-device
   std::vector<sycl::device> sycl_devices = sycl_context.get_devices();
 
-  // Retrieve devices
+  // Retrieve l0 devices
   uint32_t deviceCount = sycl_devices.size();
   for (uint32_t i = 0; i < deviceCount; ++i) {
+    sycl_l0_device_map[sycl_devices[i]] = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+        sycl_devices[i]);
     devices.push_back(sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
         sycl_devices[i]));
   }
@@ -421,7 +432,7 @@ static PyObject *getL0CtxtPtr(PyObject *self, PyObject *args) {
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].context));
 }
 static PyMethodDef ModuleMethods[] = {
-    {"load_binary", loadBinary, METH_VARARGS,
+    {"load_binary", loadSyclBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
      {"load_sycl_binary", loadSyclBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},

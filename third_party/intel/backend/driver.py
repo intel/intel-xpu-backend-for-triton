@@ -64,7 +64,8 @@ class XPUUtils(object):
         self.current_device = 0 if self.device_count[0] > 0 else -1
 
     def get_current_device(self):
-        return self.current_device
+        import torch
+        return torch.xpu.device(self.current_device).sycl_device
 
     def get_event_pool(self):
         return self.event_pool
@@ -73,10 +74,10 @@ class XPUUtils(object):
         return ipex.xpu.current_stream().sycl_queue
 
     def get_dev_ctxt_queue_objs(self):
-        context = self.get_l0_ctxt_ptr(self.get_sycl_queue())[0]
-        device = self.get_l0_dev_ptr(self.get_sycl_queue())[0]
-        queue = self.get_l0_queue(self.get_sycl_queue())[0]
-        return device, context, queue
+        #context = self.get_l0_ctxt_ptr(self.get_sycl_queue())[0]
+        #device = self.get_l0_dev_ptr(self.get_sycl_queue())[0]
+        #queue = self.get_l0_queue(self.get_sycl_queue())[0]
+        return 0, 0, 0
 
     def use_icl(self):
         return self.get_l0_queue(self.get_sycl_queue())[0] == 0
@@ -498,10 +499,8 @@ class XPUDriver(DriverBase):
         self.get_current_device = self.utils.get_current_device
 
     def get_current_stream(self, device):
-        if self.utils.get_l0_queue(self.utils.get_sycl_queue())[0] == 0:
-            return self.utils.get_l0_imm_cmd_list(self.utils.get_sycl_queue())[0]
-        else:
-            return 0
+        import torch
+        return torch.xpu.current_stream().sycl_queue
 
     def get_current_target(self):
         return ("xpu", 0)

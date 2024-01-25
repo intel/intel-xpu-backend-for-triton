@@ -313,10 +313,8 @@ class CompiledKernel:
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        import torch
-        self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_sycl_binary(
-            self.name, self.kernel, self.metadata.shared,
-            torch.xpu.device(device).sycl_device)
+        self.module, self.function, self.n_regs, self.n_spills = driver.utils.load_binary(
+            self.name, self.kernel, self.metadata.shared, device)
 
     def __getattribute__(self, name):
         if name == 'run':
@@ -327,22 +325,21 @@ class CompiledKernel:
         self._init_handles()
 
         def runner(*args, stream=None):
+            if stream is None:
+                device = driver.get_current_device()
+                stream = driver.get_current_stream(device)
             md = self.metadata
             args_expand = driver.assemble_tensormap_to_arg(md.tensormaps_info, args)
             if driver.get_current_target()[0] == "xpu":
-                use_icl = 1
-                import torch
-                stream = torch.xpu.current_stream().sycl_queue
-                dev_obj = 0
-                ctxt_obj = 0
-                q_obj = 0
-                self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
-                         md.cluster_dims[2], md.shared, use_icl, stream, q_obj, dev_obj, ctxt_obj, self.function,
-                         CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, md,
-                         driver.utils.get_event_pool(), *args_expand)
+                dev_obj, ctxt_obj, q_obj = driver.utils.get_dev_ctxt_queue_objs()
+                self.run(grid[0], grid[1], grid[2], md.num_warps,
+                        md.num_ctas, md.cluster_dims[0], md.cluster_dims[1], md.cluster_dims[2], md.shared,
+                        driver.utils.use_icl(), stream, q_obj, dev_obj, ctxt_obj, self.function,
+                        CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, md,
+                        driver.utils.get_event_pool(), *args_expand)
             else:
                 self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
-                         md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
-                         CompiledKernel.launch_exit_hook, md, *args_expand)
+                            md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
+                            CompiledKernel.launch_exit_hook, md, *args_expand)
 
         return runner
