@@ -165,6 +165,7 @@ function run_tutorial_tests {
   run_tutorial_test "03-matrix-multiplication" 03-matrix-multiplication.py  
   run_tutorial_test "04-low-memory-dropout" 04-low-memory-dropout.py
   run_tutorial_test "05-layer-norm" 05-layer-norm.py
+  run_tutorial_test "06-fused-attention.py" 06-fused-attention.py
   run_tutorial_test "07-math-functions" 07-math-functions.py
   run_tutorial_test "11-grouped-gemm" 11-grouped-gemm.py
 }

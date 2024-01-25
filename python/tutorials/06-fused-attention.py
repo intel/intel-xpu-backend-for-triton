@@ -565,7 +565,11 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
+# FIXME: change back once tl.dot uses DPAS instruction.
+if torch.cuda.is_available():
+    BATCH, N_HEADS, N_CTX, D_HEAD = 4, 48, 4096, 64
+else:
+    BATCH, N_HEADS, N_CTX, D_HEAD = 1, 4, 32, 32
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ["fwd", "bwd"]:
@@ -596,8 +600,14 @@ for mode in ["fwd", "bwd"]:
 @triton.testing.perf_report(configs)
 def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype=torch.float16, device="xpu"):
     assert mode in ["fwd", "bwd"]
-    warmup = 25
-    rep = 100
+    # FIXME: change back once tl.dot uses DPAS instruction
+    if torch.cuda.is_available():
+        warmup = 25
+        rep = 100
+    else:
+        warmup = 1
+        rep = 1
+
     if provider == "triton":
         q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="xpu", requires_grad=True)
         k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="xpu", requires_grad=True)
@@ -630,4 +640,4 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype
 
 
 # only works on post-Ampere GPUs right now
-bench_flash_attention.run(save_path=".", print_data=True)
+bench_flash_attention.run(print_data=True)
