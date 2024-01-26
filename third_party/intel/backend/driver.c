@@ -112,7 +112,6 @@ bool getBoolEnv(const std::string &env) {
 ze_module_handle_t create_module(ze_context_handle_t context,
                                  ze_device_handle_t device,
                                  uint32_t *binary_ptr, size_t binary_size) {
-  // std::cout<<"Inside create_module 1"<<std::endl;
   const char *build_flags = "";
   const ze_module_format_t format = ZE_MODULE_FORMAT_IL_SPIRV;
   ze_module_desc_t module_description = {};
@@ -127,8 +126,6 @@ ze_module_handle_t create_module(ze_context_handle_t context,
   auto context_initial = context;
   auto device_initial = device;
   auto error_no = ZE_RESULT_SUCCESS;
-  // std::cout<<context<<" | "<<device<<" | "<<module<<" |
-  // "<<module_description.inputSize<<std::endl;
   error_no =
       zeModuleCreate(context, device, &module_description, &module, &buildlog);
   if (error_no != ZE_RESULT_SUCCESS) {
@@ -143,6 +140,7 @@ ze_module_handle_t create_module(ze_context_handle_t context,
   ZE_CHECK(error_no);
   return module;
 }
+
 void printModuleKernelName(ze_module_handle_t hModule) {
   uint32_t Count = 0;
   auto ret = zeModuleGetKernelNames(hModule, &Count, nullptr);
@@ -156,6 +154,7 @@ void printModuleKernelName(ze_module_handle_t hModule) {
     }
   }
 }
+
 ze_kernel_handle_t create_function(ze_module_handle_t module,
                                    ze_kernel_flags_t flag,
                                    std::string func_name) {
@@ -172,6 +171,7 @@ ze_kernel_handle_t create_function(ze_module_handle_t module,
   ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel));
   return kernel;
 }
+
 ze_kernel_handle_t create_function(ze_module_handle_t module,
                                    std::string func_name) {
   return create_function(module, ZE_KERNEL_FLAG_FORCE_RESIDENCY, func_name);
@@ -185,13 +185,12 @@ static PyObject *loadSyclBinary(PyObject *self, PyObject *args) {
   PyObject *py_bytes;
   PyObject *py_dev;
   if (!PyArg_ParseTuple(args, "sSiO", &name, &py_bytes, &shared, &py_dev)) {
-    std::cout << "loadSyclBinary arg parse failed" << std::endl;
+    std::cerr << "loadSyclBinary arg parse failed" << std::endl;
     return NULL;
   }
   int32_t n_regs = 0;
   int32_t n_spills = 0;
   void *pdevID = PyCapsule_GetPointer(py_dev, PyCapsule_GetName(py_dev));
-  // error;
   if (pdevID == nullptr)
     return NULL;
 
@@ -233,10 +232,6 @@ static PyObject *loadSyclBinary(PyObject *self, PyObject *args) {
     }
   }
   sycl::kernel *k = new sycl::kernel(*ptr);
-  /*py::capsule kernel_capsulle(k, [](void *f) {
-      auto kk = static_cast<sycl::kernel *>(f);
-      delete kk;
-  });*/
   sycl::kernel_bundle<sycl::bundle_state::executable> *kb =
       new sycl::kernel_bundle<sycl::bundle_state::executable>(mod);
   return Py_BuildValue("(KKii)", (uint64_t)kb, (uint64_t)k, n_regs, n_spills);
@@ -389,6 +384,7 @@ static PyObject *getL0ImmCommandList(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].cmd_list));
 }
+
 static PyObject *getL0Queue(PyObject *self, PyObject *args) {
   PyObject *cap;
   void *queue = NULL;
@@ -402,6 +398,7 @@ static PyObject *getL0Queue(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].queue));
 }
+
 static PyObject *getL0DevPtr(PyObject *self, PyObject *args) {
   PyObject *cap;
   void *queue = NULL;
@@ -415,6 +412,7 @@ static PyObject *getL0DevPtr(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].device));
 }
+
 static PyObject *getL0CtxtPtr(PyObject *self, PyObject *args) {
   PyObject *cap;
   void *queue = NULL;
@@ -428,6 +426,7 @@ static PyObject *getL0CtxtPtr(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].context));
 }
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadSyclBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
