@@ -12,6 +12,7 @@
 #include <string>
 #include <sycl/sycl.hpp>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -32,7 +33,7 @@ static ze_driver_handle_t driverHandle = {nullptr};
 static ze_event_pool_handle_t eventPoolHandle = {nullptr};
 
 static std::vector<ze_device_handle_t> devices;
-std::unordered_map<sycl::device, ze_device_handle_t> sycl_l0_device_map;
+std::vector<std::pair<sycl::device, ze_device_handle_t>> sycl_l0_device_list;
 
 static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   if (code != ZE_RESULT_SUCCESS) {
@@ -57,17 +58,14 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   if (!PyArg_ParseTuple(args, "i", &device_id))
     return NULL;
 
-  if (device_id > sycl_l0_device_map.size()) {
+  if (device_id > sycl_l0_device_list.size()) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
-  auto device_it = sycl_l0_device_map.begin();
-  for (; device_id > 0; --device_id) {
-    device_it++;
-  }
+  auto device = sycl_l0_device_list[device_id];
 
   // Get device handle
-  ze_device_handle_t phDevice = device_it->second;
+  ze_device_handle_t phDevice = device.second;
 
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
@@ -365,8 +363,9 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   // Retrieve l0 devices
   uint32_t deviceCount = sycl_devices.size();
   for (uint32_t i = 0; i < deviceCount; ++i) {
-    sycl_l0_device_map[sycl_devices[i]] =
-        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_devices[i]);
+    sycl_l0_device_list.push_back(std::make_pair(
+        sycl_devices[i], sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+                             sycl_devices[i])));
     devices.push_back(sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
         sycl_devices[i]));
   }
