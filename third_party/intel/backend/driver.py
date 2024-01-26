@@ -76,9 +76,6 @@ class XPUUtils(object):
         return torch.xpu.device(device_id).sycl_device
 
     def get_dev_ctxt_queue_objs(self):
-        #context = self.get_l0_ctxt_ptr(self.get_sycl_queue())[0]
-        #device = self.get_l0_dev_ptr(self.get_sycl_queue())[0]
-        #queue = self.get_l0_queue(self.get_sycl_queue())[0]
         return 0, 0, 0
 
     def use_icl(self):
@@ -340,15 +337,11 @@ def make_launcher(constants, signature, ids):
       }}
   }}
   static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-    //std::cout<<"sycl_kernel_launch entry"<<std::endl;
+
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-    //std::cout<<"Kernel name :"<<kernel_name<<std::endl;
     void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
     uint32_t num_params = sizeof(params)/sizeof(params[0]);
     uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
-    //std::cout<<"num_params          :"<<num_params<<std::endl;
-    //std::cout<<"expected_num_params :"<<expected_num_params<<std::endl;
-    //std::cout<<"shared_memory       :"<<shared_memory<<std::endl;
     size_t global_range_x = gridX*threads_per_warp*num_warps;
     size_t global_range_y = gridY;
     size_t global_range_z = gridZ;
@@ -420,23 +413,9 @@ def make_launcher(constants, signature, ids):
       sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
       sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
       auto threads_per_warp = 32;
-      //std::cout<<"_launch : going to call sycl_kernel_launch"<<std::endl;
+
       sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
 
-/*
-      // raise exception asap
-      // {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-      if (_is_icl == 0) {{
-        _regular_launch(gridX, gridY, gridZ, num_warps, shared_memory, (ze_command_queue_handle_t)_queue,
-                        (ze_device_handle_t)_dev, (ze_context_handle_t)_ctxt, (ze_kernel_handle_t)_function,
-                        (ze_event_pool_handle_t)_event_pool
-                        {', ' + ', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
-      }} else {{
-        _launch(gridX, gridY, gridZ, num_warps, shared_memory, (ze_command_list_handle_t)_stream,
-                (ze_kernel_handle_t)_function, (ze_event_pool_handle_t)_event_pool
-                {', ' + ', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
-      }}
-*/
       if (launch_exit_hook != Py_None) {{
         PyObject_CallObject(launch_exit_hook, args);
       }}
