@@ -14,10 +14,20 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
-               ConversionPatternRewriter &rewriter) {
+               ConversionPatternRewriter &rewriter,
+               mlir::triton::Target target) {
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);
+
+  if (target == Target::GENX) {
+    constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                             mlir::gpu::Dimension::y,
+                                             mlir::gpu::Dimension::z};
+
+    Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+    return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+  }
 
   // It is not easy to get the compute capability here, so we use numCTAs to
   // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
@@ -135,7 +145,8 @@ struct PrintOpConversion
         (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant : 0);
 
     auto getPid = [&](int axis) {
-      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
+      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter,
+                      target);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 
@@ -619,25 +630,12 @@ struct GetProgramIdOpConversion
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (target == triton::Target::GENX) {
-      Location loc = op->getLoc();
-      assert(op.getAxisAsInt() < 3);
-
-      Value blockId =
-          rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxisAsInt()]);
-      rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
-      return success();
-    }
-
-    Value programId = llGetPid(op.getAxisAsInt(), op->getLoc(),
-                               op->getParentOfType<ModuleOp>(), rewriter);
+    Value programId =
+        llGetPid(op.getAxisAsInt(), op->getLoc(),
+                 op->getParentOfType<ModuleOp>(), rewriter, target);
     rewriter.replaceOp(op, programId);
     return success();
   }
-
-  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                                  mlir::gpu::Dimension::y,
-                                                  mlir::gpu::Dimension::z};
 };
 
 struct GetNumProgramsOpConversion
