@@ -57,13 +57,17 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   if (!PyArg_ParseTuple(args, "i", &device_id))
     return NULL;
 
-  if (device_id > devices.size()) {
+  if (device_id > sycl_l0_device_map.size()) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
+  auto device_it = sycl_l0_device_map.begin();
+  for (; device_id > 0; --device_id) {
+    device_it++;
+  }
 
   // Get device handle
-  ze_device_handle_t phDevice = devices[device_id];
+  ze_device_handle_t phDevice = device_it->second;
 
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
