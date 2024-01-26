@@ -33,7 +33,8 @@ static ze_driver_handle_t driverHandle = {nullptr};
 static ze_event_pool_handle_t eventPoolHandle = {nullptr};
 
 static std::vector<ze_device_handle_t> devices;
-std::vector<std::pair<sycl::device, ze_device_handle_t>> sycl_l0_device_list;
+static std::vector<std::pair<sycl::device, ze_device_handle_t>>
+    sycl_l0_device_list;
 
 static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   if (code != ZE_RESULT_SUCCESS) {
