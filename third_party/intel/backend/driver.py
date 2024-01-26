@@ -75,9 +75,6 @@ class XPUUtils(object):
         import torch
         return torch.xpu.device(device_id).sycl_device
 
-    def get_dev_ctxt_queue_objs(self):
-        return 0, 0, 0
-
     def use_icl(self):
         return self.get_l0_queue(self.get_sycl_queue())[0] == 0
 
@@ -149,7 +146,7 @@ def make_launcher(constants, signature, ids):
             "int64_t": "L",
         }[ty]
 
-    format = "iiiiiiiiiiOKKKKOOOK" + ''.join(
+    format = "iiiiiiiiiOKOOO" + ''.join(
         [format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
@@ -395,9 +392,8 @@ def make_launcher(constants, signature, ids):
 
       {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
       if (!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &num_ctas,
-                            &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &_is_icl, &py_obj_stream,
-                            &_queue, &_dev, &_ctxt, &pKrnl, &launch_enter_hook, &launch_exit_hook,
-                            &compiled_kernel, &_event_pool
+                            &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &py_obj_stream,
+                            &pKrnl, &launch_enter_hook, &launch_exit_hook, &compiled_kernel
                             {', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
         return NULL;
       }}

@@ -330,16 +330,8 @@ class CompiledKernel:
                 stream = driver.active.get_current_stream(device)
             md = self.metadata
             args_expand = driver.active.assemble_tensormap_to_arg(md.tensormaps_info, args)
-            if driver.active.get_current_target()[0] == "xpu":
-                dev_obj, ctxt_obj, q_obj = driver.active.utils.get_dev_ctxt_queue_objs()
-                self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas,
-                         md.cluster_dims[0], md.cluster_dims[1], md.cluster_dims[2], md.shared,
-                         driver.active.utils.use_icl(), stream, q_obj, dev_obj, ctxt_obj, self.function,
-                         CompiledKernel.launch_enter_hook, CompiledKernel.launch_exit_hook, md,
-                         driver.active.utils.get_event_pool(), *args_expand)
-            else:
-                self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
-                         md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
-                         CompiledKernel.launch_exit_hook, md, *args_expand)
+            self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
+                     md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
+                     CompiledKernel.launch_exit_hook, md, *args_expand)
 
         return runner
