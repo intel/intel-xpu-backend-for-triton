@@ -364,10 +364,11 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, q, k, v, causal, sm_scale, sequence_parallel=False):
-        # only support for Ampere now
-        capability = torch.cuda.get_device_capability()
-        if capability[0] < 8:
-            raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
+        if torch.cuda.is_available():
+            # only support for Ampere now
+            capability = torch.cuda.get_device_capability()
+            if capability[0] < 8:
+                raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
         BLOCK_M = 128
         BLOCK_N = 64
         # shape constraints
@@ -404,8 +405,10 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, do):
-        capability = torch.cuda.get_device_capability()
-        MMA_V3 = capability[0] >= 9
+        MMA_V3 = False
+        if torch.cuda.is_available():        
+            capability = torch.cuda.get_device_capability()
+            MMA_V3 = capability[0] >= 9
         BLOCK = 128
         q, k, v, o, L = ctx.saved_tensors
         sequence_parallel = ctx.sequence_parallel
