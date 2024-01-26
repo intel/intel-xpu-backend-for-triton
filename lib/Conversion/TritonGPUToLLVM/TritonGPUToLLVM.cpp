@@ -138,7 +138,6 @@ struct PrintOpConversion
     auto loc = op->getLoc();
 
     llvm::SmallString<64> msgNewline(op.getPrefix());
-    msgNewline.push_back('\0');
 
     Value prefixStr = LLVM::addStringToModule(
         loc, rewriter, "printfPrefix_", msgNewline,
@@ -395,7 +394,6 @@ struct PrintOpConversion
     assert(!msg.empty() && "printf with empty string not supported");
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
-    msgNewline.push_back('\0');
     Value msgValue = LLVM::addStringToModule(
         UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
         msgNewline,
