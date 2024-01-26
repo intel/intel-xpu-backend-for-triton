@@ -5,7 +5,8 @@ import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
-from datetime import datetime, timedelta
+from datetime import datetime
+
 
 def nvsmi(attrs):
     attrs = ','.join(attrs)
@@ -113,7 +114,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     for _ in range(5):
         cache.zero_()
         fn()
-    end_time = datetime.now()    
+    end_time = datetime.now()
     torch.xpu.synchronize()
     estimate_ms = ((end_time.timestamp() - start_time.timestamp()) * 1000) / 5
 
@@ -121,7 +122,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     n_warmup = max(1, int(warmup / estimate_ms))
     n_repeat = max(1, int(rep / estimate_ms))
     start_times = [datetime for i in range(n_repeat)]
-    end_times =  [datetime for i in range(n_repeat)]
+    end_times = [datetime for i in range(n_repeat)]
 
     # Warm-up
     for _ in range(n_warmup):
@@ -142,7 +143,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         end_times[i] = datetime.now()
     # Record clocks
     torch.xpu.synchronize()
-    times = torch.tensor([(e.timestamp() - s.timestamp()) * 1000 for s, e in zip(start_times, end_times)], dtype=torch.float)
+    times = torch.tensor([(e.timestamp() - s.timestamp()) * 1000 for s, e in zip(start_times, end_times)],
+                         dtype=torch.float)
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
         if len(ret) == 1:
