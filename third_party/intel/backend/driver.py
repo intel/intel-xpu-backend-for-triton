@@ -63,8 +63,7 @@ class XPUUtils(object):
         self.current_device = 0 if self.device_count[0] > 0 else -1
 
     def get_current_device(self):
-        import torch
-        return torch.xpu.device(self.current_device).sycl_device
+        return self.current_device
 
     def get_event_pool(self):
         return self.event_pool
@@ -419,11 +418,6 @@ def make_launcher(constants, signature, ids):
       auto threads_per_warp = 32;
       //std::cout<<"_launch : going to call sycl_kernel_launch"<<std::endl;
       sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
-
-      // Freeing the memory allocated during kernel load
-      sycl::kernel* krnlPtr = static_cast<sycl::kernel*>(pKrnl);
-      delete krnlPtr;
-
 /*
       // raise exception asap
       // {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};

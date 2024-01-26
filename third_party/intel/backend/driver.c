@@ -53,24 +53,17 @@ static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   }
 
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
-  PyObject *sycl_dev;
-  if (!PyArg_ParseTuple(args, "O", &sycl_dev))
+  int device_id;
+  if (!PyArg_ParseTuple(args, "i", &device_id))
     return NULL;
 
-  void *obj;
-  if (!(obj = PyCapsule_GetPointer(sycl_dev, PyCapsule_GetName(sycl_dev))))
-    return NULL;
-
-  sycl::device *device = static_cast<sycl::device *>(obj);
-
-  if (device == nullptr ||
-      sycl_l0_device_map.find(*device) == sycl_l0_device_map.end()) {
+  if (device_id > devices.size()) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
 
   // Get device handle
-  ze_device_handle_t phDevice = sycl_l0_device_map[*device];
+  ze_device_handle_t phDevice = devices[device_id];
 
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
