@@ -406,7 +406,7 @@ class _attention(torch.autograd.Function):
     @staticmethod
     def backward(ctx, do):
         MMA_V3 = False
-        if torch.cuda.is_available():        
+        if torch.cuda.is_available():
             capability = torch.cuda.get_device_capability()
             MMA_V3 = capability[0] >= 9
         BLOCK = 128

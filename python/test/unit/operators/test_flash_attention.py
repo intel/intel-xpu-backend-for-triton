@@ -5,12 +5,13 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.ops
 
+
 # FIXME: Enable larger problem sizes when tl.dot uses DPAS.
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [  #
     (2, 4, 512, 16),
-#    (2, 4, 512, 32),
-#    (2, 4, 512, 64),
-#    (2, 4, 512, 128),
+    #    (2, 4, 512, 32),
+    #    (2, 4, 512, 64),
+    #    (2, 4, 512, 128),
 ])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('causal', [True, False])
@@ -23,11 +24,11 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
             pytest.xfail('bfloat16 tma not support currently')
 
     capability = 0
-    if torch.cuda.is_available():            
+    if torch.cuda.is_available():
         capability = torch.cuda.get_device_capability()
 
     interpreter = os.environ.get("TRITON_INTERPRET", 'not found') in ["on", "true", "1"]
-    if torch.cuda.is_available():            
+    if torch.cuda.is_available():
         if not interpreter and capability[0] < 8:
             pytest.xfail("Flash attention only supported for compute capability >= 80")
     torch.manual_seed(20)
