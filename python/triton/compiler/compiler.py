@@ -314,8 +314,7 @@ class CompiledKernel:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared,
-            driver.active.utils.get_sycl_device(device))
+            self.name, self.kernel, self.metadata.shared, driver.active.utils.get_sycl_device(device))
 
     def __getattribute__(self, name):
         if name == 'run':
