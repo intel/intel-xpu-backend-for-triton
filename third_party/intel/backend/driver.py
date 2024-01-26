@@ -69,6 +69,8 @@ class XPUUtils(object):
         return self.event_pool
 
     def get_sycl_queue(self):
+        import torch
+        assert torch.xpu.is_available()
         return ipex.xpu.current_stream().sycl_queue
 
     def get_sycl_device(self, device_id):
@@ -482,6 +484,7 @@ class XPUDriver(DriverBase):
 
     def get_current_target(self):
         device = self.get_current_device()
+        assert device >= 0
         device_arch = self.utils.get_device_properties(device)['device_arch']
         return ("xpu", device_arch)
 
