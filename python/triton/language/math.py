@@ -2,8 +2,8 @@ from . import core
 
 
 def is_spirv():
-    import torch
-    return torch.xpu.is_available()
+    import triton
+    return triton.runtime.driver.active.get_current_target()[0] == "xpu"
 
 
 @core.extern

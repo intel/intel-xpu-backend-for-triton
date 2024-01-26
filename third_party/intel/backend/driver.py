@@ -401,7 +401,7 @@ def make_launcher(constants, signature, ids):
       if (launch_enter_hook != Py_None) {{
         PyObject_CallObject(launch_enter_hook, args);
       }}
-      
+
       void * pStream = PyCapsule_GetPointer(py_obj_stream, PyCapsule_GetName(py_obj_stream));
       //error;
       if(pStream == nullptr || pKrnl == nullptr) return NULL;
@@ -481,7 +481,9 @@ class XPUDriver(DriverBase):
         return torch.xpu.current_stream().sycl_queue
 
     def get_current_target(self):
-        return ("xpu", 0)
+        device = self.get_current_device()
+        device_arch = self.utils.get_device_properties(device)['device_arch']
+        return ("xpu", device_arch)
 
     @staticmethod
     def is_active():
