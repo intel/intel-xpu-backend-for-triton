@@ -5,6 +5,9 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.ops
 
+# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
+torch.xpu.enable_sync_mode()
+
 
 # FIXME: Enable larger problem sizes when tl.dot uses DPAS.
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [  #
