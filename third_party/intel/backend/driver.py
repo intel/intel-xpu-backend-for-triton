@@ -120,7 +120,7 @@ def make_launcher(constants, signature, ids):
 
     def _extracted_type(ty):
         if ty[0] == '*':
-            return "void*"
+            return "PyObject*"
         return {
             'i1': 'int32_t',
             'i32': 'int32_t',
@@ -137,7 +137,6 @@ def make_launcher(constants, signature, ids):
     def format_of(ty):
         return {
             "PyObject*": "O",
-            "void*": "K",
             "float": "f",
             "double": "d",
             "long": "l",
@@ -280,10 +279,8 @@ def make_launcher(constants, signature, ids):
       DevicePtrInfo ptr_info;
       ptr_info.dev_ptr = 0;
       ptr_info.valid = true;
-      PyTypeObject* obj_type = Py_TYPE(obj);
-
       if (PyLong_Check(obj)) {{
-        ptr_info.dev_ptr = (void*) PyLong_AsUnsignedLongLong(obj);
+        ptr_info.dev_ptr = (void*) PyLong_AsLongLong(obj);
         return ptr_info;
       }}
       if (obj == Py_None) {{
@@ -309,6 +306,7 @@ def make_launcher(constants, signature, ids):
         return ptr_info;
       }}
       PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+      ptr_info.valid = false;
       return ptr_info;
     }}
 // start sycl
@@ -411,7 +409,8 @@ def make_launcher(constants, signature, ids):
       sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
       auto threads_per_warp = 32;
 
-      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"(void *) _arg{i}" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
+      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
 
       if (launch_exit_hook != Py_None) {{
         PyObject_CallObject(launch_exit_hook, args);
