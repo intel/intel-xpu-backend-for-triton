@@ -42,7 +42,7 @@ def mask_tensor(x, mask, block, value=0):
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
 @pytest.mark.parametrize("DTYPE", [torch.float16])
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
-    pytest.skip("RuntimeError: Triton Error [ZE]: 2013265944")
+    pytest.skip("FIXME: AssertionError: Tensor-likes are not close!")
     seed = 0
     torch.manual_seed(seed)
     is_sdd = MODE == "sdd"
@@ -106,7 +106,8 @@ configs = [
 @pytest.mark.parametrize("is_dense", [False, True])
 @pytest.mark.parametrize("BLOCK, WIDTH", configs)
 def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
-    pytest.skip("RuntimeError: Triton Error [ZE]: 2013265944")
+    if not is_dense:
+        pytest.skip("FIXME: AssertionError: Tensor-likes are not close!")
     # set seed
     torch.random.manual_seed(0)
     Z, H, M, N = 2, 3, WIDTH, WIDTH
@@ -158,15 +159,17 @@ def test_attention_fwd_bwd(
     batch_size=2,
     n_heads=2,
 ):
-    pytest.skip("FIXME: Port get_device_capability to XPU")
-    capability = torch.cuda.get_device_capability()
-    if capability[0] < 7:
-        pytest.skip("Only test tl.dot() on devices with sm >= 70")
+    if torch.cuda.is_available():
+        capability = torch.cuda.get_device_capability()
+        if capability[0] < 7:
+            pytest.skip("Only test tl.dot() on devices with sm >= 70")
+
+    pytest.skip("FIXME: AssertionError: Scalars are not close!")
 
     # inputs
     qkv_shape = (batch_size, n_heads, n_ctx, 64)
     qkvs = [
-        torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True).to(dtype).cuda() for _ in range(3)
+        torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True).to(dtype).xpu() for _ in range(3)
     ]
 
     # Triton:
@@ -184,9 +187,9 @@ def test_attention_fwd_bwd(
 
     # Torch version:
     torch_q, torch_k, torch_v = [x.clone() for x in qkvs]
-    attn_mask = torch.ones([n_ctx, n_ctx], device="cuda", dtype=dtype)
+    attn_mask = torch.ones([n_ctx, n_ctx], device="xpu", dtype=dtype)
     attn_mask = torch.tril(attn_mask, diagonal=0)
-    attn_mask = 1e6 * (-1 + (attn_mask.reshape((1, 1, n_ctx, n_ctx)).cuda()))
+    attn_mask = 1e6 * (-1 + (attn_mask.reshape((1, 1, n_ctx, n_ctx)).xpu()))
     torch_q.retain_grad()
     torch_k.retain_grad()
     torch_v.retain_grad()
