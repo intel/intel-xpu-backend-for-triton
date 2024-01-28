@@ -34,11 +34,10 @@ torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 # num_ctas_list = [1, 4] if torch.cuda.get_device_capability()[0] == 9 else [1]
 num_ctas_list = [1]
 
+GPU_DIALECT = "triton_gpu"
 if is_hip():
-    GPU_DIALECT = "triton_gpu_rocm"
     THREADS_PER_WARP = 64
 else:
-    GPU_DIALECT = "triton_gpu"
     THREADS_PER_WARP = 32
 
 if is_spirv():
@@ -497,10 +496,6 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
 ])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
-    if is_hip():
-        pytest.skip(
-            'test_shift_op for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
     expr = f'x {op} y'
     bw = max(_bitwidth(dtype_x), _bitwidth(dtype_y))
     if dtype_x.startswith('int'):
@@ -2246,9 +2241,6 @@ layouts = [
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
-    if is_hip():
-        pytest.skip("test_convert1d is not supported in HIP")
-
     ir = f"""
     #dst = {dst_layout}
     #src = {src_layout}
@@ -2497,11 +2489,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
-
-    if is_hip():
-        pytest.skip(
-            'test_dot for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
 
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
