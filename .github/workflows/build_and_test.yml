@@ -198,6 +198,8 @@ jobs:
           python3 06-fused-attention.py
           python3 07-math-functions.py
           python3 08-experimental-block-pointer.py
+          python3 09-experimental-tma-matrix-multiplication.py
+          python3 10-experimental-tma-store-matrix-multiplication.py
           python3 11-grouped-gemm.py
 
       - name: Run CXX unittests

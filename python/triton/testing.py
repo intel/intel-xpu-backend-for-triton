@@ -5,6 +5,7 @@ import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
+from datetime import datetime
 
 
 def nvsmi(attrs):
@@ -109,21 +110,20 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         cache = torch.empty(int(256e6), dtype=torch.int8, device='xpu')
 
     # Estimate the runtime of the function
-    start_event = torch.xpu.Event(enable_timing=True)
-    end_event = torch.xpu.Event(enable_timing=True)
-    start_event.record()
+    start_time = datetime.now()
     for _ in range(5):
         cache.zero_()
         fn()
-    end_event.record()
+    end_time = datetime.now()
     torch.xpu.synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
+    estimate_ms = ((end_time.timestamp() - start_time.timestamp()) * 1000) / 5
 
     # compute number of warmup and repeat
     n_warmup = max(1, int(warmup / estimate_ms))
     n_repeat = max(1, int(rep / estimate_ms))
-    start_event = [torch.xpu.Event(enable_timing=True) for i in range(n_repeat)]
-    end_event = [torch.xpu.Event(enable_timing=True) for i in range(n_repeat)]
+    start_times = [datetime for i in range(n_repeat)]
+    end_times = [datetime for i in range(n_repeat)]
+
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -138,12 +138,13 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         # we clear the L2 cache before each run
         cache.zero_()
         # record time of `fn`
-        start_event[i].record()
+        start_times[i] = datetime.now()
         fn()
-        end_event[i].record()
+        end_times[i] = datetime.now()
     # Record clocks
     torch.xpu.synchronize()
-    times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
+    times = torch.tensor([(e.timestamp() - s.timestamp()) * 1000 for s, e in zip(start_times, end_times)],
+                         dtype=torch.float)
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
         if len(ret) == 1:
