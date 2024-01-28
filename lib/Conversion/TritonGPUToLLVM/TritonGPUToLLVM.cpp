@@ -778,7 +778,8 @@ struct AllocTensorOpConversion
   matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
     auto resultTy = op.getType().dyn_cast<RankedTensorType>();
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
@@ -840,8 +841,8 @@ struct ExtractSliceOpConversion
 
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSource(),
-                                                   llvmElemTy, rewriter);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSource(), llvmElemTy, rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
@@ -969,12 +970,10 @@ struct AsyncBulkCommitGroupOpConversion
 void mlir::triton::populateTritonGPUToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &moduleAllocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     triton::Target target, PatternBenefit benefit) {
   patterns.add<AddPtrOpConversion>(typeConverter, target, benefit);
-  patterns.add<AllocTensorOpConversion>(typeConverter, moduleAllocation, target,
-                                        benefit);
+  patterns.add<AllocTensorOpConversion>(typeConverter, target, benefit);
   patterns.add<DeallocTensorOpConversion>(typeConverter, target, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, target, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, target, benefit);
@@ -982,8 +981,7 @@ void mlir::triton::populateTritonGPUToLLVMPatterns(
                                                  benefit);
   patterns.add<AsyncBulkWaitOpConversion>(typeConverter, target, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, target, benefit);
-  patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation,
-                                         target, benefit);
+  patterns.add<ExtractSliceOpConversion>(typeConverter, target, benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, target, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, target, benefit);
   patterns.add<GetThreadIdOpConversion>(typeConverter, target, benefit);

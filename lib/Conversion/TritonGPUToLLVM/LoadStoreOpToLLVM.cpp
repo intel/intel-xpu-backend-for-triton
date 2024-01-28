@@ -506,12 +506,11 @@ struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
       triton::nvidia_gpu::StoreAsyncTMAOp>::ConvertTritonGPUOpToLLVMPattern;
 
   StoreAsyncTMAOpConversion(TritonGPUToLLVMTypeConverter &converter,
-                            ModuleAllocation &allocation,
                             mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
                             const TensorPtrMapT *tensorPtrMap, Target target,
                             PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::StoreAsyncTMAOp>(
-            converter, allocation, tmaMetadata, target, benefit),
+            converter, tmaMetadata, target, benefit),
         tensorPtrMap(tensorPtrMap) {}
 
   LogicalResult
@@ -843,7 +842,8 @@ struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     Value llSrc = adaptor.getSrc();
     auto srcShape = srcTy.getShape();
     auto dstElemPtrTy = ptr_ty(ctx, 3);
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
     smemBase = bitcast(smemBase, dstElemPtrTy);
 
     SmallVector<Value> offsetVals;
@@ -1037,11 +1037,10 @@ struct AtomicCASOpConversion
       triton::AtomicCASOp>::ConvertTritonGPUOpToLLVMPattern;
 
   AtomicCASOpConversion(TritonGPUToLLVMTypeConverter &converter,
-                        ModuleAllocation &allocation,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         triton::Target target, PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(
-            converter, allocation, target, benefit),
+      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(converter, target,
+                                                             benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -1127,7 +1126,8 @@ struct AtomicCASOpConversion
         } else {
           auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
           createBarrier(rewriter, loc, numCTAs);
-          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter,
+                                                    op.getOperation(), target);
           atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
           // Only threads with mask = True store the result
           PTXBuilder ptxBuilderStore;
@@ -1174,7 +1174,8 @@ struct AtomicCASOpConversion
           }
         } else {
           createBarrier(rewriter, loc, numCTAs);
-          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter,
+                                                    op.getOperation(), target);
           atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
           mlir::LLVM::storeShared(rewriter, loc, atomPtr, ret, mask, target);
           createBarrier(rewriter, loc, numCTAs);
@@ -1205,11 +1206,10 @@ struct AtomicRMWOpConversion
       triton::AtomicRMWOp>::ConvertTritonGPUOpToLLVMPattern;
 
   AtomicRMWOpConversion(TritonGPUToLLVMTypeConverter &converter,
-                        ModuleAllocation &allocation,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         triton::Target target, PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(
-            converter, allocation, target, benefit),
+      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter, target,
+                                                             benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -1348,7 +1348,8 @@ struct AtomicRMWOpConversion
             rewriter.replaceOp(op, {old});
             return success();
           }
-          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter,
+                                                    op.getOperation(), target);
           atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
           // Only threads with rmwMask = True store the result
           PTXBuilder ptxBuilderStore;
@@ -1429,7 +1430,8 @@ struct AtomicRMWOpConversion
                 vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
           }
         } else {
-          Value atomPtr = getSharedMemoryBase(loc, rewriter, op.getOperation());
+          Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter,
+                                                    op.getOperation(), target);
           atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
           // Only threads with rmwMask = True store the result
           mlir::LLVM::storeShared(rewriter, loc, atomPtr, ret, rmwMask, target);
@@ -1468,9 +1470,6 @@ struct InsertSliceOpConversion
     Value src = op.getSource();
     Value res = op.getResult();
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
-    auto *funcAllocation = allocation->getFuncData(funcOp);
-    assert(funcAllocation->getBufferId(res) == Allocation::InvalidBufferId &&
-           "Only support in-place insert_slice for now");
 
     auto srcTy = src.getType().dyn_cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
@@ -1530,12 +1529,12 @@ struct InsertSliceAsyncOpConversion
       triton::gpu::InsertSliceAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
 
   InsertSliceAsyncOpConversion(
-      TritonGPUToLLVMTypeConverter &converter, ModuleAllocation &allocation,
+      TritonGPUToLLVMTypeConverter &converter,
       ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
       ModuleAxisInfoAnalysis &axisAnalysisPass, Target target,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>(
-            converter, allocation, indexCacheInfo, target, benefit),
+            converter, indexCacheInfo, target, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -1549,9 +1548,6 @@ struct InsertSliceAsyncOpConversion
     Value mask = op.getMask();
     Value other = op.getOther();
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
-    auto *funcAllocation = allocation->getFuncData(funcOp);
-    assert(funcAllocation->getBufferId(res) == Allocation::InvalidBufferId &&
-           "Only support in-place insert_slice_async for now");
 
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto resTy = dst.getType().cast<RankedTensorType>();
@@ -1686,13 +1682,11 @@ struct InsertSliceTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
       triton::nvidia_gpu::InsertSliceTMAOp>::ConvertTritonGPUOpToLLVMPattern;
 
   InsertSliceTMAOpConversion(TritonGPUToLLVMTypeConverter &converter,
-
-                             ModuleAllocation &allocation,
                              mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
                              const TensorPtrMapT *tensorPtrMap, Target target,
                              PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::InsertSliceTMAOp>(
-            converter, allocation, tmaMetadata, target, benefit),
+            converter, tmaMetadata, target, benefit),
         tensorPtrMap(tensorPtrMap) {}
 
   LogicalResult
@@ -2052,26 +2046,23 @@ private:
 void mlir::triton::populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-    const TensorPtrMapT *tensorPtrMap, triton::Target target,
-    PatternBenefit benefit) {
+    const TensorPtrMapT *tensorPtrMap, Target target, PatternBenefit benefit) {
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, target,
                                  benefit);
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, target,
                                   benefit);
-  patterns.add<AtomicCASOpConversion>(typeConverter, allocation,
-                                      axisInfoAnalysis, target, benefit);
-  patterns.add<AtomicRMWOpConversion>(typeConverter, allocation,
-                                      axisInfoAnalysis, target, benefit);
-  patterns.add<InsertSliceOpConversion>(typeConverter, allocation,
-                                        indexCacheInfo, target, benefit);
-  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, allocation,
-                                             indexCacheInfo, axisInfoAnalysis,
-                                             target, benefit);
-  patterns.add<InsertSliceTMAOpConversion>(
-      typeConverter, allocation, tmaMetadata, tensorPtrMap, target, benefit);
-  patterns.add<StoreAsyncTMAOpConversion>(
-      typeConverter, allocation, tmaMetadata, tensorPtrMap, target, benefit);
+  patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, target,
+                                      benefit);
+  patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, target,
+                                      benefit);
+  patterns.add<InsertSliceOpConversion>(typeConverter, indexCacheInfo, target,
+                                        benefit);
+  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, indexCacheInfo,
+                                             axisInfoAnalysis, target, benefit);
+  patterns.add<InsertSliceTMAOpConversion>(typeConverter, tmaMetadata,
+                                           tensorPtrMap, target, benefit);
+  patterns.add<StoreAsyncTMAOpConversion>(typeConverter, tmaMetadata,
+                                          tensorPtrMap, target, benefit);
 }

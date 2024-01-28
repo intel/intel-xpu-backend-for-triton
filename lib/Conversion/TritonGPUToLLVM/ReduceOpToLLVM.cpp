@@ -20,11 +20,11 @@ struct ReduceOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
   ReduceOpConversion(
-      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
+      TritonGPUToLLVMTypeConverter &typeConverter,
       ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
       int computeCapability, Target target, PatternBenefit benefit)
       : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(
-            typeConverter, allocation, indexCacheInfo, target, benefit),
+            typeConverter, indexCacheInfo, target, benefit),
         computeCapability(computeCapability) {}
 
   LogicalResult
@@ -55,7 +55,7 @@ public:
     auto smemShape = helper.getScratchConfig();
 
     SmallVector<Value> smemBases =
-        getSmemBases(op, product<unsigned>(smemShape), rewriter);
+        getSmemBases(op, product<unsigned>(smemShape), rewriter, target);
 
     storeWarpReduceToSharedMemory(helper, accs, indices, smemBases, rewriter);
 
@@ -484,9 +484,8 @@ private:
 void mlir::triton::populateReduceOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     int computeCapability, Target target, PatternBenefit benefit) {
-  patterns.add<ReduceOpConversion>(typeConverter, allocation, indexCacheInfo,
+  patterns.add<ReduceOpConversion>(typeConverter, indexCacheInfo,
                                    computeCapability, target, benefit);
 }

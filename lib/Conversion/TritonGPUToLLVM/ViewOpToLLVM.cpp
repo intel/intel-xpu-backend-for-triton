@@ -295,8 +295,8 @@ struct TransOpConversion
 
 void mlir::triton::populateViewOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation, Target target, PatternBenefit benefit) {
+    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
+    PatternBenefit benefit) {
   patterns.add<ReshapeOpConversion>(typeConverter, target, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, target, benefit);
   patterns.add<SplatOpConversion>(typeConverter, target, benefit);
