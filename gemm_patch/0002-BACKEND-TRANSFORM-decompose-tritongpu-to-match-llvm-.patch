@@ -1,0 +1,556 @@
+From 3af82d325f9e18b34fc86073a5524a729d2905d5 Mon Sep 17 00:00:00 2001
+From: Dewei Wang <dewei.wang@intel.com>
+Date: Sun, 28 Jan 2024 23:41:48 -0800
+Subject: [PATCH] [BACKEND][TRANSFORM] decompose tritongpu to match llvm/spirv
+ target size
+
+---
+ .../Dialect/TritonGPU/Transforms/Passes.h     |   2 +
+ .../Dialect/TritonGPU/Transforms/Passes.td    |  21 ++
+ .../TritonGPU/Transforms/CMakeLists.txt       |   1 +
+ .../TritonGPU/Transforms/MatchTargetSize.cpp  | 210 ++++++++++++++++++
+ test/TritonGPU/match-target-size.mlir         |  64 ++++++
+ test/TritonGPU/match-target-size.output.mlir  | 186 ++++++++++++++++
+ 6 files changed, 484 insertions(+)
+ create mode 100644 lib/Dialect/TritonGPU/Transforms/MatchTargetSize.cpp
+ create mode 100644 test/TritonGPU/match-target-size.mlir
+ create mode 100644 test/TritonGPU/match-target-size.output.mlir
+
+diff --git a/include/triton/Dialect/TritonGPU/Transforms/Passes.h b/include/triton/Dialect/TritonGPU/Transforms/Passes.h
+index 2d745b8d3..129496b67 100644
+--- a/include/triton/Dialect/TritonGPU/Transforms/Passes.h
++++ b/include/triton/Dialect/TritonGPU/Transforms/Passes.h
+@@ -20,6 +20,8 @@ std::unique_ptr<Pass> createTritonGPUCanonicalizeLoopsPass();
+ 
+ std::unique_ptr<Pass> createTritonGPUDistributeToWarpsPass();
+ 
++std::unique_ptr<Pass> createTritonGPUMatchTargetSizePass();
++
+ std::unique_ptr<Pass> createTritonGPUCoalescePass();
+ 
+ std::unique_ptr<Pass> createTritonGPUReorderInstructionsPass();
+diff --git a/include/triton/Dialect/TritonGPU/Transforms/Passes.td b/include/triton/Dialect/TritonGPU/Transforms/Passes.td
+index c552c427e..b2b2fe055 100644
+--- a/include/triton/Dialect/TritonGPU/Transforms/Passes.td
++++ b/include/triton/Dialect/TritonGPU/Transforms/Passes.td
+@@ -64,6 +64,27 @@ def TritonGPUDistributeToWarps : Pass<"tritongpu-distribute-to-warps", "mlir::Mo
+                            "mlir::arith::ArithDialect"];
+ }
+ 
++def TritonGPUMatchTargetSize : Pass<"tritongpu-match-target-size", "mlir::ModuleOp"> {
++  let summary = "match the target size of specific op (dot, load, store)";
++
++  let description = [{
++    this pass should be run after tritongpu-distribute-to-warps
++  }];
++
++  let constructor = "mlir::createTritonGPUMatchTargetSizePass()";
++
++  let dependentDialects = ["mlir::triton::TritonDialect",
++                           "mlir::triton::gpu::TritonGPUDialect"];
++
++  let options = [
++    ListOption<"dotSize", "dot-size",
++           "int64_t", "target LLVM IR dot operation size">
++    // fixme : add operate-size load-size, store-size
++    // load-operate-store-size 256DW which is 16x16xf32, 32x16xf16
++  ];
++}
++
++
+ def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::ModuleOp"> {
+   let summary = "accelerate matmul";
+ 
+diff --git a/lib/Dialect/TritonGPU/Transforms/CMakeLists.txt b/lib/Dialect/TritonGPU/Transforms/CMakeLists.txt
+index d34eb9b56..30416a00e 100644
+--- a/lib/Dialect/TritonGPU/Transforms/CMakeLists.txt
++++ b/lib/Dialect/TritonGPU/Transforms/CMakeLists.txt
+@@ -3,6 +3,7 @@ add_mlir_dialect_library(TritonGPUTransforms
+   Coalesce.cpp
+   DecomposeConversions.cpp
+   DistributeToWarps.cpp
++  MatchTargetSize.cpp
+   OptimizeDotOperands.cpp
+   OptimizeEpilogue.cpp
+   OptimizeThreadLocality.cpp
+diff --git a/lib/Dialect/TritonGPU/Transforms/MatchTargetSize.cpp b/lib/Dialect/TritonGPU/Transforms/MatchTargetSize.cpp
+new file mode 100644
+index 000000000..e7c2f9804
+--- /dev/null
++++ b/lib/Dialect/TritonGPU/Transforms/MatchTargetSize.cpp
+@@ -0,0 +1,210 @@
++#include "mlir/Dialect/Arith/IR/Arith.h"
++#include "mlir/Dialect/SCF/IR/SCF.h"
++#include "mlir/Dialect/Tensor/IR/Tensor.h"
++#include "mlir/IR/TypeUtilities.h"
++#include "mlir/Support/LogicalResult.h"
++#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
++#include "triton/Analysis/Utility.h"
++#include "triton/Dialect/Triton/IR/Dialect.h"
++#include "triton/Dialect/TritonGPU/IR/Dialect.h"
++#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
++#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
++#include "triton/Tools/Sys/GetEnv.hpp"
++#include "llvm/Support/Debug.h"
++#include <memory>
++
++using namespace mlir;
++namespace tt = mlir::triton;
++namespace ttg = mlir::triton::gpu;
++
++#define GEN_PASS_CLASSES
++#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
++
++class TritonGPUMatchTargetSizePass
++    : public TritonGPUMatchTargetSizeBase<TritonGPUMatchTargetSizePass> {
++public:
++  void runOnOperation() override {
++    ModuleOp m = getOperation();
++    /// preprocess: remove all the encoding attr
++    m.walk<WalkOrder::PreOrder>([&](Operation *op) {
++      if (!llvm::any_of(op->getResultTypes(), [&](Type type) {
++            if (isa<RankedTensorType>(type)) {
++              return true;
++            } else if (auto ptrType = dyn_cast<tt::PointerType>(type)) {
++              auto pointeeType = ptrType.getPointeeType();
++              return isa<RankedTensorType>(pointeeType) ? true : false;
++            } else {
++              return false;
++            }
++          }))
++        ;
++      else if (auto forOp = dyn_cast<scf::ForOp>(op))
++        transformScfForOp(forOp);
++      else if (auto cstOp = dyn_cast<arith::ConstantOp>(op))
++        transformArithConstantOp(cstOp);
++      else
++        transformGenericOp(op);
++      return WalkResult::advance();
++    });
++
++    m.dump();
++
++    /// transform op to match target llvm/spirv size
++    // for dot split k, n to make the inner register contiguous
++    for (auto func : m.getOps<tt::FuncOp>()) {
++      // fixme: handle load/store later
++      func.walk([&](tt::DotOp dot) { splitDotOp(dot); });
++    }
++  }
++
++private:
++  Type convertType(Type type) {
++    if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
++      if (tensorType.getEncoding())
++        return RankedTensorType::get(tensorType.getShape(),
++                                     tensorType.getElementType());
++
++    } else if (auto ptrType = dyn_cast<tt::PointerType>(type)) {
++      auto newType = convertType(ptrType.getPointeeType());
++      auto newPtrType =
++          tt::PointerType::get(newType, ptrType.getAddressSpace());
++      return newPtrType;
++    }
++    return type;
++  }
++  void transformScfForOp(scf::ForOp op) {
++    auto body = op.getBody();
++    for (auto [lhs, rhs] :
++         llvm::zip(body->getArguments().drop_front(1), op.getInitArgs()))
++      lhs.setType(rhs.getType());
++    for (auto result : op->getResults()) {
++      result.setType(convertType(result.getType()));
++    }
++    return;
++  }
++  void transformArithConstantOp(arith::ConstantOp op) {
++    auto newType = convertType(op.getType());
++    auto value = cast<DenseElementsAttr>(op.getValue());
++    value = value.resizeSplat(newType.cast<ShapedType>());
++    OpBuilder b(op);
++    auto newOp = b.create<arith::ConstantOp>(op.getLoc(), newType, value);
++    op->replaceAllUsesWith(newOp->getResults());
++    op->erase();
++    return;
++  }
++  void transformGenericOp(Operation *op) {
++    for (auto result : op->getResults()) {
++      result.setType(convertType(result.getType()));
++    }
++    // updateRootInplace
++    return;
++  }
++  Operation *getDefiningOp(Value val) {
++    if (auto op = val.getDefiningOp()) {
++      return op;
++    } else if (auto arg = dyn_cast<BlockArgument>(val)) {
++      auto ownerOp = arg.getOwner()->getParentOp();
++      // support scf ForOp for now
++      auto forOp = cast<scf::ForOp>(ownerOp);
++      auto init = forOp.getInits()[arg.getArgNumber() - 1];
++      return getDefiningOp(init);
++    } else {
++      assert(0 && "add more support");
++      return nullptr;
++    }
++  }
++  void splitDotOp(tt::DotOp dot) {
++    assert(dotSize.size() == 3 && "target-size should have m, n ,k");
++    auto aType = dot.getA().getType().cast<RankedTensorType>();
++    auto bType = dot.getB().getType().cast<RankedTensorType>();
++    auto cType = dot.getC().getType().cast<RankedTensorType>();
++    auto aShape = aType.getShape();
++    auto bShape = bType.getShape();
++    auto cShape = cType.getShape();
++    auto m = aShape[0];
++    auto n = bShape[1];
++    auto k = aShape[1];
++    auto mStep = dotSize[0];
++    auto nStep = dotSize[1];
++    auto kStep = dotSize[2];
++    OpBuilder b(dot);
++    auto loc = dot.getLoc();
++    auto packValues = [&](ArrayRef<int64_t> values) {
++      SmallVector<OpFoldResult> newValues = llvm::to_vector<4>(
++          llvm::map_range(values, [&](int64_t v) -> OpFoldResult {
++            return b.getI64IntegerAttr(v);
++          }));
++      return newValues;
++    };
++    auto getSubC = [&](int mm, int nn) -> Value {
++      auto defOp = getDefiningOp(dot.getC());
++      if (auto cst = dyn_cast<arith::ConstantOp>(defOp)) {
++        auto subType =
++            RankedTensorType::get({mStep, nStep}, cType.getElementType());
++        auto val = cast<DenseElementsAttr>(cst.getValue());
++        val = val.resizeSplat(subType);
++        auto subCst = b.create<arith::ConstantOp>(loc, subType, val);
++        return subCst;
++      } else {
++        auto subC = b.create<tensor::ExtractSliceOp>(
++            loc, dot.getC(), packValues({mm, nn}), packValues({mStep, nStep}),
++            packValues({1, 1}));
++        return subC;
++      }
++    };
++    Value newC = b.create<tensor::EmptyOp>(loc, ArrayRef({m, n}),
++                                           cType.getElementType());
++
++    // n first, so that we can use larger store
++    for (auto nn = 0; nn < n; nn += nStep) {
++      for (auto mm = 0; mm < m; mm += mStep) {
++        Value subC = getSubC(mm, nn);
++        for (auto kk = 0; kk < k; kk += kStep) {
++          // decide get {mm,kk} from which load slice
++          // which is mm/mLoad, kk/kStep
++          auto subA = b.create<tensor::ExtractSliceOp>(
++              loc, dot.getA(), packValues({mm, kk}), packValues({mStep, kStep}),
++              packValues({1, 1}));
++          auto subB = b.create<tensor::ExtractSliceOp>(
++              loc, dot.getA(), packValues({kk, nn}), packValues({kStep, nStep}),
++              packValues({1, 1}));
++          subC =
++              b.create<tt::DotOp>(loc, subA, subB, subC, dot.getAllowTF32Attr(),
++                                  dot.getMaxNumImpreciseAccAttr());
++          subA.dump();
++          subB.dump();
++          subC.dump();
++        }
++        newC = b.create<tensor::InsertSliceOp>(
++            loc, subC, newC, packValues({mm, nn}), packValues({mStep, nStep}),
++            packValues({1, 1}));
++        newC.dump();
++      }
++    }
++    dot->replaceAllUsesWith(newC.getDefiningOp());
++    dot->erase();
++  }
++};
++
++std::unique_ptr<Pass> mlir::createTritonGPUMatchTargetSizePass() {
++  return std::make_unique<TritonGPUMatchTargetSizePass>();
++}
++
++// for kk -> k kStep
++// for mm -> m  mLoadStep
++//    loadA.push_back()
++
++// for nn -> n nStep
++// for kk -> k kLoadStep
++//    loadB.push_back()
++
++// for nn -> n nStep
++// for mm -> m mStep
++//   subC
++//   for kk -> k kStep
++//     subA = extract_from loadA[(kk/kStep) *(m/mLoadStep) + (mm/mLoadStep)],
++//     slice_offset = [mm, 0]
++//     subB = extract_from loadB[(nn/nStep) *(k/kLoadStep) + (kk/kLoadStep)],
++//     slice_offset = [kk, 0]
++//     subC = subA * subB + subC
++//   if kk == kLoadStep - kStep
+diff --git a/test/TritonGPU/match-target-size.mlir b/test/TritonGPU/match-target-size.mlir
+new file mode 100644
+index 000000000..709154e63
+--- /dev/null
++++ b/test/TritonGPU/match-target-size.mlir
+@@ -0,0 +1,64 @@
++#warp = #triton_gpu.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
++#dot0_ = #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>
++#dot1_ = #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>
++module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
++  tt.func public @matmul_kernel_with_block_pointers_without_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
++    %c64_i32 = arith.constant 64 : i32
++    %c4_i32 = arith.constant 4 : i32
++    %c0_i32 = arith.constant 0 : i32
++    %c32_i32 = arith.constant 32 : i32
++    %c127_i32 = arith.constant 127 : i32
++    %c1_i64 = arith.constant 1 : i64
++    %c128_i32 = arith.constant 128 : i32
++    %c8_i32 = arith.constant 8 : i32
++    %cst = arith.constant dense<0.000000e+00> : tensor<32x64xf32, #warp>
++    %0 = gpu.subgroup_id : index
++    %1 = arith.index_cast %0 : index to i32
++    %2 = tt.get_program_id x : i32
++    %3 = arith.addi %arg3, %c127_i32 : i32
++    %4 = arith.divsi %3, %c128_i32 : i32
++    %5 = arith.addi %arg4, %c127_i32 : i32
++    %6 = arith.divsi %5, %c128_i32 : i32
++    %7 = arith.muli %6, %c8_i32 : i32
++    %8 = arith.divsi %2, %7 : i32
++    %9 = arith.muli %8, %c8_i32 : i32
++    %10 = arith.subi %4, %9 : i32
++    %11 = arith.minsi %10, %c8_i32 : i32
++    %12 = arith.remsi %2, %11 : i32
++    %13 = arith.addi %9, %12 : i32
++    %14 = arith.remsi %2, %7 : i32
++    %15 = arith.divsi %14, %11 : i32
++    %16 = arith.muli %13, %c128_i32 : i32
++    %17 = arith.extsi %arg3 : i32 to i64
++    %18 = arith.extsi %arg5 : i32 to i64
++    %19 = arith.extsi %arg6 : i32 to i64
++    %20 = arith.divsi %1, %c4_i32 : i32
++    %21 = arith.remsi %20, %c8_i32 : i32
++    %22 = arith.muli %21, %c32_i32 : i32
++    %23 = arith.addi %22, %16 : i32
++    %24 = tt.make_tensor_ptr %arg0, [%17, %18], [%19, %c1_i64], [%23, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dot0_>, 1>
++    %25 = arith.muli %15, %c128_i32 : i32
++    %26 = arith.extsi %arg4 : i32 to i64
++    %27 = arith.extsi %arg7 : i32 to i64
++    %28 = arith.remsi %1, %c4_i32 : i32
++    %29 = arith.remsi %28, %c4_i32 : i32
++    %30 = arith.muli %29, %c64_i32 : i32
++    %31 = arith.addi %30, %25 : i32
++    %32 = tt.make_tensor_ptr %arg1, [%18, %26], [%27, %c1_i64], [%c0_i32, %31] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot1_>, 1>
++    %33:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %24, %arg12 = %32) -> (tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #dot0_>, 1>, !tt.ptr<tensor<32x64xf16, #dot1_>, 1>)  : i32 {
++      %37 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16, #dot0_>, 1> -> tensor<32x32xf16, #dot0_>
++      %38 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x64xf16, #dot1_>, 1> -> tensor<32x64xf16, #dot1_>
++      %39 = tt.dot %37, %38, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<32x32xf16, #dot0_> * tensor<32x64xf16, #dot1_> -> tensor<32x64xf32, #warp>
++      %40 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<32x32xf16, #dot0_>, 1>
++      %41 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x64xf16, #dot1_>, 1>
++      scf.yield %39, %40, %41 : tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #dot0_>, 1>, !tt.ptr<tensor<32x64xf16, #dot1_>, 1>
++    }
++    %34 = arith.truncf %33#0 : tensor<32x64xf32, #warp> to tensor<32x64xf16, #warp>
++    %35 = arith.extsi %arg8 : i32 to i64
++    %36 = tt.make_tensor_ptr %arg2, [%17, %26], [%35, %c1_i64], [%23, %31] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #warp>, 1>
++    tt.store %36, %34 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<32x64xf16, #warp>, 1>, tensor<32x64xf16, #warp>
++    tt.return
++  }
++}
++
++
+diff --git a/test/TritonGPU/match-target-size.output.mlir b/test/TritonGPU/match-target-size.output.mlir
+new file mode 100644
+index 000000000..390c6c7d1
+--- /dev/null
++++ b/test/TritonGPU/match-target-size.output.mlir
+@@ -0,0 +1,186 @@
++module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
++  tt.func public @matmul_kernel_with_block_pointers_without_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
++    %c16_i32 = arith.constant 16 : i32
++    %c48_i32 = arith.constant 48 : i32
++    %c64_i32 = arith.constant 64 : i32
++    %c4_i32 = arith.constant 4 : i32
++    %c0_i32 = arith.constant 0 : i32
++    %c32_i32 = arith.constant 32 : i32
++    %c127_i32 = arith.constant 127 : i32
++    %c1_i64 = arith.constant 1 : i64
++    %c128_i32 = arith.constant 128 : i32
++    %c8_i32 = arith.constant 8 : i32
++    %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
++    %0 = gpu.subgroup_id : index
++    %1 = arith.index_cast %0 : index to i32
++    %2 = tt.get_program_id x : i32
++    %3 = arith.addi %arg3, %c127_i32 : i32
++    %4 = arith.divsi %3, %c128_i32 : i32
++    %5 = arith.addi %arg4, %c127_i32 : i32
++    %6 = arith.divsi %5, %c128_i32 : i32
++    %7 = arith.muli %6, %c8_i32 : i32
++    %8 = arith.divsi %2, %7 : i32
++    %9 = arith.muli %8, %c8_i32 : i32
++    %10 = arith.subi %4, %9 : i32
++    %11 = arith.minsi %10, %c8_i32 : i32
++    %12 = arith.remsi %2, %11 : i32
++    %13 = arith.addi %9, %12 : i32
++    %14 = arith.remsi %2, %7 : i32
++    %15 = arith.divsi %14, %11 : i32
++    %16 = arith.muli %13, %c128_i32 : i32
++    %17 = arith.extsi %arg3 : i32 to i64
++    %18 = arith.extsi %arg5 : i32 to i64
++    %19 = arith.extsi %arg6 : i32 to i64
++    %20 = arith.muli %1, %c8_i32 : i32
++    %21 = arith.addi %20, %16 : i32
++    %26 = arith.divsi %1, %c4_i32 : i32
++    %27 = arith.remsi %26, %c8_i32 : i32
++    %28 = arith.muli %27, %c32_i32 : i32
++    %29 = arith.addi %28, %16 : i32
++    %30 = tt.make_tensor_ptr %arg0, [%17, %18], [%19, %c1_i64], [%29, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x16xf16>, 1>
++    %31 = tt.make_tensor_ptr %arg0, [%17, %18], [%19, %c1_i64], [%29, %c16_i32] {order = array<i32: 1, 0>} : <tensor<32x16xf16>, 1>
++    %32 = arith.muli %15, %c128_i32 : i32
++    %33 = arith.extsi %arg4 : i32 to i64
++    %34 = arith.extsi %arg7 : i32 to i64
++    %35 = arith.divsi %1, %c8_i32 : i32
++    %36 = arith.remsi %35, %c4_i32 : i32
++    %37 = arith.muli %36, %c8_i32 : i32
++    %38 = arith.remsi %1, %c8_i32 : i32
++    %39 = arith.remsi %38, %c8_i32 : i32
++    %40 = arith.muli %39, %c32_i32 : i32
++    %41 = arith.addi %40, %32 : i32
++    %46 = arith.remsi %1, %c4_i32 : i32
++    %47 = arith.remsi %46, %c4_i32 : i32
++    %48 = arith.muli %47, %c64_i32 : i32
++    %49 = arith.addi %48, %32 : i32
++    %50 = tt.make_tensor_ptr %arg1, [%18, %33], [%34, %c1_i64], [%c0_i32, %49] {order = array<i32: 1, 0>} : <tensor<32x16xf16>, 1>
++    %51 = arith.addi %49, %c16_i32 : i32
++    %52 = tt.make_tensor_ptr %arg1, [%18, %33], [%34, %c1_i64], [%c0_i32, %51] {order = array<i32: 1, 0>} : <tensor<32x16xf16>, 1>
++    %53 = arith.addi %49, %c32_i32 : i32
++    %54 = tt.make_tensor_ptr %arg1, [%18, %33], [%34, %c1_i64], [%c0_i32, %53] {order = array<i32: 1, 0>} : <tensor<32x16xf16>, 1>
++    %55 = arith.addi %49, %c48_i32 : i32
++    %56 = tt.make_tensor_ptr %arg1, [%18, %33], [%34, %c1_i64], [%c0_i32, %55] {order = array<i32: 1, 0>} : <tensor<32x16xf16>, 1>
++    %57:16 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %cst, %arg12 = %cst, %arg13 = %cst, %arg14 = %cst, %arg15 = %cst, %arg16 = %cst, %arg17 = %cst, %arg18 = %30, %arg19 = %31, %arg20 = %50, %arg21 = %52, %arg22 = %54, %arg23 = %56) -> (tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, !tt.ptr<tensor<32x16xf16>, 1>, !tt.ptr<tensor<32x16xf16>, 1>, !tt.ptr<tensor<32x16xf16>, 1>, !tt.ptr<tensor<32x16xf16>, 1>, !tt.ptr<tensor<32x16xf16>, 1>, !tt.ptr<tensor<32x16xf16>, 1>)  : i32 {
++      %76 = tt.load %arg18 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x16xf16>, 1> -> tensor<32x16xf16>
++      %77 = tt.load %arg19 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x16xf16>, 1> -> tensor<32x16xf16>
++      %78 = tt.load %arg20 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x16xf16>, 1> -> tensor<32x16xf16>
++      %79 = tt.load %arg21 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x16xf16>, 1> -> tensor<32x16xf16>
++      %80 = tt.load %arg22 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x16xf16>, 1> -> tensor<32x16xf16>
++      %81 = tt.load %arg23 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x16xf16>, 1> -> tensor<32x16xf16>
++      %extracted_slice = tensor.extract_slice %arg10[0, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %extracted_slice_0 = tensor.extract_slice %76[0, 0] [8, 16] [1, 1] : tensor<32x16xf16> to tensor<8x16xf16>
++      %extracted_slice_1 = tensor.extract_slice %78[0, 0] [16, 16] [1, 1] : tensor<32x16xf16> to tensor<16x16xf16>
++      %82 = tt.dot %extracted_slice_0, %extracted_slice_1, %extracted_slice {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_2 = tensor.extract_slice %77[0, 0] [8, 16] [1, 1] : tensor<32x16xf16> to tensor<8x16xf16>
++      %extracted_slice_3 = tensor.extract_slice %78[16, 0] [16, 16] [1, 1] : tensor<32x16xf16> to tensor<16x16xf16>
++      %83 = tt.dot %extracted_slice_2, %extracted_slice_3, %82 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_4 = tensor.extract_slice %arg10[8, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %extracted_slice_5 = tensor.extract_slice %76[8, 0] [8, 16] [1, 1] : tensor<32x16xf16> to tensor<8x16xf16>
++      %84 = tt.dot %extracted_slice_5, %extracted_slice_1, %extracted_slice_4 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_6 = tensor.extract_slice %77[8, 0] [8, 16] [1, 1] : tensor<32x16xf16> to tensor<8x16xf16>
++      %85 = tt.dot %extracted_slice_6, %extracted_slice_3, %84 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %86 = tensor.empty() : tensor<16x16xf32>
++      %inserted_slice = tensor.insert_slice %83 into %86[0, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %inserted_slice_7 = tensor.insert_slice %85 into %inserted_slice[8, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %extracted_slice_8 = tensor.extract_slice %arg11[0, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %extracted_slice_9 = tensor.extract_slice %76[16, 0] [8, 16] [1, 1] : tensor<32x16xf16> to tensor<8x16xf16>
++      %87 = tt.dot %extracted_slice_9, %extracted_slice_1, %extracted_slice_8 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_10 = tensor.extract_slice %77[16, 0] [8, 16] [1, 1] : tensor<32x16xf16> to tensor<8x16xf16>
++      %88 = tt.dot %extracted_slice_10, %extracted_slice_3, %87 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_11 = tensor.extract_slice %arg11[8, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %extracted_slice_12 = tensor.extract_slice %76[24, 0] [8, 16] [1, 1] : tensor<32x16xf16> to tensor<8x16xf16>
++      %89 = tt.dot %extracted_slice_12, %extracted_slice_1, %extracted_slice_11 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_13 = tensor.extract_slice %77[24, 0] [8, 16] [1, 1] : tensor<32x16xf16> to tensor<8x16xf16>
++      %90 = tt.dot %extracted_slice_13, %extracted_slice_3, %89 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %inserted_slice_14 = tensor.insert_slice %88 into %86[0, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %inserted_slice_15 = tensor.insert_slice %90 into %inserted_slice_14[8, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %extracted_slice_16 = tensor.extract_slice %arg12[0, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %extracted_slice_17 = tensor.extract_slice %79[0, 0] [16, 16] [1, 1] : tensor<32x16xf16> to tensor<16x16xf16>
++      %91 = tt.dot %extracted_slice_0, %extracted_slice_17, %extracted_slice_16 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_18 = tensor.extract_slice %79[16, 0] [16, 16] [1, 1] : tensor<32x16xf16> to tensor<16x16xf16>
++      %92 = tt.dot %extracted_slice_2, %extracted_slice_18, %91 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_19 = tensor.extract_slice %arg12[8, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %93 = tt.dot %extracted_slice_5, %extracted_slice_17, %extracted_slice_19 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %94 = tt.dot %extracted_slice_6, %extracted_slice_18, %93 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %inserted_slice_20 = tensor.insert_slice %92 into %86[0, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %inserted_slice_21 = tensor.insert_slice %94 into %inserted_slice_20[8, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %extracted_slice_22 = tensor.extract_slice %arg13[0, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %95 = tt.dot %extracted_slice_9, %extracted_slice_17, %extracted_slice_22 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %96 = tt.dot %extracted_slice_10, %extracted_slice_18, %95 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_23 = tensor.extract_slice %arg13[8, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %97 = tt.dot %extracted_slice_12, %extracted_slice_17, %extracted_slice_23 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %98 = tt.dot %extracted_slice_13, %extracted_slice_18, %97 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %inserted_slice_24 = tensor.insert_slice %96 into %86[0, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %inserted_slice_25 = tensor.insert_slice %98 into %inserted_slice_24[8, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %extracted_slice_26 = tensor.extract_slice %arg14[0, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %extracted_slice_27 = tensor.extract_slice %80[0, 0] [16, 16] [1, 1] : tensor<32x16xf16> to tensor<16x16xf16>
++      %99 = tt.dot %extracted_slice_0, %extracted_slice_27, %extracted_slice_26 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_28 = tensor.extract_slice %80[16, 0] [16, 16] [1, 1] : tensor<32x16xf16> to tensor<16x16xf16>
++      %100 = tt.dot %extracted_slice_2, %extracted_slice_28, %99 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_29 = tensor.extract_slice %arg14[8, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %101 = tt.dot %extracted_slice_5, %extracted_slice_27, %extracted_slice_29 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %102 = tt.dot %extracted_slice_6, %extracted_slice_28, %101 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %inserted_slice_30 = tensor.insert_slice %100 into %86[0, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %inserted_slice_31 = tensor.insert_slice %102 into %inserted_slice_30[8, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %extracted_slice_32 = tensor.extract_slice %arg15[0, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %103 = tt.dot %extracted_slice_9, %extracted_slice_27, %extracted_slice_32 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %104 = tt.dot %extracted_slice_10, %extracted_slice_28, %103 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_33 = tensor.extract_slice %arg15[8, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %105 = tt.dot %extracted_slice_12, %extracted_slice_27, %extracted_slice_33 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %106 = tt.dot %extracted_slice_13, %extracted_slice_28, %105 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %inserted_slice_34 = tensor.insert_slice %104 into %86[0, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %inserted_slice_35 = tensor.insert_slice %106 into %inserted_slice_34[8, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %extracted_slice_36 = tensor.extract_slice %arg16[0, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %extracted_slice_37 = tensor.extract_slice %81[0, 0] [16, 16] [1, 1] : tensor<32x16xf16> to tensor<16x16xf16>
++      %107 = tt.dot %extracted_slice_0, %extracted_slice_37, %extracted_slice_36 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_38 = tensor.extract_slice %81[16, 0] [16, 16] [1, 1] : tensor<32x16xf16> to tensor<16x16xf16>
++      %108 = tt.dot %extracted_slice_2, %extracted_slice_38, %107 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_39 = tensor.extract_slice %arg16[8, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %109 = tt.dot %extracted_slice_5, %extracted_slice_37, %extracted_slice_39 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %110 = tt.dot %extracted_slice_6, %extracted_slice_38, %109 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %inserted_slice_40 = tensor.insert_slice %108 into %86[0, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %inserted_slice_41 = tensor.insert_slice %110 into %inserted_slice_40[8, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %extracted_slice_42 = tensor.extract_slice %arg17[0, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %111 = tt.dot %extracted_slice_9, %extracted_slice_37, %extracted_slice_42 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %112 = tt.dot %extracted_slice_10, %extracted_slice_38, %111 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %extracted_slice_43 = tensor.extract_slice %arg17[8, 0] [8, 16] [1, 1] : tensor<16x16xf32> to tensor<8x16xf32>
++      %113 = tt.dot %extracted_slice_12, %extracted_slice_37, %extracted_slice_43 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %114 = tt.dot %extracted_slice_13, %extracted_slice_38, %113 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
++      %inserted_slice_44 = tensor.insert_slice %112 into %86[0, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %inserted_slice_45 = tensor.insert_slice %114 into %inserted_slice_44[8, 0] [8, 16] [1, 1] : tensor<8x16xf32> into tensor<16x16xf32>
++      %116 = tt.advance %arg18, [%c0_i32, %c32_i32] : <tensor<32x16xf16>, 1>
++      %117 = tt.advance %arg19, [%c0_i32, %c32_i32] : <tensor<32x16xf16>, 1>
++      %119 = tt.advance %arg20, [%c32_i32, %c0_i32] : <tensor<32x16xf16>, 1>
++      %120 = tt.advance %arg21, [%c32_i32, %c0_i32] : <tensor<32x16xf16>, 1>
++      %121 = tt.advance %arg22, [%c32_i32, %c0_i32] : <tensor<32x16xf16>, 1>
++      %122 = tt.advance %arg23, [%c32_i32, %c0_i32] : <tensor<32x16xf16>, 1>
++      scf.yield %inserted_slice_7, %inserted_slice_15, %inserted_slice_21, %inserted_slice_25, %inserted_slice_31, %inserted_slice_35, %inserted_slice_41, %inserted_slice_45, %116, %117, %119, %120, %121, %122, %115, %118 : tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, tensor<16x16xf32>, !tt.ptr<tensor<32x16xf16>, 1>, !tt.ptr<tensor<32x16xf16>, 1>, !tt.ptr<tensor<32x16xf16>, 1>, !tt.ptr<tensor<32x16xf16>, 1>, !tt.ptr<tensor<32x16xf16>, 1>, !tt.ptr<tensor<32x16xf16>, 1>}
++    %58 = arith.truncf %57#0 : tensor<16x16xf32> to tensor<16x16xf16>
++    %59 = arith.truncf %57#1 : tensor<16x16xf32> to tensor<16x16xf16>
++    %60 = arith.truncf %57#2 : tensor<16x16xf32> to tensor<16x16xf16>
++    %61 = arith.truncf %57#3 : tensor<16x16xf32> to tensor<16x16xf16>
++    %62 = arith.truncf %57#4 : tensor<16x16xf32> to tensor<16x16xf16>
++    %63 = arith.truncf %57#5 : tensor<16x16xf32> to tensor<16x16xf16>
++    %64 = arith.truncf %57#6 : tensor<16x16xf32> to tensor<16x16xf16>
++    %65 = arith.truncf %57#7 : tensor<16x16xf32> to tensor<16x16xf16>
++    %66 = arith.extsi %arg8 : i32 to i64
++    %67 = tt.make_tensor_ptr %arg2, [%17, %33], [%66, %c1_i64], [%29, %49] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %68 = arith.addi %29, %c16_i32 : i32
++    %69 = tt.make_tensor_ptr %arg2, [%17, %33], [%66, %c1_i64], [%68, %49] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %70 = tt.make_tensor_ptr %arg2, [%17, %33], [%66, %c1_i64], [%29, %51] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %71 = tt.make_tensor_ptr %arg2, [%17, %33], [%66, %c1_i64], [%68, %51] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %72 = tt.make_tensor_ptr %arg2, [%17, %33], [%66, %c1_i64], [%29, %53] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %73 = tt.make_tensor_ptr %arg2, [%17, %33], [%66, %c1_i64], [%68, %53] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %74 = tt.make_tensor_ptr %arg2, [%17, %33], [%66, %c1_i64], [%29, %55] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    %75 = tt.make_tensor_ptr %arg2, [%17, %33], [%66, %c1_i64], [%68, %55] {order = array<i32: 1, 0>} : <tensor<16x16xf16>, 1>
++    tt.store %67, %58 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>, 1>, tensor<16x16xf16>
++    tt.store %69, %59 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>, 1>, tensor<16x16xf16>
++    tt.store %70, %60 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>, 1>, tensor<16x16xf16>
++    tt.store %71, %61 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>, 1>, tensor<16x16xf16>
++    tt.store %72, %62 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>, 1>, tensor<16x16xf16>
++    tt.store %73, %63 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>, 1>, tensor<16x16xf16>
++    tt.store %74, %64 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>, 1>, tensor<16x16xf16>
++    tt.store %75, %65 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>, 1>, tensor<16x16xf16>
++    tt.return
++  }
++}
+-- 
+2.34.1
+
