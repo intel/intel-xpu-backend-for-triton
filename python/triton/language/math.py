@@ -1,14 +1,14 @@
 from . import core
 
 
-def is_spirv():
-    import torch
-    return torch.xpu.is_available()
+def is_xpu():
+    import triton
+    return triton.runtime.driver.active.get_current_target()[0] == "xpu"
 
 
 @core.extern
 def clz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("int32"), ): ("__imf_clz", core.dtype("int32")),
@@ -24,7 +24,7 @@ def clz(arg0, _builder=None):
 
 @core.extern
 def popc(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("int32"), ): ("__imf_popc", core.dtype("int32")),
@@ -40,7 +40,7 @@ def popc(arg0, _builder=None):
 
 @core.extern
 def byte_perm(arg0, arg1, arg2, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0, arg1, arg2], {
             (core.dtype("int32"), core.dtype("int32"), core.dtype("int32")): ("__imf_byte_perm", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -98,7 +98,7 @@ def max(arg0, arg1, propagate_nan: core.constexpr = core.PropagateNan.NONE, _bui
 
 @core.extern
 def mulhi(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("int32"), core.dtype("int32")): ("__imf_mulhi", core.dtype("int32")),
@@ -118,7 +118,7 @@ def mulhi(arg0, arg1, _builder=None):
 
 @core.extern
 def mul24(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("int32"), core.dtype("int32")): ("__imf_mul24", core.dtype("int32")),
@@ -134,7 +134,7 @@ def mul24(arg0, arg1, _builder=None):
 
 @core.extern
 def brev(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("int32"), ): ("__imf_brev", core.dtype("int32")),
@@ -151,7 +151,7 @@ def brev(arg0, _builder=None):
 
 @core.extern
 def sad(arg0, arg1, arg2, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1, arg2], {
                 (core.dtype("int32"), core.dtype("int32"), core.dtype("uint32")): ("__imf_sad", core.dtype("int32")),
@@ -168,7 +168,7 @@ def sad(arg0, arg1, arg2, _builder=None):
 
 @core.extern
 def abs(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("int32"), ): ("__imf_abs", core.dtype("int32")),
@@ -188,7 +188,7 @@ def abs(arg0, _builder=None):
 
 @core.extern
 def floor(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_floorf", core.dtype("fp32")),
@@ -211,7 +211,7 @@ def rcp64h(arg0, _builder=None):
 
 @core.extern
 def rsqrt(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_rsqrtf", core.dtype("fp32")),
@@ -227,7 +227,7 @@ def rsqrt(arg0, _builder=None):
 
 @core.extern
 def ceil(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp64"), ): ("__imf_ceil", core.dtype("fp64")),
@@ -244,7 +244,7 @@ def ceil(arg0, _builder=None):
 
 @core.extern
 def trunc(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp64"), ): ("__imf_trunc", core.dtype("fp64")),
@@ -260,7 +260,7 @@ def trunc(arg0, _builder=None):
 
 @core.extern
 def exp2(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_exp2f", core.dtype("fp32")),
@@ -276,7 +276,7 @@ def exp2(arg0, _builder=None):
 
 @core.extern
 def saturatef(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_saturatef", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -439,7 +439,7 @@ def sqrt_ru(arg0, _builder=None):
 
 @core.extern
 def sqrt(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_sqrtf", core.dtype("fp32")),
@@ -536,7 +536,7 @@ def mul_ru(arg0, arg1, _builder=None):
 
 @core.extern
 def double2float_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2float_rn", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -548,7 +548,7 @@ def double2float_rn(arg0, _builder=None):
 
 @core.extern
 def double2float_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2float_rz", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -560,7 +560,7 @@ def double2float_rz(arg0, _builder=None):
 
 @core.extern
 def double2float_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2float_rd", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -572,7 +572,7 @@ def double2float_rd(arg0, _builder=None):
 
 @core.extern
 def double2float_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2float_ru", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -584,7 +584,7 @@ def double2float_ru(arg0, _builder=None):
 
 @core.extern
 def double2int_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2int_rn", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -596,7 +596,7 @@ def double2int_rn(arg0, _builder=None):
 
 @core.extern
 def double2int_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2int_rz", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -608,7 +608,7 @@ def double2int_rz(arg0, _builder=None):
 
 @core.extern
 def double2int_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2int_rd", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -620,7 +620,7 @@ def double2int_rd(arg0, _builder=None):
 
 @core.extern
 def double2int_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2int_ru", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -632,7 +632,7 @@ def double2int_ru(arg0, _builder=None):
 
 @core.extern
 def double2uint_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2uint_rn", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -644,7 +644,7 @@ def double2uint_rn(arg0, _builder=None):
 
 @core.extern
 def double2uint_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2uint_rz", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -656,7 +656,7 @@ def double2uint_rz(arg0, _builder=None):
 
 @core.extern
 def double2uint_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2uint_rd", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -668,7 +668,7 @@ def double2uint_rd(arg0, _builder=None):
 
 @core.extern
 def double2uint_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2uint_ru", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -680,7 +680,7 @@ def double2uint_ru(arg0, _builder=None):
 
 @core.extern
 def int2double_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int32"), ): ("__imf_int2double_rn", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -692,7 +692,7 @@ def int2double_rn(arg0, _builder=None):
 
 @core.extern
 def uint2double_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint32"), ): ("__imf_uint2double_rn", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -704,7 +704,7 @@ def uint2double_rn(arg0, _builder=None):
 
 @core.extern
 def float2int_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2int_rn", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -716,7 +716,7 @@ def float2int_rn(arg0, _builder=None):
 
 @core.extern
 def float2int_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2int_rz", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -728,7 +728,7 @@ def float2int_rz(arg0, _builder=None):
 
 @core.extern
 def float2int_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2int_rd", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -740,7 +740,7 @@ def float2int_rd(arg0, _builder=None):
 
 @core.extern
 def float2int_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2int_ru", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -752,7 +752,7 @@ def float2int_ru(arg0, _builder=None):
 
 @core.extern
 def float2uint_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2uint_rn", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -764,7 +764,7 @@ def float2uint_rn(arg0, _builder=None):
 
 @core.extern
 def float2uint_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2uint_rz", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -776,7 +776,7 @@ def float2uint_rz(arg0, _builder=None):
 
 @core.extern
 def float2uint_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2uint_rd", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -788,7 +788,7 @@ def float2uint_rd(arg0, _builder=None):
 
 @core.extern
 def float2uint_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2uint_ru", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -800,7 +800,7 @@ def float2uint_ru(arg0, _builder=None):
 
 @core.extern
 def int2float_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int32"), ): ("__imf_int2float_rn", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -812,7 +812,7 @@ def int2float_rn(arg0, _builder=None):
 
 @core.extern
 def int2float_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int32"), ): ("__imf_int2float_rz", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -824,7 +824,7 @@ def int2float_rz(arg0, _builder=None):
 
 @core.extern
 def int2float_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int32"), ): ("__imf_int2float_rd", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -836,7 +836,7 @@ def int2float_rd(arg0, _builder=None):
 
 @core.extern
 def int2float_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int32"), ): ("__imf_int2float_ru", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -848,7 +848,7 @@ def int2float_ru(arg0, _builder=None):
 
 @core.extern
 def uint2float_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint32"), ): ("__imf_uint2float_rn", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -860,7 +860,7 @@ def uint2float_rn(arg0, _builder=None):
 
 @core.extern
 def uint2float_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint32"), ): ("__imf_uint2float_rz", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -872,7 +872,7 @@ def uint2float_rz(arg0, _builder=None):
 
 @core.extern
 def uint2float_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint32"), ): ("__imf_uint2float_rd", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -884,7 +884,7 @@ def uint2float_rd(arg0, _builder=None):
 
 @core.extern
 def uint2float_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint32"), ): ("__imf_uint2float_ru", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -896,7 +896,7 @@ def uint2float_ru(arg0, _builder=None):
 
 @core.extern
 def hiloint2double(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0, arg1], {
             (core.dtype("int32"), core.dtype("int32")): ("__imf_hiloint2double", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -908,7 +908,7 @@ def hiloint2double(arg0, arg1, _builder=None):
 
 @core.extern
 def double2loint(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2loint", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -920,7 +920,7 @@ def double2loint(arg0, _builder=None):
 
 @core.extern
 def double2hiint(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2hiint", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -932,7 +932,7 @@ def double2hiint(arg0, _builder=None):
 
 @core.extern
 def float2ll_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2ll_rn", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -944,7 +944,7 @@ def float2ll_rn(arg0, _builder=None):
 
 @core.extern
 def float2ll_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2ll_rz", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -956,7 +956,7 @@ def float2ll_rz(arg0, _builder=None):
 
 @core.extern
 def float2ll_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2ll_rd", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -968,7 +968,7 @@ def float2ll_rd(arg0, _builder=None):
 
 @core.extern
 def float2ll_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2ll_ru", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -980,7 +980,7 @@ def float2ll_ru(arg0, _builder=None):
 
 @core.extern
 def float2ull_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2ull_rn", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -992,7 +992,7 @@ def float2ull_rn(arg0, _builder=None):
 
 @core.extern
 def float2ull_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2ull_rz", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1004,7 +1004,7 @@ def float2ull_rz(arg0, _builder=None):
 
 @core.extern
 def float2ull_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2ull_rd", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1016,7 +1016,7 @@ def float2ull_rd(arg0, _builder=None):
 
 @core.extern
 def float2ull_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float2ull_ru", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1028,7 +1028,7 @@ def float2ull_ru(arg0, _builder=None):
 
 @core.extern
 def double2ll_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2ll_rn", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1040,7 +1040,7 @@ def double2ll_rn(arg0, _builder=None):
 
 @core.extern
 def double2ll_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2ll_rz", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1052,7 +1052,7 @@ def double2ll_rz(arg0, _builder=None):
 
 @core.extern
 def double2ll_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2ll_rd", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1064,7 +1064,7 @@ def double2ll_rd(arg0, _builder=None):
 
 @core.extern
 def double2ll_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2ll_ru", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1076,7 +1076,7 @@ def double2ll_ru(arg0, _builder=None):
 
 @core.extern
 def double2ull_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2ull_rn", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1088,7 +1088,7 @@ def double2ull_rn(arg0, _builder=None):
 
 @core.extern
 def double2ull_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2ull_rz", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1100,7 +1100,7 @@ def double2ull_rz(arg0, _builder=None):
 
 @core.extern
 def double2ull_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2ull_rd", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1112,7 +1112,7 @@ def double2ull_rd(arg0, _builder=None):
 
 @core.extern
 def double2ull_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double2ull_ru", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1124,7 +1124,7 @@ def double2ull_ru(arg0, _builder=None):
 
 @core.extern
 def ll2float_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int64"), ): ("__imf_ll2float_rn", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -1136,7 +1136,7 @@ def ll2float_rn(arg0, _builder=None):
 
 @core.extern
 def ll2float_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int64"), ): ("__imf_ll2float_rz", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -1148,7 +1148,7 @@ def ll2float_rz(arg0, _builder=None):
 
 @core.extern
 def ll2float_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int64"), ): ("__imf_ll2float_rd", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -1160,7 +1160,7 @@ def ll2float_rd(arg0, _builder=None):
 
 @core.extern
 def ll2float_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int64"), ): ("__imf_ll2float_ru", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -1172,7 +1172,7 @@ def ll2float_ru(arg0, _builder=None):
 
 @core.extern
 def ull2float_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint64"), ): ("__imf_ull2float_rn", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -1185,7 +1185,7 @@ def ull2float_rn(arg0, _builder=None):
 
 @core.extern
 def ull2float_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint64"), ): ("__imf_ull2float_rz", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -1197,7 +1197,7 @@ def ull2float_rz(arg0, _builder=None):
 
 @core.extern
 def ull2float_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint64"), ): ("__imf_ull2float_rd", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -1209,7 +1209,7 @@ def ull2float_rd(arg0, _builder=None):
 
 @core.extern
 def ull2float_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint64"), ): ("__imf_ull2float_ru", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -1221,7 +1221,7 @@ def ull2float_ru(arg0, _builder=None):
 
 @core.extern
 def ll2double_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int64"), ): ("__imf_ll2double_rn", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -1233,7 +1233,7 @@ def ll2double_rn(arg0, _builder=None):
 
 @core.extern
 def ll2double_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int64"), ): ("__imf_ll2double_rz", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -1245,7 +1245,7 @@ def ll2double_rz(arg0, _builder=None):
 
 @core.extern
 def ll2double_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int64"), ): ("__imf_ll2double_rd", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -1257,7 +1257,7 @@ def ll2double_rd(arg0, _builder=None):
 
 @core.extern
 def ll2double_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int64"), ): ("__imf_ll2double_ru", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -1269,7 +1269,7 @@ def ll2double_ru(arg0, _builder=None):
 
 @core.extern
 def ull2double_rn(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint64"), ): ("__imf_ull2double_rn", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -1281,7 +1281,7 @@ def ull2double_rn(arg0, _builder=None):
 
 @core.extern
 def ull2double_rz(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint64"), ): ("__imf_ull2double_rz", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -1293,7 +1293,7 @@ def ull2double_rz(arg0, _builder=None):
 
 @core.extern
 def ull2double_rd(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint64"), ): ("__imf_ull2double_rd", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -1305,7 +1305,7 @@ def ull2double_rd(arg0, _builder=None):
 
 @core.extern
 def ull2double_ru(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint64"), ): ("__imf_ull2double_ru", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -1317,7 +1317,7 @@ def ull2double_ru(arg0, _builder=None):
 
 @core.extern
 def int_as_float(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int32"), ): ("__imf_int_as_float", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -1329,7 +1329,7 @@ def int_as_float(arg0, _builder=None):
 
 @core.extern
 def float_as_int(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float_as_int", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -1341,7 +1341,7 @@ def float_as_int(arg0, _builder=None):
 
 @core.extern
 def uint_as_float(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("uint32"), ): ("__imf_uint_as_float", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
@@ -1353,7 +1353,7 @@ def uint_as_float(arg0, _builder=None):
 
 @core.extern
 def float_as_uint(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_float_as_uint", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -1365,7 +1365,7 @@ def float_as_uint(arg0, _builder=None):
 
 @core.extern
 def longlong_as_double(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("int64"), ): ("__imf_longlong_as_double", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -1377,7 +1377,7 @@ def longlong_as_double(arg0, _builder=None):
 
 @core.extern
 def double_as_longlong(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp64"), ): ("__imf_double_as_longlong", core.dtype("int64")),
         }, is_pure=True, _builder=_builder)
@@ -1461,7 +1461,7 @@ def hadd(arg0, arg1, _builder=None):
 
 @core.extern
 def rhadd(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("int32"), core.dtype("int32")): ("__imf_rhadd", core.dtype("int32")),
@@ -1522,7 +1522,7 @@ def rsqrt_rn(arg0, _builder=None):
 
 @core.extern
 def ffs(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [
                 arg0,
@@ -1542,7 +1542,7 @@ def ffs(arg0, _builder=None):
 
 @core.extern
 def rint(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [
                 arg0,
@@ -1562,7 +1562,7 @@ def rint(arg0, _builder=None):
 
 @core.extern
 def llrint(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [
                 arg0,
@@ -1582,7 +1582,7 @@ def llrint(arg0, _builder=None):
 
 @core.extern
 def nearbyint(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [
                 arg0,
@@ -1602,7 +1602,7 @@ def nearbyint(arg0, _builder=None):
 
 @core.extern
 def isnan(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [
                 arg0,
@@ -1622,7 +1622,7 @@ def isnan(arg0, _builder=None):
 
 @core.extern
 def signbit(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [
                 arg0,
@@ -1642,7 +1642,7 @@ def signbit(arg0, _builder=None):
 
 @core.extern
 def copysign(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("fp32")): ("__imf_copysignf", core.dtype("fp32")),
@@ -1658,7 +1658,7 @@ def copysign(arg0, arg1, _builder=None):
 
 @core.extern
 def finitef(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise("", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_isfinitef", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
@@ -1670,7 +1670,7 @@ def finitef(arg0, _builder=None):
 
 @core.extern
 def isinf(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_isinff", core.dtype("int32")),
@@ -1686,7 +1686,7 @@ def isinf(arg0, _builder=None):
 
 @core.extern
 def nextafter(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("fp32")): ("__imf_nextafterf", core.dtype("fp32")),
@@ -1702,7 +1702,7 @@ def nextafter(arg0, arg1, _builder=None):
 
 @core.extern
 def sin(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_sinf", core.dtype("fp32")),
@@ -1718,7 +1718,7 @@ def sin(arg0, _builder=None):
 
 @core.extern
 def cos(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_cosf", core.dtype("fp32")),
@@ -1734,7 +1734,7 @@ def cos(arg0, _builder=None):
 
 @core.extern
 def sinpi(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_sinpif", core.dtype("fp32")),
@@ -1750,7 +1750,7 @@ def sinpi(arg0, _builder=None):
 
 @core.extern
 def cospi(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_cospif", core.dtype("fp32")),
@@ -1766,7 +1766,7 @@ def cospi(arg0, _builder=None):
 
 @core.extern
 def tan(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_tanf", core.dtype("fp32")),
@@ -1782,7 +1782,7 @@ def tan(arg0, _builder=None):
 
 @core.extern
 def log2(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_log2f", core.dtype("fp32")),
@@ -1798,7 +1798,7 @@ def log2(arg0, _builder=None):
 
 @core.extern
 def exp(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_expf", core.dtype("fp32")),
@@ -1814,7 +1814,7 @@ def exp(arg0, _builder=None):
 
 @core.extern
 def exp10(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_exp10f", core.dtype("fp32")),
@@ -1830,7 +1830,7 @@ def exp10(arg0, _builder=None):
 
 @core.extern
 def cosh(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_coshf", core.dtype("fp32")),
@@ -1846,7 +1846,7 @@ def cosh(arg0, _builder=None):
 
 @core.extern
 def sinh(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_sinhf", core.dtype("fp32")),
@@ -1862,7 +1862,7 @@ def sinh(arg0, _builder=None):
 
 @core.extern
 def tanh(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_tanhf", core.dtype("fp32")),
@@ -1878,7 +1878,7 @@ def tanh(arg0, _builder=None):
 
 @core.extern
 def atan2(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("fp32")): ("__imf_atan2f", core.dtype("fp32")),
@@ -1894,7 +1894,7 @@ def atan2(arg0, arg1, _builder=None):
 
 @core.extern
 def atan(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_atanf", core.dtype("fp32")),
@@ -1910,7 +1910,7 @@ def atan(arg0, _builder=None):
 
 @core.extern
 def asin(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_asinf", core.dtype("fp32")),
@@ -1926,7 +1926,7 @@ def asin(arg0, _builder=None):
 
 @core.extern
 def acos(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_acosf", core.dtype("fp32")),
@@ -1942,7 +1942,7 @@ def acos(arg0, _builder=None):
 
 @core.extern
 def log(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_logf", core.dtype("fp32")),
@@ -1958,7 +1958,7 @@ def log(arg0, _builder=None):
 
 @core.extern
 def log10(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_log10f", core.dtype("fp32")),
@@ -1974,7 +1974,7 @@ def log10(arg0, _builder=None):
 
 @core.extern
 def log1p(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_log1pf", core.dtype("fp32")),
@@ -1990,7 +1990,7 @@ def log1p(arg0, _builder=None):
 
 @core.extern
 def acosh(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_acoshf", core.dtype("fp32")),
@@ -2006,7 +2006,7 @@ def acosh(arg0, _builder=None):
 
 @core.extern
 def asinh(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_asinhf", core.dtype("fp32")),
@@ -2022,7 +2022,7 @@ def asinh(arg0, _builder=None):
 
 @core.extern
 def atanh(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_atanhf", core.dtype("fp32")),
@@ -2038,7 +2038,7 @@ def atanh(arg0, _builder=None):
 
 @core.extern
 def expm1(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_expm1f", core.dtype("fp32")),
@@ -2054,7 +2054,7 @@ def expm1(arg0, _builder=None):
 
 @core.extern
 def hypot(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("fp32")): ("__imf_hypotf", core.dtype("fp32")),
@@ -2070,7 +2070,7 @@ def hypot(arg0, arg1, _builder=None):
 
 @core.extern
 def rhypot(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("fp32")): ("__imf_rhypotf", core.dtype("fp32")),
@@ -2086,7 +2086,7 @@ def rhypot(arg0, arg1, _builder=None):
 
 @core.extern
 def norm3d(arg0, arg1, arg2, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1, arg2], {
                 (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__imf_norm3df", core.dtype("fp32")),
@@ -2102,7 +2102,7 @@ def norm3d(arg0, arg1, arg2, _builder=None):
 
 @core.extern
 def rnorm3d(arg0, arg1, arg2, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1, arg2], {
                 (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__imf_rnorm3df", core.dtype("fp32")),
@@ -2118,7 +2118,7 @@ def rnorm3d(arg0, arg1, arg2, _builder=None):
 
 @core.extern
 def norm4d(arg0, arg1, arg2, arg3, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1, arg2, arg3], {
                 (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")):
@@ -2138,7 +2138,7 @@ def norm4d(arg0, arg1, arg2, arg3, _builder=None):
 
 @core.extern
 def rnorm4d(arg0, arg1, arg2, arg3, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1, arg2, arg3], {
                 (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")):
@@ -2158,7 +2158,7 @@ def rnorm4d(arg0, arg1, arg2, arg3, _builder=None):
 
 @core.extern
 def cbrt(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_cbrtf", core.dtype("fp32")),
@@ -2174,7 +2174,7 @@ def cbrt(arg0, _builder=None):
 
 @core.extern
 def rcbrt(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_rcbrtf", core.dtype("fp32")),
@@ -2258,7 +2258,7 @@ def cyl_bessel_i1(arg0, _builder=None):
 
 @core.extern
 def erf(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_erff", core.dtype("fp32")),
@@ -2274,7 +2274,7 @@ def erf(arg0, _builder=None):
 
 @core.extern
 def erfinv(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_erfcinvf", core.dtype("fp32")),
@@ -2290,7 +2290,7 @@ def erfinv(arg0, _builder=None):
 
 @core.extern
 def erfc(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_erfcf", core.dtype("fp32")),
@@ -2306,7 +2306,7 @@ def erfc(arg0, _builder=None):
 
 @core.extern
 def erfcx(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_erfcxf", core.dtype("fp32")),
@@ -2331,7 +2331,7 @@ def erfcinv(arg0, _builder=None):
 
 @core.extern
 def normcdfinv(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__nv_cdnorminvf", core.dtype("fp32")),
@@ -2347,7 +2347,7 @@ def normcdfinv(arg0, _builder=None):
 
 @core.extern
 def normcdf(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__nv_cdnormf", core.dtype("fp32")),
@@ -2363,7 +2363,7 @@ def normcdf(arg0, _builder=None):
 
 @core.extern
 def lgamma(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_lgammaf", core.dtype("fp32")),
@@ -2379,7 +2379,7 @@ def lgamma(arg0, _builder=None):
 
 @core.extern
 def ldexp(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("int32")): ("__imf_ldexpf", core.dtype("fp32")),
@@ -2395,7 +2395,7 @@ def ldexp(arg0, arg1, _builder=None):
 
 @core.extern
 def scalbn(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("int32")): ("__imf_scalbnf", core.dtype("fp32")),
@@ -2411,7 +2411,7 @@ def scalbn(arg0, arg1, _builder=None):
 
 @core.extern
 def fmod(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fmodf", core.dtype("fp32")),
@@ -2427,7 +2427,7 @@ def fmod(arg0, arg1, _builder=None):
 
 @core.extern
 def remainder(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("fp32")): ("__imf_remainderf", core.dtype("fp32")),
@@ -2443,7 +2443,7 @@ def remainder(arg0, arg1, _builder=None):
 
 @core.extern
 def fma(arg0, arg1, arg2, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1, arg2], {
                 (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__nv_fmaf", core.dtype("fp32")),
@@ -2459,7 +2459,7 @@ def fma(arg0, arg1, arg2, _builder=None):
 
 @core.extern
 def pow(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("int32")): ("__imf_powif", core.dtype("fp32")),
@@ -2479,7 +2479,7 @@ def pow(arg0, arg1, _builder=None):
 
 @core.extern
 def tgamma(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_tgammaf", core.dtype("fp32")),
@@ -2495,7 +2495,7 @@ def tgamma(arg0, _builder=None):
 
 @core.extern
 def round(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_roundf", core.dtype("fp32")),
@@ -2511,7 +2511,7 @@ def round(arg0, _builder=None):
 
 @core.extern
 def llround(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_llroundf", core.dtype("int64")),
@@ -2527,7 +2527,7 @@ def llround(arg0, _builder=None):
 
 @core.extern
 def fdim(arg0, arg1, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0, arg1], {
                 (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fdimf", core.dtype("fp32")),
@@ -2543,7 +2543,7 @@ def fdim(arg0, arg1, _builder=None):
 
 @core.extern
 def ilogb(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_ilogbf", core.dtype("int32")),
@@ -2559,7 +2559,7 @@ def ilogb(arg0, _builder=None):
 
 @core.extern
 def logb(arg0, _builder=None):
-    if is_spirv():
+    if is_xpu():
         return core.extern_elementwise(
             "", "", [arg0], {
                 (core.dtype("fp32"), ): ("__imf_logf", core.dtype("fp32")),

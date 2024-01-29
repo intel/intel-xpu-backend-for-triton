@@ -484,7 +484,8 @@ private:
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
 
@@ -565,7 +566,8 @@ private:
 
     if (shouldUseDistSmem(srcLayout, dstLayout))
       return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getOperation());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
@@ -871,7 +873,8 @@ private:
     auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto inOrd = getOrder(srcLayout);
     auto outOrd = dstSharedLayout.getOrder();
-    Value smemBase = getSharedMemoryBase(loc, rewriter, dst);
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
@@ -1123,9 +1126,8 @@ private:
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-    triton::Target target, PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, allocation,
-                                          indexCacheInfo, target, benefit);
+    Target target, PatternBenefit benefit) {
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, indexCacheInfo, target,
+                                          benefit);
 }

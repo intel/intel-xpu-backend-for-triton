@@ -14,10 +14,20 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
-               ConversionPatternRewriter &rewriter) {
+               ConversionPatternRewriter &rewriter,
+               mlir::triton::Target target) {
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);
+
+  if (target == Target::GENX) {
+    constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                             mlir::gpu::Dimension::y,
+                                             mlir::gpu::Dimension::z};
+
+    Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+    return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+  }
 
   // It is not easy to get the compute capability here, so we use numCTAs to
   // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
@@ -128,14 +138,14 @@ struct PrintOpConversion
     auto loc = op->getLoc();
 
     llvm::SmallString<64> msgNewline(op.getPrefix());
-    msgNewline.push_back('\0');
 
     Value prefixStr = LLVM::addStringToModule(
         loc, rewriter, "printfPrefix_", msgNewline,
         (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant : 0);
 
     auto getPid = [&](int axis) {
-      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
+      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter,
+                      target);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 
@@ -384,7 +394,6 @@ struct PrintOpConversion
     assert(!msg.empty() && "printf with empty string not supported");
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
-    msgNewline.push_back('\0');
     Value msgValue = LLVM::addStringToModule(
         UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
         msgNewline,
@@ -619,25 +628,12 @@ struct GetProgramIdOpConversion
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (target == triton::Target::GENX) {
-      Location loc = op->getLoc();
-      assert(op.getAxisAsInt() < 3);
-
-      Value blockId =
-          rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[op.getAxisAsInt()]);
-      rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
-      return success();
-    }
-
-    Value programId = llGetPid(op.getAxisAsInt(), op->getLoc(),
-                               op->getParentOfType<ModuleOp>(), rewriter);
+    Value programId =
+        llGetPid(op.getAxisAsInt(), op->getLoc(),
+                 op->getParentOfType<ModuleOp>(), rewriter, target);
     rewriter.replaceOp(op, programId);
     return success();
   }
-
-  static constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                                  mlir::gpu::Dimension::y,
-                                                  mlir::gpu::Dimension::z};
 };
 
 struct GetNumProgramsOpConversion
@@ -782,7 +778,8 @@ struct AllocTensorOpConversion
   matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    Value smemBase = getSharedMemoryBase(loc, rewriter, op.getResult());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
     auto resultTy = op.getType().dyn_cast<RankedTensorType>();
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
@@ -844,8 +841,8 @@ struct ExtractSliceOpConversion
 
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSource(),
-                                                   llvmElemTy, rewriter);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSource(), llvmElemTy, rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();
@@ -973,12 +970,10 @@ struct AsyncBulkCommitGroupOpConversion
 void mlir::triton::populateTritonGPUToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &moduleAllocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     triton::Target target, PatternBenefit benefit) {
   patterns.add<AddPtrOpConversion>(typeConverter, target, benefit);
-  patterns.add<AllocTensorOpConversion>(typeConverter, moduleAllocation, target,
-                                        benefit);
+  patterns.add<AllocTensorOpConversion>(typeConverter, target, benefit);
   patterns.add<DeallocTensorOpConversion>(typeConverter, target, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, target, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, target, benefit);
@@ -986,8 +981,7 @@ void mlir::triton::populateTritonGPUToLLVMPatterns(
                                                  benefit);
   patterns.add<AsyncBulkWaitOpConversion>(typeConverter, target, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, target, benefit);
-  patterns.add<ExtractSliceOpConversion>(typeConverter, moduleAllocation,
-                                         target, benefit);
+  patterns.add<ExtractSliceOpConversion>(typeConverter, target, benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, target, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, target, benefit);
   patterns.add<GetThreadIdOpConversion>(typeConverter, target, benefit);

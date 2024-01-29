@@ -475,7 +475,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     // Slow path for the case where there are multiple warps with unique data on
     // the axis.
     auto elems = helper.getScratchSizeInElems();
-    SmallVector<Value> smemBases = getSmemBases(op, elems, rewriter);
+    SmallVector<Value> smemBases = getSmemBases(op, elems, rewriter, target);
     SmallVector<Type> smemTypes(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       smemTypes[i] = getElementType(op, i);
@@ -530,9 +530,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 void mlir::triton::populateScanOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ModuleAllocation &allocation,
     ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     Target target, PatternBenefit benefit) {
-  patterns.add<ScanOpConversion>(typeConverter, allocation, indexCacheInfo,
-                                 target, benefit);
+  patterns.add<ScanOpConversion>(typeConverter, indexCacheInfo, target,
+                                 benefit);
 }

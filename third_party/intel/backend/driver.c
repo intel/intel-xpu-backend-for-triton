@@ -12,6 +12,7 @@
 #include <string>
 #include <sycl/sycl.hpp>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -32,6 +33,8 @@ static ze_driver_handle_t driverHandle = {nullptr};
 static ze_event_pool_handle_t eventPoolHandle = {nullptr};
 
 static std::vector<ze_device_handle_t> devices;
+static std::vector<std::pair<sycl::device, ze_device_handle_t>>
+    sycl_l0_device_list;
 
 static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   if (code != ZE_RESULT_SUCCESS) {
@@ -56,13 +59,14 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   if (!PyArg_ParseTuple(args, "i", &device_id))
     return NULL;
 
-  if (device_id > devices.size()) {
-    std::cerr << "Device ID not found: " << device_id << std::endl;
+  if (device_id > sycl_l0_device_list.size()) {
+    std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
+  auto device = sycl_l0_device_list[device_id];
 
   // Get device handle
-  ze_device_handle_t phDevice = devices[device_id];
+  ze_device_handle_t phDevice = device.second;
 
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
@@ -72,6 +76,22 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int multiprocessor_count =
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
   int sm_clock_rate = device_properties.coreClockRate;
+
+  // Extract triton::gpu::intel::DeviceArch from pci_device_id
+  // https://dgpu-docs.intel.com/devices/hardware-table.html
+  int pci_device_id = device_properties.deviceId;
+  int gpu_arch = 3;  // triton::gpu::intel::DeviceArch::UNKNOWN
+  switch ((pci_device_id >> 8) & 0xFF)
+  {
+    case 0x56:
+      gpu_arch = 0; // Arc GPUs 56xx
+      break;
+    case 0x0B: // PVC GPUs 0Bxx
+      gpu_arch = 1; // PVC
+      break;
+    default:
+      // fall through
+  }
 
   ze_device_compute_properties_t compute_properties = {};
   compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
@@ -92,12 +112,150 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   delete[] pMemoryProperties;
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
                        max_shared_mem, "multiprocessor_count",
                        multiprocessor_count, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width);
+                       mem_bus_width, "device_arch", gpu_arch);
 }
+
+/*Sycl code Start*/
+bool getBoolEnv(const std::string &env) {
+  const char *s = std::getenv(env.c_str());
+  std::string str(s ? s : "");
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  return (str == "on" || str == "true" || str == "1");
+}
+
+ze_module_handle_t create_module(ze_context_handle_t context,
+                                 ze_device_handle_t device,
+                                 uint32_t *binary_ptr, size_t binary_size) {
+  const char *build_flags = "";
+  const ze_module_format_t format = ZE_MODULE_FORMAT_IL_SPIRV;
+  ze_module_desc_t module_description = {};
+  module_description.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
+  module_description.format = format;
+  module_description.inputSize =
+      static_cast<uint32_t>(binary_size * sizeof(uint32_t));
+  module_description.pInputModule = (uint8_t *)binary_ptr;
+  module_description.pBuildFlags = build_flags;
+  ze_module_build_log_handle_t buildlog;
+  ze_module_handle_t module;
+  auto context_initial = context;
+  auto device_initial = device;
+  auto error_no = ZE_RESULT_SUCCESS;
+  error_no =
+      zeModuleCreate(context, device, &module_description, &module, &buildlog);
+  if (error_no != ZE_RESULT_SUCCESS) {
+    size_t szLog = 0;
+    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
+    char *strLog = (char *)malloc(szLog);
+    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog));
+    std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
+    free(strLog);
+    ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
+  }
+  ZE_CHECK(error_no);
+  return module;
+}
+
+void printModuleKernelName(ze_module_handle_t hModule) {
+  uint32_t Count = 0;
+  auto ret = zeModuleGetKernelNames(hModule, &Count, nullptr);
+  assert(ret == ZE_RESULT_SUCCESS);
+  std::unique_ptr<const char *[]> PNames(new const char *[Count]);
+  ret = zeModuleGetKernelNames(hModule, &Count, PNames.get());
+  assert(ret == ZE_RESULT_SUCCESS);
+  if (getBoolEnv("MLIR_ENABLE_DUMP")) {
+    for (uint32_t i = 0; i < Count; ++i) {
+      std::cout << std::string(PNames[i]) << std::endl;
+    }
+  }
+}
+
+ze_kernel_handle_t create_function(ze_module_handle_t module,
+                                   ze_kernel_flags_t flag,
+                                   std::string func_name) {
+  ze_kernel_handle_t kernel;
+  ze_kernel_desc_t kernel_description = {};
+  kernel_description.stype = ZE_STRUCTURE_TYPE_KERNEL_DESC;
+  kernel_description.pNext = nullptr;
+  kernel_description.flags = flag;
+  kernel_description.pKernelName = func_name.c_str();
+  auto module_initial = module;
+  if (getBoolEnv("MLIR_ENABLE_DUMP")) {
+    std::cout << "create kernel:" << func_name << std::endl;
+  }
+  ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel));
+  return kernel;
+}
+
+ze_kernel_handle_t create_function(ze_module_handle_t module,
+                                   std::string func_name) {
+  return create_function(module, ZE_KERNEL_FLAG_FORCE_RESIDENCY, func_name);
+}
+
+std::vector<std::unique_ptr<sycl::kernel>> compiled_kernels;
+
+static PyObject *loadSyclBinary(PyObject *self, PyObject *args) {
+  const char *name;
+  int shared;
+  PyObject *py_bytes;
+  PyObject *py_dev;
+  if (!PyArg_ParseTuple(args, "sSiO", &name, &py_bytes, &shared, &py_dev)) {
+    std::cerr << "loadSyclBinary arg parse failed" << std::endl;
+    return NULL;
+  }
+  int32_t n_regs = 0;
+  int32_t n_spills = 0;
+  void *pdevID = PyCapsule_GetPointer(py_dev, PyCapsule_GetName(py_dev));
+  if (pdevID == nullptr)
+    return NULL;
+
+  sycl::device device = *(static_cast<sycl::device *>(pdevID));
+  std::string kernel_name = name;
+  size_t binary_size = PyBytes_Size(py_bytes);
+  binary_size = binary_size / sizeof(uint32_t);
+
+  uint32_t *binary_ptr = (uint32_t *)PyBytes_AsString(py_bytes);
+  ;
+  auto ctx = device.get_platform().ext_oneapi_get_default_context();
+  auto l0_device =
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(device);
+  auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
+  auto l0_module =
+      create_module(l0_context, l0_device, binary_ptr, binary_size);
+
+  auto l0_kernel = create_function(l0_module, kernel_name);
+  ze_kernel_properties_t props;
+  props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
+  props.pNext = nullptr;
+  ZE_CHECK(zeKernelGetProperties(l0_kernel, &props));
+  n_spills = props.spillMemSize;
+  auto mod = sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
+                                      sycl::bundle_state::executable>(
+      {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer}, ctx);
+  auto fun = sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
+      {mod, l0_kernel, sycl::ext::oneapi::level_zero::ownership::transfer},
+      ctx);
+  compiled_kernels.push_back(std::make_unique<sycl::kernel>(fun));
+  sycl::kernel *ptr = compiled_kernels[compiled_kernels.size() - 1].get();
+  if (getBoolEnv("MLIR_ENABLE_DUMP")) {
+    std::cout << "compiled kernel ptr: " << ptr << std::endl;
+    std::cout << "total kernels:" << compiled_kernels.size() << std::endl;
+    for (auto &k : compiled_kernels) {
+      std::cout << "  kernel:"
+                << k->get_info<sycl::info::kernel::function_name>() << " @"
+                << k.get() << std::endl;
+    }
+  }
+  sycl::kernel *k = new sycl::kernel(*ptr);
+  sycl::kernel_bundle<sycl::bundle_state::executable> *kb =
+      new sycl::kernel_bundle<sycl::bundle_state::executable>(mod);
+  return Py_BuildValue("(KKii)", (uint64_t)kb, (uint64_t)k, n_regs, n_spills);
+}
+/*Sycl code end*/
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name;
@@ -216,12 +374,15 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
 
   auto sycl_context = sycl_queue->get_context();
 
-  // Get l0-device
+  // Get sycl-device
   std::vector<sycl::device> sycl_devices = sycl_context.get_devices();
 
-  // Retrieve devices
+  // Retrieve l0 devices
   uint32_t deviceCount = sycl_devices.size();
   for (uint32_t i = 0; i < deviceCount; ++i) {
+    sycl_l0_device_list.push_back(std::make_pair(
+        sycl_devices[i], sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+                             sycl_devices[i])));
     devices.push_back(sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
         sycl_devices[i]));
   }
@@ -243,6 +404,7 @@ static PyObject *getL0ImmCommandList(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].cmd_list));
 }
+
 static PyObject *getL0Queue(PyObject *self, PyObject *args) {
   PyObject *cap;
   void *queue = NULL;
@@ -256,6 +418,7 @@ static PyObject *getL0Queue(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].queue));
 }
+
 static PyObject *getL0DevPtr(PyObject *self, PyObject *args) {
   PyObject *cap;
   void *queue = NULL;
@@ -269,6 +432,7 @@ static PyObject *getL0DevPtr(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].device));
 }
+
 static PyObject *getL0CtxtPtr(PyObject *self, PyObject *args) {
   PyObject *cap;
   void *queue = NULL;
@@ -282,8 +446,11 @@ static PyObject *getL0CtxtPtr(PyObject *self, PyObject *args) {
   }
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].context));
 }
+
 static PyMethodDef ModuleMethods[] = {
-    {"load_binary", loadBinary, METH_VARARGS,
+    {"load_binary", loadSyclBinary, METH_VARARGS,
+     "Load provided SPV into ZE driver"},
+    {"load_sycl_binary", loadSyclBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
     {"get_device_properties", getDeviceProperties, METH_VARARGS,
      "Get the properties for a given device"},

@@ -15,12 +15,11 @@ from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
 
 
 def is_hip():
-    return triton.runtime.driver.get_current_target()[0] == "hip"
+    return triton.runtime.driver.active.get_current_target()[0] == "hip"
 
 
 def is_spirv():
-    import torch
-    return torch.xpu.is_available()
+    return triton.runtime.driver.active.get_current_target()[0] == "xpu"
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -35,11 +34,10 @@ torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 # num_ctas_list = [1, 4] if torch.cuda.get_device_capability()[0] == 9 else [1]
 num_ctas_list = [1]
 
+GPU_DIALECT = "triton_gpu"
 if is_hip():
-    GPU_DIALECT = "triton_gpu_rocm"
     THREADS_PER_WARP = 64
 else:
-    GPU_DIALECT = "triton_gpu"
     THREADS_PER_WARP = 32
 
 if is_spirv():
@@ -498,10 +496,6 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
 ])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
-    if is_hip():
-        pytest.skip(
-            'test_shift_op for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
     expr = f'x {op} y'
     bw = max(_bitwidth(dtype_x), _bitwidth(dtype_y))
     if dtype_x.startswith('int'):
@@ -2082,8 +2076,8 @@ layouts = [
     BlockedLayout([1, 4], [8, 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([4, 4], [2, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     DpasLayout(repeatCount=8, warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1]),
-    # DpasLayout(repeatCount=8, warps_per_cta=[2, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1])
-    # DpasLayout(repeatCount=8, warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
+    DpasLayout(repeatCount=8, warps_per_cta=[2, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1]),
+    DpasLayout(repeatCount=8, warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0])
 ]
 
 
@@ -2096,8 +2090,6 @@ layouts = [
 def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, device):
     if is_hip():
         pytest.skip("test_reduce_layouts is not supported in HIP")
-    if is_xpu(device) and 'dpas' in str(src_layout):
-        pytest.skip("FIXME: Incorrect result on XPU")
 
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.xfail("Skipping sum reduction on float16 due to accuracy issues")
@@ -2249,9 +2241,6 @@ layouts = [
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
-    if is_hip():
-        pytest.skip("test_convert1d is not supported in HIP")
-
     ir = f"""
     #dst = {dst_layout}
     #src = {src_layout}
@@ -2500,11 +2489,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     check_cuda_only(device)
 
     capability = torch.cuda.get_device_capability()
-
-    if is_hip():
-        pytest.skip(
-            'test_dot for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
-        )
 
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
@@ -4611,4 +4595,25 @@ def test_sort(M, N, descending, dtype_str, device):
     y = torch.sort(x, descending=descending)[0]
     z = torch.empty_like(x)
     sort_kernel[(1, )](x, z, N, M, descending, num_warps=8)
+    assert (y == z).all(), (y, z)
+
+
+@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
+@pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32'])
+def test_flip(M, N, dtype_str, device):
+
+    @triton.jit
+    def flip_kernel(X, Z, N: tl.constexpr, M: tl.constexpr):
+        offx = tl.arange(0, M)
+        offy = tl.arange(0, N) * M
+        off2d = offx[None, :] + offy[:, None]
+        x = tl.load(X + off2d)
+        x = tl.flip(x)
+        tl.store(Z + off2d, x)
+
+    x = numpy_random((N, M), dtype_str=dtype_str)
+    x = torch.from_numpy(x).to(device)
+    y = torch.flip(x, (1, ))
+    z = torch.empty_like(x, device=device)
+    flip_kernel[(1, )](x, z, N, M, num_warps=8)
     assert (y == z).all(), (y, z)

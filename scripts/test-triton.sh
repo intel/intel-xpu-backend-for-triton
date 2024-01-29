@@ -105,13 +105,7 @@ function run_core_tests {
   fi
   cd ${CORE_TEST_DIR}
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
-
-  # run test_subprocess serially to avoid issues with print buffer handling.
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu language/test_subprocess.py
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
@@ -162,9 +156,15 @@ function run_tutorial_tests {
 
   run_tutorial_test "01-vector-add" 01-vector-add.py
   run_tutorial_test "02-fused-softmax" 02-fused-softmax.py
+  run_tutorial_test "03-matrix-multiplication" 03-matrix-multiplication.py
   run_tutorial_test "04-low-memory-dropout" 04-low-memory-dropout.py
   run_tutorial_test "05-layer-norm" 05-layer-norm.py
+  run_tutorial_test "06-fused-attention.py" 06-fused-attention.py
   run_tutorial_test "07-math-functions" 07-math-functions.py
+  run_tutorial_test "08-experimental-block-pointer" 08-experimental-block-pointer.py
+  run_tutorial_test "09-experimental-tma-matrix-multiplication" 09-experimental-tma-matrix-multiplication.py
+  run_tutorial_test "10-experimental-tma-store-matrix-multiplication" 10-experimental-tma-store-matrix-multiplication.py
+  run_tutorial_test "11-grouped-gemm" 11-grouped-gemm.py
 }
 
 function test_triton {
