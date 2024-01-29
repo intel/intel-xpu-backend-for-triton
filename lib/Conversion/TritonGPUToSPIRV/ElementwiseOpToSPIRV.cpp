@@ -516,13 +516,18 @@ struct CmpIOpSPIRVConversion
                      ConversionPatternRewriter &rewriter, Type elemTy,
                      ValueRange operands, Location loc) const {
 
-    Type oprandType =
+    Type operandType =
         this->getTypeConverter()->convertType(operands[0].getType());
+    Type operandType1 =
+        this->getTypeConverter()->convertType(operands[1].getType());
+    Value op1 = operands[0];
+    Value op2 = operands[1];
+
     switch (op.getPredicate()) {
 
 #define DISPATCH_WITH_LOGICAL(cmpPredicate, spirvOp, spirvLogicOp)             \
   case cmpPredicate:                                                           \
-    if (isBoolScalarOrVector(oprandType)) {                                    \
+    if (isBoolScalarOrVector(operandType)) {                                   \
       return rewriter.create<spirvLogicOp>(loc, operands[0], operands[1]);     \
     } else {                                                                   \
       return rewriter.create<spirvOp>(loc, operands[0], operands[1]);          \
@@ -536,7 +541,13 @@ struct CmpIOpSPIRVConversion
 
 #define DISPATCH(cmpPredicate, spirvOp)                                        \
   case cmpPredicate:                                                           \
-    return rewriter.create<spirvOp>(loc, operands[0], operands[1]);
+    if (isBoolScalarOrVector(operandType)) {                                   \
+      op1 = select(operands[0], i32_val(1), i32_val(0));                       \
+    }                                                                          \
+    if (isBoolScalarOrVector(operandType1)) {                                  \
+      op2 = select(operands[1], i32_val(1), i32_val(0));                       \
+    }                                                                          \
+    return rewriter.create<spirvOp>(loc, op1, op2);
 
       DISPATCH(arith::CmpIPredicate::slt, spirv::SLessThanOp);
       DISPATCH(arith::CmpIPredicate::sle, spirv::SLessThanEqualOp);
