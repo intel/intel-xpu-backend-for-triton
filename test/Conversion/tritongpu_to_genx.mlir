@@ -947,7 +947,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   tt.func @test_index_cache() {
     // CHECK: genx.workitem.id.x
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
-    // CHECK-NOT: genx.workitem.id.x
     %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
     tt.return
   }
@@ -961,7 +960,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
   tt.func @test_base_index_cache(%arg0: tensor<128x32xf32, #blocked0>) {
     // CHECK: genx.workitem.id.x
     %0 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
-    // CHECK-NOT: genx.workitem.id.x
     %1 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
     tt.return
   }
@@ -974,7 +972,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
   // CHECK-LABEL: test_index_cache_different_block
   tt.func @test_index_cache_different_block(%arg0: tensor<128x32xf32, #blocked0>, %arg1: i1) {
     // CHECK: genx.workitem.id.x
-    // CHECK-NOT: genx.workitem.id.x
     %0 = triton_gpu.convert_layout %arg0 : (tensor<128x32xf32, #blocked0>) -> tensor<128x32xf32, #shared0>
     cf.cond_br %arg1, ^bb1, ^bb2
     ^bb1:  // pred: ^bb0

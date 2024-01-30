@@ -173,8 +173,8 @@ struct PrintOpConversion
         SmallVector<SmallVector<Value>> indices;
         if (auto rankedTy =
                 op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
-          indices =
-              emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy);
+          indices = emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy,
+                                true);
           for (int64_t dim : rankedTy.getShape()) {
             if (dim > 0) {
               dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
@@ -585,12 +585,10 @@ struct AssertOpConversion
 struct MakeRangeOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp> {
 
-  MakeRangeOpConversion(
-      TritonGPUToLLVMTypeConverter &converter,
-      ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-      Target target, PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(
-            converter, indexCacheInfo, target, benefit) {}
+  MakeRangeOpConversion(TritonGPUToLLVMTypeConverter &converter, Target target,
+                        PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(converter, target,
+                                                             benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
@@ -603,7 +601,7 @@ struct MakeRangeOpConversion
     auto elemTy = rankedTy.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs = emitIndices(loc, rewriter, layout, rankedTy);
+    auto idxs = emitIndices(loc, rewriter, layout, rankedTy, true);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.
@@ -970,7 +968,6 @@ struct AsyncBulkCommitGroupOpConversion
 void mlir::triton::populateTritonGPUToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     triton::Target target, PatternBenefit benefit) {
   patterns.add<AddPtrOpConversion>(typeConverter, target, benefit);
   patterns.add<AllocTensorOpConversion>(typeConverter, target, benefit);
@@ -987,8 +984,7 @@ void mlir::triton::populateTritonGPUToLLVMPatterns(
   patterns.add<GetThreadIdOpConversion>(typeConverter, target, benefit);
   patterns.add<GetCanonicalWarpIdConversion>(typeConverter, target, benefit);
   patterns.add<GetClusterCTAIdOpConversion>(typeConverter, target, benefit);
-  patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, target,
-                                      benefit);
+  patterns.add<MakeRangeOpConversion>(typeConverter, target, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<PrintOpConversion>(typeConverter, target, benefit);
   patterns.add<AssertOpConversion>(typeConverter, target, benefit);

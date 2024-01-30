@@ -37,24 +37,11 @@ namespace {
 
 class IndexEmitter {
 public:
-  struct Cache {
-    llvm::DenseMap<IndexCacheKeyT, llvm::SmallVector<Value>,
-                   CacheKeyDenseMapInfo>
-        baseIndexCache;
-    llvm::DenseMap<IndexCacheKeyT, llvm::SmallVector<llvm::SmallVector<Value>>,
-                   CacheKeyDenseMapInfo>
-        indexCache;
-    OpBuilder::InsertPoint indexInsertPoint;
-  };
-
   IndexEmitter(MLIRContext *context_)
       : context(context_), option(context), typeConverter(context, option),
-        cacheInfo({&cache.baseIndexCache, &cache.indexCache,
-                   &cache.indexInsertPoint}),
-        base(typeConverter, cacheInfo, Target::Default), rewriter(context),
+        base(typeConverter, Target::Default), rewriter(context),
         loc(UnknownLoc::get(context)) {
     rewriter.setInsertionPointToStart(&block);
-    cache.indexInsertPoint = rewriter.saveInsertionPoint();
   }
 
   llvm::SmallVector<llvm::SmallVector<Value>>
@@ -90,8 +77,6 @@ private:
   MLIRContext *context;
   LowerToLLVMOptions option;
   TritonGPUToLLVMTypeConverter typeConverter;
-  Cache cache;
-  ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo cacheInfo;
   ConvertTritonGPUOpToLLVMPatternBase base;
   Block block;
   ConversionPatternRewriter rewriter;

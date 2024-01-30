@@ -11,6 +11,7 @@
 
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
+#include "triton/Target/PTX/TmaMetadata.h"
 
 #include <numeric>
 
@@ -510,8 +511,8 @@ struct StoreAsyncTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
                             const TensorPtrMapT *tensorPtrMap, Target target,
                             PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::StoreAsyncTMAOp>(
-            converter, tmaMetadata, target, benefit),
-        tensorPtrMap(tensorPtrMap) {}
+            converter, target, benefit),
+        tensorPtrMap(tensorPtrMap), tmaMetadata(tmaMetadata) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::StoreAsyncTMAOp op, OpAdaptor adaptor,
@@ -1016,6 +1017,7 @@ private:
   }
 
   const TensorPtrMapT *tensorPtrMap;
+  mlir::triton::gpu::TMAMetadataTy *tmaMetadata;
 };
 
 namespace {
@@ -1511,7 +1513,7 @@ struct InsertSliceOpConversion
     auto smemBase = gep(elemPtrTy, elemTy, smemObj.base, offset);
 
     auto llSrc = adaptor.getSource();
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, true);
     storeDistributedToShared(src, llSrc, srcStrides, srcIndices, dst, smemBase,
                              elemTy, loc, rewriter);
     // Barrier is not necessary.
@@ -1528,13 +1530,11 @@ struct InsertSliceAsyncOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::gpu::InsertSliceAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  InsertSliceAsyncOpConversion(
-      TritonGPUToLLVMTypeConverter &converter,
-      ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-      ModuleAxisInfoAnalysis &axisAnalysisPass, Target target,
-      PatternBenefit benefit)
+  InsertSliceAsyncOpConversion(TritonGPUToLLVMTypeConverter &converter,
+                               ModuleAxisInfoAnalysis &axisAnalysisPass,
+                               Target target, PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>(
-            converter, indexCacheInfo, target, benefit),
+            converter, target, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -1686,8 +1686,8 @@ struct InsertSliceTMAOpConversion : public ConvertTritonGPUOpToLLVMPattern<
                              const TensorPtrMapT *tensorPtrMap, Target target,
                              PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::InsertSliceTMAOp>(
-            converter, tmaMetadata, target, benefit),
-        tensorPtrMap(tensorPtrMap) {}
+            converter, target, benefit),
+        tensorPtrMap(tensorPtrMap), tmaMetadata(tmaMetadata) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::InsertSliceTMAOp op, OpAdaptor adaptor,
@@ -2040,13 +2040,13 @@ private:
   }
 
   const TensorPtrMapT *tensorPtrMap;
+  mlir::triton::gpu::TMAMetadataTy *tmaMetadata;
 };
 } // namespace
 
 void mlir::triton::populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
     const TensorPtrMapT *tensorPtrMap, Target target, PatternBenefit benefit) {
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, target,
@@ -2057,10 +2057,9 @@ void mlir::triton::populateLoadStoreOpToLLVMPatterns(
                                       benefit);
   patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, target,
                                       benefit);
-  patterns.add<InsertSliceOpConversion>(typeConverter, indexCacheInfo, target,
-                                        benefit);
-  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, indexCacheInfo,
-                                             axisInfoAnalysis, target, benefit);
+  patterns.add<InsertSliceOpConversion>(typeConverter, target, benefit);
+  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, axisInfoAnalysis,
+                                             target, benefit);
   patterns.add<InsertSliceTMAOpConversion>(typeConverter, tmaMetadata,
                                            tensorPtrMap, target, benefit);
   patterns.add<StoreAsyncTMAOpConversion>(typeConverter, tmaMetadata,
