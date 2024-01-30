@@ -7,6 +7,7 @@ fused type convert and matmul, base on triton matmul, the different with matmul:
 """
 import pytest
 import torch
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton.language as tl
 from triton import cdiv, jit
@@ -24,7 +25,7 @@ out_dtypes = ["float16", "float32"]
 def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
     if x_dtype == w_dtype:
         pytest.skip("skip same dtype")
-    device = torch.cuda.current_device()
+    device = "xpu"
     x_dtype = getattr(torch, x_dtype)
     w_dtype = getattr(torch, w_dtype)
     a = torch.randn((M, K), device=device, dtype=x_dtype)
@@ -97,4 +98,10 @@ def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
         BLOCK_N=BLOCK_N,  #
         BLOCK_K=BLOCK_K)
 
-    torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
+    # FIXME: For XPU tests torch can compute reference result on CPU using fp32
+    # arithmetics for fp16 test. Such reference requires increased tolerance for
+    # big K values.
+    if device == "xpu" and out_dtype == "float16" and K > 128:
+        torch.testing.assert_close(out_torch, out_triton, atol=2, rtol=0.1)
+    else:
+        torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)

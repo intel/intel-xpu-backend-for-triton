@@ -183,6 +183,12 @@ jobs:
           cd python/test/unit
           python3 -m pytest -n 8 --verbose operators
 
+      - name: Regression tests
+        run: |
+          pip install pytest-rerunfailures
+          cd python/test/regression
+          python3 -m pytest -vvv -s . --reruns 10 --ignore=test_performance.py --ignore=test_functional_regressions.py
+
       - name: Run XPU python tests
         run: |
           cd python/test/backend/third_party_backends
