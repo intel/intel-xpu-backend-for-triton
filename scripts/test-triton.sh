@@ -55,7 +55,7 @@ export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 python3 -m pip install lit
-python3 -m pip install pytest pytest-xdist
+python3 -m pip install pytest pytest-xdist pytest-rerunfailures
 python3 -m pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
 if [ $? -ne 0 ]; then
   echo "FAILED: return code $?"
@@ -128,6 +128,22 @@ function run_core_tests {
   fi
 }
 
+function run_regression_tests {
+  echo "***************************************************"
+  echo "******   Running Triton Regression tests     ******"
+  echo "***************************************************"
+  REGRESSION_TEST_DIR=$TRITON_PROJ/python/test/regression
+  if [ ! -d "${REGRESSION_TEST_DIR}" ]; then
+    echo "Not found '${REGRESSION_TEST_DIR}'. Build Triton please" ; exit 3
+  fi
+  cd ${REGRESSION_TEST_DIR}
+
+  python3 -m pytest -vvv -s . --reruns 10 --ignore=test_performance.py --ignore=test_functional_regressions.py
+  if [ $? -ne 0 ]; then
+    echo "FAILED: return code $?" ; exit $?
+  fi
+}
+
 function run_tutorial_test {
   echo
   echo "****** Running $1 test ******"
@@ -173,6 +189,7 @@ function test_triton {
   fi
   if [ "$TEST_CORE" = true ]; then
     run_core_tests
+    run_regression_tests
   fi
   if [ "$TEST_TUTORIAL" = true ]; then
     run_tutorial_tests
