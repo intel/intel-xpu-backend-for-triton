@@ -7,7 +7,7 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import DriverBase
 
 
-import intel_extension_for_pytorch as ipex
+
 
 
 dirname = os.getenv("ZE_PATH", default="/usr/local")
@@ -70,7 +70,7 @@ class XPUUtils(object):
 
     def get_sycl_queue(self):
         import torch
-        return ipex.xpu.current_stream().sycl_queue
+        return torch.xpu.current_stream().sycl_queue
 
     def get_sycl_device(self, device_id):
         import torch
