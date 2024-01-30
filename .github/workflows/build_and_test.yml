@@ -75,7 +75,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.4
+      - runner-0.0.5
     strategy:
       matrix:
         python:
