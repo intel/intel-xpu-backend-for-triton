@@ -113,6 +113,14 @@ static const Fp8ConversionDesc Fp8E5M2_to_Fp16(bool hasNativeFP) {
   return ret;
 }
 
+static inline float int32_to_fp32(uint32_t val) {
+  union {
+    uint32_t as_bits;
+    float as_value;
+  } fp32 = {val};
+  return fp32.as_value;
+}
+
 static SmallVector<Value>
 Fp8E5M2_to_Bf16_func(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {

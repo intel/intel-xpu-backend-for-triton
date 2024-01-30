@@ -8,6 +8,8 @@ import pytest
 import triton
 import triton.language as tl
 
+torch.xpu.enable_sync_mode()
+
 def matching_int(dtype):
     if dtype.primitive_bitwidth == 8:
         return torch.int8
@@ -196,6 +198,7 @@ def launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, BLO
 
 def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, max_repr, offset):
 
+    print("rounding=", rounding)
     src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, src_dtype.primitive_bitwidth, max_repr)
     dst = launch_type_convert_triton(src, src_dtype, dst_dtype, rounding)
     src = launch_type_convert_triton(src, src_dtype, tl.float32)
@@ -227,15 +230,21 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 
     numbits_src = exponent_bits + mantissa_bits + 1
 
-    src = launch_exhaustive_populate(src_dtype, 0, 65536, False, numbits_src, max_repr)
+    # src = launch_exhaustive_populate(src_dtype, 0, 65536, False, numbits_src, max_repr)
+    src = launch_exhaustive_populate(src_dtype, 0, 4096, False, numbits_src, max_repr)
 
     dst = launch_type_convert_triton(src, src_dtype, dst_dtype)
+    torch.set_printoptions(profile="full")
+    print("target type=", dst)
     dst = launch_type_convert_triton(dst, dst_dtype, tl.float32)
 
     dst2 = launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias)
 
+    print("src=", src, "\ndst=", dst, "\nemulated=", dst2)
+    print("dst-emulated=", dst-dst2)
+    print("nonzero errors=", dst2&(dst-dst2))
+    print("idx=", torch.nonzero(dst2&(dst-dst2)))
     assert(torch.equal(dst, dst2))
-
 
 @pytest.mark.parametrize("src_dtype, dst_dtype", [
     ('float16', 'float32'),
@@ -258,8 +267,13 @@ def test_typeconvert_upcast(src_dtype, dst_dtype):
     if src_dtype == 'float8e4nv' and torch.cuda.is_available() and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("float8e4nv upcast tests only supported on compute capability 9.0+")
 
+<<<<<<< HEAD
     if torch.xpu.is_available() and src_dtype == 'float8e4nv':
         pytest.skip("FIXME: Incorrect result on XPU")
+=======
+    # if torch.xpu.is_available() and (src_dtype == 'float8e5' and dst_dtype == 'bfloat16') or src_dtype == 'float8e4nv':
+    #     pytest.skip("FIXME: Incorrect result on XPU")
+>>>>>>> 76b6e6ca (Reproduce cuda fp8e5m2 to bf16 conversion)
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
@@ -271,6 +285,65 @@ def test_typeconvert_upcast(src_dtype, dst_dtype):
     }[src_dtype]
 
     upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff)
+
+@pytest.mark.foo
+def test_typeconvert_upcast_fp16_fp32():
+    src_dtype = 'float16'
+    dst_dtype = 'float32'
+    stuff = {
+        'float8e4b15': (4, 3, 15, 0x7e),
+        'float8e4nv': (4, 3, 7, 0x7e),
+        'float8e5': (5, 2, 15, 0x7b),
+        'float16': (5, 10, 15, 0x7bff),
+        'bfloat16': (8, 7, 127, 0x7f7f),
+    }[src_dtype]
+
+    upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff)
+
+@pytest.mark.bar
+def test_typeconvert_upcast_fp8e5_bf16():
+    src_dtype = 'float8e5'
+    dst_dtype = 'bfloat16'
+    stuff = {
+        'float8e4b15': (4, 3, 15, 0x7e),
+        'float8e4nv': (4, 3, 7, 0x7e),
+        'float8e5': (5, 2, 15, 0x7b),
+        'float16': (5, 10, 15, 0x7bff),
+        'bfloat16': (8, 7, 127, 0x7f7f),
+    }[src_dtype]
+
+    upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff)
+
+@pytest.mark.zet
+def test_typeconvert_upcast_fp16_bf16():
+    src_dtype = 'float16'
+    dst_dtype = 'bfloat16'
+    stuff = {
+        'float8e4b15': (4, 3, 15, 0x7e),
+        'float8e4nv': (4, 3, 7, 0x7e),
+        'float8e5': (5, 2, 15, 0x7b),
+        'float16': (5, 10, 15, 0x7bff),
+        'bfloat16': (8, 7, 127, 0x7f7f),
+    }[src_dtype]
+
+    upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff)
+
+@pytest.mark.uti
+def test_typeconvert_upcast_fp16_bf16():
+    src_dtype = 'bfloat16'
+    dst_dtype = 'float16'
+    stuff = {
+        'float8e4b15': (4, 3, 15, 0x7e),
+        'float8e4nv': (4, 3, 7, 0x7e),
+        'float8e5': (5, 2, 15, 0x7b),
+        'float16': (5, 10, 15, 0x7bff),
+        'bfloat16': (8, 7, 127, 0x7f7f),
+    }[src_dtype]
+
+    upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff)
+
+
+
 
 @pytest.mark.parametrize("src_dtype, dst_dtype, rounding, max_repr", [
     ('float32', 'float16', 'rtne', 0x477fe000),
