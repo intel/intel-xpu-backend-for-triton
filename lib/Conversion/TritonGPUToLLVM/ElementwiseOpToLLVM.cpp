@@ -1415,8 +1415,19 @@ struct FpToFpOpConversion
       return builder.launch(rewriter, loc, f16_ty, false);
     }
     case mlir::triton::Target::GENX:
-      return rewriter.create<GENX::FpToFpOp>(loc, f16_ty, v,
-                                             GENX::RoundingMode::RTE);
+      switch (rounding) {
+      case RoundingMode::RTNE:
+        return rewriter.create<GENX::FpToFpOp>(loc, f16_ty, v,
+                                               GENX::RoundingMode::RTE);
+      case RoundingMode::RTZ:
+        return rewriter.create<GENX::FpToFpOp>(loc, f16_ty, v,
+                                               GENX::RoundingMode::RTZ);
+      default:
+        llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
+                        "conversion: "
+                     << stringifyRoundingMode(rounding) << "\n";
+        llvm_unreachable("");
+      }
     default:
       assert(false && "TODO");
     }
