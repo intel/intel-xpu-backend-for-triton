@@ -181,7 +181,7 @@ jobs:
       - name: Run partial operators tests
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --verbose operators
+          python3 -m pytest -n 4 --maxfail=1 --verbose operators
 
       - name: Regression tests
         run: |
