@@ -461,12 +461,6 @@ struct ConvertTritonGPUToLLVM
     bool isWarpSpecialization =
         ttng::TritonNvidiaGPUDialect::getWSSupportedAttr(mod);
     OpBuilder::InsertPoint indexInsertPoint;
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo indexCacheInfo{
-        &baseIndexCache, &indexCache, &indexInsertPoint};
-    // TODO: enable index cache if there are multiple functions
-    if (axisInfoAnalysis.getNumFunctions() > 1) {
-      indexCacheInfo = {nullptr, nullptr, nullptr};
-    }
 
     // tmaMetadata is absent in a triton-opt unit test, in this case, create a
     // local one and dump it after this pass is done.
@@ -477,8 +471,7 @@ struct ConvertTritonGPUToLLVM
     RewritePatternSet patterns(context);
 
     auto populatePatterns1 = [&](auto populateFunc) {
-      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   indexCacheInfo, target,
+      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis, target,
                    /*benefit*/ 10);
     };
 
@@ -489,13 +482,13 @@ struct ConvertTritonGPUToLLVM
 
     auto populatePatterns3 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   indexCacheInfo, tmaMetadata, &tensorPtrMap, target,
+                   tmaMetadata, &tensorPtrMap, target,
                    /*benefit*/ 10);
     };
 
     auto populatePatterns4 = [&](auto populateFunc) {
       populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   indexCacheInfo, computeCapability, target,
+                   computeCapability, target,
                    /*benefit*/ 10);
     };
 
@@ -545,11 +538,6 @@ struct ConvertTritonGPUToLLVM
   }
 
 private:
-  DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
-      baseIndexCache;
-  DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
-           CacheKeyDenseMapInfo>
-      indexCache;
   mlir::triton::gpu::TMAMetadataTy *tmaMetadata = nullptr;
 
   void initSharedMemory(TritonGPUToLLVMTypeConverter &typeConverter,

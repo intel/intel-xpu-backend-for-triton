@@ -19,12 +19,11 @@ namespace {
 struct ReduceOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
-  ReduceOpConversion(
-      TritonGPUToLLVMTypeConverter &typeConverter,
-      ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
-      int computeCapability, Target target, PatternBenefit benefit)
+  ReduceOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                     int computeCapability, Target target,
+                     PatternBenefit benefit)
       : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(
-            typeConverter, indexCacheInfo, target, benefit),
+            typeConverter, target, benefit),
         computeCapability(computeCapability) {}
 
   LogicalResult
@@ -196,8 +195,8 @@ private:
         emitOffsetForLayout(helper.getSrcLayout(), operandType);
     unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
-    auto srcIndices =
-        emitIndices(op.getLoc(), rewriter, helper.getSrcLayout(), operandType);
+    auto srcIndices = emitIndices(op.getLoc(), rewriter, helper.getSrcLayout(),
+                                  operandType, true);
     // reduce within threads
     for (unsigned i = 0; i < srcElems; ++i) {
       SmallVector<unsigned> key = offset[i];
@@ -455,7 +454,8 @@ private:
         // nd-tensor where n >= 1
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getTotalElemsPerThread(resultTy);
-        auto resultIndices = emitIndices(loc, rewriter, resultLayout, resultTy);
+        auto resultIndices =
+            emitIndices(loc, rewriter, resultLayout, resultTy, true);
         assert(resultIndices.size() == resultElems);
 
         SmallVector<Value> resultVals(resultElems);
@@ -484,8 +484,7 @@ private:
 void mlir::triton::populateReduceOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    ConvertTritonGPUOpToLLVMPatternBase::IndexCacheInfo &indexCacheInfo,
     int computeCapability, Target target, PatternBenefit benefit) {
-  patterns.add<ReduceOpConversion>(typeConverter, indexCacheInfo,
-                                   computeCapability, target, benefit);
+  patterns.add<ReduceOpConversion>(typeConverter, computeCapability, target,
+                                   benefit);
 }

@@ -15,7 +15,6 @@
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Target/PTX/TmaMetadata.h"
 #include <set>
 #include <type_traits>
 
@@ -36,7 +35,6 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::DpasEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
-using ::mlir::triton::gpu::TMAMetadataTy;
 namespace ttng = ::mlir::triton::nvidia_gpu;
 
 typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
@@ -148,61 +146,11 @@ protected:
   }
 };
 
-struct IndexCacheKeyT {
-  Attribute layout;
-  RankedTensorType type;
-  bool withCTAOffset;
-};
-
-struct CacheKeyDenseMapInfo {
-  static IndexCacheKeyT getEmptyKey() {
-    auto *pointer = llvm::DenseMapInfo<void *>::getEmptyKey();
-    return {mlir::Attribute(static_cast<mlir::Attribute::ImplType *>(pointer)),
-            RankedTensorType{}, true};
-  }
-  static IndexCacheKeyT getTombstoneKey() {
-    auto *pointer = llvm::DenseMapInfo<void *>::getTombstoneKey();
-    auto tombstone = llvm::DenseMapInfo<RankedTensorType>::getTombstoneKey();
-    return {mlir::Attribute(static_cast<mlir::Attribute::ImplType *>(pointer)),
-            tombstone, true};
-  }
-  static unsigned getHashValue(IndexCacheKeyT key) {
-    return llvm::hash_combine(mlir::hash_value(key.layout),
-                              mlir::hash_value(key.type),
-                              llvm::hash_value(key.withCTAOffset));
-  }
-  static bool isEqual(IndexCacheKeyT LHS, IndexCacheKeyT RHS) {
-    return LHS.layout == RHS.layout && LHS.type == RHS.type &&
-           LHS.withCTAOffset == RHS.withCTAOffset;
-  }
-};
-
 class ConvertTritonGPUOpToLLVMPatternBase {
 public:
-  // Two levels of value cache in emitting indices calculation:
-  // Key: {layout, shape, withCTAOffset}
-  struct IndexCacheInfo {
-    DenseMap<IndexCacheKeyT, SmallVector<Value>, CacheKeyDenseMapInfo>
-        *baseIndexCache = nullptr;
-    DenseMap<IndexCacheKeyT, SmallVector<SmallVector<Value>>,
-             CacheKeyDenseMapInfo> *indexCache = nullptr;
-    OpBuilder::InsertPoint *indexInsertPoint = nullptr;
-  };
-
   explicit ConvertTritonGPUOpToLLVMPatternBase(
       TritonGPUToLLVMTypeConverter &typeConverter, Target target)
       : converter(&typeConverter), target(target) {}
-
-  explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter,
-      IndexCacheInfo indexCacheInfo, Target target)
-      : converter(&typeConverter), indexCacheInfo(indexCacheInfo),
-        target(target) {}
-
-  explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, TMAMetadataTy *tmaMetadata,
-      Target target)
-      : converter(&typeConverter), tmaMetadata(tmaMetadata), target(target) {}
 
   TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
 
@@ -431,6 +379,7 @@ public:
     return ret;
   }
 
+  /*-------*/
   SmallVector<Value>
   loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
                           Value src, SharedMemoryObject smemObj, Type elemTy,
@@ -678,55 +627,42 @@ public:
                                             RankedTensorType type,
                                             bool withCTAOffset) const {
     auto shape = type.getShape();
-    IndexCacheKeyT key{layout, type, withCTAOffset};
-    auto cache = indexCacheInfo.baseIndexCache;
-    auto insertPt = indexCacheInfo.indexInsertPoint;
 
     SmallVector<Value> baseIndex;
-    if (cache && cache->count(key) > 0) {
-      return cache->lookup(key);
-    } else {
-      ConversionPatternRewriter::InsertionGuard guard(rewriter);
-      if (cache)
-        restoreInsertionPointIfSet(insertPt, rewriter);
-      SmallVector<Value> result;
-      if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-        result = emitBaseIndexWithinCTAForBlockedLayout(loc, rewriter,
-                                                        blockedLayout, type);
-      } else if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-        if (mmaLayout.isVolta())
-          result = emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter,
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    SmallVector<Value> result;
+    if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+      result = emitBaseIndexWithinCTAForBlockedLayout(loc, rewriter,
+                                                      blockedLayout, type);
+    } else if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+      if (mmaLayout.isVolta())
+        result = emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter, mmaLayout,
+                                                      type);
+      if (mmaLayout.isAmpere() || mmaLayout.isHopper())
+        result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter,
                                                         mmaLayout, type);
-        if (mmaLayout.isAmpere() || mmaLayout.isHopper())
-          result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter,
-                                                          mmaLayout, type);
-      } else if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
-        result = emitBaseIndexForDpasLayout(loc, rewriter, dpasLayout, type);
-      } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-        auto parentLayout = sliceLayout.getParent();
-        auto parentShape = sliceLayout.paddedShape(type.getShape());
-        RankedTensorType parentTy = RankedTensorType::get(
-            parentShape, type.getElementType(), parentLayout);
-        result = emitBaseIndexForLayout(loc, rewriter, parentLayout, parentTy,
-                                        withCTAOffset);
-        result.erase(result.begin() + sliceLayout.getDim());
-        // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
-        return result;
-      } else {
-        llvm_unreachable("unsupported emitBaseIndexForLayout");
-      }
-      if (withCTAOffset) {
-        auto CTAOffset = emitCTAOffsetForLayout(loc, rewriter, layout, shape);
-        assert(CTAOffset.size() == result.size() && "Rank mismatch");
-        for (unsigned k = 0; k < result.size(); ++k)
-          result[k] = add(result[k], CTAOffset[k]);
-      }
-      if (cache) {
-        cache->insert(std::make_pair(key, result));
-        *insertPt = rewriter.saveInsertionPoint();
-      }
+    } else if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+      result = emitBaseIndexForDpasLayout(loc, rewriter, dpasLayout, type);
+    } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+      auto parentLayout = sliceLayout.getParent();
+      auto parentShape = sliceLayout.paddedShape(type.getShape());
+      RankedTensorType parentTy = RankedTensorType::get(
+          parentShape, type.getElementType(), parentLayout);
+      result = emitBaseIndexForLayout(loc, rewriter, parentLayout, parentTy,
+                                      withCTAOffset);
+      result.erase(result.begin() + sliceLayout.getDim());
+      // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
       return result;
+    } else {
+      llvm_unreachable("unsupported emitBaseIndexForLayout");
     }
+    if (withCTAOffset) {
+      auto CTAOffset = emitCTAOffsetForLayout(loc, rewriter, layout, shape);
+      assert(CTAOffset.size() == result.size() && "Rank mismatch");
+      for (unsigned k = 0; k < result.size(); ++k)
+        result[k] = add(result[k], CTAOffset[k]);
+    }
+    return result;
   }
 
   SmallVector<SmallVector<unsigned>>
@@ -763,45 +699,29 @@ public:
     }
   }
 
-  // -----------------------------------------------------------------------
-  // Emit indices
-  // -----------------------------------------------------------------------
+  // Emit indices calculation within each ConversionPattern, and returns a
+  // [elemsPerThread X rank] index matrix.
   SmallVector<SmallVector<Value>>
-  emitIndices(Location loc, ConversionPatternRewriter &b, Attribute layout,
-              RankedTensorType type, bool withCTAOffset = true) const {
-    IndexCacheKeyT key{layout, type, withCTAOffset};
-    auto cache = indexCacheInfo.indexCache;
-    auto insertPt = indexCacheInfo.indexInsertPoint;
-    if (cache && cache->count(key) > 0) {
-      return cache->lookup(key);
-    } else {
-      ConversionPatternRewriter::InsertionGuard guard(b);
-      if (cache)
-        restoreInsertionPointIfSet(insertPt, b);
-      SmallVector<SmallVector<Value>> result;
-      if (auto blocked = layout.dyn_cast<BlockedEncodingAttr>()) {
-        result = emitIndicesForDistributedLayout(loc, b, blocked, type,
-                                                 withCTAOffset);
-      } else if (auto mma = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-        result =
-            emitIndicesForDistributedLayout(loc, b, mma, type, withCTAOffset);
-      } else if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
-        result = emitIndicesForDistributedLayout(loc, b, dpasLayout, type,
-                                                 withCTAOffset);
-      } else if (auto slice = layout.dyn_cast<SliceEncodingAttr>()) {
-        result =
-            emitIndicesForDistributedLayout(loc, b, slice, type, withCTAOffset);
-      } else {
-        llvm_unreachable(
-            "emitIndices for layouts other than blocked, mma, and slice not "
-            "implemented yet");
-      }
-      if (cache) {
-        cache->insert(std::make_pair(key, result));
-        *insertPt = b.saveInsertionPoint();
-      }
-      return result;
-    }
+  emitIndices(Location loc, ConversionPatternRewriter &rewriter,
+              Attribute layout, RankedTensorType type,
+              bool withCTAOffset) const {
+    // step 1, delinearize threadId to get the base index
+    auto multiDimBase =
+        emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
+    // step 2, get offset of each element
+    auto offset = emitOffsetForLayout(layout, type);
+    // step 3, add offset to base, and reorder the sequence
+    // of indices to guarantee that elems in the same
+    // sizePerThread are adjacent in order
+    auto shape = type.getShape();
+    unsigned rank = shape.size();
+    unsigned elemsPerThread = offset.size();
+    SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
+                                                SmallVector<Value>(rank));
+    for (unsigned n = 0; n < elemsPerThread; ++n)
+      for (unsigned k = 0; k < rank; ++k)
+        multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
+    return multiDimIdx;
   }
 
 private:
@@ -1175,30 +1095,6 @@ private:
     return ret;
   }
 
-  // Emit indices calculation within each ConversionPattern, and returns a
-  // [elemsPerThread X rank] index matrix.
-  SmallVector<SmallVector<Value>> emitIndicesForDistributedLayout(
-      Location loc, ConversionPatternRewriter &rewriter, Attribute layout,
-      RankedTensorType type, bool withCTAOffset) const {
-    // step 1, delinearize threadId to get the base index
-    auto multiDimBase =
-        emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
-    // step 2, get offset of each element
-    auto offset = emitOffsetForLayout(layout, type);
-    // step 3, add offset to base, and reorder the sequence
-    // of indices to guarantee that elems in the same
-    // sizePerThread are adjacent in order
-    auto shape = type.getShape();
-    unsigned rank = shape.size();
-    unsigned elemsPerThread = offset.size();
-    SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
-                                                SmallVector<Value>(rank));
-    for (unsigned n = 0; n < elemsPerThread; ++n)
-      for (unsigned k = 0; k < rank; ++k)
-        multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
-    return multiDimIdx;
-  }
-
   SmallVector<SmallVector<unsigned>>
   emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
                            RankedTensorType type) const {
@@ -1226,8 +1122,6 @@ private:
 
 protected:
   TritonGPUToLLVMTypeConverter *converter;
-  IndexCacheInfo indexCacheInfo;
-  mlir::triton::gpu::TMAMetadataTy *tmaMetadata;
   Target target;
 };
 
@@ -1243,21 +1137,6 @@ public:
       PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, target) {}
-
-  explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonGPUToLLVMTypeConverter &typeConverter,
-      IndexCacheInfo indexCacheInfo, Target target, PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, indexCacheInfo,
-                                            target) {}
-
-  explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonGPUToLLVMTypeConverter &typeConverter,
-      mlir::triton::gpu::TMAMetadataTy *tmaMetadata, Target target,
-      PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, tmaMetadata,
-                                            target) {}
 
 protected:
   TritonGPUToLLVMTypeConverter *getTypeConverter() const {
