@@ -22,10 +22,9 @@ out_dtypes = ["float16", "float32"]
                           for w in input_dtypes
                           for x in input_dtypes  #
                           for o in out_dtypes])
-def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
+def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype, device):
     if x_dtype == w_dtype:
         pytest.skip("skip same dtype")
-    device = "xpu"
     x_dtype = getattr(torch, x_dtype)
     w_dtype = getattr(torch, w_dtype)
     a = torch.randn((M, K), device=device, dtype=x_dtype)
