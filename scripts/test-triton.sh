@@ -138,7 +138,7 @@ function run_regression_tests {
   fi
   cd ${REGRESSION_TEST_DIR}
 
-  python3 -m pytest -vvv -s . --reruns 10 --ignore=test_performance.py --ignore=test_functional_regressions.py
+  python3 -m pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
