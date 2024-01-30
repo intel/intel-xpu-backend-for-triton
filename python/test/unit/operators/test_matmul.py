@@ -43,9 +43,9 @@ torch.xpu.enable_sync_mode()
             # 8 warp
             (128, 256, 16, 1, 8, 2, None, None, None, AT, BT, DTYPE, DTYPE, True, True, None, None),
             (256, 128, 16, 1, 8, 2, None, None, None, AT, BT, DTYPE, DTYPE, True, True, None, None),
-            #FIXME(256, 128, 32, 1, 8, 2, None, None, None, AT, BT, DTYPE, DTYPE, True, True, None, None),
+            (256, 128, 32, 1, 8, 2, None, None, None, AT, BT, DTYPE, DTYPE, True, True, None, None),
             # variable input
-            #FIXME(128, 128, 32, 1, 4, 2, 256, 384, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
+            (128, 128, 32, 1, 4, 2, 256, 384, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
             (128, 128, 32, 1, 4, 2, 107, 233, 128, AT, BT, DTYPE, DTYPE, True, True, None, None),
             (128, 128, 32, 1, 4, 2, 107, 233, 83, AT, BT, DTYPE, DTYPE, True, True, None, None),
             (128, 256, 64, 1, 8, 3, 256, 512, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
@@ -55,10 +55,13 @@ torch.xpu.enable_sync_mode()
             (16, 16, 16, 1, 1, STAGES, 32, 32, 80, AT, BT, DTYPE, DTYPE, True, True, None, None),
             (64, 32, 64, 1, 2, STAGES, 128, 64, 128, AT, BT, DTYPE, DTYPE, True, True, None, None),
             (128, 64, 16, 1, 4, STAGES, 256, 128, 80, AT, BT, DTYPE, DTYPE, True, True, None, None),
-            #FIXME(256, 128, 32, 1, 8, STAGES, 512, 256, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
-            #FIXME(128, 128, 32, 1, 4, STAGES, 256, 256, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
-        ] for DTYPE in ["float16", "bfloat16", "float32"] for AT in [False, True] for BT in [False, True] for STAGES in
-          [4]],
+            (256, 128, 32, 1, 8, STAGES, 512, 256, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
+            (128, 128, 32, 1, 4, STAGES, 256, 256, 160, AT, BT, DTYPE, DTYPE, True, True, None, None),
+        ]
+          for DTYPE in ["float16", "bfloat16", "float32"]
+          for AT in [False, True]
+          for BT in [False, True]
+          for STAGES in [4]],
         # mixed-precision
         *[[
             (32, 32, 32, 1, 1, 2, None, None, None, AT, BT, ADTYPE, BDTYPE, True, FASTACCUM, None, None),
@@ -119,6 +122,10 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (
             ADTYPE in ["float8e4nv", "float8e5", "float8e4b15", "bfloat16"]
             or BDTYPE in ["float8e4nv", "float8e5", "float8e4b15", "bfloat16"]):
+        pytest.skip("FIXME: Incorrect result on XPU")
+    if BLOCK_M == 256 and BLOCK_N == 128 and BLOCK_K == 32:
+        pytest.skip("FIXME: Incorrect result on XPU")
+    if BLOCK_M == 128 and BLOCK_N == 128 and BLOCK_K == 32 and M == 256 and (N == 384 or N == 256):
         pytest.skip("FIXME: Incorrect result on XPU")
     # Regression from e4c91aeb43cbc9743272c19002901c37087b7370:
     if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (ACC_DTYPE == "float32"

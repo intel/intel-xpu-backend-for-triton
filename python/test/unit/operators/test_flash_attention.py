@@ -9,17 +9,19 @@ import triton.ops
 torch.xpu.enable_sync_mode()
 
 
-# FIXME: Enable larger problem sizes when tl.dot uses DPAS.
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [  #
     (2, 4, 512, 16),
-    #    (2, 4, 512, 32),
-    #    (2, 4, 512, 64),
-    #    (2, 4, 512, 128),
+    (2, 4, 512, 32),
+    (2, 4, 512, 64),
+    (2, 4, 512, 128),
 ])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('seq_par', [True, False])
 def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par):
+    if D_HEAD != 16:
+        pytest.skip("FIXME: Enable larger problem sizes when tl.dot uses DPAS")
+
     import os
     enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
     if enable_tma in ["on", "true", "1"]:
