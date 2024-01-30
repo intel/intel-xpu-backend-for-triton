@@ -9,6 +9,8 @@ on:
     branches:
       - llvm-target
 
+permissions: read-all
+
 env:
   BASE: /home/runner
   LLVM_SYSPATH: /home/runner/packages/llvm
