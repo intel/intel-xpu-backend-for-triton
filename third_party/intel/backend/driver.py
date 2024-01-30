@@ -70,12 +70,10 @@ class XPUUtils(object):
 
     def get_sycl_queue(self):
         import torch
-        import intel_extension_for_pytorch #noqa
         return torch.xpu.current_stream().sycl_queue
 
     def get_sycl_device(self, device_id):
         import torch
-        import intel_extension_for_pytorch #noqa
         return torch.xpu.device(device_id).sycl_device
 
     def use_icl(self):
