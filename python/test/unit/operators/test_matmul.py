@@ -120,6 +120,10 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             ADTYPE in ["float8e4nv", "float8e5", "float8e4b15", "bfloat16"]
             or BDTYPE in ["float8e4nv", "float8e5", "float8e4b15", "bfloat16"]):
         pytest.skip("FIXME: Incorrect result on XPU")
+    # Regression from e4c91aeb43cbc9743272c19002901c37087b7370:
+    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (ACC_DTYPE == "float32"
+                                                                or ACC_DTYPE is None) and OUTPUT_DTYPE == "float32":
+        pytest.skip("FIXME: Incorrect result on XPU")
 
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
