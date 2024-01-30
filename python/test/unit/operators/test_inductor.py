@@ -164,6 +164,7 @@ def test_avg_pool_bw():
 @pytest.mark.parametrize("RBLOCK", [1, 16, 32, 64, 128])
 @pytest.mark.parametrize("num_warps", [1, 4])
 def test_scan2d_broadcast(RBLOCK, num_warps):
+
     @triton.jit(debug=True)
     def fn(in_ptr, out_ptr, XBLOCK: tl.constexpr, RBLOCK: tl.constexpr):
         rindex = tl.arange(0, RBLOCK)[None, :]
