@@ -16,7 +16,7 @@ torch.xpu.enable_sync_mode()
     for dtype in ['float16', 'float32']
     for mode in ['forward', 'backward']
 ])
-def test_op(M, N, dtype, mode):
+def test_op(M, N, dtype, mode, device):
     if torch.cuda.is_available():
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8 and dtype == "bfloat16":
@@ -24,8 +24,8 @@ def test_op(M, N, dtype, mode):
 
     dtype = {'bfloat16': torch.bfloat16, 'float16': torch.float16, 'float32': torch.float32}[dtype]
     # create inputs
-    x = torch.randn(M, N, dtype=dtype, device='xpu', requires_grad=True)
-    idx = 4 + torch.ones(M, dtype=torch.int64, device='xpu')
+    x = torch.randn(M, N, dtype=dtype, device=device, requires_grad=True)
+    idx = 4 + torch.ones(M, dtype=torch.int64, device=device)
     # forward pass
     tt_y = triton.ops.cross_entropy(x, idx)
     th_y = torch.nn.CrossEntropyLoss(reduction="none")(x, idx)
