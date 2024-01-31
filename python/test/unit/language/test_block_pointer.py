@@ -27,7 +27,7 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option:
     for n in (64, 128, 256, 512, 1024)
     for padding in ("zero", "nan")  #
 ])
-def test_block_copy(dtypes_str, n, padding_option):
+def test_block_copy(dtypes_str, n, padding_option, device):
     if torch.cuda.is_available():
         capability = torch.cuda.get_device_capability()
         if capability[0] >= 9:
@@ -40,10 +40,10 @@ def test_block_copy(dtypes_str, n, padding_option):
     if src_dtype_str in ("bool", "int16"):
         if padding_option == "nan":
             pytest.skip("Padding with NaN is not supported for integer types")
-        a = torch.randint(0, 2, (n, ), device="xpu", dtype=src_dtype)
+        a = torch.randint(0, 2, (n, ), device=device, dtype=src_dtype)
     else:
-        a = torch.randn((n, ), device="xpu", dtype=src_dtype)
-    b = torch.zeros((n, ), device="xpu", dtype=dst_dtype)
+        a = torch.randn((n, ), device=device, dtype=src_dtype)
+    b = torch.zeros((n, ), device=device, dtype=dst_dtype)
 
     grid = lambda meta: (triton.cdiv(n, meta["BLOCK_SIZE"]), )
     block_copy_kernel[grid](a_ptr=a, b_ptr=b, N=n, BLOCK_SIZE=64, padding_option=padding_option)
@@ -88,12 +88,12 @@ def matmul_no_scf_with_advance_kernel(  #
         [64, 64, 64],
     ] for num_warps in [4, 8]
 ])
-def test_block_ptr_matmul_no_scf(shape, num_warps):
+def test_block_ptr_matmul_no_scf(shape, num_warps, device):
 
     m, n, k = shape
-    a = torch.randn((m, k), device="xpu", dtype=torch.float16)
-    b = torch.randn((k, n), device="xpu", dtype=torch.float16)
-    c = torch.empty((m, n), device="xpu", dtype=torch.float32)
+    a = torch.randn((m, k), device=device, dtype=torch.float16)
+    b = torch.randn((k, n), device=device, dtype=torch.float16)
+    c = torch.empty((m, n), device=device, dtype=torch.float32)
 
     grid = lambda META: (1, )
     matmul_no_scf_with_advance_kernel[grid](
