@@ -565,6 +565,14 @@ private:
   }
 
   void decomposeInsertSliceAsyncOp(ModuleOp mod) const {
+
+    // The function has been deprecated upstream but is required to work on
+    // genx. The current rewrite pattern for InsertSliceAsync generates PTX and
+    // there is no matching instruciton on genx at the moment.
+    // FIXME: remove this function once a suitable replacement is available.
+    if (target != triton::Target::GENX)
+      return;
+
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     // TODO(Keren): This is a hacky knob that may cause performance regression
     // when decomposition has been performed. We should remove this knob once we
