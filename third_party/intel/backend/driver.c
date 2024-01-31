@@ -99,6 +99,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
   zeDeviceGetComputeProperties(phDevice, &compute_properties);
   int max_shared_mem = compute_properties.maxSharedLocalMemory;
+  int max_group_size = compute_properties.maxTotalGroupSize;
+  int num_subgroup_sizes = compute_properties.numSubGroupSizes;
+  PyObject *subgroup_sizes = PyTuple_New(num_subgroup_sizes);
+  for (int i = 0; i < num_subgroup_sizes; i++) {
+      PyTuple_SetItem(subgroup_sizes, i, PyLong_FromLong(compute_properties.subGroupSizes[i]));
+  }
 
   uint32_t memoryCount = 0;
   zeDeviceGetMemoryProperties(phDevice, &memoryCount, nullptr);
@@ -114,11 +120,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   delete[] pMemoryProperties;
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}", "max_shared_mem",
                        max_shared_mem, "multiprocessor_count",
                        multiprocessor_count, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width, "device_arch", gpu_arch);
+                       mem_bus_width, "device_arch", gpu_arch,
+                       "max_group_size", max_group_size, "subgroup_sizes", subgroup_sizes);
 }
 
 /*Sycl code Start*/

@@ -343,7 +343,7 @@ private:
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    Value warpSize = getModuleWarpSize(rewriter, loc);
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
     auto srcLayout = helper.getSrcLayout();
@@ -396,7 +396,7 @@ private:
     Location loc = op.getLoc();
 
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    Value warpSize = getModuleWarpSize(rewriter, loc);
     Value laneId = urem(threadId, warpSize);
     Value zero = i32_val(0);
 
