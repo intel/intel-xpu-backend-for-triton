@@ -298,7 +298,7 @@ def make_launcher(constants, signature, ids):
           ptr_info.valid = false;
           return ptr_info;
         }}
-        ptr_info.dev_ptr = (void*) PyLong_AsUnsignedLongLong(ret);
+        ptr_info.dev_ptr = (void*) PyLong_AsLongLong(ret);
         if(!ptr_info.dev_ptr) {{
           return ptr_info;
         }}
