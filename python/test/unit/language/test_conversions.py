@@ -243,7 +243,11 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     print("src=", src, "\ndst=", dst, "\nemulated=", dst2)
     print("dst-emulated=", dst-dst2)
     print("nonzero errors=", dst2&(dst-dst2))
-    print("idx=", torch.nonzero(dst2&(dst-dst2)))
+    idx = torch.nonzero(dst2&(dst-dst2))
+    print("idx=", idx)
+    print("bad src=", src[idx])
+    print("bad dst=", dst[idx])
+    print("bad emulated=", dst2[idx])
     assert(torch.equal(dst, dst2))
 
 @pytest.mark.parametrize("src_dtype, dst_dtype", [
@@ -301,8 +305,8 @@ def test_typeconvert_upcast_fp16_fp32():
     upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff)
 
 @pytest.mark.bar
-def test_typeconvert_upcast_fp8e5_bf16():
-    src_dtype = 'float8e5'
+def test_typeconvert_upcast_fp8e4nv_bf16():
+    src_dtype = 'float8e4nv'
     dst_dtype = 'bfloat16'
     stuff = {
         'float8e4b15': (4, 3, 15, 0x7e),
