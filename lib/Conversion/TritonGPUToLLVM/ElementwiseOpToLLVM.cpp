@@ -133,17 +133,66 @@ Fp8E5M2_to_Bf16_func(Location loc, ConversionPatternRewriter &rewriter,
 
   Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
   Value b1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
+  // In i32 original fp8 exponent is b0 >> 26
+  // bf16's 5-bit exponent in the top 2 bytes of i32 is at b0 >> 23
+  // 2^5-1 << 23 = 0xf800000
   b0 = lshr(i32_ty, b0, i32_val(3));
   b1 = lshr(i32_ty, b1, i32_val(3));
 
-  b0 = add(i32_ty, b0, i32_val(0x38003800));
-  b1 = add(i32_ty, b1, i32_val(0x38003800));
+  Value c0 = and_(i32_ty, b0, i32_val(0xffff0000));
+  Value c1 = shl(i32_ty, b0, i32_val(16));
+  Value c2 = and_(i32_ty, b1, i32_val(0xffff0000));
+  Value c3 = shl(i32_ty, b1, i32_val(16));
+
+  auto i32x4VecTy = vec_ty(i32_ty, 4);
+  Value predefined = undef(i32x4VecTy);
+  predefined = insert_element(i32x4VecTy, predefined, i32_val(0x0), i32_val(0));
+  predefined =
+      insert_element(i32x4VecTy, predefined, i32_val(0x37800000), i32_val(1));
+  predefined =
+      insert_element(i32x4VecTy, predefined, i32_val(0x38000000), i32_val(2));
+  predefined =
+      insert_element(i32x4VecTy, predefined, i32_val(0x38400000), i32_val(3));
+  // Check if the exponent is zero, i.e. subnormal number.
+  // depending on the significand value normalization goes like:
+  //  [00] -> 0x0
+  //  [01] -> exp=127-16, sig=0x0
+  //  [10] -> exp=127-15, sig=0x0
+  //  [11] -> exp=127-15, sig=b1000...
+  Value cmp0 = icmp_eq(and_(c0, i32_val(0xf800000)), i32_val(0));
+  Value cmp1 = icmp_eq(and_(c1, i32_val(0xf800000)), i32_val(0));
+  Value cmp2 = icmp_eq(and_(c2, i32_val(0xf800000)), i32_val(0));
+  Value cmp3 = icmp_eq(and_(c3, i32_val(0xf800000)), i32_val(0));
+
+  Value predef_idx0 = lshr(and_(c0, i32_val(3 << 21)), i32_val(21));
+  Value predef_idx1 = lshr(and_(c1, i32_val(3 << 21)), i32_val(21));
+  Value predef_idx2 = lshr(and_(c2, i32_val(3 << 21)), i32_val(21));
+  Value predef_idx3 = lshr(and_(c3, i32_val(3 << 21)), i32_val(21));
+
+  Value normalized0 = extract_element(i32_ty, predefined, predef_idx0);
+  Value normalized1 = extract_element(i32_ty, predefined, predef_idx1);
+  Value normalized2 = extract_element(i32_ty, predefined, predef_idx2);
+  Value normalized3 = extract_element(i32_ty, predefined, predef_idx3);
+
+  Value d0 = add(i32_ty, c0, i32_val(0x38000000));
+  Value d1 = add(i32_ty, c1, i32_val(0x38000000));
+  Value d2 = add(i32_ty, c2, i32_val(0x38000000));
+  Value d3 = add(i32_ty, c3, i32_val(0x38000000));
+
+  Value res0 = select(cmp0, normalized0, d0);
+  Value res1 = select(cmp1, normalized1, d1);
+  Value res2 = select(cmp2, normalized2, d2);
+  Value res3 = select(cmp3, normalized3, d3);
+
+  Value f0 = or_(i32_ty, res0, lshr(i32_ty, res1, i32_val(16)));
+  Value f1 = or_(i32_ty, res2, lshr(i32_ty, res3, i32_val(16)));
+
   Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
   Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
 
   auto bf16x2VecTy = vec_ty(i16_ty, 2);
-  Value bf16x2Vec0 = or_(i32_ty, sign0, b0);
-  Value bf16x2Vec1 = or_(i32_ty, sign1, b1);
+  Value bf16x2Vec0 = or_(i32_ty, sign0, f0);
+  Value bf16x2Vec1 = or_(i32_ty, sign1, f1);
   bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
   bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
 
