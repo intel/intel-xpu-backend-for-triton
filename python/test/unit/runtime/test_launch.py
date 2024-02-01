@@ -30,22 +30,16 @@ def test_memory_leak() -> None:
 
     tracemalloc.start()
     try:
-        print("Hello Sarbojit")
         inp = torch.randn(10, device='xpu')
         out = torch.randn(10, device='xpu')
-        begin, _ = tracemalloc.get_traced_memory()
         kernel[(10, )](inp, out, 10, XBLOCK=16)
         gc.collect()
-        end, _ = tracemalloc.get_traced_memory()
-        print("Memory used : " + str(end - begin))
         begin, _ = tracemalloc.get_traced_memory()
         for _ in range(100):
             kernel[(10, )](inp, out, 10, XBLOCK=16)
         gc.collect()
         end, _ = tracemalloc.get_traced_memory()
-        print("Memory used after 100 iteration: " + str(end - begin))
         assert end - begin < 30000
-        #assert(False)
     finally:
         tracemalloc.stop()
 
