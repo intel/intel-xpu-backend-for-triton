@@ -260,7 +260,7 @@ def make_launcher(constants, signature, ids):
     auto cgf = [&](sycl::handler &cgh) {{
       {" ".join(f'set_scalar_arg(cgh, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
       if (shared_memory) {{
-          using share_mem_t = sycl::accessor<int8_t, 1, sycl::access::mode::read_write, sycl::access::target::local>;
+          using share_mem_t = sycl::local_accessor<int8_t, 1>;
           share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
           cgh.set_arg(num_params, local_buffer);
           //cgh.parallel_for(sycl::nd_range{{sycl::range{{(uint32_t)gridX*threads_per_warp*num_warps}}, sycl::range{{work_group_size}}}}, kernel_ptr);

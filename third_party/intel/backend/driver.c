@@ -89,7 +89,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
     gpu_arch = 1; // PVC
     break;
   default:
-    // fall through
+    ; // fall through
   }
 
   ze_device_compute_properties_t compute_properties = {};
@@ -301,15 +301,15 @@ bool update(sycl::queue sycl_queue) {
   // Get l0-context
   auto sycl_context = sycl_queue.get_context();
   ze_context_handle_t hCtxt =
-      get_native<sycl::backend::ext_oneapi_level_zero>(sycl_context);
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_context);
   // Get l0-device
   std::vector<sycl::device> sycl_devices = sycl_context.get_devices();
   ze_device_handle_t hDev =
-      get_native<sycl::backend::ext_oneapi_level_zero>(sycl_devices[0]);
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_devices[0]);
   // Get l0-queue
   bool immediate_cmd_list = false;
   std::variant<ze_command_queue_handle_t, ze_command_list_handle_t> queue_var =
-      get_native<sycl::backend::ext_oneapi_level_zero>(sycl_queue);
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_queue);
   auto l0_queue = std::get_if<ze_command_queue_handle_t>(&queue_var);
   if (l0_queue == nullptr) {
     auto imm_cmd_list = std::get_if<ze_command_list_handle_t>(&queue_var);
