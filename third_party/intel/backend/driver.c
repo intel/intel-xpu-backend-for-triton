@@ -43,7 +43,10 @@ static inline void gpuAssert(ze_result_t code, const char *file, int line) {
     char err[1024] = {0};
     strcat(err, prefix);
     strcat(err, str.c_str());
+    PyGILState_STATE gil_state;
+    gil_state = PyGILState_Ensure();
     PyErr_SetString(PyExc_RuntimeError, err);
+    PyGILState_Release(gil_state);
   }
 }
 
@@ -225,8 +228,13 @@ static PyObject *loadSyclBinary(PyObject *self, PyObject *args) {
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
   auto l0_module =
       create_module(l0_context, l0_device, binary_ptr, binary_size);
-
   auto l0_kernel = create_function(l0_module, kernel_name);
+
+  if (PyErr_Occurred()) {
+    // check for errors from module/kernel creation
+    return NULL;
+  }
+
   ze_kernel_properties_t props;
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   props.pNext = nullptr;
