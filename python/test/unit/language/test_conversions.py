@@ -271,14 +271,6 @@ def test_typeconvert_upcast(src_dtype, dst_dtype):
     if src_dtype == 'float8e4nv' and torch.cuda.is_available() and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("float8e4nv upcast tests only supported on compute capability 9.0+")
 
-<<<<<<< HEAD
-    if torch.xpu.is_available() and src_dtype == 'float8e4nv':
-        pytest.skip("FIXME: Incorrect result on XPU")
-=======
-    # if torch.xpu.is_available() and (src_dtype == 'float8e5' and dst_dtype == 'bfloat16') or src_dtype == 'float8e4nv':
-    #     pytest.skip("FIXME: Incorrect result on XPU")
->>>>>>> 76b6e6ca (Reproduce cuda fp8e5m2 to bf16 conversion)
-
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
         'float8e4b15': (4, 3, 15, 0x7e),
@@ -305,9 +297,9 @@ def test_typeconvert_upcast_fp16_fp32():
     upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff)
 
 @pytest.mark.bar
-def test_typeconvert_upcast_fp8e4nv_bf16():
+def test_typeconvert_upcast_fp8e4nv_f16():
     src_dtype = 'float8e4nv'
-    dst_dtype = 'bfloat16'
+    dst_dtype = 'float32'
     stuff = {
         'float8e4b15': (4, 3, 15, 0x7e),
         'float8e4nv': (4, 3, 7, 0x7e),
