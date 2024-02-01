@@ -229,7 +229,6 @@ static PyObject *loadSyclBinary(PyObject *self, PyObject *args) {
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
   auto l0_module =
       create_module(l0_context, l0_device, binary_ptr, binary_size);
-      
   auto l0_kernel = create_function(l0_module, kernel_name);
 
   if (PyErr_Occurred()) {
