@@ -18,9 +18,6 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target()[0] == "hip"
 
 
-def is_spirv():
-    return triton.runtime.driver.active.get_current_target()[0] == "xpu"
-
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
