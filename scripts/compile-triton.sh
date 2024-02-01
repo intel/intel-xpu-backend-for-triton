@@ -3,7 +3,7 @@
 set +o xtrace
 if [ ! -d "$BASE" ]; then
   echo "**** BASE is not given *****"
-  BASE=$(dirname "$0")/../..
+  BASE=$(cd $(dirname "$0")/../.. && pwd)
   echo "**** Default BASE is set to $BASE ****"
 fi
 
