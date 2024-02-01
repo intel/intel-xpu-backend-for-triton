@@ -18,7 +18,6 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target()[0] == "hip"
 
 
-
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
 float_dtypes = ['float16', 'float32', 'float64']
