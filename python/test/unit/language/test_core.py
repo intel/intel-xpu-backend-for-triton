@@ -1932,9 +1932,6 @@ def test_histogram(M, N, device):
             'test_histogram for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
         )
 
-    if is_xpu(device):
-        pytest.skip("RuntimeError: \"histc\" not implemented for 'Int'")
-
     @triton.jit
     def histogram_kernel(x_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr):
         offset1 = tl.arange(0, M)
@@ -1946,7 +1943,11 @@ def test_histogram(M, N, device):
     torch.manual_seed(17)
     x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
     z = torch.empty(N, dtype=torch.int32, device=device)
-    z_torch = torch.histc(x, bins=N, min=0, max=N - 1)
+    # FIXME: use regular histc when supported for xpu.
+    if is_xpu(device):
+        z_torch = torch.histc(x.to('cpu').to(torch.float32), bins=N, min=0, max=N - 1).to(torch.int32).to('xpu')
+    else:
+        z_torch = torch.histc(x, bins=N, min=0, max=N - 1)
     histogram_kernel[(1, )](x, z, M=M, N=N)
     assert (z_torch == z).all()
 
