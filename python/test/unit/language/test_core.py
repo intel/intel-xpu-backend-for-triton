@@ -40,10 +40,6 @@ if is_hip():
 else:
     THREADS_PER_WARP = 32
 
-if is_spirv():
-    # FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
-    torch.xpu.enable_sync_mode()
-
 
 def _bitwidth(dtype: str) -> int:
     # ex.: "int64" -> 64

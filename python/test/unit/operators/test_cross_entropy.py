@@ -5,9 +5,6 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.ops
 
-# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
-torch.xpu.enable_sync_mode()
-
 
 @pytest.mark.parametrize("M, N, dtype, mode", [  #
     (M, N, dtype, mode)

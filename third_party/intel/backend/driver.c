@@ -80,17 +80,16 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   // Extract triton::gpu::intel::DeviceArch from pci_device_id
   // https://dgpu-docs.intel.com/devices/hardware-table.html
   int pci_device_id = device_properties.deviceId;
-  int gpu_arch = 3;  // triton::gpu::intel::DeviceArch::UNKNOWN
-  switch ((pci_device_id >> 8) & 0xFF)
-  {
-    case 0x56:
-      gpu_arch = 0; // Arc GPUs 56xx
-      break;
-    case 0x0B: // PVC GPUs 0Bxx
-      gpu_arch = 1; // PVC
-      break;
-    default:
-      // fall through
+  int gpu_arch = 3; // triton::gpu::intel::DeviceArch::UNKNOWN
+  switch ((pci_device_id >> 8) & 0xFF) {
+  case 0x56:
+    gpu_arch = 0; // Arc GPUs 56xx
+    break;
+  case 0x0B:      // PVC GPUs 0Bxx
+    gpu_arch = 1; // PVC
+    break;
+  default:
+    // fall through
   }
 
   ze_device_compute_properties_t compute_properties = {};
@@ -350,19 +349,6 @@ static PyObject *initContext(PyObject *self, PyObject *args) {
   return Py_BuildValue("(K)", (uint64_t)context);
 }
 
-static PyObject *initEventPool(PyObject *self, PyObject *args) {
-  // Create event pool
-  ze_event_pool_desc_t tsEventPoolDesc = {
-      ZE_STRUCTURE_TYPE_EVENT_POOL_DESC, nullptr,
-      ZE_EVENT_POOL_FLAG_HOST_VISIBLE, // all events in pool are visible to Host
-      1                                // count
-  };
-  ZE_CHECK(zeEventPoolCreate(context, &tsEventPoolDesc, 0, nullptr,
-                             &eventPoolHandle));
-
-  return Py_BuildValue("(K)", (uint64_t)eventPoolHandle);
-}
-
 static PyObject *initDevices(PyObject *self, PyObject *args) {
   PyObject *cap;
   void *queue = NULL;
@@ -390,21 +376,6 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
-static PyObject *getL0ImmCommandList(PyObject *self, PyObject *args) {
-  PyObject *cap;
-  void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
-  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
-    return NULL;
-  sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
-
-  if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
-    update(*sycl_queue);
-  }
-  return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].cmd_list));
-}
-
 static PyObject *getL0Queue(PyObject *self, PyObject *args) {
   PyObject *cap;
   void *queue = NULL;
@@ -417,20 +388,6 @@ static PyObject *getL0Queue(PyObject *self, PyObject *args) {
     update(*sycl_queue);
   }
   return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].queue));
-}
-
-static PyObject *getL0DevPtr(PyObject *self, PyObject *args) {
-  PyObject *cap;
-  void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
-  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
-    return NULL;
-  sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
-  if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
-    update(*sycl_queue);
-  }
-  return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].device));
 }
 
 static PyObject *getL0CtxtPtr(PyObject *self, PyObject *args) {
@@ -458,13 +415,7 @@ static PyMethodDef ModuleMethods[] = {
      "Initialize the ZE GPU context"},
     {"init_devices", initDevices, METH_VARARGS,
      "Initialize the ZE GPU devices and return device count"},
-    {"init_event_pool", initEventPool, METH_VARARGS,
-     "Initialize ZE event pool"},
-    {"get_l0_imm_cmd_list", getL0ImmCommandList, METH_VARARGS,
-     "Get l0 command list in case of immediate command list"},
     {"get_l0_queue", getL0Queue, METH_VARARGS, "Get l0 queue from sycl queue"},
-    {"get_l0_dev_ptr", getL0DevPtr, METH_VARARGS,
-     "Extract l0 device pointer from sycl queue"},
     {"get_l0_ctxt_ptr", getL0CtxtPtr, METH_VARARGS,
      "Extract l0 context pointer from sycl queue"},
     {NULL, NULL, 0, NULL} // sentinel
