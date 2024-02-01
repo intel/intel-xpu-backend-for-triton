@@ -635,8 +635,7 @@ static const Fp8ConversionDesc Fp16_to_Fp8E4M3B15x4 = {
 
 /* ----- FP8E4M3 ------ */
 // Note: when handled by software, this format
-// does not handle denormals and has
-// more than a single NaN values.
+// has more than a single NaN values.
 
 // Fp8E4M3 -> Fp16 (packed)
 static SmallVector<Value>
@@ -654,12 +653,59 @@ Fp8E4M3Nv_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
 
   b0 = lshr(i32_ty, b0, i32_val(1));
 
-  b0 = add(i32_ty, b0, i32_val(0x20002000));
+  Value c0 = and_(i32_ty, b0, i32_val(0xffff0000));
+  Value c1 = shl(i32_ty, b0, i32_val(16));
 
-  b0 = or_(i32_ty, b0, and_(i32_ty, a0, i32_val(0x80008000)));
+  // Check if the exponent is zero, i.e. subnormal number.
+  // fp8e4 has a bias of 7
+  // depending on the significand value normalization goes like:
+  //  [000] -> 0x0
+  //  [001] -> exp=15-9, sig=0x0
+  //  [010] -> exp=15-8, sig=0x0
+  //  [011] -> exp=15-8, sig=b100...
+  //  [100] -> exp=15-7, sig=0x0
+  //  [101] -> exp=15-7, sig=b010...
+  //  [110] -> exp=15-7, sig=b100...
+  //  [111] -> exp=15-7, sig=b110...
+  Value cmp0 = icmp_eq(and_(c0, i32_val(0x7c000000)), i32_val(0));
+  Value cmp1 = icmp_eq(and_(c1, i32_val(0x7c000000)), i32_val(0));
+
+  auto i32x8VecTy = vec_ty(i32_ty, 8);
+  Value predefined = undef(i32x8VecTy);
+  predefined = insert_element(i32x8VecTy, predefined, i32_val(0x0), i32_val(0));
+  predefined =
+      insert_element(i32x8VecTy, predefined, i32_val(0x18000000), i32_val(1));
+  predefined =
+      insert_element(i32x8VecTy, predefined, i32_val(0x1C000000), i32_val(2));
+  predefined =
+      insert_element(i32x8VecTy, predefined, i32_val(0x1E000000), i32_val(3));
+  predefined =
+      insert_element(i32x8VecTy, predefined, i32_val(0x20000000), i32_val(4));
+  predefined =
+      insert_element(i32x8VecTy, predefined, i32_val(0x21000000), i32_val(5));
+  predefined =
+      insert_element(i32x8VecTy, predefined, i32_val(0x22000000), i32_val(6));
+  predefined =
+      insert_element(i32x8VecTy, predefined, i32_val(0x23000000), i32_val(7));
+
+  Value predef_idx0 = lshr(and_(c0, i32_val(7 << 23)), i32_val(23));
+  Value predef_idx1 = lshr(and_(c1, i32_val(7 << 23)), i32_val(23));
+
+  Value normalized0 = extract_element(i32_ty, predefined, predef_idx0);
+  Value normalized1 = extract_element(i32_ty, predefined, predef_idx1);
+
+  Value d0 = add(i32_ty, c0, i32_val(0x20000000));
+  Value d1 = add(i32_ty, c1, i32_val(0x20000000));
+
+  Value res0 = select(cmp0, normalized0, d0);
+  Value res1 = select(cmp1, normalized1, d1);
+
+  Value f0 = or_(i32_ty, res0, lshr(i32_ty, res1, i32_val(16)));
+  Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
 
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  auto fp16x2Vec0 = bitcast(b0, fp16x2VecTy);
+  Value fp16x2Vec0 = or_(i32_ty, sign0, f0);
+  fp16x2Vec0 = bitcast(fp16x2Vec0, fp16x2VecTy);
 
   return {extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
           extract_element(f16_ty, fp16x2Vec0, i32_val(1))};
