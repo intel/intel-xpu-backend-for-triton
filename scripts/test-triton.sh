@@ -43,8 +43,8 @@ fi
 set +o xtrace
 if [ ! -d "$BASE" ]; then
   echo "**** BASE is not given *****"
-  echo "**** Default BASE is set to /iusers/$USER ****"
-  BASE=/iusers/$USER
+  BASE=$(cd $(dirname "$0")/../.. && pwd)
+  echo "**** Default BASE is set to $BASE ****"
 fi
 
 if [ "$VENV" = true ]; then
