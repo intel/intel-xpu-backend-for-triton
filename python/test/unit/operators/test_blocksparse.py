@@ -5,9 +5,6 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.ops
 
-# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
-torch.xpu.enable_sync_mode()
-
 
 def sparsify_tensor(x, mask, block):
     ret = torch.empty((x.size(0), mask.sum(), block, block), dtype=x.dtype, device=x.device)
@@ -41,7 +38,7 @@ def mask_tensor(x, mask, block, value=0):
 @pytest.mark.parametrize("TRANS_B", [False, True])
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
 @pytest.mark.parametrize("DTYPE", [torch.float16])
-def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=256):
+def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, device, Z=3, H=2, M=512, N=384, K=256):
     pytest.skip("FIXME: AssertionError: Tensor-likes are not close!")
     seed = 0
     torch.manual_seed(seed)
@@ -84,7 +81,7 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, Z=3, H=2, M=512, N=384, K=
     b_tri = do_sparsify(b_tri) if is_dds else b_tri
     a_tri.retain_grad()
     b_tri.retain_grad()
-    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device="xpu")
+    op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device=device)
     c_tri = op(a_tri, b_tri)
     c_tri.backward(dc_tri)
     da_tri = a_tri.grad
@@ -105,7 +102,7 @@ configs = [
 
 @pytest.mark.parametrize("is_dense", [False, True])
 @pytest.mark.parametrize("BLOCK, WIDTH", configs)
-def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
+def test_softmax(BLOCK, WIDTH, is_dense, device, Z=2, H=2, is_causal=True, scale=0.4):
     if not is_dense:
         pytest.skip("FIXME: AssertionError: Tensor-likes are not close!")
     # set seed
@@ -126,7 +123,7 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
     # compute [torch]
     a_ref = mask_tensor(a_ref, layout, BLOCK, value=float("-inf"))
     a_ref.retain_grad()
-    at_mask = torch.ones((M, N), device="xpu")
+    at_mask = torch.ones((M, N), device=device)
     if is_causal:
         at_mask = torch.tril(at_mask)
     M = at_mask[None, None, :, :] + torch.zeros_like(a_ref)
@@ -139,7 +136,7 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
     a_tri = sparsify_tensor(a_tri, layout, BLOCK)
     a_tri.retain_grad()
     dout_tri = sparsify_tensor(dout_tri, layout, BLOCK)
-    op = triton.ops.blocksparse.softmax(layout, BLOCK, device="xpu", is_dense=is_dense)
+    op = triton.ops.blocksparse.softmax(layout, BLOCK, device=device, is_dense=is_dense)
     out_tri = op(a_tri, scale=scale, is_causal=is_causal)
     out_tri.backward(dout_tri)
     da_tri = a_tri.grad
@@ -150,15 +147,7 @@ def test_softmax(BLOCK, WIDTH, is_dense, Z=2, H=2, is_causal=True, scale=0.4):
 
 @pytest.mark.parametrize("block", [16, 32, 64])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
-def test_attention_fwd_bwd(
-    block,
-    dtype,
-    input_scale=1.0,
-    scale=1 / 8.0,
-    n_ctx=256,
-    batch_size=2,
-    n_heads=2,
-):
+def test_attention_fwd_bwd(block, dtype, device, input_scale=1.0, scale=1 / 8.0, n_ctx=256, batch_size=2, n_heads=2):
     if torch.cuda.is_available():
         capability = torch.cuda.get_device_capability()
         if capability[0] < 7:
@@ -187,7 +176,7 @@ def test_attention_fwd_bwd(
 
     # Torch version:
     torch_q, torch_k, torch_v = [x.clone() for x in qkvs]
-    attn_mask = torch.ones([n_ctx, n_ctx], device="xpu", dtype=dtype)
+    attn_mask = torch.ones([n_ctx, n_ctx], device=device, dtype=dtype)
     attn_mask = torch.tril(attn_mask, diagonal=0)
     attn_mask = 1e6 * (-1 + (attn_mask.reshape((1, 1, n_ctx, n_ctx)).xpu()))
     torch_q.retain_grad()

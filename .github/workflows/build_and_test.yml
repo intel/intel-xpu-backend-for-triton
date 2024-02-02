@@ -162,7 +162,7 @@ jobs:
           cd python/test/unit
           python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest runtime/
+          python3 -m pytest --device xpu runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
 
@@ -176,12 +176,12 @@ jobs:
           CUA_VISIBLE_DEVICES: ""
         run: |
           cd python/test/unit
-          python3 -m pytest -vs operators/test_flash_attention.py
+          python3 -m pytest -vs --device xpu operators/test_flash_attention.py
 
       - name: Run partial operators tests
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --verbose operators
+          python3 -m pytest -n 8 --verbose --device xpu operators
 
       - name: Regression tests
         run: |

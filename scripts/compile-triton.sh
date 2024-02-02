@@ -3,11 +3,10 @@
 set +o xtrace
 if [ ! -d "$BASE" ]; then
   echo "**** BASE is not given *****"
-  echo "**** Default BASE is set to /iusers/$USER ****"
-  BASE=/iusers/$USER
+  BASE=$(cd $(dirname "$0")/../.. && pwd)
+  echo "**** Default BASE is set to $BASE ****"
 fi
 
-CMAKE=/usr/bin/cmake
 export PACKAGES_DIR=$BASE/packages
 export SPIRV_TOOLS=$PACKAGES_DIR/spirv-tools
 export LLVM_PROJ=$BASE/llvm
@@ -48,6 +47,9 @@ fi
 
 if [ ! -d "$PACKAGES_DIR" ]; then
   mkdir $PACKAGES_DIR
+fi
+if [ $BASE != $HOME ]; then
+  ln -s $PACKAGES_DIR $HOME/packages
 fi
 
 ############################################################################
@@ -91,7 +93,7 @@ function build_llvm {
   echo "****** Configuring $LLVM_PROJ ******"
 
   cd $LLVM_PROJ_BUILD
-  $CMAKE -G Ninja ../llvm \
+  cmake -G Ninja ../llvm \
     -DLLVM_ENABLE_DUMP=1 \
     -DCMAKE_BUILD_TYPE=Release \
     -DLLVM_ENABLE_ASSERTIONS=true \

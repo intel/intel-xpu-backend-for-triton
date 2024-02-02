@@ -258,7 +258,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype):
     if src_dtype == 'float8e4nv' and torch.cuda.is_available() and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("float8e4nv upcast tests only supported on compute capability 9.0+")
 
-    if torch.xpu.is_available() and (src_dtype == 'float8e5' and dst_dtype == 'bfloat16') or src_dtype == 'float8e4nv':
+    if torch.xpu.is_available() and src_dtype == 'float8e4nv':
         pytest.skip("FIXME: Incorrect result on XPU")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)

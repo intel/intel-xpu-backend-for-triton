@@ -7,9 +7,6 @@ from torch.testing import assert_close
 import triton
 import triton.language as tl
 
-#FIXME
-torch.xpu.enable_sync_mode()
-
 
 @triton.jit
 def kernel_device_assert(X, Y, BLOCK: tl.constexpr):

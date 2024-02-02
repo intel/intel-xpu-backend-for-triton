@@ -54,12 +54,9 @@ class XPUUtils(object):
         self.load_sycl_binary = mod.load_sycl_binary
         self.get_device_properties = mod.get_device_properties
         self.get_l0_queue = mod.get_l0_queue
-        self.get_l0_imm_cmd_list = mod.get_l0_imm_cmd_list
-        self.get_l0_dev_ptr = mod.get_l0_dev_ptr
         self.get_l0_ctxt_ptr = mod.get_l0_ctxt_ptr
         self.context = mod.init_context(self.get_sycl_queue())
         self.device_count = mod.init_devices(self.get_sycl_queue())
-        self.event_pool = mod.init_event_pool()[0]
         self.current_device = 0 if self.device_count[0] > 0 else -1
 
     def get_current_device(self):
@@ -178,98 +175,6 @@ def make_launcher(constants, signature, ids):
 
     #define ZE_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-    static void _regular_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int shared_memory,
-                                ze_command_queue_handle_t queue, ze_device_handle_t _dev, ze_context_handle_t _ctxt,
-                                ze_kernel_handle_t function, ze_event_pool_handle_t event_pool
-                                {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-      void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
-
-      if (gridX*gridY*gridZ > 0) {{
-        {" ".join(f'zeKernelSetArgumentValue(function, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
-        if (shared_memory) {{
-          uint32_t num_params = sizeof(params)/sizeof(params[0]);
-          zeKernelSetArgumentValue(function, num_params, shared_memory, NULL);
-        }}
-        zeKernelSetGroupSize(function, 32*num_warps, 1, 1);
-
-        ze_group_count_t grpCount = {{gridX, gridY, gridZ}};
-
-        // Create command list
-        ze_command_list_handle_t CmdList;
-        ze_command_list_desc_t CommandListDesc_ = {{
-            ZE_STRUCTURE_TYPE_COMMAND_LIST_DESC,
-            nullptr,
-            0,
-            0,
-        }};
-
-        ZE_CHECK(zeCommandListCreate(_ctxt, _dev, &CommandListDesc_, &CmdList));
-
-        ze_event_desc_t eventDesc = {{
-            ZE_STRUCTURE_TYPE_EVENT_DESC,
-            nullptr,
-            0,
-            0,
-            ZE_EVENT_SCOPE_FLAG_HOST
-        }};
-        ze_event_handle_t hEvent;
-        ZE_CHECK(zeEventCreate(event_pool, &eventDesc, &hEvent));
-
-        // Append a signal of an event into the command list after the kernel executes
-        ZE_CHECK(zeCommandListAppendLaunchKernel(CmdList, function, &grpCount, hEvent, 0, nullptr));
-
-        // close command list
-        ZE_CHECK(zeCommandListClose(CmdList));
-
-        // FIXME: The following statement currently doesn't synchronize all IPEX SYCL queues.
-        //        Needs to find all IPEX SYCL queues
-        // Synchronize the command queue to ensure previous IPEX SYCL commands complete before Triton kernel starts
-        // ZE_CHECK(zeCommandQueueSynchronize(queue, std::numeric_limits<uint64_t>::max()));
-
-        // execute command list
-        ZE_CHECK(zeCommandQueueExecuteCommandLists(queue, 1, &CmdList, nullptr));
-
-        // Wait on event to complete
-        ZE_CHECK(zeEventHostSynchronize(hEvent, std::numeric_limits<uint64_t>::max()));
-      }}
-    }}
-
-    static void _launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int shared_memory,
-                        ze_command_list_handle_t queue, ze_kernel_handle_t function, ze_event_pool_handle_t event_pool
-                        {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-      void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
-
-      if (gridX*gridY*gridZ > 0) {{
-        {" ".join(f'zeKernelSetArgumentValue(function, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
-        if (shared_memory) {{
-          uint32_t num_params = sizeof(params)/sizeof(params[0]);
-          zeKernelSetArgumentValue(function, num_params, shared_memory, NULL);
-        }}
-        zeKernelSetGroupSize(function, 32*num_warps, 1, 1);
-        ze_group_count_t grpCount = {{gridX, gridY, gridZ}};
-
-        ze_event_desc_t eventDesc = {{
-            ZE_STRUCTURE_TYPE_EVENT_DESC,
-            nullptr,
-            0,
-            0,
-            ZE_EVENT_SCOPE_FLAG_HOST
-        }};
-        ze_event_handle_t hEvent;
-        ZE_CHECK(zeEventCreate(event_pool, &eventDesc, &hEvent));
-
-        // FIXME: The following statement currently doesn't synchronize all IPEX SYCL queues.
-        //        Needs to find all IPEX SYCL queues
-        // Synchronize to ensure previous IPEX SYCL commands complete before Triton kernel starts
-        ZE_CHECK(zeCommandListHostSynchronize(queue, std::numeric_limits<uint64_t>::max()));
-
-        // Append a signal of an event into the command list after the kernel executes
-        ZE_CHECK(zeCommandListAppendLaunchKernel(queue, function, &grpCount, hEvent, 0, nullptr));
-        // Wait on event to complete
-        ZE_CHECK(zeEventHostSynchronize(hEvent, std::numeric_limits<uint64_t>::max()));
-      }}
-    }}
-
     typedef struct _DevicePtrInfo {{
       void* dev_ptr;
       bool valid;
@@ -355,7 +260,7 @@ def make_launcher(constants, signature, ids):
     auto cgf = [&](sycl::handler &cgh) {{
       {" ".join(f'set_scalar_arg(cgh, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
       if (shared_memory) {{
-          using share_mem_t = sycl::accessor<int8_t, 1, sycl::access::mode::read_write, sycl::access::target::local>;
+          using share_mem_t = sycl::local_accessor<int8_t, 1>;
           share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
           cgh.set_arg(num_params, local_buffer);
           //cgh.parallel_for(sycl::nd_range{{sycl::range{{(uint32_t)gridX*threads_per_warp*num_warps}}, sycl::range{{work_group_size}}}}, kernel_ptr);
