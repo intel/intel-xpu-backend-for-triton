@@ -81,8 +81,12 @@ fi
 ############################################################################
 ## Configure and build the llvm project.
 
-C_COMPILER=/usr/bin/gcc
-CXX_COMPILER=/usr/bin/g++
+if [ ! -d "$C_COMPILER" ] || [ ! -d "$CXX_COMPILER" ]; then
+  C_COMPILER=`which gcc`
+  CXX_COMPILER=`which g++`
+  echo "**** C_COMPILER is set to $C_COMPILER ****"
+  echo "**** CXX_COMPILER is set to $CXX_COMPILER ****"
+fi
 
 if [ ! -d "$LLVM_PROJ_BUILD" ]
 then
