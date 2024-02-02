@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 set +o xtrace
-if [ ! -d "$BASE" ]; then
+if [ ! -z "$BASE" ]; then
   echo "**** BASE is not given *****"
   BASE=$(cd $(dirname "$0")/../.. && pwd)
   echo "**** Default BASE is set to $BASE ****"
@@ -81,10 +81,12 @@ fi
 ############################################################################
 ## Configure and build the llvm project.
 
-if [ ! -d "$C_COMPILER" ] || [ ! -d "$CXX_COMPILER" ]; then
+if [ ! -z "$C_COMPILER" ]; then
   C_COMPILER=`which gcc`
-  CXX_COMPILER=`which g++`
   echo "**** C_COMPILER is set to $C_COMPILER ****"
+fi
+if [ ! -z "$CXX_COMPILER" ]; then
+  CXX_COMPILER=`which g++`
   echo "**** CXX_COMPILER is set to $CXX_COMPILER ****"
 fi
 
