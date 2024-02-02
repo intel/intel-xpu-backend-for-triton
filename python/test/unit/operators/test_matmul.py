@@ -8,9 +8,6 @@ import triton
 import triton.language as tl
 import triton.ops
 
-# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
-torch.xpu.enable_sync_mode()
-
 
 @pytest.mark.parametrize(
     "BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE, ALLOW_TF32, F8_FASTACCUM, ACC_DTYPE, OUTPUT_DTYPE",
