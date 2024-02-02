@@ -427,39 +427,39 @@ Intel GPU backed has thus two paths for Triton kernels compilation:
 At a higher level, the two approaches represent only the way the IR is looked at (e.g., Triton IR can be thought of "SIMD" in a way that it operates on tensors; and autovectorization converts initial sizes to appropriate hardware-defined vector widths for actual instructions).
 
 ## Links and materials
-[1] Triton repo: https://github.com/openai/triton  
-[2] PyTorch 2.0 release notes: https://pytorch.org/get-started/pytorch-2.0/#developervendor-experience  
-[3] FX graph documentation: https://pytorch.org/docs/stable/fx.html  
-[4] Torch Dynamo deep dive: https://pytorch.org/docs/stable/torch.compiler_deepdive.html  
-[5] Torch Inductor introduction & design: https://dev-discuss.pytorch.org/t/torchinductor-a-pytorch-native-compiler-with-define-by-run-ir-and-symbolic-shapes/747  
-[6] PrimTorch: https://pytorch.org/get-started/pytorch-2.0/#primtorch-stable-primitive-operators  
-[7] Torch Inductor Triton codegen sources: https://github.com/pytorch/pytorch/blob/95a86ed9ca107329151e0dc172386d50dd3471c6/torch/_inductor/codegen/triton.py  
-[8] Triton dialects: https://triton-lang.org/main/dialects/dialects.html  
-[9] Torch Inductor details from hot chips 2023: https://youtu.be/i-dOWSHk3Wk?si=EmnM3pnOglh13j8s&t=828  
-[10] Triton paper (Triton: an intermediate language and compiler for tiled neural network computations) https://dl.acm.org/doi/abs/10.1145/3315508.3329973  
-[11] Pytorch IRs: https://pytorch.org/docs/master/ir.html#irs  
-[12] Extern operators selection mechanism: https://github.com/pytorch/pytorch/blob/94db6578ccee2551c986d92c245e0a0729b99449/torch/_inductor/select_algorithm.py  
-[13] Guards overview: https://pytorch.org/docs/stable/torch.compiler_guards_overview.html  
-[14] Triton heuristics: https://github.com/pytorch/pytorch/blob/6ebb26d572d5fcdc6ac0d1297bdf8d1eb5d20722/torch/_inductor/triton_heuristics.py  
-[15] Softmax implementation example: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/python/tutorials/02-fused-softmax.py  
-[16] Triton language: https://triton-lang.org/main/python-api/triton.language.html  
-[17] Triton dialect ops: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/Triton/IR/TritonOps.td  
-[18] TritonGPU dialect ops: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td  
-[19] Triton layouts definition: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td  
-[20] Swizzling examples for shared layout: https://github.com/openai/triton/discussions/2026#discussioncomment-6746579  
-[21] Nvidia’s Matrix Multiply-Accumulate Instructions: https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-multiply-accumulate-instructions  
-[22] Intel’s Xe-HPG overview & white paper: https://www.intel.com/content/www/us/en/developer/articles/technical/introduction-to-the-xe-hpg-architecture.html  
-[23] AMD’s Matrix cores: https://gpuopen.com/learn/amd-lab-notes/amd-lab-notes-matrix-cores-readme/  
-[24] pybind11: https://github.com/pybind/pybind11  
-[25] Tensor extract slice: https://mlir.llvm.org/docs/Dialects/TensorOps/#tensorextract_slice-tensorextractsliceop  
-[26] Matrix fragments for mma.m16n8k16: https://docs-nvidia-com.translate.goog/cuda/parallel-thread-execution/index.html?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp#warp-level-matrix-fragment-mma-16816-float  
-[27] Intel XPU backend for Triton repo: https://github.com/intel/intel-xpu-backend-for-triton  
-[28] SPIR-V: https://www.khronos.org/spir/  
-[29] Intel Graphics Compiler: https://github.com/intel/intel-graphics-compiler  
-[30] OpenCL 3.0 API specification: https://registry.khronos.org/OpenCL/specs/3.0-unified/html/OpenCL_API.html#_execution_model  
-[31] C-for-Metal: High Performance SIMD Programming on Intel GPUs: https://arxiv.org/abs/2101.11049  
-[32] GenISA intrinsics: https://github.com/intel/intel-graphics-compiler/blob/4a1798982e29564baba0265b19a4752f8f458219/IGC/GenISAIntrinsics/Intrinsic_definitions.py  
-[33] GenX intrinsics: https://github.com/intel/vc-intrinsics  
-[34] Sycl ext invoke_simd: https://github.com/intel/llvm/blob/d3c8a7e621ba41be5c11ebad1bce8cd1af216117/sycl/doc/extensions/experimental/sycl_ext_oneapi_invoke_simd.asciidoc  
-[35] GenX dialect: https://github.com/intel/llvm/tree/genx  
-[36] XeGPU dialect: https://github.com/intel/mlir-extensions  
+[1] Triton repo: https://github.com/openai/triton<br>
+[2] PyTorch 2.0 release notes: https://pytorch.org/get-started/pytorch-2.0/#developervendor-experience<br>
+[3] FX graph documentation: https://pytorch.org/docs/stable/fx.html<br>
+[4] Torch Dynamo deep dive: https://pytorch.org/docs/stable/torch.compiler_deepdive.html<br>
+[5] Torch Inductor introduction & design: https://dev-discuss.pytorch.org/t/torchinductor-a-pytorch-native-compiler-with-define-by-run-ir-and-symbolic-shapes/747<br>
+[6] PrimTorch: https://pytorch.org/get-started/pytorch-2.0/#primtorch-stable-primitive-operators<br>
+[7] Torch Inductor Triton codegen sources: https://github.com/pytorch/pytorch/blob/95a86ed9ca107329151e0dc172386d50dd3471c6/torch/_inductor/codegen/triton.py<br>
+[8] Triton dialects: https://triton-lang.org/main/dialects/dialects.html<br>
+[9] Torch Inductor details from hot chips 2023: https://youtu.be/i-dOWSHk3Wk?si=EmnM3pnOglh13j8s&t=828<br>
+[10] Triton paper (Triton: an intermediate language and compiler for tiled neural network computations) https://dl.acm.org/doi/abs/10.1145/3315508.3329973<br>
+[11] Pytorch IRs: https://pytorch.org/docs/master/ir.html#irs<br>
+[12] Extern operators selection mechanism: https://github.com/pytorch/pytorch/blob/94db6578ccee2551c986d92c245e0a0729b99449/torch/_inductor/select_algorithm.py<br>
+[13] Guards overview: https://pytorch.org/docs/stable/torch.compiler_guards_overview.html<br>
+[14] Triton heuristics: https://github.com/pytorch/pytorch/blob/6ebb26d572d5fcdc6ac0d1297bdf8d1eb5d20722/torch/_inductor/triton_heuristics.py<br>
+[15] Softmax implementation example: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/python/tutorials/02-fused-softmax.py<br>
+[16] Triton language: https://triton-lang.org/main/python-api/triton.language.html<br>
+[17] Triton dialect ops: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/Triton/IR/TritonOps.td<br>
+[18] TritonGPU dialect ops: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td<br>
+[19] Triton layouts definition: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td<br>
+[20] Swizzling examples for shared layout: https://github.com/openai/triton/discussions/2026#discussioncomment-6746579<br>
+[21] Nvidia’s Matrix Multiply-Accumulate Instructions: https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-multiply-accumulate-instructions<br>
+[22] Intel’s Xe-HPG overview & white paper: https://www.intel.com/content/www/us/en/developer/articles/technical/introduction-to-the-xe-hpg-architecture.html<br>
+[23] AMD’s Matrix cores: https://gpuopen.com/learn/amd-lab-notes/amd-lab-notes-matrix-cores-readme/<br>
+[24] pybind11: https://github.com/pybind/pybind11<br>
+[25] Tensor extract slice: https://mlir.llvm.org/docs/Dialects/TensorOps/#tensorextract_slice-tensorextractsliceop<br>
+[26] Matrix fragments for mma.m16n8k16: https://docs-nvidia-com.translate.goog/cuda/parallel-thread-execution/index.html?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp#warp-level-matrix-fragment-mma-16816-float<br>
+[27] Intel XPU backend for Triton repo: https://github.com/intel/intel-xpu-backend-for-triton<br>
+[28] SPIR-V: https://www.khronos.org/spir/<br>
+[29] Intel Graphics Compiler: https://github.com/intel/intel-graphics-compiler<br>
+[30] OpenCL 3.0 API specification: https://registry.khronos.org/OpenCL/specs/3.0-unified/html/OpenCL_API.html#_execution_model<br>
+[31] C-for-Metal: High Performance SIMD Programming on Intel GPUs: https://arxiv.org/abs/2101.11049<br>
+[32] GenISA intrinsics: https://github.com/intel/intel-graphics-compiler/blob/4a1798982e29564baba0265b19a4752f8f458219/IGC/GenISAIntrinsics/Intrinsic_definitions.py<br>
+[33] GenX intrinsics: https://github.com/intel/vc-intrinsics<br>
+[34] Sycl ext invoke_simd: https://github.com/intel/llvm/blob/d3c8a7e621ba41be5c11ebad1bce8cd1af216117/sycl/doc/extensions/experimental/sycl_ext_oneapi_invoke_simd.asciidoc<br>
+[35] GenX dialect: https://github.com/intel/llvm/tree/genx<br>
+[36] XeGPU dialect: https://github.com/intel/mlir-extensions<br>
