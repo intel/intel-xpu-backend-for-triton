@@ -24,7 +24,7 @@ out_dtypes = ["float16", "float32"]
                           for o in out_dtypes])
 def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype, device):
     if x_dtype == w_dtype:
-        pytest.skip("skip same dtype")
+        pytest.xfail("skip same dtype")
     x_dtype = getattr(torch, x_dtype)
     w_dtype = getattr(torch, w_dtype)
     a = torch.randn((M, K), device=device, dtype=x_dtype)
