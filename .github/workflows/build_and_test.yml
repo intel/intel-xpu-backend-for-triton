@@ -155,7 +155,7 @@ jobs:
           cd python
           lit -v build/*/test
 
-      - name: Create directory for testing reports
+      - name: Create directory for tests reports
         run: |
           mkdir ~/reports
 
@@ -227,3 +227,7 @@ jobs:
           cp -r $HOME/.cache/pip/* $TMPDIR/
           # ignore error if other job created a cache with the same key already
           mv $TMPDIR $PIP_CACHE || true
+
+      - name: Pass rate
+        run: |
+          python3 scripts/pass_rate.py --reports ~/reports
