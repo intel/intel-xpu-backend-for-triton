@@ -20,8 +20,6 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.language as tl
 
-torch.xpu.enable_sync_mode()
-
 
 @triton.jit
 def asin_kernel(
