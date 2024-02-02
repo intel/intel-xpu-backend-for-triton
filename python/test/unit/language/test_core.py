@@ -1134,10 +1134,10 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
 
     check_cuda_only(device)
 
-    capability = torch.cuda.get_device_capability()
-    if capability[0] < 7:
-        if dtype_x_str == 'float16':
-            pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
+        capability = torch.cuda.get_device_capability()
+        if capability[0] < 7:
+            if dtype_x_str == 'float16':
+                pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
     n_programs = 5
 
     # triton kernel
@@ -2179,7 +2179,7 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
 layouts = [
     BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    # DpasLayout(repeatCount=8, warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1])
+    DpasLayout(repeatCount=8, warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1])
 ]
 
 
@@ -2231,7 +2231,7 @@ def test_store_op(M, src_layout, device):
 layouts = [
     BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    # DpasLayout(repeatCount=8, warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1])
+    DpasLayout(repeatCount=8, warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1])
 ]
 
 
@@ -2518,7 +2518,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
 
     if num_ctas > 1 and in_dtype == 'int8':
         # FIXME: mma v2 with num_ctas > 1 does not work
-        pytest.skip()
+        pytest.xfail()
 
     # triton kernel
     @triton.jit
@@ -4108,8 +4108,6 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
         pytest.xfail("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.xfail("Do not convert same layout")
-    if 'dpas' in str(src_layout) and 'dpas' in str(dst_layout):
-        pytest.xfail("Do not convert between DPAS layouts")
 
     layouts = f"""
     #src = {src_layout}

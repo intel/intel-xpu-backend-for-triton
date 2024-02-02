@@ -115,7 +115,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         if capability[0] < 9 and (ADTYPE == "float8e4nv" or BDTYPE == "float8e4nv"):
             pytest.skip("Only test float8e4nv on devices with sm >= 90")
     if (ADTYPE == "bfloat16" or BDTYPE == "bfloat16") and SPLIT_K != 1:
-        pytest.skip("bfloat16 matmuls don't allow split_k for now")
+        pytest.xfail("bfloat16 matmuls don't allow split_k for now")
 
     if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 64:
         pytest.skip("FIXME: Incorrect result on XPU")
