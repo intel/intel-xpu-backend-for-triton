@@ -1466,6 +1466,11 @@ struct InsertSliceOpConversion
   LogicalResult
   matchAndRewrite(tensor::InsertSliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+
+    // This function has been removed upstream and should only exist for genx
+    assert(target == triton::Target::GENX &&
+           "InsertSliceOpConversion: genx target not supported yet");
+
     // %dst = insert_slice %src into %dst[%offsets]
     Location loc = op->getLoc();
     Value dst = op.getDest();
@@ -1540,6 +1545,15 @@ struct InsertSliceAsyncOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+
+    // This function should not be called on the genx target since all
+    // InsertSliceAsyncOps would be decomposed into InsertSliceOps by the
+    // decomposeInsertSliceAsyncOp function.
+    // FIXME: remove this assertion once a suitable replacement instruction
+    // exists for the generated PTX in this function (cp.async.cg.shared.global)
+    assert(target != triton::Target::GENX &&
+           "InsertSliceAsyncOpConversion: genx target not supported yet");
+
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();
     Value src = op.getSrc();
