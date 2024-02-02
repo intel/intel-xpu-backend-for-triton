@@ -6,6 +6,15 @@
 |-------------------- | -------------------- |
 | [![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/openai/triton/actions/workflows/wheels.yml) |
 
+
+# Triton
+
+This is the development repository of Triton, a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs.
+
+The foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing this work if you use Triton!
+
+The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.
+
 <!-- @cond -->
 # Compatibility
 
@@ -17,14 +26,6 @@
   |Toolchain |Intel® oneAPI Base Toolkit [2024.0.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html) or later|[Install Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html)|
 
 <!-- @endcond -->
-
-# Triton
-
-This is the development repository of Triton, a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs.
-
-The foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing this work if you use Triton!
-
-The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.
 
 # Quick Installation
 
