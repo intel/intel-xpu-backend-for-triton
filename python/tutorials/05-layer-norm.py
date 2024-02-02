@@ -35,8 +35,6 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.language as tl
 
-torch.xpu.enable_sync_mode()
-
 try:
     # This is https://github.com/NVIDIA/apex, NOT the apex on PyPi, so it
     # should not be added to extras_require in setup.py.
