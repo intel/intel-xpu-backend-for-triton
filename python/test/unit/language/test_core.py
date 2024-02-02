@@ -1134,10 +1134,10 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
 
     check_cuda_only(device)
 
-        capability = torch.cuda.get_device_capability()
-        if capability[0] < 7:
-            if dtype_x_str == 'float16':
-                pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
+    capability = torch.cuda.get_device_capability()
+    if capability[0] < 7:
+        if dtype_x_str == 'float16':
+            pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
     n_programs = 5
 
     # triton kernel
