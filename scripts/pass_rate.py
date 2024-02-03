@@ -93,7 +93,7 @@ def print_json_stats(stats: List[ReportStats]):
     """Print JSON stats."""
     overall = overall_stats(stats)
     data = {
-        'ts': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'ts': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         'git_ref': os.getenv('GITHUB_REF_NAME', ''),
         'git_sha': os.getenv('GITHUB_SHA', ''),
         'python_version': platform.python_version(),
