@@ -231,3 +231,7 @@ jobs:
       - name: Pass rate
         run: |
           python3 scripts/pass_rate.py --reports ~/reports
+          mkdir -p /cache/reports/pass-rate
+          TMPFILE=$(mktemp -p /cache/reports/pass-rate XXXXXXXXXX)
+          python3 scripts/pass_rate.py --reports ~/reports --json > $TMPFILE.temp
+          mv $TMPFILE.temp $TMPFILE.json

@@ -2,7 +2,11 @@
 
 import argparse
 import dataclasses
+import datetime
+import json
+import os
 import pathlib
+import platform
 import xml.etree.ElementTree as ET
 from typing import List
 
@@ -24,7 +28,12 @@ def create_argument_parser() -> argparse.ArgumentParser:
         '--reports',
         default='.',
         type=str,
-        help='directory with testing reports (JUnit XML), default: %(default)s',
+        help='directory with reports (JUnit XML), default: %(default)s',
+    )
+    argument_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='print stats in JSON',
     )
     return argument_parser
 
@@ -73,13 +82,40 @@ def print_stats(stats: ReportStats):
     )  # yapf: disable
 
 
+def print_text_stats(stats: List[ReportStats]):
+    """Prints human readable stats."""
+    for item in stats:
+        print_stats(item)
+    print_stats(overall_stats(stats))
+
+
+def print_json_stats(stats: List[ReportStats]):
+    """Print JSON stats."""
+    overall = overall_stats(stats)
+    data = {
+        'ts': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'git_ref': os.getenv('GITHUB_REF_NAME', ''),
+        'git_sha': os.getenv('GITHUB_SHA', ''),
+        'python_version': platform.python_version(),
+        'testsuite': overall.name,
+        'passed': overall.passed,
+        'skipped': overall.skipped,
+        'xfailed': overall.xfailed,
+        'total': overall.total,
+        'pass_rate_1': round(100 * overall.passed / overall.total, 2),
+        'pass_rate_2': round(100 * overall.passed / (overall.total - overall.xfailed), 2)
+    }  # yapf: disable
+    print(json.dumps(data, indent=2))
+
+
 def main():
     """Main."""
     args = create_argument_parser().parse_args()
     stats = parse_reports(pathlib.Path(args.reports))
-    for item in stats:
-        print_stats(item)
-    print_stats(overall_stats(stats))
+    if args.json:
+        print_json_stats(stats)
+    else:
+        print_text_stats(stats)
 
 
 if __name__ == '__main__':
