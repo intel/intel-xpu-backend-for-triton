@@ -14,8 +14,16 @@ import triton.language as tl
 from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
 
 
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target()[0] == "cuda"
+
+
 def is_hip():
     return triton.runtime.driver.active.get_current_target()[0] == "hip"
+
+
+def is_xpu():
+    return triton.runtime.driver.active.get_current_target()[0] == "xpu"
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -72,7 +80,7 @@ def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, h
         raise RuntimeError(f'Unknown dtype {dtype_str}')
 
 
-def to_triton(x: np.ndarray, device='cuda', dst_type=None) -> Union[TensorWrapper, torch.Tensor]:
+def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torch.Tensor]:
     '''
     Note: We need dst_type because the type of x can be different from dst_type.
           For example: x is of type `float32`, dst_type is `bfloat16`.
@@ -118,14 +126,6 @@ def patch_kernel(template, to_replace):
     for key, value in to_replace.items():
         kernel.src = kernel.src.replace(key, value)
     return kernel
-
-
-def is_cuda(device):
-    return device in ['cuda']
-
-
-def is_xpu(device):
-    return device in ['xpu']
 
 
 def check_cuda_only(device):
@@ -1173,7 +1173,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     else:
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
     sem_str = "acq_rel" if sem is None else sem
-    if not is_cuda(device):
+    if not is_cuda():
         return
 
     assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
@@ -1282,7 +1282,7 @@ def test_atomic_cas(sem, num_ctas, device):
     h = serialized_add[(64, )](data, Lock, SEM=sem, num_ctas=num_ctas)
     sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
-    if not is_cuda(device):
+    if not is_cuda():
         return
     assert f"atom.global.{sem_str}" in h.asm["ptx"]
 
@@ -1677,7 +1677,7 @@ reduce_configs1 = [(op, dtype, (1, 1024), axis, False)
 reduce2d_shapes = [(2, 32), (4, 32), (4, 128)]
 # TODO: fix and uncomment
 # , (32, 64), (64, 128)]
-if torch.cuda.is_available() and 'V100' in torch.cuda.get_device_name(0):
+if is_cuda() and 'V100' in torch.cuda.get_device_name(0):
     reduce2d_shapes += [(128, 256) and (32, 1024)]
 
 reduce_configs2 = [(op, 'float32', shape, axis, False)
@@ -1932,7 +1932,7 @@ def test_histogram(M, N, device):
             'test_histogram for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
         )
 
-    if is_xpu(device):
+    if is_xpu():
         pytest.skip("RuntimeError: \"histc\" not implemented for 'Int'")
 
     @triton.jit
@@ -2045,10 +2045,7 @@ def test_scan_layouts(M, N, src_layout, axis, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        kernel = triton.compile(f.name, target=(device, capability))
+        kernel = triton.compile(f.name)
     rs = RandomState(17)
     x = rs.randint(-100, 100, (M, N)).astype('int32')
 
@@ -2082,7 +2079,6 @@ layouts = [
 def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, device):
     if is_hip():
         pytest.skip("test_reduce_layouts is not supported in HIP")
-
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.xfail("Skipping sum reduction on float16 due to accuracy issues")
 
@@ -2146,10 +2142,7 @@ def test_reduce_layouts(M, N, src_layout, axis, reduce2d, dtype_str, reduce_op, 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        kernel = triton.compile(f.name, target=(device, capability))
+        kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = numpy_random((M, N), dtype_str=dtype_str, rs=rs, low=0, high=10)
@@ -2204,10 +2197,7 @@ def test_store_op(M, src_layout, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        store_kernel = triton.compile(f.name, target=(device, capability))
+        store_kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, 1)).astype('float32')
@@ -2255,10 +2245,7 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        kernel = triton.compile(f.name, target=(device, capability))
+        kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, )).astype('int32')
@@ -2341,10 +2328,7 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        kernel = triton.compile(f.name, target=(device, capability))
+        kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, N)).astype('int32')
@@ -2440,7 +2424,7 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     np.testing.assert_allclose(to_numpy(z_tri), z_ref)
     np.testing.assert_allclose(to_numpy(z_tri_contiguous), z_ref)
 
-    if not is_cuda(device):
+    if not is_cuda():
         return
 
     # parse ptx to make sure ld/st are vectorized
@@ -2597,7 +2581,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          num_warps=num_warps, num_ctas=num_ctas, out_dtype=out_dtype)
 
     if epilogue == 'softmax' and (in_dtype != 'float32' or allow_tf32):
-        if is_hip():
+        if not is_cuda():
             pass
         else:
             ptx = pgm.asm["ptx"]
@@ -2638,7 +2622,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     else:
         # added atol, to loose precision for float16xfloat16->float32 case
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
-    if not is_cuda(device):
+    if not is_cuda():
         return
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
@@ -2673,7 +2657,7 @@ def test_max_num_imprecise_acc(device):
             'test_max_num_imprecise_acc for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
         )
 
-    if torch.cuda.is_available():
+    if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability != (9, 0):
             return
@@ -2700,14 +2684,14 @@ def test_max_num_imprecise_acc(device):
     y = torch.zeros((K, N), dtype=torch.float8_e5m2, device=device)
     z = torch.zeros((M, N), dtype=torch.float32, device=device)
     h = kernel[(1, 1)](x, y, z, M, N, K, MAX_NUM_IMPRECISE_ACC, num_warps=num_warps)
-    if not is_cuda(device):
+    if not is_cuda():
         return
     assert h.asm["ptx"].count("add.f32") == (M * N) // (32 * num_warps) * (K / MAX_NUM_IMPRECISE_ACC)
 
 
 @pytest.mark.parametrize('in_dtype', ['float32'])
 def test_dot_mulbroadcastred(in_dtype, device):
-    if torch.cuda.is_available():
+    if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
             pytest.skip("Requires sm >= 80 to run")
@@ -2747,7 +2731,7 @@ def test_dot_mulbroadcastred(in_dtype, device):
     z_ref = np.matmul(x, y)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), atol=0.01)
 
-    if not is_cuda(device):
+    if not is_cuda():
         return
     assert "tt.dot" in h.asm['ttir']
     # when using MMAv3, we will not pipeline the load op for Y
@@ -2816,7 +2800,7 @@ def test_constexpr(literal, dtype_str, device):
 
 @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 def test_dot_without_load(dtype_str, device):
-    if torch.cuda.is_available():
+    if is_cuda():
         capability = torch.cuda.get_device_capability()
         allow_tf32 = capability[0] > 7
     else:
@@ -2966,7 +2950,7 @@ def test_load_cache_modifier(cache, device):
         tl.store(dst + offsets, x)
 
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
-    if not is_cuda(device):
+    if not is_cuda():
         return
 
     ptx = pgm.asm['ptx']
@@ -2996,7 +2980,7 @@ def test_vectorization(N, num_ctas, device):
 
     pgm = _kernel[(1, )](dst, src, N=N, BLOCK_SIZE=block_size)
 
-    if not is_cuda(device):
+    if not is_cuda():
         return
 
     ptx = pgm.asm["ptx"]
@@ -3023,7 +3007,7 @@ def test_vectorization_hints(has_hints, device):
         tl.store(dst + offsets, x, mask=offsets < N)
 
     pgm = _kernel[(1, )](dst, src, off, N=1024, BLOCK_SIZE=src.shape[0], HINT=has_hints)
-    if not is_cuda(device):
+    if not is_cuda():
         return
 
     ptx = pgm.asm["ptx"]
@@ -3049,13 +3033,9 @@ def test_store_cache_modifier(cache, device):
         x = tl.load(src + offsets)
         tl.store(dst + offsets, x, cache_modifier=CACHE)
 
-    if is_hip():
+    if not is_cuda():
         return
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
-
-    if not is_cuda(device):
-        return
-
     ptx = pgm.asm['ptx']
     if cache == '':
         assert 'st.global.wb' not in ptx
@@ -4155,10 +4135,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        capability = 0
-        if torch.cuda.is_available():
-            capability = torch.cuda.get_device_capability()
-        kernel = triton.compile(f.name, target=(device, capability))
+        kernel = triton.compile(f.name)
     kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
     assert torch.equal(z, x)
@@ -4205,7 +4182,7 @@ mma_pairs = [
 @pytest.mark.parametrize("dtype", ['float16'])
 @pytest.mark.parametrize("mma_pair", mma_pairs)
 def test_convertmma2mma(M, N, mma_pair, dtype, device):
-    if is_hip() or is_xpu(device):
+    if is_hip() or is_xpu():
         pytest.xfail("test_mma2mma is not supported in HIP/XPU")
 
     src_layout, _ = mma_pair
@@ -4254,10 +4231,7 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
             f.write(ir)
             f.flush()
-            capability = 0
-            if torch.cuda.is_available():
-                capability = torch.cuda.get_device_capability()
-            kernel = triton.compile(f.name, target=(device, capability))
+            kernel = triton.compile(f.name)
         kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
         assert torch.equal(z, x)
@@ -4381,7 +4355,7 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_hip():
         pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
-    if is_xpu(device):
+    if is_xpu():
         pytest.xfail('test_fp8_dot_acc not supported on XPU.')
 
     check_type_supported(in_type_str, device)
@@ -4431,9 +4405,8 @@ def test_enable_fp_fusion(enable_fp_fusion, device):
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)
 
-    if not is_cuda(device):
+    if not is_cuda():
         return
-
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
     assert found_fma == enable_fp_fusion
 
