@@ -479,21 +479,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
     // CHECK: genx.barrier
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<1xf32>
+    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<1xf32>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<1xf32>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<1xf32>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<1xf32>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<1xf32>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<1xf32>
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<1xf32>
+    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<16x16xf32, #blocked0>) -> tensor<16x16xf32, #blocked1>
     tt.return
   }
@@ -704,7 +692,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: convert_blocked1d_to_slice0
   tt.func @convert_blocked1d_to_slice0(%src:tensor<32xi32, #blocked0>) {
-    // CHECK-COUNT-4: llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xi32>
+    // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xi32>
     %cvt = triton_gpu.convert_layout %src : (tensor<32xi32, #blocked0>) -> tensor<32xi32, #triton_gpu.slice<{dim = 0, parent = #blocked1}>>
     tt.return
   }
