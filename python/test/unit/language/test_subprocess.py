@@ -69,7 +69,6 @@ def test_print(func_type: str, data_type: str):
 
 @pytest.mark.parametrize("func_type", assert_types)
 def test_assert(func_type: str):
-
     os.environ["TRITON_DEBUG"] = "1"
     proc = subprocess.Popen([sys.executable, assert_path, func_type], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             shell=False)
@@ -92,7 +91,6 @@ def test_assert(func_type: str):
 
 @pytest.mark.parametrize("caller_type, callee_type", nested_types)
 def test_assert_nested(caller_type, callee_type):
-
     proc = subprocess.Popen([sys.executable, assert_path, caller_type, callee_type], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, shell=False)
     _, errs = proc.communicate()
