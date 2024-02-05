@@ -32,7 +32,7 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
     interpreter = os.environ.get("TRITON_INTERPRET", 'not found') in ["on", "true", "1"]
     if torch.cuda.is_available():
         if not interpreter and capability[0] < 8:
-            pytest.xfail("Flash attention only supported for compute capability >= 80")
+            pytest.skip("Flash attention only supported for compute capability >= 80")
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=device).normal_(mean=0., std=0.5).requires_grad_()
     k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=device).normal_(mean=0., std=0.5).requires_grad_()
