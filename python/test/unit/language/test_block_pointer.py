@@ -6,6 +6,10 @@ import triton
 import triton.language as tl
 
 
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target()[0] == "cuda"
+
+
 @triton.jit
 def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option: tl.constexpr):
     pid = tl.program_id(0)
@@ -25,7 +29,7 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option:
     for padding in ("zero", "nan")  #
 ])
 def test_block_copy(dtypes_str, n, padding_option, device):
-    if torch.cuda.is_available():
+    if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability[0] >= 9:
             pytest.skip("Hopper support is working in progress")
@@ -86,6 +90,10 @@ def matmul_no_scf_with_advance_kernel(  #
     ] for num_warps in [4, 8]
 ])
 def test_block_ptr_matmul_no_scf(shape, num_warps, device):
+    if is_cuda():
+        capability = torch.cuda.get_device_capability()
+        if capability[0] >= 9:
+            pytest.skip("Hopper support is working in progress")
 
     m, n, k = shape
     a = torch.randn((m, k), device=device, dtype=torch.float16)

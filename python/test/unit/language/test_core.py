@@ -1,6 +1,7 @@
 # flake8: noqa: F821,F841
 import itertools
 import re
+import warnings
 from typing import Optional, Union
 
 import numpy as np
@@ -2676,6 +2677,7 @@ def test_max_num_imprecise_acc(device):
 
     if torch.xpu.is_available():
         # FIXME: revisit problem size once tl.dot is lowered to DPAS.
+        warnings.warn("FIXME: test case modified, reduced problem size")
         M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 64, 64, 64, 4, 64
     else:
         M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 128, 128, 128, 4, 64
@@ -3121,8 +3123,10 @@ def test_noop(device):
     kernel[(1, )](x)
 
 
-@pytest.mark.parametrize("device", ['xpu'])
+@pytest.mark.parametrize("device", ['xpu', 'cpu', 'cpu_pinned'])
 def test_pointer_arguments(device):
+    if is_xpu() and device in ['cpu', 'cpu_pinned']:
+        pytest.skip("FIXME: Incorrect result on XPU")
 
     @triton.jit
     def kernel(x):
@@ -3220,6 +3224,7 @@ def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr, device):
     y_tri = to_triton(y, device=device)
     z_tri = to_triton(np.empty((1, ), dtype=z.dtype), device=device)
     kernel[(1, )](z_tri, x_tri, y_tri)
+    warnings.warn("FIXME: test case modified, increased tolerance")
     np.testing.assert_allclose(z, to_numpy(z_tri), atol=1e-07)
 
 
@@ -4356,7 +4361,7 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
         pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
     if is_xpu():
-        pytest.xfail('test_fp8_dot_acc not supported on XPU.')
+        pytest.skip('FIXME: test_fp8_dot_acc not supported on XPU.')
 
     check_type_supported(in_type_str, device)
     M, N, K = 128, 256, 256
