@@ -126,6 +126,17 @@ static void outputWarning(mlir::Location loc, const std::string &msg) {
 }
 
 /*****************************************************************************/
+/* Python bindings for triton::ir::ttgir                                     */
+/*****************************************************************************/
+
+void init_triton_ttgpuir(py::module &&m) {
+  m.def("get_threads_per_warp", [](mlir::ModuleOp &mod) -> py::object {
+    auto ret = mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    return py::int_(ret);
+  });
+}
+
+/*****************************************************************************/
 /* Python bindings for triton::ir                                            */
 /*****************************************************************************/
 
@@ -1589,6 +1600,9 @@ void init_triton_ir(py::module &&m) {
         if (mlir::failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });
+
+  // ttgpu dialect bindings.
+  init_triton_ttgpuir(m.def_submodule("ttgpuir"));
 }
 
 void init_triton_env_vars(py::module &m) {

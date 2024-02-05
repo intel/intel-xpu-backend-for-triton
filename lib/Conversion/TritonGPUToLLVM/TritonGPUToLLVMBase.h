@@ -191,6 +191,12 @@ public:
     return tid;
   }
 
+  Value getModuleWarpSize(ConversionPatternRewriter &rewriter,
+                          Location loc) const {
+    auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+  }
+
   Value GetCanonicalWarpId(ConversionPatternRewriter &rewriter,
                            Location loc) const {
     return rewriter.create<triton::nvgpu::CanonicalWarpIdOp>(
@@ -503,7 +509,7 @@ public:
       auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
       auto order = triton::gpu::getOrder(layout);
       auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
-      Value warpSize = i32_val(32);
+      Value warpSize = getModuleWarpSize(rewriter, loc);
       Value laneId = urem(tid, warpSize);
       Value warpId = udiv(tid, warpSize);
       SmallVector<Value> multiDimWarpId =
@@ -746,7 +752,7 @@ private:
       const BlockedEncodingAttr &blockedLayout, RankedTensorType type) const {
     auto shape = type.getShape();
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    Value warpSize = getModuleWarpSize(rewriter, loc);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     auto sizePerThread = blockedLayout.getSizePerThread();
