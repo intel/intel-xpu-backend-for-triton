@@ -337,6 +337,7 @@ class XPUOptions:
     num_ctas: int = 1
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
+    threads_per_warp: int = 32
     ptx_version: int = None
     enable_warp_specialization: bool = False
     enable_persistent: bool = False
@@ -405,7 +406,7 @@ class XPUBackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, 32, opt.num_ctas, capability)
+        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.threads_per_warp, opt.num_ctas, capability)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
@@ -466,6 +467,8 @@ class XPUBackend(BaseBackend):
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
+        threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
+        metadata["threads_per_warp"] = threads_per_warp
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         tma_infos = intel.TMAInfos()

@@ -263,7 +263,6 @@ def make_launcher(constants, signature, ids):
           using share_mem_t = sycl::local_accessor<int8_t, 1>;
           share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
           cgh.set_arg(num_params, local_buffer);
-          //cgh.parallel_for(sycl::nd_range{{sycl::range{{(uint32_t)gridX*threads_per_warp*num_warps}}, sycl::range{{work_group_size}}}}, kernel_ptr);
           cgh.parallel_for(parallel_work_size, kernel_ptr);
       }} else {{
           cgh.parallel_for(parallel_work_size, kernel_ptr);
@@ -312,7 +311,12 @@ def make_launcher(constants, signature, ids):
 
       sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
       sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
-      auto threads_per_warp = 32;
+      int threads_per_warp = 32;
+      if (PyObject_HasAttrString(compiled_kernel, "threads_per_warp")) {{
+        PyObject* _threads_per_warp = PyObject_GetAttrString(compiled_kernel, "threads_per_warp");
+        if (PyLong_Check(_threads_per_warp))
+           threads_per_warp = PyLong_AsLong(_threads_per_warp);
+      }}
 
       {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
       sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
