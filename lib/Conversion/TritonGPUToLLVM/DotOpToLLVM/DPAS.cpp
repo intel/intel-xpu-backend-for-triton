@@ -3,6 +3,7 @@
 
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -12,7 +13,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 using mlir::triton::gpu::DotOperandEncodingAttr;
-using mlir::triton::gpu::DpasEncodingAttr;
+using mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace {
 
@@ -40,10 +41,15 @@ public:
     auto AEncoding = ATensorTy.getEncoding().cast<DotOperandEncodingAttr>();
     auto BEncoding = BTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
 
-    auto repA =
-        AEncoding.getDPASRep(ATensorTy.getShape(), ATensorTy.getElementType());
-    auto repB =
-        BEncoding.getDPASRep(BTensorTy.getShape(), BTensorTy.getElementType());
+    auto ADpasEncoding =
+        AEncoding.getParent().cast<triton::gpu::intel::DpasEncodingAttr>();
+    auto BDpasEncoding =
+        BEncoding.getParent().cast<triton::gpu::intel::DpasEncodingAttr>();
+
+    auto repA = ADpasEncoding.getDPASRepetitions(ATensorTy.getShape(),
+                                                 AEncoding.getOpIdx());
+    auto repB = BDpasEncoding.getDPASRepetitions(BTensorTy.getShape(),
+                                                 BEncoding.getOpIdx());
     assert(repA[1] == repB[0] && "Unexpected rep for A and B operands");
 
     unsigned repM = repA[0], repN = repB[1], repK = repA[1];
@@ -68,7 +74,9 @@ public:
 
     unsigned RC =
         AEncoding.getParent().cast<DpasEncodingAttr>().getRepeatCount();
-    unsigned cNumElems = RC;
+    auto threadsPerWarp = ADpasEncoding.getSubGroupSize();
+    auto shapeC = ADpasEncoding.getShapeC();
+    unsigned cNumElems = product<unsigned>(shapeC) / threadsPerWarp;
     auto CTy = vec_ty(resElemTy, cNumElems);
 
     for (unsigned m = 0; m < repM; ++m) {
