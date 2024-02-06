@@ -1334,9 +1334,8 @@ public:
       SmallVector<unsigned> order = triton::gpu::getOrder(encoding);
       if (rank != order.size())
         return resultVals;
-      ArrayRef<unsigned> orderRef(order);
-      elemsPerThread = reorder(ArrayRef<unsigned>(elemsPerThread), orderRef);
-      constancy = reorder(ArrayRef<int64_t>(constancy), orderRef);
+      elemsPerThread = applyPermutation(elemsPerThread, order);
+      constancy = applyPermutation(constancy, order);
     }
 
     SmallVector<unsigned> strides(rank, 1);
@@ -2075,18 +2074,13 @@ struct ElementwiseInlineAsmOpConversion
     // equals the number of output elements per return value, except when the
     // asm has no inputs, in which case there's 1 output element.
     size_t numInputElems = unpackedOperands[0].size();
-    for (unsigned i = 0; i < unpackedOperands.size(); ++i) {
-      if (unpackedOperands[i].size() != numInputElems) {
-        llvm::report_fatal_error("Inline asm op has operands with different "
-                                 "numbers of elements.");
-      }
-    }
 
-    // TODO(jlebar): This should be checked by the verifier.
-    if (numInputElems % op.getPackedElement() != 0) {
-      llvm::report_fatal_error("Inline asm op has packed_element=k, but k does "
-                               "not divide the number of elements per thread.");
-    }
+    // These are checked by the verifier, so we don't need to raise a nice
+    // error.
+    assert(all_of(unpackedOperands, [&](auto &operands) {
+      return operands.size() == numInputElems;
+    }));
+    assert(numInputElems % op.getPackedElement() == 0);
 
     // Run the inline asm op on each block of elements.
     //

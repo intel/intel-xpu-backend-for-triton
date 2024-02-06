@@ -17,6 +17,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -122,6 +123,17 @@ static void outputWarning(mlir::Location loc, const std::string &msg) {
 
   PyErr_WarnEx(PyExc_UserWarning, (locStr + ": " + msg).c_str(),
                /*stack_level=*/2);
+}
+
+/*****************************************************************************/
+/* Python bindings for triton::ir::ttgir                                     */
+/*****************************************************************************/
+
+void init_triton_ttgpuir(py::module &&m) {
+  m.def("get_threads_per_warp", [](mlir::ModuleOp &mod) -> py::object {
+    auto ret = mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    return py::int_(ret);
+  });
 }
 
 /*****************************************************************************/
@@ -1302,14 +1314,16 @@ void init_triton_ir(py::module &&m) {
                  mlir::RankedTensorType::get(shape, aTy.getElementType()), a,
                  b);
            })
+      // Implements tl.trans and tl.permute.
       .def("create_trans",
-           [](TritonOpBuilder &self, mlir::Value &arg) -> mlir::Value {
+           [](TritonOpBuilder &self, mlir::Value &arg,
+              std::vector<int> &order) -> mlir::Value {
              auto argType = arg.getType().dyn_cast<mlir::RankedTensorType>();
              auto argEltType = argType.getElementType();
-             std::vector<int64_t> retShape = argType.getShape();
-             std::reverse(retShape.begin(), retShape.end());
+             auto retShape =
+                 mlir::triton::applyPermutation(argType.getShape(), order);
              return self.create<mlir::triton::TransOp>(
-                 mlir::RankedTensorType::get(retShape, argEltType), arg);
+                 mlir::RankedTensorType::get(retShape, argEltType), arg, order);
            })
       .def("create_broadcast",
            [](TritonOpBuilder &self, mlir::Value &arg,
@@ -1586,6 +1600,9 @@ void init_triton_ir(py::module &&m) {
         if (mlir::failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });
+
+  // ttgpu dialect bindings.
+  init_triton_ttgpuir(m.def_submodule("ttgpuir"));
 }
 
 void init_triton_env_vars(py::module &m) {

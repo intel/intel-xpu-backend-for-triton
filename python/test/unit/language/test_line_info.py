@@ -128,6 +128,7 @@ def check_file_lines(file_lines, file_name, lineno, should_contain=True):
 
 func_types = ["single", "call", "call_noinline", "multi_files", "autotune", "dot_combine"]
 
+
 @pytest.mark.parametrize("func", func_types)
 def test_line_info(func: str):
     try:
