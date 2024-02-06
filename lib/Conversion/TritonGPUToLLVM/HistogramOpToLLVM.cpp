@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Analysis/Utility.h"
 
@@ -6,6 +7,30 @@ using namespace mlir;
 using namespace mlir::triton;
 
 static int log2Int(int64_t num) { return (num > 1) ? 1 + log2Int(num / 2) : 0; }
+
+static Value generateVoteBallot(Location loc, Value bit, int threadMask,
+                                Value threadId, int numThreadPerWarp,
+                                ConversionPatternRewriter &rewriter,
+                                Target target) {
+  if (target == Target::NVVM) {
+    return rewriter.create<NVVM::VoteBallotOp>(loc, i32_ty, i32_val(threadMask),
+                                               bit);
+  }
+
+  assert(target == Target::GENX && "unsupported target");
+  assert(threadMask == -1 && "unsupported thread mask for GENX target");
+
+  // Emulate vote.ballot.sync behavior using shift, shuffle, and or.
+  // TODO: check for more efficient solution.
+  int offs = 1;
+  Value laneId = and_(threadId, i32_val(numThreadPerWarp - 1));
+  Value reduced_val = shl(select(bit, i32_val(1), i32_val(0)), laneId);
+  for (int offs = 1; offs < numThreadPerWarp; offs = offs << 1) {
+    Value other_val = LLVM::shflSync(loc, rewriter, reduced_val, offs, target);
+    reduced_val = or_(reduced_val, other_val);
+  }
+  return reduced_val;
+}
 
 // Compute a histogram within a warp. This uses an algorithm by @apgoucher
 // that does the following:
@@ -17,7 +42,7 @@ static SmallVector<Value>
 computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
                           SmallVector<Value> &srcValues, int numBins,
                           int numThreadPerWarp, Value threadId,
-                          ConversionPatternRewriter &rewriter) {
+                          ConversionPatternRewriter &rewriter, Target target) {
   assert(numBins % numThreadPerWarp == 0 &&
          "numBins must be divisible by numThreadPerWarp");
   Value zero = i32_val(0);
@@ -35,9 +60,8 @@ computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
     SmallVector<Value> ballotBits;
     for (int j = 0; j < numBits; ++j) {
       Value bitSet = and_(value, i32_val(1 << j));
-      Value threadMask = i32_val(-1);
-      Value bit = rewriter.create<NVVM::VoteBallotOp>(loc, i32_ty, threadMask,
-                                                      icmp_ne(bitSet, zero));
+      Value bit = generateVoteBallot(loc, icmp_ne(bitSet, zero), -1, threadId,
+                                     numThreadPerWarp, rewriter, target);
       ballotBits.push_back(bit);
     }
     Value fullMask = i32_val(0xFFFFFFFF);
@@ -156,9 +180,9 @@ public:
     Value threadId = getThreadId(rewriter, loc);
     auto srcType = op.getInput().getType().cast<RankedTensorType>();
     // First compute a warp local histogram based on values owned by each warps.
-    SmallVector<Value> warpLevelHistogram =
-        computeWarpLevelHistogram(loc, srcType, srcValues, numBins,
-                                  numThreadsPerWarp, threadId, rewriter);
+    SmallVector<Value> warpLevelHistogram = computeWarpLevelHistogram(
+        loc, srcType, srcValues, numBins, numThreadsPerWarp, threadId, rewriter,
+        target);
 
     // Then use atomic to update the histogram in shared memory.
     // TODO: we could skip this for cases with num_warps=1 as long as we can
