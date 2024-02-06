@@ -886,15 +886,18 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
 static void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
                                  SmallVector<SmallVector<unsigned>> &offsets,
                                  unsigned ctaOffsetX, unsigned ctaOffsetY) {
-  unsigned elemsPerThreadPerGroup =
-      triton::gpu::getContigPerThread(dpasLayout)[0];
-  unsigned warpSize = triton::gpu::getWarpSize(dpasLayout);
+  SmallVector<unsigned> sizePerThreads = getSizePerThread(dpasLayout);
+  uint32_t elemsPerThreadPerGroup = product<unsigned>(sizePerThreads);
+  uint32_t rowsPerWarp =
+      dpasLayout.getSubGroupSize() / dpasLayout.getExecutionSize();
   SmallVector<unsigned> shapePerCTA =
       triton::gpu::getShapePerCTATile(dpasLayout);
 
   for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
-    offsets.push_back(
-        {ctaOffsetX * shapePerCTA[0] + elem, ctaOffsetY * shapePerCTA[1]});
+    uint32_t elemRowIndex = (elem / sizePerThreads[1]) * rowsPerWarp;
+    uint32_t elemColIndex = elem % sizePerThreads[1];
+    offsets.push_back({ctaOffsetX * shapePerCTA[0] + elemRowIndex,
+                       ctaOffsetY * shapePerCTA[1] + elemColIndex});
   }
 }
 
@@ -1025,31 +1028,29 @@ emitBaseIndexForDpasLayout(Location loc, ConversionPatternRewriter &rewriter,
   Value warpId = udiv(threadId, warpSize);
   Value laneId = urem(threadId, warpSize);
 
-  SmallVector<Value> warpsPerCTA = {i32_val(dpasLayout.getWarpsPerCTA()[0]),
-                                    i32_val(dpasLayout.getWarpsPerCTA()[1])};
+  auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
   ArrayRef<int64_t> shape = type.getShape();
+
+  auto order = triton::gpu::getOrder(dpasLayout);
+  SmallVector<Value> multiDimWarpId =
+      delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
   // Compute the 2-dim coordinates of the warp containing the tensor element
   // operated on by this thread.
-  SmallVector<unsigned> warpShape = {8, 16};
+  SmallVector<unsigned> warpShape = dpasLayout.getShapeC();
   Value rowWarpId =
-      urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / warpShape[0]));
-  Value colWarpId = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
-                         i32_val(shape[1] / warpShape[1]));
+      urem(multiDimWarpId[0], i32_val(std::ceil(shape[0] / warpShape[0])));
+  Value colWarpId =
+      urem(multiDimWarpId[1], i32_val(std::ceil(shape[1] / warpShape[1])));
   Value rowWarpOffset = mul(rowWarpId, i32_val(warpShape[0]));
   Value colWarpOffset = mul(colWarpId, i32_val(warpShape[1]));
 
   // Compute the 2-dim coordinates of the first element in the warp operated
   // on by this thread.
   SmallVector<unsigned> threadsPerWarp = getThreadsPerWarp(dpasLayout);
-  SmallVector<unsigned> contigPerThread = getContigPerThread(dpasLayout);
   SmallVector<Value> multiDimBase = {
-      add(mul(i32_val(contigPerThread[0]),
-              udiv(laneId, i32_val(threadsPerWarp[1]))),
-          rowWarpOffset),
-      add(mul(i32_val(contigPerThread[1]),
-              urem(laneId, i32_val(threadsPerWarp[1]))),
-          colWarpOffset)};
+      add(udiv(laneId, i32_val(threadsPerWarp[1])), rowWarpOffset),
+      add(urem(laneId, i32_val(threadsPerWarp[1])), colWarpOffset)};
   return multiDimBase;
 }
 
