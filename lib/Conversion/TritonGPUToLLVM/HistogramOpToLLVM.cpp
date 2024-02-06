@@ -159,18 +159,17 @@ static SmallVector<Value> computeCrossWarpHistogram(
 
 namespace {
 struct HistogramOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::HistogramOp> {
+    : public ConvertOpToLLVMPattern<triton::HistogramOp> {
 public:
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::HistogramOp>::ConvertTritonGPUOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<triton::HistogramOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value input = adaptor.getInput();
-    SmallVector<Value> srcValues =
-        getTypeConverter()->unpackLLElements(loc, input, rewriter);
+    auto typeConverter = getTypeConverter();
+    SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
     int numBins =
         op.getResult().getType().cast<RankedTensorType>().getDimSize(0);
     int numThreadsPerWarp = 32;
@@ -203,8 +202,8 @@ public:
         loc, rewriter, srcType, baseSharedMemPtr, warpLevelHistogram, numBins,
         numThreadsPerWarp, innerDimIndices, threadId, numWarps);
 
-    Value results = getTypeConverter()->packLLElements(
-        loc, histogramValue, rewriter, op.getResult().getType());
+    Value results = packLLElements(loc, typeConverter, histogramValue, rewriter,
+                                   op.getResult().getType());
     rewriter.replaceOp(op, results);
     return success();
   }
@@ -212,8 +211,14 @@ public:
 } // namespace
 
 void mlir::triton::populateHistogramOpToLLVMPatterns(
+<<<<<<< HEAD
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
     PatternBenefit benefit) {
   patterns.add<HistogramOpConversion>(typeConverter, target, benefit);
+=======
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+  patterns.add<HistogramOpConversion>(typeConverter, benefit);
+>>>>>>> 2dd9d74527f431e5e822b8e67c01900e4d0bfef3
 }

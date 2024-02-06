@@ -11,37 +11,36 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            TritonGPUToLLVMTypeConverter *typeConverter,
+                            const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
 
 LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            TritonGPUToLLVMTypeConverter *typeConverter,
+                            const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
 
 LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                             TritonGPUToLLVMTypeConverter *typeConverter,
+                             const LLVMTypeConverter *typeConverter,
                              ConversionPatternRewriter &rewriter);
 
 LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                              TritonGPUToLLVMTypeConverter *typeConverter,
+                              const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter);
 
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
 LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                           TritonGPUToLLVMTypeConverter *typeConverter,
+                           const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread);
 
 LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                                 triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
-                                TritonGPUToLLVMTypeConverter *typeConverter,
+                                const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread);
 namespace {
-struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
+struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
+  using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
@@ -96,9 +95,9 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 };
 
 struct DotAsyncOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::DotAsyncOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::DotAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::DotAsyncOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::DotAsyncOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::DotAsyncOp op, OpAdaptor adaptor,
@@ -135,9 +134,9 @@ struct DotAsyncOpConversion
 };
 
 struct DotWaitOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::DotWaitOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::DotWaitOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::DotWaitOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::DotWaitOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::DotWaitOp op, OpAdaptor adaptor,
@@ -198,10 +197,18 @@ struct DotWaitOpConversion
 } // namespace
 
 void mlir::triton::populateDotOpToLLVMPatterns(
+<<<<<<< HEAD
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
     PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, target, benefit);
   patterns.add<DotAsyncOpConversion>(typeConverter, target, benefit);
   patterns.add<DotWaitOpConversion>(typeConverter, target, benefit);
+=======
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+  patterns.add<DotOpConversion>(typeConverter, benefit);
+  patterns.add<DotAsyncOpConversion>(typeConverter, benefit);
+  patterns.add<DotWaitOpConversion>(typeConverter, benefit);
+>>>>>>> 2dd9d74527f431e5e822b8e67c01900e4d0bfef3
 }

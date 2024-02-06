@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "ReduceScanCommon.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -19,11 +20,18 @@ namespace {
 struct ReduceOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
+<<<<<<< HEAD
   ReduceOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
                      int computeCapability, Target target,
                      PatternBenefit benefit)
       : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(
             typeConverter, target, benefit),
+=======
+  ReduceOpConversion(LLVMTypeConverter &typeConverter, int computeCapability,
+                     PatternBenefit benefit)
+      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(typeConverter,
+                                                                  benefit),
+>>>>>>> 2dd9d74527f431e5e822b8e67c01900e4d0bfef3
         computeCapability(computeCapability) {}
 
   LogicalResult
@@ -122,8 +130,7 @@ private:
     unsigned srcElems = getTotalElemsPerThread(types[0]);
     SmallVector<SmallVector<Value>> srcValues(srcElems);
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      auto values =
-          getTypeConverter()->unpackLLElements(loc, operands[i], rewriter);
+      auto values = unpackLLElements(loc, operands[i], rewriter);
 
       assert(values.size() == srcValues.size());
       for (unsigned j = 0; j < srcValues.size(); ++j) {
@@ -300,8 +307,8 @@ private:
           key.insert(key.begin() + axis, 0);
           resultVals.push_back(accs[key][i]);
         }
-        results[i] = getTypeConverter()->packLLElements(loc, resultVals,
-                                                        rewriter, resultTy);
+        results[i] = packLLElements(loc, getTypeConverter(), resultVals,
+                                    rewriter, resultTy);
       } else
         results[i] = accs.begin()->second[i];
     }
@@ -476,8 +483,8 @@ private:
           resultVals[j] = load(elemTy, readPtr);
         }
 
-        results[i] = getTypeConverter()->packLLElements(loc, resultVals,
-                                                        rewriter, resultTy);
+        results[i] = packLLElements(loc, getTypeConverter(), resultVals,
+                                    rewriter, resultTy);
       } else {
         // 0d-tensor -> scalar
         results[i] = load(elemTy, smemBases[i]);
@@ -489,9 +496,16 @@ private:
 } // namespace
 
 void mlir::triton::populateReduceOpToLLVMPatterns(
+<<<<<<< HEAD
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     int computeCapability, Target target, PatternBenefit benefit) {
   patterns.add<ReduceOpConversion>(typeConverter, computeCapability, target,
                                    benefit);
+=======
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
+    PatternBenefit benefit) {
+  patterns.add<ReduceOpConversion>(typeConverter, computeCapability, benefit);
+>>>>>>> 2dd9d74527f431e5e822b8e67c01900e4d0bfef3
 }
