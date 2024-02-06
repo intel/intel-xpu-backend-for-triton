@@ -1,16 +1,13 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
 struct RegAllocOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::RegAllocOp> {
-  using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::RegAllocOp>::ConvertOpToLLVMPattern;
+    : public ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::RegAllocOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::nvidia_gpu::RegAllocOp>::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::RegAllocOp op, OpAdaptor adaptor,
@@ -23,9 +20,9 @@ struct RegAllocOpConversion
 };
 
 struct RegDeallocOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::RegDeallocOp> {
-  using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::RegDeallocOp>::ConvertOpToLLVMPattern;
+    : public ConvertTritonGPUOpToLLVMPattern<triton::nvidia_gpu::RegDeallocOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::nvidia_gpu::RegDeallocOp>::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::RegDeallocOp op, OpAdaptor adaptor,
@@ -39,17 +36,10 @@ struct RegDeallocOpConversion
 } // namespace
 
 void mlir::triton::populateRegReallocOpToLLVMPatterns(
-<<<<<<< HEAD
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
     PatternBenefit benefit) {
   patterns.add<RegAllocOpConversion>(typeConverter, target, benefit);
   patterns.add<RegDeallocOpConversion>(typeConverter, target, benefit);
-=======
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
-  patterns.add<RegAllocOpConversion>(typeConverter, benefit);
-  patterns.add<RegDeallocOpConversion>(typeConverter, benefit);
->>>>>>> 2dd9d74527f431e5e822b8e67c01900e4d0bfef3
   return;
 }

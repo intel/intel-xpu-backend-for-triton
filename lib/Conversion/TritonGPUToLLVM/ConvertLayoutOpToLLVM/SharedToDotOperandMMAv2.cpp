@@ -1,3 +1,4 @@
+#include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 
 using namespace mlir;
@@ -24,7 +25,7 @@ public:
                      ArrayRef<int64_t> tileShape, ArrayRef<int> instrShape,
                      ArrayRef<int> matShape, int perPhase, int maxPhase,
                      int elemBytes, ConversionPatternRewriter &rewriter,
-                     const LLVMTypeConverter *typeConverter,
+                     TritonGPUToLLVMTypeConverter *typeConverter,
                      const Location &loc);
 
   // lane = thread % 32
@@ -404,7 +405,7 @@ MMA16816SmemLoader::MMA16816SmemLoader(
     ArrayRef<Value> smemStrides, ArrayRef<int64_t> tileShape,
     ArrayRef<int> instrShape, ArrayRef<int> matShape, int perPhase,
     int maxPhase, int elemBytes, ConversionPatternRewriter &rewriter,
-    const LLVMTypeConverter *typeConverter, const Location &loc)
+    TritonGPUToLLVMTypeConverter *typeConverter, const Location &loc)
     : nPerWarp(nPerWarp), order(order.begin(), order.end()),
       warpsPerCTA(warpsPerCTA.begin(), warpsPerCTA.end()), kOrder(kOrder),
       kWidth(kWidth), tileShape(tileShape.begin(), tileShape.end()),
@@ -470,7 +471,7 @@ Type getSharedMemTy(Type argType) {
 
 Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int n0, int n1,
-    const LLVMTypeConverter *typeConverter, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter) {
   std::vector<Value> elems;
   for (int m = 0; m < n0; ++m)
@@ -487,7 +488,7 @@ Value composeValuesToDotOperandLayoutStruct(
   MLIRContext *ctx = elemTy.getContext();
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(elems.size(), elemTy));
-  auto result = packLLElements(loc, typeConverter, elems, rewriter, structTy);
+  auto result = typeConverter->packLLElements(loc, elems, rewriter, structTy);
   return result;
 }
 
@@ -497,7 +498,7 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
                 uint32_t kOrder, int kWidth, SmallVector<int> instrShape,
                 SmallVector<int> matShape, Value warpId, Value lane,
                 ValueTable &vals, bool isA,
-                const LLVMTypeConverter *typeConverter,
+                TritonGPUToLLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto shapePerCTA = getShapePerCTA(tensorTy);
@@ -563,7 +564,8 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
 Value loadArg(ConversionPatternRewriter &rewriter, Location loc, Value tensor,
               DotOperandEncodingAttr encoding,
               const SharedMemoryObject &smemObj,
-              const LLVMTypeConverter *typeConverter, Value thread, bool isA) {
+              TritonGPUToLLVMTypeConverter *typeConverter, Value thread,
+              bool isA) {
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   auto shapePerCTA = getShapePerCTA(tensorTy);
   int bitwidth = tensorTy.getElementTypeBitWidth();
@@ -625,7 +627,7 @@ namespace SharedToDotOperandMMAv2 {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
-                    const LLVMTypeConverter *typeConverter, Value thread) {
+                    TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
   if (opIdx == 0)
     return loadArg(rewriter, loc, tensor, encoding, smemObj, typeConverter,
                    thread, true);

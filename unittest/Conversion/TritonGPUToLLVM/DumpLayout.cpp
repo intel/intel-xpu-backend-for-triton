@@ -23,8 +23,7 @@
 
 #include "DumpLayout.h"
 
-#include "../../../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
-#include "../../../lib/Conversion/TritonGPUToLLVM/Utility.h"
+#include "../../../lib/Conversion/TritonGPUToLLVM/TritonGPUToLLVMBase.h"
 
 namespace mlir {
 namespace triton {
@@ -40,12 +39,8 @@ class IndexEmitter {
 public:
   IndexEmitter(MLIRContext *context_)
       : context(context_), option(context), typeConverter(context, option),
-<<<<<<< HEAD
         base(typeConverter, Target::Default), rewriter(context),
         loc(UnknownLoc::get(context)) {
-=======
-        rewriter(context), loc(UnknownLoc::get(context)) {
->>>>>>> 2dd9d74527f431e5e822b8e67c01900e4d0bfef3
     rewriter.setInsertionPointToStart(&block);
   }
 
@@ -53,7 +48,7 @@ public:
   emitIndices(Attribute layout, llvm::ArrayRef<int64_t> shape,
               bool withCTAOffset) {
     auto type = RankedTensorType::get(shape, rewriter.getF16Type(), layout);
-    return mlir::emitIndices(loc, rewriter, layout, type, withCTAOffset);
+    return base.emitIndices(loc, rewriter, layout, type, withCTAOffset);
   }
 
   llvm::DenseMap<unsigned, Value>
@@ -63,9 +58,9 @@ public:
     auto srcTy = RankedTensorType::get(shape, elemTy, srcLayout);
     SharedMemoryObject smemObj(getMockSmemBase(), elemTy, shape,
                                sharedLayout.getOrder(), loc, rewriter);
-    return getSwizzledSharedPtrs(loc, /*inVec=*/1, srcTy, sharedLayout, elemTy,
-                                 smemObj, rewriter, smemObj.offsets,
-                                 smemObj.strides);
+    return base.getSwizzledSharedPtrs(loc, /*inVec=*/1, srcTy, sharedLayout,
+                                      elemTy, smemObj, rewriter,
+                                      smemObj.offsets, smemObj.strides);
   }
 
 private:
@@ -82,6 +77,7 @@ private:
   MLIRContext *context;
   LowerToLLVMOptions option;
   TritonGPUToLLVMTypeConverter typeConverter;
+  ConvertTritonGPUOpToLLVMPatternBase base;
   Block block;
   ConversionPatternRewriter rewriter;
   Location loc;

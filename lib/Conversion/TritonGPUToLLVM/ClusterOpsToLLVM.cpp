@@ -22,18 +22,14 @@
  */
 
 #include "PatternTritonGPUOpToLLVM.h"
-#include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
-struct ClusterArriveOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ClusterArriveOp> {
-  using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::ClusterArriveOp>::ConvertOpToLLVMPattern;
+struct ClusterArriveOpConversion : public ConvertTritonGPUOpToLLVMPattern<
+                                       triton::nvidia_gpu::ClusterArriveOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::nvidia_gpu::ClusterArriveOp>::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ClusterArriveOp op, OpAdaptor adaptor,
@@ -44,10 +40,10 @@ struct ClusterArriveOpConversion
   }
 };
 
-struct ClusterWaitOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ClusterWaitOp> {
-  using ConvertOpToLLVMPattern<
-      triton::nvidia_gpu::ClusterWaitOp>::ConvertOpToLLVMPattern;
+struct ClusterWaitOpConversion : public ConvertTritonGPUOpToLLVMPattern<
+                                     triton::nvidia_gpu::ClusterWaitOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::nvidia_gpu::ClusterWaitOp>::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ClusterWaitOp op, OpAdaptor adaptor,
@@ -59,17 +55,10 @@ struct ClusterWaitOpConversion
 } // namespace
 
 void mlir::triton::populateClusterOpsToLLVMPatterns(
-<<<<<<< HEAD
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
     PatternBenefit benefit) {
   patterns.add<ClusterArriveOpConversion>(typeConverter, target, benefit);
   patterns.add<ClusterWaitOpConversion>(typeConverter, target, benefit);
-=======
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
-  patterns.add<ClusterArriveOpConversion>(typeConverter, benefit);
-  patterns.add<ClusterWaitOpConversion>(typeConverter, benefit);
->>>>>>> 2dd9d74527f431e5e822b8e67c01900e4d0bfef3
   return;
 }
