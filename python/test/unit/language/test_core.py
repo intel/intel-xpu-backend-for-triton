@@ -1946,7 +1946,7 @@ def test_histogram(M, N, device):
     x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
     z = torch.empty(N, dtype=torch.int32, device=device)
     # FIXME: use regular histc when supported for xpu.
-    if is_xpu(device):
+    if is_xpu():
         z_torch = torch.histc(x.to('cpu').to(torch.float32), bins=N, min=0, max=N - 1).to(torch.int32).to('xpu')
     else:
         z_torch = torch.histc(x, bins=N, min=0, max=N - 1)
