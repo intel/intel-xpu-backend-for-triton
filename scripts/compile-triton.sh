@@ -158,6 +158,9 @@ function build_triton {
     python3 -m venv .venv --prompt triton
     source .venv/bin/activate
     pip install ninja cmake wheel
+  else
+    echo "**** Cleaning up Python virtualenv ****"
+    deactivate
   fi
 
   export LLVM_SYSPATH=$PACKAGES_DIR/llvm
