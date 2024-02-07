@@ -122,7 +122,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (ADTYPE == "int8" and BDTYPE == "bfloat16"):
         pytest.skip("FIXME: Incorrect result on XPU")
     if BLOCK_M == 256 and BLOCK_N == 128 and BLOCK_K == 32 and ADTYPE in ["float16", "bfloat16"
-                                                                          ] and (AT != False or BT != False):
+                                                                          ] and (AT is not False or BT is not False):
         pytest.skip("FIXME: Incorrect result on XPU")
     if BLOCK_M == 128 and BLOCK_N == 128 and BLOCK_K == 32 and M == 256 and (N == 384 or N == 256):
         pytest.skip("FIXME: Incorrect result on XPU")
