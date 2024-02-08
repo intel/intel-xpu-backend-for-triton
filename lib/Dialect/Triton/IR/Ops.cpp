@@ -438,7 +438,7 @@ mlir::LogicalResult mlir::triton::DotOp::inferReturnTypes(
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
-    Dialect &dialect = aEnc.getDialect();
+    Dialect &dialect = retEnc.getDialect();
     auto interface = dyn_cast<DialectInferLayoutInterface>(&dialect);
     if (interface->inferDotOpEncoding(aEnc, 0, retEnc, location).failed())
       return mlir::failure();
@@ -462,7 +462,11 @@ LogicalResult mlir::triton::DotOp::verify() {
   // Verify that the encodings are valid.
   if (!aEncoding || !bEncoding)
     return emitError("mismatching encoding between A and B operands");
-  Dialect &dialect = aEncoding.getDialect();
+
+  // type is the same as the accumulator
+  auto accTy = getOperand(2).getType().cast<RankedTensorType>();
+  auto retEnc = accTy.getEncoding();
+  Dialect &dialect = retEnc.getDialect();
   auto interface = cast<DialectInferLayoutInterface>(&dialect);
   return interface->verifyDotOpEncodingCompatibility(getOperation(), aEncoding,
                                                      bEncoding);

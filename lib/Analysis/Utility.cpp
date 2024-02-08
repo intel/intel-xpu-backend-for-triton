@@ -212,9 +212,6 @@ bool ReduceOpHelper::isSupportedLayout() {
   if (auto mmaLayout = srcLayout.dyn_cast<triton::gpu::MmaEncodingTrait>()) {
     return mmaLayout.supportReduction();
   }
-  if (auto dpasLayout = srcLayout.dyn_cast<triton::gpu::DpasEncodingAttr>()) {
-    return true;
-  }
   if (auto sliceLayout = srcLayout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
     return true;
   }
