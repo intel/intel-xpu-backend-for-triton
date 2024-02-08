@@ -311,13 +311,9 @@ class CompiledKernel:
         max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
-        if driver.active.get_current_target()[0] == "xpu":
-            self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
-                self.name, self.kernel, self.metadata.shared, driver.active.utils.get_sycl_device(device))
-        else:
-            # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-            self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
-                self.name, self.kernel, self.metadata.shared, device)
+        # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
+        self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
+            self.name, self.kernel, self.metadata.shared, device)
 
     def __getattribute__(self, name):
         if name == 'run':
