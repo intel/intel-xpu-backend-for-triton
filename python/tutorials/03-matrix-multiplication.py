@@ -309,8 +309,9 @@ triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output={triton_output}")
 print(f"torch_output={torch_output}")
-# FIXME: reset atol to 1e-2 for xpu
-if torch.allclose(triton_output, torch_output, atol=1e-1, rtol=0):
+# Note: the torch.matmul implementation uses a different algorithm so 
+# we need to raise atol.
+if torch.allclose(triton_output, torch_output, atol=4e-2, rtol=0):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")
