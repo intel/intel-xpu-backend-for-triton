@@ -89,7 +89,8 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   case 0x0B:      // PVC GPUs 0Bxx
     gpu_arch = 1; // PVC
     break;
-  default:; // fall through
+  default:
+    ; // fall through
   }
 
   ze_device_compute_properties_t compute_properties = {};
@@ -100,8 +101,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int num_subgroup_sizes = compute_properties.numSubGroupSizes;
   PyObject *subgroup_sizes = PyTuple_New(num_subgroup_sizes);
   for (int i = 0; i < num_subgroup_sizes; i++) {
-    PyTuple_SetItem(subgroup_sizes, i,
-                    PyLong_FromLong(compute_properties.subGroupSizes[i]));
+      PyTuple_SetItem(subgroup_sizes, i, PyLong_FromLong(compute_properties.subGroupSizes[i]));
   }
 
   uint32_t memoryCount = 0;
@@ -118,12 +118,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   delete[] pMemoryProperties;
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}",
-                       "max_shared_mem", max_shared_mem, "multiprocessor_count",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}", "max_shared_mem",
+                       max_shared_mem, "multiprocessor_count",
                        multiprocessor_count, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width, "device_arch", gpu_arch, "max_group_size",
-                       max_group_size, "subgroup_sizes", subgroup_sizes);
+                       mem_bus_width, "device_arch", gpu_arch,
+                       "max_group_size", max_group_size, "subgroup_sizes", subgroup_sizes);
 }
 
 /*Sycl code Start*/
@@ -209,7 +209,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name;
   int shared;
   PyObject *py_bytes;
-  uint64_t devId;
+  int devId;
 
   if (!PyArg_ParseTuple(args, "sSii", &name, &py_bytes, &shared, &devId)) {
     std::cerr << "loadBinary arg parse failed" << std::endl;
@@ -217,6 +217,11 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   }
   int32_t n_regs = 0;
   int32_t n_spills = 0;
+
+  if (device_id > sycl_l0_device_list.size()) {
+    std::cerr << "Device is not found " << std::endl;
+    return NULL;
+  }
 
   auto sycl_l0_device_pair = sycl_l0_device_list[devId];
   sycl::device sycl_device = sycl_l0_device_pair.first;
