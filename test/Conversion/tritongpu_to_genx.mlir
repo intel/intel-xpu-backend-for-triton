@@ -537,93 +537,93 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 // -----
 
-#dpas = #triton_gpu.dpas<{repeatCount=8, warpsPerCTA=[1,1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas}>
-#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#dpas}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1]}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: dot_f32_f16_f16_f32_1
-  tt.func @dot_f32_f16_f16_f32_1(%a: tensor<8x16xf16, #dot_operand_a>, %b: tensor<16x16xf16, #dot_operand_b>, %c: tensor<8x16xf32, #dpas>) {
+  tt.func @dot_f32_f16_f16_f32_1(%a: tensor<8x16xf16, #dot_operand_a>, %b: tensor<16x16xf16, #dot_operand_b>, %c: tensor<8x16xf32, #mma>) {
     // CHECK: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<FP16>, pb = #genx.precision_type<FP16>, rc = 8 : i32} : (vector<8xf32>, vector<8xf16>, vector<16xf16>) -> vector<8xf32>
-    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<8x16xf32, #dpas>
+    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<8x16xf32, #mma>
     tt.return
   }
 }
 
 // -----
 
-#dpas = #triton_gpu.dpas<{repeatCount=8, warpsPerCTA=[1,1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas}>
-#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#dpas}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1]}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: dot_f32_f16_f16_f32_2
-  tt.func @dot_f32_f16_f16_f32_2(%a: tensor<16x16xf16, #dot_operand_a>, %b: tensor<16x16xf16, #dot_operand_b>, %c: tensor<16x16xf32, #dpas>) {
+  tt.func @dot_f32_f16_f16_f32_2(%a: tensor<16x16xf16, #dot_operand_a>, %b: tensor<16x16xf16, #dot_operand_b>, %c: tensor<16x16xf32, #mma>) {
     // COM: 2 repetitions along axis for M.
     // CHECK-COUNT-2: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<FP16>, pb = #genx.precision_type<FP16>, rc = 8 : i32} : (vector<8xf32>, vector<8xf16>, vector<16xf16>) -> vector<8xf32>
-    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<16x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<16x16xf32, #dpas>
+    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<16x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<16x16xf32, #mma>
     tt.return
   }
 }
 
 // -----
 
-#dpas = #triton_gpu.dpas<{repeatCount=8, warpsPerCTA=[1,1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas}>
-#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#dpas}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1]}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: dot_i32_i8_i8_i32_1
-  tt.func @dot_i32_i8_i8_i32_1(%a: tensor<8x32xi8, #dot_operand_a>, %b: tensor<32x16xi8, #dot_operand_b>, %c: tensor<8x16xi32, #dpas>) {
+  tt.func @dot_i32_i8_i8_i32_1(%a: tensor<8x32xi8, #dot_operand_a>, %b: tensor<32x16xi8, #dot_operand_b>, %c: tensor<8x16xi32, #mma>) {
     // CHECK: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<S8>, pb = #genx.precision_type<S8>, rc = 8 : i32} : (vector<8xi32>, vector<16xi8>, vector<32xi8>) -> vector<8xi32>
-    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x32xi8, #dot_operand_a> * tensor<32x16xi8, #dot_operand_b> -> tensor<8x16xi32, #dpas>
+    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x32xi8, #dot_operand_a> * tensor<32x16xi8, #dot_operand_b> -> tensor<8x16xi32, #mma>
     tt.return
   }
 }
 
 // -----
 
-#dpas = #triton_gpu.dpas<{repeatCount=8, warpsPerCTA=[1,1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas}>
-#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#dpas}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1]}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: dot_i32_i8_i8_i32_2
-  tt.func @dot_i32_i8_i8_i32_2(%a: tensor<8x64xi8, #dot_operand_a>, %b: tensor<64x16xi8, #dot_operand_b>, %c: tensor<8x16xi32, #dpas>) {
+  tt.func @dot_i32_i8_i8_i32_2(%a: tensor<8x64xi8, #dot_operand_a>, %b: tensor<64x16xi8, #dot_operand_b>, %c: tensor<8x16xi32, #mma>) {
     // COM: 2 repetition along axis for K.
     // CHECK: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<S8>, pb = #genx.precision_type<S8>, rc = 8 : i32} : (vector<8xi32>, vector<16xi8>, vector<32xi8>) -> vector<8xi32>
-    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x64xi8, #dot_operand_a> * tensor<64x16xi8, #dot_operand_b> -> tensor<8x16xi32, #dpas>
+    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x64xi8, #dot_operand_a> * tensor<64x16xi8, #dot_operand_b> -> tensor<8x16xi32, #mma>
     tt.return
   }
 }
 
 // -----
 
-#dpas = #triton_gpu.dpas<{repeatCount=8, warpsPerCTA=[1,1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas}>
-#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#dpas}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1]}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: dot_f32_tf32_tf32_f32_1
-  tt.func @dot_f32_tf32_tf32_f32_1(%a: tensor<8x8xf32, #dot_operand_a>, %b: tensor<8x16xf32, #dot_operand_b>, %c: tensor<8x16xf32, #dpas>) {
+  tt.func @dot_f32_tf32_tf32_f32_1(%a: tensor<8x8xf32, #dot_operand_a>, %b: tensor<8x16xf32, #dot_operand_b>, %c: tensor<8x16xf32, #mma>) {
     // CHECK: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<TF32>, pb = #genx.precision_type<TF32>, rc = 8 : i32} : (vector<8xf32>, vector<4xf32>, vector<8xf32>) -> vector<8xf32>
-    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x8xf32, #dot_operand_a> * tensor<8x16xf32, #dot_operand_b> -> tensor<8x16xf32, #dpas>
+    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x8xf32, #dot_operand_a> * tensor<8x16xf32, #dot_operand_b> -> tensor<8x16xf32, #mma>
     tt.return
   }
 }
 
 // -----
 
-#dpas = #triton_gpu.dpas<{repeatCount=8, warpsPerCTA=[1,1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas}>
-#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#dpas}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1]}>
+#dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#mma}>
+#dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#mma}>
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: dot_f32_tf32_tf32_f32_2
-  tt.func @dot_f32_tf32_tf32_f32_2(%a: tensor<8x8xf32, #dot_operand_a>, %b: tensor<8x32xf32, #dot_operand_b>, %c: tensor<8x32xf32, #dpas>) {
+  tt.func @dot_f32_tf32_tf32_f32_2(%a: tensor<8x8xf32, #dot_operand_a>, %b: tensor<8x32xf32, #dot_operand_b>, %c: tensor<8x32xf32, #mma>) {
     // COM: 2 repetitions along axis for N.
     // CHECK-COUNT-2: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<TF32>, pb = #genx.precision_type<TF32>, rc = 8 : i32} : (vector<8xf32>, vector<4xf32>, vector<8xf32>) -> vector<8xf32>
-    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x8xf32, #dot_operand_a> * tensor<8x32xf32, #dot_operand_b> -> tensor<8x32xf32, #dpas>
+    %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x8xf32, #dot_operand_a> * tensor<8x32xf32, #dot_operand_b> -> tensor<8x32xf32, #mma>
     tt.return
   }
 }
@@ -631,10 +631,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 // -----
 
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#dpas = #triton_gpu.dpas<{repeatCount = 8, warpsPerCTA = [2, 2], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: convert_layout_dpas_block
-  tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x16xf32, #dpas>) {
+  tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x16xf32, #mma>) {
     // CHECK: llvm.store
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
@@ -642,7 +642,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: genx.barrier
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
-    %0 = triton_gpu.convert_layout %arg0 : (tensor<32x16xf32, #dpas>) -> tensor<32x16xf32, #blocked0>
+    %0 = triton_gpu.convert_layout %arg0 : (tensor<32x16xf32, #mma>) -> tensor<32x16xf32, #blocked0>
     tt.return
   }
 }
@@ -650,10 +650,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // -----
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#dpas = #triton_gpu.dpas<{repeatCount = 8, warpsPerCTA = [2, 2], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: convert_layout_dpas_block
-  tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x64xf32, #dpas>) {
+  tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x64xf32, #mma>) {
     // CHECK: llvm.store
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
@@ -665,7 +665,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: genx.barrier
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
-    %0 = triton_gpu.convert_layout %arg0 : (tensor<32x64xf32, #dpas>) -> tensor<32x64xf32, #blocked>
+    %0 = triton_gpu.convert_layout %arg0 : (tensor<32x64xf32, #mma>) -> tensor<32x64xf32, #blocked>
     tt.return
   }
 }

@@ -8,6 +8,7 @@
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/TargetSelect.h"
 #include <pybind11/pybind11.h>
@@ -107,7 +108,8 @@ void init_triton_intel(py::module &&m){
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
-    registry.insert<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+    registry.insert<mlir::triton::gpu::intel::TritonIntelGPUDialect,
+                    mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
                     mlir::triton::nvgpu::NVGPUDialect>();
     mlir::registerNVVMDialectTranslation(registry);
     mlir::registerGENXDialectTranslation(registry);
