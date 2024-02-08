@@ -8,6 +8,7 @@ Getting Started
 ---------------
 
 - Follow the :doc:`installation instructions <getting-started/installation>` for your platform of choice.
+- Triton project architecture described :doc:`here. <getting-started/architecture>`
 - Take a look at the :doc:`tutorials <getting-started/tutorials/index>` to learn how to write your first Triton program.
 
 .. toctree::
@@ -16,8 +17,28 @@ Getting Started
    :hidden:
 
    getting-started/installation
+   getting-started/start
+   getting-started/architecture
    getting-started/tutorials/index
 
+
+Programming Guide
+-----------------
+
+Check out the following documents to learn more about Triton and how it compares against other DSLs for DNNs:
+
+- Chapter 1: :doc:`Introduction <programming-guide/chapter-1/introduction>`      
+- Chapter 2: :doc:`Related Work <programming-guide/chapter-2/related-work>`
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Programming Guide
+   :hidden:
+
+   programming-guide/chapter-1/introduction
+   programming-guide/chapter-2/related-work
+
+.. _Triton: https://github.com/openai/triton
 
 Python API
 ----------
@@ -38,7 +59,7 @@ Python API
 
 
 Triton MLIR Dialects and Ops
---------------------
+----------------------------
 
 - :doc:`Triton MLIR Dialects and Ops <dialects/dialects>`
 
@@ -49,20 +70,3 @@ Triton MLIR Dialects and Ops
 
    dialects/dialects
 
-Going Further
--------------
-
-Check out the following documents to learn more about Triton and how it compares against other DSLs for DNNs:
-
-- Chapter 1: :doc:`Introduction <programming-guide/chapter-1/introduction>`
-- Chapter 2: :doc:`Related Work <programming-guide/chapter-2/related-work>`
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Programming Guide
-   :hidden:
-
-   programming-guide/chapter-1/introduction
-   programming-guide/chapter-2/related-work
-
-.. _Triton: https://github.com/openai/triton

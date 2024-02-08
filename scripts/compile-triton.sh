@@ -196,6 +196,9 @@ build() {
 
   if [ "$BUILD_TRITON" = true ]; then
     build_triton
+    echo "**** Configuring $TRITON_PROJ docs ****"
+    cd $TRITON_PROJ/docs
+    python3 -m sphinx . _build/html/mai
   fi
 }
 
