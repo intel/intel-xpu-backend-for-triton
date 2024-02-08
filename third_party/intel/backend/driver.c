@@ -218,7 +218,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   int32_t n_regs = 0;
   int32_t n_spills = 0;
 
-  if (device_id > sycl_l0_device_list.size()) {
+  if (devId > sycl_l0_device_list.size()) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
