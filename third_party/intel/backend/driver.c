@@ -29,8 +29,6 @@ typedef struct l0_resc_handles {
 
 std::unordered_map<sycl::queue, l0_resc_handles> sycl_queue_map;
 static ze_context_handle_t context = {nullptr};
-static ze_driver_handle_t driverHandle = {nullptr};
-static ze_event_pool_handle_t eventPoolHandle = {nullptr};
 
 static std::vector<ze_device_handle_t> devices;
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
@@ -91,8 +89,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   case 0x0B:      // PVC GPUs 0Bxx
     gpu_arch = 1; // PVC
     break;
-  default:
-    ; // fall through
+  default:; // fall through
   }
 
   ze_device_compute_properties_t compute_properties = {};
@@ -103,7 +100,8 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int num_subgroup_sizes = compute_properties.numSubGroupSizes;
   PyObject *subgroup_sizes = PyTuple_New(num_subgroup_sizes);
   for (int i = 0; i < num_subgroup_sizes; i++) {
-      PyTuple_SetItem(subgroup_sizes, i, PyLong_FromLong(compute_properties.subGroupSizes[i]));
+    PyTuple_SetItem(subgroup_sizes, i,
+                    PyLong_FromLong(compute_properties.subGroupSizes[i]));
   }
 
   uint32_t memoryCount = 0;
@@ -120,12 +118,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   delete[] pMemoryProperties;
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}", "max_shared_mem",
-                       max_shared_mem, "multiprocessor_count",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}",
+                       "max_shared_mem", max_shared_mem, "multiprocessor_count",
                        multiprocessor_count, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width, "device_arch", gpu_arch,
-                       "max_group_size", max_group_size, "subgroup_sizes", subgroup_sizes);
+                       mem_bus_width, "device_arch", gpu_arch, "max_group_size",
+                       max_group_size, "subgroup_sizes", subgroup_sizes);
 }
 
 /*Sycl code Start*/
@@ -207,31 +205,31 @@ ze_kernel_handle_t create_function(ze_module_handle_t module,
 
 std::vector<std::unique_ptr<sycl::kernel>> compiled_kernels;
 
-static PyObject *loadSyclBinary(PyObject *self, PyObject *args) {
+static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name;
   int shared;
   PyObject *py_bytes;
-  PyObject *py_dev;
-  if (!PyArg_ParseTuple(args, "sSiO", &name, &py_bytes, &shared, &py_dev)) {
-    std::cerr << "loadSyclBinary arg parse failed" << std::endl;
+  uint64_t devId;
+
+  if (!PyArg_ParseTuple(args, "sSii", &name, &py_bytes, &shared, &devId)) {
+    std::cerr << "loadBinary arg parse failed" << std::endl;
     return NULL;
   }
   int32_t n_regs = 0;
   int32_t n_spills = 0;
-  void *pdevID = PyCapsule_GetPointer(py_dev, PyCapsule_GetName(py_dev));
-  if (pdevID == nullptr)
-    return NULL;
 
-  sycl::device device = *(static_cast<sycl::device *>(pdevID));
+  auto sycl_l0_device_pair = sycl_l0_device_list[devId];
+  sycl::device sycl_device = sycl_l0_device_pair.first;
+
   std::string kernel_name = name;
   size_t binary_size = PyBytes_Size(py_bytes);
   binary_size = binary_size / sizeof(uint32_t);
 
   uint32_t *binary_ptr = (uint32_t *)PyBytes_AsString(py_bytes);
   ;
-  auto ctx = device.get_platform().ext_oneapi_get_default_context();
+  auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
   auto l0_device =
-      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(device);
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
   auto l0_module =
       create_module(l0_context, l0_device, binary_ptr, binary_size);
@@ -270,47 +268,6 @@ static PyObject *loadSyclBinary(PyObject *self, PyObject *args) {
   return Py_BuildValue("(KKii)", (uint64_t)kb, (uint64_t)k, n_regs, n_spills);
 }
 /*Sycl code end*/
-
-static PyObject *loadBinary(PyObject *self, PyObject *args) {
-  const char *name;
-  int shared;
-  PyObject *py_bytes;
-  int device_id;
-  if (!PyArg_ParseTuple(args, "sSii", &name, &py_bytes, &shared, &device_id)) {
-    std::cerr << "loadBinary arg parse failed" << std::endl;
-    return NULL;
-  }
-
-  if (device_id > devices.size()) {
-    std::cerr << "Device ID not found: " << device_id << std::endl;
-    return NULL;
-  }
-
-  ze_device_handle_t device = devices[device_id];
-
-  int32_t n_regs = 0;
-  int32_t n_spills = 0;
-
-  ze_module_desc_t module_desc = {};
-  module_desc.format = ZE_MODULE_FORMAT_IL_SPIRV;
-  module_desc.inputSize = PyBytes_Size(py_bytes);
-  module_desc.pInputModule = (uint8_t *)PyBytes_AsString(py_bytes);
-  ze_module_handle_t module;
-  ZE_CHECK(zeModuleCreate(context, device, &module_desc, &module, nullptr));
-
-  ze_kernel_desc_t kernel_desc = {};
-  kernel_desc.pKernelName = name;
-  ze_kernel_handle_t fun;
-  ZE_CHECK(zeKernelCreate(module, &kernel_desc, &fun));
-
-  if (PyErr_Occurred()) {
-    std::cerr << "loadBinary error occurred" << std::endl;
-    return NULL;
-  }
-
-  return Py_BuildValue("(KKii)", (uint64_t)module, (uint64_t)fun, n_regs,
-                       n_spills);
-}
 
 bool update(sycl::queue sycl_queue) {
   // Get l0-context
@@ -391,38 +348,8 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
-static PyObject *getL0Queue(PyObject *self, PyObject *args) {
-  PyObject *cap;
-  void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
-  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
-    return NULL;
-  sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
-  if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
-    update(*sycl_queue);
-  }
-  return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].queue));
-}
-
-static PyObject *getL0CtxtPtr(PyObject *self, PyObject *args) {
-  PyObject *cap;
-  void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
-  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
-    return NULL;
-  sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
-  if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
-    update(*sycl_queue);
-  }
-  return Py_BuildValue("(K)", (uint64_t)(sycl_queue_map[*sycl_queue].context));
-}
-
 static PyMethodDef ModuleMethods[] = {
-    {"load_binary", loadSyclBinary, METH_VARARGS,
-     "Load provided SPV into ZE driver"},
-    {"load_sycl_binary", loadSyclBinary, METH_VARARGS,
+    {"load_binary", loadBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
     {"get_device_properties", getDeviceProperties, METH_VARARGS,
      "Get the properties for a given device"},
@@ -430,9 +357,6 @@ static PyMethodDef ModuleMethods[] = {
      "Initialize the ZE GPU context"},
     {"init_devices", initDevices, METH_VARARGS,
      "Initialize the ZE GPU devices and return device count"},
-    {"get_l0_queue", getL0Queue, METH_VARARGS, "Get l0 queue from sycl queue"},
-    {"get_l0_ctxt_ptr", getL0CtxtPtr, METH_VARARGS,
-     "Extract l0 context pointer from sycl queue"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 

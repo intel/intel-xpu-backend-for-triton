@@ -51,10 +51,7 @@ class XPUUtils(object):
         dirname = os.path.dirname(os.path.realpath(__file__))
         mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
         self.load_binary = mod.load_binary
-        self.load_sycl_binary = mod.load_sycl_binary
         self.get_device_properties = mod.get_device_properties
-        self.get_l0_queue = mod.get_l0_queue
-        self.get_l0_ctxt_ptr = mod.get_l0_ctxt_ptr
         self.context = mod.init_context(self.get_sycl_queue())
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.current_device = 0 if self.device_count[0] > 0 else -1
@@ -72,9 +69,6 @@ class XPUUtils(object):
     def get_sycl_device(self, device_id):
         import torch
         return torch.xpu.device(device_id).sycl_device
-
-    def use_icl(self):
-        return self.get_l0_queue(self.get_sycl_queue())[0] == 0
 
 # ------------------------
 # Launcher
