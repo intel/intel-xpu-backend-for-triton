@@ -228,6 +228,7 @@ The resulting IR follows the input language almost 1 to 1:
   }
 
 .. image :: ../pics/prog-model.png
+  :width: 400
 
 As seen in the example above, Triton relies on pointer arithmetic mixed with a wide set of ‘built  -ins’ (e.g., ``tl.program_id()``) calls to produce the IR. There is tensor creation, shape manipulation, math, memory, and some other built-ins available (see [c16]_ for the complete set). The program model (SPMD) assumes that an executor runs a number of ‘programs’ that process different data. The kernel can accept torch tensors and treat them as a tensor of pointers. Each kernel is assumed to be single-threaded, each working on a ‘block’ of data (e.g., ``BLOCK_SIZE: tl.constexpr`` in the kernel example above; in this case happens to equal 1024). Triton “automatically” parallelizes the execution across the range of data. Since the block size affects hardware mapping (e.g., shared memory access) the value is a compile-time constant. Automatic parallelization basically means that users do not need to explicitly control and synchronize (e.g., for shared memory access). Calls to math functions are emitted as additional functions usually containing libdevice calls (or similar).
 Additionally, Triton provides a runtime and a JIT, and caches previously compiled kernels for reuse. Python binding is done through pybind11 [c24]_.
@@ -317,10 +318,10 @@ For example, a shape/order pair defines a distribution layout:
           [3  7  11 15]
 
 For the Threads Per Subgroup (Warp) and Values Per Thread level, the linear id distribution is variant for each sub-class encoding.
-The layout function :math:`L` of this layout is then defined, for an index :math:`i \in R^D`, as follows: TODO  :math:`d \in D` ????, Is it dimesion?
+The layout function :math:`L` of this layout is then defined, for an index :math:`i \in R^D` and :math:`d \in D` for dimension, as follows:
 
 .. math::
-
+  
   L(A)[i_d] =& L[i_d + k_d * A_{shape}[d]] \bmod L_{shape}[d]; \\
              & \forall k_d : i_d + k_d * A_{shape}[d] < L_{shape}[d]\\
 
