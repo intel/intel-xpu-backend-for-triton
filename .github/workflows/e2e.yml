@@ -21,7 +21,8 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.5
+      - cpu
+#      - runner-0.0.5
     steps:
       - name: Install Python 3.10
         uses: actions/setup-python@v5
@@ -68,5 +69,6 @@ jobs:
 
       - name: Install IPEX
         run: |
+          source ~/intel/oneapi/setvars.sh
           pip install intel-extension-for-pytorch/dist/*.whl
           python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
