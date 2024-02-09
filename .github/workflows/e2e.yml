@@ -1,0 +1,65 @@
+name: E2E
+
+on:
+  workflow_dispatch:
+# FIXME: temporary run this workflow for PRs
+  pull_request:
+    branches:
+      - llvm-target
+
+permissions: read-all
+
+env:
+  BASE: /home/runner
+  LLVM_SYSPATH: /home/runner/packages/llvm
+  BACKEND: XPU
+  TRITON_DISABLE_LINE_INFO: 1
+
+jobs:
+  build:
+    name: Build PyTorch, IPEX, Triton
+    runs-on:
+      - glados
+      - spr
+      - cpu
+    steps:
+      - name: Create environment file
+        run: |
+          cat <<EOF >~/env.sh
+          source ~/intel/oneapi/compiler/latest/env/vars.sh
+          source ~/intel/oneapi/mkl/latest/env/vars.sh
+          export MKL_DPCPP_ROOT=${HOME}/intel/oneapi/mkl/latest
+          export LD_LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LD_LIBRARY_PATH}
+          export LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LIBRARY_PATH}
+          export USE_AOT_DEVLIST='pvc'
+          source ~/intel/oneapi/tbb/latest/env/vars.sh
+          EOF
+
+      - name: Build PyTorch
+        run: |
+          source ~/env.sh
+          git clone -b dev/triton-test-3.0 https://github.com/Stonepia/pytorch.git pytorch
+          cd pytorch
+          git submodule sync && git submodule update --init --recursive --jobs 0
+          pip install -r requirements.txt
+          python setup.py bdist_wheel
+
+      - name: Install PyTorch
+        run: |
+          pip install pytorch/dist/*.whl
+          python -c "import torch;print(torch.__version__)"
+
+      - name: Build IPEX
+        run: |
+          source ~/env.sh
+          git clone -b dev/triton-test-3.0 https://github.com/intel/intel-extension-for-pytorch.git
+          cd intel-extension-for-pytorch
+          git submodule sync
+          git submodule update --init --recursive --jobs 0
+          pip install -r requirements.txt
+          python setup.py bdist_wheel
+
+      - name: Install IPEX
+        run: |
+          pip install intel-extension-for-pytorch/dist/*.whl
+          python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
