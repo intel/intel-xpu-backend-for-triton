@@ -21,7 +21,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - cpu
+      - runner-0.0.5
     steps:
       - name: Install Python 3.10
         uses: actions/setup-python@v5
