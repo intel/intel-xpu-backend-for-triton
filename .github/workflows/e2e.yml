@@ -40,7 +40,8 @@ jobs:
           source ~/env.sh
           git clone -b dev/triton-test-3.0 https://github.com/Stonepia/pytorch.git pytorch
           cd pytorch
-          git submodule sync && git submodule update --init --recursive --jobs 0
+          git submodule sync
+          git submodule update --init --recursive
           pip install -r requirements.txt
           python setup.py bdist_wheel
 
@@ -55,7 +56,7 @@ jobs:
           git clone -b dev/triton-test-3.0 https://github.com/intel/intel-extension-for-pytorch.git
           cd intel-extension-for-pytorch
           git submodule sync
-          git submodule update --init --recursive --jobs 0
+          git submodule update --init --recursive
           pip install -r requirements.txt
           python setup.py bdist_wheel
 
