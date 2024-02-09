@@ -23,6 +23,11 @@ jobs:
       - spr
       - cpu
     steps:
+      - name: Install Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
       - name: Create environment file
         run: |
           cat <<EOF >~/env.sh
@@ -41,7 +46,7 @@ jobs:
           git clone -b dev/triton-test-3.0 https://github.com/Stonepia/pytorch.git pytorch
           cd pytorch
           git submodule sync
-          git submodule update --init --recursive
+          git submodule update --init --recursive --jobs 8
           pip install -r requirements.txt
           python setup.py bdist_wheel
 
@@ -56,7 +61,7 @@ jobs:
           git clone -b dev/triton-test-3.0 https://github.com/intel/intel-extension-for-pytorch.git
           cd intel-extension-for-pytorch
           git submodule sync
-          git submodule update --init --recursive
+          git submodule update --init --recursive --jobs 8
           pip install -r requirements.txt
           python setup.py bdist_wheel
 
