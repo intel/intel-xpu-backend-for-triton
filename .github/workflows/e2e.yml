@@ -14,20 +14,42 @@ env:
   LLVM_SYSPATH: /home/runner/packages/llvm
   BACKEND: XPU
   TRITON_DISABLE_LINE_INFO: 1
+  PYTHON_VERSION: "3.10"
+  PYTORCH_REPO: https://github.com/Stonepia/pytorch.git
+  PYTORCH_BRANCH: dev/triton-test-3.0
+  IPEX_REPO: https://github.com/intel/intel-extension-for-pytorch.git
+  IPEX_BRANCH: dev/triton-test-3.0
+  LLVM_REPO: https://github.com/intel/llvm.git
+  LLVM_BRANCH: genx
 
 jobs:
   build:
-    name: Build PyTorch, IPEX, Triton
+    name: Build
     runs-on:
       - glados
       - spr
       - cpu
-#      - runner-0.0.5
     steps:
-      - name: Install Python 3.10
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Identify versions
+        run: |
+          echo "PYTORCH_COMMIT_ID=$(git ls-remote $PYTORCH_REPO refs/heads/$PYTORCH_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
+          echo "IPEX_COMMIT_ID=$(git ls-remote $IPEX_REPO refs/heads/$IPEX_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
+          echo "LLVM_COMMIT_ID=$(git ls-remote $LLVM_REPO refs/heads/$LLVM_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
+
+      - name: Print versions
+        run: |
+          echo "PyTorch: $PYTORCH_COMMIT_ID"
+          echo "IPEX:    $IPEX_COMMIT_ID"
+          echo "LLVM:    $LLVM_COMMIT_ID"
+          echo "Triton:  $GITHUB_SHA"
 
       - name: Create environment file
         run: |
@@ -44,7 +66,7 @@ jobs:
       - name: Build PyTorch
         run: |
           source ~/env.sh
-          git clone -b dev/triton-test-3.0 https://github.com/Stonepia/pytorch.git pytorch
+          git clone --single-branch -b $PYTORCH_BRANCH $PYTORCH_REPO
           cd pytorch
           git submodule sync
           git submodule update --init --recursive --jobs 8
@@ -60,7 +82,7 @@ jobs:
         run: |
           source ~/intel/oneapi/setvars.sh
           export USE_AOT_DEVLIST='pvc'
-          git clone -b dev/triton-test-3.0 https://github.com/intel/intel-extension-for-pytorch.git
+          git clone --single-branch -b $IPEX_BRANCH $IPEX_REPO
           cd intel-extension-for-pytorch
           git submodule sync
           git submodule update --init --recursive --jobs 8
