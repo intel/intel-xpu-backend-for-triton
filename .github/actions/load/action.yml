@@ -1,0 +1,40 @@
+name: load
+description: Load a directory from a cache based on a shared directory
+inputs:
+  root:
+    description:
+    default: /cache
+  path:
+    description: A directory to load from a cache
+    required: true
+  key:
+    description: A cache key
+    required: true
+outputs:
+  path:
+    description: A directory to save to a cache
+    value: ${{ inputs.path }}
+  status:
+    description: Cache status, hit or miss
+    value: ${{ steps.load.outputs.status }}
+  dest:
+    description: Directory in cache
+    value: ${{ steps.load.outputs.dest }}
+runs:
+  using: "composite"
+  steps:
+    - name: Load ${{ inputs.path }} from cache
+      id: load
+      run: |
+        ITEM_PATH="${{ inputs.root }}/${{ inputs.key }}"
+        echo "dest=$ITEM_PATH" >> $GITHUB_OUTPUT
+        if [[ -d $ITEM_PATH ]]; then
+          echo "Cache hit for ${{ inputs.key }}"
+          echo "status=hit" >> $GITHUB_OUTPUT
+          mkdir -p ${{ inputs.path }}
+          cp -r $ITEM_PATH/* ${{ inputs.path }}/
+          touch $ITEM_PATH.hit
+        else
+          echo "Cache miss for ${{ inputs.key }}"
+          echo "status=miss" >> $GITHUB_OUTPUT
+        fi

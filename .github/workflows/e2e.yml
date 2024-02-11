@@ -51,7 +51,7 @@ jobs:
           echo "LLVM:    $LLVM_COMMIT_ID"
           echo "Triton:  $GITHUB_SHA"
 
-      - name: Create environment file
+      - name: Create environment file for building PyTorch
         run: |
           cat <<EOF >~/env.sh
           source ~/intel/oneapi/compiler/latest/env/vars.sh
@@ -63,7 +63,15 @@ jobs:
           source ~/intel/oneapi/tbb/latest/env/vars.sh
           EOF
 
+      - name: Load PyTorch wheels from a cache
+        id: pytorch-cache
+        uses: .github/action/load
+        with:
+          path: $PWD/pytorch/dist
+          key: pytoch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
+
       - name: Build PyTorch
+        if: ${{ steps.pytorch-cache.outputs.status == "miss" }}
         run: |
           source ~/env.sh
           git clone --single-branch -b $PYTORCH_BRANCH $PYTORCH_REPO
@@ -77,6 +85,20 @@ jobs:
         run: |
           pip install pytorch/dist/*.whl
           python -c "import torch;print(torch.__version__)"
+
+      - name: Save PyTorch wheels to a cache
+        if: ${{ steps.pytorch-cache.outputs.status == "miss" }}
+        uses: .github/action/save
+        with:
+          path: ${{ steps.pytorch-cache.outputs.path }}
+          dest: ${{ steps.pytorch-cache.outputs.dest }}
+
+      - name: Load IPEX wheels from a cache
+        id: ipex-cache
+        uses: .github/action/load
+        with:
+          path: intel-extension-for-pytorch/dist
+          key: ipex-$PYTHON_VERSION-$IPEX_COMMIT_ID
 
       - name: Build IPEX
         run: |
@@ -94,3 +116,10 @@ jobs:
           source ~/intel/oneapi/setvars.sh
           pip install intel-extension-for-pytorch/dist/*.whl
           python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
+
+      - name: Save IPEX wheels to a cache
+        if: ${{ steps.ipex-cache.outputs.status == "miss" }}
+        uses: .github/action/save
+        with:
+          path: ${{ steps.ipex-cache.outputs.path }}
+          dest: ${{ steps.ipex-cache.outputs.dest }}
