@@ -16,7 +16,7 @@ runs:
     - name: Save ${{ inputs.path }} to cache
       shell: bash
       run: |
-        TEMP_ITEM=$(mkdir -d -p ${{ inputs.root }})
+        TEMP_ITEM=$(mktemp -d -p ${{ inputs.root }})
         cp -r ${{ inputs.path }}/* $TEMP_ITEM/
         # ignore error if other job created a cache with the same key already
         mv $TEMP_ITEM ${{ inputs.dest }} || true
