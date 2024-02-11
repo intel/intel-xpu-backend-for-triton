@@ -71,7 +71,7 @@ jobs:
           key: pytoch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
 
       - name: Build PyTorch
-        if: ${{ steps.pytorch-cache.outputs.status == "miss" }}
+        if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
         run: |
           source ~/env.sh
           git clone --single-branch -b $PYTORCH_BRANCH $PYTORCH_REPO
@@ -87,7 +87,7 @@ jobs:
           python -c "import torch;print(torch.__version__)"
 
       - name: Save PyTorch wheels to a cache
-        if: ${{ steps.pytorch-cache.outputs.status == "miss" }}
+        if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
         uses: ./.github/action/save
         with:
           path: ${{ steps.pytorch-cache.outputs.path }}
@@ -101,7 +101,7 @@ jobs:
           key: ipex-$PYTHON_VERSION-$IPEX_COMMIT_ID
 
       - name: Build IPEX
-        if: ${{ steps.ipex-cache.outputs.status == "miss" }}
+        if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
         run: |
           source ~/intel/oneapi/setvars.sh
           export USE_AOT_DEVLIST='pvc'
@@ -119,7 +119,7 @@ jobs:
           python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
 
       - name: Save IPEX wheels to a cache
-        if: ${{ steps.ipex-cache.outputs.status == "miss" }}
+        if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
         uses: ./.github/action/save
         with:
           path: ${{ steps.ipex-cache.outputs.path }}
