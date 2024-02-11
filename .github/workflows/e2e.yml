@@ -65,7 +65,7 @@ jobs:
 
       - name: Load PyTorch wheels from a cache
         id: pytorch-cache
-        uses: ./.github/action/load
+        uses: ./.github/actions/load
         with:
           path: $PWD/pytorch/dist
           key: pytoch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
@@ -88,14 +88,14 @@ jobs:
 
       - name: Save PyTorch wheels to a cache
         if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
-        uses: ./.github/action/save
+        uses: ./.github/actions/save
         with:
           path: ${{ steps.pytorch-cache.outputs.path }}
           dest: ${{ steps.pytorch-cache.outputs.dest }}
 
       - name: Load IPEX wheels from a cache
         id: ipex-cache
-        uses: ./.github/action/load
+        uses: ./.github/actions/load
         with:
           path: intel-extension-for-pytorch/dist
           key: ipex-$PYTHON_VERSION-$IPEX_COMMIT_ID
@@ -120,7 +120,7 @@ jobs:
 
       - name: Save IPEX wheels to a cache
         if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
-        uses: ./.github/action/save
+        uses: ./.github/actions/save
         with:
           path: ${{ steps.ipex-cache.outputs.path }}
           dest: ${{ steps.ipex-cache.outputs.dest }}
