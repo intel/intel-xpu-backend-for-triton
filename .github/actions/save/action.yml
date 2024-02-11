@@ -14,6 +14,7 @@ runs:
   using: "composite"
   steps:
     - name: Save ${{ inputs.path }} to cache
+      shell: bash
       run: |
         TEMP_ITEM=$(mkdir -d -p ${{ inputs.root }})
         cp -r ${{ inputs.path }}/* $TEMP_ITEM/

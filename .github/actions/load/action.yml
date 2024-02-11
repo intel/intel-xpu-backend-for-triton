@@ -25,6 +25,7 @@ runs:
   steps:
     - name: Load ${{ inputs.path }} from cache
       id: load
+      shell: bash
       run: |
         ITEM_PATH="${{ inputs.root }}/${{ inputs.key }}"
         echo "dest=$ITEM_PATH" >> $GITHUB_OUTPUT
