@@ -43,13 +43,19 @@ jobs:
           echo "PYTORCH_COMMIT_ID=$(git ls-remote $PYTORCH_REPO refs/heads/$PYTORCH_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
           echo "IPEX_COMMIT_ID=$(git ls-remote $IPEX_REPO refs/heads/$IPEX_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
           echo "LLVM_COMMIT_ID=$(git ls-remote $LLVM_REPO refs/heads/$LLVM_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
+          echo "TORCHVISION_COMMIT_ID=$(git ls-remote https://github.com/pytorch/vision.git refs/heads/main | cut -f1)" >> "${GITHUB_ENV}"
+          echo "TORCHTEXT_COMMIT_ID=$(git ls-remote https://github.com/pytorch/text.git refs/heads/main | cut -f1)" >> "${GITHUB_ENV}"
+          echo "TORCHAUDIO_COMMIT_ID=$(git ls-remote https://github.com/pytorch/audio.git refs/heads/main | cut -f1)" >> "${GITHUB_ENV}"
 
       - name: Print versions
         run: |
-          echo "PyTorch: $PYTORCH_COMMIT_ID"
-          echo "IPEX:    $IPEX_COMMIT_ID"
-          echo "LLVM:    $LLVM_COMMIT_ID"
-          echo "Triton:  $GITHUB_SHA"
+          echo "PyTorch:     $PYTORCH_COMMIT_ID"
+          echo "TorchVision: $TORCHVISION_COMMIT_ID"
+          echo "TorchText:   $TORCHTEXT_COMMIT_ID"
+          echo "TorchAudio:  $TORCHAUDIO_COMMIT_ID"
+          echo "IPEX:        $IPEX_COMMIT_ID"
+          echo "LLVM:        $LLVM_COMMIT_ID"
+          echo "Triton:      $GITHUB_SHA"
 
       - name: Create environment file for building PyTorch
         run: |
@@ -124,3 +130,62 @@ jobs:
         with:
           path: ${{ steps.ipex-cache.outputs.path }}
           dest: ${{ steps.ipex-cache.outputs.dest }}
+
+      - name: Generate Triton cache key
+        id: triton-key
+        run: |
+          COMPOSITE_KEY=$(echo $PYTHON_VERSION $LLVM_COMMIT_ID $GITHUB_SHA | sha256sum - | cut -d\  -f1)
+          echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
+
+      - name: Load Triton wheels from a cache
+        id: triton-cache
+        uses: ./.github/actions/load
+        with:
+          path: $PWD/python/dist
+          key: ${{ steps.triton-key.outputs.key }}
+
+      - name: Generate packages cache key
+        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
+        id: packages-key
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        run: |
+          COMPOSITE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
+          echo "key=packages-$COMPOSITE_KEY-$CACHE_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Load packages from a cache
+        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
+        id: packages-cache
+        with:
+          path: $HOME/packages
+          key: ${{ steps.packages-key.outputs.key }}
+
+      - name: Build packages
+        if: ${{ steps.triton-cache.outputs.status == 'miss' && steps.packages-cache.outputs.status == 'miss' }}
+        run: |
+          ./scripts/compile-triton.sh --skip-triton
+
+      - name: Save packages to a cache
+        if: ${{ steps.triton-cache.outputs.status == 'miss' && steps.packages-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.packages-cache.outputs.path }}
+          dest: ${{ steps.packages-cache.outputs.dest }}
+
+      - name: Build Triton wheels
+        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
+        run: |
+          cd python
+          python setup.py bdist_wheel
+
+      - name: Install Triton
+        run: |
+          pip install python/dist/*.whl
+
+      - name: Save Triton wheels to a cache
+        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.triton-cache.outputs.path }}
+          dest: ${{ steps.triton-cache.outputs.dest }}
