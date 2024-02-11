@@ -68,7 +68,7 @@ jobs:
         uses: ./.github/actions/load
         with:
           path: $PWD/pytorch/dist
-          key: pytoch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
+          key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
 
       - name: Build PyTorch
         if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
