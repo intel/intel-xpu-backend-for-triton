@@ -69,20 +69,17 @@ jobs:
           source ~/intel/oneapi/tbb/latest/env/vars.sh
           EOF
 
-      - name: Clone PyTorch repository
-        run: |
-          git clone --single-branch -b $PYTORCH_BRANCH --recurse-submodules --jobs 8 $PYTORCH_REPO
-
-      - name: Load PyTorch wheels from a cache
+      - name: Load PyTorch from a cache
         id: pytorch-cache
         uses: ./.github/actions/load
         with:
-          path: $PWD/pytorch/dist
+          path: $PWD/pytorch
           key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
 
       - name: Build PyTorch
         if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
         run: |
+          git clone --single-branch -b $PYTORCH_BRANCH --recurse-submodules --jobs 8 $PYTORCH_REPO
           source ~/env.sh
           cd pytorch
           pip install -r requirements.txt
@@ -237,15 +234,27 @@ jobs:
           pip install -e .
 
       - name: Create a symlink to the test script
-        run:
+        run: |
           cd pytorch
           ln -s $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh .
 
+      # TODO: run in parallel
       - name: Run e2e tests
         run: |
           source ~/intel/oneapi/setvars.sh
+          export WORKSPACE=$HOME
           cd pytorch
-          bash ./inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0
-          bash ./inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 0
-          bash ./inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 0
-          bash ./inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 0
+          for model in huggingface timm torchbench; do
+            for mode in inference training; do
+              for dtype in amp_bf16 amp_fp16 float32; do
+                ./inductor_xpu_test.sh $model $dtype $mode accuracy xpu 0
+              done
+            done
+          done
+
+      - name: Copy reports
+        run: |
+          mkdir -p /cache/reports/e2e
+          $TMPDIR=$(mktemp -d -p /cache/reports/e2e/XXXXXXXXX.tmp)
+          cp -r ~/inductor_log/* $TMPDIR
+          mv -T $TMPDIR /cache/reports/e2e/$(date '+%Y%m%d%H%M%S') || true
