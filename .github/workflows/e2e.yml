@@ -177,6 +177,7 @@ jobs:
       - name: Build Triton wheels
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}
         run: |
+          pip install wheel
           cd python
           python setup.py bdist_wheel
 
