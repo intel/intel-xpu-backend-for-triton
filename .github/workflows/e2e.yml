@@ -73,7 +73,7 @@ jobs:
         id: pytorch-cache
         uses: ./.github/actions/load
         with:
-          path: $PWD/pytorch
+          path: pytorch
           key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
 
       - name: Build PyTorch
@@ -90,7 +90,7 @@ jobs:
           pip install pytorch/dist/*.whl
           python -c "import torch;print(torch.__version__)"
 
-      - name: Save PyTorch wheels to a cache
+      - name: Save PyTorch to a cache
         if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/save
         with:
@@ -137,7 +137,7 @@ jobs:
         id: triton-cache
         uses: ./.github/actions/load
         with:
-          path: $PWD/python/dist
+          path: python/dist
           key: ${{ steps.triton-key.outputs.key }}
 
       - name: Generate packages cache key
