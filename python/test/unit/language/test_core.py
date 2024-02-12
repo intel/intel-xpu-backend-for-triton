@@ -4426,7 +4426,7 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
 
     if is_xpu():
         # FIXME: revisit problem size once tl.dot is lowered to DPAS.
-        warnings.warn("FIXME: test case modified, reduced problem size")        
+        warnings.warn("FIXME: test case modified, reduced problem size")
         M, N, K = 64, 128, 128
         BLOCK_M, BLOCK_N, BLOCK_K = 64, 128, 64
     else:
