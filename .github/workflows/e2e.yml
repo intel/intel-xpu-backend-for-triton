@@ -243,13 +243,12 @@ jobs:
 
       - name: Install PyTorch Benchmarks
         run: |
-          pip install pyyaml pandas scipy psutil pyre_extensions torchrec
+          pip install pyyaml pandas scipy psutil pyre_extensions torchrec transformers=4.27.4
           git clone --single-branch -b $BENCHMARK_BRANCH --recurse-submodules --jobs 8 $BENCHMARK_REPO
           cd benchmark
           python install.py
           pip install -e .
 
-      # TODO: run in parallel
       - name: Run e2e tests
         run: |
           source ~/intel/oneapi/setvars.sh
