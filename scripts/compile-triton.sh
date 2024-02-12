@@ -24,7 +24,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./compile-triton.sh [--llvm | --triton | --clean| --venv]"
+      echo "Example usage: ./compile-triton.sh [--llvm | --triton | --clean | --venv]"
       exit 1
       ;;
     *)
