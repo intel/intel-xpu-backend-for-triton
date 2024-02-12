@@ -69,6 +69,10 @@ jobs:
           source ~/intel/oneapi/tbb/latest/env/vars.sh
           EOF
 
+      - name: Clone PyTorch repository
+        run: |
+          git clone --single-branch -b $PYTORCH_BRANCH --recurse-submodules --jobs 8 $PYTORCH_REPO
+
       - name: Load PyTorch wheels from a cache
         id: pytorch-cache
         uses: ./.github/actions/load
@@ -80,10 +84,7 @@ jobs:
         if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
         run: |
           source ~/env.sh
-          git clone --single-branch -b $PYTORCH_BRANCH $PYTORCH_REPO
           cd pytorch
-          git submodule sync
-          git submodule update --init --recursive --jobs 8
           pip install -r requirements.txt
           python setup.py bdist_wheel
 
@@ -111,10 +112,8 @@ jobs:
         run: |
           source ~/intel/oneapi/setvars.sh
           export USE_AOT_DEVLIST='pvc'
-          git clone --single-branch -b $IPEX_BRANCH $IPEX_REPO
+          git clone --single-branch -b $IPEX_BRANCH --recurse-submodules --jobs 8 $IPEX_REPO
           cd intel-extension-for-pytorch
-          git submodule sync
-          git submodule update --init --recursive --jobs 8
           pip install -r requirements.txt
           python setup.py bdist_wheel
 
@@ -198,13 +197,19 @@ jobs:
           cd vision
           python setup.py bdist_wheel
 
+      # TODO: move to the base image
+      - name: Install torchvision dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y libpng libjpeg
+
       - name: Install torchvision
         run: |
           pip install vision/dist/*.whl
 
       - name: Build torchtext wheels
         run: |
-          git clone --recursive --single-branch -b main https://github.com/pytorch/text.git
+          git clone --recurse-submodules --jobs 8 --single-branch -b main https://github.com/pytorch/text.git
           cd text
           python setup.py bdist_wheel
 
@@ -226,15 +231,21 @@ jobs:
         run: |
           python -c "import torchvision,torchtext,torchaudio;print(torchvision.__version__, torchtext.__version__, torchaudio.__version__)"
           pip install pyyaml pandas scipy psutil pyre_extensions torchrec
-          git clone --single-branch -b main --recursive https://github.com/pytorch/benchmark.git
+          git clone --single-branch -b main --recurse-submodules --jobs 8 https://github.com/pytorch/benchmark.git
           cd benchmark
           python install.py
           pip install -e .
 
+      - name: Create a symlink to the test script
+        run:
+          cd pytorch
+          ln -s $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh .
+
       - name: Run e2e tests
         run: |
           source ~/intel/oneapi/setvars.sh
-          bash ./scripts/inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0
-          bash ./scripts/inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 0
-          bash ./scripts/inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 0
-          bash ./scripts/inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 0
+          cd pytorch
+          bash ./inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0
+          bash ./inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 0
+          bash ./inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 0
+          bash ./inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 0
