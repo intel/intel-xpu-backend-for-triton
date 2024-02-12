@@ -188,17 +188,17 @@ jobs:
           path: ${{ steps.triton-cache.outputs.path }}
           dest: ${{ steps.triton-cache.outputs.dest }}
 
-      - name: Build torchvision wheels
-        run: |
-          git clone --single-branch -b main https://github.com/pytorch/vision.git
-          cd vision
-          python setup.py bdist_wheel
-
       # TODO: move to the base image
       - name: Install torchvision dependencies
         run: |
           sudo apt update -y
           sudo apt install -y libpng-dev libjpeg-dev
+
+      - name: Build torchvision wheels
+        run: |
+          git clone --single-branch -b main https://github.com/pytorch/vision.git
+          cd vision
+          python setup.py bdist_wheel
 
       - name: Install torchvision
         run: |
