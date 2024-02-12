@@ -14,6 +14,7 @@ env:
   LLVM_SYSPATH: /home/runner/packages/llvm
   BACKEND: XPU
   TRITON_DISABLE_LINE_INFO: 1
+  USE_AOT_DEVLIST: pvc
   PYTHON_VERSION: "3.10"
   PYTORCH_REPO: https://github.com/Stonepia/pytorch.git
   PYTORCH_BRANCH: dev/triton-test-3.0
@@ -65,7 +66,6 @@ jobs:
           export MKL_DPCPP_ROOT=${HOME}/intel/oneapi/mkl/latest
           export LD_LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LD_LIBRARY_PATH}
           export LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LIBRARY_PATH}
-          export USE_AOT_DEVLIST='pvc'
           source ~/intel/oneapi/tbb/latest/env/vars.sh
           EOF
 
