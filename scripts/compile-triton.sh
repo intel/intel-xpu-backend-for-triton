@@ -1,5 +1,44 @@
 #!/usr/bin/env bash
 
+# Select what to build.
+BUILD_LLVM=false
+BUILD_TRITON=false
+CLEAN=false
+VENV=false
+for arg in "$@"; do
+  case $arg in
+    --llvm)
+      BUILD_LLVM=true
+      shift
+      ;;
+    --triton)
+      BUILD_TRITON=true
+      shift
+      ;;
+    --clean)
+      CLEAN=true
+      shift
+      ;;
+    --venv)
+      VENV=true
+      shift
+      ;;
+    --help)
+      echo "Example usage: ./compile-triton.sh [--llvm | --triton | --clean| --venv]"
+      exit 1
+      ;;
+    *)
+      ARGS+="${arg} "
+      shift
+      ;;
+  esac
+done
+
+if [ "$BUILD_LLVM" = false ] && [ "$BUILD_TRITON" = false ]; then
+  BUILD_LLVM=true
+  BUILD_TRITON=true
+fi
+
 set +o xtrace
 if [ -z "$BASE" ]; then
   echo "**** BASE is not given *****"
@@ -13,37 +52,27 @@ export LLVM_PROJ=$BASE/llvm
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
+if [ "$CLEAN" = true ]; then
+  echo "**** Cleaning $PACKAGES_DIR, $LLVM_PROJ, and $TRITON_PROJ_BUILD before build ****"
+  rm -rf $PACKAGES_DIR $LLVM_PROJ $TRITON_PROJ_BUILD
+fi
+
+if [ "$VENV" = true ]; then
+  echo "**** Creating Python virtualenv ****"
+  python3 -m venv .venv --prompt triton
+  source .venv/bin/activate
+  pip install ninja cmake wheel
+else
+  echo "**** Cleaning up Python virtualenv ****"
+  deactivate
+fi
+
 function check_rc {
   if [ $? != 0 ]; then
     echo "Command failed with rc: $rc"
     exit 1
   fi
 }
-
-CLEAN=false
-VENV=false
-SKIP_TRITON=false
-for arg in "$@"; do
-  case $arg in
-    --clean)
-      CLEAN=true
-      shift
-      ;;
-    --venv)
-      VENV=true
-      shift
-      ;;
-    --skip-triton)
-      SKIP_TRITON=true
-      shift
-      ;;
-  esac
-done
-
-if [ "$CLEAN" = true ]; then
-  echo "**** Cleaning $PACKAGES_DIR , $LLVM_PROJ , and $TRITON_PROJ_BUILD before build ****"
-  rm -rf $PACKAGES_DIR $LLVM_PROJ $TRITON_PROJ_BUILD
-fi
 
 if [ ! -d "$PACKAGES_DIR" ]; then
   mkdir $PACKAGES_DIR
@@ -119,7 +148,6 @@ function build_llvm {
   ninja check-mlir
   check_rc
 }
-build_llvm
 
 ############################################################################
 # Install libGenISAIntrinsics.a
@@ -139,10 +167,6 @@ fi
 ############################################################################
 ## Configure and build the Triton project.
 
-if [ "$SKIP_TRITON" = true ]; then
-  exit 0
-fi
-
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then
   # Remove the cached triton.
@@ -152,16 +176,6 @@ fi
 function build_triton {
   echo "**** Configuring $TRITON_PROJ ****"
   cd $TRITON_PROJ
-
-  if [ "$VENV" = true ]; then
-    echo "**** Creating Python virtualenv ****"
-    python3 -m venv .venv --prompt triton
-    source .venv/bin/activate
-    pip install ninja cmake wheel
-  else
-    echo "**** Cleaning up Python virtualenv ****"
-    deactivate
-  fi
 
   export LLVM_SYSPATH=$PACKAGES_DIR/llvm
   export DEBUG=1
@@ -176,4 +190,14 @@ function build_triton {
   # Copy compile_commands.json in the build directory (so that cland vscode plugin can find it).
   cp $TRITON_PROJ_BUILD/"$(ls $TRITON_PROJ_BUILD)"/compile_commands.json $TRITON_PROJ/
 }
-build_triton
+
+function build {
+  if [ "$BUILD_LLVM" = true ]; then
+    build_llvm
+  fi
+  if [ "$BUILD_TRITON" = true ]; then
+    build_triton
+  fi
+}
+
+build
