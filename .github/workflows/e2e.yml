@@ -201,7 +201,7 @@ jobs:
       - name: Install torchvision dependencies
         run: |
           sudo apt update -y
-          sudo apt install -y libpng libjpeg
+          sudo apt install -y libpng-dev libjpeg-dev
 
       - name: Install torchvision
         run: |
