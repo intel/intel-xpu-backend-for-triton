@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 from . import language as tl
 from datetime import datetime
 
+
 def synchronize():
     import torch
     if torch.cuda.is_available():
@@ -122,7 +123,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     for _ in range(5):
         cache.zero_()
         fn()
-    synchronize()        
+    synchronize()
     end_time = datetime.now()
     estimate_ms = ((end_time.timestamp() - start_time.timestamp()) * 1000) / 5
 
