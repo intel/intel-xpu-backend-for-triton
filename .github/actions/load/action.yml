@@ -33,6 +33,10 @@ runs:
       run: |
         ITEM_PATH="${{ inputs.root }}/${{ inputs.key }}"
         echo "dest=$ITEM_PATH" >> $GITHUB_OUTPUT
+        if [[ -d ${{ inputs.path }} ]]; then
+          echo "Directory ${{ inputs.path }} exists and will not be restored from cache"
+          exit 1
+        fi
         if [[ -d $ITEM_PATH ]]; then
           echo "Cache hit for ${{ inputs.key }}"
           echo "status=hit" >> $GITHUB_OUTPUT
