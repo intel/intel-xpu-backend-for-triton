@@ -39,7 +39,7 @@ jobs:
         mode:
           - inference
           - training
-    max-parallel: 1
+      max-parallel: 1
     timeout-minutes: 360
     steps:
       - name: Checkout repository
