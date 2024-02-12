@@ -986,64 +986,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
   let hasCustomAssemblyFormat = 1;
 }
 
-def DpasEncodingAttr : DistributedEncoding<"DpasEncoding", "dpas_encoding"> {
-  let mnemonic = "dpas";
-
-  let description = [{
-    An encoding for tensors that have been produced by XMX tensor cores.
-    It is characterized by parameters:
-      - `repeatCount` which shall be in the range [1, 8]
-      - `warpsPerCTA` which indicate how data should be partitioned between warps
-        For PVC the implicit warpTileSize is [8, 16].
-
-    Example:
-    For a tensor with a shape of [16, 32], warpsPerCTA set to [2, 2] the data
-    will be distributed between threads as follows:
-
-                   warp 0                               warp 1
-    ----------------/\-----------------  ----------------/\-----------------
-    [ 0   1   2   3   ......  14  15 ]   [ 16  17  18  19  ......  30  31 ]
-    [ 0   1   2   3   ......  14  15 ]   [ 16  17  18  19  ......  30  31 ]
-    [ 0   1   2   3   ......  14  15 ]   [ 16  17  18  19  ......  30  31 ]
-    [ 0   1   2   3   ......  14  15 ]   [ 16  17  18  19  ......  30  31 ]
-    [ 0   1   2   3   ......  14  15 ]   [ 16  17  18  19  ......  30  31 ]
-    [ 0   1   2   3   ......  14  15 ]   [ 16  17  18  19  ......  30  31 ]
-    [ 0   1   2   3   ......  14  15 ]   [ 16  17  18  19  ......  30  31 ]
-    [ 0   1   2   3   ......  14  15 ]   [ 16  17  18  19  ......  30  31 ]
-
-                   warp 2                               warp 3
-    ----------------/\-----------------  ----------------/\-----------------
-    [ 32  33  34  35  ......  46  47 ]   [ 48  49  50  51  ......  62  63 ]
-    [ 32  33  34  35  ......  46  47 ]   [ 48  49  50  51  ......  62  63 ]
-    [ 32  33  34  35  ......  46  47 ]   [ 48  49  50  51  ......  62  63 ]
-    [ 32  33  34  35  ......  46  47 ]   [ 48  49  50  51  ......  62  63 ]
-    [ 32  33  34  35  ......  46  47 ]   [ 48  49  50  51  ......  62  63 ]
-    [ 32  33  34  35  ......  46  47 ]   [ 48  49  50  51  ......  62  63 ]
-    [ 32  33  34  35  ......  46  47 ]   [ 48  49  50  51  ......  62  63 ]
-    [ 32  33  34  35  ......  46  47 ]   [ 48  49  50  51  ......  62  63 ]
-  }];
-
-  let parameters = (
-    ins
-    "unsigned":$repeatCount,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
-    "CTALayoutAttr":$CTALayout
-  );
-
-  let extraClassDeclaration = extraDistributedDeclaration # [{
-    unsigned getSystolicDepth() const { return 8; }
-    unsigned getExecutionSize() const { return 16; }
-    unsigned getOpsPerChannel(unsigned bitWidth) const {
-      return std::max(1u, std::min(32u / bitWidth, 8u));
-    }
-    unsigned getOpsPerChannel(Type matElemTy) const {
-      return getOpsPerChannel(matElemTy.getIntOrFloatBitWidth());
-    }
-  }];
-
-  let hasCustomAssemblyFormat = 1;
-}
-
 def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let mnemonic = "slice";
 
@@ -1121,9 +1063,6 @@ section 9.7.13.4.1 for more details.
 
   let hasCustomAssemblyFormat = 1;
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getDPASElemsPerInstr(unsigned bitWidth) const;
-    SmallVector<int64_t> getDPASRep(ArrayRef<int64_t> operandShape,
-                                    Type elemType) const;
   }];
 }
 
