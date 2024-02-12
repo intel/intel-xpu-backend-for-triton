@@ -28,7 +28,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - cpu
+      - runner-0.0.5
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -194,7 +194,7 @@ jobs:
 
       - name: Build torchvision wheels
         run: |
-          git clone https://github.com/pytorch/vision.git
+          git clone --single-branch -b main https://github.com/pytorch/vision.git
           cd vision
           python setup.py bdist_wheel
 
@@ -204,7 +204,7 @@ jobs:
 
       - name: Build torchtext wheels
         run: |
-          git clone --recursive https://github.com/pytorch/text.git
+          git clone --recursive --single-branch -b main https://github.com/pytorch/text.git
           cd text
           python setup.py bdist_wheel
 
@@ -214,10 +214,27 @@ jobs:
 
       - name: Build torchaudio wheels
         run: |
-          git clone https://github.com/pytorch/audio.git
+          git clone --single-branch -b main https://github.com/pytorch/audio.git
           cd audio
           python setup.py bdist_wheel
 
       - name: Install torchaudio
         run: |
           pip install audio/dist/*.whl
+
+      - name: Install PyTorch Benchmarks
+        run: |
+          python -c "import torchvision,torchtext,torchaudio;print(torchvision.__version__, torchtext.__version__, torchaudio.__version__)"
+          pip install pyyaml pandas scipy psutil pyre_extensions torchrec
+          git clone --single-branch -b main --recursive https://github.com/pytorch/benchmark.git
+          cd benchmark
+          python install.py
+          pip install -e .
+
+      - name: Run e2e tests
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          bash ./scripts/inductor_xpu_test.sh huggingface amp_bf16 inference accuracy xpu 0
+          bash ./scripts/inductor_xpu_test.sh huggingface amp_bf16 training accuracy xpu 0
+          bash ./scripts/inductor_xpu_test.sh huggingface amp_fp16 inference accuracy xpu 0
+          bash ./scripts/inductor_xpu_test.sh huggingface amp_fp16 training accuracy xpu 0
