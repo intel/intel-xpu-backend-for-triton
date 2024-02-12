@@ -157,6 +157,7 @@ jobs:
       - name: Load packages from a cache
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}
         id: packages-cache
+        uses: ./.github/actions/load
         with:
           path: $HOME/packages
           key: ${{ steps.packages-key.outputs.key }}
