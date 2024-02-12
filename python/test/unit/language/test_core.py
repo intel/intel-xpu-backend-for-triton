@@ -3188,7 +3188,7 @@ def test_noop(device):
 @pytest.mark.parametrize("device", ['xpu', 'cpu', 'cpu_pinned'])
 def test_pointer_arguments(device):
     if is_xpu() and device in ['cpu_pinned']:
-        pytest.skip("RuntimeError: Pinned memory requires CUDA.")
+        pytest.xfail("RuntimeError: Pinned memory requires CUDA.")
 
     @triton.jit
     def kernel(x):
