@@ -243,7 +243,7 @@ jobs:
 
       - name: Install PyTorch Benchmarks
         run: |
-          pip install pyyaml pandas scipy psutil pyre_extensions torchrec transformers=4.27.4
+          pip install pyyaml pandas scipy psutil pyre_extensions torchrec transformers==4.27.4
           git clone --single-branch -b $BENCHMARK_BRANCH --recurse-submodules --jobs 8 $BENCHMARK_REPO
           cd benchmark
           python install.py
