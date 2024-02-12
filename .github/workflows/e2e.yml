@@ -200,7 +200,7 @@ jobs:
 
       - name: Install torchvision
         run: |
-          pip install vision/dist/*.wh
+          pip install vision/dist/*.whl
 
       - name: Build torchtext wheels
         run: |
@@ -210,7 +210,7 @@ jobs:
 
       - name: Install torchtext
         run: |
-          pip install text/dist/*.wh
+          pip install text/dist/*.whl
 
       - name: Build torchaudio wheels
         run: |
@@ -220,4 +220,4 @@ jobs:
 
       - name: Install torchaudio
         run: |
-          pip install audio/dist/*.wh
+          pip install audio/dist/*.whl
