@@ -6,7 +6,7 @@
 
 To build triton from source, we need to start with installing GPU drivers. If you're using Data Center (PVC) GPUs, please follow the instructions from [here](https://dgpu-docs.intel.com/driver/installation.html#install-steps) of your Linux distribution. For Intel Arc (client) GPUs, here are the [instructions](https://dgpu-docs.intel.com/driver/client/overview.html).
 
-We also need to install OneAPI Basekit with version > 2024.0.1. Please follow the instructions from [here](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html) to install it.
+We also need to install OneAPI Basekit with version >= 2024.0.1. Please follow the instructions from [here](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html) to install it.
 
 
 ### Python and Virtual Environment
