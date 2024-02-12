@@ -1,4 +1,4 @@
-#! /bin/bash
+#!/bin/bash
 # This script work for xpu / cuda device inductor tests
 
 SUITE=${1:-huggingface}     # huggingface / torchbench / timm_models
@@ -12,7 +12,7 @@ NUM_SHARDS=${8}             # num test shards
 SHARD_ID=${9}               # shard id
 MODEL_ONLY=${10}            # GoogleFnet / T5Small
 
-WORKSPACE=`pwd`
+WORKSPACE=${WORKSPACE:-$PWD}
 LOG_DIR=$WORKSPACE/inductor_log/${SUITE}/${DT}
 mkdir -p ${LOG_DIR}
 LOG_NAME=inductor_${SUITE}_${DT}_${MODE}_${DEVICE}_${SCENARIO}
@@ -25,10 +25,10 @@ fi
 
 Cur_Ver=`pip list | grep "^torch " | awk '{print $2}' | cut -d"+" -f 1`
 if [ $(printf "${Cur_Ver}\n2.0.2"|sort|head -1) = "${Cur_Ver}" ]; then
-    Mode_extra="";
+    Mode_extra=""
 else
     # For PT 2.1
-    Mode_extra="--inference --freezing ";
+    Mode_extra="--inference --freezing "
 fi
 
 if [[ $MODE == "training" ]]; then
@@ -47,7 +47,10 @@ if [[ -n "$NUM_SHARDS" && -n "$SHARD_ID" ]]; then
   partition_flags="--total-partitions $NUM_SHARDS --partition-id $SHARD_ID "
 fi
 
-ulimit -n 1048576
+if (( $EUID == 0 )); then
+    ulimit -n 1048576
+fi
+
 if [[ $DT == "amp_bf16" ]]; then
     ZE_AFFINITY_MASK=${CARD} python benchmarks/dynamo/${SUITE}.py --${SCENARIO} --amp -d${DEVICE} -n10 --no-skip --dashboard ${Mode_extra} ${Shape_extra} ${partition_flags} ${Model_only_extra} --backend=inductor --timeout=4800 --output=${LOG_DIR}/${LOG_NAME}.csv 2>&1 | tee ${LOG_DIR}/${LOG_NAME}.log
 elif [[ $DT == "amp_fp16" ]]; then
