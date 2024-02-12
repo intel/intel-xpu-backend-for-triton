@@ -10,6 +10,10 @@ inputs:
   key:
     description: A cache key
     required: true
+  symlink:
+    description: Create a symlink instead instead of copying from cache
+    type: bool
+    default: true
 outputs:
   path:
     description: A directory to save to a cache
@@ -32,8 +36,13 @@ runs:
         if [[ -d $ITEM_PATH ]]; then
           echo "Cache hit for ${{ inputs.key }}"
           echo "status=hit" >> $GITHUB_OUTPUT
-          mkdir -p ${{ inputs.path }}
-          cp -r $ITEM_PATH/* ${{ inputs.path }}/
+          if [[ ${{ inputs.symlink }} == true ]]; then
+            mkdir -p $(dirname ${{ inputs.path }})
+            ln -s $ITEM_PATH ${{ inputs.path }}
+          else
+            mkdir -p ${{ inputs.path }}
+            cp -r $ITEM_PATH/* ${{ inputs.path }}/
+          fi
           touch $ITEM_PATH.hit
         else
           echo "Cache miss for ${{ inputs.key }}"
