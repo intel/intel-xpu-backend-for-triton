@@ -244,11 +244,6 @@ jobs:
           python install.py
           pip install -e .
 
-      - name: Create a symlink to the test script
-        run: |
-          cd pytorch
-          ln -s $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh .
-
       # TODO: run in parallel
       - name: Run e2e tests
         run: |
@@ -257,7 +252,7 @@ jobs:
           cd pytorch
           #for dtype in amp_bf16 amp_fp16 float32; do
           for dtype in amp_bf16; do
-            ./inductor_xpu_test.sh ${{ matrix.model }} $dtype ${{ matrix.mode }} accuracy xpu 0
+            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.model }} $dtype ${{ matrix.mode }} accuracy xpu 0
           done
 
       - name: Copy reports
