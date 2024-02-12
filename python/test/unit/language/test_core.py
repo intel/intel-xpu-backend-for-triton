@@ -4422,12 +4422,17 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_hip():
         pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
-    if is_xpu():
-        pytest.skip('FIXME: test_fp8_dot_acc not supported on XPU.')
-
     check_type_supported(in_type_str, device)
-    M, N, K = 128, 256, 256
-    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
+
+    if is_xpu():
+        # FIXME: revisit problem size once tl.dot is lowered to DPAS.
+        warnings.warn("FIXME: test case modified, reduced problem size")        
+        M, N, K = 64, 128, 128
+        BLOCK_M, BLOCK_N, BLOCK_K = 64, 128, 64
+    else:
+        M, N, K = 128, 256, 256
+        BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
+
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
     Bt = B.T
@@ -4439,9 +4444,9 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0), C.stride(1),
                         BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
     torch_a = torch.from_numpy(A)
-    th_a = f8_to_f16(torch_a.cuda(), in_type_str)
+    th_a = f8_to_f16(torch_a.xpu(), in_type_str)
     torch_b = torch.from_numpy(B)
-    th_b = f8_to_f16(torch_b.cuda(), in_type_str)
+    th_b = f8_to_f16(torch_b.xpu(), in_type_str)
     ref_out = torch.matmul(th_a, th_b).to(torch.float32)
     if in_type_str == 'float8e4nv':
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
