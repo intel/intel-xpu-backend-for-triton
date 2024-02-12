@@ -22,6 +22,7 @@ env:
   IPEX_BRANCH: dev/triton-test-3.0
   LLVM_REPO: https://github.com/intel/llvm.git
   LLVM_BRANCH: genx
+  BENCHMARK_REPO: https://github.com/weishi-deng/benchmark.git
 
 jobs:
   build:
@@ -214,6 +215,7 @@ jobs:
       - name: Install torchvision
         run: |
           pip install vision/dist/*.whl
+          python -c "import torchvision; print(torchvision.__version__)"
 
       - name: Build torchtext wheels
         run: |
@@ -224,6 +226,7 @@ jobs:
       - name: Install torchtext
         run: |
           pip install text/dist/*.whl
+          python -c "import torchtext; print(torchtext.__version__)"
 
       - name: Build torchaudio wheels
         run: |
@@ -234,12 +237,12 @@ jobs:
       - name: Install torchaudio
         run: |
           pip install audio/dist/*.whl
+          python -c "import torchaudio; print(torchaudio.__version__)"
 
       - name: Install PyTorch Benchmarks
         run: |
-          python -c "import torchvision,torchtext,torchaudio;print(torchvision.__version__, torchtext.__version__, torchaudio.__version__)"
           pip install pyyaml pandas scipy psutil pyre_extensions torchrec
-          git clone --single-branch -b main --recurse-submodules --jobs 8 https://github.com/pytorch/benchmark.git
+          git clone --single-branch -b main --recurse-submodules --jobs 8 $BENCHMARK_REPO
           cd benchmark
           python install.py
           pip install -e .
