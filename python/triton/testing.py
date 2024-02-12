@@ -7,6 +7,13 @@ from typing import Any, Dict, List
 from . import language as tl
 from datetime import datetime
 
+def synchronize():
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif torch.xpu.is_available():
+        torch.xpu.synchronize()
+
 
 def nvsmi(attrs):
     attrs = ','.join(attrs)
@@ -100,10 +107,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     """
 
     fn()
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    elif torch.xpu.is_available():
-        torch.xpu.synchronize()
+    synchronize()
 
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
@@ -118,11 +122,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     for _ in range(5):
         cache.zero_()
         fn()
+    synchronize()        
     end_time = datetime.now()
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    elif torch.xpu.is_available():
-        torch.xpu.synchronize()
     estimate_ms = ((end_time.timestamp() - start_time.timestamp()) * 1000) / 5
 
     # compute number of warmup and repeat
@@ -147,12 +148,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         # record time of `fn`
         start_times[i] = datetime.now()
         fn()
+        synchronize()
         end_times[i] = datetime.now()
-    # Record clocks
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    elif torch.xpu.is_available():
-        torch.xpu.synchronize()
     times = torch.tensor([(e.timestamp() - s.timestamp()) * 1000 for s, e in zip(start_times, end_times)],
                          dtype=torch.float)
     if quantiles is not None:
