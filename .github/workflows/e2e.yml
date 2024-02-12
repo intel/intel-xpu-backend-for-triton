@@ -190,3 +190,33 @@ jobs:
         with:
           path: ${{ steps.triton-cache.outputs.path }}
           dest: ${{ steps.triton-cache.outputs.dest }}
+
+      - name: Build torchvision wheels
+        run: |
+          git clone https://github.com/pytorch/vision.git
+          cd vision
+          python setup.py bdist_wheel
+
+      - name: Install torchvision
+        run: |
+          pip install vision/dist/*.wh
+
+      - name: Build torchtext wheels
+        run: |
+          git clone --recursive https://github.com/pytorch/text.git
+          cd text
+          python setup.py bdist_wheel
+
+      - name: Install torchtext
+        run: |
+          pip install text/dist/*.wh
+
+      - name: Build torchaudio wheels
+        run: |
+          git clone https://github.com/pytorch/audio.git
+          cd audio
+          python setup.py bdist_wheel
+
+      - name: Install torchaudio
+        run: |
+          pip install audio/dist/*.wh
