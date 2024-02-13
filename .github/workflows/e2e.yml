@@ -41,7 +41,7 @@ jobs:
         mode:
           - inference
           - training
-      max-parallel: 1
+      #max-parallel: 1
     timeout-minutes: 360
     steps:
       - name: Checkout repository
@@ -212,6 +212,7 @@ jobs:
         run: |
           git clone --single-branch -b main https://github.com/pytorch/vision.git
           cd vision
+          git checkout $(<$GITHUB_WORKSPACE/pytorch/.github/ci_commit_pins/vision.txt)
           python setup.py bdist_wheel
 
       - name: Install torchvision
@@ -223,6 +224,7 @@ jobs:
         run: |
           git clone --recurse-submodules --jobs 8 --single-branch -b main https://github.com/pytorch/text.git
           cd text
+          git checkout $(<$GITHUB_WORKSPACE/pytorch/.github/ci_commit_pins/text.txt)
           python setup.py bdist_wheel
 
       - name: Install torchtext
@@ -234,6 +236,7 @@ jobs:
         run: |
           git clone --single-branch -b main https://github.com/pytorch/audio.git
           cd audio
+          git checkout $(<$GITHUB_WORKSPACE/pytorch/.github/ci_commit_pins/audio.txt)
           python setup.py bdist_wheel
 
       - name: Install torchaudio
