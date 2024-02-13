@@ -132,7 +132,7 @@ jobs:
       - name: Build packages
         if: ${{ hashFiles('.packages-cache') == '' }}
         run: |
-          ./scripts/compile-triton.sh --skip-triton
+          ./scripts/compile-triton.sh --llvm
 
       - name: Save packages cache
         if: ${{ hashFiles('.packages-cache') == '' }}
