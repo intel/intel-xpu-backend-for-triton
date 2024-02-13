@@ -92,9 +92,6 @@ jobs:
           cd pytorch
           pip install -r requirements.txt
           python setup.py bdist_wheel
-          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" >> "${GITHUB_ENV}"
-          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" >> "${GITHUB_ENV}"
-          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> "${GITHUB_ENV}"
 
       - name: Install PyTorch
         run: |
@@ -198,6 +195,13 @@ jobs:
         with:
           path: ${{ steps.triton-cache.outputs.path }}
           dest: ${{ steps.triton-cache.outputs.dest }}
+
+      - name: Identify commits id for torchvision, torchtext, torchaudio
+        run: |
+          cd pytorch
+          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" >> "${GITHUB_ENV}"
+          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" >> "${GITHUB_ENV}"
+          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> "${GITHUB_ENV}"
 
       # TODO: move to the base image
       - name: Install torchvision dependencies
