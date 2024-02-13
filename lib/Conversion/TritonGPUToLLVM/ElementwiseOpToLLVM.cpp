@@ -1850,11 +1850,12 @@ struct FpToFpOpConversion
               convDesc.numElements};
     } break;
     default: {
-      if (srcTy.getTypeID() == dstTy.getTypeID())
+      if (srcTy.getTypeID() == dstTy.getTypeID()) {
         if (srcTy.getTypeID() == F8E4M3TyID || dstTy.getTypeID() == F8E4M3TyID)
           return {identity_func, 2};
         else
           return {identity_func, 4};
+      }
 
       auto undefRounding = static_cast<RoundingMode>(-1);
       static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>,
