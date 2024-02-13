@@ -19,5 +19,8 @@ runs:
         TEMP_ITEM=$(mktemp -d -p ${{ inputs.root }})
         cp -rT ${{ inputs.path }} $TEMP_ITEM
         # ignore error if other job created a cache with the same key already
-        mv -T $TEMP_ITEM ${{ inputs.dest }} || true
-        touch ${{ inputs.dest }}.hit
+        if mv -T $TEMP_ITEM ${{ inputs.dest }}; then
+          touch ${{ inputs.dest }}.hit
+        else
+          rm -rf $TEMP_ITEM
+        fi
