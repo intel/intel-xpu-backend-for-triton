@@ -83,6 +83,7 @@ jobs:
         with:
           path: pytorch
           key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
+          symlink: false
 
       - name: Build PyTorch
         if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
