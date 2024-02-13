@@ -2,13 +2,12 @@ name: Build and test
 
 on:
   workflow_dispatch:
-# FIXME: temporary disable the main CI workflow
-#  pull_request:
-#    branches:
-#      - llvm-target
-#  push:
-#    branches:
-#      - llvm-target
+  pull_request:
+    branches:
+      - llvm-target
+  push:
+    branches:
+      - llvm-target
 
 permissions: read-all
 

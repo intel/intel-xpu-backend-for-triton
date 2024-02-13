@@ -2,10 +2,8 @@ name: E2E
 
 on:
   workflow_dispatch:
-# FIXME: temporary run this workflow for PRs
-  pull_request:
-    branches:
-      - llvm-target
+  schedule:
+    - cron: "5 1 * * *"
 
 permissions: read-all
 
@@ -35,13 +33,13 @@ jobs:
     strategy:
       matrix:
         model:
-          #- huggingface
-          #- timm_models
+          - huggingface
+          - timm_models
           - torchbench
         mode:
           - inference
-          #- training
-      #max-parallel: 1
+          - training
+      max-parallel: 2
     timeout-minutes: 180
     steps:
       - name: Checkout repository
