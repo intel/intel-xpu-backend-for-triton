@@ -191,9 +191,9 @@ function build {
     build_llvm
   fi
   if [ "$BUILD_TRITON" = true ]; then
-    build_triton    
+    build_triton
   fi
-  
+
   # Install libGenISAIntrinsics.a
   cp $LLVM_PROJ/mlir/lib/Target/LLVMIR/Dialect/GENX/libGenISAIntrinsics.a $PACKAGES_DIR/llvm/lib
 }
