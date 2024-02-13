@@ -83,7 +83,6 @@ jobs:
         with:
           path: pytorch
           key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
-          symlink: false
 
       - name: Build PyTorch
         if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
@@ -209,6 +208,7 @@ jobs:
         run: |
           sudo apt update -y
           sudo apt install -y libpng-dev libjpeg-dev pkg-config
+          pip install wheel
 
       - name: Build torchvision wheels
         run: |
