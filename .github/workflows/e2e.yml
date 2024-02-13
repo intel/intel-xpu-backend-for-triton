@@ -205,7 +205,7 @@ jobs:
       - name: Install torchvision dependencies
         run: |
           sudo apt update -y
-          sudo apt install -y libpng-dev libjpeg-dev pkg-config libgl1
+          sudo apt install -y libpng-dev libjpeg-dev pkg-config libgl1 libpango-1.0-0
           pip install wheel
 
       - name: Build torchvision wheels
