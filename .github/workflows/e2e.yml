@@ -203,7 +203,7 @@ jobs:
       - name: Install torchvision dependencies
         run: |
           sudo apt update -y
-          sudo apt install -y libpng-dev libjpeg-dev
+          sudo apt install -y libpng-dev libjpeg-dev pkg-config
 
       - name: Build torchvision wheels
         run: |
