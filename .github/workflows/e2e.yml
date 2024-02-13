@@ -167,7 +167,7 @@ jobs:
       - name: Build packages
         if: ${{ steps.triton-cache.outputs.status == 'miss' && steps.packages-cache.outputs.status == 'miss' }}
         run: |
-          ./scripts/compile-triton.sh --skip-triton
+          ./scripts/compile-triton.sh --llvm
 
       - name: Save packages to a cache
         if: ${{ steps.triton-cache.outputs.status == 'miss' && steps.packages-cache.outputs.status == 'miss' }}
