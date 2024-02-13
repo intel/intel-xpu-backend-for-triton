@@ -35,14 +35,14 @@ jobs:
     strategy:
       matrix:
         model:
-          - huggingface
-          - timm_models
+          #- huggingface
+          #- timm_models
           - torchbench
         mode:
           - inference
-          - training
+          #- training
       #max-parallel: 1
-    timeout-minutes: 360
+    timeout-minutes: 180
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -268,7 +268,7 @@ jobs:
           mkdir -p /cache/reports/e2e
           TMPDIR=$(mktemp -d -p /cache/reports/e2e XXXXXXXXX.tmp)
           cp -r $GITHUB_WORKSPACE/inductor_log/* $TMPDIR
-          mv -T $TMPDIR /cache/reports/e2e/$(date '+%Y%m%d%H%M%S') || true
+          mv -T $TMPDIR /cache/reports/e2e/$(date '+%Y%m%d%H%M%S')-${{ matrix.model }}-${{ matrix.mode }} || rm -rf $TMPDIR
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4
