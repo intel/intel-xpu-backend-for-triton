@@ -2940,12 +2940,56 @@ struct SelectOpConversion
         adaptor.getAttributes().getValue())};
   }
 };
+
+struct AddPtrOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::AddPtrOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::AddPtrOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::AddPtrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto resultTy = op.getType();
+    auto offsetTy = op.getOffset().getType();
+    auto typeConverter = getTypeConverter();
+    auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
+    if (resultTensorTy) {
+      unsigned elems = getTotalElemsPerThread(resultTy);
+      Type elemTy = typeConverter->convertType(resultTensorTy.getElementType()
+                                                   .cast<triton::PointerType>()
+                                                   .getPointeeType());
+      Type ptrTy = typeConverter->convertType(resultTensorTy.getElementType());
+      auto ptrs =
+          typeConverter->unpackLLElements(loc, adaptor.getPtr(), rewriter);
+      auto offsets =
+          typeConverter->unpackLLElements(loc, adaptor.getOffset(), rewriter);
+      SmallVector<Value> resultVals(elems);
+      for (unsigned i = 0; i < elems; ++i) {
+        resultVals[i] = gep(ptrTy, elemTy, ptrs[i], offsets[i]);
+      }
+      Value view =
+          typeConverter->packLLElements(loc, resultVals, rewriter, resultTy);
+      rewriter.replaceOp(op, view);
+    } else {
+      assert(resultTy.isa<triton::PointerType>());
+      auto resultPtrTy = typeConverter->convertType(resultTy);
+      auto resultElemTy = typeConverter->convertType(
+          resultTy.cast<triton::PointerType>().getPointeeType());
+      Value result =
+          gep(resultPtrTy, resultElemTy, adaptor.getPtr(), adaptor.getOffset());
+      rewriter.replaceOp(op, result);
+    }
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    int computeCapability, Target target, PatternBenefit benefit) {
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
+    Target target, PatternBenefit benefit) {
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
       typeConverter, axisInfoAnalysis, target, benefit);
@@ -2993,6 +3037,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
+  patterns.add<AddPtrOpConversion>(typeConverter, target, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, target,
                                  benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, target,
