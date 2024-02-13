@@ -40,7 +40,7 @@ jobs:
           - inference
           - training
       max-parallel: 2
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
