@@ -200,6 +200,7 @@ jobs:
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" >> "${GITHUB_ENV}"
           echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" >> "${GITHUB_ENV}"
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> "${GITHUB_ENV}"
+          echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" >> "${GITHUB_ENV}"
 
       # TODO: move to the base image
       - name: Install torchvision dependencies
@@ -246,7 +247,7 @@ jobs:
 
       - name: Install PyTorch Benchmarks
         run: |
-          pip install pyyaml pandas scipy psutil pyre_extensions torchrec transformers==4.27.4
+          pip install pyyaml pandas scipy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
           git clone --single-branch -b $BENCHMARK_BRANCH --recurse-submodules --jobs 8 $BENCHMARK_REPO
           cd benchmark
           python install.py
