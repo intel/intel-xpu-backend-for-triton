@@ -45,7 +45,7 @@ runs:
             ln -s $ITEM_PATH ${{ inputs.path }}
           else
             mkdir -p ${{ inputs.path }}
-            cp -r $ITEM_PATH/* ${{ inputs.path }}/
+            cp -rT $ITEM_PATH ${{ inputs.path }}
           fi
           touch $ITEM_PATH.hit
         else

@@ -17,7 +17,7 @@ runs:
       shell: bash
       run: |
         TEMP_ITEM=$(mktemp -d -p ${{ inputs.root }})
-        cp -r ${{ inputs.path }}/* $TEMP_ITEM/
+        cp -rT ${{ inputs.path }} $TEMP_ITEM
         # ignore error if other job created a cache with the same key already
         mv -T $TEMP_ITEM ${{ inputs.dest }} || true
         touch ${{ inputs.dest }}.hit
