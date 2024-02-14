@@ -35,8 +35,6 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.language as tl
 
-torch.xpu.enable_sync_mode()
-
 try:
     # This is https://github.com/NVIDIA/apex, NOT the apex on PyPi, so it
     # should not be added to extras_require in setup.py.
@@ -315,11 +313,11 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='xpu'):
     y_ref.backward(dy, retain_graph=True)
     dx_ref, dw_ref, db_ref = [_.grad.clone() for _ in [x, weight, bias]]
     # compare
-    assert torch.allclose(y_tri, y_ref, atol=1e-2, rtol=0)
-    assert torch.allclose(dx_tri, dx_ref, atol=1e-2, rtol=0)
-    assert torch.allclose(db_tri, db_ref, atol=1e-2, rtol=0)
-    # FIXME: tolerance was increased from 1e-2 to 2e-2 to allow test to run
-    assert torch.allclose(dw_tri, dw_ref, atol=2e-2, rtol=0)
+    atol = 1e-2 if dtype == torch.float16 else 1e-4
+    assert torch.allclose(y_tri, y_ref, atol=atol, rtol=0)
+    assert torch.allclose(dx_tri, dx_ref, atol=atol, rtol=0)
+    assert torch.allclose(db_tri, db_ref, atol=atol, rtol=0)
+    assert torch.allclose(dw_tri, dw_ref, atol=atol, rtol=0)
 
 
 @triton.testing.perf_report(
@@ -377,7 +375,9 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='x
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
-test_layer_norm(1151, 8192, torch.float16)
+# For XPU device the reference result is always computed using fp32/fp64,
+# so we don't try to compare result for fp16.
+test_layer_norm(1151, 8192, torch.float32)
 bench_layer_norm.run(print_data=True)
 
 # %%

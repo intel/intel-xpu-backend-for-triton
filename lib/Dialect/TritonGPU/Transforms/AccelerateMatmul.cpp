@@ -5,6 +5,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -13,14 +14,15 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttig = mlir::triton::gpu::intel;
 namespace {
 using tt::DotOp;
 using ttg::BlockedEncodingAttr;
 using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
-using ttg::DpasEncodingAttr;
 using ttg::NvidiaMmaEncodingAttr;
 using ttg::SliceEncodingAttr;
+using ttig::DpasEncodingAttr;
 
 // higher mma version is preferred, will fallback to lower version if not
 // supported

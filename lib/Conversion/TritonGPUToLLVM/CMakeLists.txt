@@ -15,8 +15,13 @@ add_triton_library(TritonGPUToLLVM
     LoadStoreOpToLLVM.cpp
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
-    TritonGPUToLLVMPass.cpp
     DecomposeUnsupportedConversions.cpp
+    AssertOpToLLVM.cpp
+    PrintOpToLLVM.cpp
+    MemoryOpToLLVM.cpp
+    ControlFlowOpToLLVM.cpp
+    MakeRangeOpToLLVM.cpp
+    SPMDOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
     TypeConverter.cpp
@@ -43,6 +48,7 @@ add_triton_library(TritonGPUToLLVM
     TritonAnalysis
     TritonIR
     TritonGPUIR
+    TritonIntelGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
     NVGPUIR

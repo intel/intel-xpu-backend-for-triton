@@ -8,9 +8,6 @@ from torch.testing import assert_close
 import triton
 import triton.language as tl
 
-#FIXME
-torch.xpu.enable_sync_mode()
-
 
 @triton.jit
 def kernel_device_print(X, Y, BLOCK: tl.constexpr):
@@ -88,9 +85,9 @@ def test_print(func: str, data_type: str):
     elif func == "static_print":
         kernel_static_print[(1, )](x, y, BLOCK=shape[0], PLACEHOLDER=uuid.uuid4())
     elif func == "no_arg_print":
-        kernel_no_arg_print[(1, )](num_warps=4)
+        kernel_no_arg_print[(1, )](num_warps=4, threads_per_warp=32)
     elif func == "print_no_arg":
-        kernel_print_no_arg[(1, )](num_warps=4)
+        kernel_print_no_arg[(1, )](num_warps=4, threads_per_warp=32)
     else:
         assert f"Unknown kernel: {func}"
 

@@ -14,6 +14,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <set>
 #include <type_traits>
@@ -32,9 +33,9 @@ using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::DpasEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
+using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 namespace ttng = ::mlir::triton::nvidia_gpu;
 
 typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
@@ -189,6 +190,12 @@ public:
       tid = rewriter.create<arith::RemSIOp>(loc, tid, _128);
     }
     return tid;
+  }
+
+  Value getModuleWarpSize(ConversionPatternRewriter &rewriter,
+                          Location loc) const {
+    auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
   }
 
   Value GetCanonicalWarpId(ConversionPatternRewriter &rewriter,
@@ -503,7 +510,7 @@ public:
       auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
       auto order = triton::gpu::getOrder(layout);
       auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
-      Value warpSize = i32_val(32);
+      Value warpSize = getModuleWarpSize(rewriter, loc);
       Value laneId = urem(tid, warpSize);
       Value warpId = udiv(tid, warpSize);
       SmallVector<Value> multiDimWarpId =
@@ -746,7 +753,7 @@ private:
       const BlockedEncodingAttr &blockedLayout, RankedTensorType type) const {
     auto shape = type.getShape();
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = i32_val(32);
+    Value warpSize = getModuleWarpSize(rewriter, loc);
     Value laneId = urem(threadId, warpSize);
     Value warpId = udiv(threadId, warpSize);
     auto sizePerThread = blockedLayout.getSizePerThread();

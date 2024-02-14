@@ -1,4 +1,5 @@
 add_subdirectory(Triton)
 add_subdirectory(TritonGPU)
+add_subdirectory(TritonIntelGPU)
 add_subdirectory(TritonNvidiaGPU)
 add_subdirectory(NVGPU)

@@ -1466,6 +1466,11 @@ struct InsertSliceOpConversion
   LogicalResult
   matchAndRewrite(tensor::InsertSliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+
+    // This function has been removed upstream and should only exist for genx
+    assert(target == triton::Target::GENX &&
+           "InsertSliceOpConversion: genx target not supported yet");
+
     // %dst = insert_slice %src into %dst[%offsets]
     Location loc = op->getLoc();
     Value dst = op.getDest();
@@ -1540,6 +1545,15 @@ struct InsertSliceAsyncOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+
+    // This function should not be called on the genx target since all
+    // InsertSliceAsyncOps would be decomposed into InsertSliceOps by the
+    // decomposeInsertSliceAsyncOp function.
+    // FIXME: remove this assertion once a suitable replacement instruction
+    // exists for the generated PTX in this function (cp.async.cg.shared.global)
+    assert(target != triton::Target::GENX &&
+           "InsertSliceAsyncOpConversion: genx target not supported yet");
+
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();
     Value src = op.getSrc();
@@ -2042,11 +2056,157 @@ private:
   const TensorPtrMapT *tensorPtrMap;
   mlir::triton::gpu::TMAMetadataTy *tmaMetadata;
 };
+
+struct ExtractSliceOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ExtractSliceOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::ExtractSliceOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::ExtractSliceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // %dst = extract_slice %src[%offsets]
+    Location loc = op->getLoc();
+    auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
+    auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+    assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
+    assert(op.hasUnitStride() &&
+           "Only unit stride supported by ExtractSliceOpConversion");
+
+    auto typeConverter = getTypeConverter();
+    auto llvmElemTy = typeConverter->convertType(srcTy.getElementType());
+
+    // newBase = base + offset
+    // Triton supports either static and dynamic offsets
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSource(), llvmElemTy, rewriter);
+    SmallVector<Value, 4> opOffsetVals;
+    SmallVector<Value, 4> offsetVals;
+    auto mixedOffsets = op.getMixedOffsets();
+    for (auto i = 0, j = 0; i < mixedOffsets.size(); ++i) {
+      if (op.isDynamicOffset(i)) {
+        // adaptor.getOffsets() returns list of variable offsets. the size of
+        // the list may not be the same as mixedOffsets
+        opOffsetVals.emplace_back(adaptor.getOffsets()[j]);
+        ++j;
+      } else
+        opOffsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
+      offsetVals.emplace_back(add(smemObj.offsets[i], opOffsetVals[i]));
+    }
+    // Compute the offset based on the original strides of the shared memory
+    // object
+    auto offset = dot(rewriter, loc, opOffsetVals, smemObj.strides);
+    // newShape = rank_reduce(shape)
+    // Triton only supports static tensor sizes
+    SmallVector<Value, 4> strideVals;
+    for (auto i = 0; i < op.getStaticSizes().size(); ++i) {
+      if (op.getStaticSize(i) == 1) {
+        offsetVals.erase(offsetVals.begin() + i);
+      } else {
+        strideVals.emplace_back(smemObj.strides[i]);
+      }
+    }
+
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    smemObj =
+        SharedMemoryObject(gep(elemPtrTy, llvmElemTy, smemObj.base, offset),
+                           llvmElemTy, strideVals, offsetVals);
+    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
+    rewriter.replaceOp(op, retVal);
+    return success();
+  }
+};
+
+struct AsyncWaitOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::AsyncWaitOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    PTXBuilder ptxBuilder;
+    auto &asyncWaitOp = *ptxBuilder.create<>("cp.async.wait_group");
+    auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
+    asyncWaitOp(ptxBuilder.newConstantOperand(num));
+
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto voidTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, voidTy);
+
+    // Safe to remove the op since it doesn't have any return value.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct AsyncCommitGroupOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncCommitGroupOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::AsyncCommitGroupOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AsyncCommitGroupOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    PTXBuilder ptxBuilder;
+    ptxBuilder.create<>("cp.async.commit_group")->operator()();
+    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+    // Safe to remove the op since it doesn't have any return value.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct AsyncBulkWaitOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncBulkWaitOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::AsyncBulkWaitOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AsyncBulkWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    PTXBuilder ptxBuilder;
+    auto &asyncBulkWaitOp = *ptxBuilder.create<>("cp.async.bulk.wait_group");
+    auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
+    asyncBulkWaitOp(ptxBuilder.newConstantOperand(num));
+
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto voidTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, voidTy);
+
+    // Safe to remove the op since it doesn't have any return value.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct AsyncBulkCommitGroupOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::gpu::AsyncBulkCommitGroupOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::AsyncBulkCommitGroupOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AsyncBulkCommitGroupOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    PTXBuilder ptxBuilder;
+    ptxBuilder.create<>("cp.async.bulk.commit_group")->operator()();
+    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+    // Safe to remove the op since it doesn't have any return value.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis,
     mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
     const TensorPtrMapT *tensorPtrMap, Target target, PatternBenefit benefit) {
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, target,
@@ -2057,6 +2217,7 @@ void mlir::triton::populateLoadStoreOpToLLVMPatterns(
                                       benefit);
   patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, target,
                                       benefit);
+  patterns.add<ExtractSliceOpConversion>(typeConverter, target, benefit);
   patterns.add<InsertSliceOpConversion>(typeConverter, target, benefit);
   patterns.add<InsertSliceAsyncOpConversion>(typeConverter, axisInfoAnalysis,
                                              target, benefit);
@@ -2064,4 +2225,9 @@ void mlir::triton::populateLoadStoreOpToLLVMPatterns(
                                            tensorPtrMap, target, benefit);
   patterns.add<StoreAsyncTMAOpConversion>(typeConverter, tmaMetadata,
                                           tensorPtrMap, target, benefit);
+  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, target, benefit);
+  patterns.add<AsyncWaitOpConversion>(typeConverter, target, benefit);
+  patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, target,
+                                                 benefit);
+  patterns.add<AsyncBulkWaitOpConversion>(typeConverter, target, benefit);
 }

@@ -8,6 +8,14 @@ from . import language as tl
 from datetime import datetime
 
 
+def synchronize():
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif torch.xpu.is_available():
+        torch.xpu.synchronize()
+
+
 def nvsmi(attrs):
     attrs = ','.join(attrs)
     cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
@@ -77,7 +85,8 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None):
     return torch.mean(torch.tensor(ret)).item()
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean"):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
+             device='xpu'):
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
     """
@@ -99,23 +108,23 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     """
 
     fn()
-    torch.xpu.synchronize()
+    synchronize()
 
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
     if fast_flush:
-        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='xpu')
+        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device=device)
     else:
-        cache = torch.empty(int(256e6), dtype=torch.int8, device='xpu')
+        cache = torch.empty(int(256e6), dtype=torch.int8, device=device)
 
     # Estimate the runtime of the function
     start_time = datetime.now()
     for _ in range(5):
         cache.zero_()
         fn()
+    synchronize()
     end_time = datetime.now()
-    torch.xpu.synchronize()
     estimate_ms = ((end_time.timestamp() - start_time.timestamp()) * 1000) / 5
 
     # compute number of warmup and repeat
@@ -140,9 +149,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         # record time of `fn`
         start_times[i] = datetime.now()
         fn()
+        synchronize()
         end_times[i] = datetime.now()
-    # Record clocks
-    torch.xpu.synchronize()
     times = torch.tensor([(e.timestamp() - s.timestamp()) * 1000 for s, e in zip(start_times, end_times)],
                          dtype=torch.float)
     if quantiles is not None:

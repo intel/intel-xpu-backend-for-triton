@@ -8,9 +8,6 @@ import triton
 import triton.language as tl
 import triton.ops
 
-# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
-torch.xpu.enable_sync_mode()
-
 
 @pytest.mark.parametrize(
     "BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE, ALLOW_TF32, F8_FASTACCUM, ACC_DTYPE, OUTPUT_DTYPE",
@@ -115,15 +112,17 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         if capability[0] < 9 and (ADTYPE == "float8e4nv" or BDTYPE == "float8e4nv"):
             pytest.skip("Only test float8e4nv on devices with sm >= 90")
     if (ADTYPE == "bfloat16" or BDTYPE == "bfloat16") and SPLIT_K != 1:
-        pytest.skip("bfloat16 matmuls don't allow split_k for now")
+        pytest.xfail("bfloat16 matmuls don't allow split_k for now")
 
     if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 64:
         pytest.skip("FIXME: Incorrect result on XPU")
-    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (
-            ADTYPE in ["float8e4nv", "float8e5", "float8e4b15", "bfloat16"]
-            or BDTYPE in ["float8e4nv", "float8e5", "float8e4b15", "bfloat16"]):
+    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (ADTYPE in ["float8e4nv", "float8e5", "float8e4b15"]
+                                                                or BDTYPE in ["float8e4nv", "float8e5", "float8e4b15"]):
         pytest.skip("FIXME: Incorrect result on XPU")
-    if BLOCK_M == 256 and BLOCK_N == 128 and BLOCK_K == 32:
+    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (ADTYPE == "int8" and BDTYPE == "bfloat16"):
+        pytest.skip("FIXME: Incorrect result on XPU")
+    if BLOCK_M == 256 and BLOCK_N == 128 and BLOCK_K == 32 and ADTYPE in ["float16", "bfloat16"
+                                                                          ] and (AT is not False or BT is not False):
         pytest.skip("FIXME: Incorrect result on XPU")
     if BLOCK_M == 128 and BLOCK_N == 128 and BLOCK_K == 32 and M == 256 and (N == 384 or N == 256):
         pytest.skip("FIXME: Incorrect result on XPU")

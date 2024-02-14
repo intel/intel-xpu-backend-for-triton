@@ -30,9 +30,9 @@ def type_convert_triton(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.const
     tl.store(dst + idxs, y)
 
 
-def launch_type_convert_triton(src, src_dtype, dst_dtype, rounding=None, BLOCK_SIZE=4096):
+def launch_type_convert_triton(src, src_dtype, dst_dtype, device, rounding=None, BLOCK_SIZE=4096):
 
-    dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device='xpu')
+    dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device=device)
     type_convert_triton[(src.shape[0] // BLOCK_SIZE,)](triton.reinterpret(src, src_dtype), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE)
     return dst
 
@@ -72,16 +72,16 @@ def exhaustive_populate(dst, offset, BLOCK_SIZE : tl.constexpr, force_odd : tl.c
     tl.store(dst + idxs, vals)
 
 
-def launch_exhaustive_populate(dst_dtype, offset, numel, force_odd, output_bits, max_repr, BLOCK_SIZE=4096):
+def launch_exhaustive_populate(dst_dtype, offset, numel, force_odd, output_bits, max_repr, device, BLOCK_SIZE=4096):
 
     assert(numel % BLOCK_SIZE == 0)
-    dst = torch.empty((numel,), dtype=matching_int(dst_dtype), device='xpu')
+    dst = torch.empty((numel,), dtype=matching_int(dst_dtype), device=device)
     exhaustive_populate[(numel // BLOCK_SIZE,)](triton.reinterpret(dst, dst_dtype), offset, BLOCK_SIZE, force_odd, output_bits, max_repr)
     return dst
 
 
 @triton.jit
-def arbitrary_fp32_downcast(x, rounding : tl.constexpr, exponent_bits : tl.constexpr, mantissa_bits : tl.constexpr, exponent_bias : tl.constexpr):
+def arbitrary_fp32_downcast(x, rounding : tl.constexpr, exponent_bits : tl.constexpr, mantissa_bits : tl.constexpr, exponent_bias : tl.constexpr, device_ : tl.constexpr):
 
     tl.static_assert(x.dtype == tl.float32, "input must be float32")
     numbits_dst : tl.constexpr = 1 + exponent_bits + mantissa_bits
@@ -112,16 +112,39 @@ def arbitrary_fp32_downcast(x, rounding : tl.constexpr, exponent_bits : tl.const
     mantissa = tl.where(exponent > -1, mantissa, mantissa * 0.5)
     exponent = tl.where(exponent > -1, exponent, exponent + 1)
 
-    if rounding == 'rtne':
-        mantissa = tl.inline_asm_elementwise("""{
-        cvt.rni.s32.f32 $0, $1;
-}""", "=r,r", [mantissa,], dtype=tl.int32, is_pure=True, pack=1).to(tl.uint32)
-    elif rounding == 'rtz':
-        mantissa = tl.inline_asm_elementwise("""{
-        cvt.rzi.s32.f32 $0, $1;
-}""", "=r,r", [mantissa,], dtype=tl.int32, is_pure=True, pack=1).to(tl.uint32)
+    if device_ == 'xpu':
+        # convert mantissa to int with proper rounding without inline asm.
+        to_cast = mantissa.to(tl.uint32, bitcast=True)
+        mantissa2 = (to_cast & 0x7fffff)
+        exponent2 = ((to_cast >> 23) & 0xff).to(tl.int32, bitcast=True)
+        mantissa2 = tl.where(exponent2 == 0, exponent2, mantissa2 + 0x800000).to(tl.int32)
+        shift_r = tl.where(exponent2 == 0, 1, 23 - (exponent2 - 127))
+        tl.device_assert(shift_r >= 0)
+        # Shift >= 25 always produce 0. Truncate to 25 to avoid overflows on rounding.
+        shift_r = tl.where(shift_r > 25, 25, shift_r)
+        int_val = mantissa2 >> shift_r
+
+        if rounding == 'rtne':
+            mask = (1 << shift_r) - 1
+            tail = mantissa2 & mask
+            threshold = tl.where(shift_r == 0, 1, (1 << (shift_r - 1)))
+            add_1 = tail > threshold or (tail == threshold and (int_val & 1) == 1)
+            int_val = tl.where(add_1, int_val + 1, int_val)
+        mantissa = int_val.to(tl.uint32)
+        # Prefer INF for big numbers instead of NaN
+        make_inf = exponent == (1 << exponent_bits) - 2 and mantissa > (1 << mantissa_bits)
+        mantissa = tl.where(make_inf, 1 << mantissa_bits, mantissa)
     else:
-        raise ValueError('unrecognized rounding mode')
+        if rounding == 'rtne':
+            mantissa = tl.inline_asm_elementwise("""{
+            cvt.rni.s32.f32 $0, $1;
+    }""", "=r,r", [mantissa,], dtype=tl.int32, is_pure=True, pack=1).to(tl.uint32)
+        elif rounding == 'rtz':
+            mantissa = tl.inline_asm_elementwise("""{
+            cvt.rzi.s32.f32 $0, $1;
+    }""", "=r,r", [mantissa,], dtype=tl.int32, is_pure=True, pack=1).to(tl.uint32)
+        else:
+            raise ValueError('unrecognized rounding mode')
 
     # Reassemble output floating-point representation:
     exponent = exponent.to(tl.uint32)
@@ -134,22 +157,22 @@ def arbitrary_fp32_downcast(x, rounding : tl.constexpr, exponent_bits : tl.const
 
 
 @triton.jit
-def downcast_emulated(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.constexpr, exponent_bits : tl.constexpr, mantissa_bits : tl.constexpr, exponent_bias : tl.constexpr):
+def downcast_emulated(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.constexpr, exponent_bits : tl.constexpr, mantissa_bits : tl.constexpr, exponent_bias : tl.constexpr, device_: tl.constexpr):
 
     tl.static_assert(src.dtype.element_ty == tl.float32, "src dtype must be float32")
 
     idxs = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     x = tl.load(src + idxs)
-    y = arbitrary_fp32_downcast(x, rounding, exponent_bits, mantissa_bits, exponent_bias)
+    y = arbitrary_fp32_downcast(x, rounding, exponent_bits, mantissa_bits, exponent_bias, device_=device_)
     y = y.to(dst.dtype.element_ty, bitcast=True)
     tl.store(dst + idxs, y)
 
 
-def launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, BLOCK_SIZE=4096):
+def launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device, BLOCK_SIZE=4096):
 
-    dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device='xpu')
+    dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device=device)
     downcast_emulated[(src.shape[0] // BLOCK_SIZE,)](
-        triton.reinterpret(src, src_dtype), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias)
+        triton.reinterpret(src, src_dtype), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias, device_=device)
     return dst
 
 
@@ -187,23 +210,31 @@ def upcast_emulated(src, dst, BLOCK_SIZE : tl.constexpr, exponent_bits : tl.cons
     tl.store(dst + idxs, y)
 
 
-def launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, BLOCK_SIZE=4096):
+def launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, device, BLOCK_SIZE=4096):
 
-    dst = torch.empty(src.shape, dtype=torch.int32, device='xpu')
+    dst = torch.empty(src.shape, dtype=torch.int32, device=device)
     upcast_emulated[(src.shape[0] // BLOCK_SIZE,)](src, triton.reinterpret(dst, tl.float32), BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias)
     return dst
 
 
-def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, max_repr, offset):
+def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, max_repr, offset, device):
 
-    src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, src_dtype.primitive_bitwidth, max_repr)
-    dst = launch_type_convert_triton(src, src_dtype, dst_dtype, rounding)
-    src = launch_type_convert_triton(src, src_dtype, tl.float32)
+    src = launch_exhaustive_populate(src_dtype, offset << 24, 2**24, False, src_dtype.primitive_bitwidth, max_repr, device)
+    dst = launch_type_convert_triton(src, src_dtype, dst_dtype, device=device, rounding=rounding)
+    # Emulated cast always works on fp32. In XPU Triton kernels FP32 is casted to FP8 through FP16, which
+    # in some cases gives different results compared to direct FP32 to FP8 conversion (some precision might
+    # be lost due to two-step conversion). To get matching results, we convert FP32 source data to FP16 and
+    # back to FP32. This will need to be changed back when HW FP32->FP8 convertion is used for XPU.
+    if device=='xpu' and src_dtype.primitive_bitwidth == 32 and dst_dtype.primitive_bitwidth == 8:
+        src = launch_type_convert_triton(src, src_dtype, tl.float16, device=device, rounding=rounding)
+        src = launch_type_convert_triton(src, tl.float16, tl.float32, device=device)
+    else:
+        src = launch_type_convert_triton(src, src_dtype, tl.float32, device=device)
 
-    dst2 = launch_downcast_emulated(src, tl.float32, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias)
+    dst2 = launch_downcast_emulated(src, tl.float32, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
-    dst = launch_upcast_emulated(dst, exponent_bits, mantissa_bits, exponent_bias)
-    dst2 = launch_upcast_emulated(dst2, exponent_bits, mantissa_bits, exponent_bias)
+    dst = launch_upcast_emulated(dst, exponent_bits, mantissa_bits, exponent_bias, device=device)
+    dst2 = launch_upcast_emulated(dst2, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
     if not (torch.equal(dst, dst2)):
 
@@ -223,16 +254,16 @@ def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, 
         raise ValueError('%d elements mismatch' % (dst != dst2).sum())
 
 
-def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bias, max_repr):
+def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bias, max_repr, device):
 
     numbits_src = exponent_bits + mantissa_bits + 1
 
-    src = launch_exhaustive_populate(src_dtype, 0, 65536, False, numbits_src, max_repr)
+    src = launch_exhaustive_populate(src_dtype, 0, 65536, False, numbits_src, max_repr, device=device)
 
-    dst = launch_type_convert_triton(src, src_dtype, dst_dtype)
-    dst = launch_type_convert_triton(dst, dst_dtype, tl.float32)
+    dst = launch_type_convert_triton(src, src_dtype, dst_dtype, device=device)
+    dst = launch_type_convert_triton(dst, dst_dtype, tl.float32, device=device)
 
-    dst2 = launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias)
+    dst2 = launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
     assert(torch.equal(dst, dst2))
 
@@ -253,13 +284,10 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     ('float8e4nv', 'bfloat16'),
     ('float8e4nv', 'float32'),
 ])
-def test_typeconvert_upcast(src_dtype, dst_dtype):
+def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
     if src_dtype == 'float8e4nv' and torch.cuda.is_available() and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("float8e4nv upcast tests only supported on compute capability 9.0+")
-
-    if torch.xpu.is_available() and (src_dtype == 'float8e5' and dst_dtype == 'bfloat16') or src_dtype == 'float8e4nv':
-        pytest.skip("FIXME: Incorrect result on XPU")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
@@ -270,7 +298,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype):
         'bfloat16': (8, 7, 127, 0x7f7f),
     }[src_dtype]
 
-    upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff)
+    upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff, device=device)
 
 @pytest.mark.parametrize("src_dtype, dst_dtype, rounding, max_repr", [
     ('float32', 'float16', 'rtne', 0x477fe000),
@@ -288,16 +316,13 @@ def test_typeconvert_upcast(src_dtype, dst_dtype):
     ('float16', 'float8e5', 'rtne', 0x7b00),
     ('float16', 'float8e4nv', 'rtne', 0x5f00),
 ])
-def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr):
+def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     if src_dtype != 'float32' and torch.cuda.is_available() and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("non-float32 downcast tests only supported on compute capability 9.0+")
 
     if dst_dtype.startswith('float8') and rounding == 'rtne' and torch.cuda.is_available() and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("float8 downcast with RTNE rounding tests only supported on compute capability 9.0+")
-
-    if torch.xpu.is_available():
-        pytest.skip("FIXME: Incorrect result on XPU")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
     stuff = {
@@ -309,4 +334,4 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr):
     }[dst_dtype]
 
     for i in range(256):
-        downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i)
+        downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i, device=device)

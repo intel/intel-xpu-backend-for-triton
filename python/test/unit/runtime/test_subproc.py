@@ -9,9 +9,6 @@ import triton
 import triton.language as tl
 from triton.compiler import ASTSource
 
-# FIXME remove this once Triton L0 queue and IPEX SYCL queue can be synchronized through events
-torch.xpu.enable_sync_mode()
-
 tmpdir = ".tmp"
 
 

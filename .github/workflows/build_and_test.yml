@@ -132,7 +132,7 @@ jobs:
       - name: Build packages
         if: ${{ hashFiles('.packages-cache') == '' }}
         run: |
-          ./scripts/compile-triton.sh --skip-triton
+          ./scripts/compile-triton.sh --llvm
 
       - name: Save packages cache
         if: ${{ hashFiles('.packages-cache') == '' }}
@@ -155,16 +155,20 @@ jobs:
           cd python
           lit -v build/*/test
 
+      - name: Create directory for tests reports
+        run: |
+          mkdir ~/reports
+
       - name: Run core tests
         run: |
           pip install pytest pytest-xdist
           pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
           cd python/test/unit
-          python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
+          python3 -m pytest --junitxml=~/reports/language.xml -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest runtime/
+          python3 -m pytest --junitxml=~/reports/runtime.xml --device xpu runtime/
           # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --junitxml=~/reports/line_info.xml --verbose --device xpu language/test_line_info.py
 
       - name: Clear cache
         run: |
@@ -176,18 +180,18 @@ jobs:
           CUA_VISIBLE_DEVICES: ""
         run: |
           cd python/test/unit
-          python3 -m pytest -vs operators/test_flash_attention.py
+          python3 -m pytest --junitxml=~/reports/flash_attention.xml -vs --device xpu operators/test_flash_attention.py
 
       - name: Run partial operators tests
         run: |
           cd python/test/unit
-          python3 -m pytest -n 8 --verbose operators
+          python3 -m pytest --junitxml=~/reports/operators.xml -n 8 --verbose --device xpu operators
 
       - name: Regression tests
         run: |
           pip install pytest-rerunfailures
           cd python/test/regression
-          python3 -m pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
+          python3 -m pytest --junitxml=~/reports/regression.xml -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
 
       - name: Run XPU python tests
         run: |
@@ -223,3 +227,11 @@ jobs:
           cp -r $HOME/.cache/pip/* $TMPDIR/
           # ignore error if other job created a cache with the same key already
           mv $TMPDIR $PIP_CACHE || true
+
+      - name: Pass rate
+        run: |
+          python3 scripts/pass_rate.py --reports ~/reports
+          mkdir -p /cache/reports/pass-rate
+          TMPFILE=$(mktemp -p /cache/reports/pass-rate XXXXXXXXXX)
+          python3 scripts/pass_rate.py --reports ~/reports --json > $TMPFILE
+          mv $TMPFILE $TMPFILE.json

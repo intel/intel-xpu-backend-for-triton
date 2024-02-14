@@ -27,62 +27,6 @@ static ValueTableFMA getValueTableFromStructFMA(
   return res;
 }
 
-static Value convertIfRequired(Value val, Type tgtTy, Location loc,
-                               ConversionPatternRewriter &rewriter) {
-  Type valTy = val.getType();
-  if (valTy == tgtTy)
-    return val;
-
-  assert(tgtTy.isIntOrFloat() && valTy.isIntOrFloat() &&
-         "Unexpected tgtTy or valTy types");
-
-  auto convertToFloat = [&](Type valTy, FloatType tgtTy) -> Value {
-    unsigned tgtBitWidth = tgtTy.getIntOrFloatBitWidth(),
-             valBitWidth = valTy.getIntOrFloatBitWidth();
-
-    return llvm::TypeSwitch<Type, Value>(valTy)
-        .Case<FloatType>([&](FloatType ty) {
-          Operation *castOp =
-              (valBitWidth <= tgtBitWidth)
-                  ? rewriter.create<LLVM::FPExtOp>(loc, tgtTy, val)
-                  : rewriter.create<LLVM::FPTruncOp>(loc, tgtTy, val);
-          return castOp->getResult(0);
-        })
-        .Case<IntegerType>([&](IntegerType ty) {
-          Operation *castOp =
-              (ty.isSigned() || ty.isSignless())
-                  ? rewriter.create<LLVM::SIToFPOp>(loc, tgtTy, val)
-                  : rewriter.create<LLVM::UIToFPOp>(loc, tgtTy, val);
-          return castOp->getResult(0);
-        });
-  };
-
-  auto convertToInteger = [&](Type valTy, IntegerType tgtTy) -> Value {
-    unsigned tgtBitWidth = tgtTy.getIntOrFloatBitWidth(),
-             valBitWidth = valTy.getIntOrFloatBitWidth();
-
-    return llvm::TypeSwitch<Type, Value>(valTy)
-        .Case<FloatType>([&](FloatType ty) {
-          Operation *castOp =
-              (tgtTy.isSigned() || tgtTy.isSignless())
-                  ? rewriter.create<LLVM::FPToSIOp>(loc, tgtTy, val)
-                  : rewriter.create<LLVM::FPToUIOp>(loc, tgtTy, val);
-          return castOp->getResult(0);
-        })
-        .Case<IntegerType>([&](IntegerType ty) {
-          Operation *castOp =
-              (valBitWidth <= tgtBitWidth)
-                  ? rewriter.create<LLVM::SExtOp>(loc, tgtTy, val)
-                  : rewriter.create<LLVM::TruncOp>(loc, tgtTy, val);
-          return castOp->getResult(0);
-        });
-  };
-
-  return llvm::TypeSwitch<Type, Value>(tgtTy)
-      .Case<FloatType>([&](auto ty) { return convertToFloat(valTy, ty); })
-      .Case<IntegerType>([&](auto ty) { return convertToInteger(valTy, ty); });
-}
-
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToLLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
@@ -147,10 +91,10 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                         ? mIdx * N / nShapePerCTATile * mSizePerThread + nIdx
                         : nIdx * M / mShapePerCTATile * nSizePerThread + mIdx;
             Type tgtTy = ret[z].getType();
-            Value opA =
-                convertIfRequired(has[{m + mm, k}], tgtTy, loc, rewriter);
-            Value opB =
-                convertIfRequired(hbs[{n + nn, k}], tgtTy, loc, rewriter);
+            Value opA = has[{m + mm, k}];
+            Value opB = hbs[{n + nn, k}];
+            assert(opA.getType() == tgtTy);
+            assert(opB.getType() == tgtTy);
 
             llvm::TypeSwitch<Type>(tgtTy)
                 .Case<FloatType>([&](auto) {
