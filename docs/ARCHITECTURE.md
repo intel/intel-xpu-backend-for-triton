@@ -4,11 +4,11 @@ The goal of this document is to describe the high-level architecture and roadmap
 
 ## Introduction
 
-Triton [1][10] has two main use cases: triton language JIT compiler and pytorch 2.0 [2] low-level backend compiler. Here we focus on the latter but keep the former in mind (as well as supporting other frameworks).
+Triton [1][10] has two main use cases: triton language JIT compiler and PyTorch 2.0 [2] low-level backend compiler. Here we focus on the latter but keep the former in mind (as well as supporting other frameworks).
 
 ![](pics/pt2.png)
 
-From pytorch point of view, a model FX graph [3] is captured by Dynamo [4] (and AOT Autograd if necessary) which is passed to Inductor [5]. The Inductor converts the broad set of pytorch’s ATen operators into a narrower set of stable primitive operators (PrimTorch) [6] via “decompositions” (a customizable mechanism for complex operator expansion). The resulting graph is translated into Triton kernels which are decorated python functions produced by the Inductor [7]. Triton frontend consumes function sources, the internals follow traditional compiler architecture: an AST is built and traversed to produce an MLIR module. The module is progressively lowered into the LLVM dialect. A regular LLVM module is then produced and converted to an appropriate representation depending on the target (e.g., PTX for Nvidia). A compiled kernel is then returned with a launcher stub. Kernels are then executed by pytorch through Inductor’s scheduling & wrapper interfaces.
+From PyTorch point of view, a model FX graph [3] is captured by Dynamo [4] (and AOT Autograd if necessary) which is passed to Inductor [5]. The Inductor converts the broad set of PyTorch’s ATen operators into a narrower set of stable primitive operators (PrimTorch) [6] via “decompositions” (a customizable mechanism for complex operator expansion). The resulting graph is translated into Triton kernels which are decorated python functions produced by the Inductor [7]. Triton frontend consumes function sources, the internals follow traditional compiler architecture: an AST is built and traversed to produce an MLIR module. The module is progressively lowered into the LLVM dialect. A regular LLVM module is then produced and converted to an appropriate representation depending on the target (e.g., PTX for Nvidia). A compiled kernel is then returned with a launcher stub. Kernels are then executed by PyTorch through Inductor’s scheduling & wrapper interfaces.
 
 ## Triton MLIR compiler details
 
@@ -25,8 +25,8 @@ There are three main IR stages on which most of the optimizations are done: Trit
 In addition to the custom dialects Triton reuses upstream ones like arith & math for math, scf/cf for control flow, index, func, nvvm for low-level GPU operations. Triton also introduces some Nvidia-specific dialects for lowering to Hopper target.
 
 #### Torch Inductor IR (input language)
-Torch Inductor is a pure Python compiler of pytorch models. The Inductor uses “define-by-run” loop level IR. It supports dynamic shapes/strides. The Inductor primarily targets GPUs with Triton and CPUs by generating C++ sources with OpenMP. At a high-level Inductor  performs:
-* **Graph operators’ decomposition** into a smaller set of operators (~250 PrimTorch ops instead of ~2k pytorch ops [11]; Note: the sets are not stabilized!).
+Torch Inductor is a pure Python compiler of PyTorch models. The Inductor uses “define-by-run” loop level IR. It supports dynamic shapes/strides. The Inductor primarily targets GPUs with Triton and CPUs by generating C++ sources with OpenMP. At a high-level Inductor  performs:
+* **Graph operators’ decomposition** into a smaller set of operators (~250 PrimTorch ops instead of ~2k PyTorch ops [11]; Note: the sets are not stabilized!).
 * **Loop-level IR graph lowering**: remove views, broadcasting, indexing simplification, materialization vs reuse decisions, layout optimization, loop reordering.
 * **Scheduling**: horizontal/vertical/reduction fusion , tiling, memory planning, buffer reuse, autotuning.
 * **Backend code generation** (depending on the target).
@@ -34,6 +34,10 @@ Torch Inductor is a pure Python compiler of pytorch models. The Inductor uses �
 The sequence of the above steps produces a `call` function that controls the guards [13] and then calls a sequence of Aten/Extern kernels intermixed with generated triton functions. Former are resolved through an algorithm selection mechanism [12]. The latter is a Python function with `@triton.jit` decorator, e.g. (fused bias from a linear layer and a Relu):
 
 ```python
+import torch
+import triton
+import triton.language as tl
+
 @triton.jit
 def triton_(in_out_ptr0, in_ptr0, xnumel, XBLOCK : tl.constexpr):
     xnumel = 16
@@ -50,7 +54,64 @@ def triton_(in_out_ptr0, in_ptr0, xnumel, XBLOCK : tl.constexpr):
 ```
 
 Each kernel will additionally be annotated with meta information such as size hints, signature, device type, mutated args, and others.
-By default, Inductor reuses efficient implementations of compute-heavy operations such as matrix multiplication or flash attention via dispatching a call to the Aten op native implementation. The generated code for a single causal attention block would look like the following. Note the linear layers and the attention blocks produce a standalone kernel call (only the fused native dropout makes it to a Triton kernel in this case).
+By default, Inductor reuses efficient implementations of compute-heavy operations such as matrix multiplication or flash attention via dispatching a call to the operator's native implementation in Aten. Consider a model:
+
+```Python
+class CausalSelfAttention(nn.Module):
+
+    def __init__(self, num_heads: int, embed_dimension: int, bias: bool=False, is_causal: bool=False, dropout:float=0.0):
+        super().__init__()
+        assert embed_dimension % num_heads == 0
+        # key, query, value projections for all heads, but in a batch
+        self.c_attn = nn.Linear(embed_dimension, 3 * embed_dimension, bias=bias)
+        # output projection
+        self.c_proj = nn.Linear(embed_dimension, embed_dimension, bias=bias)
+        # regularization
+        self.dropout = dropout
+        self.resid_dropout = nn.Dropout(dropout)
+        self.num_heads = num_heads
+        self.embed_dimension = embed_dimension
+        # Perform causal masking
+        self.is_causal = is_causal
+
+    def forward(self, x):
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        query_projected = self.c_attn(x)
+
+        batch_size = query_projected.size(0)
+        embed_dim = query_projected.size(2)
+        head_dim = embed_dim // (self.num_heads * 3)
+
+        query, key, value = query_projected.chunk(3, -1)
+        query = query.view(batch_size, -1, self.num_heads, head_dim).transpose(1, 2)
+        key = key.view(batch_size, -1, self.num_heads, head_dim).transpose(1, 2)
+        value = value.view(batch_size, -1, self.num_heads, head_dim).transpose(1, 2)
+
+        if self.training:
+            dropout = self.dropout
+            is_causal = self.is_causal
+        else:
+            dropout = 0.0
+            is_causal = False
+
+        y = F.scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=dropout, is_causal=is_causal)
+        y = y.transpose(1, 2).view(batch_size, -1, self.num_heads * head_dim)
+
+        y = self.resid_dropout(self.c_proj(y))
+        return y
+
+
+num_heads = 8
+heads_per_dim = 64
+batch_size = 1
+max_seq_len = 128
+embed_dimension = num_heads * heads_per_dim
+dtype = torch.float16
+p = torch.randn(batch_size, max_seq_len, embed_dimension, dtype=dtype).cuda()
+model = CausalSelfAttention(num_heads=num_heads, embed_dimension=embed_dimension, bias=True, is_causal=True, dropout=0.1).to("cuda").to(dtype)
+```
+
+The generated code for a single causal attention block would look like the following. Note the linear layers and the attention blocks produce a standalone kernel call (only the fused native dropout makes it to a Triton kernel in this case).
 
 ```python
 def call(args):
@@ -172,7 +233,7 @@ TritonGPU dialect [18] exposes GPU-specific operators. After converting Trition 
 * Thread locality optimization.
 * Matmul acceleration pipeline.
 * Dot operands optimization.
-* SW Pipelining.
+* Software loop Pipelining.
 * Prefetching – add hoisted multi-buffering in the shared memory for the dot operator inside a loop.
 * Data duplication reduction.
 * Instruction reordering.
@@ -435,14 +496,14 @@ Thoroughly designing components interaction provides an opportunity for user exp
 #### Analysis results
 Triton needs a runtime to bundle a kernel invocation as well as memory movement to and from GPUs. The are three main options to consider: [SYCL runtime](https://registry.khronos.org/SYCL/specs/sycl-2020/html/sycl-2020.html), [Level Zero runtime](https://github.com/oneapi-src/level-zero), and [Unified runtime](https://github.com/oneapi-src/unified-runtime).
 
-Triton is usually used together with pytorch in a sense that Triton kernels consume pytorch tensors and often represent some custom operation. Hence, Triton runtime needs to interact with pytorch components to guarantee synchronization. These components include:
+Triton is usually used together with PyTorch in a sense that Triton kernels consume PyTorch tensors and often represent some custom operation. Hence, Triton runtime needs to interact with PyTorch components to guarantee synchronization. These components include:
 
 * The basic device memory allocation & movement (e.g., `torch.randn(1823, 781, device='xpu')`)
 * Aten operators’ implementations via oneDNN
 * Pytorch distributed modes via oneCCL
 * Habana’s Synapse backend (oneDNN + custom compiler)
 
-Fundamentally, a pytorch+triton package needs to be able to allocate and move device memory, run kernels, and synchronize on events. All of these can be done at the lowest level (L0).
+Fundamentally, a PyTorch+triton package needs to be able to allocate and move device memory, run kernels, and synchronize on events. All of these can be done at the lowest level (L0).
 
 Using the lowest level possible has following benefits:
 
@@ -467,13 +528,13 @@ Ultimately this means that Triton is forced to have a dependency on SYCL runtime
 #### Directions
 Going forward, removing SYCL runtime dependency from Triton can be achieved with some joint effort (Triton, upstream work for memory allocation, oneDNN, oneCCL, and runtimes). Without significant changes to runtimes there are two areas of improvement: data allocation and movement API and synchronization with SYCL-based components.
 
-Memory allocation and movement does not depend on SYCL and can be consumed by SYCL-based components with relatively minor changes. Using Unified runtime is an appealing option as it has the necessary interop capabilities with L0 and can potentially become the standard mechanism for accelerator interaction in pytorch. It also does not restrict the language choice for kernels implementation and may avoid the need for additional runtimes interop features.
+Memory allocation and movement does not depend on SYCL and can be consumed by SYCL-based components with relatively minor changes. Using Unified runtime is an appealing option as it has the necessary interop capabilities with L0 and can potentially become the standard mechanism for accelerator interaction in PyTorch. It also does not restrict the language choice for kernels implementation and may avoid the need for additional runtimes interop features.
 
-Pytorch has a [mechanism of streams](https://pytorch.org/docs/stable/generated/torch.cuda.Stream.html#torch.cuda.Stream) (a linear sequence of execution that belongs to a specific device) to orchestrate kernel invocation and data movement. Using pytorch’s synchronization abstractions can help decouple Triton kernels and Aten operator implementations by communicating via a stream (handled at the Inductor level). The stream can use a low-level runtime and have wrappers for SYCL-based consumers. Its implementation will live inside pytorch as a separate component.
+Pytorch has a [mechanism of streams](https://pytorch.org/docs/stable/generated/torch.cuda.Stream.html#torch.cuda.Stream) (a linear sequence of execution that belongs to a specific device) to orchestrate kernel invocation and data movement. Using PyTorch’s synchronization abstractions can help decouple Triton kernels and Aten operator implementations by communicating via a stream (handled at the Inductor level). The stream can use a low-level runtime and have wrappers for SYCL-based consumers. Its implementation will live inside PyTorch as a separate component.
 
 There is also an option to introduce SYCL kernel invocation support into Unified runtime to make it indifferent to the input. This path allows for putting Unified runtime as the first-class citizen tool for all the components.
 
-Triton will have an opportunity to be used without pytorch while not having a redundant dependency on SYCL runtime and display all the beneficial qualities of relying on a low-level runtime.
+Triton will have an opportunity to be used without PyTorch while not having a redundant dependency on SYCL runtime and display all the beneficial qualities of relying on a low-level runtime.
 
 ## Links and materials
 [1] Triton repo: https://github.com/openai/triton<br>
