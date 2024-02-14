@@ -97,8 +97,7 @@ struct AdvanceOpConversion
 
 void mlir::triton::populateTensorPtrOpsToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
-    PatternBenefit benefit) {
+    Target target, PatternBenefit benefit) {
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, target, benefit);
   patterns.add<AdvanceOpConversion>(typeConverter, target, benefit);
   return;

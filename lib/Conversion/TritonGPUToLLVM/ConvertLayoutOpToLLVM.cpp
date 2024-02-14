@@ -663,8 +663,7 @@ private:
                                  vals, smemBase, shape);
         else if (isStMatrixCompatible(srcTy) && accumNumReplicates == 1 &&
                  outOrd[0] == 1 && paddedRepShape[1] % 8 == 0) {
-          Value llvmSrc = adaptor.getSrc();
-          storeDistributedToSharedWithStMatrix(srcTy, llvmSrc, smemBase,
+          storeDistributedToSharedWithStMatrix(srcTy, vals, smemBase,
                                                paddedRepShape, origRepShape,
                                                loc, rewriter);
         } else
@@ -793,7 +792,7 @@ private:
   }
 
   void storeDistributedToSharedWithStMatrix(
-      RankedTensorType tensorTy, Value llvmSrc, Value smemBase,
+      RankedTensorType tensorTy, SmallVector<Value> &inVals, Value smemBase,
       ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
       Location loc, ConversionPatternRewriter &rewriter) const {
     auto shapePerCTA = getShapePerCTA(tensorTy);
@@ -816,7 +815,6 @@ private:
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warp, warpsPerCTA);
 
-    auto inVals = getTypeConverter()->unpackLLElements(loc, llvmSrc, rewriter);
     // Compute the relative offset for each lane.
     Value stMatrixLaneOffset =
         computeStMatrixAddr(lane, paddedRepShape[1], loc, rewriter);
@@ -1125,7 +1123,6 @@ private:
 
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
-    PatternBenefit benefit) {
+    Target target, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, target, benefit);
 }
