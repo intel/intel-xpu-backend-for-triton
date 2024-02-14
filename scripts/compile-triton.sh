@@ -67,7 +67,7 @@ elif [ -n "$VIRTUAL_ENV" ]; then
   deactivate
 fi
 
-function check_rc {
+check_rc() {
   if [ $? != 0 ]; then
     echo "Command failed with rc: $rc"
     exit 1
@@ -124,7 +124,7 @@ then
   mkdir $LLVM_PROJ_BUILD
 fi
 
-function build_llvm {
+build_llvm() {
   echo "****** Configuring $LLVM_PROJ ******"
 
   cd $LLVM_PROJ_BUILD
@@ -168,7 +168,7 @@ then
   rm -fr /iusers/$USERS/.triton
 fi
 
-function build_triton {
+build_triton() {
   echo "**** Configuring $TRITON_PROJ ****"
   cd $TRITON_PROJ
 
@@ -186,7 +186,7 @@ function build_triton {
   cp $TRITON_PROJ_BUILD/"$(ls $TRITON_PROJ_BUILD)"/compile_commands.json $TRITON_PROJ/
 }
 
-function build {
+build() {
   if [ "$BUILD_LLVM" = true ]; then
     build_llvm
   fi

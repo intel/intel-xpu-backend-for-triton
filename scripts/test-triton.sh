@@ -68,7 +68,7 @@ then
   exit 1
 fi
 
-function run_unit_tests {
+run_unit_tests() {
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
@@ -95,7 +95,7 @@ function run_unit_tests {
   fi
 }
 
-function run_core_tests {
+run_core_tests() {
   echo "***************************************************"
   echo "******      Running Triton Core tests        ******"
   echo "***************************************************"
@@ -128,7 +128,7 @@ function run_core_tests {
   fi
 }
 
-function run_regression_tests {
+run_regression_tests() {
   echo "***************************************************"
   echo "******   Running Triton Regression tests     ******"
   echo "***************************************************"
@@ -144,7 +144,7 @@ function run_regression_tests {
   fi
 }
 
-function run_tutorial_test {
+run_tutorial_test() {
   echo
   echo "****** Running $1 test ******"
   echo
@@ -155,7 +155,7 @@ function run_tutorial_test {
 
 }
 
-function run_tutorial_tests {
+run_tutorial_tests() {
   echo "***************************************************"
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
@@ -183,7 +183,7 @@ function run_tutorial_tests {
   run_tutorial_test "11-grouped-gemm" 11-grouped-gemm.py
 }
 
-function test_triton {
+test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
   fi
