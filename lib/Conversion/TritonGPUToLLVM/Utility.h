@@ -424,7 +424,7 @@ static bool isKernel(FunctionOpInterface funcOp) {
 static Value getStackPointer(PatternRewriter &rewriter,
                              FunctionOpInterface funcOp, Target target) {
   auto mod = funcOp->getParentOfType<ModuleOp>();
-  if (target == Target::GENX) {
+  if (target == triton::Target::GENX) {
     LLVM::LLVMPointerType ptrTy =
         ptr_ty(rewriter.getContext(), GENX::GENXMemorySpace::kWorkgroup);
     if (mod->getAttrOfType<IntegerAttr>("triton_gpu.shared").getInt() == 0)
@@ -461,6 +461,34 @@ static Value getSharedMemoryBase(Location loc,
 }
 
 } // namespace LLVM
+
+static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
+                      ConversionPatternRewriter &rewriter,
+                      mlir::triton::Target target) {
+  assert(axis >= 0);
+  assert(axis < 3);
+  assert(moduleOp);
+
+  if (target == triton::Target::GENX) {
+    constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                             mlir::gpu::Dimension::y,
+                                             mlir::gpu::Dimension::z};
+
+    Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+    return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+  }
+
+  // It is not easy to get the compute capability here, so we use numCTAs to
+  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
+  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
+  // "%clusterid".
+  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+
+  std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
+  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
+  return LLVM::getSRegValue(rewriter, loc, sreg);
+}
+
 } // namespace mlir
 
 #endif

@@ -37,8 +37,7 @@ struct RegDeallocOpConversion
 
 void mlir::triton::populateRegReallocOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
-    PatternBenefit benefit) {
+    Target target, PatternBenefit benefit) {
   patterns.add<RegAllocOpConversion>(typeConverter, target, benefit);
   patterns.add<RegDeallocOpConversion>(typeConverter, target, benefit);
   return;

@@ -234,8 +234,7 @@ struct FenceAsyncSharedOpConversion
 
 void mlir::triton::populateBarrierOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
-    PatternBenefit benefit) {
+    Target target, PatternBenefit benefit) {
   patterns.add<BarrierOpConversion>(typeConverter, target, benefit);
   patterns.add<AllocMBarrierOpConversion>(typeConverter, target, benefit);
   patterns.add<MBarrierArriveOpConversion>(typeConverter, target, benefit);

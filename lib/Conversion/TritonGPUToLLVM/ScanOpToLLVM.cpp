@@ -529,7 +529,6 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 
 void mlir::triton::populateScanOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
-    PatternBenefit benefit) {
+    Target target, PatternBenefit benefit) {
   patterns.add<ScanOpConversion>(typeConverter, target, benefit);
 }
