@@ -11,7 +11,7 @@ inputs:
     description: A cache key
     required: true
   symlink:
-    description: Create a symlink instead instead of copying from cache
+    description: Create a symlink instead of copying from cache
     type: bool
     default: true
 outputs:
