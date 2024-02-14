@@ -39,7 +39,6 @@ def mask_tensor(x, mask, block, value=0):
 @pytest.mark.parametrize("BLOCK", [16, 32, 64])
 @pytest.mark.parametrize("DTYPE", [torch.float16])
 def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, device, Z=3, H=2, M=512, N=384, K=256):
-    pytest.skip("FIXME: AssertionError: Tensor-likes are not close!")
     seed = 0
     torch.manual_seed(seed)
     is_sdd = MODE == "sdd"
@@ -103,8 +102,6 @@ configs = [
 @pytest.mark.parametrize("is_dense", [False, True])
 @pytest.mark.parametrize("BLOCK, WIDTH", configs)
 def test_softmax(BLOCK, WIDTH, is_dense, device, Z=2, H=2, is_causal=True, scale=0.4):
-    if not is_dense:
-        pytest.skip("FIXME: AssertionError: Tensor-likes are not close!")
     # set seed
     torch.random.manual_seed(0)
     Z, H, M, N = 2, 3, WIDTH, WIDTH
