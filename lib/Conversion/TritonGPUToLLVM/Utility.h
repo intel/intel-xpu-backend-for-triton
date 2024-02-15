@@ -503,8 +503,18 @@ static Value getModuleWarpSize(ConversionPatternRewriter &rewriter,
 
 static Value getClusterCTAId(ConversionPatternRewriter &rewriter,
                              Location loc) {
-  return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(loc,
-                                                        rewriter.getI32Type());
+  Target target = triton::Target::GENX; // FIXME
+  switch (target) {
+  case triton::Target::NVVM:
+    return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(
+        loc, rewriter.getI32Type());
+  case triton::Target::ROCDL:
+  case triton::Target::GENX:
+    // Clusters of thread blocks aren't supported.
+    return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+  default:
+    llvm_unreachable("Unexpected target");
+  }
 }
 
 // -----------------------------------------------------------------------
@@ -852,6 +862,10 @@ emitOffsetForMmaLayoutV3(const NvidiaMmaEncodingAttr &mmaLayout,
 
 static SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type);
+static SmallVector<Value>
+emitBaseIndexForDpasLayout(Location loc, ConversionPatternRewriter &rewriter,
+                           const DpasEncodingAttr &dpasLayout,
+                           RankedTensorType type);
 
 static SmallVector<SmallVector<unsigned>>
 emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
@@ -947,6 +961,8 @@ emitBaseIndexForLayout(Location loc, ConversionPatternRewriter &rewriter,
     if (mmaLayout.isAmpere() || mmaLayout.isHopper())
       result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter, mmaLayout,
                                                       type);
+  } else if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+    result = emitBaseIndexForDpasLayout(loc, rewriter, dpasLayout, type);
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
     auto parentShape = sliceLayout.paddedShape(type.getShape());

@@ -407,41 +407,6 @@ public:
     return mask;
   }
 
-  // -----------------------------------------------------------------------
-  // Get offsets / indices for any layout
-  // -----------------------------------------------------------------------
-
-  SmallVector<Value> emitCTAOffsetForLayout(Location loc,
-                                            ConversionPatternRewriter &rewriter,
-                                            Attribute layout,
-                                            ArrayRef<int64_t> shape) const {
-    unsigned rank = shape.size();
-    SmallVector<unsigned> CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
-    SmallVector<unsigned> CTASplitNum = triton::gpu::getCTASplitNum(layout);
-    SmallVector<unsigned> CTAOrder = triton::gpu::getCTAOrder(layout);
-    SmallVector<int64_t> shapePerCTA =
-        triton::gpu::getShapePerCTA(CTASplitNum, shape);
-
-    // Delinearize clusterCTAId
-    Value clusterCTAId = getClusterCTAId(rewriter, loc);
-    SmallVector<Value> multiDimClusterCTAId =
-        delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
-
-    // CTA Wrapping
-    for (unsigned i = 0; i < rank; ++i) {
-      // This wrapping rule must be consistent with getShapePerCTA
-      unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
-      multiDimClusterCTAId[i] =
-          urem(multiDimClusterCTAId[i], i32_val(splitNum));
-    }
-
-    SmallVector<Value> CTAOffset(rank);
-    for (unsigned i = 0; i < rank; ++i)
-      CTAOffset[i] = mul(multiDimClusterCTAId[i], i32_val(shapePerCTA[i]));
-
-    return CTAOffset;
-  }
-
   SmallVector<Value> emitBaseIndexForLayout(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             Attribute layout,
