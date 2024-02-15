@@ -37,7 +37,7 @@ struct MakeRangeOpConversion
     }
     auto typeConverter = getTypeConverter();
     Value result =
-        typeConverter->packLLElements(loc, retVals, rewriter, rankedTy);
+        packLLElements(loc, typeConverter, retVals, rewriter, rankedTy);
     rewriter.replaceOp(op, result);
     return success();
   }

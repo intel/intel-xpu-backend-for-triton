@@ -59,8 +59,7 @@ public:
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
         loadedB, repN, repK, BTensorTy.getElementType());
     Type resElemTy = DTensorTy.getElementType();
-    SmallVector<Value> fc =
-        typeConverter->unpackLLElements(loc, loadedC, rewriter);
+    SmallVector<Value> fc = unpackLLElements(loc, loadedC, rewriter);
 
     GENX::PrecisionType APrecision = getElementPrecision(ATensorTy, resElemTy),
                         BPrecision = getElementPrecision(BTensorTy, resElemTy);
@@ -99,7 +98,7 @@ public:
 
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), resElemTy));
-    Value res = typeConverter->packLLElements(loc, fc, rewriter, structTy);
+    Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
     rewriter.replaceOp(op, res);
 
     return success();
@@ -173,8 +172,7 @@ private:
   ValueTable getValuesFromDotOperandLayoutStruct(Value val, int64_t dim0,
                                                  int64_t dim1,
                                                  Type elemTy) const {
-    SmallVector<Value> elems =
-        typeConverter->unpackLLElements(loc, val, rewriter);
+    SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
     ValueTable vals;
     for (int64_t i = 0; i < dim0; i++) {
       for (int64_t j = 0; j < dim1; j++)

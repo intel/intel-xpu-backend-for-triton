@@ -43,8 +43,7 @@ struct PrintOpConversion
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
-        auto elems = typeConverter->unpackLLElements(
-            loc, adaptor.getOperands()[i], rewriter);
+        auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
 
         // Get the indices of `elems` within the tensor.  Note that if `elems`
         // has an "interesting" layout, then these will not be in any
