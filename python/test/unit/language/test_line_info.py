@@ -168,9 +168,9 @@ def test_line_info(func: str):
     elif func == "multi_files":
         assert (check_file_lines(file_lines, "test_line_info.py", 49))
         assert (check_file_lines(file_lines, "test_line_info.py", 51))
-        assert (check_file_lines(file_lines, "standard.py", 33))
-        assert (check_file_lines(file_lines, "standard.py", 34))
-        assert (check_file_lines(file_lines, "standard.py", 36))
+        assert (check_file_lines(file_lines, "standard.py", 198))
+        assert (check_file_lines(file_lines, "standard.py", 153))
+        assert (check_file_lines(file_lines, "standard.py", 198))
     elif func == "autotune":
         assert (check_file_lines(file_lines, "test_line_info.py", 62))
         assert (check_file_lines(file_lines, "test_line_info.py", 63))
