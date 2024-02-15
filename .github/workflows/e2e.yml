@@ -59,7 +59,7 @@ jobs:
       - name: Install required dependencies
         run: |
           sudo apt update -y
-          sudo apt install -y libpng-dev libjpeg-dev pkg-config libgl1 libpango-1.0-0
+          sudo apt install -y libpng-dev libjpeg-dev pkg-config libgl1 libpango-1.0-0 libpangoft2-1.0-0
           pip install wheel
 
       - name: Identify versions
