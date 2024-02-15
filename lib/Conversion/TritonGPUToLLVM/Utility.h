@@ -494,12 +494,6 @@ static Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) {
   return tid;
 }
 
-static Value GetCanonicalWarpId(ConversionPatternRewriter &rewriter,
-                                Location loc) {
-  return rewriter.create<triton::nvgpu::CanonicalWarpIdOp>(
-      loc, rewriter.getI32Type());
-}
-
 static Value getClusterCTAId(ConversionPatternRewriter &rewriter,
                              Location loc) {
   return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(loc,

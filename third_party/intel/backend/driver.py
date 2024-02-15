@@ -94,19 +94,10 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def generate_cu_signature(constants, signature, ids):
-    # CUtensorMap*s are always the last arguments
-    num_regular_signatures = max(signature.keys()) + 1 if len(signature) > 0 else 0
-    if ids["ids_of_tensormaps"] is not None:
-        for i, _ in enumerate(ids["ids_of_tensormaps"]):
-            signature[num_regular_signatures + i] = '*CUtensorMap'
-    return signature, num_regular_signatures
-
 
 def make_launcher(constants, signature, ids):
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    signature, desc_start_idx = generate_cu_signature(constants, signature, ids)
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
@@ -380,12 +371,9 @@ class XPULauncher(object):
 
     def __init__(self, src, metadata):
         ids = {
-            "ids_of_tensormaps": metadata.ids_of_tensormaps,
-            "ids_of_folded_args": metadata.ids_of_folded_args,
             "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
         constants = src.constants if hasattr(src, "constants") else dict()
-        enable_warp_specialization = False
         src = make_launcher(constants, src.signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
@@ -416,7 +404,3 @@ class XPUDriver(DriverBase):
     def is_active():
         import torch
         return torch.xpu.is_available()
-
-    def assemble_tensormap_to_arg(self, tensormaps_info, args):
-        args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
-        return args_ptr

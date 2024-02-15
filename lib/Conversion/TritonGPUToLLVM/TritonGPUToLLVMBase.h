@@ -21,10 +21,6 @@
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
-constexpr ::llvm::StringLiteral kAttrNumTMALoadDescsName =
-    "triton_gpu.num-tma-load";
-constexpr ::llvm::StringLiteral kAttrNumTMAStoreDescsName =
-    "triton_gpu.num-tma-store";
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -196,12 +192,6 @@ public:
                           Location loc) const {
     auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
-  }
-
-  Value GetCanonicalWarpId(ConversionPatternRewriter &rewriter,
-                           Location loc) const {
-    return rewriter.create<triton::nvgpu::CanonicalWarpIdOp>(
-        loc, rewriter.getI32Type());
   }
 
   Value getClusterCTAId(ConversionPatternRewriter &rewriter,
