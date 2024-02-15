@@ -151,23 +151,6 @@ public:
 
   TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
 
-  static Value
-  getStructFromSharedMemoryObject(Location loc,
-                                  const SharedMemoryObject &smemObj,
-                                  ConversionPatternRewriter &rewriter) {
-    auto elems = smemObj.getElems();
-    auto types = smemObj.getTypes();
-    auto structTy =
-        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-    // pack into struct
-    Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
-    for (const auto &v : llvm::enumerate(elems)) {
-      assert(v.value() && "can not insert null values");
-      llvmStruct = insert_val(structTy, llvmStruct, v.value(), v.index());
-    }
-    return llvmStruct;
-  }
-
   // Returns CTA level thread idx
   Value getThreadIdInCTA(ConversionPatternRewriter &rewriter,
                          Location loc) const {
@@ -186,12 +169,6 @@ public:
       tid = rewriter.create<arith::RemSIOp>(loc, tid, _128);
     }
     return tid;
-  }
-
-  Value getModuleWarpSize(ConversionPatternRewriter &rewriter,
-                          Location loc) const {
-    auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
   }
 
   Value getClusterCTAId(ConversionPatternRewriter &rewriter,

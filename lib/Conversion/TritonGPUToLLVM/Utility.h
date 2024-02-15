@@ -494,6 +494,12 @@ static Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) {
   return tid;
 }
 
+static Value getModuleWarpSize(ConversionPatternRewriter &rewriter,
+                               Location loc) {
+  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+}
+
 static Value getClusterCTAId(ConversionPatternRewriter &rewriter,
                              Location loc) {
   return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(loc,
