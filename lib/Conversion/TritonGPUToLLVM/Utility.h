@@ -10,6 +10,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <set>
 
@@ -518,6 +519,7 @@ using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
+using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 static Value dot(ConversionPatternRewriter &rewriter, Location loc,
                  ArrayRef<Value> offsets, ArrayRef<Value> strides) {
@@ -874,6 +876,21 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
     }
   }
   return resultOffsets;
+}
+
+static void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
+                                 SmallVector<SmallVector<unsigned>> &offsets,
+                                 unsigned ctaOffsetX, unsigned ctaOffsetY) {
+  unsigned elemsPerThreadPerGroup =
+      triton::gpu::getContigPerThread(dpasLayout)[0];
+  unsigned warpSize = triton::gpu::getWarpSize(dpasLayout);
+  SmallVector<unsigned> shapePerCTA =
+      triton::gpu::getShapePerCTATile(dpasLayout);
+
+  for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
+    offsets.push_back(
+        {ctaOffsetX * shapePerCTA[0] + elem, ctaOffsetY * shapePerCTA[1]});
+  }
 }
 
 //

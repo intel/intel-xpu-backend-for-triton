@@ -633,20 +633,6 @@ public:
     llvm_unreachable("unsupported emitOffsetForLayout");
   }
 
-  void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
-                            SmallVector<SmallVector<unsigned>> &offsets,
-                            unsigned ctaOffsetX, unsigned ctaOffsetY) const {
-    unsigned elemsPerThreadPerGroup =
-        triton::gpu::getContigPerThread(dpasLayout)[0];
-    unsigned warpSize = getWarpSize(dpasLayout);
-    SmallVector<unsigned> shapePerCTA = getShapePerCTATile(dpasLayout);
-
-    for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
-      offsets.push_back(
-          {ctaOffsetX * shapePerCTA[0] + elem, ctaOffsetY * shapePerCTA[1]});
-    }
-  }
-
   // Emit indices calculation within each ConversionPattern, and returns a
   // [elemsPerThread X rank] index matrix.
   SmallVector<SmallVector<Value>>
