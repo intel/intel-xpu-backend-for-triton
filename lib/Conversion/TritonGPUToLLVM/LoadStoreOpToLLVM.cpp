@@ -978,9 +978,9 @@ struct InsertSliceOpConversion
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     auto smemBase = gep(elemPtrTy, elemTy, smemObj.base, offset);
 
-    auto llSrc = adaptor.getSource();
+    auto inVals = unpackLLElements(loc, adaptor.getSource(), rewriter);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, true);
-    storeDistributedToShared(src, llSrc, srcStrides, srcIndices, dst, smemBase,
+    storeDistributedToShared(src, inVals, srcStrides, srcIndices, dst, smemBase,
                              elemTy, loc, rewriter);
     // Barrier is not necessary.
     // The membar pass knows that it writes to shared memory and will handle it

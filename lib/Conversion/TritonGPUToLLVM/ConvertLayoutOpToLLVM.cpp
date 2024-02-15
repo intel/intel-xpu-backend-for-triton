@@ -861,8 +861,9 @@ private:
     auto dstStrides =
         getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
     auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, false);
-    storeDistributedToShared(src, adaptor.getSrc(), dstStrides, srcIndices, dst,
-                             smemBase, elemTy, loc, rewriter);
+    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    storeDistributedToShared(src, inVals, dstStrides, srcIndices, dst, smemBase,
+                             elemTy, loc, rewriter);
     auto smemObj = SharedMemoryObject(smemBase, elemTy, dstShapePerCTA, outOrd,
                                       loc, rewriter);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
