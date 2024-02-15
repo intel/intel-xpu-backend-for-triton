@@ -250,7 +250,7 @@ struct ExpandDimsOpConversion
 
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
-    DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
+    std::map<SmallVector<unsigned>, Value> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
     }
@@ -259,7 +259,7 @@ struct ExpandDimsOpConversion
     for (size_t i = 0; i < resultOffsets.size(); i++) {
       auto offset = resultOffsets[i];
       offset.erase(offset.begin() + srcLayout.getDim());
-      resultVals.push_back(srcValues.lookup(offset));
+      resultVals.push_back(srcValues.at(offset));
     }
     Value ret = packLLElements(loc, this->getTypeConverter(), resultVals,
                                rewriter, resultTy);

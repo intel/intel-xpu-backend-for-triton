@@ -534,22 +534,6 @@ public:
     return mask;
   }
 
-  struct SmallVectorKeyInfo {
-    static unsigned getHashValue(const SmallVector<unsigned> &key) {
-      return llvm::hash_combine_range(key.begin(), key.end());
-    }
-    static bool isEqual(const SmallVector<unsigned> &lhs,
-                        const SmallVector<unsigned> &rhs) {
-      return lhs == rhs;
-    }
-    static SmallVector<unsigned> getEmptyKey() {
-      return SmallVector<unsigned>();
-    }
-    static SmallVector<unsigned> getTombstoneKey() {
-      return {std::numeric_limits<unsigned>::max()};
-    }
-  };
-
   // -----------------------------------------------------------------------
   // Get offsets / indices for any layout
   // -----------------------------------------------------------------------

@@ -1,4 +1,3 @@
-#include "Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
