@@ -25,7 +25,7 @@ env:
 
 jobs:
   build:
-    name: Build
+    name: Test
     runs-on:
       - glados
       - spr
@@ -287,5 +287,5 @@ jobs:
       - name: Upload test logs
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ matrix.model }}-${{ matrix.mode }}
+          name: logs-${{ matrix.model }}-${{ matrix.dtype }}
           path: inductor_log
