@@ -44,21 +44,6 @@ public:
 
   TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
 
-  Value getClusterCTAId(ConversionPatternRewriter &rewriter,
-                        Location loc) const {
-    switch (target) {
-    case triton::Target::NVVM:
-      return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(
-          loc, rewriter.getI32Type());
-    case triton::Target::ROCDL:
-    case triton::Target::GENX:
-      // Clusters of thread blocks aren't supported.
-      return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    default:
-      llvm_unreachable("Unexpected target");
-    }
-  }
-
   // -----------------------------------------------------------------------
   // Shared memory utilities
   // -----------------------------------------------------------------------
@@ -405,75 +390,6 @@ public:
       mask = and_(mask, icmp_eq(tid, i32_val(0)));
     }
     return mask;
-  }
-
-  SmallVector<Value> emitBaseIndexForLayout(Location loc,
-                                            ConversionPatternRewriter &rewriter,
-                                            Attribute layout,
-                                            RankedTensorType type,
-                                            bool withCTAOffset) const {
-    auto shape = type.getShape();
-
-    SmallVector<Value> baseIndex;
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
-    SmallVector<Value> result;
-    if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-      result = emitBaseIndexWithinCTAForBlockedLayout(loc, rewriter,
-                                                      blockedLayout, type);
-    } else if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-      if (mmaLayout.isVolta())
-        result = emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter, mmaLayout,
-                                                      type);
-      if (mmaLayout.isAmpere() || mmaLayout.isHopper())
-        result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter,
-                                                        mmaLayout, type);
-    } else if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
-      result = emitBaseIndexForDpasLayout(loc, rewriter, dpasLayout, type);
-    } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-      auto parentLayout = sliceLayout.getParent();
-      auto parentShape = sliceLayout.paddedShape(type.getShape());
-      RankedTensorType parentTy = RankedTensorType::get(
-          parentShape, type.getElementType(), parentLayout);
-      result = emitBaseIndexForLayout(loc, rewriter, parentLayout, parentTy,
-                                      withCTAOffset);
-      result.erase(result.begin() + sliceLayout.getDim());
-      // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
-      return result;
-    } else {
-      llvm_unreachable("unsupported emitBaseIndexForLayout");
-    }
-    if (withCTAOffset) {
-      auto CTAOffset = emitCTAOffsetForLayout(loc, rewriter, layout, shape);
-      assert(CTAOffset.size() == result.size() && "Rank mismatch");
-      for (unsigned k = 0; k < result.size(); ++k)
-        result[k] = add(result[k], CTAOffset[k]);
-    }
-    return result;
-  }
-
-  // Emit indices calculation within each ConversionPattern, and returns a
-  // [elemsPerThread X rank] index matrix.
-  SmallVector<SmallVector<Value>>
-  emitIndices(Location loc, ConversionPatternRewriter &rewriter,
-              Attribute layout, RankedTensorType type,
-              bool withCTAOffset) const {
-    // step 1, delinearize threadId to get the base index
-    auto multiDimBase =
-        emitBaseIndexForLayout(loc, rewriter, layout, type, withCTAOffset);
-    // step 2, get offset of each element
-    auto offset = emitOffsetForLayout(layout, type);
-    // step 3, add offset to base, and reorder the sequence
-    // of indices to guarantee that elems in the same
-    // sizePerThread are adjacent in order
-    auto shape = type.getShape();
-    unsigned rank = shape.size();
-    unsigned elemsPerThread = offset.size();
-    SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
-                                                SmallVector<Value>(rank));
-    for (unsigned n = 0; n < elemsPerThread; ++n)
-      for (unsigned k = 0; k < rank; ++k)
-        multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
-    return multiDimIdx;
   }
 
 private:
