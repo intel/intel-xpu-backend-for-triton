@@ -284,16 +284,6 @@ public:
     return mask;
   }
 
-  Value dot(ConversionPatternRewriter &rewriter, Location loc,
-            ArrayRef<Value> offsets, ArrayRef<Value> strides) const {
-    assert(offsets.size() == strides.size());
-    Value ret = i32_val(0);
-    for (auto [offset, stride] : llvm::zip(offsets, strides)) {
-      ret = add(ret, mul(offset, stride));
-    }
-    return ret;
-  }
-
   struct SmallVectorKeyInfo {
     static unsigned getHashValue(const SmallVector<unsigned> &key) {
       return llvm::hash_combine_range(key.begin(), key.end());
