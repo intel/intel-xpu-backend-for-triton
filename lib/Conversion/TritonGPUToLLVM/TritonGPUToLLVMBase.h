@@ -263,79 +263,58 @@ public:
     return outVals;
   }
 
-  // -----------------------------------------------------------------------
-  // Utilities
-  // -----------------------------------------------------------------------
-  Value getMask(Type valueTy, ConversionPatternRewriter &rewriter,
-                Location loc) const {
-    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
-    Value mask = int_val(1, 1);
-    auto tid = tid_val();
-    auto clusterCTAId = getClusterCTAId(rewriter, loc);
-    if (tensorTy) {
-      auto layout = tensorTy.getEncoding();
-      auto shape = tensorTy.getShape();
-      unsigned rank = shape.size();
-      auto sizePerThread = triton::gpu::getSizePerThread(layout);
-      auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
-      auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
-      auto order = triton::gpu::getOrder(layout);
-      auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
-      Value warpSize = getModuleWarpSize(rewriter, loc);
-      Value laneId = urem(tid, warpSize);
-      Value warpId = udiv(tid, warpSize);
-      SmallVector<Value> multiDimWarpId =
-          delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-      SmallVector<Value> multiDimThreadId =
-          delinearize(rewriter, loc, laneId, threadsPerWarp, order);
-      for (unsigned dim = 0; dim < rank; ++dim) {
-        // if there is no data replication across threads on this dimension
-        if (shape[dim] >= shapePerCTATile[dim])
-          continue;
-        // Otherwise, we need to mask threads that will replicate data on this
-        // dimension. Calculate the thread index on this dimension for the CTA
-        Value threadDim =
-            add(mul(multiDimWarpId[dim], i32_val(threadsPerWarp[dim])),
-                multiDimThreadId[dim]);
-        mask = and_(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
-                                   i32_val(shape[dim])));
-      }
-      // Do not write duplicated data when multicast is enabled
-      if (triton::gpu::getNumCTAs(layout) > 1) {
-        auto _0 = i32_val(0);
-        auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
-        auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
-        auto CTAOrder = triton::gpu::getCTAOrder(layout);
-
-        auto multiDimClusterCTAId =
-            delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
-
-        for (unsigned dim = 0; dim < rank; ++dim) {
-          // Skip when multicast is not enabled in this dimension
-          if (CTAsPerCGA[dim] == CTASplitNum[dim])
-            continue;
-          // This wrapping rule must be consistent with emitCTAOffsetForLayout
-          unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
-          Value repId = udiv(multiDimClusterCTAId[dim], i32_val(splitNum));
-          // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:
-          //     CTA0 and CTA2 holds data of block0,
-          //     CTA1 and CTA3 holds data of block1.
-          // Only CTA0 and CTA1 are expected to write while CTA2 and CTA3 should
-          // be masked. We add the following mask:
-          //     multiDimClusterCTAId[dim] / splitNum == 0
-          // Actually in all existing cases of multicast, splitNum is always 1.
-          // The mask is equivalent to:
-          //     multiDimClusterCTAId[dim] == 0
-          mask = and_(mask, icmp_eq(repId, _0));
-        }
-      }
-    } else {
-      // If the tensor is not ranked, then it is a scalar and only thread 0 of
-      // CTA0 can write
-      mask = and_(mask, icmp_eq(clusterCTAId, i32_val(0)));
-      mask = and_(mask, icmp_eq(tid, i32_val(0)));
+  void storeDistributedToShared(Value src, Value llSrc,
+                                ArrayRef<Value> dstStrides,
+                                ArrayRef<SmallVector<Value>> srcIndices,
+                                Value dst, Value smemBase, Type elemTy,
+                                Location loc,
+                                ConversionPatternRewriter &rewriter) const {
+    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto srcShape = srcTy.getShape();
+    assert(srcShape.size() == 2 &&
+           "Unexpected rank of storeDistributedToShared");
+    auto dstTy = dst.getType().cast<RankedTensorType>();
+    auto srcDistributedLayout = srcTy.getEncoding();
+    if (auto mmaLayout =
+            srcDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+      assert((!mmaLayout.isVolta()) &&
+             "ConvertLayout MMAv1->Shared is not supported yet");
     }
-    return mask;
+    auto dstSharedLayout =
+        dstTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+    auto dstElemTy = dstTy.getElementType();
+    auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
+    auto outOrd = dstSharedLayout.getOrder();
+    unsigned inVec = inOrd == outOrd
+                         ? triton::gpu::getUniqueContigPerThread(
+                               srcDistributedLayout, srcShape)[inOrd[0]]
+                         : 1;
+    unsigned outVec = dstSharedLayout.getVec();
+    unsigned minVec = std::min(outVec, inVec);
+    unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
+    assert(numElems == srcIndices.size());
+    auto inVals = unpackLLElements(loc, llSrc, rewriter);
+    auto wordTy = vec_ty(elemTy, minVec);
+    Value word;
+
+    SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};
+    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    SharedMemoryObject smemObj(smemBase, elemTy, srcStrides, offsetVals);
+
+    DenseMap<unsigned, Value> sharedPtrs =
+        getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, dstElemTy,
+                              smemObj, rewriter, offsetVals, srcStrides);
+
+    for (unsigned i = 0; i < numElems; ++i) {
+      if (i % minVec == 0)
+        word = undef(wordTy);
+      word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
+      if (i % minVec == minVec - 1) {
+        Value smemAddr = sharedPtrs[i / minVec * minVec];
+        smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
+        store(word, smemAddr);
+      }
+    }
   }
 
 private:
