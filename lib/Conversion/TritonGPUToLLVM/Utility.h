@@ -970,6 +970,22 @@ emitBaseIndexForLayout(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 static SmallVector<SmallVector<unsigned>>
+emitOffsetForDpasLayout(const DpasEncodingAttr &dpasLayout,
+                        RankedTensorType type) {
+  ArrayRef<int64_t> shape = type.getShape();
+  SmallVector<SmallVector<unsigned>> offsets;
+  SmallVector<unsigned> shapePerCTA = getShapePerCTATile(dpasLayout);
+
+  for (unsigned i = 0; i < shape[0]; i += shapePerCTA[0]) {
+    for (unsigned j = 0; j < shape[1]; j += shapePerCTA[1]) {
+      emitDpasOffsetForCTA(dpasLayout, offsets, i, j);
+    }
+  }
+
+  return offsets;
+}
+
+static SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
     return emitOffsetForBlockedLayout(blockedLayout, type);
@@ -980,6 +996,9 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
       return emitOffsetForMmaLayoutV2(mmaLayout, type);
     if (mmaLayout.isHopper())
       return emitOffsetForMmaLayoutV3(mmaLayout, type);
+  }
+  if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+    return emitOffsetForDpasLayout(dpasLayout, type);
   }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
     return emitOffsetForSliceLayout(sliceLayout, type);
