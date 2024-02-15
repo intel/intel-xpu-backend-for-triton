@@ -266,9 +266,15 @@ jobs:
           pip install audio/dist/*.whl
           python -c "import torchaudio; print(torchaudio.__version__)"
 
-      - name: Install PyTorch Benchmarks
+      - name: Install transformers for huggingface
+        if: ${{ matrix.suite == 'huggingface' }}
         run: |
-          pip install pyyaml pandas scipy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+          pip install transformers==$TRANSFORMERS_VERSION
+
+      - name: Install PyTorch Benchmarks
+        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        run: |
+          pip install pyyaml pandas scipy psutil pyre_extensions torchrec
           git clone --single-branch -b $BENCHMARK_BRANCH --recurse-submodules --jobs 8 $BENCHMARK_REPO
           cd benchmark
           python install.py
