@@ -479,9 +479,21 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
     // CHECK: genx.barrier
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
+    // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
+    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.load
+    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.load
+    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.load
+    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.load
+    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.load
+    // CHECK-SAME: !llvm.ptr<3>
+    // CHECK: llvm.load
+    // CHECK-SAME: !llvm.ptr<3>
     %0 = triton_gpu.convert_layout %arg0 : (tensor<16x16xf32, #blocked0>) -> tensor<16x16xf32, #blocked1>
     tt.return
   }

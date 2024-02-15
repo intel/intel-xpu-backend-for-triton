@@ -349,6 +349,7 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
 # ---------------
 
 
+@pytest.mark.usefixtures("add_interpreter_test")
 @pytest.mark.parametrize("dtype_x, dtype_y, op", [  #
     (dtype_x, dtype_y, op)
     for op in ['+', '-', '*', '/', '%']
@@ -870,6 +871,31 @@ def test_abs_fp8(in_dtype, device):
     expect = f32_tensor.abs()
     actual_f8 = convert_float_to_float32(out_f8, in_dtype)
     torch.testing.assert_close(actual_f8, expect, equal_nan=True)
+
+
+# ----------------
+# test transpose
+# ----------------
+
+
+@pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
+def test_transpose(dtype_x, device):
+    SIZE = 128
+
+    @triton.jit
+    def kernel(Z, X, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        off2d = off[None, :] + (tl.arange(0, 2) * SIZE)[:, None]
+        x = tl.load(X + off2d)
+        z = x.T
+        tl.store(Z + off2d.T, z)
+
+    x = numpy_random([SIZE, 2], dtype_str=dtype_x)
+    z_ref = x.T
+    x_tri = to_triton(x, device=device, dst_type=dtype_x)
+    z_tri = to_triton(np.empty_like(z_ref), device=device, dst_type=dtype_x)
+    kernel[(1, )](z_tri, x_tri, SIZE=SIZE)
+    np.testing.assert_allclose(z_ref, to_numpy(z_tri))
 
 
 # ----------------
