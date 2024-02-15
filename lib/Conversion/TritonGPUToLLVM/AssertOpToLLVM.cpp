@@ -18,8 +18,7 @@ struct AssertOpConversion
     auto loc = op.getLoc();
     auto ctx = rewriter.getContext();
     auto typeConverter = getTypeConverter();
-    auto elems =
-        typeConverter->unpackLLElements(loc, adaptor.getCondition(), rewriter);
+    auto elems = unpackLLElements(loc, adaptor.getCondition(), rewriter);
     auto elemTy = elems[0].getType();
     Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {

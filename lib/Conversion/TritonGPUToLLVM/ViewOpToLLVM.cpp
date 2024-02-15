@@ -47,7 +47,7 @@ struct SplatOpConversion
     auto llSrc = bitcast(constVal, srcType);
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
-    return typeConverter->packLLElements(loc, elems, rewriter, resType);
+    return packLLElements(loc, typeConverter, elems, rewriter, resType);
   }
 
   LogicalResult matchAndRewrite(triton::SplatOp op, OpAdaptor adaptor,
@@ -120,10 +120,8 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
         this->getTypeConverter()->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
     // unpack input values
-    auto lhsVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getLhs(), rewriter);
-    auto rhsVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getRhs(), rewriter);
+    auto lhsVals = unpackLLElements(loc, adaptor.getLhs(), rewriter);
+    auto rhsVals = unpackLLElements(loc, adaptor.getRhs(), rewriter);
     // concatenate (and potentially reorder) values
     SmallVector<Value> retVals;
     for (Value v : lhsVals)
@@ -132,7 +130,7 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
       retVals.push_back(v);
     // pack and replace
     Value ret =
-        getTypeConverter()->packLLElements(loc, retVals, rewriter, resultTy);
+        packLLElements(loc, getTypeConverter(), retVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -165,9 +163,9 @@ struct InterleaveOpConversion
     auto resultTy = op.getType().cast<RankedTensorType>();
 
     SmallVector<Value> lhsVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getLhs(), rewriter);
+        unpackLLElements(loc, adaptor.getLhs(), rewriter);
     SmallVector<Value> rhsVals =
-        getTypeConverter()->unpackLLElements(loc, adaptor.getRhs(), rewriter);
+        unpackLLElements(loc, adaptor.getRhs(), rewriter);
     assert(lhsVals.size() == rhsVals.size());
 
     SmallVector<Value> interleavedVals;
@@ -176,8 +174,8 @@ struct InterleaveOpConversion
       interleavedVals.push_back(rhsVals[i]);
     }
 
-    Value ret = getTypeConverter()->packLLElements(loc, interleavedVals,
-                                                   rewriter, resultTy);
+    Value ret = packLLElements(loc, getTypeConverter(), interleavedVals,
+                               rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -202,10 +200,9 @@ struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
     auto resultTy = op.getType().template cast<RankedTensorType>();
     auto srcTy = op.getSrc().getType().template cast<RankedTensorType>();
 
-    auto vals = this->getTypeConverter()->unpackLLElements(
-        loc, adaptor.getSrc(), rewriter);
+    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     Value ret =
-        this->getTypeConverter()->packLLElements(loc, vals, rewriter, resultTy);
+        packLLElements(loc, this->getTypeConverter(), vals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -223,8 +220,7 @@ struct ExpandDimsOpConversion
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto srcVals = this->getTypeConverter()->unpackLLElements(
-        loc, adaptor.getSrc(), rewriter);
+    auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
 
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
     auto resultTy = op.getType().template cast<RankedTensorType>();
@@ -238,7 +234,7 @@ struct ExpandDimsOpConversion
 
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
-    DenseMap<SmallVector<unsigned>, Value, SmallVectorKeyInfo> srcValues;
+    std::map<SmallVector<unsigned>, Value> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
     }
@@ -247,10 +243,10 @@ struct ExpandDimsOpConversion
     for (size_t i = 0; i < resultOffsets.size(); i++) {
       auto offset = resultOffsets[i];
       offset.erase(offset.begin() + srcLayout.getDim());
-      resultVals.push_back(srcValues.lookup(offset));
+      resultVals.push_back(srcValues.at(offset));
     }
-    Value ret = this->getTypeConverter()->packLLElements(loc, resultVals,
-                                                         rewriter, resultTy);
+    Value ret = packLLElements(loc, this->getTypeConverter(), resultVals,
+                               rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -285,10 +281,9 @@ struct TransOpConversion : public ConvertTritonGPUOpToLLVMPattern<TransOp> {
       //  - the translation from src to dst is just a "renaming" of the
       //    registers, i.e. each thread has exactly the same values.
       // Thus the transpose op simply returns the same values it got.
-      auto vals = this->getTypeConverter()->unpackLLElements(
-          loc, adaptor.getSrc(), rewriter);
-      Value ret = this->getTypeConverter()->packLLElements(loc, vals, rewriter,
-                                                           resultTy);
+      auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      Value ret = packLLElements(loc, this->getTypeConverter(), vals, rewriter,
+                                 resultTy);
       rewriter.replaceOp(op, ret);
       return success();
     }
@@ -334,8 +329,7 @@ struct BroadcastOpConversion
     auto order = triton::gpu::getOrder(srcLayout);
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
-    SmallVector<Value> srcVals =
-        typeConverter->unpackLLElements(loc, src, rewriter);
+    SmallVector<Value> srcVals = unpackLLElements(loc, src, rewriter);
 
     std::map<SmallVector<unsigned>, Value> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
@@ -352,7 +346,7 @@ struct BroadcastOpConversion
     }
 
     Value resultStruct =
-        typeConverter->packLLElements(loc, resultVals, rewriter, resultTy);
+        packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }

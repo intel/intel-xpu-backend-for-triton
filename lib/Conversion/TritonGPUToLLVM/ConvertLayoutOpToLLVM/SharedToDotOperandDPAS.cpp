@@ -203,7 +203,7 @@ Value composeValuesToDotOperandLayoutStruct(
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(elems.size(), elemTy));
 
-  return typeConverter->packLLElements(loc, elems, rewriter, structTy);
+  return packLLElements(loc, typeConverter, elems, rewriter, structTy);
 }
 
 Type getSharedMemTy(Type argType) {
