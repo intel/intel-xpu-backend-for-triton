@@ -40,7 +40,7 @@ def test_compile_in_subproc() -> None:
         major, minor = torch.cuda.get_device_capability(0)
         cc = major * 10 + minor
 
-    config = triton.compiler.AttrsDescriptor(tuple(range(4)), (), (), ())
+    config = triton.compiler.AttrsDescriptor(tuple(range(4)), ())
 
     multiprocessing.set_start_method('fork')
     proc = multiprocessing.Process(target=compile_fn, args=(config, cc))
@@ -63,12 +63,13 @@ def compile_fn_dot(attrs, capability):
 
 
 def test_compile_in_forked_subproc() -> None:
+    reset_tmp_dir()
     capability = 0
     if torch.cuda.is_available():
         major, minor = torch.cuda.get_device_capability(0)
         capability = major * 10 + minor
 
-    config = triton.compiler.AttrsDescriptor(tuple(range(1)), (), (), ())
+    config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
 
     assert multiprocessing.get_start_method() == 'fork'
     proc = multiprocessing.Process(target=compile_fn_dot, args=(config, capability))

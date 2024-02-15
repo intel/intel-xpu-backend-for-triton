@@ -2,7 +2,6 @@
 #include "Utility.h"
 
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -45,7 +44,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
-                    TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
+                    const LLVMTypeConverter *typeConverter, Value thread);
 }
 
 namespace SharedToDotOperandFMA {
@@ -162,9 +161,11 @@ private:
       return multiDimOffset;
     }
     if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+      assert(rank == 2 ||
+             (rank == 3 && mmaLayout.isAmpere()) && "Unexpected rank");
       auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
       auto instrShape = mmaLayout.getInstrShape();
-      SmallVector<Value> mmaColIdx(4);
+      SmallVector<Value> mmaColIdx(2);
       SmallVector<Value> mmaRowIdx(2);
       Value threadId = getThreadId(rewriter, loc);
       Value warpSize = i32_val(32);
@@ -186,22 +187,26 @@ private:
       Value _8 = i32_val(8);
       Value _16 = i32_val(16);
       if (mmaLayout.isAmpere() || mmaLayout.isHopper()) {
-        multiDimWarpId[0] =
-            urem(multiDimWarpId[0],
-                 i32_val(ceil<unsigned>(shapePerCTA[0], instrShape[0])));
-        multiDimWarpId[1] =
-            urem(multiDimWarpId[1],
-                 i32_val(ceil<unsigned>(shapePerCTA[1], instrShape[1])));
+        multiDimWarpId[rank - 1] =
+            urem(multiDimWarpId[rank - 1],
+                 i32_val(ceil<unsigned>(shapePerCTA[rank - 1],
+                                        instrShape[rank - 1])));
+        multiDimWarpId[rank - 2] =
+            urem(multiDimWarpId[rank - 2],
+                 i32_val(ceil<unsigned>(shapePerCTA[rank - 2],
+                                        instrShape[rank - 2])));
 
         Value mmaGrpId = udiv(laneId, _4);
         Value mmaGrpIdP8 = add(mmaGrpId, _8);
         Value mmaThreadIdInGrp = urem(laneId, _4);
         Value mmaThreadIdInGrpM2 = mul(mmaThreadIdInGrp, _2);
         Value mmaThreadIdInGrpM2P1 = add(mmaThreadIdInGrpM2, _1);
-        Value rowWarpOffset = mul(multiDimWarpId[0], i32_val(instrShape[0]));
+        Value rowWarpOffset =
+            mul(multiDimWarpId[rank - 2], i32_val(instrShape[rank - 2]));
         mmaRowIdx[0] = add(mmaGrpId, rowWarpOffset);
         mmaRowIdx[1] = add(mmaGrpIdP8, rowWarpOffset);
-        Value colWarpOffset = mul(multiDimWarpId[1], i32_val(instrShape[1]));
+        Value colWarpOffset =
+            mul(multiDimWarpId[rank - 1], i32_val(instrShape[rank - 1]));
         mmaColIdx[0] = add(mmaThreadIdInGrpM2, colWarpOffset);
         mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
       } else if (mmaLayout.isVolta()) {
@@ -210,7 +215,6 @@ private:
         llvm_unreachable("Unexpected MMALayout version");
       }
 
-      assert(rank == 2);
       SmallVector<Value> multiDimOffset(rank);
       if (mmaLayout.isHopper()) {
         unsigned elemIdRem4 = elemId % 4;
@@ -225,14 +229,19 @@ private:
             add(multiDimOffset[1],
                 i32_val(multiDimCTAInRepId[1] * shapePerCTATile[1]));
       } else if (mmaLayout.isAmpere()) {
-        multiDimOffset[0] = elemId < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
-        multiDimOffset[1] = elemId % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];
-        multiDimOffset[0] =
-            add(multiDimOffset[0],
-                i32_val(multiDimCTAInRepId[0] * shapePerCTATile[0]));
-        multiDimOffset[1] =
-            add(multiDimOffset[1],
-                i32_val(multiDimCTAInRepId[1] * shapePerCTATile[1]));
+        if (rank == 3)
+          multiDimOffset[0] =
+              add(multiDimWarpId[0],
+                  i32_val(multiDimCTAInRepId[0] * shapePerCTATile[0]));
+        multiDimOffset[rank - 2] = elemId < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
+        multiDimOffset[rank - 1] =
+            elemId % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];
+        multiDimOffset[rank - 2] =
+            add(multiDimOffset[rank - 2], i32_val(multiDimCTAInRepId[rank - 2] *
+                                                  shapePerCTATile[rank - 2]));
+        multiDimOffset[rank - 1] =
+            add(multiDimOffset[rank - 1], i32_val(multiDimCTAInRepId[rank - 1] *
+                                                  shapePerCTATile[rank - 1]));
       } else if (mmaLayout.isVolta()) {
         auto [isARow, isBRow, isAVec4, isBVec4, _] =
             mmaLayout.decodeVoltaLayoutStates();
@@ -635,23 +644,7 @@ private:
       auto multiDimRepId =
           getMultiDimIndex<unsigned>(repId, numReplicates, outOrd);
       if (repId != 0) {
-        // TODO[shuhaoj]: change hard code style of numThreads. Hide async
-        // attr.  Better way to determine barId (number of agents are limited).
-        if (auto optionalAgentId = getWSAgentId(op)) {
-          int agentId = *optionalAgentId, roleId = 0;
-          if (auto optionalRoleId = getWSRoleId(op))
-            roleId = *optionalRoleId;
-          int barId = agentId + roleId + nameBarrierIdBegin;
-          assert(barId < nameBarrierIdEnd);
-          auto bar = rewriter.create<LLVM::ConstantOp>(
-              loc, i32_ty, rewriter.getI32IntegerAttr(barId));
-          auto kNumThreads = rewriter.create<LLVM::ConstantOp>(
-              loc, i32_ty, rewriter.getI32IntegerAttr(128));
-          rewriter.create<triton::nvgpu::NamedBarrierWaitOp>(loc, bar,
-                                                             kNumThreads);
-        } else {
-          barrier();
-        }
+        barrier();
       }
       if (srcLayout.isa<BlockedEncodingAttr>() ||
           srcLayout.isa<SliceEncodingAttr>() ||
@@ -676,23 +669,7 @@ private:
         return failure();
       }
 
-      // TODO[shuhaoj]: change hard code style of numThreads. Hide async_agent
-      // attr.  Better way to determine barId (number of agents are limited).
-      if (auto optionalAgentId = getWSAgentId(op)) {
-        int agentId = *optionalAgentId, roleId = 0;
-        if (auto optionalRoleId = getWSRoleId(op))
-          roleId = *optionalRoleId;
-        int barId = agentId + roleId + nameBarrierIdBegin;
-        assert(barId < nameBarrierIdEnd);
-        auto bar = rewriter.create<LLVM::ConstantOp>(
-            loc, i32_ty, rewriter.getI32IntegerAttr(barId));
-        auto kNumThreads = rewriter.create<LLVM::ConstantOp>(
-            loc, i32_ty, rewriter.getI32IntegerAttr(128));
-        rewriter.create<triton::nvgpu::NamedBarrierWaitOp>(loc, bar,
-                                                           kNumThreads);
-      } else {
-        barrier();
-      }
+      barrier();
       if (dstLayout.isa<BlockedEncodingAttr>() ||
           dstLayout.isa<SliceEncodingAttr>() ||
           dstLayout.isa<DpasEncodingAttr>() ||
@@ -865,12 +842,13 @@ private:
     auto srcShape = srcTy.getShape();
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
-    assert(srcShape.size() == 2 &&
-           "Unexpected rank of ConvertLayout(blocked->shared)");
     auto srcLayout = srcTy.getEncoding();
     auto dstSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto inOrd = getOrder(srcLayout);
     auto outOrd = dstSharedLayout.getOrder();
+    assert(srcShape.size() == 2 ||
+           (srcShape.size() <= 3 && outOrd[2] == 0) &&
+               "Unexpected rank of ConvertLayout(blocked->shared)");
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());

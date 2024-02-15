@@ -2,7 +2,8 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 
 #include "TritonGPUToLLVMBase.h"
-#include "triton/Target/PTX/TmaMetadata.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "triton/Analysis/AxisInfo.h"
 
 namespace mlir {
 namespace triton {
@@ -34,19 +35,13 @@ void populateHistogramOpToLLVMPatterns(
 
 void populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    mlir::triton::gpu::TMAMetadataTy *tmaMetadata,
-    const TensorPtrMapT *tensorPtrMap, Target target, PatternBenefit benefit);
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
+    PatternBenefit benefit);
 
 void populateReduceOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
                                     int computeCapability, Target target,
                                     PatternBenefit benefit);
-
-void populateRegReallocOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit);
-
 void populateScanOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns, Target target,
                                   PatternBenefit benefit);
