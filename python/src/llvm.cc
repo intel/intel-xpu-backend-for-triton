@@ -49,7 +49,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     assert(shortPtr);
     shortPtr->setValue(true);
   }
-  if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+  if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
     auto optIt = options.find("print-after-all");
     if (optIt != options.end()) {
       auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
@@ -169,7 +169,7 @@ void init_triton_llvm(py::module &&m) {
 
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt) {
-    if (triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
+    if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
       return;
     using namespace llvm;
     LoopAnalysisManager lam;
@@ -181,7 +181,7 @@ void init_triton_llvm(py::module &&m) {
     PassInstrumentationCallbacks passInstrCb;
     StandardInstrumentations standardInstr(mod->getContext(),
                                            /*DebugLogging*/ true);
-    if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+    if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
       standardInstr.registerCallbacks(passInstrCb, &mam);
       instrCbPtr = &passInstrCb;
       auto optMap = llvm::cl::getRegisteredOptions();
