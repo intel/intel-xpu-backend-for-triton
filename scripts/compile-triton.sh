@@ -111,11 +111,11 @@ fi
 ## Configure and build the llvm project.
 
 if [ -z "$C_COMPILER" ]; then
-  C_COMPILER=`which gcc`
+  C_COMPILER=${GCC:-$(which gcc)}
   echo "**** C_COMPILER is set to $C_COMPILER ****"
 fi
 if [ -z "$CXX_COMPILER" ]; then
-  CXX_COMPILER=`which g++`
+  CXX_COMPILER=${GXX:-$(which g++)}
   echo "**** CXX_COMPILER is set to $CXX_COMPILER ****"
 fi
 
