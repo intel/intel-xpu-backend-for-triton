@@ -1500,6 +1500,7 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getSizePerThread() const {
   if (isVolta()) {
     res[rank - 2] = 1;
     res[rank - 1] = 2;
+    return res;
   }
   if (isHopper()) {
     auto instrShape = getInstrShape();
