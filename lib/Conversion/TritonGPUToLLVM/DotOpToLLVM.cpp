@@ -16,27 +16,27 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             ConversionPatternRewriter &rewriter);
 
 LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            TritonGPUToLLVMTypeConverter *typeConverter,
+                            const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
 
 LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                             TritonGPUToLLVMTypeConverter *typeConverter,
+                             const LLVMTypeConverter *typeConverter,
                              ConversionPatternRewriter &rewriter);
 
 LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                              TritonGPUToLLVMTypeConverter *typeConverter,
+                              const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter);
 
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
 LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                           TritonGPUToLLVMTypeConverter *typeConverter,
+                           const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread);
 
 LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                                 triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
-                                TritonGPUToLLVMTypeConverter *typeConverter,
+                                const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread);
 namespace {
