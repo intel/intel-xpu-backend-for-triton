@@ -40,9 +40,6 @@ jobs:
           - amp_bf16
           - amp_fp16
           - float32
-#        mode:
-#          - inference
-#          - training
       max-parallel: 2
       fail-fast: false
     timeout-minutes: 720
@@ -277,15 +274,45 @@ jobs:
             $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.model }} ${{ matrix.dtype }} $mode accuracy xpu 0
           done
 
+      - name: Report environment details
+        run: |
+          mkdir -p inductor_log
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
+
+          cat <<EOF | tee inductor_log/.env
+          TIMESTAMP=$TIMESTAMP
+          JOB_NAME=${{ join(matrix.*, '-') }}
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=$PYTHON_VERSION
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          IPEX_REPO=$IPEX_REPO
+          IPEX_COMMIT_ID=$IPEX_COMMIT_ID
+          LLVM_REPO=$LLVM_REPO
+          LLVM_COMMIT_ID=$LLVM_COMMIT_ID
+          BENCHMARK_REPO=$BENCHMARK_REPO
+          BENCHMARK_COMMIT_ID=$BENCHMARK_COMMIT_ID
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
+          TORCHTEXT_COMMIT_ID=$TORCHTEXT_COMMIT_ID
+          TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
+          TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION
+          TIMM_COMMIT_ID=$TIMM_COMMIT_ID
+          EOF
+
       - name: Copy reports
         run: |
           mkdir -p /cache/reports/e2e
           TMPDIR=$(mktemp -d -p /cache/reports/e2e XXXXXXXXX.tmp)
           cp -r $GITHUB_WORKSPACE/inductor_log/* $TMPDIR
-          mv -T $TMPDIR /cache/reports/e2e/$(date '+%Y%m%d%H%M%S')-${{ matrix.model }}-${{ matrix.dtype }} || rm -rf $TMPDIR
+          mv -T $TMPDIR /cache/reports/e2e/$TIMESTAMP-${{ join(matrix.*, '-') }} || rm -rf $TMPDIR
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ matrix.model }}-${{ matrix.dtype }}
+          name: logs-${{ join(matrix.*, '-') }}
           path: inductor_log
