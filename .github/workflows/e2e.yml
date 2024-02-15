@@ -36,6 +36,9 @@ jobs:
           - huggingface
           - timm_models
           - torchbench
+        mode:
+          - inference
+          - training
         dtype:
           - amp_bf16
           - amp_fp16
@@ -270,9 +273,7 @@ jobs:
           source ~/intel/oneapi/setvars.sh
           export WORKSPACE=$GITHUB_WORKSPACE
           cd pytorch
-          for mode in training inference; do
-            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.model }} ${{ matrix.dtype }} $mode accuracy xpu 0
-          done
+          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.model }} ${{ matrix.dtype }} ${{ matrix.mode }} accuracy xpu 0
 
       - name: Report environment details
         run: |
