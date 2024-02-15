@@ -81,7 +81,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   // Extract triton::gpu::intel::DeviceArch from pci_device_id
   // https://dgpu-docs.intel.com/devices/hardware-table.html
   int pci_device_id = device_properties.deviceId;
-  int gpu_arch = 3; // triton::gpu::intel::DeviceArch::UNKNOWN
+  int gpu_arch = 2; // triton::gpu::intel::DeviceArch::UNKNOWN
   switch ((pci_device_id >> 8) & 0xFF) {
   case 0x56:
     gpu_arch = 0; // Arc GPUs 56xx
