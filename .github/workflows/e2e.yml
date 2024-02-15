@@ -36,11 +36,16 @@ jobs:
           - huggingface
           - timm_models
           - torchbench
-        mode:
-          - inference
-          - training
+        dtype:
+          - amp_bf16
+          - amp_fp16
+          - float32
+#        mode:
+#          - inference
+#          - training
       max-parallel: 2
-    timeout-minutes: 240
+      fail-fast: false
+    timeout-minutes: 720
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -268,8 +273,8 @@ jobs:
           source ~/intel/oneapi/setvars.sh
           export WORKSPACE=$GITHUB_WORKSPACE
           cd pytorch
-          for dtype in amp_bf16 amp_fp16 float32; do
-            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.model }} $dtype ${{ matrix.mode }} accuracy xpu 0
+          for mode in training inference; do
+            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.model }} ${{ matrix.dtype }} $mode accuracy xpu 0
           done
 
       - name: Copy reports
@@ -277,7 +282,7 @@ jobs:
           mkdir -p /cache/reports/e2e
           TMPDIR=$(mktemp -d -p /cache/reports/e2e XXXXXXXXX.tmp)
           cp -r $GITHUB_WORKSPACE/inductor_log/* $TMPDIR
-          mv -T $TMPDIR /cache/reports/e2e/$(date '+%Y%m%d%H%M%S')-${{ matrix.model }}-${{ matrix.mode }} || rm -rf $TMPDIR
+          mv -T $TMPDIR /cache/reports/e2e/$(date '+%Y%m%d%H%M%S')-${{ matrix.model }}-${{ matrix.dtype }} || rm -rf $TMPDIR
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4
