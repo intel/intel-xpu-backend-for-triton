@@ -1005,6 +1005,47 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   llvm_unreachable("unsupported emitOffsetForLayout");
 }
 
+// -----------------------------------------------------------------------
+// Dpas layout indices
+// -----------------------------------------------------------------------
+
+static SmallVector<Value>
+emitBaseIndexForDpasLayout(Location loc, ConversionPatternRewriter &rewriter,
+                           const DpasEncodingAttr &dpasLayout,
+                           RankedTensorType type) {
+  Value threadId = getThreadId(rewriter, loc);
+  Value warpSize = i32_val(triton::gpu::getWarpSize(dpasLayout));
+  Value warpId = udiv(threadId, warpSize);
+  Value laneId = urem(threadId, warpSize);
+
+  SmallVector<Value> warpsPerCTA = {i32_val(dpasLayout.getWarpsPerCTA()[0]),
+                                    i32_val(dpasLayout.getWarpsPerCTA()[1])};
+  ArrayRef<int64_t> shape = type.getShape();
+
+  // Compute the 2-dim coordinates of the warp containing the tensor element
+  // operated on by this thread.
+  SmallVector<unsigned> warpShape = {8, 16};
+  Value rowWarpId =
+      urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / warpShape[0]));
+  Value colWarpId = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
+                         i32_val(shape[1] / warpShape[1]));
+  Value rowWarpOffset = mul(rowWarpId, i32_val(warpShape[0]));
+  Value colWarpOffset = mul(colWarpId, i32_val(warpShape[1]));
+
+  // Compute the 2-dim coordinates of the first element in the warp operated
+  // on by this thread.
+  SmallVector<unsigned> threadsPerWarp = getThreadsPerWarp(dpasLayout);
+  SmallVector<unsigned> contigPerThread = getContigPerThread(dpasLayout);
+  SmallVector<Value> multiDimBase = {
+      add(mul(i32_val(contigPerThread[0]),
+              udiv(laneId, i32_val(threadsPerWarp[1]))),
+          rowWarpOffset),
+      add(mul(i32_val(contigPerThread[1]),
+              urem(laneId, i32_val(threadsPerWarp[1]))),
+          colWarpOffset)};
+  return multiDimBase;
+}
+
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
 static SmallVector<SmallVector<Value>>
