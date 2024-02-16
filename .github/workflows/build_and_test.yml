@@ -79,60 +79,49 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check if pip cache exists
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
           CACHE_NUMBER: 1
-        run: |
-          PIP_CACHE_KEY="pip-${{ matrix.python }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}"
-          PIP_CACHE="/cache/$PIP_CACHE_KEY"
-          echo "PIP_CACHE=$PIP_CACHE" >> "${GITHUB_ENV}"
-          if [[ -d $PIP_CACHE ]]; then
-            echo "Python cache found for key $PIP_CACHE_KEY"
-            echo $PIP_CACHE > .pip-cache
-            mkdir -p $HOME/.cache
-            ln -s $PIP_CACHE $HOME/.cache/pip
-          else
-            echo "Python cache not found for key $PIP_CACHE_KEY"
-          fi
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ matrix.python }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Python ${{ matrix.python }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Check if packages cache exists
-        env:
-          # Increase this value to reset cache
-          CACHE_NUMBER: 1
+      - name: Calculate packages cache key
         run: |
           LLVM_COMMIT_ID=$(git ls-remote https://github.com/intel/llvm.git refs/heads/genx | cut -f1)
           echo "Latest llvm genx commit id: $LLVM_COMMIT_ID"
-          COMPOSITE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
-          PACKAGES_CACHE_KEY="packages-$COMPOSITE_KEY-${{ env.CACHE_NUMBER }}"
-          PACKAGES_CACHE="/cache/$PACKAGES_CACHE_KEY"
-          echo "PACKAGES_CACHE=$PACKAGES_CACHE" >> "${GITHUB_ENV}"
-          if [[ -d $PACKAGES_CACHE ]]; then
-            echo "Packages cache found for key $PACKAGES_CACHE_KEY"
-            echo $PACKAGES_CACHE > .packages-cache
-            ln -s $PACKAGES_CACHE $HOME/packages
-          else
-            echo "Packages cache not found for key $PACKAGES_CACHE_KEY"
-          fi
+          PACKAGES_CACHE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
+          echo "PACKAGES_CACHE_KEY=$PACKAGES_CACHE_KEY" >> "${GITHUB_ENV}"
+
+      - name: Load packages cache
+        id: packages-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        with:
+          path: $HOME/packages
+          key: packages-${{ env.PACKAGES_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
 
       - name: Build packages
-        if: ${{ hashFiles('.packages-cache') == '' }}
+        if: ${{ steps.packages-cache.outputs.status == 'miss' }}
         run: |
           ./scripts/compile-triton.sh --llvm
 
       - name: Save packages cache
-        if: ${{ hashFiles('.packages-cache') == '' }}
-        run: |
-          TMPDIR=/cache/${{ github.run_id }}-$RANDOM
-          mkdir $TMPDIR
-          cp -r $HOME/packages/* $TMPDIR/
-          # ignore error if other job created a cache with the same key already
-          mv $TMPDIR $PACKAGES_CACHE || true
+        if: ${{ steps.packages-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.packages-cache.outputs.path }}
+          dest: ${{ steps.packages-cache.outputs.dest }}
 
       - name: Build Triton
         run: |
@@ -211,13 +200,11 @@ jobs:
           ctest
 
       - name: Save pip cache
-        if: ${{ hashFiles('.pip-cache') == '' }}
-        run: |
-          TMPDIR=/cache/${{ github.run_id }}-$RANDOM
-          mkdir $TMPDIR
-          cp -r $HOME/.cache/pip/* $TMPDIR/
-          # ignore error if other job created a cache with the same key already
-          mv $TMPDIR $PIP_CACHE || true
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Pass rate
         run: |
