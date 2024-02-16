@@ -1143,7 +1143,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
 
     if is_xpu():
         capability = 0
-        if dtype_x_str == 'float16':        
+        if dtype_x_str == 'float16':
             pytest.skip("FIXME: Atomic RMW for float16 not yet supported by IGC")
 
     n_programs = 5
