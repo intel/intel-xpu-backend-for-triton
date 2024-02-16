@@ -28,22 +28,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check if pip cache exists
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
           CACHE_NUMBER: 1
-        run: |
-          PIP_CACHE_KEY="pip-3.9-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}"
-          PIP_CACHE="/cache/$PIP_CACHE_KEY"
-          echo "PIP_CACHE=$PIP_CACHE" >> "${GITHUB_ENV}"
-          if [[ -d $PIP_CACHE ]]; then
-            echo "Python cache found for key $PIP_CACHE_KEY"
-            echo $PIP_CACHE > .pip-cache
-            mkdir -p $HOME/.cache
-            ln -s $PIP_CACHE $HOME/.cache/pip
-          else
-            echo "Python cache not found for key $PIP_CACHE_KEY"
-          fi
+        with:
+          path: $HOME/.cache/pip
+          key: pip-3.9-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Python 3.9
         uses: actions/setup-python@v5
@@ -62,13 +55,11 @@ jobs:
           python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
 
       - name: Save pip cache
-        if: ${{ hashFiles('.pip-cache') == '' }}
-        run: |
-          TMPDIR=/cache/${{ github.run_id }}-$RANDOM
-          mkdir $TMPDIR
-          cp -r $HOME/.cache/pip/* $TMPDIR/
-          # ignore error if other job created a cache with the same key already
-          mv $TMPDIR $PIP_CACHE || true
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
 
   integration-tests:
     name: Integration tests
