@@ -282,7 +282,7 @@ jobs:
       - name: Install PyTorch Benchmarks
         if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
         run: |
-          pip install
+          #pip install
           git clone --single-branch -b $BENCHMARK_BRANCH --recurse-submodules --jobs 8 $BENCHMARK_REPO
           cd benchmark
           python install.py
