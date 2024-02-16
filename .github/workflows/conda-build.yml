@@ -1,0 +1,238 @@
+name: Build and test
+
+on:
+  workflow_dispatch:
+    #FIXME
+  push:
+  workflow_dispatch:
+  schedule:
+    - cron: '51 3 * * *'
+        
+
+permissions: read-all
+
+env:
+  BASE: /home/runner
+  LLVM_SYSPATH: /home/runner/packages/llvm
+  BACKEND: XPU
+  TRITON_DISABLE_LINE_INFO: 1
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on:
+      - glados
+      - spr
+      - cpu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check if pip cache exists
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        run: |
+          PIP_CACHE_KEY="pip-3.9-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}"
+          PIP_CACHE="/cache/$PIP_CACHE_KEY"
+          echo "PIP_CACHE=$PIP_CACHE" >> "${GITHUB_ENV}"
+          if [[ -d $PIP_CACHE ]]; then
+            echo "Python cache found for key $PIP_CACHE_KEY"
+            echo $PIP_CACHE > .pip-cache
+            mkdir -p $HOME/.cache
+            ln -s $PIP_CACHE $HOME/.cache/pip
+          else
+            echo "Python cache not found for key $PIP_CACHE_KEY"
+          fi
+
+      - name: Install Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Run pre-commit checks
+        run: |
+          pip install --upgrade pre-commit
+
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
+          # If first run of yapf worked and made changes reset the tree to the original state
+          git reset --hard
+
+          python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
+
+      - name: Save pip cache
+        if: ${{ hashFiles('.pip-cache') == '' }}
+        run: |
+          TMPDIR=/cache/${{ github.run_id }}-$RANDOM
+          mkdir $TMPDIR
+          cp -r $HOME/.cache/pip/* $TMPDIR/
+          # ignore error if other job created a cache with the same key already
+          mv $TMPDIR $PIP_CACHE || true
+
+  integration-tests:
+    name: Integration tests
+    runs-on:
+      - glados
+      - spr
+      - runner-0.0.5
+    strategy:
+      matrix:
+        python:
+          - "3.9"
+          - "3.10"
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check if pip cache exists
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        run: |
+          PIP_CACHE_KEY="pip-${{ matrix.python }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}"
+          PIP_CACHE="/cache/$PIP_CACHE_KEY"
+          echo "PIP_CACHE=$PIP_CACHE" >> "${GITHUB_ENV}"
+          if [[ -d $PIP_CACHE ]]; then
+            echo "Python cache found for key $PIP_CACHE_KEY"
+            echo $PIP_CACHE > .pip-cache
+            mkdir -p $HOME/.cache
+            ln -s $PIP_CACHE $HOME/.cache/pip
+          else
+            echo "Python cache not found for key $PIP_CACHE_KEY"
+          fi
+
+      - name: Install Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Check if packages cache exists
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        run: |
+          LLVM_COMMIT_ID=$(git ls-remote https://github.com/intel/llvm.git refs/heads/genx | cut -f1)
+          echo "Latest llvm genx commit id: $LLVM_COMMIT_ID"
+          COMPOSITE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
+          PACKAGES_CACHE_KEY="packages-$COMPOSITE_KEY-${{ env.CACHE_NUMBER }}"
+          PACKAGES_CACHE="/cache/$PACKAGES_CACHE_KEY"
+          echo "PACKAGES_CACHE=$PACKAGES_CACHE" >> "${GITHUB_ENV}"
+          if [[ -d $PACKAGES_CACHE ]]; then
+            echo "Packages cache found for key $PACKAGES_CACHE_KEY"
+            echo $PACKAGES_CACHE > .packages-cache
+            ln -s $PACKAGES_CACHE $HOME/packages
+          else
+            echo "Packages cache not found for key $PACKAGES_CACHE_KEY"
+          fi
+
+      - name: Build packages
+        if: ${{ hashFiles('.packages-cache') == '' }}
+        run: |
+          conda env update scripts/triton.yml
+          conda run --no-capture-output -n triton ./scripts/compile-triton.sh --llvm
+
+#      - name: Save packages cache
+#        if: ${{ hashFiles('.packages-cache') == '' }}
+#        run: |
+#          TMPDIR=/cache/${{ github.run_id }}-$RANDOM
+#          mkdir $TMPDIR
+#          cp -r $HOME/packages/* $TMPDIR/
+#          # ignore error if other job created a cache with the same key already
+#          mv $TMPDIR $PACKAGES_CACHE || true
+#
+#      - name: Build Triton
+#        run: |
+#          cd python
+#          pip install wheel
+#          pip install --no-build-isolation '.[tests]'
+#
+#      - name: Run lit tests
+#        run: |
+#          pip install lit
+#          cd python
+#          lit -v build/*/test
+#
+#      - name: Create directory for tests reports
+#        run: |
+#          mkdir ~/reports
+#
+#      - name: Run core tests
+#        run: |
+#          pip install pytest pytest-xdist
+#          pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
+#          cd python/test/unit
+#          python3 -m pytest --junitxml=~/reports/language.xml -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
+#          # run runtime tests serially to avoid race condition with cache handling.
+#          python3 -m pytest --junitxml=~/reports/runtime.xml --device xpu runtime/
+#          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+#          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --junitxml=~/reports/line_info.xml --verbose --device xpu language/test_line_info.py
+#
+#      - name: Clear cache
+#        run: |
+#          rm -rf ~/.triton
+#
+#      - name: Run interpreter tests
+#        env:
+#          # TRITON_INTERPRET: "1"
+#          CUA_VISIBLE_DEVICES: ""
+#        run: |
+#          cd python/test/unit
+#          python3 -m pytest --junitxml=~/reports/flash_attention.xml -vs --device xpu operators/test_flash_attention.py
+#
+#      - name: Run partial operators tests
+#        run: |
+#          cd python/test/unit
+#          python3 -m pytest --junitxml=~/reports/operators.xml -n 8 --verbose --device xpu operators
+#
+#      - name: Regression tests
+#        run: |
+#          pip install pytest-rerunfailures
+#          cd python/test/regression
+#          python3 -m pytest --junitxml=~/reports/regression.xml -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
+#
+#      - name: Run XPU python tests
+#        run: |
+#          cd python/test/backend/third_party_backends
+#          python3 -m pytest -n auto --verbose test_xpu_backend.py
+#
+#      - name: Run Tutorials
+#        run: |
+#          pip install matplotlib pandas tabulate
+#          cd python/tutorials
+#          python3 01-vector-add.py
+#          python3 02-fused-softmax.py
+#          python3 03-matrix-multiplication.py
+#          python3 04-low-memory-dropout.py
+#          python3 05-layer-norm.py
+#          python3 06-fused-attention.py
+#          python3 07-math-functions.py
+#          python3 08-experimental-block-pointer.py
+#          python3 09-experimental-tma-matrix-multiplication.py
+#          python3 10-experimental-tma-store-matrix-multiplication.py
+#          python3 11-grouped-gemm.py
+#
+#      - name: Run CXX unittests
+#        run: |
+#          cd python/build/*cmake*
+#          ctest
+#
+#      - name: Save pip cache
+#        if: ${{ hashFiles('.pip-cache') == '' }}
+#        run: |
+#          TMPDIR=/cache/${{ github.run_id }}-$RANDOM
+#          mkdir $TMPDIR
+#          cp -r $HOME/.cache/pip/* $TMPDIR/
+#          # ignore error if other job created a cache with the same key already
+#          mv $TMPDIR $PIP_CACHE || true
+#
+#      - name: Pass rate
+#        run: |
+#          python3 scripts/pass_rate.py --reports ~/reports
+#          mkdir -p /cache/reports/pass-rate
+#          TMPFILE=$(mktemp -p /cache/reports/pass-rate XXXXXXXXXX)
+#          python3 scripts/pass_rate.py --reports ~/reports --json > $TMPFILE
+#          mv $TMPFILE $TMPFILE.json

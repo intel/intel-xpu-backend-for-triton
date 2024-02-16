@@ -1,0 +1,11 @@
+name: triton
+channels:
+  - conda-forge
+
+dependencies:
+  - gxx_linux-64  11.*.*
+  - gcc_linux-64  11.*.*
+  - pip   23.*
+  - zlib
+  - cmake   3.22.*
+  - python  3.9.*
