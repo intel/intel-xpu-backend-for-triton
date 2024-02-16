@@ -2593,20 +2593,20 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             if out_dtype == 'float16':
                 # TODO: support out_dtype=float16 for tl.dot on V100
                 pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
-    
+
     if is_xpu():
         capability = 0
 
         if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
             pytest.skip("shared memory out of resource")
         if (M, N, K, num_warps) in [(32, 128, 64, 2)]:
-            if out_dtype == 'int8' and ((col_a, col_b) not in [False, True]):        
+            if out_dtype == 'int8' and ((col_a, col_b) not in [False, True]):
                 pytest.skip("FIXME: Incorrect results on XPU")
-            if out_dtype == 'float32' and in_dtype == 'float16' and col_b == True:
+            if out_dtype == 'float32' and in_dtype == 'float16' and col_b is True:
                 pytest.skip("FIXME: Incorrect results on XPU")
         if (M, N, K, num_warps) in [(128, 128, 64, 2)]:
             pytest.skip("FIXME: Fails to run on XPU")
-        if (M, N, K, num_warps) in [(128, 128, 64, 4)] and (in_dtype, out_dtype) not in ['float32', 'float32']:        
+        if (M, N, K, num_warps) in [(128, 128, 64, 4)] and (in_dtype, out_dtype) not in ['float32', 'float32']:
             pytest.skip("FIXME: Fails to run on XPU")
 
     if is_cuda():
