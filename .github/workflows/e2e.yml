@@ -69,8 +69,9 @@ jobs:
             libsdl2-dev libsdl2-2.0-0
 
       - name: Install Python dependencies
+        run: |
           pip install wheel \
-            pyyaml pandas scipy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+            pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
 
       - name: Identify versions
         run: |
