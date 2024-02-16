@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "ReduceScanCommon.h"
 #include "TritonGPUToLLVMBase.h"
 #include "triton/Analysis/Utility.h"
 
