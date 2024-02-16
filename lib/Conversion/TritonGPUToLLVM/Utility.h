@@ -496,9 +496,22 @@ static Value getModuleWarpSize(ConversionPatternRewriter &rewriter,
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
+// This is the dirties hack I have ever written.
+// What we really need is to change the model
+class TritonTargetProxy {
+  static Target &target() {
+    static Target target = Target::Default;
+    return target;
+  }
+
+public:
+  static void set(Target t) { target() = t; }
+  static Target get() { return target(); }
+};
+
 static Value getClusterCTAId(ConversionPatternRewriter &rewriter,
                              Location loc) {
-  Target target = triton::Target::GENX; // FIXME
+  Target target = TritonTargetProxy::get();
   switch (target) {
   case triton::Target::NVVM:
     return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(
