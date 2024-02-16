@@ -3423,8 +3423,11 @@ def test_bin_op_constexpr(op, is_lhs_constexpr, is_rhs_constexpr, device):
     y_tri = to_triton(y, device=device)
     z_tri = to_triton(np.empty((1, ), dtype=z.dtype), device=device)
     kernel[(1, )](z_tri, x_tri, y_tri)
-    warnings.warn("FIXME: test case modified, increased tolerance")
-    np.testing.assert_allclose(z, to_numpy(z_tri), atol=1e-07)
+    if op == '%':
+        warnings.warn("FIXME: test case modified, increased tolerance")
+        np.testing.assert_allclose(z, to_numpy(z_tri), atol=1e-07)
+    else:
+        np.testing.assert_allclose(z, to_numpy(z_tri))
 
 
 def test_constexpr_shape(device):
