@@ -1507,6 +1507,7 @@ def test_join_with_mma(device):
 
 
 def test_split(device):
+
     @triton.jit
     def kernel(X, Z1, Z2, N: tl.constexpr):
         offs = tl.arange(0, N)
