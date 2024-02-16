@@ -17,14 +17,18 @@ RUN set -ex; \
       intel-level-zero-gpu \
       level-zero \
       level-zero-dev libigc-dev intel-igc-cm libigdfcl-dev libigfxcmrt-dev \
-    ; \
-    apt-get install -y --no-install-recommends --fix-missing \
       build-essential \
       zlib1g-dev \
       cmake \
       ninja-build \
       ncurses-term \
       wget \
+      pkg-config \
+      libpng-dev libjpeg-dev libsndfile1-dev libxml2-dev libxslt1-dev \
+      libgl1-mesa-glx  \
+      fontconfig libfontconfig1-dev \
+      libpango-1.0-0 libpangoft2-1.0-0 \
+      libsdl2-dev libsdl2-2.0-0 \
     ; \
     rm -rf /var/lib/apt/lists/*
 
