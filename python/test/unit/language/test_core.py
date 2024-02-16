@@ -2598,7 +2598,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         capability = 0
 
         if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
-            pytest.skip("shared memory out of resource")
+            pytest.skip("FIXME: shared memory out of resource - reevaluate with DPAS")
         if (M, N, K, num_warps) in [(32, 128, 64, 2)]:
             if out_dtype == 'int8' and ((col_a, col_b) not in [False, True]):
                 pytest.skip("FIXME: Incorrect results on XPU")
