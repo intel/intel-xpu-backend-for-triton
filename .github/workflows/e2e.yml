@@ -32,7 +32,7 @@ jobs:
       - runner-0.0.5
     strategy:
       matrix:
-        model:
+        suite:
           - huggingface
           - timm_models
           - torchbench
@@ -57,7 +57,7 @@ jobs:
 
       # TODO: move to the base image
       # See also https://github.com/weishi-deng/benchmark/blob/main/docker/gcp-a100-runner-dind.dockerfile#L10-L15
-      - name: Install required dependencies
+      - name: Install system dependencies
         run: |
           sudo apt update -y
           sudo apt install -y \
@@ -68,7 +68,9 @@ jobs:
             libpango-1.0-0 libpangoft2-1.0-0 \
             libsdl2-dev libsdl2-2.0-0
 
-          pip install wheel
+      - name: Install Python dependencies
+          pip install wheel \
+            pyyaml pandas scipy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
 
       - name: Identify versions
         run: |
@@ -273,15 +275,10 @@ jobs:
           pip install audio/dist/*.whl
           python -c "import torchaudio; print(torchaudio.__version__)"
 
-      - name: Install transformers for huggingface
-        if: ${{ matrix.suite == 'huggingface' }}
-        run: |
-          pip install transformers==$TRANSFORMERS_VERSION
-
       - name: Install PyTorch Benchmarks
         if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
         run: |
-          pip install pyyaml pandas scipy psutil pyre_extensions torchrec
+          pip install
           git clone --single-branch -b $BENCHMARK_BRANCH --recurse-submodules --jobs 8 $BENCHMARK_REPO
           cd benchmark
           python install.py
@@ -292,7 +289,7 @@ jobs:
           source ~/intel/oneapi/setvars.sh
           export WORKSPACE=$GITHUB_WORKSPACE
           cd pytorch
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.model }} ${{ matrix.dtype }} ${{ matrix.mode }} accuracy xpu 0
+          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} accuracy xpu 0
 
       - name: Report environment details
         run: |
