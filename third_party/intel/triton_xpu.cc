@@ -6,9 +6,9 @@
 #include "triton/Conversion/NVGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/TargetSelect.h"
 #include <pybind11/pybind11.h>
@@ -22,7 +22,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
   m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability) {
-    pm.addPass(createConvertTritonGPUToLLVMPass(capability, mlir::triton::GENX));
+    pm.addPass(
+        createConvertTritonGPUToLLVMPass(capability, mlir::triton::GENX));
   });
 }
 
@@ -35,7 +36,7 @@ void init_triton_intel_passes_ttnvgpuir(py::module &&m) {
                      mlir::triton::createConvertNVGPUToLLVMPass);
 }
 
-void init_triton_intel(py::module &&m){
+void init_triton_intel(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_intel_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
@@ -66,21 +67,5 @@ void init_triton_intel(py::module &&m){
     mlir::registerGENXDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
-  });
-
-  // TODO: could be done in python if we had a generic interface to set metadata
-  m.def("set_nvvm_reflect_ftz", [](llvm::Module *mod) {
-    // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
-    // this will enable fast math path in libdevice
-    // for example, when enable nvvm-reflect-ftz, sqrt.approx.f32 will change to
-    // sqrt.approx.ftz.f32
-    using namespace llvm;
-    auto &ctx = mod->getContext();
-    Type *i32 = Type::getInt32Ty(ctx);
-    auto *mdFour = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 4));
-    auto *mdName = MDString::get(ctx, "nvvm-reflect-ftz");
-    auto *mdOne = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 1));
-    auto *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
-    mod->addModuleFlag(reflect);
   });
 }

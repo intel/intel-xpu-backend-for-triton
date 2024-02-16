@@ -172,7 +172,8 @@ public:
     auto typeConverter = getTypeConverter();
     SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
     int numBins = op.getType().getDimSize(0);
-    int numThreadsPerWarp = 32;
+    int numThreadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.
     numBins = std::max(numBins, numThreadsPerWarp);

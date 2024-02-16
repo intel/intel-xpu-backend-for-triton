@@ -105,7 +105,7 @@ run_core_tests() {
   fi
   cd ${CORE_TEST_DIR}
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 20 --verbose --device xpu language/ --ignore=language/test_line_info.py
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
@@ -116,7 +116,7 @@ run_core_tests() {
     echo "FAILED: return code $?" ; exit $?
   fi
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu operators/
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 12 --verbose --device xpu operators/
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi

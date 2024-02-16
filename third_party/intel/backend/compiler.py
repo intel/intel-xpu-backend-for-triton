@@ -30,22 +30,6 @@ def _path_to_binary(binary: str):
     raise RuntimeError(f"Cannot find {binary}")
 
 
-@functools.lru_cache()
-def ptx_get_version(cuda_version) -> int:
-    '''
-    Get the highest PTX version supported by the current CUDA driver.
-    '''
-    assert isinstance(cuda_version, str)
-    major, minor = map(int, cuda_version.split('.'))
-    if major == 12:
-        return 80 + minor
-    if major == 11:
-        return 70 + minor
-    if major == 10:
-        return 63 + minor
-    raise RuntimeError("Triton only support CUDA 10.0 or higher")
-
-
 @dataclass(frozen=True)
 class XPUOptions:
     num_warps: int = 4
@@ -53,7 +37,6 @@ class XPUOptions:
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
     threads_per_warp: int = 32
-    ptx_version: int = None
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     allow_fp8e4nv: bool = False
