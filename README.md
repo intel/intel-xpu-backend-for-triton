@@ -114,6 +114,20 @@ Or with a virtualenv:
 scripts/test-triton.sh --venv
 ```
 
+You may find it helpful to make a symlink to the builddir and tell your local
+git to ignore it.
+
+```
+$ ln -s python/build/cmake<...> build
+$ echo build >> .git/info/exclude
+```
+
+Then you can e.g. rebuild and run lit with the following command.
+
+```
+$ ninja -C build && ( cd build ; lit test )
+```
+
 # Changelog
 
 Version 2.0 is out! New features include:

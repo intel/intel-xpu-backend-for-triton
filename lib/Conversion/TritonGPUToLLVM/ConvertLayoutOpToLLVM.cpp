@@ -72,8 +72,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     if (isaDistributedLayout(srcLayout) &&
@@ -478,7 +478,7 @@ private:
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
     auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
+    auto dstTy = op.getType();
     auto srcLayout = srcTy.getEncoding();
     auto dstLayout = dstTy.getEncoding();
     auto srcShapePerCTA = getShapePerCTA(srcTy);
@@ -562,8 +562,8 @@ private:
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
@@ -697,7 +697,7 @@ private:
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
     auto dstShape = dstTy.getShape();
-    assert(dstShape.size() == 2 &&
+    assert(dstShape.size() <= 2 &&
            "Unexpected rank of ConvertLayout(shared->blocked)");
     auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
     auto dstLayout = dstTy.getEncoding();
@@ -828,7 +828,7 @@ private:
                            ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
+    auto dstTy = op.getType();
     auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
     auto srcLayout = srcTy.getEncoding();
     auto outOrd = dstTy.getEncoding().cast<SharedEncodingAttr>().getOrder();
@@ -862,36 +862,31 @@ private:
   lowerSharedToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                           ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto srcTensorTy = op.getSrc().getType();
-    auto dstTensorTy = op.getResult().getType();
-    auto dotOperandLayout =
-        dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-    auto sharedLayout = srcTensorTy.getEncoding().cast<SharedEncodingAttr>();
+    auto dstEnc = op.getType().getEncoding().cast<DotOperandEncodingAttr>();
+    auto sharedLayout =
+        op.getSrc().getType().getEncoding().cast<SharedEncodingAttr>();
 
     int K;
-    if (dotOperandLayout.getOpIdx() == 0) // $a
-      K = dstTensorTy.getShape()[sharedLayout.getOrder()[0]];
+    if (dstEnc.getOpIdx() == 0) // $a
+      K = op.getType().getShape()[sharedLayout.getOrder()[0]];
     else // $b
-      K = dstTensorTy.getShape()[sharedLayout.getOrder()[1]];
+      K = op.getType().getShape()[sharedLayout.getOrder()[1]];
     bool isOuter = K == 1;
 
     Value res;
-    if (auto mmaLayout = dotOperandLayout.getParent()
-                             .dyn_cast_or_null<NvidiaMmaEncodingAttr>()) {
-      res = lowerSharedToDotOperandMMA(op, adaptor, rewriter, mmaLayout,
-                                       dotOperandLayout, isOuter);
-    } else if (auto dpasLayout = dotOperandLayout.getParent()
-                                     .dyn_cast_or_null<DpasEncodingAttr>()) {
+    if (auto mmaLayout =
+            dstEnc.getParent().dyn_cast_or_null<NvidiaMmaEncodingAttr>()) {
+      res = lowerSharedToDotOperandMMA(op, adaptor, rewriter, mmaLayout, dstEnc,
+                                       isOuter);
+    } else if (auto dpasLayout =
+                   dstEnc.getParent().dyn_cast_or_null<DpasEncodingAttr>()) {
       res = lowerSharedToDotOperandDPAS(op, adaptor, rewriter, dpasLayout,
-                                        dotOperandLayout, isOuter);
+                                        dstEnc, isOuter);
     } else if (auto blockedLayout =
-                   dotOperandLayout.getParent()
-                       .dyn_cast_or_null<BlockedEncodingAttr>()) {
-      auto dotOpLayout =
-          dstTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+                   dstEnc.getParent().dyn_cast_or_null<BlockedEncodingAttr>()) {
       auto thread = getThreadId(rewriter, loc);
       res = SharedToDotOperandFMA::convertLayout(
-          dotOpLayout.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
+          dstEnc.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
           thread, loc, getTypeConverter(), rewriter);
     } else {
       assert(false && "Unsupported dot operand layout found");
@@ -907,7 +902,7 @@ private:
                        ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
+    auto dstTy = op.getType();
     if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
@@ -978,8 +973,8 @@ private:
                               OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
     if (triton::gpu::getTotalElemsPerThread(srcTy) ==
         triton::gpu::getTotalElemsPerThread(dstTy)) {
       rewriter.replaceOp(op, adaptor.getSrc());

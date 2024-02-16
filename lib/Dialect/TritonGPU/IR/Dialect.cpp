@@ -410,7 +410,7 @@ bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
   // If the new elements per thread is less than the old one, we will need to do
   // convert encoding that goes through shared memory anyway. So we consider it
   // as expensive.
-  auto tensorTy = cat.getResult().getType();
+  RankedTensorType tensorTy = cat.getType();
   auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
   auto shape = tensorTy.getShape();
   auto elemTy = tensorTy.getElementType();
@@ -2326,6 +2326,88 @@ struct TritonGPUInferLayoutInterface
 
     return success();
   }
+
+  LogicalResult
+  inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                      std::optional<Location> loc) const override {
+    auto enc = srcEnc.dyn_cast<BlockedEncodingAttr>();
+    if (!enc) {
+      return emitOptionalError(loc,
+                               "JoinOp can only operate on BlockedEncoding");
+    }
+
+    // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
+    // AxBxCx2.  The encoding is the same as the input, but with 2 elems per
+    // thread in the new dimension.  The new dimension is most-minor.
+    auto append = [](ArrayRef<unsigned> vals, int val) {
+      SmallVector<unsigned> ret(vals);
+      ret.push_back(val);
+      return ret;
+    };
+    auto appendMinorDim = [](ArrayRef<unsigned> order) {
+      SmallVector<unsigned> ret(order);
+      ret.insert(ret.begin(), ret.size());
+      return ret;
+    };
+    dstEnc = BlockedEncodingAttr::get(
+        enc.getContext(),                    //
+        append(enc.getSizePerThread(), 2),   //
+        append(enc.getThreadsPerWarp(), 1),  //
+        append(enc.getWarpsPerCTA(), 1),     //
+        appendMinorDim(enc.getOrder()),      //
+        CTALayoutAttr::get(enc.getContext(), //
+                           append(enc.getCTAsPerCGA(), 1),
+                           append(enc.getCTASplitNum(), 1),
+                           appendMinorDim(enc.getCTAOrder())));
+    return success();
+  }
+
+  LogicalResult
+  inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                       std::optional<Location> loc) const override {
+    auto enc = srcEnc.dyn_cast<BlockedEncodingAttr>();
+    if (!enc) {
+      return emitOptionalError(loc,
+                               "SplitOp can only operate on BlockedEncoding");
+    }
+
+    // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
+    // shape AxBxC.  The input must have 2 elements per thread in the last
+    // dimension, which must be most-minor.  The result encoding is the same as
+    // the input, but with the last dimension removed.
+    if (enc.getSizePerThread().back() != 2) {
+      return emitOptionalError(loc,
+                               "SplitOp requires 2 elements per thread in the "
+                               "last dimension of the input");
+    }
+    if (enc.getThreadsPerWarp().back() != 1 ||
+        enc.getWarpsPerCTA().back() != 1 || enc.getCTAsPerCGA().back() != 1) {
+      return emitOptionalError(
+          loc, "SplitOp requires threadsPerWarp, warpsPerCTA, "
+               "and CTAsPerCGA = 1 for the last dimension of the input");
+    }
+    if (enc.getOrder().front() != enc.getOrder().size() - 1) {
+      return emitOptionalError(
+          loc, "SplitOp requires the last dimension to be most-minor in order");
+    }
+    if (enc.getCTALayout().getCTAsPerCGA().back() != 1) {
+      return emitOptionalError(
+          loc,
+          "SplitOp requires the last dimension to be most-minor in CTAOrder");
+    }
+
+    dstEnc = BlockedEncodingAttr::get(
+        enc.getContext(), //
+        ArrayRef(enc.getSizePerThread()).drop_back(1),
+        ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
+        ArrayRef(enc.getWarpsPerCTA()).drop_back(1),
+        ArrayRef(enc.getOrder()).drop_front(1),
+        CTALayoutAttr::get(enc.getContext(), //
+                           ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
+                           ArrayRef(enc.getCTASplitNum()).drop_back(1),
+                           ArrayRef(enc.getCTAOrder()).drop_front(1)));
+    return success();
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -2343,14 +2425,13 @@ struct CanonicalizeConvertFromReshape
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
-    if (isExpensiveView(convert.getOperand().getType(), op.getType()))
+    if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
     if (!op.getAllowReorder() || op.getEfficientLayout().has_value())
       return failure();
 
-    rewriter.replaceOpWithNewOp<triton::ReshapeOp>(op, op.getResult().getType(),
-                                                   convert.getOperand(),
-                                                   op.getAllowReorder());
+    rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
+        op, op.getType(), convert.getSrc(), op.getAllowReorder());
     return mlir::success();
   }
 };
@@ -2363,11 +2444,11 @@ struct CanonicalizeConvertFromHistogram
   mlir::LogicalResult
   matchAndRewrite(triton::HistogramOp op,
                   PatternRewriter &rewriter) const override {
-    auto convert = op.getInput().getDefiningOp<ConvertLayoutOp>();
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
     rewriter.replaceOpWithNewOp<triton::HistogramOp>(
-        op, op->getResult(0).getType(), convert.getOperand());
+        op, op->getResult(0).getType(), convert.getSrc());
     return mlir::success();
   }
 };
@@ -2410,7 +2491,7 @@ struct CanonicalizeConvertFromConvert
     if (auto reshape = dyn_cast<ReshapeOp>(arg)) {
       if (!reshape.getAllowReorder() ||
           reshape.getEfficientLayout().has_value() ||
-          isExpensiveView(reshape.getOperand().getType(), op.getType()))
+          isExpensiveView(reshape.getSrc().getType(), op.getType()))
         return failure();
 
       // In TritonGPUToLLVM phase, ViewOp is converted to unpacking and packing
@@ -2434,7 +2515,7 @@ struct CanonicalizeConvertFromConvert
       // For histogram ops the input and output layouts are independent, so we
       // can always fold convert into the histogram op.
       rewriter.replaceOpWithNewOp<HistogramOp>(op, op->getResult(0).getType(),
-                                               histogram.getOperand());
+                                               histogram.getSrc());
       return success();
     }
 
@@ -2485,7 +2566,7 @@ struct CanonicalizeConvertFromConvert
       if (!hasSharedEncoding(op->getResult(0)))
         return failure();
 
-      auto origType = extract_slice.getSource().getType();
+      auto origType = extract_slice.getSrc().getType();
       auto newType =
           RankedTensorType::get(origType.getShape(), origType.getElementType(),
                                 op.getType().getEncoding());
@@ -2499,7 +2580,7 @@ struct CanonicalizeConvertFromConvert
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(extract_slice);
       auto newArg = rewriter.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), newType, extract_slice.getSource());
+          op->getLoc(), newType, extract_slice.getSrc());
       rewriter.replaceOpWithNewOp<triton::gpu::ExtractSliceOp>(
           op, resType, newArg.getResult(), extract_slice.getOffsets(),
           extract_slice.getSizes(), extract_slice.getStrides(),
@@ -2511,12 +2592,10 @@ struct CanonicalizeConvertFromConvert
     // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (auto cvt = dyn_cast<ConvertLayoutOp>(arg)) {
       if (cvt.getSrc().getDefiningOp() && !hasSharedEncoding(cvt.getSrc()) &&
-          hasSharedEncoding(op.getOperand()) &&
-          !hasSharedEncoding(op.getResult()))
+          hasSharedEncoding(op.getSrc()) && !hasSharedEncoding(op.getResult()))
         return failure();
 
-      if (hasSharedEncoding(op.getOperand()) &&
-          hasSharedEncoding(op.getResult()))
+      if (hasSharedEncoding(op.getSrc()) && hasSharedEncoding(op.getResult()))
         return failure();
 
       auto srcType = op.getSrc().getType();

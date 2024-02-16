@@ -411,6 +411,20 @@ struct TritonIntelGPUInferLayoutInterface
     // TODO
     return failure();
   }
+
+  LogicalResult
+  inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                      std::optional<Location> loc) const override {
+    // TODO
+    return failure();
+  }
+
+  LogicalResult
+  inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                       std::optional<Location> loc) const override {
+    // TODO
+    return failure();
+  }
 };
 
 //===----------------------------------------------------------------------===//
