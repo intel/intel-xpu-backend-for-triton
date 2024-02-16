@@ -328,7 +328,7 @@ jobs:
         run: |
           mkdir -p /cache/reports/e2e
           TMPDIR=$(mktemp -d -p /cache/reports/e2e XXXXXXXXX.tmp)
-          cp -r $GITHUB_WORKSPACE/inductor_log/* $TMPDIR
+          cp -rT $GITHUB_WORKSPACE/inductor_log $TMPDIR
           mv -T $TMPDIR /cache/reports/e2e/$TIMESTAMP-${{ join(matrix.*, '-') }} || rm -rf $TMPDIR
 
       - name: Upload test logs
