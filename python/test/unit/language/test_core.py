@@ -1507,9 +1507,6 @@ def test_join_with_mma(device):
 
 
 def test_split(device):
-    if is_xpu():
-        pytest.skip("FIXME: Incorrect result on XPU")
-
     @triton.jit
     def kernel(X, Z1, Z2, N: tl.constexpr):
         offs = tl.arange(0, N)

@@ -182,9 +182,10 @@ struct JoinOpConversion
   }
 };
 
-struct SplitOpConversion : public ConvertOpToLLVMPattern<ExperimentalSplitOp> {
-  using OpAdaptor = typename ExperimentalSplitOp::Adaptor;
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+struct SplitOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<ExperimentalSplitOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      ExperimentalSplitOp>::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(ExperimentalSplitOp op, OpAdaptor adaptor,
@@ -404,6 +405,7 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, target, benefit);
   patterns.add<CatOpConversion>(typeConverter, target, benefit);
   patterns.add<JoinOpConversion>(typeConverter, target, benefit);
+  patterns.add<SplitOpConversion>(typeConverter, target, benefit);
   patterns.add<TransOpConversion>(typeConverter, target, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, target, benefit);
 }
