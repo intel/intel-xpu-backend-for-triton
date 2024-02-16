@@ -4222,7 +4222,6 @@ def test_nested_while(device):
 def test_num_threads(device):
     if is_hip():
         pytest.skip("test_num_threads is not supported in HIP")
-    check_cuda_only(device)
 
     @triton.jit
     def kernel(Out):
