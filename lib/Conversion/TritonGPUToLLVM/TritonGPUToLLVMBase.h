@@ -70,9 +70,4 @@ protected:
   }
 };
 
-namespace mlir::triton {
-class ReduceOp;
-class ScanOp;
-} // namespace mlir::triton
-
 #endif
