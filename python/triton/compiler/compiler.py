@@ -20,12 +20,19 @@ import os
 class AttrsDescriptor:
     divisible_by_16: set = None
     equal_to_1: set = None
+    # FIXME: Remove `ids_of_folded_args` and `divisible_by_8` when IPEX is updated.
+    ids_of_folded_args: set = None
+    divisible_by_8: set = None
 
     def __post_init__(self):
         if self.divisible_by_16 is None:
             self.divisible_by_16 = set()
         if self.equal_to_1 is None:
             self.equal_to_1 = set()
+        if self.ids_of_folded_args is None:
+            self.ids_of_folded_args = set()
+        if self.divisible_by_8 is None:
+            self.divisible_by_8 = set()
 
     def to_dict(self):
         return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
