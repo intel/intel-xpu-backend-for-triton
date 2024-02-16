@@ -1135,12 +1135,17 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
             'test_atomic_rmw for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
         )
 
-    check_cuda_only(device)
+    if is_cuda():
+        capability = torch.cuda.get_device_capability()
+        if capability[0] < 7:
+            if dtype_x_str == 'float16':
+                pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
 
-    capability = torch.cuda.get_device_capability()
-    if capability[0] < 7:
+    if is_xpu():
+        capability = 0
         if dtype_x_str == 'float16':
-            pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
+            pytest.skip("FIXME: Atomic RMW for float16 not yet supported by IGC")
+
     n_programs = 5
 
     # triton kernel
@@ -1507,8 +1512,6 @@ def test_join_with_mma(device):
 
 
 def test_split(device):
-    if is_xpu():
-        pytest.skip("FIXME: Incorrect result on XPU")
 
     @triton.jit
     def kernel(X, Z1, Z2, N: tl.constexpr):
