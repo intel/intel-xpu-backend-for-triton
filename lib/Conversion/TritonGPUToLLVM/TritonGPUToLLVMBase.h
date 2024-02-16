@@ -263,60 +263,6 @@ public:
     return outVals;
   }
 
-  void storeDistributedToShared(Value src, Value llSrc,
-                                ArrayRef<Value> dstStrides,
-                                ArrayRef<SmallVector<Value>> srcIndices,
-                                Value dst, Value smemBase, Type elemTy,
-                                Location loc,
-                                ConversionPatternRewriter &rewriter) const {
-    auto srcTy = src.getType().cast<RankedTensorType>();
-    auto srcShape = srcTy.getShape();
-    assert(srcShape.size() == 2 &&
-           "Unexpected rank of storeDistributedToShared");
-    auto dstTy = dst.getType().cast<RankedTensorType>();
-    auto srcDistributedLayout = srcTy.getEncoding();
-    if (auto mmaLayout =
-            srcDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-      assert((!mmaLayout.isVolta()) &&
-             "ConvertLayout MMAv1->Shared is not supported yet");
-    }
-    auto dstSharedLayout =
-        dstTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
-    auto dstElemTy = dstTy.getElementType();
-    auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
-    auto outOrd = dstSharedLayout.getOrder();
-    unsigned inVec = inOrd == outOrd
-                         ? triton::gpu::getUniqueContigPerThread(
-                               srcDistributedLayout, srcShape)[inOrd[0]]
-                         : 1;
-    unsigned outVec = dstSharedLayout.getVec();
-    unsigned minVec = std::min(outVec, inVec);
-    unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
-    assert(numElems == srcIndices.size());
-    auto inVals = unpackLLElements(loc, llSrc, rewriter);
-    auto wordTy = vec_ty(elemTy, minVec);
-    Value word;
-
-    SmallVector<Value> srcStrides = {dstStrides[0], dstStrides[1]};
-    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
-    SharedMemoryObject smemObj(smemBase, elemTy, srcStrides, offsetVals);
-
-    DenseMap<unsigned, Value> sharedPtrs =
-        getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, dstElemTy,
-                              smemObj, rewriter, offsetVals, srcStrides);
-
-    for (unsigned i = 0; i < numElems; ++i) {
-      if (i % minVec == 0)
-        word = undef(wordTy);
-      word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
-      if (i % minVec == minVec - 1) {
-        Value smemAddr = sharedPtrs[i / minVec * minVec];
-        smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
-        store(word, smemAddr);
-      }
-    }
-  }
-
 private:
   void restoreInsertionPointIfSet(OpBuilder::InsertPoint *insertPt,
                                   ConversionPatternRewriter &rewriter) const {
