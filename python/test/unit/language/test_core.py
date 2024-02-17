@@ -2582,28 +2582,40 @@ def test_trans_4d(dtype_str, shape, perm, device):
      for col_b in [True, False]] + [(64, 64, 64, 4, False, False, 'chain-dot', False, 'bfloat16', 'float32')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, num_ctas, device):
-    check_cuda_only(device)
+    if is_cuda():
+        capability = torch.cuda.get_device_capability()
 
-    capability = torch.cuda.get_device_capability()
+        if capability[0] < 7:
+            pytest.skip("Only test tl.dot() on devices with sm >= 70")
+        if capability[0] < 8:
+            if capability[1] == 0 and in_dtype == 'int8':
+                pytest.skip("Only test int8 on devices with sm >= 75")
+            if allow_tf32:
+                pytest.skip("Only test tf32 on devices with sm >= 80")
+        if capability[0] == 7:
+            if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
+                pytest.skip("shared memory out of resource")
+            if out_dtype == 'float16':
+                # TODO: support out_dtype=float16 for tl.dot on V100
+                pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
 
-    if capability[0] < 7:
-        pytest.skip("Only test tl.dot() on devices with sm >= 70")
-    if capability[0] < 8:
-        if capability[1] == 0 and in_dtype == 'int8':
-            pytest.skip("Only test int8 on devices with sm >= 75")
-        if allow_tf32:
-            pytest.skip("Only test tf32 on devices with sm >= 80")
-    if capability[0] == 7:
+    if is_xpu():
+        capability = 0
+
         if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
-            pytest.skip("shared memory out of resource")
-        if out_dtype == 'float16':
-            # TODO: support out_dtype=float16 for tl.dot on V100
-            pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
+            pytest.skip("FIXME: shared memory out of resource - reevaluate with DPAS")
+        if (M, N, K, num_warps) in [(32, 128, 64, 2)]:
+            if out_dtype == 'int8' and ((col_a, col_b) not in [False, True]):
+                pytest.skip("FIXME: Incorrect results on XPU")
+            if out_dtype == 'float32' and in_dtype == 'float16' and col_b is True:
+                pytest.skip("FIXME: Incorrect results on XPU")
+        if (M, N, K, num_warps) in [(128, 128, 64, 2)]:
+            pytest.skip("FIXME: Fails to run on XPU")
+        if (M, N, K, num_warps) in [(128, 128, 64, 4)] and (in_dtype, out_dtype) not in ['float32', 'float32']:
+            pytest.skip("FIXME: Fails to run on XPU")
 
-    if (M, N, K, num_warps) in [(128, 256, 32, 8)]:
-        pytest.skip(f"test_dot{(M, N, K)} not supported on HIP: memory out of resource")
-
-    torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    if is_cuda():
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
     if num_ctas > 1 and in_dtype == 'int8':
         # FIXME: mma v2 with num_ctas > 1 does not work
@@ -4215,7 +4227,6 @@ def test_nested_while(device):
 def test_num_threads(device):
     if is_hip():
         pytest.skip("test_num_threads is not supported in HIP")
-    check_cuda_only(device)
 
     @triton.jit
     def kernel(Out):
