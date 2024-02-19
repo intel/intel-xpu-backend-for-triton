@@ -24,10 +24,9 @@ struct ReduceOpConversion
           triton::ReduceOp> {
 public:
   ReduceOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                     int computeCapability, Target target,
-                     PatternBenefit benefit)
-      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(
-            typeConverter, target, benefit),
+                     int computeCapability, PatternBenefit benefit)
+      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(typeConverter,
+                                                                  benefit),
         computeCapability(computeCapability) {}
 
   LogicalResult
@@ -45,7 +44,7 @@ public:
     reduceWithinThreads(helper, srcValues, accs, indices, rewriter);
 
     // Then reduce across threads within a warp.
-    reduceWithinWarps(helper, accs, rewriter, target);
+    reduceWithinWarps(helper, accs, rewriter);
 
     if (helper.isWarpSynchronous()) {
       // If all the values to be reduced are within the same warp there is
@@ -58,7 +57,7 @@ public:
     auto smemShape = helper.getScratchConfig();
 
     SmallVector<Value> smemBases =
-        getSmemBases(op, product<unsigned>(smemShape), rewriter, target);
+        getSmemBases(op, product<unsigned>(smemShape), rewriter);
 
     storeWarpReduceToSharedMemory(helper, accs, indices, smemBases, rewriter);
 
@@ -70,7 +69,7 @@ public:
     //
     // Each thread needs to process:
     //   elemsPerThread = sizeInterWarps * s1 * s2 .. Sn / numThreads
-    accumulatePartialReductions(helper, smemBases, rewriter, target);
+    accumulatePartialReductions(helper, smemBases, rewriter);
 
     // We could avoid this barrier in some of the layouts, however this is not
     // the general case.
@@ -209,51 +208,11 @@ private:
   // region and the accumulator values as source.
   void warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                   SmallVector<Value> &acc, triton::ReduceOp op,
-                  unsigned numLaneToReduce, unsigned interleave,
-                  Target target) const {
-    if (target != Target::GENX) {
-      if (auto kind = matchReduxKind(op)) {
-        // Based on benchmarking on A100 redux op gives a speed up only when
-        // doing a single reduction (not partitioned) and when the mask is
-        // static. Therefore we currently only enable it to reduce across all
-        // the lanes.
-        if (numLaneToReduce == 32) {
-          assert(acc.size() == 1);
-          Value mask = i32_val(0xFFFFFFFF);
-          // Even though we currently don't use redux for partitioned reduction
-          // the code below supports it in case we want to tweak the heuristic.
-          if (numLaneToReduce < 32) {
-            // For partitioned reduction we need to calculate the mask so that
-            // each group of numLaneToReduce threads has the correct mask.
-            unsigned bitmask = (1 << numLaneToReduce) - 1;
-            Value threadId = getThreadId(rewriter, loc);
-            Value laneId = urem(threadId, i32_val(32));
-            mask = shl(i32_val(bitmask),
-                       and_(laneId, i32_val(~(numLaneToReduce - 1))));
-          }
-          for (unsigned i = 0; i < acc.size(); ++i) {
-            unsigned bitwidth = acc[i].getType().cast<IntegerType>().getWidth();
-            if (bitwidth < 32) {
-              if (*kind == NVVM::ReduxKind::MIN ||
-                  *kind == NVVM::ReduxKind::MAX)
-                acc[i] = sext(i32_ty, acc[i]);
-              else
-                acc[i] = zext(i32_ty, acc[i]);
-            }
-            acc[i] = rewriter.create<NVVM::ReduxOp>(loc, acc[i].getType(),
-                                                    acc[0], *kind, mask);
-            if (bitwidth < 32)
-              acc[i] = trunc(int_ty(bitwidth), acc[i]);
-          }
-          return;
-        }
-      }
-    }
-
+                  unsigned numLaneToReduce, unsigned interleave) const {
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned i = 0; i < acc.size(); ++i) {
-        shfl[i] = shflSync(loc, rewriter, acc[i], N * interleave, target);
+        shfl[i] = shflSync(loc, rewriter, acc[i], N * interleave);
       }
       accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
     }
@@ -263,7 +222,7 @@ private:
   void
   reduceWithinWarps(ReduceOpHelper &helper,
                     std::map<SmallVector<unsigned>, SmallVector<Value>> &accs,
-                    ConversionPatternRewriter &rewriter, Target target) const {
+                    ConversionPatternRewriter &rewriter) const {
     triton::ReduceOp op = helper.getOperation();
     unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
     unsigned threadOffsetOnReductionAxis =
@@ -272,7 +231,7 @@ private:
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &acc = accs[key];
       warpReduce(rewriter, op.getLoc(), acc, op, sizeIntraWarps,
-                 threadOffsetOnReductionAxis, target);
+                 threadOffsetOnReductionAxis);
     }
   }
 
@@ -374,7 +333,7 @@ private:
         auto elemTy = getElementType(op, i);
         Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
                              smemBases[i], writeOffset);
-        storeShared(rewriter, loc, writePtr, acc[i], laneZero, target);
+        storeShared(rewriter, loc, writePtr, acc[i], laneZero);
       }
     }
   }
@@ -383,8 +342,7 @@ private:
   // store back to shared memory.
   void accumulatePartialReductions(ReduceOpHelper &helper,
                                    SmallVector<Value> &smemBases,
-                                   ConversionPatternRewriter &rewriter,
-                                   Target target) const {
+                                   ConversionPatternRewriter &rewriter) const {
     triton::ReduceOp op = helper.getOperation();
     auto srcLayout = helper.getSrcLayout();
     auto smemShape = helper.getScratchConfig();
@@ -410,11 +368,9 @@ private:
         auto elemTy = getElementType(op, i);
         Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
                             smemBases[i], readOffset);
-        acc[i] =
-            loadShared(rewriter, loc, readPtr, elemTy, threadIsNeeded, target);
+        acc[i] = loadShared(rewriter, loc, readPtr, elemTy, threadIsNeeded);
       }
-      warpReduce(rewriter, loc, acc, op, sizeInterWarps, 1 /* interleave */,
-                 target);
+      warpReduce(rewriter, loc, acc, op, sizeInterWarps, 1 /* interleave */);
       // only the first thread in each sizeInterWarps is writing
       Value writeOffset = readOffset;
       SmallVector<Value> writePtrs(op.getNumOperands());
@@ -430,7 +386,7 @@ private:
       Value pred = and_(threadIsNeeded, laneIdModSizeInterWarpsIsZero);
 
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        storeShared(rewriter, loc, writePtrs[i], acc[i], pred, target);
+        storeShared(rewriter, loc, writePtrs[i], acc[i], pred);
       }
 
       if (round != elemsPerThread - 1) {
@@ -487,7 +443,6 @@ private:
 
 void mlir::triton::populateReduceOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int computeCapability, Target target, PatternBenefit benefit) {
-  patterns.add<ReduceOpConversion>(typeConverter, computeCapability, target,
-                                   benefit);
+    int computeCapability, PatternBenefit benefit) {
+  patterns.add<ReduceOpConversion>(typeConverter, computeCapability, benefit);
 }

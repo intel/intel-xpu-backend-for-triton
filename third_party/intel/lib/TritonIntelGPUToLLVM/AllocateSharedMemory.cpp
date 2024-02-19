@@ -30,8 +30,7 @@ struct AllocateSharedMemory
     ModuleAllocation allocation(mod);
 
     mod.walk([&](FunctionOpInterface funcOp) {
-      if (target == Target::GENX && allocation.isRoot(funcOp) &&
-          allocation.getSharedMemorySize()) {
+      if (allocation.isRoot(funcOp) && allocation.getSharedMemorySize()) {
         LLVM::LLVMPointerType ptrTy =
             LLVM::LLVMPointerType::get(ctx, GENX::GENXMemorySpace::kWorkgroup);
         funcOp.insertArgument(funcOp.getNumArguments(), ptrTy, {},

@@ -109,9 +109,8 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
 
   explicit CatOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                           Target target, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<CatOp>(typeConverter, target, benefit) {
-  }
+                           PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
 
   LogicalResult
   matchAndRewrite(CatOp op, OpAdaptor adaptor,
@@ -144,9 +143,9 @@ struct JoinOpConversion
   using OpAdaptor = typename ExperimentalJoinOp::Adaptor;
 
   explicit JoinOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                            Target target, PatternBenefit benefit = 1)
+                            PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<ExperimentalJoinOp>(typeConverter,
-                                                            target, benefit) {}
+                                                            benefit) {}
 
   LogicalResult
   matchAndRewrite(ExperimentalJoinOp op, OpAdaptor adaptor,
@@ -229,10 +228,8 @@ struct SplitOpConversion
 struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
   using OpAdaptor = typename ReshapeOp::Adaptor;
   explicit ReshapeOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-
-                               Target target, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<ReshapeOp>(typeConverter, target,
-                                                   benefit) {}
+                               PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<ReshapeOp>(typeConverter, benefit) {}
 
   LogicalResult
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
@@ -257,9 +254,8 @@ struct ExpandDimsOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp> {
   using OpAdaptor = typename ExpandDimsOp::Adaptor;
   explicit ExpandDimsOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  Target target, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp>(typeConverter, target,
-                                                      benefit) {}
+                                  PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp>(typeConverter, benefit) {}
 
   LogicalResult
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
@@ -401,14 +397,14 @@ struct BroadcastOpConversion
 
 void mlir::triton::populateViewOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
-  patterns.add<ReshapeOpConversion>(typeConverter, target, benefit);
-  patterns.add<ExpandDimsOpConversion>(typeConverter, target, benefit);
-  patterns.add<SplatOpConversion>(typeConverter, target, benefit);
-  patterns.add<ArithConstantSplatOpConversion>(typeConverter, target, benefit);
-  patterns.add<CatOpConversion>(typeConverter, target, benefit);
-  patterns.add<JoinOpConversion>(typeConverter, target, benefit);
-  patterns.add<SplitOpConversion>(typeConverter, target, benefit);
-  patterns.add<TransOpConversion>(typeConverter, target, benefit);
-  patterns.add<BroadcastOpConversion>(typeConverter, target, benefit);
+    PatternBenefit benefit) {
+  patterns.add<ReshapeOpConversion>(typeConverter, benefit);
+  patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
+  patterns.add<SplatOpConversion>(typeConverter, benefit);
+  patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
+  patterns.add<CatOpConversion>(typeConverter, benefit);
+  patterns.add<JoinOpConversion>(typeConverter, benefit);
+  patterns.add<SplitOpConversion>(typeConverter, benefit);
+  patterns.add<TransOpConversion>(typeConverter, benefit);
+  patterns.add<BroadcastOpConversion>(typeConverter, benefit);
 }

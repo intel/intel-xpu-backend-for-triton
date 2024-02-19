@@ -147,8 +147,8 @@ namespace intel {
 class ConvertTritonGPUOpToLLVMPatternBase {
 public:
   explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, Target target)
-      : converter(&typeConverter), target(target) {}
+      TritonGPUToLLVMTypeConverter &typeConverter)
+      : converter(&typeConverter) {}
 
   TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
 
@@ -625,7 +625,6 @@ private:
 
 protected:
   intel::TritonGPUToLLVMTypeConverter *converter;
-  Target target;
 };
 
 template <typename SourceOp>
@@ -636,10 +635,10 @@ public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ConvertTritonGPUOpToLLVMPattern(
-      intel::TritonGPUToLLVMTypeConverter &typeConverter, Target target,
+      intel::TritonGPUToLLVMTypeConverter &typeConverter,
       PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        intel::ConvertTritonGPUOpToLLVMPatternBase(typeConverter, target) {}
+        intel::ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
 
 protected:
   intel::TritonGPUToLLVMTypeConverter *getTypeConverter() const {
@@ -675,8 +674,7 @@ public:
 
   // Helper to compute the smem bases in both reductions and scans
   SmallVector<Value> getSmemBases(SourceOp op, unsigned elems,
-                                  ConversionPatternRewriter &rewriter,
-                                  Target target) const {
+                                  ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     // indices will store the index of the op operands in descending order
     // of their bitwidths
@@ -690,7 +688,7 @@ public:
     // Assign base index to each operand in their order in indices
     std::map<unsigned, Value> indexToBase;
     indexToBase[indices[0]] =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
       indexToBase[indices[i]] = gep(
           ptr_ty(rewriter.getContext(), 3), getElementType(op, indices[i - 1]),

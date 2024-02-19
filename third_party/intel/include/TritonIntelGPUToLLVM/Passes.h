@@ -32,7 +32,7 @@ createAllocateSharedMemoryPass(const AllocateSharedMemoryOptions &options);
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonIntelGPUToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonIntelGPUToLLVMPass(int32_t computeCapability, Target target);
+createConvertTritonIntelGPUToLLVMPass(int32_t computeCapability);
 
 #define GEN_PASS_REGISTRATION
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"

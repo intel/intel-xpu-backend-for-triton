@@ -57,10 +57,8 @@ struct ReturnOpConversion
 // CallOpInterfaceLowering is adapted from
 // https://github.com/llvm/llvm-project/blob/fae656b2dd80246c3c6f01e9c77c49560368752c/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp#L485
 struct CallOpConversion : public ConvertOpToLLVMPattern<triton::CallOp> {
-  CallOpConversion(LLVMTypeConverter &converter, Target target,
-                   PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit),
-        target(target) {}
+  CallOpConversion(LLVMTypeConverter &converter, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::CallOp>(converter, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::CallOp callOp,
@@ -89,12 +87,12 @@ private:
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
     if (!caller->hasAttr("allocation.offset")) {
-      auto base = LLVM::getStackPointer(rewriter, caller, target);
+      auto base = LLVM::getStackPointer(rewriter, caller);
       promotedOperands.push_back(base);
       return promotedOperands;
     }
     promotedOperands.push_back(
-        LLVM::getSharedMemoryBase(callOp->getLoc(), rewriter, callOp, target));
+        LLVM::getSharedMemoryBase(callOp->getLoc(), rewriter, callOp));
     return promotedOperands;
   }
 
@@ -137,15 +135,13 @@ private:
     }
     return results;
   }
-
-  Target target;
 };
 
 } // namespace
 
 void mlir::triton::populateControlFlowOpToLLVMPattern(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
-  patterns.add<ReturnOpConversion>(typeConverter, target, benefit);
-  patterns.add<CallOpConversion>(typeConverter, target, benefit);
+    PatternBenefit benefit) {
+  patterns.add<ReturnOpConversion>(typeConverter, benefit);
+  patterns.add<CallOpConversion>(typeConverter, benefit);
 }

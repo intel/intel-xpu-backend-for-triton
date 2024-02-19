@@ -1,3 +1,6 @@
+#ifndef TRITONGPU_CONVERSION_TRITONINTELGPUTOLLVM_PASSES_H
+#define TRITONGPU_CONVERSION_TRITONINTELGPUTOLLVM_PASSES_H
+
 #include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -56,7 +59,7 @@ static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, Target target)
+  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
@@ -71,9 +74,8 @@ public:
 
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   triton::Target target, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps),
-        target(target) {}
+                   PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
 
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
@@ -165,12 +167,11 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
 private:
   int numWarps{0};
-  triton::Target target;
 };
 
 class TritonLLVMConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
+  explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<GENX::GENXDialect>();
@@ -193,8 +194,8 @@ struct ConvertTritonIntelGPUToLLVM
                     NVVM::NVVMDialect, GENX::GENXDialect>();
   }
 
-  ConvertTritonIntelGPUToLLVM(int32_t computeCapability, Target target)
-      : ConvertTritonIntelGPUToLLVMBase({computeCapability, target}) {}
+  ConvertTritonIntelGPUToLLVM(int32_t computeCapability)
+      : ConvertTritonIntelGPUToLLVMBase({computeCapability}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -203,7 +204,7 @@ struct ConvertTritonIntelGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
-    TritonLLVMConversionTarget convTarget(*context, target);
+    TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -220,9 +221,9 @@ struct ConvertTritonIntelGPUToLLVM
     {
       mlir::LowerToLLVMOptions option(context);
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, target,
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                          /*benefit=*/1);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
@@ -234,36 +235,32 @@ struct ConvertTritonIntelGPUToLLVM
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
-    initSharedMemory(typeConverter, target);
+    initSharedMemory(typeConverter);
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
     int benefit = 10;
-    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, target,
-                                          benefit);
-    populateDotOpToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
-                                        axisInfoAnalysis, computeCapability,
-                                        target, benefit);
+    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populateElementwiseOpToLLVMPatterns(
+        typeConverter, patterns, axisInfoAnalysis, computeCapability, benefit);
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
-                                      target, benefit);
+                                      benefit);
     populateReduceOpToLLVMPatterns(typeConverter, patterns, computeCapability,
-                                   target, benefit);
-    populateScanOpToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populateViewOpToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populateBarrierOpToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, target,
-                                       benefit);
-    populateClusterOpsToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populateHistogramOpToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populatePrintOpToLLVMPattern(typeConverter, patterns, target, benefit);
-    populateAssertOpToLLVMPattern(typeConverter, patterns, target, benefit);
-    populateMemoryOpToLLVMPattern(typeConverter, patterns, target, benefit);
-    populateControlFlowOpToLLVMPattern(typeConverter, patterns, target,
-                                       benefit);
-    populateMakeRangeOpToLLVMPattern(typeConverter, patterns, target, benefit);
-    populateSPMDOpToLLVMPattern(typeConverter, patterns, target, benefit);
+                                   benefit);
+    populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populateViewOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
+    populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
+    populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
+    populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
+    populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
+    populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
+    populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
+    populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
@@ -286,7 +283,7 @@ struct ConvertTritonIntelGPUToLLVM
   }
 
 private:
-  void initSharedMemory(LLVMTypeConverter &typeConverter, Target target) {}
+  void initSharedMemory(LLVMTypeConverter &typeConverter) {}
 
   // pass ws related named attrs.
   static void addWSNamedAttrs(Operation *op,
@@ -298,13 +295,6 @@ private:
   }
 
   void decomposeInsertSliceAsyncOp(ModuleOp mod) const {
-
-    // The function has been deprecated upstream but is required to work on
-    // genx. The current rewrite pattern for InsertSliceAsync generates PTX and
-    // there is no matching instruciton on genx at the moment.
-    // FIXME: remove this function once a suitable replacement is available.
-    if (target != triton::Target::GENX)
-      return;
 
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     // TODO(Keren): This is a hacky knob that may cause performance regression
@@ -427,10 +417,11 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
   return std::make_unique<ConvertTritonIntelGPUToLLVM>();
 }
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target) {
-  return std::make_unique<ConvertTritonIntelGPUToLLVM>(computeCapability,
-                                                       target);
+createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
+  return std::make_unique<ConvertTritonIntelGPUToLLVM>(computeCapability);
 }
 
 } // namespace triton
 } // namespace mlir
+
+#endif

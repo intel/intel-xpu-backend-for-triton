@@ -22,8 +22,7 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
   m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability) {
-    pm.addPass(
-        createConvertTritonIntelGPUToLLVMPass(capability, mlir::triton::GENX));
+    pm.addPass(mlir::triton::createConvertTritonIntelGPUToLLVMPass(capability));
   });
 }
 
