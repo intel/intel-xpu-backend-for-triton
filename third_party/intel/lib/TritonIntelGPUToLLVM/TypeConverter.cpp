@@ -7,6 +7,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::intel::TritonGPUToLLVMTypeConverter;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;

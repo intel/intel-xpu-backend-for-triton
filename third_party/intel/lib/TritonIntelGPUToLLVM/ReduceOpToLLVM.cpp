@@ -14,9 +14,14 @@ using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
+using ::intel::ConvertTritonGPUOpToLLVMPattern;
+using ::intel::ConvertTritonGPUOpToLLVMPatternBase;
+using ::intel::TritonGPUToLLVMTypeConverter;
+
 namespace {
 struct ReduceOpConversion
-    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
+    : public ::intel::ConvertTritonGPUReduceScanToLLVMPattern<
+          triton::ReduceOp> {
 public:
   ReduceOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
                      int computeCapability, Target target,

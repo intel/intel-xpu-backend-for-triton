@@ -5,6 +5,9 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::intel::ConvertTritonGPUOpToLLVMPattern;
+using ::intel::ConvertTritonGPUOpToLLVMPatternBase;
+using ::intel::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;

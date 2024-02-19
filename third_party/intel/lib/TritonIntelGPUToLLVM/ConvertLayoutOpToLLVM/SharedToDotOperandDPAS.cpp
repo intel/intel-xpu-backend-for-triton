@@ -5,6 +5,7 @@
 #include "llvm/Support/ErrorHandling.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;
+using ::intel::TritonGPUToLLVMTypeConverter;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 

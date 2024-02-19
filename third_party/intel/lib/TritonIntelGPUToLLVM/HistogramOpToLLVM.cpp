@@ -6,6 +6,10 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::intel::ConvertTritonGPUOpToLLVMPattern;
+using ::intel::ConvertTritonGPUOpToLLVMPatternBase;
+using ::intel::TritonGPUToLLVMTypeConverter;
+
 static int log2Int(int64_t num) { return (num > 1) ? 1 + log2Int(num / 2) : 0; }
 
 static Value generateVoteBallot(Location loc, Value bit, int threadMask,

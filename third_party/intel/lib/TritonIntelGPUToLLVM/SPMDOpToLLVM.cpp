@@ -6,6 +6,10 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::intel::ConvertTritonGPUOpToLLVMPattern;
+using ::intel::ConvertTritonGPUOpToLLVMPatternBase;
+using ::intel::TritonGPUToLLVMTypeConverter;
+
 struct GetProgramIdOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::GetProgramIdOp> {
   using ConvertTritonGPUOpToLLVMPattern<

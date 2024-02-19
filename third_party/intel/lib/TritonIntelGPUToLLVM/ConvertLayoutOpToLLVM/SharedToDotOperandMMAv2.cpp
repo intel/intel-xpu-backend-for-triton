@@ -4,6 +4,7 @@
 using namespace mlir;
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
+using ::intel::TritonGPUToLLVMTypeConverter;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;

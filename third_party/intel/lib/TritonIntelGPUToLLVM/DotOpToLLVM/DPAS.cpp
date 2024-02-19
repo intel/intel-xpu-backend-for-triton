@@ -12,6 +12,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
+using ::intel::TritonGPUToLLVMTypeConverter;
 using mlir::triton::gpu::DotOperandEncodingAttr;
 using mlir::triton::gpu::intel::DpasEncodingAttr;
 

@@ -94,8 +94,6 @@ using namespace mlir::triton;
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
-#define addrspacecast(...)                                                     \
-  rewriter.create<LLVM::AddrSpaceCastOp>(loc, __VA_ARGS__)
 
 // Types
 #define int_ty(width) rewriter.getIntegerType(width)
@@ -401,13 +399,13 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                 ArrayRef<Value> multiDim, ArrayRef<unsigned> shape);
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i, triton::Target target);
+               int i);
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i, triton::Target target);
+                 int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i, triton::Target target);
+                  int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i, triton::Target target);
+                  Value i);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content,
                         unsigned addressSpace);
@@ -417,15 +415,8 @@ static bool isKernel(FunctionOpInterface funcOp) {
 }
 
 static Value getStackPointer(PatternRewriter &rewriter,
-                             FunctionOpInterface funcOp, Target target) {
+                             FunctionOpInterface funcOp) {
   auto mod = funcOp->getParentOfType<ModuleOp>();
-  if (target == triton::Target::GENX) {
-    LLVM::LLVMPointerType ptrTy =
-        ptr_ty(rewriter.getContext(), GENX::GENXMemorySpace::kWorkgroup);
-    if (mod->getAttrOfType<IntegerAttr>("triton_gpu.shared").getInt() == 0)
-      return rewriter.create<LLVM::UndefOp>(funcOp.getLoc(), ptrTy);
-    return funcOp.getArgument(funcOp.getNumArguments() - 1);
-  }
   LLVM::GlobalOp globalBase = nullptr;
   mod.walk([&](LLVM::GlobalOp op) {
     if (op.getSymName() == "global_smem")
@@ -440,7 +431,7 @@ static Value getStackPointer(PatternRewriter &rewriter,
 
 static Value getSharedMemoryBase(Location loc,
                                  ConversionPatternRewriter &rewriter,
-                                 Operation *op, Target target) {
+                                 Operation *op) {
   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
   FunctionOpInterface func =
       op->template getParentOfType<FunctionOpInterface>();
@@ -450,8 +441,7 @@ static Value getSharedMemoryBase(Location loc,
                       .getValue()
                       .getZExtValue();
   Value offVal = i32_val(offset);
-  Value base =
-      gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func, target), offVal);
+  Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
 }
 

@@ -1,3 +1,4 @@
+#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -17,7 +18,6 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -30,8 +30,8 @@
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+#define GEN_PASS_DECL_CONVERTTRITONINTELGPUTOLLVM
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
@@ -137,34 +137,18 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     auto ctx = funcOp->getContext();
 
-    switch (target) {
-    case Target::NVVM:
-    case Target::ROCDL:
-      if (LLVM::isKernel(funcOp)) {
-        // Set an attribute to indicate this function is a kernel entry.
-        newFuncOp->setAttr("nvvm.kernel",
-                           rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-      }
-      // Set an attribute for maxntidx, it could be used in latter LLVM codegen
-      // for `nvvm.annotation` metadata.
-      newFuncOp->setAttr("nvvm.maxntid",
-                         rewriter.getDenseI32ArrayAttr(32 * numWarps));
-      break;
-    case Target::GENX:
-      NamedAttrList attrs;
-      auto mod = funcOp->getParentOfType<ModuleOp>();
-      int threadsPerWarp =
-          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-      if (LLVM::isKernel(funcOp))
-        attrs.append(GENX::GENXDialect::getKernelFuncAttrName(),
-                     rewriter.getI32IntegerAttr(1));
-      attrs.append(GENX::GENXDialect::getMaxWorkGroupSizeAttrName(),
-                   rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
-      attrs.append(GENX::GENXDialect::getReqdSubGroupSizeAttrName(),
-                   rewriter.getI32ArrayAttr(threadsPerWarp));
-      newFuncOp->setDialectAttrs(attrs);
-      break;
-    }
+    NamedAttrList attrs;
+    auto mod = funcOp->getParentOfType<ModuleOp>();
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    if (LLVM::isKernel(funcOp))
+      attrs.append(GENX::GENXDialect::getKernelFuncAttrName(),
+                   rewriter.getI32IntegerAttr(1));
+    attrs.append(GENX::GENXDialect::getMaxWorkGroupSizeAttrName(),
+                 rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
+    attrs.append(GENX::GENXDialect::getReqdSubGroupSizeAttrName(),
+                 rewriter.getI32ArrayAttr(threadsPerWarp));
+    newFuncOp->setDialectAttrs(attrs);
+
     if (!LLVM::isKernel(funcOp)) {
       // The noinline attribute will be used by the LLVM codegen to prevent
       // inlining.
@@ -189,15 +173,7 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    switch (target) {
-    case Target::NVVM:
-      addLegalDialect<NVVM::NVVMDialect>();
-      addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
-      break;
-    case Target::GENX:
-      addLegalDialect<GENX::GENXDialect>();
-      break;
-    }
+    addLegalDialect<GENX::GENXDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
@@ -206,17 +182,19 @@ public:
   }
 };
 
-struct ConvertTritonGPUToLLVM
-    : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
-  using ConvertTritonGPUToLLVMBase::ConvertTritonGPUToLLVMBase;
+using namespace intel;
+struct ConvertTritonIntelGPUToLLVM
+    : public triton::impl::ConvertTritonIntelGPUToLLVMBase<
+          ConvertTritonIntelGPUToLLVM> {
+  using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
                     NVVM::NVVMDialect, GENX::GENXDialect>();
   }
 
-  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target)
-      : ConvertTritonGPUToLLVMBase({computeCapability, target}) {}
+  ConvertTritonIntelGPUToLLVM(int32_t computeCapability, Target target)
+      : ConvertTritonIntelGPUToLLVMBase({computeCapability, target}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -291,14 +269,7 @@ struct ConvertTritonGPUToLLVM
     // to help convert scalar expression to LLVM.
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    switch (target) {
-    case Target::NVVM:
-      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-      break;
-    case Target::GENX:
-      mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
-      break;
-    }
+    mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
@@ -315,31 +286,7 @@ struct ConvertTritonGPUToLLVM
   }
 
 private:
-  void initSharedMemory(LLVMTypeConverter &typeConverter, Target target) {
-    ModuleOp mod = getOperation();
-    OpBuilder b(mod.getBodyRegion());
-    auto ctx = mod.getContext();
-    auto loc = mod.getLoc();
-    auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-    switch (target) {
-    case Target::NVVM:
-    case Target::ROCDL: {
-      // Set array size 0 and external linkage indicates that we use dynamic
-      // shared allocation to allow a larger shared memory size for each kernel.
-      //
-      // Ask for 16B alignment on global_smem because that's the largest we
-      // should ever need (4xi32).
-      auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-      auto global = b.create<LLVM::GlobalOp>(
-          loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
-          "global_smem", /*value=*/Attribute(), /*alignment=*/16,
-          // Add ROCm support.
-          static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
-    } break;
-    case Target::GENX: {
-    } break;
-    }
-  }
+  void initSharedMemory(LLVMTypeConverter &typeConverter, Target target) {}
 
   // pass ws related named attrs.
   static void addWSNamedAttrs(Operation *op,
@@ -477,11 +424,12 @@ namespace mlir {
 namespace triton {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
-  return std::make_unique<ConvertTritonGPUToLLVM>();
+  return std::make_unique<ConvertTritonIntelGPUToLLVM>();
 }
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target);
+  return std::make_unique<ConvertTritonIntelGPUToLLVM>(computeCapability,
+                                                       target);
 }
 
 } // namespace triton

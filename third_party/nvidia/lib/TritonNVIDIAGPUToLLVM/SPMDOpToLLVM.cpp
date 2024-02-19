@@ -30,17 +30,6 @@ struct GetNumProgramsOpConversion
   LogicalResult
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (target == triton::Target::GENX) {
-      Location loc = op->getLoc();
-      assert(op.getAxis() < 3);
-
-      Value blockId =
-          rewriter.create<::mlir::gpu::GridDimOp>(loc, dims[op.getAxis()]);
-      rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, i32_ty, blockId);
-
-      return success();
-    }
-
     // It is not easy to get the compute capability here, so we use numCTAs to
     // decide the semantic of GetNumProgramsOp. If numCTAs = 1, then
     // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted to

@@ -1,6 +1,10 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 
+using ::intel::ConvertTritonGPUOpToLLVMPattern;
+using ::intel::ConvertTritonGPUOpToLLVMPatternBase;
+using ::intel::TritonGPUToLLVMTypeConverter;
+
 static SmallVector<Value> identity_func(Location loc,
                                         ConversionPatternRewriter &rewriter,
                                         const SmallVector<Value> &v) {

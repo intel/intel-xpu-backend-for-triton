@@ -218,14 +218,14 @@ struct PTXInstrCommon {
   using Operand = PTXBuilder::Operand;
 
   // clang-format off
-  PTXInstrExecution& operator()() { return call({}); }
-  PTXInstrExecution& operator()(Operand* a) { return call({a}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b) { return call({a, b}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c) { return call({a, b, c}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d) { return call({a, b, c, d}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d, Operand * e) { return call({a, b, c, d, e}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d, Operand * e, Operand* f) { return call({a, b, c, d, e, f}); }
-  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d, Operand * e, Operand* f, Operand* g) { return call({a, b, c, d, e, f, g}); }
+  PTXInstrExecution& operator()() { return this->call({}); }
+  PTXInstrExecution& operator()(Operand* a) { return this->call({a}); }
+  PTXInstrExecution& operator()(Operand* a, Operand* b) { return this->call({a, b}); }
+  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c) { return this->call({a, b, c}); }
+  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d) { return this->call({a, b, c, d}); }
+  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d, Operand * e) { return this->call({a, b, c, d, e}); }
+  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d, Operand * e, Operand* f) { return this->call({a, b, c, d, e, f}); }
+  PTXInstrExecution& operator()(Operand* a, Operand* b, Operand* c, Operand* d, Operand * e, Operand* f, Operand* g) { return this->call({a, b, c, d, e, f, g}); }
   // clang-format on
 
   // Set operands of this instruction.

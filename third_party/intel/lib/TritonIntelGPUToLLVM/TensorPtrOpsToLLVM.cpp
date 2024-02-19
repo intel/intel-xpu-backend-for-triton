@@ -25,6 +25,10 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::intel::ConvertTritonGPUOpToLLVMPattern;
+using ::intel::ConvertTritonGPUOpToLLVMPatternBase;
+using ::intel::TritonGPUToLLVMTypeConverter;
+
 namespace {
 struct MakeTensorPtrOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::MakeTensorPtrOp> {

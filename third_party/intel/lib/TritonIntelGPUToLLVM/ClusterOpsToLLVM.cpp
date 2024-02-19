@@ -24,6 +24,9 @@
 #include "PatternTritonGPUOpToLLVM.h"
 using namespace mlir;
 using namespace mlir::triton;
+using ::intel::ConvertTritonGPUOpToLLVMPattern;
+using ::intel::ConvertTritonGPUOpToLLVMPatternBase;
+using ::intel::TritonGPUToLLVMTypeConverter;
 
 namespace {
 struct ClusterArriveOpConversion : public ConvertTritonGPUOpToLLVMPattern<

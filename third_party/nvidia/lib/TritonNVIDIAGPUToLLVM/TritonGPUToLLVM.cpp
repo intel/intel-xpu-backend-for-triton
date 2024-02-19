@@ -25,8 +25,8 @@
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "../lib/Conversion/TritonGPUToLLVM/TypeConverter.h"
-#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 
 namespace mlir {
 namespace triton {
@@ -137,34 +137,16 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     auto ctx = funcOp->getContext();
 
-    switch (target) {
-    case Target::NVVM:
-    case Target::ROCDL:
-      if (LLVM::isKernel(funcOp)) {
-        // Set an attribute to indicate this function is a kernel entry.
-        newFuncOp->setAttr("nvvm.kernel",
-                           rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-      }
-      // Set an attribute for maxntidx, it could be used in latter LLVM codegen
-      // for `nvvm.annotation` metadata.
-      newFuncOp->setAttr("nvvm.maxntid",
-                         rewriter.getDenseI32ArrayAttr(32 * numWarps));
-      break;
-    case Target::GENX:
-      NamedAttrList attrs;
-      auto mod = funcOp->getParentOfType<ModuleOp>();
-      int threadsPerWarp =
-          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-      if (LLVM::isKernel(funcOp))
-        attrs.append(GENX::GENXDialect::getKernelFuncAttrName(),
-                     rewriter.getI32IntegerAttr(1));
-      attrs.append(GENX::GENXDialect::getMaxWorkGroupSizeAttrName(),
-                   rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
-      attrs.append(GENX::GENXDialect::getReqdSubGroupSizeAttrName(),
-                   rewriter.getI32ArrayAttr(threadsPerWarp));
-      newFuncOp->setDialectAttrs(attrs);
-      break;
+    if (LLVM::isKernel(funcOp)) {
+      // Set an attribute to indicate this function is a kernel entry.
+      newFuncOp->setAttr("nvvm.kernel",
+                         rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
     }
+    // Set an attribute for maxntidx, it could be used in latter LLVM codegen
+    // for `nvvm.annotation` metadata.
+    newFuncOp->setAttr("nvvm.maxntid",
+                       rewriter.getDenseI32ArrayAttr(32 * numWarps));
+    break;
     if (!LLVM::isKernel(funcOp)) {
       // The noinline attribute will be used by the LLVM codegen to prevent
       // inlining.
@@ -189,15 +171,8 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    switch (target) {
-    case Target::NVVM:
-      addLegalDialect<NVVM::NVVMDialect>();
-      addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
-      break;
-    case Target::GENX:
-      addLegalDialect<GENX::GENXDialect>();
-      break;
-    }
+    addLegalDialect<NVVM::NVVMDialect>();
+    addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
@@ -291,14 +266,7 @@ struct ConvertTritonGPUToLLVM
     // to help convert scalar expression to LLVM.
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    switch (target) {
-    case Target::NVVM:
-      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-      break;
-    case Target::GENX:
-      mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
-      break;
-    }
+    mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))

@@ -8,10 +8,10 @@
 
 #include "TypeConverter.h"
 //
+#include "TritonIntelGPUToLLVM/Passes.h"
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -143,6 +143,7 @@ protected:
   }
 };
 
+namespace intel {
 class ConvertTritonGPUOpToLLVMPatternBase {
 public:
   explicit ConvertTritonGPUOpToLLVMPatternBase(
@@ -161,17 +162,8 @@ public:
 
   Value getClusterCTAId(ConversionPatternRewriter &rewriter,
                         Location loc) const {
-    switch (target) {
-    case triton::Target::NVVM:
-      return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(
-          loc, rewriter.getI32Type());
-    case triton::Target::ROCDL:
-    case triton::Target::GENX:
-      // Clusters of thread blocks aren't supported.
-      return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    default:
-      llvm_unreachable("Unexpected target");
-    }
+    // Clusters of thread blocks aren't supported.
+    return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   }
 
   // -----------------------------------------------------------------------
@@ -632,28 +624,29 @@ private:
   }
 
 protected:
-  TritonGPUToLLVMTypeConverter *converter;
+  intel::TritonGPUToLLVMTypeConverter *converter;
   Target target;
 };
 
 template <typename SourceOp>
 class ConvertTritonGPUOpToLLVMPattern
     : public ConvertOpToLLVMPattern<SourceOp>,
-      public ConvertTritonGPUOpToLLVMPatternBase {
+      public intel::ConvertTritonGPUOpToLLVMPatternBase {
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonGPUToLLVMTypeConverter &typeConverter, Target target,
+      intel::TritonGPUToLLVMTypeConverter &typeConverter, Target target,
       PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, target) {}
+        intel::ConvertTritonGPUOpToLLVMPatternBase(typeConverter, target) {}
 
 protected:
-  TritonGPUToLLVMTypeConverter *getTypeConverter() const {
+  intel::TritonGPUToLLVMTypeConverter *getTypeConverter() const {
     LLVMTypeConverter *ret =
-        ((ConvertTritonGPUOpToLLVMPatternBase *)this)->getTypeConverter();
-    return (TritonGPUToLLVMTypeConverter *)ret;
+        ((intel::ConvertTritonGPUOpToLLVMPatternBase *)this)
+            ->getTypeConverter();
+    return (intel::TritonGPUToLLVMTypeConverter *)ret;
   }
 };
 
@@ -670,7 +663,7 @@ public:
   static_assert(std::is_same_v<SourceOp, ReduceOp> ||
                 std::is_same_v<SourceOp, ScanOp>);
 
-  using ConvertTritonGPUOpToLLVMPatternBase::getTypeConverter;
+  using intel::ConvertTritonGPUOpToLLVMPatternBase::getTypeConverter;
   using ConvertTritonGPUOpToLLVMPattern<
       SourceOp>::ConvertTritonGPUOpToLLVMPattern;
 
@@ -711,5 +704,5 @@ public:
     return smemBases;
   }
 };
-
+} // namespace intel
 #endif

@@ -1,14 +1,14 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 
+#include "TritonIntelGPUToLLVM/PTXAsmFormat.h"
+#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -1402,24 +1402,12 @@ static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
   assert(axis < 3);
   assert(moduleOp);
 
-  if (target == triton::Target::GENX) {
-    constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                             mlir::gpu::Dimension::y,
-                                             mlir::gpu::Dimension::z};
+  constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                           mlir::gpu::Dimension::y,
+                                           mlir::gpu::Dimension::z};
 
-    Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
-    return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
-  }
-
-  // It is not easy to get the compute capability here, so we use numCTAs to
-  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // "%clusterid".
-  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
-  std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
-  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  return LLVM::getSRegValue(rewriter, loc, sreg);
+  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
 } // namespace mlir

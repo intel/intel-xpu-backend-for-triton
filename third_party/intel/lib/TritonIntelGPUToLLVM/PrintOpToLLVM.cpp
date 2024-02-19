@@ -6,6 +6,10 @@ namespace {
 using namespace mlir;
 using namespace mlir::triton;
 
+using ::intel::ConvertTritonGPUOpToLLVMPattern;
+using ::intel::ConvertTritonGPUOpToLLVMPatternBase;
+using ::intel::TritonGPUToLLVMTypeConverter;
+
 // The input print op contains:
 //  - a "prefix" (string) specified by the user, and
 //  - one or more "operands" (tensors).

@@ -1,10 +1,15 @@
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
+#include "TritonIntelGPUToLLVM/PTXAsmFormat.h"
+#include "TritonIntelGPUToLLVM/AsmFormat.h"
+#include "TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "llvm/Support/raw_ostream.h"
 // TODO(Superjomn): unify to llvm::raw_string_ostream
 #include <sstream>
+
+// todo: remove
+
+using ::intel::TritonGPUToLLVMTypeConverter;
 
 namespace mlir {
 namespace triton {

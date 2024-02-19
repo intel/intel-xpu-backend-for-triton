@@ -33,7 +33,7 @@ add_triton_library(TritonIntelGPUToLLVM
     AllocateSharedMemory.cpp
 
     DEPENDS
-    TritonGPUConversionPassIncGen
+    TritonIntelGPUConversionPassIncGen
 
     LINK_LIBS PUBLIC
     MLIRIR
