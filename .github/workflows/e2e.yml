@@ -66,17 +66,20 @@ jobs:
       - name: Set matrix
         id: set-matrix
         run: |
-          suite="${{ inputs.suite }}"
-          mode="${{ inputs.mode }}"
-          dtype="${{ inputs.dtype }}"
-          if [[ -z "$suite" || "$suite" == "all" ]]; then
+          if [[ -z "${{ inputs.suite }}" || "${{ inputs.suite }}" == "all" ]]; then
             suite='["huggingface", "timm_models", "torchbench"]'
+          else
+            suite='["${{ inputs.suite }}"]'
           fi
-          if [[ -z "$mode" || "$mode" == "all" ]]; then
+          if [[ -z "${{ inputs.mode }}" || "${{ inputs.mode }}" == "all" ]]; then
             mode='["inference", "training"]'
+          else
+            mode='["${{ inputs.mode }}"]'
           fi
-          if [[ -z "$dtype" || "$dtype" == "all" ]]; then
+          if [[ -z "${{ inputs.dtype }}" || "${{ inputs.dtype }}" == "all" ]]; then
             dtype='["amp_bf16", "amp_fp16", "float32"]'
+          else
+            dtype='["${{ inputs.dtype }}"]'
           fi
           echo "suite=$suite" >> $GITHUB_OUTPUT
           echo "mode=$mode" >> $GITHUB_OUTPUT
