@@ -2,6 +2,33 @@ name: E2E
 
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Test suite
+        type: choice
+        options:
+          - all
+          - huggingface
+          - timm_models
+          - torchbench
+        default: all
+      mode:
+        description: Inference/Training
+        type: choice
+        options:
+          - all
+          - inference
+          - training
+        default: all
+      dtype:
+        description: Data type
+        type: choice
+        options:
+          - all
+          - amp_bf16
+          - amp_fp16
+          - float32
+        default: all
   schedule:
     - cron: "5 1 * * *"
 
@@ -24,25 +51,49 @@ env:
   BENCHMARK_BRANCH: main
 
 jobs:
+  matrix:
+    name: Matrix
+    runs-on:
+      - glados
+      - spr
+      - cpu
+    outputs:
+      suite: ${{ steps.set-matrix.outputs.suite }}
+      mode: ${{ steps.set-matrix.outputs.mode }}
+      dtype: ${{ steps.set-matrix.outputs.dtype }}
+    timeout-minutes: 10
+    steps:
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          suite="${{ inputs.suite }}"
+          mode="${{ inputs.mode }}"
+          dtype="${{ inputs.dtype }}"
+          if [[ -z "$suite" || "$suite" == "all" ]]; then
+            suite='["huggingface", "timm_models", "torchbench"]'
+          fi
+          if [[ -z "$mode" || "$mode" == "all" ]]; then
+            mode='["inference", "training"]'
+          fi
+          if [[ -z "$dtype" || "$dtype" == "all" ]]; then
+            dtype='["amp_bf16", "amp_fp16", "float32"]'
+          fi
+          echo "suite=$suite" >> $GITHUB_OUTPUT
+          echo "mode=$mode" >> $GITHUB_OUTPUT
+          echo "dtype=$dtype" >> $GITHUB_OUTPUT
+
   build:
     name: Test
+    needs: matrix
     runs-on:
       - glados
       - spr
       - runner-0.0.6
     strategy:
       matrix:
-        suite:
-          - huggingface
-          - timm_models
-          - torchbench
-        mode:
-          - inference
-          - training
-        dtype:
-          - amp_bf16
-          - amp_fp16
-          - float32
+        suite: ${{ fromJson(needs.matrix.outputs.suite) }}
+        mode: ${{ fromJson(needs.matrix.outputs.mode) }}
+        dtype: ${{ fromJson(needs.matrix.outputs.dtype) }}
       max-parallel: 2
       fail-fast: false
     timeout-minutes: 720
