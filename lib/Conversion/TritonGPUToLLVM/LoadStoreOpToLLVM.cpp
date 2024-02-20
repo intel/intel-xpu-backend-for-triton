@@ -458,7 +458,7 @@ struct StoreOpConversion
       vec = std::min(vec, maskAlign);
     }
 
-    Value mask = getMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc);
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
@@ -612,7 +612,7 @@ struct AtomicCASOpConversion
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
-    Value mask = getMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc);
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -787,7 +787,7 @@ struct AtomicRMWOpConversion
       // mask
       numElems = tensorTy.getNumElements();
     }
-    Value mask = getMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc);
 
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
