@@ -1663,9 +1663,13 @@ struct FpToFpOpConversion
       cvt(res, operand);
       return builder.launch(rewriter, loc, f32_ty, false);
     } break;
-    case mlir::triton::Target::GENX:
-      return rewriter.create<GENX::FpToFpOp>(loc, f32_ty, v,
-                                             GENX::RoundingMode::RTE);
+    case mlir::triton::Target::GENX: {
+      auto ctx = rewriter.getContext();
+      // TODO: Remove unnecessary rounding mode.
+      return rewriter.create<GENX::FpToFpOp>(
+          loc, f32_ty, v,
+          GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTE));
+    }
     default:
       assert(false && "TODO");
     }
@@ -1750,20 +1754,24 @@ struct FpToFpOpConversion
       cvt(res, operand);
       return builder.launch(rewriter, loc, f16_ty, false);
     }
-    case mlir::triton::Target::GENX:
+    case mlir::triton::Target::GENX: {
+      auto ctx = rewriter.getContext();
       switch (rounding) {
       case RoundingMode::RTNE:
-        return rewriter.create<GENX::FpToFpOp>(loc, f16_ty, v,
-                                               GENX::RoundingMode::RTE);
+        return rewriter.create<GENX::FpToFpOp>(
+            loc, f16_ty, v,
+            GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTE));
       case RoundingMode::RTZ:
-        return rewriter.create<GENX::FpToFpOp>(loc, f16_ty, v,
-                                               GENX::RoundingMode::RTZ);
+        return rewriter.create<GENX::FpToFpOp>(
+            loc, f16_ty, v,
+            GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTZ));
       default:
         llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
                         "conversion: "
                      << stringifyRoundingMode(rounding) << "\n";
         llvm_unreachable("");
       }
+    }
     default:
       assert(false && "TODO");
     }
