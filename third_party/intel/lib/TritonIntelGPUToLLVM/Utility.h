@@ -1,7 +1,10 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
+#ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
+#define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 
 #include "TritonIntelGPUToLLVM/PTXAsmFormat.h"
+
+#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
+
 #include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -14,133 +17,9 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <set>
 
-using namespace mlir;
-using namespace mlir::triton;
-
-// Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
-// Operators
-#define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
-#define ptrtoint(...) rewriter.create<LLVM::PtrToIntOp>(loc, __VA_ARGS__)
-#define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
-#define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
-#define sext(...) rewriter.create<LLVM::SExtOp>(loc, __VA_ARGS__)
-#define fpext(...) rewriter.create<LLVM::FPExtOp>(loc, __VA_ARGS__)
-#define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
-#define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
-#define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
-#define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
-#define sub(...) rewriter.create<LLVM::SubOp>(loc, __VA_ARGS__)
-#define fadd(...) rewriter.create<LLVM::FAddOp>(loc, __VA_ARGS__)
-#define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
-#define fmul(...) rewriter.create<LLVM::FMulOp>(loc, __VA_ARGS__)
-#define lshr(...) rewriter.create<LLVM::LShrOp>(loc, __VA_ARGS__)
-#define smax(...) rewriter.create<LLVM::SMaxOp>(loc, __VA_ARGS__)
-#define umax(...) rewriter.create<LLVM::UMaxOp>(loc, __VA_ARGS__)
-#define fmax(...) rewriter.create<LLVM::MaxNumOp>(loc, __VA_ARGS__)
-#define smin(...) rewriter.create<LLVM::SMinOp>(loc, __VA_ARGS__)
-#define umin(...) rewriter.create<LLVM::UMinOp>(loc, __VA_ARGS__)
-#define fmin(...) rewriter.create<LLVM::MinNumOp>(loc, __VA_ARGS__)
-#define shl(...) rewriter.create<LLVM::ShlOp>(loc, __VA_ARGS__)
-#define lshr(...) rewriter.create<LLVM::LShrOp>(loc, __VA_ARGS__)
-#define and_(...) rewriter.create<LLVM::AndOp>(loc, __VA_ARGS__)
-#define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
-#define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
-#define bitcast(val__, type__)                                                 \
-  rewriter.create<LLVM::BitcastOp>(loc, type__, val__)
-#define gep(...) rewriter.create<LLVM::GEPOp>(loc, __VA_ARGS__)
-#define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
-#define insert_val(...) rewriter.create<LLVM::InsertValueOp>(loc, __VA_ARGS__)
-#define extract_val(...) rewriter.create<LLVM::ExtractValueOp>(loc, __VA_ARGS__)
-#define insert_element(...)                                                    \
-  rewriter.create<LLVM::InsertElementOp>(loc, __VA_ARGS__)
-#define extract_element(...)                                                   \
-  rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
-#define load(...) rewriter.create<LLVM::LoadOp>(loc, __VA_ARGS__)
-#define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
-#define load_dsmem(...) LLVM::createLoadDSmem(loc, rewriter, __VA_ARGS__)
-#define store_dsmem(...) LLVM::createStoreDSmem(loc, rewriter, __VA_ARGS__)
-#define fcmp_ogt(lhs, rhs)                                                     \
-  rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
-                                LLVM::FCmpPredicate::ogt, lhs, rhs)
-#define fcmp_olt(lhs, rhs)                                                     \
-  rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
-                                LLVM::FCmpPredicate::olt, lhs, rhs)
-#define fcmp_eq(lhs, rhs)                                                      \
-  rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
-                                LLVM::FCmpPredicate::oeq, lhs, rhs)
-#define icmp_eq(...)                                                           \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq, __VA_ARGS__)
-#define icmp_ne(...)                                                           \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne, __VA_ARGS__)
-#define icmp_slt(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::slt, __VA_ARGS__)
-#define icmp_sle(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sle, __VA_ARGS__)
-#define icmp_sgt(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sgt, __VA_ARGS__)
-#define icmp_sge(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sge, __VA_ARGS__)
-#define icmp_ult(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ult, __VA_ARGS__)
-#define icmp_ule(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ule, __VA_ARGS__)
-#define icmp_ugt(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ugt, __VA_ARGS__)
-#define icmp_uge(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::uge, __VA_ARGS__)
-#define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
-#define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
-#define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
-#define barSync(rewriter, op, bar, numThreads)                                 \
-  do {                                                                         \
-    ::mlir::triton::PTXBuilder ptxBuilder;                                     \
-    auto &barSyncOp = *ptxBuilder.create<>("bar.sync");                        \
-    barSyncOp(ptxBuilder.newConstantOperand(bar),                              \
-              ptxBuilder.newConstantOperand(numThreads));                      \
-    auto voidTy = void_ty(op->getContext());                                   \
-    ptxBuilder.launch(rewriter, op->getLoc(), voidTy);                         \
-  } while (0)
-#define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
-#define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
-#define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
-#define addrspacecast(...)                                                     \
-  rewriter.create<LLVM::AddrSpaceCastOp>(loc, __VA_ARGS__)
-
-// Types
-#define int_ty(width) rewriter.getIntegerType(width)
-#define i64_ty rewriter.getIntegerType(64)
-#define i32_ty rewriter.getIntegerType(32)
-#define i16_ty rewriter.getIntegerType(16)
-#define i32_ty rewriter.getIntegerType(32)
-#define i64_ty rewriter.getIntegerType(64)
-#define ui32_ty rewriter.getIntegerType(32, false)
-#define f16_ty rewriter.getF16Type()
-#define bf16_ty rewriter.getBF16Type()
-#define i8_ty rewriter.getIntegerType(8)
-#define i1_ty rewriter.getI1Type()
-#define f32_ty rewriter.getF32Type()
-#define f64_ty rewriter.getF64Type()
-#define vec_ty(type, num) VectorType::get(num, type)
-#define void_ty(ctx) LLVM::LLVMVoidType::get(ctx)
-#define struct_ty(...) LLVM::LLVMStructType::getLiteral(ctx, __VA_ARGS__)
-#define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
-
-// Constants
-#define f16_val(...) LLVM::createConstantF16(loc, rewriter, __VA_ARGS__)
-#define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
-#define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
-#define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
-#define i64_val(...) LLVM::createConstantI64(loc, rewriter, __VA_ARGS__)
-#define int_val(width, val)                                                    \
-  LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
-#define tid_val() getThreadId(rewriter, loc)
-
-// Attributes
-#define i32_arr_attr(...) rewriter.getI32ArrayAttr({__VA_ARGS__})
-#define i64_arr_attr(...) rewriter.getI64ArrayAttr({__VA_ARGS__})
-
 namespace mlir {
 namespace triton {
+namespace intel {
 
 // Delinearize supposing order is [0, 1, .. , n]
 template <typename T>
@@ -199,10 +78,11 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
   return getLinearIndexImpl<T>(applyPermutation(multiDimIndex, order),
                                applyPermutation(shape, order));
 }
-
+} // namespace intel
 } // namespace triton
 
 namespace LLVM {
+namespace intel {
 using namespace mlir::triton;
 
 /// Create a predicated block, using \p cond as the condition and \p ops for the
@@ -259,32 +139,6 @@ Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
                              Value cond, ThenOpsFn &&thenOpsFn) {
   return createPredicatedBlock(rewriter, loc, cond, {}, thenOpsFn);
 }
-
-/// Create a 32-bit integer constant.
-Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
-
-/// Create a 64-bit integer constant.
-Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v);
-
-/// Create a 16-bit float constant.
-Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
-
-/// Create a 32-bit float constant.
-Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
-
-/// Create a 64-bit float constant.
-Value createConstantF64(Location loc, OpBuilder &rewriter, double v);
-
-/// Create NaN constant of specified type.
-Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type);
-
-/// Create an index type constant.
-Value createIndexConstant(OpBuilder &builder, Location loc,
-                          TypeConverter *converter, int64_t value);
-
-/// Create an integer constant of \param width bits.
-Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
-                                int64_t value);
 
 /// Usage of macro load_dsmem
 /// (1) load_dsmem(addr, ctaId)
@@ -468,9 +322,10 @@ static Value getSharedMemoryBase(Location loc,
   Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
 }
-
+} // namespace intel
 } // namespace LLVM
 
+namespace intel {
 /* ------------------------------------ */
 // Returns CTA level thread idx
 static Value getThreadIdInCTA(ConversionPatternRewriter &rewriter,
@@ -532,7 +387,7 @@ static SmallVector<Value> emitBaseIndexWithinCTAForBlockedLayout(
     Location loc, ConversionPatternRewriter &rewriter,
     const BlockedEncodingAttr &blockedLayout, RankedTensorType type) {
   auto shape = type.getShape();
-  Value threadId = getThreadId(rewriter, loc);
+  Value threadId = intel::getThreadId(rewriter, loc);
   Value warpSize = i32_val(32);
   Value laneId = urem(threadId, warpSize);
   Value warpId = udiv(threadId, warpSize);
@@ -620,7 +475,7 @@ static SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV1(
   auto [isARow, isBRow, isAVec4, isBVec4, _] =
       mmaLayout.decodeVoltaLayoutStates();
 
-  Value thread = getThreadId(rewriter, loc);
+  Value thread = intel::getThreadId(rewriter, loc);
   auto *ctx = thread.getContext();
   Value _1 = i32_val(1);
   Value _2 = i32_val(2);
@@ -768,7 +623,7 @@ static SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV2V3(
     warpsPerCTA.push_back(i32_val(_warpsPerCTA[i]));
   auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
 
-  Value threadId = getThreadId(rewriter, loc);
+  Value threadId = intel::getThreadId(rewriter, loc);
   Value warpSize = i32_val(32);
   Value laneId = urem(threadId, warpSize);
   Value warpId = udiv(threadId, warpSize);
@@ -902,7 +757,7 @@ emitCTAOffsetForLayout(Location loc, ConversionPatternRewriter &rewriter,
       triton::gpu::getShapePerCTA(CTASplitNum, shape);
 
   // Delinearize clusterCTAId
-  Value clusterCTAId = getClusterCTAId(rewriter, loc);
+  Value clusterCTAId = intel::getClusterCTAId(rewriter, loc);
   SmallVector<Value> multiDimClusterCTAId =
       delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
 
@@ -1005,7 +860,7 @@ static SmallVector<Value>
 emitBaseIndexForDpasLayout(Location loc, ConversionPatternRewriter &rewriter,
                            const DpasEncodingAttr &dpasLayout,
                            RankedTensorType type) {
-  Value threadId = getThreadId(rewriter, loc);
+  Value threadId = intel::getThreadId(rewriter, loc);
   Value warpSize = i32_val(triton::gpu::getWarpSize(dpasLayout));
   Value warpId = udiv(threadId, warpSize);
   Value laneId = urem(threadId, warpSize);
@@ -1406,6 +1261,7 @@ static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
+} // namespace intel
 } // namespace mlir
 
 #endif

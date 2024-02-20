@@ -648,12 +648,14 @@ protected:
     return (intel::TritonGPUToLLVMTypeConverter *)ret;
   }
 };
+} // namespace intel
 
 namespace mlir::triton {
 class ReduceOp;
 class ScanOp;
 } // namespace mlir::triton
 
+namespace intel {
 template <typename SourceOp>
 class ConvertTritonGPUReduceScanToLLVMPattern
     : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {

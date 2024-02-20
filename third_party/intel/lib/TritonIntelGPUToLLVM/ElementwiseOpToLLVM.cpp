@@ -1633,7 +1633,7 @@ struct FpToFpOpConversion
 
   static Value convertBf16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
-                                 const Value &v, ) {
+                                 const Value &v) {
     auto as_int16 = bitcast(v, i16_ty);
     auto as_int32 = zext(i32_ty, as_int16);
     auto shifted = shl(i32_ty, as_int32, i32_val(16));

@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
 #include "intel/include/NVGPUToLLVM/Passes.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 // #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"

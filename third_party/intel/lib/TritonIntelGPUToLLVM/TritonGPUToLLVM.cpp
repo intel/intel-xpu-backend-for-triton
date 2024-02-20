@@ -1,6 +1,3 @@
-#ifndef TRITONGPU_CONVERSION_TRITONINTELGPUTOLLVM_PASSES_H
-#define TRITONGPU_CONVERSION_TRITONINTELGPUTOLLVM_PASSES_H
-
 #include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -33,7 +30,7 @@
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DECL_CONVERTTRITONINTELGPUTOLLVM
+#define GEN_PASS_DEF_CONVERTTRITONINTELGPUTOLLVM
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
@@ -201,7 +198,7 @@ struct ConvertTritonIntelGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    mlir::LowerToLLVMOptions option(context);
+    ::mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonGPUToLLVMTypeConverter typeConverter(context, option);
     TritonLLVMConversionTarget convTarget(*context);
@@ -287,7 +284,7 @@ private:
 
   // pass ws related named attrs.
   static void addWSNamedAttrs(Operation *op,
-                              ArrayRef<mlir::NamedAttribute> attrs) {
+                              ArrayRef<::mlir::NamedAttribute> attrs) {
     for (const NamedAttribute attr : attrs)
       if (attr.getName() == "async_agent" ||
           attr.getName() == "agent.mutex_role")
@@ -423,5 +420,3 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
 
 } // namespace triton
 } // namespace mlir
-
-#endif

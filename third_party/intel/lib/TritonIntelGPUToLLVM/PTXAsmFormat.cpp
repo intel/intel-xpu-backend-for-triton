@@ -13,6 +13,7 @@ using ::intel::TritonGPUToLLVMTypeConverter;
 
 namespace mlir {
 namespace triton {
+namespace intel {
 
 PTXInstr::Operand *
 PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
@@ -234,5 +235,6 @@ PTXInstr &PTXInstr::b(int width) {
   return *this;
 }
 
+} // namespace intel
 } // namespace triton
 } // namespace mlir

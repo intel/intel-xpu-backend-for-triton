@@ -7,60 +7,7 @@ namespace mlir {
 
 namespace LLVM {
 using namespace mlir::triton;
-
-Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v) {
-  auto i32ty = rewriter.getIntegerType(32);
-  return rewriter.create<LLVM::ConstantOp>(loc, i32ty,
-                                           IntegerAttr::get(i32ty, v));
-}
-
-Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v) {
-  auto i64ty = rewriter.getIntegerType(64);
-  return rewriter.create<LLVM::ConstantOp>(loc, i64ty,
-                                           IntegerAttr::get(i64ty, v));
-}
-
-Value createConstantF16(Location loc, OpBuilder &rewriter, float v) {
-  auto type = type::f16Ty(rewriter.getContext());
-  return rewriter.create<LLVM::ConstantOp>(loc, type,
-                                           rewriter.getF16FloatAttr(v));
-}
-
-Value createConstantF32(Location loc, OpBuilder &rewriter, float v) {
-  auto type = type::f32Ty(rewriter.getContext());
-  return rewriter.create<LLVM::ConstantOp>(loc, type,
-                                           rewriter.getF32FloatAttr(v));
-}
-
-Value createConstantF64(Location loc, OpBuilder &rewriter, double v) {
-  auto type = type::f64Ty(rewriter.getContext());
-  return rewriter.create<LLVM::ConstantOp>(loc, type,
-                                           rewriter.getF64FloatAttr(v));
-}
-
-Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type) {
-  if (!type.isa<FloatType>()) {
-    llvm::report_fatal_error("Creating NaN constant for non-float type!");
-  }
-  return rewriter.create<LLVM::ConstantOp>(
-      loc, type, APFloat::getNaN(type.cast<FloatType>().getFloatSemantics()));
-}
-
-// Create an index type constant.
-Value createIndexConstant(OpBuilder &builder, Location loc,
-                          TypeConverter *converter, int64_t value) {
-  Type ty = converter->convertType(builder.getIndexType());
-  return builder.create<LLVM::ConstantOp>(loc, ty,
-                                          builder.getIntegerAttr(ty, value));
-}
-
-// Create an integer constant of \param width bits.
-Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
-                                int64_t value) {
-  Type ty = builder.getIntegerType(width);
-  return builder.create<LLVM::ConstantOp>(loc, ty,
-                                          builder.getIntegerAttr(ty, value));
-}
+namespace intel {
 
 // A wrapper of LoadDSmemOp when vec = 1
 // (1) Get bitwidth from elemTy
@@ -388,5 +335,6 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   return stringStart;
 }
 
+} // namespace intel
 } // namespace LLVM
 } // namespace mlir

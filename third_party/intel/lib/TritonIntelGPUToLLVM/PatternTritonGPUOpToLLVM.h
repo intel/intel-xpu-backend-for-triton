@@ -78,7 +78,7 @@ void populateMakeRangeOpToLLVMPattern(
 void populateSPMDOpToLLVMPattern(
     intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
-
+} // namespace intel
 } // namespace triton
 } // namespace mlir
 

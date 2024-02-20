@@ -14,6 +14,7 @@ class Location;
 
 namespace triton {
 using llvm::StringRef;
+namespace intel {
 
 struct PTXInstr;
 struct PTXInstrCommon;
@@ -332,6 +333,7 @@ struct PTXCpAsyncLoadInstr : PTXInstrBase<PTXCpAsyncLoadInstr> {
   }
 };
 
+} // namespace intel
 } // namespace triton
 } // namespace mlir
 

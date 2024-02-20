@@ -6,9 +6,6 @@ add_triton_library(TritonIntelGPUToLLVM
     ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM/DPAS.cpp
     DotOpToLLVM/FMA.cpp
-    DotOpToLLVM/MMAv1.cpp
-    DotOpToLLVM/MMAv2.cpp
-    DotOpToLLVM/WGMMA.cpp
     DotOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp

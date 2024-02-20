@@ -18,30 +18,9 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToLLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
 
-LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            const LLVMTypeConverter *typeConverter,
-                            ConversionPatternRewriter &rewriter);
-
-LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                             const LLVMTypeConverter *typeConverter,
-                             ConversionPatternRewriter &rewriter);
-
-LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                              const LLVMTypeConverter *typeConverter,
-                              ConversionPatternRewriter &rewriter);
-
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
-LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                           const LLVMTypeConverter *typeConverter,
-                           ConversionPatternRewriter &rewriter, Value thread);
-
-LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
-                                triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
-                                const LLVMTypeConverter *typeConverter,
-                                ConversionPatternRewriter &rewriter,
-                                Value thread);
 namespace {
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -60,25 +39,6 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     size_t reduceAxis = 1;
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
-
-    NvidiaMmaEncodingAttr mmaLayout = D.getType()
-                                          .cast<RankedTensorType>()
-                                          .getEncoding()
-                                          .dyn_cast<NvidiaMmaEncodingAttr>();
-    if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
-      if (mmaLayout.isVolta())
-        return convertMMA884(op, adaptor, getTypeConverter(), rewriter);
-      if (mmaLayout.isTuring())
-        return convertMMA1688(op, adaptor, getTypeConverter(), rewriter);
-      if (mmaLayout.isAmpere())
-        return convertMMA16816(op, adaptor, getTypeConverter(), rewriter);
-      if (mmaLayout.isHopper())
-        return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                            getThreadId(rewriter, loc));
-
-      llvm::report_fatal_error(
-          "Unsupported MMA kind found when converting DotOp to LLVM.");
-    }
 
     DpasEncodingAttr dpasLayout = D.getType()
                                       .cast<RankedTensorType>()
