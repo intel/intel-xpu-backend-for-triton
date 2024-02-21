@@ -1,15 +1,15 @@
-#ifndef NVGPU_CONVERSION_PASSES
-#define NVGPU_CONVERSION_PASSES
+#ifndef NVGPUINTEL_CONVERSION_PASSES
+#define NVGPUINTEL_CONVERSION_PASSES
 
 include "mlir/Pass/PassBase.td"
 
 
-def ConvertNVGPUToLLVM : Pass<"convert-nv-gpu-to-llvm", "mlir::ModuleOp"> {
+def ConvertNVGPUINTELToLLVM : Pass<"convert-nv-gpu-intel-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert NVGPU to LLVM";
     let description = [{
 
     }];
-    let constructor = "mlir::triton::createConvertNVGPUToLLVMPass()";
+    let constructor = "mlir::triton::createConvertNVGPUIntelToLLVMPass()";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::LLVM::LLVMDialect",
