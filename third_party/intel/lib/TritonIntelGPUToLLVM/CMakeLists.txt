@@ -1,0 +1,54 @@
+add_triton_library(TritonGPUToLLVM
+    ConvertLayoutOpToLLVM/SharedToDotOperandDPAS.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
+    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
+    ConvertLayoutOpToLLVM.cpp
+    DotOpToLLVM/DPAS.cpp
+    DotOpToLLVM/FMA.cpp
+    DotOpToLLVM/MMAv1.cpp
+    DotOpToLLVM/MMAv2.cpp
+    DotOpToLLVM/WGMMA.cpp
+    DotOpToLLVM.cpp
+    HistogramOpToLLVM.cpp
+    ElementwiseOpToLLVM.cpp
+    LoadStoreOpToLLVM.cpp
+    BarrierOpToLLVM.cpp
+    TritonGPUToLLVM.cpp
+    DecomposeUnsupportedConversions.cpp
+    AssertOpToLLVM.cpp
+    PrintOpToLLVM.cpp
+    MemoryOpToLLVM.cpp
+    ControlFlowOpToLLVM.cpp
+    MakeRangeOpToLLVM.cpp
+    SPMDOpToLLVM.cpp
+    ReduceOpToLLVM.cpp
+    ScanOpToLLVM.cpp
+    TypeConverter.cpp
+    Utility.cpp
+    ViewOpToLLVM.cpp
+    TensorPtrOpsToLLVM.cpp
+    ClusterOpsToLLVM.cpp
+    PTXAsmFormat.cpp
+    AllocateSharedMemory.cpp
+
+    DEPENDS
+    TritonGPUConversionPassIncGen
+
+    LINK_LIBS PUBLIC
+    MLIRIR
+    MLIRPass
+    MLIRGENXDialect
+    MLIRGPUDialect
+    MLIRGPUToGENXTransforms
+    MLIRGPUToNVVMTransforms
+    MLIRGPUToROCDLTransforms
+    MLIRGPUTransforms
+    TritonAnalysis
+    TritonIR
+    TritonGPUIR
+    TritonIntelGPUIR
+    TritonGPUTransforms
+    TritonNvidiaGPUTransforms
+    NVGPUIR
+)
