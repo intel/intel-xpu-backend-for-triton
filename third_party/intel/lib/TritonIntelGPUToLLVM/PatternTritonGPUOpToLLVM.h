@@ -7,78 +7,78 @@ namespace mlir {
 namespace triton {
 
 void populateBarrierOpToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateClusterOpsToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateConvertLayoutOpToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateDotOpToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateElementwiseOpToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     int computeCapability, PatternBenefit benefit);
 
 void populateHistogramOpToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateLoadStoreOpToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     PatternBenefit benefit);
 
 void populateReduceOpToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, int computeCapability, PatternBenefit benefit);
 void populateScanOpToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateTensorPtrOpsToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateTritonGPUToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateViewOpToLLVMPatterns(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populatePrintOpToLLVMPattern(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateAssertOpToLLVMPattern(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateMemoryOpToLLVMPattern(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateControlFlowOpToLLVMPattern(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateMakeRangeOpToLLVMPattern(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateSPMDOpToLLVMPattern(
-    intel::TritonGPUToLLVMTypeConverter &typeConverter,
+    ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
-} // namespace intel
+
 } // namespace triton
 } // namespace mlir
 

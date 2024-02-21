@@ -1,5 +1,4 @@
 #include "TypeConverter.h"
-#include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -90,7 +89,8 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
       //  f16/bf16   | vector<8xf16/bf16>
       //     i8      | vector<16xi8>
       //     tf32    | vector<4xf32>
-      return vec_ty(elemTy, RC * ((8 * (float)(sizeof(int16_t)) / bitWidth)));
+      return VectorType::get(elemTy,
+                             RC * ((8 * (float)(sizeof(int16_t)) / bitWidth)));
     } else {
       //  Elem. Type | vector size
       // ------------------------------
@@ -98,7 +98,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
       //     i8      | vector<32xi8>
       //     tf32    | vector<8xf32>
       assert(dotOpLayout.getOpIdx() == 1);
-      return vec_ty(elemTy, RC * ((8 * sizeof(int32_t)) / bitWidth));
+      return VectorType::get(elemTy, RC * ((8 * sizeof(int32_t)) / bitWidth));
     }
   }
 

@@ -6,11 +6,11 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::loadShared;
-using ::mlir::LLVM::shflSync;
-using ::mlir::LLVM::storeShared;
+using ::mlir::LLVM::intel::delinearize;
+using ::mlir::LLVM::intel::linearize;
+using ::mlir::LLVM::intel::loadShared;
+using ::mlir::LLVM::intel::shflSync;
+using ::mlir::LLVM::intel::storeShared;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 

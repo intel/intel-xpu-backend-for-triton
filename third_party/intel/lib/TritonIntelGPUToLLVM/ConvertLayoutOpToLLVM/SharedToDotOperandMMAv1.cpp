@@ -14,6 +14,7 @@ using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::intel::PTXBuilder;
 
 // Compute the offset of the matrix to load.
 // Returns offsetAM, offsetAK, offsetBN, offsetBK.

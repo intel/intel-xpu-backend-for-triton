@@ -9,6 +9,7 @@ using namespace mlir::triton;
 using ::intel::ConvertTritonGPUOpToLLVMPattern;
 using ::intel::ConvertTritonGPUOpToLLVMPatternBase;
 using ::intel::TritonGPUToLLVMTypeConverter;
+using ::mlir::LLVM::intel::llGetPid;
 
 // The input print op contains:
 //  - a "prefix" (string) specified by the user, and

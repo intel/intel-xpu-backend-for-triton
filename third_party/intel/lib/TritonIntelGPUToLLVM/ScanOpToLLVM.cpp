@@ -5,11 +5,11 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::shflIdxSync;
-using ::mlir::LLVM::shflUpSync;
-using ::mlir::LLVM::storeShared;
+using ::mlir::LLVM::intel::delinearize;
+using ::mlir::LLVM::intel::linearize;
+using ::mlir::LLVM::intel::shflIdxSync;
+using ::mlir::LLVM::intel::shflUpSync;
+using ::mlir::LLVM::intel::storeShared;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 using ::intel::ConvertTritonGPUOpToLLVMPattern;
@@ -333,9 +333,9 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
 
 namespace {
 struct ScanOpConversion
-    : public intel::ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp> {
+    : public ::intel::ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp> {
 public:
-  using intel::ConvertTritonGPUReduceScanToLLVMPattern<
+  using ::intel::ConvertTritonGPUReduceScanToLLVMPattern<
       triton::ScanOp>::ConvertTritonGPUReduceScanToLLVMPattern;
 
   LogicalResult

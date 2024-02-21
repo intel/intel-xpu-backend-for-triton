@@ -5,10 +5,10 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
 
+namespace intel {
 using namespace mlir;
 using namespace mlir::triton;
 
-namespace intel {
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
 public:
   using TypeConverter::convertType;

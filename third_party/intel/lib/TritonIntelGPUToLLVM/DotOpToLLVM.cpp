@@ -82,16 +82,6 @@ struct DotAsyncOpConversion
                                           .cast<RankedTensorType>()
                                           .getEncoding()
                                           .dyn_cast<NvidiaMmaEncodingAttr>();
-    if (!isOuter && mmaLayout &&
-        supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
-      if (mmaLayout.isHopper()) {
-        return convertAsyncWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                                 getThreadId(rewriter, loc));
-      }
-
-      llvm::report_fatal_error(
-          "Unsupported MMA kind found when converting DotAsyncOp to LLVM.");
-    }
 
     llvm::report_fatal_error(
         "Unsupported DotAsyncOp found when converting TritonGPU to LLVM.");

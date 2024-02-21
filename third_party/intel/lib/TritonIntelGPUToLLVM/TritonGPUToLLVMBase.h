@@ -147,10 +147,12 @@ namespace intel {
 class ConvertTritonGPUOpToLLVMPatternBase {
 public:
   explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter)
+      ::intel::TritonGPUToLLVMTypeConverter &typeConverter)
       : converter(&typeConverter) {}
 
-  TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
+  ::intel::TritonGPUToLLVMTypeConverter *getTypeConverter() const {
+    return converter;
+  }
 
   // Returns CTA level thread idx
   Value getThreadIdInCTA(ConversionPatternRewriter &rewriter,
@@ -624,28 +626,28 @@ private:
   }
 
 protected:
-  intel::TritonGPUToLLVMTypeConverter *converter;
+  ::intel::TritonGPUToLLVMTypeConverter *converter;
 };
 
 template <typename SourceOp>
 class ConvertTritonGPUOpToLLVMPattern
     : public ConvertOpToLLVMPattern<SourceOp>,
-      public intel::ConvertTritonGPUOpToLLVMPatternBase {
+      public ::intel::ConvertTritonGPUOpToLLVMPatternBase {
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ConvertTritonGPUOpToLLVMPattern(
-      intel::TritonGPUToLLVMTypeConverter &typeConverter,
+      ::intel::TritonGPUToLLVMTypeConverter &typeConverter,
       PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        intel::ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
+        ::intel::ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
 
 protected:
-  intel::TritonGPUToLLVMTypeConverter *getTypeConverter() const {
+  ::intel::TritonGPUToLLVMTypeConverter *getTypeConverter() const {
     LLVMTypeConverter *ret =
-        ((intel::ConvertTritonGPUOpToLLVMPatternBase *)this)
+        ((::intel::ConvertTritonGPUOpToLLVMPatternBase *)this)
             ->getTypeConverter();
-    return (intel::TritonGPUToLLVMTypeConverter *)ret;
+    return (::intel::TritonGPUToLLVMTypeConverter *)ret;
   }
 };
 } // namespace intel
@@ -664,7 +666,7 @@ public:
   static_assert(std::is_same_v<SourceOp, ReduceOp> ||
                 std::is_same_v<SourceOp, ScanOp>);
 
-  using intel::ConvertTritonGPUOpToLLVMPatternBase::getTypeConverter;
+  using ConvertTritonGPUOpToLLVMPatternBase::getTypeConverter;
   using ConvertTritonGPUOpToLLVMPattern<
       SourceOp>::ConvertTritonGPUOpToLLVMPattern;
 
