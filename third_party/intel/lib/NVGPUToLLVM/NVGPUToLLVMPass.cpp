@@ -1,4 +1,4 @@
-#include "triton/Conversion/NVGPUToLLVM/NVGPUToLLVMPass.h"
+#include "NVGPUIntelToLLVM/NVGPUIntelToLLVMPass.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
@@ -8,17 +8,15 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
-
-#include "../lib/Conversion/TritonGPUToLLVM/Utility.h"
+#include "intel/lib/TritonIntelGPUToLLVM/Utility.h"
 using namespace mlir;
 using namespace mlir::triton;
 
 #define GEN_PASS_CLASSES
-#include "triton/Conversion/NVGPUToLLVM/Passes.h.inc"
+#include "intel/include/NVGPUIntelToLLVM/Passes.h.inc"
 
 namespace ttn = mlir::triton::nvgpu;
-using ::mlir::LLVM::getSRegValue;
+using ::mlir::LLVM::intel::getSRegValue;
 
 namespace {
 
@@ -723,10 +721,12 @@ public:
 
 namespace mlir {
 namespace triton {
+namespace intel {
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUToLLVMPass() {
+std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUIntelToLLVMPass() {
   return std::make_unique<::ConvertNVGPUToLLVM>();
 }
 
+} // namespace intel
 } // namespace triton
 } // namespace mlir
