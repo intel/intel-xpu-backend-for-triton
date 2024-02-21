@@ -172,10 +172,10 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
 };
 
 static void callMmaTuringInt8(PTXBuilder &builder, int b, int m, int n, int k,
-                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
-                              unsigned colsPerThread, int numCPackedElem,
-                              ValueTableV2 &ha, ValueTableV2 &hb,
-                              const SmallVector<Value> &fc) {
+                              mlir::triton::intel::PTXInstr &mma,
+                              unsigned numMmaRets, unsigned colsPerThread,
+                              int numCPackedElem, ValueTableV2 &ha,
+                              ValueTableV2 &hb, const SmallVector<Value> &fc) {
   auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=r");
   auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=r");
   auto cArgs1 = builder.newListOperand();
@@ -219,10 +219,11 @@ static void callMmaTuringInt8(PTXBuilder &builder, int b, int m, int n, int k,
 }
 
 static void callMmaTuringFp16(PTXBuilder &builder, int b, int m, int n, int k,
-                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
-                              unsigned colsPerThread, int numCPackedElem,
-                              ValueTableV2 &ha, ValueTableV2 &hb,
-                              const SmallVector<Value> &fc, bool isAccF16) {
+                              mlir::triton::intel::PTXInstr &mma,
+                              unsigned numMmaRets, unsigned colsPerThread,
+                              int numCPackedElem, ValueTableV2 &ha,
+                              ValueTableV2 &hb, const SmallVector<Value> &fc,
+                              bool isAccF16) {
   auto retArgs = builder.newListOperand(numMmaRets, isAccF16 ? "=r" : "=f");
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i) {
@@ -246,11 +247,12 @@ static void callMmaTuringFp16(PTXBuilder &builder, int b, int m, int n, int k,
 }
 
 static void callMmaAmpere(PTXBuilder &builder, int b, int m, int n, int k,
-                          mlir::triton::PTXInstr &mma, unsigned numMmaRets,
-                          unsigned colsPerThread, int numCPackedElem,
-                          unsigned batchOffset, ValueTableV2 &ha,
-                          ValueTableV2 &hb, const SmallVector<Value> &fc,
-                          bool isAccF16, bool isIntMMA) {
+                          mlir::triton::intel::PTXInstr &mma,
+                          unsigned numMmaRets, unsigned colsPerThread,
+                          int numCPackedElem, unsigned batchOffset,
+                          ValueTableV2 &ha, ValueTableV2 &hb,
+                          const SmallVector<Value> &fc, bool isAccF16,
+                          bool isIntMMA) {
   auto retArgs =
       builder.newListOperand(numMmaRets, isIntMMA || isAccF16 ? "=r" : "=f");
   auto cArgs = builder.newListOperand();

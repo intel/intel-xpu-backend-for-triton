@@ -8,16 +8,19 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 
-#include "intel/lib/TritonIntelGPUToLLVM/Utility.h"
+#include "TritonIntelGPUToLLVM/PTXAsmFormat.h"
+
+#include "../TritonIntelGPUToLLVM/Utility.h"
 using namespace mlir;
 using namespace mlir::triton;
 
 #define GEN_PASS_CLASSES
-#include "intel/include/NVGPUIntelToLLVM/Passes.h.inc"
+#include "NVGPUIntelToLLVM/Passes.h.inc"
 
 namespace ttn = mlir::triton::nvgpu;
 using ::mlir::LLVM::getSRegValue;
 using ::mlir::triton::intel::PTXBuilder;
+using ::mlir::triton::intel::PTXInstr;
 
 namespace {
 
@@ -688,7 +691,8 @@ public:
   }
 };
 
-class ConvertNVGPUToLLVM : public ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
+class ConvertNVGPUToLLVM
+    : public ConvertNVGPUIntelToLLVMBase<ConvertNVGPUToLLVM> {
 
 public:
   explicit ConvertNVGPUToLLVM() {}

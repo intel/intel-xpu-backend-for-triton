@@ -11,6 +11,9 @@ template <typename T> class OperationPass;
 namespace triton {
 namespace intel {
 
+#define GEN_PASS_DECL
+#include "NVGPUIntelToLLVM/Passes.h.inc"
+
 std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUIntelToLLVMPass();
 
 } // namespace intel

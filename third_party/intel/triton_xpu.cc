@@ -1,5 +1,5 @@
-﻿#include "TritonIntelGPUToLLVM/Passes.h"
-#include "intel/include/NVGPUIntelToLLVM/Passes.h"
+﻿#include "NVGPUIntelToLLVM/Passes.h"
+#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/GENX/GENXToLLVMIRTranslation.h"
@@ -33,7 +33,7 @@ void init_triton_intel_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fence_insertion",
                      mlir::createTritonNvidiaGPUFenceInsertionPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
-                     mlir::triton::intel::createConvertNVGPUIntelToLLVMPass);
+                     mlir::triton::createConvertNVGPUIntelToLLVMPass);
 }
 
 void init_triton_intel(py::module &&m) {

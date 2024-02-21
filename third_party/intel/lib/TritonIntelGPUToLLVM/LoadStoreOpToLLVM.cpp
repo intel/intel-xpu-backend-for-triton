@@ -23,6 +23,8 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::intel::PTXBuilder;
+using ::mlir::triton::intel::PTXCpAsyncLoadInstr;
+using ::mlir::triton::intel::PTXInstr;
 
 namespace {
 

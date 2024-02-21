@@ -263,6 +263,7 @@ struct ConvertTritonGPUToLLVM
 
     RewritePatternSet patterns(context);
     int benefit = 10;
+    using namespace mlir::triton::intel;
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, target,
                                           benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, target, benefit);
