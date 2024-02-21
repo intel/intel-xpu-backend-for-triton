@@ -15,8 +15,7 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
-// namespace intel {
-TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
+TritonIntelGPUToLLVMTypeConverter::TritonIntelGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
     const DataLayoutAnalysis *analysis)
     : LLVMTypeConverter(ctx, option, analysis) {
@@ -45,7 +44,7 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   });
 }
 
-Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
+Type TritonIntelGPUToLLVMTypeConverter::convertTritonPointerType(
     triton::PointerType type) {
   auto ctx = type.getContext();
   auto pointeeType = type.getPointeeType();
@@ -70,7 +69,7 @@ Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
   return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
 }
 
-Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
+Type TritonIntelGPUToLLVMTypeConverter::getElementTypeForStruct(
     RankedTensorType type) {
   auto ctx = type.getContext();
   Attribute layout = type.getEncoding();
@@ -109,7 +108,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   return IntegerType::get(ctx, 32);
 }
 
-Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
+Type TritonIntelGPUToLLVMTypeConverter::convertTritonTensorType(
     RankedTensorType type) {
   auto ctx = type.getContext();
   Attribute layout = type.getEncoding();
@@ -134,4 +133,3 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
   SmallVector<Type, 4> types(numElementsPerThread, eltType);
   return LLVM::LLVMStructType::getLiteral(ctx, types);
 }
-// } // namespace intel

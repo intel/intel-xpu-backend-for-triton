@@ -10,78 +10,78 @@ namespace triton {
 namespace intel {
 
 void populateBarrierOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit);
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
 void populateClusterOpsToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit);
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
 void populateConvertLayoutOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit);
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
-void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                 RewritePatternSet &patterns, Target target,
-                                 PatternBenefit benefit);
+void populateDotOpToLLVMPatterns(
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
 void populateElementwiseOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
-    Target target, PatternBenefit benefit);
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    int computeCapability, Target target, PatternBenefit benefit);
 
 void populateHistogramOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit);
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
 void populateLoadStoreOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
-    PatternBenefit benefit);
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    Target target, PatternBenefit benefit);
 
-void populateReduceOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                    RewritePatternSet &patterns,
-                                    int computeCapability, Target target,
-                                    PatternBenefit benefit);
-void populateScanOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns, Target target,
-                                  PatternBenefit benefit);
+void populateReduceOpToLLVMPatterns(
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int computeCapability, Target target,
+    PatternBenefit benefit);
+void populateScanOpToLLVMPatterns(
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
 void populateTensorPtrOpsToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit);
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
 void populateTritonGPUToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit);
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
-void populateViewOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns, Target target,
-                                  PatternBenefit benefit);
+void populateViewOpToLLVMPatterns(
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
-void populatePrintOpToLLVMPattern(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns, Target target,
-                                  PatternBenefit benefit);
+void populatePrintOpToLLVMPattern(
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
-void populateAssertOpToLLVMPattern(TritonGPUToLLVMTypeConverter &typeConverter,
-                                   RewritePatternSet &patterns, Target target,
-                                   PatternBenefit benefit);
+void populateAssertOpToLLVMPattern(
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
-void populateMemoryOpToLLVMPattern(TritonGPUToLLVMTypeConverter &typeConverter,
-                                   RewritePatternSet &patterns, Target target,
-                                   PatternBenefit benefit);
+void populateMemoryOpToLLVMPattern(
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
 void populateControlFlowOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit);
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
 void populateMakeRangeOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit);
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
-void populateSPMDOpToLLVMPattern(TritonGPUToLLVMTypeConverter &typeConverter,
-                                 RewritePatternSet &patterns, Target target,
-                                 PatternBenefit benefit);
+void populateSPMDOpToLLVMPattern(
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
 } // namespace intel
 } // namespace triton

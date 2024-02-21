@@ -19,10 +19,10 @@ struct SplatOpConversion
   // @elemType: the element type in operand.
   // @resType: the return type of the Splat-like op.
   // @constVal: a LLVM::ConstantOp or other scalar value.
-  static Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
-                                  TritonGPUToLLVMTypeConverter *typeConverter,
-                                  ConversionPatternRewriter &rewriter,
-                                  Location loc) {
+  static Value
+  convertSplatLikeOp(Type elemType, Type resType, Value constVal,
+                     TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                     ConversionPatternRewriter &rewriter, Location loc) {
     auto tensorTy = resType.cast<RankedTensorType>();
     // Check the converted type for the tensor as depending on the encoding the
     // converter may pick different element types.
@@ -105,7 +105,7 @@ struct ArithConstantSplatOpConversion
 struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
 
-  explicit CatOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit CatOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
                            Target target, PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<CatOp>(typeConverter, target, benefit) {
   }
@@ -140,7 +140,7 @@ struct JoinOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<ExperimentalJoinOp> {
   using OpAdaptor = typename ExperimentalJoinOp::Adaptor;
 
-  explicit JoinOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit JoinOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
                             Target target, PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<ExperimentalJoinOp>(typeConverter,
                                                             target, benefit) {}
@@ -225,7 +225,7 @@ struct SplitOpConversion
 
 struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
   using OpAdaptor = typename ReshapeOp::Adaptor;
-  explicit ReshapeOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit ReshapeOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
 
                                Target target, PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<ReshapeOp>(typeConverter, target,
@@ -253,8 +253,9 @@ struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
 struct ExpandDimsOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp> {
   using OpAdaptor = typename ExpandDimsOp::Adaptor;
-  explicit ExpandDimsOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  Target target, PatternBenefit benefit = 1)
+  explicit ExpandDimsOpConversion(
+      TritonIntelGPUToLLVMTypeConverter &typeConverter, Target target,
+      PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp>(typeConverter, target,
                                                       benefit) {}
 
@@ -397,8 +398,8 @@ struct BroadcastOpConversion
 } // namespace
 
 void mlir::triton::intel::populateViewOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit) {
   patterns.add<ReshapeOpConversion>(typeConverter, target, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, target, benefit);
   patterns.add<SplatOpConversion>(typeConverter, target, benefit);

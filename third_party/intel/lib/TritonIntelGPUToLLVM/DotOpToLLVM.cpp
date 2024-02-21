@@ -13,7 +13,7 @@ using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace fma_details {
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            TritonGPUToLLVMTypeConverter *typeConverter,
+                            TritonIntelGPUToLLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
 
 LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
@@ -29,7 +29,7 @@ LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               ConversionPatternRewriter &rewriter);
 
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                          TritonGPUToLLVMTypeConverter *typeConverter,
+                          TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
 LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
@@ -207,8 +207,8 @@ struct DotWaitOpConversion
 } // namespace
 
 void mlir::triton::intel::populateDotOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, target, benefit);
   patterns.add<DotAsyncOpConversion>(typeConverter, target, benefit);
   patterns.add<DotWaitOpConversion>(typeConverter, target, benefit);

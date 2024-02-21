@@ -138,7 +138,7 @@ struct LoadOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::LoadOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  LoadOpConversion(TritonGPUToLLVMTypeConverter &converter,
+  LoadOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    triton::Target target, PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, target,
@@ -419,7 +419,7 @@ struct StoreOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::StoreOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  StoreOpConversion(TritonGPUToLLVMTypeConverter &converter,
+  StoreOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     triton::Target target, PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, target,
@@ -575,7 +575,7 @@ struct AtomicCASOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::AtomicCASOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  AtomicCASOpConversion(TritonGPUToLLVMTypeConverter &converter,
+  AtomicCASOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         triton::Target target, PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(converter, target,
@@ -742,7 +742,7 @@ struct AtomicRMWOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::AtomicRMWOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  AtomicRMWOpConversion(TritonGPUToLLVMTypeConverter &converter,
+  AtomicRMWOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         triton::Target target, PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter, target,
@@ -1068,7 +1068,7 @@ struct InsertSliceAsyncOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::gpu::InsertSliceAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  InsertSliceAsyncOpConversion(TritonGPUToLLVMTypeConverter &converter,
+  InsertSliceAsyncOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
                                Target target, PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>(
@@ -1381,9 +1381,9 @@ struct AsyncBulkCommitGroupOpConversion
 } // namespace
 
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
-    PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    Target target, PatternBenefit benefit) {
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, target,
                                  benefit);
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, target,

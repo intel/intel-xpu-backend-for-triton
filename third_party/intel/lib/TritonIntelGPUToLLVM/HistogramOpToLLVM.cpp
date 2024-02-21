@@ -213,7 +213,7 @@ public:
 } // namespace
 
 void mlir::triton::intel::populateHistogramOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit) {
   patterns.add<HistogramOpConversion>(typeConverter, target, benefit);
 }

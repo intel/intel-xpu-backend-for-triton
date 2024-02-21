@@ -19,7 +19,7 @@ namespace {
 struct ReduceOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
-  ReduceOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  ReduceOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
                      int computeCapability, Target target,
                      PatternBenefit benefit)
       : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(
@@ -482,8 +482,9 @@ private:
 } // namespace
 
 void mlir::triton::intel::populateReduceOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int computeCapability, Target target, PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, int computeCapability, Target target,
+    PatternBenefit benefit) {
   patterns.add<ReduceOpConversion>(typeConverter, computeCapability, target,
                                    benefit);
 }

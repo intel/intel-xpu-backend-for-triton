@@ -137,7 +137,7 @@ struct AssertOpConversion
 } // namespace
 
 void mlir::triton::intel::populateAssertOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit) {
   patterns.add<AssertOpConversion>(typeConverter, target, benefit);
 }

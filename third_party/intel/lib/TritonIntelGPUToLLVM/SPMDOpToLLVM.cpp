@@ -81,8 +81,8 @@ struct GetClusterCTAIdOpConversion
 } // namespace
 
 void mlir::triton::intel::populateSPMDOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit) {
   patterns.add<GetProgramIdOpConversion>(typeConverter, target, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, target, benefit);
   patterns.add<GetClusterCTAIdOpConversion>(typeConverter, target, benefit);

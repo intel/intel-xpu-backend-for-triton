@@ -140,8 +140,8 @@ private:
 } // namespace
 
 void mlir::triton::intel::populateControlFlowOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit) {
   patterns.add<ReturnOpConversion>(typeConverter, target, benefit);
   patterns.add<CallOpConversion>(typeConverter, target, benefit);
 }

@@ -8,19 +8,17 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-// namespace intel {
-
-class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
+class TritonIntelGPUToLLVMTypeConverter : public LLVMTypeConverter {
 public:
   using TypeConverter::convertType;
 
-  TritonGPUToLLVMTypeConverter(MLIRContext *ctx, LowerToLLVMOptions &option,
-                               const DataLayoutAnalysis *analysis = nullptr);
+  TritonIntelGPUToLLVMTypeConverter(
+      MLIRContext *ctx, LowerToLLVMOptions &option,
+      const DataLayoutAnalysis *analysis = nullptr);
 
   Type getElementTypeForStruct(RankedTensorType type);
   Type convertTritonPointerType(triton::PointerType type);
   Type convertTritonTensorType(RankedTensorType type);
 };
 
-// } // namespace intel
 #endif

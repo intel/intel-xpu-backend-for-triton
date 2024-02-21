@@ -62,8 +62,8 @@ struct DeallocTensorOpConversion
 } // namespace
 
 void mlir::triton::intel::populateMemoryOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, Target target, PatternBenefit benefit) {
   patterns.add<AllocTensorOpConversion>(typeConverter, target, benefit);
   patterns.add<DeallocTensorOpConversion>(typeConverter, target, benefit);
 }
