@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITON_GPU_TO_LLVM_PTX_ASM_FORMAT_H_
-#define TRITON_CONVERSION_TRITON_GPU_TO_LLVM_PTX_ASM_FORMAT_H_
+#ifndef TRITON_CONVERSION_TRITON_INTEL_GPU_TO_LLVM_PTX_ASM_FORMAT_H_
+#define TRITON_CONVERSION_TRITON_INTEL_GPU_TO_LLVM_PTX_ASM_FORMAT_H_
 
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -14,6 +14,8 @@ class Location;
 
 namespace triton {
 using llvm::StringRef;
+
+namespace intel {
 
 struct PTXInstr;
 struct PTXInstrCommon;
@@ -332,6 +334,7 @@ struct PTXCpAsyncLoadInstr : PTXInstrBase<PTXCpAsyncLoadInstr> {
   }
 };
 
+} // namespace intel
 } // namespace triton
 } // namespace mlir
 
