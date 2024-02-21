@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TYPECONVERTER_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TYPECONVERTER_H
+#ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_TYPECONVERTER_H
+#define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_TYPECONVERTER_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -7,6 +7,8 @@
 
 using namespace mlir;
 using namespace mlir::triton;
+
+namespace intel {
 
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
 public:
@@ -20,4 +22,5 @@ public:
   Type convertTritonTensorType(RankedTensorType type);
 };
 
+} // namespace intel
 #endif

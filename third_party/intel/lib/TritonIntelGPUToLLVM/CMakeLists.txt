@@ -1,4 +1,4 @@
-add_triton_library(TritonGPUToLLVM
+add_triton_library(TritonIntelGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandDPAS.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
@@ -33,22 +33,9 @@ add_triton_library(TritonGPUToLLVM
     AllocateSharedMemory.cpp
 
     DEPENDS
-    TritonGPUConversionPassIncGen
+    TritonIntelGPUConversionPassIncGen
+    NVGPUIntelConversionPassIncGen
 
-    LINK_LIBS PUBLIC
-    MLIRIR
-    MLIRPass
-    MLIRGENXDialect
-    MLIRGPUDialect
-    MLIRGPUToGENXTransforms
-    MLIRGPUToNVVMTransforms
-    MLIRGPUToROCDLTransforms
-    MLIRGPUTransforms
-    TritonAnalysis
-    TritonIR
-    TritonGPUIR
-    TritonIntelGPUIR
-    TritonGPUTransforms
-    TritonNvidiaGPUTransforms
-    NVGPUIR
+    TritonNVIDIAGPUConversionPassIncGen
+    NVGPUAttrDefsIncGen
 )

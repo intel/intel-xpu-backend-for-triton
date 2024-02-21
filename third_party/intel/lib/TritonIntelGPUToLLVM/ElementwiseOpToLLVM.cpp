@@ -1,11 +1,13 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 
+namespace {
 static SmallVector<Value> identity_func(Location loc,
                                         ConversionPatternRewriter &rewriter,
                                         const SmallVector<Value> &v) {
   return v;
 }
+} // namespace
 namespace mlir::triton {
 
 namespace gpu {
@@ -2969,6 +2971,7 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
 } // namespace
 } // namespace gpu
 
+namespace intel {
 void populateElementwiseOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
@@ -3084,5 +3087,5 @@ void populateElementwiseOpToLLVMPatterns(
       typeConverter, axisInfoAnalysis, computeCapability, target,
       benefitForPropNan);
 }
-
+} // namespace intel
 } // namespace mlir::triton

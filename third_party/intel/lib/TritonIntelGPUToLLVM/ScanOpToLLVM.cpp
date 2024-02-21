@@ -13,6 +13,7 @@ using ::mlir::LLVM::shflUpSync;
 using ::mlir::LLVM::storeShared;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
+namespace {
 // apply combine region to acc and cur and accumulate it into acc
 // TODO(Lezcano) This is now duplicated with ReduceOpConversion::reduce.
 // Deduplicate
@@ -331,7 +332,6 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
   }
 }
 
-namespace {
 struct ScanOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp> {
 public:
@@ -528,7 +528,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 }
 } // namespace
 
-void mlir::triton::populateScanOpToLLVMPatterns(
+void mlir::triton::intel::populateScanOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     Target target, PatternBenefit benefit) {
   patterns.add<ScanOpConversion>(typeConverter, target, benefit);

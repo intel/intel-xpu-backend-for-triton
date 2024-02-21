@@ -1,3 +1,4 @@
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -17,7 +18,6 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -30,8 +30,8 @@
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+#define GEN_PASS_DEF_CONVERTTRITONINTELGPUTOLLVM
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
@@ -476,11 +476,13 @@ private:
 namespace mlir {
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonIntelGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
 }
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int32_t computeCapability, Target target) {
+createConvertTritonIntelGPUToLLVMPass(int32_t computeCapability,
+                                      Target target) {
   return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target);
 }
 

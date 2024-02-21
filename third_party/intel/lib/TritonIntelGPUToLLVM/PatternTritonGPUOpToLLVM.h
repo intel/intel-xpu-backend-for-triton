@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
+#ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
+#define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 
 #include "TritonGPUToLLVMBase.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -7,6 +7,7 @@
 
 namespace mlir {
 namespace triton {
+namespace intel {
 
 void populateBarrierOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
@@ -82,6 +83,7 @@ void populateSPMDOpToLLVMPattern(TritonGPUToLLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns, Target target,
                                  PatternBenefit benefit);
 
+} // namespace intel
 } // namespace triton
 } // namespace mlir
 

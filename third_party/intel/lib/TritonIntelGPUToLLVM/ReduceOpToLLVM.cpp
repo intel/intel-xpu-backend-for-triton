@@ -481,7 +481,7 @@ private:
 };
 } // namespace
 
-void mlir::triton::populateReduceOpToLLVMPatterns(
+void mlir::triton::intel::populateReduceOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int computeCapability, Target target, PatternBenefit benefit) {
   patterns.add<ReduceOpConversion>(typeConverter, computeCapability, target,

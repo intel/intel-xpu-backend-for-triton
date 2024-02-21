@@ -1375,7 +1375,7 @@ struct AsyncBulkCommitGroupOpConversion
 
 } // namespace
 
-void mlir::triton::populateLoadStoreOpToLLVMPatterns(
+void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
     PatternBenefit benefit) {

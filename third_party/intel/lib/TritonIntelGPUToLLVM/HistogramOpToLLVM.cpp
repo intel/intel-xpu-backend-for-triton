@@ -6,6 +6,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+namespace {
 static int log2Int(int64_t num) { return (num > 1) ? 1 + log2Int(num / 2) : 0; }
 
 static Value generateVoteBallot(Location loc, Value bit, int threadMask,
@@ -157,7 +158,6 @@ static SmallVector<Value> computeCrossWarpHistogram(
   return histogramValues;
 }
 
-namespace {
 struct HistogramOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::HistogramOp> {
 public:
@@ -211,7 +211,7 @@ public:
 };
 } // namespace
 
-void mlir::triton::populateHistogramOpToLLVMPatterns(
+void mlir::triton::intel::populateHistogramOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     Target target, PatternBenefit benefit) {
   patterns.add<HistogramOpConversion>(typeConverter, target, benefit);

@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_BASE_H
+#ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_BASE_H
+#define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_BASE_H
 
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
@@ -9,9 +9,9 @@
 #include "TypeConverter.h"
 //
 #include "Utility.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"

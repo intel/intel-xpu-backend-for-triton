@@ -339,7 +339,7 @@ struct PrintOpConversion
 
 } // namespace
 
-void mlir::triton::populatePrintOpToLLVMPattern(
+void mlir::triton::intel::populatePrintOpToLLVMPattern(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     Target target, PatternBenefit benefit) {
   patterns.add<PrintOpConversion>(typeConverter, target, benefit);

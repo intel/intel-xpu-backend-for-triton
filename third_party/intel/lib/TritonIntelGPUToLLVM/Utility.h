@@ -1,14 +1,15 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
+#ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
+#define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 
+#include "intel/include/TritonIntelGPUToLLVM/PTXAsmFormat.h"
+
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -93,7 +94,7 @@ using namespace mlir::triton;
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
 #define barSync(rewriter, op, bar, numThreads)                                 \
   do {                                                                         \
-    ::mlir::triton::PTXBuilder ptxBuilder;                                     \
+    ::mlir::triton::intel::PTXBuilder ptxBuilder;                              \
     auto &barSyncOp = *ptxBuilder.create<>("bar.sync");                        \
     barSyncOp(ptxBuilder.newConstantOperand(bar),                              \
               ptxBuilder.newConstantOperand(numThreads));                      \
@@ -141,6 +142,7 @@ using namespace mlir::triton;
 
 namespace mlir {
 namespace triton {
+namespace intel {
 
 // Delinearize supposing order is [0, 1, .. , n]
 template <typename T>
@@ -200,6 +202,7 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
                                applyPermutation(shape, order));
 }
 
+} // namespace intel
 } // namespace triton
 
 namespace LLVM {
