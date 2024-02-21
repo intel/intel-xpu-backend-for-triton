@@ -27,7 +27,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
@@ -65,6 +65,7 @@ triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
   }
 }
 
+namespace {
 int64_t getSwizzlingFromLayout(const SharedEncodingAttr &layout,
                                uint32_t widthInByte) {
   int perPhase = layout.getPerPhase();
@@ -215,7 +216,8 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
   // Workaround for a bug in ptxas 12.3 that cause a failure in
   // test_core.py::test_dot. The shuffle will force the compiler to treat the
   // value as uniform and prevent wrong optimizations.
-  warp = mlir::LLVM::shflIdxSync(loc, rewriter, warp, 0, mlir::triton::NVVM);
+  warp = mlir::LLVM::utils::shflIdxSync(loc, rewriter, warp, 0,
+                                        mlir::triton::NVVM);
   Value warpM = urem(warp, i32_val(wpt[0]));
   Value warpId = urem(warpM, i32_val(shapePerCTA[0] / instrShape[0]));
 
@@ -513,7 +515,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   rewriter.replaceOp(op, res);
   return success();
 }
+} // namespace
 
+namespace fma_details {
 LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread) {
@@ -545,3 +549,4 @@ LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                     op.getAllowTF32(), op.getMaxNumImpreciseAcc(), false,
                     thread);
 }
+} // namespace fma_details

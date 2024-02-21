@@ -58,8 +58,9 @@ using namespace mlir::triton;
   rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
 #define load(...) rewriter.create<LLVM::LoadOp>(loc, __VA_ARGS__)
 #define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
-#define load_dsmem(...) LLVM::createLoadDSmem(loc, rewriter, __VA_ARGS__)
-#define store_dsmem(...) LLVM::createStoreDSmem(loc, rewriter, __VA_ARGS__)
+#define load_dsmem(...) LLVM::utils::createLoadDSmem(loc, rewriter, __VA_ARGS__)
+#define store_dsmem(...)                                                       \
+  LLVM::utils::createStoreDSmem(loc, rewriter, __VA_ARGS__)
 #define fcmp_ogt(lhs, rhs)                                                     \
   rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
                                 LLVM::FCmpPredicate::ogt, lhs, rhs)
@@ -127,13 +128,13 @@ using namespace mlir::triton;
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
 // Constants
-#define f16_val(...) LLVM::createConstantF16(loc, rewriter, __VA_ARGS__)
-#define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
-#define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
-#define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
-#define i64_val(...) LLVM::createConstantI64(loc, rewriter, __VA_ARGS__)
+#define f16_val(...) LLVM::utils::createConstantF16(loc, rewriter, __VA_ARGS__)
+#define f32_val(...) LLVM::utils::createConstantF32(loc, rewriter, __VA_ARGS__)
+#define f64_val(...) LLVM::utils::createConstantF64(loc, rewriter, __VA_ARGS__)
+#define i32_val(...) LLVM::utils::createConstantI32(loc, rewriter, __VA_ARGS__)
+#define i64_val(...) LLVM::utils::createConstantI64(loc, rewriter, __VA_ARGS__)
 #define int_val(width, val)                                                    \
-  LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
+  LLVM::utils::createLLVMIntegerConstant(rewriter, loc, width, val)
 #define tid_val() getThreadId(rewriter, loc)
 
 // Attributes
@@ -206,6 +207,7 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
 } // namespace triton
 
 namespace LLVM {
+namespace utils {
 using namespace mlir::triton;
 
 /// Create a predicated block, using \p cond as the condition and \p ops for the
@@ -471,10 +473,12 @@ static Value getSharedMemoryBase(Location loc,
                       .getZExtValue();
   Value offVal = i32_val(offset);
   Value base =
-      gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func, target), offVal);
+      gep(ptrTy, i8_ty, LLVM::utils::getStackPointer(rewriter, func, target),
+          offVal);
   return base;
 }
 
+} // namespace utils
 } // namespace LLVM
 
 /* ------------------------------------ */
@@ -508,10 +512,9 @@ static Value getClusterCTAId(ConversionPatternRewriter &rewriter,
 // -----------------------------------------------------------------------
 // Shared memory utilities
 // -----------------------------------------------------------------------
-using LLVM::getMultiDimIndex;
-using LLVM::SharedMemoryObject;
-using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::SharedMemoryObject;
+using ::mlir::LLVM::utils::delinearize;
+using ::mlir::LLVM::utils::SharedMemoryObject;
+using ::mlir::triton::getMultiDimIndex;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -1428,7 +1431,7 @@ static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
 
   std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
   sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  return LLVM::getSRegValue(rewriter, loc, sreg);
+  return LLVM::utils::getSRegValue(rewriter, loc, sreg);
 }
 
 } // namespace mlir

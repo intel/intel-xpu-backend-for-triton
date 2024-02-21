@@ -5,7 +5,7 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
 
 namespace {
 struct SplatOpConversion

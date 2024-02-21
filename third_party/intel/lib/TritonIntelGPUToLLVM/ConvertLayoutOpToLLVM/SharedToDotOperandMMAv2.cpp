@@ -4,9 +4,9 @@
 using namespace mlir;
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
-using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
+using ::mlir::LLVM::utils::delinearize;
+using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::utils::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;

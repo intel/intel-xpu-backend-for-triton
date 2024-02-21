@@ -62,12 +62,12 @@ struct AssertOpConversion
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     unsigned addrSpace =
         (target == Target::GENX) ? GENX::GENXMemorySpace::kCrossWorkgroup : 0;
-    Value messageString = LLVM::addStringToModule(
+    Value messageString = LLVM::utils::addStringToModule(
         loc, rewriter, "assertMessage_", message, addrSpace);
-    Value fileString =
-        LLVM::addStringToModule(loc, rewriter, "assertFile_", file, addrSpace);
-    Value funcString =
-        LLVM::addStringToModule(loc, rewriter, "assertFunc_", func, addrSpace);
+    Value fileString = LLVM::utils::addStringToModule(
+        loc, rewriter, "assertFile_", file, addrSpace);
+    Value funcString = LLVM::utils::addStringToModule(
+        loc, rewriter, "assertFunc_", func, addrSpace);
     Value lineNumber = i32_val(line);
 
     SmallVector<Value> operands;

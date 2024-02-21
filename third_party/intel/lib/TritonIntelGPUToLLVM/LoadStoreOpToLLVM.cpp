@@ -15,9 +15,9 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::linearize;
+using ::mlir::LLVM::utils::delinearize;
+using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::utils::linearize;
 using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -259,7 +259,7 @@ struct LoadOpConversion
         }
 
         // Create a predicated load operation.
-        Block &endBlock = LLVM::createPredicatedBlock(
+        Block &endBlock = LLVM::utils::createPredicatedBlock(
             rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
               Value addrElem =
                   bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
@@ -516,7 +516,7 @@ struct StoreOpConversion
         }
 
         // Create a predicated store operation.
-        mlir::LLVM::createPredicatedBlock(rewriter, loc, maskVal, [&] {
+        mlir::LLVM::utils::createPredicatedBlock(rewriter, loc, maskVal, [&] {
           Value addrElem =
               bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
           store(vecWord, addrElem);
@@ -662,8 +662,8 @@ struct AtomicCASOpConversion
         } else {
           auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
           createBarrier(rewriter, loc, numCTAs);
-          Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter,
-                                                    op.getOperation(), target);
+          Value atomPtr = LLVM::utils::getSharedMemoryBase(
+              loc, rewriter, op.getOperation(), target);
           atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
           // Only threads with mask = True store the result
           PTXBuilder ptxBuilderStore;
@@ -685,8 +685,8 @@ struct AtomicCASOpConversion
                "Unexpected width");
 
         Value zero = (valueElemNBits == 32) ? i32_val(0) : i64_val(0);
-        Block &endBlock =
-            mlir::LLVM::createPredicatedBlock(rewriter, loc, mask, {zero}, [&] {
+        Block &endBlock = mlir::LLVM::utils::createPredicatedBlock(
+            rewriter, loc, mask, {zero}, [&] {
               // casPtr = bitcast(casPtr, ptr_ty(ctx, 1));
               casCmp = bitcast(casCmp, zero.getType());
               casVal = bitcast(casVal, zero.getType());
@@ -710,10 +710,11 @@ struct AtomicCASOpConversion
           }
         } else {
           createBarrier(rewriter, loc, numCTAs);
-          Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter,
-                                                    op.getOperation(), target);
+          Value atomPtr = LLVM::utils::getSharedMemoryBase(
+              loc, rewriter, op.getOperation(), target);
           atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
-          mlir::LLVM::storeShared(rewriter, loc, atomPtr, ret, mask, target);
+          mlir::LLVM::utils::storeShared(rewriter, loc, atomPtr, ret, mask,
+                                         target);
           createBarrier(rewriter, loc, numCTAs);
           Value ret = load(valueElemTy, atomPtr);
           createBarrier(rewriter, loc, numCTAs);
@@ -881,8 +882,8 @@ struct AtomicRMWOpConversion
             rewriter.replaceOp(op, {old});
             return success();
           }
-          Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter,
-                                                    op.getOperation(), target);
+          Value atomPtr = LLVM::utils::getSharedMemoryBase(
+              loc, rewriter, op.getOperation(), target);
           atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
           // Only threads with rmwMask = True store the result
           PTXBuilder ptxBuilderStore;
@@ -911,7 +912,7 @@ struct AtomicRMWOpConversion
             .Case<mlir::Float32Type>([&](auto ty) { zero = f32_val(0); })
             .Case<mlir::Float64Type>([&](auto ty) { zero = f64_val(0); });
 
-        Block &endBlock = mlir::LLVM::createPredicatedBlock(
+        Block &endBlock = mlir::LLVM::utils::createPredicatedBlock(
             rewriter, loc, rmwMask, {zero}, [&] {
               mlir::LLVM::AtomicBinOp rmwKind;
               switch (atomicRmwAttr) {
@@ -963,11 +964,12 @@ struct AtomicRMWOpConversion
                 vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
           }
         } else {
-          Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter,
-                                                    op.getOperation(), target);
+          Value atomPtr = LLVM::utils::getSharedMemoryBase(
+              loc, rewriter, op.getOperation(), target);
           atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
           // Only threads with rmwMask = True store the result
-          mlir::LLVM::storeShared(rewriter, loc, atomPtr, ret, rmwMask, target);
+          mlir::LLVM::utils::storeShared(rewriter, loc, atomPtr, ret, rmwMask,
+                                         target);
           createBarrier(rewriter, loc, numCTAs);
           Value loadVal = load(valueElemTy, atomPtr);
           createBarrier(rewriter, loc, numCTAs);
@@ -1252,8 +1254,8 @@ struct ExtractSliceOpConversion
 
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                         llvmElemTy, rewriter);
+    auto smemObj = LLVM::utils::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(), llvmElemTy, rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
     auto mixedOffsets = op.getMixedOffsets();

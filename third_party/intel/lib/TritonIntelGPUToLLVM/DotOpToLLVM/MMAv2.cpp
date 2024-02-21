@@ -10,6 +10,7 @@ using ::mlir::triton::intel::PTXBuilder;
 
 using ValueTableV2 = std::map<std::array<int, 3>, Value>;
 
+namespace {
 Value loadC(Value tensor, Value llTensor,
             const LLVMTypeConverter *typeConverter, Location loc,
             ConversionPatternRewriter &rewriter) {
@@ -390,7 +391,9 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                     op.getC(), op.getD(), adaptor.getA(), adaptor.getB(),
                     loadedC, op, adaptor, isTuring);
 }
+} // namespace
 
+namespace fma_details {
 // Convert to mma.m16n8k8
 LogicalResult convertMMA1688(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                              const LLVMTypeConverter *typeConverter,
@@ -404,3 +407,4 @@ LogicalResult convertMMA16816(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                               ConversionPatternRewriter &rewriter) {
   return convertMMA(op, adaptor, typeConverter, rewriter, false /*isTuring*/);
 }
+} // namespace fma_details

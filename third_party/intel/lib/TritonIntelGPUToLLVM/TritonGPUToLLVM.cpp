@@ -126,7 +126,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                   ConversionPatternRewriter &rewriter) const override {
     // Prevent LLVM's inliner to inline this function
     auto amendedFuncOp = funcOp;
-    if (!LLVM::isKernel(funcOp))
+    if (!LLVM::utils::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
     LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
@@ -140,7 +140,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     switch (target) {
     case Target::NVVM:
     case Target::ROCDL:
-      if (LLVM::isKernel(funcOp)) {
+      if (LLVM::utils::isKernel(funcOp)) {
         // Set an attribute to indicate this function is a kernel entry.
         newFuncOp->setAttr("nvvm.kernel",
                            rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
@@ -155,7 +155,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       auto mod = funcOp->getParentOfType<ModuleOp>();
       int threadsPerWarp =
           triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-      if (LLVM::isKernel(funcOp))
+      if (LLVM::utils::isKernel(funcOp))
         attrs.append(GENX::GENXDialect::getKernelFuncAttrName(),
                      rewriter.getI32IntegerAttr(1));
       attrs.append(GENX::GENXDialect::getMaxWorkGroupSizeAttrName(),
@@ -165,7 +165,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp->setDialectAttrs(attrs);
       break;
     }
-    if (!LLVM::isKernel(funcOp)) {
+    if (!LLVM::utils::isKernel(funcOp)) {
       // The noinline attribute will be used by the LLVM codegen to prevent
       // inlining.
       // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/LLVMIR/IR/LLVMInlining.cpp#L267
@@ -310,7 +310,7 @@ struct ConvertTritonGPUToLLVM
     if (numCTAs == 1) {
       mod.walk([](triton::nvgpu::ClusterCTAIdOp id) {
         OpBuilder b(id);
-        Value zero = LLVM::createConstantI32(id->getLoc(), b, 0);
+        Value zero = LLVM::utils::createConstantI32(id->getLoc(), b, 0);
         id.replaceAllUsesWith(zero);
       });
     }

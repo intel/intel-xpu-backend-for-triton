@@ -9,6 +9,7 @@ using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 
+namespace {
 static Type getMmaRetType(TensorType operand) {
   auto *ctx = operand.getContext();
   Type fp32Ty = type::f32Ty(ctx);
@@ -34,7 +35,9 @@ static ValueTable extractLoadedOperand(Value llStruct, int NK,
 
   return rcds;
 }
+} // namespace
 
+namespace fma_details {
 LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
@@ -158,3 +161,4 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   rewriter.replaceOp(op, res);
   return success();
 }
+} // namespace fma_details

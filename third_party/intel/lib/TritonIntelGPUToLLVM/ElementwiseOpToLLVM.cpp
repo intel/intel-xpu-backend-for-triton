@@ -2743,7 +2743,7 @@ struct MinMaxFOpConversion
     auto isNan = rewriter.create<LLVM::OrOp>(loc, lhsIsNan, rhsIsNan);
     auto nonNanRes = rewriter.create<DestOpNoNanProp>(loc, elemTy, lhs, rhs);
 
-    auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
+    auto nan = LLVM::utils::createNaNConstant(loc, rewriter, elemTy);
 
     // Select the result based on the isNan flag.
     return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
@@ -2861,7 +2861,7 @@ struct ClampFOpConversion
       auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
                                                operands[0][1]);
       auto nonNanRes = rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2]);
-      auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
+      auto nan = LLVM::utils::createNaNConstant(loc, rewriter, elemTy);
       // Select the result based on the isNan flag.
       return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
     }

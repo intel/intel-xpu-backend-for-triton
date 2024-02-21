@@ -2,10 +2,10 @@
 #include "../Utility.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;
-using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::linearize;
+using ::mlir::LLVM::utils::delinearize;
+using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::utils::getStridesFromShapeAndOrder;
+using ::mlir::LLVM::utils::linearize;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;

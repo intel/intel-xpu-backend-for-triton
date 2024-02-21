@@ -216,6 +216,7 @@ private:
 
 } // namespace
 
+namespace fma_details {
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
@@ -253,3 +254,4 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return helper.convertDot(op, adaptor);
 }
+} // namespace fma_details

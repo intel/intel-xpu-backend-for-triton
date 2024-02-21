@@ -3,12 +3,12 @@
 
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::linearize;
+using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::utils::getStridesFromShapeAndOrder;
+using ::mlir::LLVM::utils::linearize;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
+using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::utils::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;
@@ -489,8 +489,8 @@ private:
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
+    Value smemBase = LLVM::utils::getSharedMemoryBase(
+        loc, rewriter, op.getOperation(), target);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
 
@@ -569,8 +569,8 @@ private:
 
     if (shouldUseDistSmem(srcLayout, dstLayout))
       return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
+    Value smemBase = LLVM::utils::getSharedMemoryBase(
+        loc, rewriter, op.getOperation(), target);
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
@@ -835,8 +835,8 @@ private:
     assert(srcTy.getShape().size() == 2 ||
            (srcTy.getShape().size() <= 3 && outOrd[2] == 0) &&
                "Unexpected rank of ConvertLayout(blocked->shared)");
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
+    Value smemBase = LLVM::utils::getSharedMemoryBase(
+        loc, rewriter, op.getOperation(), target);
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);

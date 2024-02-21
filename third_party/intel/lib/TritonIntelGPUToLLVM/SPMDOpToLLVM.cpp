@@ -54,7 +54,7 @@ struct GetNumProgramsOpConversion
     std::string sreg = numCTAs == 1 ? "%nctaid." : "%nclusterid.";
     sreg.append(1, 'x' + op.getAxis()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
 
-    Value numPrograms = LLVM::getSRegValue(rewriter, loc, sreg);
+    Value numPrograms = LLVM::utils::getSRegValue(rewriter, loc, sreg);
     rewriter.replaceOp(op, numPrograms);
     return success();
   }

@@ -9,6 +9,7 @@ using ::mlir::triton::intel::PTXBuilder;
 namespace mlir {
 
 namespace LLVM {
+namespace utils {
 using namespace mlir::triton;
 
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v) {
@@ -453,5 +454,6 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   return stringStart;
 }
 
+} // namespace utils
 } // namespace LLVM
 } // namespace mlir

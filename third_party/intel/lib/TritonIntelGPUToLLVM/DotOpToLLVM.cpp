@@ -5,12 +5,13 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
+namespace fma_details {
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToLLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
@@ -39,6 +40,7 @@ LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread);
+} // namespace fma_details
 namespace {
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -64,14 +66,17 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                                           .dyn_cast<NvidiaMmaEncodingAttr>();
     if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
       if (mmaLayout.isVolta())
-        return convertMMA884(op, adaptor, getTypeConverter(), rewriter);
+        return fma_details::convertMMA884(op, adaptor, getTypeConverter(),
+                                          rewriter);
       if (mmaLayout.isTuring())
-        return convertMMA1688(op, adaptor, getTypeConverter(), rewriter);
+        return fma_details::convertMMA1688(op, adaptor, getTypeConverter(),
+                                           rewriter);
       if (mmaLayout.isAmpere())
-        return convertMMA16816(op, adaptor, getTypeConverter(), rewriter);
+        return fma_details::convertMMA16816(op, adaptor, getTypeConverter(),
+                                            rewriter);
       if (mmaLayout.isHopper())
-        return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                            getThreadId(rewriter, loc));
+        return fma_details::convertWGMMA(op, adaptor, getTypeConverter(),
+                                         rewriter, getThreadId(rewriter, loc));
 
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
@@ -82,14 +87,16 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
                                       .getEncoding()
                                       .dyn_cast<DpasEncodingAttr>();
     if (!isOuter && dpasLayout && supportDPAS(op)) {
-      return convertDPAS(op, adaptor, getTypeConverter(), rewriter);
+      return fma_details::convertDPAS(op, adaptor, getTypeConverter(),
+                                      rewriter);
     }
 
     if (D.getType()
             .cast<RankedTensorType>()
             .getEncoding()
             .isa<BlockedEncodingAttr>())
-      return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
+      return fma_details::convertFMADot(op, adaptor, getTypeConverter(),
+                                        rewriter);
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
@@ -122,8 +129,9 @@ struct DotAsyncOpConversion
     if (!isOuter && mmaLayout &&
         supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
       if (mmaLayout.isHopper()) {
-        return convertAsyncWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                                 getThreadId(rewriter, loc));
+        return fma_details::convertAsyncWGMMA(op, adaptor, getTypeConverter(),
+                                              rewriter,
+                                              getThreadId(rewriter, loc));
       }
 
       llvm::report_fatal_error(

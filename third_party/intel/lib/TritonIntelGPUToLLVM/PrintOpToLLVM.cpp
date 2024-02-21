@@ -22,7 +22,7 @@ struct PrintOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto typeConverter = getTypeConverter();
     auto loc = op->getLoc();
-    Value prefixStr = LLVM::addStringToModule(
+    Value prefixStr = LLVM::utils::addStringToModule(
         loc, rewriter, "printfPrefix_", op.getPrefix(),
         (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant : 0);
 
@@ -276,7 +276,7 @@ struct PrintOpConversion
     assert(!msg.empty() && "printf with empty string not supported");
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
-    Value msgValue = LLVM::addStringToModule(
+    Value msgValue = LLVM::utils::addStringToModule(
         UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
         msgNewline,
         (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant : 0);

@@ -11,6 +11,7 @@ using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTableFMA = std::map<std::pair<int, int>, Value>;
 
+namespace {
 static ValueTableFMA getValueTableFromStructFMA(
     Value val, int K, int n0, int shapePerCTATile, int sizePerThread,
     ConversionPatternRewriter &rewriter, Location loc,
@@ -26,7 +27,9 @@ static ValueTableFMA getValueTableFromStructFMA(
   }
   return res;
 }
+} // namespace
 
+namespace fma_details {
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             TritonGPUToLLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
@@ -113,3 +116,4 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   return success();
 }
+} // namespace fma_details

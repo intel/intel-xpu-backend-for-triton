@@ -85,12 +85,12 @@ private:
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
     if (!caller->hasAttr("allocation.offset")) {
-      auto base = LLVM::getStackPointer(rewriter, caller, target);
+      auto base = LLVM::utils::getStackPointer(rewriter, caller, target);
       promotedOperands.push_back(base);
       return promotedOperands;
     }
-    promotedOperands.push_back(
-        LLVM::getSharedMemoryBase(callOp->getLoc(), rewriter, callOp, target));
+    promotedOperands.push_back(LLVM::utils::getSharedMemoryBase(
+        callOp->getLoc(), rewriter, callOp, target));
     return promotedOperands;
   }
 
