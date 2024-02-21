@@ -36,7 +36,7 @@ def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
 def TTIG_PrefetchOp : TTIG_Op<"prefetch", []> {
   let summary = "Prefetch from a tensor pointer";
 
-  let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
+  let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
                        TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
 
   let results = (outs);

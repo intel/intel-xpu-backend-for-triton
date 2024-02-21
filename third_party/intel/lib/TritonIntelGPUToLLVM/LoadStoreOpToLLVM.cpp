@@ -129,6 +129,29 @@ protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
 };
 
+struct PrefetchOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>,
+      public LoadStoreConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::intel::PrefetchOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  PrefetchOpConversion(TritonGPUToLLVMTypeConverter &converter,
+                       ModuleAxisInfoAnalysis &axisAnalysisPass,
+                       PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>(
+            converter, benefit),
+        LoadStoreConversionBase(axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    // TODO: materialize the prefetching to gather or 2D prefetching.
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct LoadOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>,
       public LoadStoreConversionBase {
@@ -791,6 +814,7 @@ private:
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+  patterns.add<PrefetchOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);
