@@ -330,6 +330,7 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
 } // namespace
 
 namespace SharedToDotOperandDPAS {
+namespace intel {
 
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
@@ -349,4 +350,5 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   return Value();
 }
 
+} // namespace intel
 } // namespace SharedToDotOperandDPAS

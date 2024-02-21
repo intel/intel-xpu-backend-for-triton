@@ -22,6 +22,7 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 // Forward declarations
 
 namespace SharedToDotOperandMMAv1 {
+namespace intel {
 using CoordTy = SmallVector<Value>;
 using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 
@@ -37,29 +38,39 @@ Value convertLayout(int opIdx, Value tensor, const SharedMemoryObject &smemObj,
                     TritonGPUToLLVMTypeConverter *typeConverter,
                     ConversionPatternRewriter &rewriter, Type resultTy);
 
+} // namespace intel
 } // namespace SharedToDotOperandMMAv1
 
 namespace SharedToDotOperandMMAv2 {
+namespace intel {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread);
-}
+
+} // namespace intel
+} // namespace SharedToDotOperandMMAv2
 
 namespace SharedToDotOperandFMA {
+namespace intel {
 Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
                     Value thread, Location loc,
                     TritonGPUToLLVMTypeConverter *typeConverter,
                     ConversionPatternRewriter &rewriter);
-}
+
+} // namespace intel
+} // namespace SharedToDotOperandFMA
 
 namespace SharedToDotOperandDPAS {
+namespace intel {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
                     TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
+
+} // namespace intel
 } // namespace SharedToDotOperandDPAS
 
 namespace {
@@ -243,7 +254,7 @@ private:
       } else if (mmaLayout.isVolta()) {
         auto [isARow, isBRow, isAVec4, isBVec4, _] =
             mmaLayout.decodeVoltaLayoutStates();
-        auto coords = SharedToDotOperandMMAv1::getMNCoords(
+        auto coords = SharedToDotOperandMMAv1::intel::getMNCoords(
             threadId, loc, rewriter, mmaLayout.getWarpsPerCTA(), mmaLayout,
             shape, isARow, isBRow, isAVec4, isBVec4);
         return coords[elemId];
@@ -885,7 +896,7 @@ private:
     } else if (auto blockedLayout =
                    dstEnc.getParent().dyn_cast_or_null<BlockedEncodingAttr>()) {
       auto thread = getThreadId(rewriter, loc);
-      res = SharedToDotOperandFMA::convertLayout(
+      res = SharedToDotOperandFMA::intel::convertLayout(
           dstEnc.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
           thread, loc, getTypeConverter(), rewriter);
     } else {
@@ -1023,7 +1034,7 @@ private:
                                                    llvmElemTy, rewriter);
     Value res;
     if (!isOuter && mmaLayout.isAmpere()) { // tensor core v2
-      res = SharedToDotOperandMMAv2::convertLayout(
+      res = SharedToDotOperandMMAv2::intel::convertLayout(
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
           smemObj, getTypeConverter(), getThreadId(rewriter, loc));
     } else if (!isOuter && mmaLayout.isVolta() && isMMA) { // tensor core v1
@@ -1038,7 +1049,7 @@ private:
         return Value();
       }
 
-      res = SharedToDotOperandMMAv1::convertLayout(
+      res = SharedToDotOperandMMAv1::intel::convertLayout(
           dotOperandLayout.getOpIdx(), src, smemObj, getThreadId(rewriter, loc),
           loc, getTypeConverter(), rewriter, dst.getType());
     } else {
@@ -1063,7 +1074,7 @@ private:
                                                    llvmElemTy, rewriter);
     Value res;
     if (!isOuter) {
-      res = SharedToDotOperandDPAS::convertLayout(
+      res = SharedToDotOperandDPAS::intel::convertLayout(
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
           smemObj, getTypeConverter(), tid_val());
     } else {

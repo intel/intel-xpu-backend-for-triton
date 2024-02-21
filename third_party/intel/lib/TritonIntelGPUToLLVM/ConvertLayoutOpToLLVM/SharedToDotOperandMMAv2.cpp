@@ -16,6 +16,7 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
+namespace {
 // Data loader for mma.16816 instruction.
 class MMA16816SmemLoader {
 public:
@@ -759,8 +760,10 @@ getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
                          expandedStrides, expandedOffsets);
   return expandedSmemObj;
 }
+} // namespace
 
 namespace SharedToDotOperandMMAv2 {
+namespace intel {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
@@ -781,4 +784,5 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                    expandedSmemObj, typeConverter, thread, false);
   }
 }
+} // namespace intel
 } // namespace SharedToDotOperandMMAv2

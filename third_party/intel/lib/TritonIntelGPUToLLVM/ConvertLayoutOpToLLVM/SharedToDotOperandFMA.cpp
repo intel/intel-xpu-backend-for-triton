@@ -15,6 +15,7 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
+namespace {
 SmallVector<Value>
 getThreadIds(Value threadId, ArrayRef<unsigned int> shapePerCTATile,
              ArrayRef<unsigned int> sizePerThread, ArrayRef<unsigned int> order,
@@ -222,8 +223,10 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
 
   return getStructFromValueTable(vbs, rewriter, loc, typeConverter, elemTy);
 }
+} // namespace
 
 namespace SharedToDotOperandFMA {
+namespace intel {
 Value convertLayout(int opIdx, Value val, Value llVal,
                     BlockedEncodingAttr dLayout, Value thread, Location loc,
                     TritonGPUToLLVMTypeConverter *typeConverter,
@@ -233,4 +236,5 @@ Value convertLayout(int opIdx, Value val, Value llVal,
   else
     return loadBFMA(val, llVal, dLayout, thread, loc, typeConverter, rewriter);
 }
+} // namespace intel
 } // namespace SharedToDotOperandFMA

@@ -33,6 +33,7 @@ using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
+namespace {
 triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
   auto dTy = d.getType().cast<RankedTensorType>().getElementType();
   if (dTy.isF32()) {
@@ -65,7 +66,6 @@ triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
   }
 }
 
-namespace {
 int64_t getSwizzlingFromLayout(const SharedEncodingAttr &layout,
                                uint32_t widthInByte) {
   int perPhase = layout.getPerPhase();

@@ -14,6 +14,8 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
+namespace {
+
 // Compute the offset of the matrix to load.
 // Returns offsetAM, offsetAK, offsetBN, offsetBK.
 // NOTE, the information M(from $a) and N(from $b) couldn't be retrieved at
@@ -341,8 +343,10 @@ static Value loadB(Value tensor, const SharedMemoryObject &smemObj,
   Value res = packLLElements(loc, typeConverter, elems, rewriter, resultTy);
   return res;
 }
+} // namespace
 
 namespace SharedToDotOperandMMAv1 {
+namespace intel {
 using CoordTy = SmallVector<Value>;
 using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 
@@ -461,4 +465,5 @@ Value convertLayout(int opIdx, Value tensor, const SharedMemoryObject &smemObj,
   }
 }
 
+} // namespace intel
 } // namespace SharedToDotOperandMMAv1
