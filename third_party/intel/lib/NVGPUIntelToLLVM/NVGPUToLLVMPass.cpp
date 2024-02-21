@@ -726,12 +726,12 @@ public:
 
 namespace mlir {
 namespace triton {
-namespace intel {
+// namespace intel {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUIntelToLLVMPass() {
   return std::make_unique<::ConvertNVGPUToLLVM>();
 }
 
-} // namespace intel
+// } // namespace intel
 } // namespace triton
 } // namespace mlir
