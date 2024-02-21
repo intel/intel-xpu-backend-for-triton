@@ -1,6 +1,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -132,6 +133,177 @@ struct LoadStoreConversionBase {
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
   const triton::intel::TargetInfo &targetInfo;
+};
+
+struct PrefetchOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>,
+      public LoadStoreConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::intel::PrefetchOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  PrefetchOpConversion(TritonGPUToLLVMTypeConverter &converter,
+                       const triton::intel::TargetInfo &targetInfo,
+                       ModuleAxisInfoAnalysis &axisAnalysisPass,
+                       PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>(
+            converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  std::tuple<Value, Value, Value, Value, Value, Value, Value>
+  getValuesFromBlockPointerStruct(Value blockPointer,
+                                  ConversionPatternRewriter &rewriter) const {
+    SmallVector<Value> elems =
+        unpackLLElements(blockPointer.getLoc(), blockPointer, rewriter);
+
+    return {elems[0], elems[1], elems[2], elems[3],
+            elems[4], elems[5], elems[6]};
+  }
+
+  static std::tuple<SmallVector<unsigned, 2>, SmallVector<unsigned, 2>>
+  getWarpsPerTile(Type eltTy, const ArrayRef<int64_t> shape, int numWarps) {
+    //  The cache line is 64 bytes.
+    //  Block_width times array_size should not exceed 64 bytes. The maximum
+    //  bytes number of col is 64. Always prefetch one cache line a time.
+    //  Block_height 1-32. The maximum row size is 32.
+    //  The maximum bytes for each 2D prefetching could be 32*64= 2048 bytes.
+    uint32_t bytesPerElt = eltTy.getIntOrFloatBitWidth() / 8;
+    uint32_t maxBytesNum = 2048;
+    uint32_t bytesPerCol = 64;
+    uint32_t rowNum = std::min<uint32_t>(shape[0], 32);
+    SmallVector<unsigned, 2> shapePerWarp = {rowNum, bytesPerCol / bytesPerElt};
+
+    uint32_t rowColRatio =
+        mlir::ceil<uint32_t>(shapePerWarp[0], shapePerWarp[1]);
+    uint32_t colRowRatio =
+        mlir::ceil<uint32_t>(shapePerWarp[1], shapePerWarp[0]);
+
+    SmallVector<unsigned, 2> ret = {1, 1};
+    do {
+      if (ret[0] * ret[1] >= numWarps)
+        break;
+      if (shape[0] / (shapePerWarp[0] * colRowRatio) / ret[0] >=
+          shape[1] / (shapePerWarp[1] * rowColRatio) / ret[1]) {
+        if (ret[0] < shape[0] / shapePerWarp[0]) {
+          ret[0] *= 2;
+        } else
+          ret[1] *= 2;
+      } else {
+        ret[1] *= 2;
+      }
+    } while (true);
+    return {ret, shapePerWarp};
+  }
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    auto typeConverter = getTypeConverter();
+    auto *ctx = rewriter.getContext();
+
+    // original values
+    Value ptr = op.getPtr();
+    Type ptrTy = ptr.getType();
+
+    // only to materialize the prefetch op with block pointer for now.
+    if (isTensorPointerType(ptrTy)) {
+      auto ptrType = ptrTy.cast<PointerType>();
+      auto tensorTy = ptrType.getPointeeType().cast<RankedTensorType>();
+      Type eltTy = tensorTy.getElementType();
+      const ArrayRef<int64_t> tensorShape = tensorTy.getShape();
+      auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+      auto numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+
+      SmallVector<unsigned, 2> warpsPerCTA, shapePerWarp;
+      std::tie(warpsPerCTA, shapePerWarp) =
+          getWarpsPerTile(eltTy, tensorShape, numWarps);
+
+      SmallVector<int64_t> numReps = {
+          mlir::ceil<int64_t>(tensorShape[0], shapePerWarp[0] * warpsPerCTA[0]),
+          mlir::ceil<int64_t>(tensorShape[1],
+                              shapePerWarp[1] * warpsPerCTA[1])};
+
+      uint32_t bytesPerCol =
+          shapePerWarp[1] * eltTy.getIntOrFloatBitWidth() / 8;
+      uint32_t elemSizeInBits = bytesPerCol >= 4 ? 32 : bytesPerCol * 8;
+      uint32_t tileWidthInElem =
+          mlir::ceil<uint32_t>(bytesPerCol * 8, elemSizeInBits);
+      uint32_t tileHeightInElem = shapePerWarp[0];
+
+      Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
+      Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
+      Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+      SmallVector<Value> multiDimWarpId =
+          mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, {1, 0});
+
+      Value blockPtr = adaptor.getPtr();
+      Value offsetBaseX, offsetBaseY, width, height, rowStride, colStride, base;
+      std::tie(offsetBaseY, offsetBaseX, height, width, rowStride, colStride,
+               base) = getValuesFromBlockPointerStruct(blockPtr, rewriter);
+
+      base = gep(base.getType(), eltTy, base, offsetBaseX);
+      offsetBaseY = rewriter.create<arith::TruncIOp>(loc, i32_ty, offsetBaseY);
+      rowStride = rewriter.create<arith::TruncIOp>(loc, i32_ty, rowStride);
+      Value rowOffset = mul(offsetBaseY, rowStride);
+      base = gep(base.getType(), eltTy, base, rowOffset);
+
+      width = rewriter.create<arith::TruncIOp>(loc, i32_ty, width);
+      width = sub(mul(width, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
+                  i32_val(1));
+
+      height = rewriter.create<arith::TruncIOp>(loc, i32_ty, height);
+      height = sub(height, i32_val(1));
+
+      rowStride = rewriter.create<arith::TruncIOp>(loc, i32_ty, rowStride);
+      rowStride =
+          sub(mul(rowStride, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
+              i32_val(1));
+
+      multiDimWarpId[1] =
+          rewriter.create<arith::TruncIOp>(loc, i32_ty, multiDimWarpId[1]);
+      multiDimWarpId[0] =
+          rewriter.create<arith::TruncIOp>(loc, i32_ty, multiDimWarpId[0]);
+
+      for (int row = 0; row < numReps[0]; ++row) {
+        for (int col = 0; col < numReps[1]; ++col) {
+          Value offsetX, offsetY;
+          offsetX = add(
+              // the offset of this warp.
+              mul(multiDimWarpId[1], i32_val(shapePerWarp[1])),
+              // add the replica offset with a warp stride.
+              i32_val(col * warpsPerCTA[1] * shapePerWarp[1]));
+          // Round the offset into to the tensor shape
+          offsetX = urem(offsetX, i32_val(tensorShape[0]));
+
+          offsetY = add(
+              // the offset of this warp.
+              mul(multiDimWarpId[0], i32_val(shapePerWarp[0])),
+              // add the replica offset with a warp stride.
+              i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
+          // Round the offset into to the tensor shape
+          offsetY = urem(offsetY, i32_val(tensorShape[0]));
+
+          rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
+              loc,
+              /*ptr*/ base,
+              /*base_width*/ width,
+              /*base_height*/ height,
+              /*base_pitch*/ rowStride,
+              /*x*/ rewriter.create<arith::TruncIOp>(loc, i32_ty, offsetX),
+              /*y*/ rewriter.create<arith::TruncIOp>(loc, i32_ty, offsetY),
+              /*elem_size_in_bits*/ elemSizeInBits,
+              /*tile_width*/ tileWidthInElem,
+              /*tile_height*/ tileHeightInElem,
+              /*v_blocks*/ 1,
+              /*transpose*/ false,
+              /*vnni*/ false, TritonGEN::PrefetchCacheControl::L1C_L3C);
+        }
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
 };
 
 struct LoadOpConversion
@@ -970,6 +1142,6 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     const TargetInfo &targetInfo, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-               StoreOpConversion>(typeConverter, targetInfo, axisInfoAnalysis,
-                                  benefit);
+               StoreOpConversion, PrefetchOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, benefit);
 }
