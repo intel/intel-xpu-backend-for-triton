@@ -8,7 +8,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-namespace intel {
+// namespace intel {
 
 class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
 public:
@@ -22,5 +22,5 @@ public:
   Type convertTritonTensorType(RankedTensorType type);
 };
 
-} // namespace intel
+// } // namespace intel
 #endif

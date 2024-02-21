@@ -1,4 +1,4 @@
-#include "intel/include/TritonIntelGPUToLLVM/PTXAsmFormat.h"
+#include "TritonIntelGPUToLLVM/PTXAsmFormat.h"
 #include "intel/include/TritonIntelGPUToLLVM/AsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"

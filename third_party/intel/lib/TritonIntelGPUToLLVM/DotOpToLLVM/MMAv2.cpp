@@ -6,6 +6,7 @@ using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::triton::intel::PTXBuilder;
 
 using ValueTableV2 = std::map<std::array<int, 3>, Value>;
 

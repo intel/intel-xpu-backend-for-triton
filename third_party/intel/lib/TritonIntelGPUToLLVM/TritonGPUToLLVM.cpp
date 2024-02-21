@@ -1,4 +1,4 @@
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -31,7 +31,7 @@
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_CONVERTTRITONINTELGPUTOLLVM
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
+#include "TritonIntelGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
@@ -207,8 +207,9 @@ public:
 };
 
 struct ConvertTritonGPUToLLVM
-    : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
-  using ConvertTritonGPUToLLVMBase::ConvertTritonGPUToLLVMBase;
+    : public triton::impl::ConvertTritonIntelGPUToLLVMBase<
+          ConvertTritonGPUToLLVM> {
+  using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
@@ -216,7 +217,7 @@ struct ConvertTritonGPUToLLVM
   }
 
   ConvertTritonGPUToLLVM(int32_t computeCapability, Target target)
-      : ConvertTritonGPUToLLVMBase({computeCapability, target}) {}
+      : ConvertTritonIntelGPUToLLVMBase({computeCapability, target}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();

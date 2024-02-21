@@ -1,6 +1,8 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 
+using ::mlir::triton::intel::PTXBuilder;
+using ::mlir::triton::intel::PTXInstr;
 namespace {
 static SmallVector<Value> identity_func(Location loc,
                                         ConversionPatternRewriter &rewriter,

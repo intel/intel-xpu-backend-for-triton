@@ -8,8 +8,8 @@
 
 #include "TypeConverter.h"
 //
+#include "TritonIntelGPUToLLVM/Passes.h"
 #include "Utility.h"
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"

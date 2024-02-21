@@ -346,7 +346,7 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
 
     Value readPtr = gep(ptr_ty(ctx, 3), shemTy, ptr, stridedOffset);
 
-    PTXBuilder builder;
+    mlir::triton::intel::PTXBuilder builder;
     // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
     // thread.
     auto resArgs = builder.newListOperand(4, "=r");

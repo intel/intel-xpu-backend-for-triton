@@ -1,4 +1,4 @@
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
@@ -11,19 +11,18 @@ using namespace mlir::triton;
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DEF_ALLOCATESHAREDMEMORY
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
+#define GEN_PASS_DEF_INTELALLOCATESHAREDMEMORY
+#include "TritonIntelGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
 namespace {
 
-// FIXME
 struct AllocateSharedMemory
-    : public mlir::triton::impl::AllocateSharedMemoryBase<
+    : public mlir::triton::impl::IntelAllocateSharedMemoryBase<
           AllocateSharedMemory> {
-  using AllocateSharedMemoryBase<
-      AllocateSharedMemory>::AllocateSharedMemoryBase;
+  using IntelAllocateSharedMemoryBase<
+      AllocateSharedMemory>::IntelAllocateSharedMemoryBase;
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
@@ -74,7 +73,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createIntelAllocateSharedMemoryPass() {
   return std::make_unique<AllocateSharedMemory>();
 }
 std::unique_ptr<OperationPass<ModuleOp>> createIntelAllocateSharedMemoryPass(
-    const AllocateSharedMemoryOptions &options) {
+    const IntelAllocateSharedMemoryOptions &options) {
   return std::make_unique<AllocateSharedMemory>(options);
 }
 

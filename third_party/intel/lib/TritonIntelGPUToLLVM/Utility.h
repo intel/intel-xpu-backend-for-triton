@@ -1,9 +1,9 @@
 #ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 
-#include "intel/include/TritonIntelGPUToLLVM/PTXAsmFormat.h"
+#include "TritonIntelGPUToLLVM/PTXAsmFormat.h"
 
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
@@ -142,7 +142,7 @@ using namespace mlir::triton;
 
 namespace mlir {
 namespace triton {
-namespace intel {
+// namespace intel {
 
 // Delinearize supposing order is [0, 1, .. , n]
 template <typename T>
@@ -202,7 +202,7 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
                                applyPermutation(shape, order));
 }
 
-} // namespace intel
+// } // namespace intel
 } // namespace triton
 
 namespace LLVM {

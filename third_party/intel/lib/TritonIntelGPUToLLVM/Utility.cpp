@@ -3,6 +3,9 @@
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
+
+using ::mlir::triton::intel::PTXBuilder;
+
 namespace mlir {
 
 namespace LLVM {

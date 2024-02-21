@@ -109,7 +109,7 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
     auto ha = has.at({m, k});
     auto hb = hbs.at({n, k});
 
-    PTXBuilder builder;
+    mlir::triton::intel::PTXBuilder builder;
     auto idx = getIdx(m, n);
 
     // note: using "=f" for float leads to cleaner PTX

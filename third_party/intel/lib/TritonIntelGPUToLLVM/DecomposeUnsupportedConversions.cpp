@@ -9,8 +9,8 @@ using namespace mlir::triton;
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DEF_DECOMPOSEUNSUPPORTEDCONVERSIONS
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
+#define GEN_PASS_DEF_INTELDECOMPOSEUNSUPPORTEDCONVERSIONS
+#include "TritonIntelGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
@@ -22,9 +22,8 @@ static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
     op->setAttr(attr.getName(), attr.getValue());
 }
 
-// FIXME
 struct DecomposeUnsupportedConversions
-    : public mlir::triton::impl::DecomposeUnsupportedConversionsBase<
+    : public mlir::triton::impl::IntelDecomposeUnsupportedConversionsBase<
           DecomposeUnsupportedConversions> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();

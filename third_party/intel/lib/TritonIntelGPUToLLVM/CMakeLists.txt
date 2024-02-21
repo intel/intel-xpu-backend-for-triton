@@ -36,6 +36,6 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonIntelGPUConversionPassIncGen
     NVGPUIntelConversionPassIncGen
 
-    TritonNVIDIAGPUConversionPassIncGen
-    NVGPUAttrDefsIncGen
+    TritonNvidiaGPUTransforms
+    NVGPUIR
 )

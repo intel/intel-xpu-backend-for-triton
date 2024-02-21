@@ -15,7 +15,7 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
-namespace intel {
+// namespace intel {
 TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
     const DataLayoutAnalysis *analysis)
@@ -134,4 +134,4 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
   SmallVector<Type, 4> types(numElementsPerThread, eltType);
   return LLVM::LLVMStructType::getLiteral(ctx, types);
 }
-} // namespace intel
+// } // namespace intel

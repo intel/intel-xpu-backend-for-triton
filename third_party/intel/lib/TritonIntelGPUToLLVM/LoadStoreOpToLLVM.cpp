@@ -22,6 +22,7 @@ using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::intel::PTXBuilder;
 
 namespace {
 
