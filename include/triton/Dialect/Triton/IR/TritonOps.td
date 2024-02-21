@@ -207,6 +207,24 @@ def TT_LoadOp : TT_Op<"load",
     let hasCanonicalizer = 1;
 }
 
+def TT_PrefetchOp : TT_Op<"prefetch",
+                      [MemoryEffects<[MemWrite, MemRead]>
+                                      ]> {
+    let summary = "prefetch  from a tensor pointer";
+
+    let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
+                         TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
+
+    let results = (outs);
+
+    let assemblyFormat = [{
+      $ptr attr-dict `:` type($ptr)
+    }];
+
+    let hasCanonicalizer = 0;
+}
+
+
 def TT_StoreOp : TT_Op<"store",
                        [SameLoadStoreOperandsShape,
                         SameLoadStoreOperandsEncoding,
@@ -947,6 +965,29 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
 
   let assemblyFormat = "attr-dict ($srcs^ `:` type($srcs))?";
   let hasVerifier = 1;
+}
+
+def TT_TensorRelated : AnyTypeOf<[TT_Tensor, TT_TensorPtr]>;
+
+def TT_GlueOp : TT_Op<"glue", [// operands have same type: SameOperandsType,
+                               Pure]> {
+    let summary = "glue/concat opearands to a larger size";
+
+    let arguments = (ins Variadic<TT_TensorRelated>:$operands);
+
+    let results = (outs TT_TensorRelated:$result);
+
+    let assemblyFormat = "$operands attr-dict `:` type($operands) `->` type($result)";
+}
+
+def TT_ExtractOp : TT_Op<"extract", [Pure]> {
+    let summary = "extract a sub value from base at idx";
+
+    let arguments = (ins TT_TensorRelated:$base, I32Attr:$idx);
+
+    let results = (outs TT_TensorRelated:$result);
+
+    let assemblyFormat = "$base `,` $idx attr-dict `:` type($base) `->` type($result)";
 }
 
 #endif // Triton_OPS

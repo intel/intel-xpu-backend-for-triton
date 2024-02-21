@@ -18,6 +18,8 @@ std::unique_ptr<Pass> createPrefetchPass();
 
 std::unique_ptr<Pass> createTritonGPUDistributeToWarpsPass();
 
+std::unique_ptr<Pass> createTritonGPUMatchTargetSizePass();
+
 std::unique_ptr<Pass> createCoalescePass();
 
 std::unique_ptr<Pass> createReorderInstructionsPass();
