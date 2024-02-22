@@ -1,0 +1,379 @@
+name: E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Test suite
+        type: choice
+        options:
+          - all
+          - huggingface
+          - timm_models
+          - torchbench
+        default: all
+      mode:
+        description: Inference/Training
+        type: choice
+        options:
+          - all
+          - inference
+          - training
+        default: all
+      dtype:
+        description: Data type
+        type: choice
+        options:
+          - all
+          - amp_bf16
+          - amp_fp16
+          - float32
+        default: all
+  schedule:
+    - cron: "5 1 * * *"
+
+permissions: read-all
+
+env:
+  BASE: /home/runner
+  LLVM_SYSPATH: /home/runner/packages/llvm
+  BACKEND: XPU
+  TRITON_DISABLE_LINE_INFO: 1
+  USE_AOT_DEVLIST: pvc
+  PYTHON_VERSION: "3.10"
+  PYTORCH_REPO: https://github.com/Stonepia/pytorch.git
+  PYTORCH_BRANCH: dev/triton-test-3.0
+  IPEX_REPO: https://github.com/intel/intel-extension-for-pytorch.git
+  IPEX_BRANCH: dev/triton-test-3.0
+  LLVM_REPO: https://github.com/intel/llvm.git
+  LLVM_BRANCH: genx
+  BENCHMARK_REPO: https://github.com/weishi-deng/benchmark.git
+  BENCHMARK_BRANCH: main
+
+jobs:
+  matrix:
+    name: Matrix
+    runs-on:
+      - glados
+      - spr
+      - cpu
+    outputs:
+      suite: ${{ steps.set-matrix.outputs.suite }}
+      mode: ${{ steps.set-matrix.outputs.mode }}
+      dtype: ${{ steps.set-matrix.outputs.dtype }}
+    timeout-minutes: 10
+    steps:
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          if [[ -z "${{ inputs.suite }}" || "${{ inputs.suite }}" == "all" ]]; then
+            suite='["huggingface", "timm_models", "torchbench"]'
+          else
+            suite='["${{ inputs.suite }}"]'
+          fi
+          if [[ -z "${{ inputs.mode }}" || "${{ inputs.mode }}" == "all" ]]; then
+            mode='["inference", "training"]'
+          else
+            mode='["${{ inputs.mode }}"]'
+          fi
+          if [[ -z "${{ inputs.dtype }}" || "${{ inputs.dtype }}" == "all" ]]; then
+            dtype='["amp_bf16", "amp_fp16", "float32"]'
+          else
+            dtype='["${{ inputs.dtype }}"]'
+          fi
+          echo "suite=$suite" >> $GITHUB_OUTPUT
+          echo "mode=$mode" >> $GITHUB_OUTPUT
+          echo "dtype=$dtype" >> $GITHUB_OUTPUT
+
+  build:
+    name: Test
+    needs: matrix
+    runs-on:
+      - glados
+      - spr
+      - runner-0.0.6
+    strategy:
+      matrix:
+        suite: ${{ fromJson(needs.matrix.outputs.suite) }}
+        mode: ${{ fromJson(needs.matrix.outputs.mode) }}
+        dtype: ${{ fromJson(needs.matrix.outputs.dtype) }}
+      max-parallel: 2
+      fail-fast: false
+    timeout-minutes: 720
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python build dependencies
+        run: |
+          pip install wheel
+
+      - name: Identify versions
+        run: |
+          echo "PYTORCH_COMMIT_ID=$(git ls-remote $PYTORCH_REPO refs/heads/$PYTORCH_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
+          echo "IPEX_COMMIT_ID=$(git ls-remote $IPEX_REPO refs/heads/$IPEX_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
+          echo "LLVM_COMMIT_ID=$(git ls-remote $LLVM_REPO refs/heads/$LLVM_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
+          echo "BENCHMARK_COMMIT_ID=$(git ls-remote $BENCHMARK_REPO refs/heads/$BENCHMARK_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
+
+      - name: Print versions
+        run: |
+          echo "$PYTORCH_REPO: $PYTORCH_COMMIT_ID"
+          echo "$IPEX_REPO: $IPEX_COMMIT_ID"
+          echo "$LLVM_REPO: $LLVM_COMMIT_ID"
+          echo "$GITHUB_REPOSITORY: $GITHUB_SHA"
+
+      - name: Create environment file for building PyTorch
+        run: |
+          cat <<EOF >~/env.sh
+          source ~/intel/oneapi/compiler/latest/env/vars.sh
+          source ~/intel/oneapi/mkl/latest/env/vars.sh
+          export MKL_DPCPP_ROOT=${HOME}/intel/oneapi/mkl/latest
+          export LD_LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LD_LIBRARY_PATH}
+          export LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LIBRARY_PATH}
+          source ~/intel/oneapi/tbb/latest/env/vars.sh
+          EOF
+
+      - name: Load PyTorch from a cache
+        id: pytorch-cache
+        uses: ./.github/actions/load
+        with:
+          path: pytorch
+          key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
+
+      - name: Build PyTorch
+        if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
+        run: |
+          git clone --single-branch -b $PYTORCH_BRANCH --recurse-submodules --jobs 8 $PYTORCH_REPO
+          source ~/env.sh
+          cd pytorch
+          pip install -r requirements.txt
+          python setup.py bdist_wheel
+
+      - name: Identify pinned versions
+        run: |
+          cd pytorch
+          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" >> "${GITHUB_ENV}"
+          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" >> "${GITHUB_ENV}"
+          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> "${GITHUB_ENV}"
+          echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" >> "${GITHUB_ENV}"
+          echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" >> "${GITHUB_ENV}"
+
+      # TIMM depends on torch and torchaudio, so in general, it needs to be installed before
+      # installing custom torch and torchaudio.
+      - name: Install TIMM Models
+        run: |
+          # install timm without dependencies
+          pip install --no-deps git+https://github.com/huggingface/pytorch-image-models@$TIMM_COMMIT_ID
+          # install timm dependencies without torch and torchvision
+          pip install $(curl -sSL https://raw.githubusercontent.com/huggingface/pytorch-image-models/$TIMM_COMMIT_ID/requirements.txt | grep -vE torch)
+
+      - name: Install PyTorch
+        run: |
+          pip install pytorch/dist/*.whl
+          python -c "import torch;print(torch.__version__)"
+
+      - name: Save PyTorch to a cache
+        if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pytorch-cache.outputs.path }}
+          dest: ${{ steps.pytorch-cache.outputs.dest }}
+
+      - name: Load IPEX wheels from a cache
+        id: ipex-cache
+        uses: ./.github/actions/load
+        with:
+          path: intel-extension-for-pytorch/dist
+          key: ipex-$PYTHON_VERSION-$IPEX_COMMIT_ID
+
+      - name: Build IPEX
+        if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          export USE_AOT_DEVLIST='pvc'
+          git clone --single-branch -b $IPEX_BRANCH --recurse-submodules --jobs 8 $IPEX_REPO
+          cd intel-extension-for-pytorch
+          pip install -r requirements.txt
+          python setup.py bdist_wheel
+
+      - name: Install IPEX
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          pip install intel-extension-for-pytorch/dist/*.whl
+          python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
+
+      - name: Save IPEX wheels to a cache
+        if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.ipex-cache.outputs.path }}
+          dest: ${{ steps.ipex-cache.outputs.dest }}
+
+      - name: Generate Triton cache key
+        id: triton-key
+        run: |
+          COMPOSITE_KEY=$(echo $PYTHON_VERSION $LLVM_COMMIT_ID $GITHUB_SHA | sha256sum - | cut -d\  -f1)
+          echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
+
+      - name: Load Triton wheels from a cache
+        id: triton-cache
+        uses: ./.github/actions/load
+        with:
+          path: python/dist
+          key: ${{ steps.triton-key.outputs.key }}
+
+      - name: Generate packages cache key
+        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
+        id: packages-key
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        run: |
+          COMPOSITE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
+          echo "key=packages-$COMPOSITE_KEY-$CACHE_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Load packages from a cache
+        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
+        id: packages-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/packages
+          key: ${{ steps.packages-key.outputs.key }}
+
+      - name: Build packages
+        if: ${{ steps.triton-cache.outputs.status == 'miss' && steps.packages-cache.outputs.status == 'miss' }}
+        run: |
+          ./scripts/compile-triton.sh --llvm
+
+      - name: Save packages to a cache
+        if: ${{ steps.triton-cache.outputs.status == 'miss' && steps.packages-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.packages-cache.outputs.path }}
+          dest: ${{ steps.packages-cache.outputs.dest }}
+
+      - name: Build Triton wheels
+        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
+        run: |
+          cd python
+          python setup.py bdist_wheel
+
+      - name: Install Triton
+        run: |
+          pip install python/dist/*.whl
+
+      - name: Save Triton wheels to a cache
+        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.triton-cache.outputs.path }}
+          dest: ${{ steps.triton-cache.outputs.dest }}
+
+      - name: Install python test dependencies
+        run: |
+          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+
+      - name: Build torchvision wheels
+        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        run: |
+          git clone --single-branch -b main https://github.com/pytorch/vision.git
+          cd vision
+          git checkout $TORCHVISION_COMMIT_ID
+          python setup.py bdist_wheel
+
+      - name: Install torchvision
+        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        run: |
+          pip install vision/dist/*.whl
+          python -c "import torchvision; print(torchvision.__version__)"
+
+      - name: Build torchtext wheels
+        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        run: |
+          git clone --recurse-submodules --jobs 8 --single-branch -b main https://github.com/pytorch/text.git
+          cd text
+          git checkout $TORCHTEXT_COMMIT_ID
+          python setup.py bdist_wheel
+
+      - name: Install torchtext
+        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        run: |
+          pip install text/dist/*.whl
+          python -c "import torchtext; print(torchtext.__version__)"
+
+      - name: Build torchaudio wheels
+        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        run: |
+          git clone --single-branch -b main https://github.com/pytorch/audio.git
+          cd audio
+          git checkout $TORCHAUDIO_COMMIT_ID
+          python setup.py bdist_wheel
+
+      - name: Install torchaudio
+        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        run: |
+          pip install audio/dist/*.whl
+          python -c "import torchaudio; print(torchaudio.__version__)"
+
+      - name: Install PyTorch Benchmarks
+        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        run: |
+          git clone --single-branch -b $BENCHMARK_BRANCH --recurse-submodules --jobs 8 $BENCHMARK_REPO
+          cd benchmark
+          python install.py
+          pip install -e .
+
+      - name: Run e2e tests
+        run: |
+          source ~/intel/oneapi/setvars.sh
+          export WORKSPACE=$GITHUB_WORKSPACE
+          cd pytorch
+          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} accuracy xpu 0
+
+      - name: Report environment details
+        run: |
+          mkdir -p inductor_log
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
+
+          cat <<EOF | tee inductor_log/.env
+          TIMESTAMP=$TIMESTAMP
+          JOB_NAME=${{ join(matrix.*, '-') }}
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=$PYTHON_VERSION
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          IPEX_REPO=$IPEX_REPO
+          IPEX_COMMIT_ID=$IPEX_COMMIT_ID
+          LLVM_REPO=$LLVM_REPO
+          LLVM_COMMIT_ID=$LLVM_COMMIT_ID
+          BENCHMARK_REPO=$BENCHMARK_REPO
+          BENCHMARK_COMMIT_ID=$BENCHMARK_COMMIT_ID
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
+          TORCHTEXT_COMMIT_ID=$TORCHTEXT_COMMIT_ID
+          TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
+          TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION
+          TIMM_COMMIT_ID=$TIMM_COMMIT_ID
+          EOF
+
+      - name: Copy reports
+        run: |
+          mkdir -p /cache/reports/e2e
+          TMPDIR=$(mktemp -d -p /cache/reports/e2e XXXXXXXXX.tmp)
+          cp -rT $GITHUB_WORKSPACE/inductor_log $TMPDIR
+          mv -T $TMPDIR /cache/reports/e2e/$TIMESTAMP-${{ join(matrix.*, '-') }} || rm -rf $TMPDIR
+
+      - name: Upload test logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ join(matrix.*, '-') }}
+          path: inductor_log

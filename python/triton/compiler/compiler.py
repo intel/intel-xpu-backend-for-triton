@@ -8,7 +8,6 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 # TODO: this shouldn't be here
-from ..backends.intel.compiler import InfoFromBackendForTensorMap
 from dataclasses import dataclass
 from .code_generator import ast_to_ttir
 from pathlib import Path
@@ -21,6 +20,7 @@ import os
 class AttrsDescriptor:
     divisible_by_16: set = None
     equal_to_1: set = None
+    # FIXME: Remove `ids_of_folded_args` and `divisible_by_8` when IPEX is updated.
     ids_of_folded_args: set = None
     divisible_by_8: set = None
 
@@ -33,6 +33,14 @@ class AttrsDescriptor:
             self.ids_of_folded_args = set()
         if self.divisible_by_8 is None:
             self.divisible_by_8 = set()
+
+    def to_dict(self):
+        return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
+
+    @staticmethod
+    def from_dict(data):
+        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
+                               equal_to_1=set(data.get('equal_to_1', [])))
 
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])
@@ -80,16 +88,6 @@ def _get_num_warps_from_ir_str(src: str):
     num_warps_matches = re.findall(ttgir_num_warps_pattern, src)
     assert len(num_warps_matches) == 1, "Expected exactly one match for num_warps"
     num_warps = int(num_warps_matches[0])
-
-    # If warp specialization is enabled, the true number of warps from
-    # the perspective of e.g. CUDA is num-warps times the number of
-    # specialized groups.
-    num_warp_groups_matches = re.findall(r'"triton_gpu.num-warp-groups-per-cta"\s?=\s?(\d+)\s?:', src)
-    assert len(num_warp_groups_matches) == 0 or len(num_warp_groups_matches) == 1, \
-      "Expected triton_gpu.num-warp-groups-per-cta attribute to appear 0 or 1 times"
-    if num_warp_groups_matches:
-        num_warps *= int(num_warp_groups_matches[0])
-
     return num_warps
 
 
@@ -116,12 +114,6 @@ class ASTSource:
     def make_ir(self, options, context):
         return ast_to_ttir(self.fn, self, context=context, options=options)
 
-    def metadata(self):
-        # TODO: remove once TMA support is cleaned up
-        return {
-            "ids_of_folded_args": tuple([int(k) for k in self.attrs.ids_of_folded_args]),
-        }
-
     def parse_options(self):
         return dict()
 
@@ -146,9 +138,6 @@ class IRSource:
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
         return module
-
-    def metadata(self):
-        return {"ids_of_folded_args": tuple()}
 
     def parse_options(self):
         if self.ext == "ttgir":
@@ -224,14 +213,13 @@ def compile(src, target=None, options=None):
     if metadata_path is not None:
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
-        return CompiledKernel(src, metadata_group)
+        return CompiledKernel(src, metadata_group, hash)
     # initialize metadata
     metadata = {
         "hash": hash,
         "target": target,
         **options.__dict__,
         **get_env_vars(),
-        **src.metadata(),
     }
     # run compilation pipeline  and populate metadata
     stages = dict()
@@ -257,7 +245,7 @@ def compile(src, target=None, options=None):
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
     # return handle to compiled kernel
-    return CompiledKernel(src, metadata_group)
+    return CompiledKernel(src, metadata_group, hash)
 
 
 def make_backend(target):
@@ -275,17 +263,13 @@ class CompiledKernel:
     launch_enter_hook = None
     launch_exit_hook = None
 
-    def __init__(self, src, metadata_group):
+    def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         self.metadata = json.loads(metadata_path.read_text())
-        self.metadata['tensormaps_info'] = [InfoFromBackendForTensorMap(e) for e in self.metadata['tensormaps_info']
-                                            ] if 'tensormaps_info' in self.metadata else []
-        for i, _ in enumerate(self.metadata["tensormaps_info"]):
-            self.metadata["tensormaps_info"][i].ids_of_folded_args = tuple(self.metadata["ids_of_folded_args"])
-        self.metadata["tensormaps_info"] = tuple(self.metadata["tensormaps_info"])
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(self.metadata.keys())))
         self.metadata = KernelMetadata(**self.metadata)
+        self.hash = hash
 
         self.name = self.metadata.name
         # create launcher
@@ -328,9 +312,8 @@ class CompiledKernel:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
             md = self.metadata
-            args_expand = driver.active.assemble_tensormap_to_arg(md.tensormaps_info, args)
             self.run(grid[0], grid[1], grid[2], md.num_warps, md.num_ctas, md.cluster_dims[0], md.cluster_dims[1],
                      md.cluster_dims[2], md.shared, stream, self.function, CompiledKernel.launch_enter_hook,
-                     CompiledKernel.launch_exit_hook, md, *args_expand)
+                     CompiledKernel.launch_exit_hook, md, *args)
 
         return runner

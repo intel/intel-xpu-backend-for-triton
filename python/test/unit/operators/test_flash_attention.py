@@ -20,17 +20,10 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
         pytest.skip("FIXME: Enable larger problem sizes when tl.dot uses DPAS")
 
     import os
-    enable_tma = os.environ.get('ENABLE_TMA', 'not found').lower()
-    if enable_tma in ["on", "true", "1"]:
-        if dtype == torch.bfloat16:
-            pytest.xfail('bfloat16 tma not support currently')
-
-    capability = 0
-    if torch.cuda.is_available():
-        capability = torch.cuda.get_device_capability()
 
     interpreter = os.environ.get("TRITON_INTERPRET", 'not found') in ["on", "true", "1"]
     if torch.cuda.is_available():
+        capability = torch.cuda.get_device_capability()
         if not interpreter and capability[0] < 8:
             pytest.skip("Flash attention only supported for compute capability >= 80")
     torch.manual_seed(20)

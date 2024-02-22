@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "ReduceScanCommon.h"
 #include "TritonGPUToLLVMBase.h"
 #include "triton/Analysis/Utility.h"
 
@@ -432,7 +433,7 @@ unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   unsigned srcElems = getTotalElemsPerThread(types[0]);
   SmallVector<SmallVector<Value>> srcValues(srcElems);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-    auto values = converter.unpackLLElements(loc, operands[i], rewriter);
+    auto values = unpackLLElements(loc, operands[i], rewriter);
 
     assert(values.size() == srcValues.size());
     for (unsigned j = 0; j < srcValues.size(); ++j) {
@@ -519,8 +520,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto valuesTransposed = transpose(srcValues);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
     auto resultTy = op.getResult()[i].getType().dyn_cast<RankedTensorType>();
-    results[i] = getTypeConverter()->packLLElements(loc, valuesTransposed[i],
-                                                    rewriter, resultTy);
+    results[i] = packLLElements(loc, getTypeConverter(), valuesTransposed[i],
+                                rewriter, resultTy);
   }
   rewriter.replaceOp(op, results);
   return success();
@@ -529,7 +530,6 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 
 void mlir::triton::populateScanOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
-    PatternBenefit benefit) {
+    Target target, PatternBenefit benefit) {
   patterns.add<ScanOpConversion>(typeConverter, target, benefit);
 }

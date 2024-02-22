@@ -53,8 +53,8 @@ struct MakeTensorPtrOpConversion
 
     elems.push_back(base);
 
-    auto newValue = getTypeConverter()->packLLElements(
-        op.getLoc(), elems, rewriter, result.getType());
+    auto newValue = packLLElements(op.getLoc(), getTypeConverter(), elems,
+                                   rewriter, result.getType());
     rewriter.replaceOp(op, newValue);
     return success();
   }
@@ -75,7 +75,7 @@ struct AdvanceOpConversion
     auto tensorPtr = adaptor.getPtr();
 
     auto offsets = adaptor.getOffsets();
-    auto elems = getTypeConverter()->unpackLLElements(loc, tensorPtr, rewriter);
+    auto elems = unpackLLElements(loc, tensorPtr, rewriter);
 
     SmallVector<Value, 2> newOffsets;
 
@@ -87,8 +87,8 @@ struct AdvanceOpConversion
       elems[i] = newOffsets[i];
     }
 
-    auto newValue = getTypeConverter()->packLLElements(op.getLoc(), elems,
-                                                       rewriter, ptrType);
+    auto newValue = packLLElements(op.getLoc(), getTypeConverter(), elems,
+                                   rewriter, ptrType);
     rewriter.replaceOp(op, newValue);
     return success();
   }
@@ -97,8 +97,7 @@ struct AdvanceOpConversion
 
 void mlir::triton::populateTensorPtrOpsToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
-    PatternBenefit benefit) {
+    Target target, PatternBenefit benefit) {
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, target, benefit);
   patterns.add<AdvanceOpConversion>(typeConverter, target, benefit);
   return;

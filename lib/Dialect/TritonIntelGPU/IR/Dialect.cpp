@@ -403,6 +403,28 @@ struct TritonIntelGPUInferLayoutInterface
       return op->emitError("mismatching kWidth between A and B operands");
     return success();
   }
+
+  LogicalResult
+  inferReshapeOpNoReorderEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                                  ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                                  std::optional<Location> loc) const override {
+    // TODO
+    return failure();
+  }
+
+  LogicalResult
+  inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                      std::optional<Location> loc) const override {
+    // TODO
+    return failure();
+  }
+
+  LogicalResult
+  inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                       std::optional<Location> loc) const override {
+    // TODO
+    return failure();
+  }
 };
 
 //===----------------------------------------------------------------------===//

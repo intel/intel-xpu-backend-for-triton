@@ -25,13 +25,12 @@ using namespace mlir;
 
 static inline bool
 willIncreaseRegisterPressure(triton::gpu::ConvertLayoutOp op) {
-  auto srcType = op.getOperand().getType().cast<RankedTensorType>();
-  auto dstType = op.getResult().getType().cast<RankedTensorType>();
-  auto srcEncoding = srcType.getEncoding();
-  auto dstEncoding = dstType.getEncoding();
-  if (srcEncoding.isa<triton::gpu::SharedEncodingAttr>())
+  if (op.getSrc()
+          .getType()
+          .getEncoding()
+          .isa<triton::gpu::SharedEncodingAttr>())
     return true;
-  if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+  if (op.getType().getEncoding().isa<triton::gpu::DotOperandEncodingAttr>())
     return true;
   return false;
 }
@@ -49,10 +48,7 @@ public:
     // register pressure
     DenseMap<Operation *, Operation *> opToMove;
     auto moveAfter = [](Operation *lhs, Operation *rhs) {
-      auto lhsId = getWSRoleId(lhs);
-      auto rhsId = getWSRoleId(rhs);
-      if (lhsId == rhsId)
-        lhs->moveAfter(rhs);
+      lhs->moveAfter(rhs);
     };
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       if (!willIncreaseRegisterPressure(op))
@@ -70,7 +66,7 @@ public:
       kv.first->moveBefore(kv.second);
     // Move convert(load) immediately after dependent load
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
-      auto dstType = op.getResult().getType().cast<RankedTensorType>();
+      RankedTensorType dstType = op.getType();
       auto dstEncoding = dstType.getEncoding();
       // Enable moving shared->dot conversion after dependent load.
       // For the Q tensor in flash attention, the shared->dot conversion acts as
@@ -85,7 +81,7 @@ public:
       if (!dstEncoding.isa<triton::gpu::SharedEncodingAttr>())
         return;
 #endif
-      Operation *argOp = op.getOperand().getDefiningOp();
+      Operation *argOp = op.getSrc().getDefiningOp();
       if (!argOp)
         return;
       moveAfter(op, argOp);
@@ -93,7 +89,7 @@ public:
     // Move transpositions just after their definition
     opToMove.clear();
     m.walk([&](triton::TransOp op) {
-      Operation *argOp = op.getOperand().getDefiningOp();
+      Operation *argOp = op.getSrc().getDefiningOp();
       if (!argOp)
         return;
       moveAfter(op, argOp);
@@ -108,7 +104,7 @@ public:
     return;
 #endif
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
-      auto dstType = op.getResult().getType().cast<RankedTensorType>();
+      auto dstType = op.getType().cast<RankedTensorType>();
       auto dstEncoding =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (!dstEncoding)

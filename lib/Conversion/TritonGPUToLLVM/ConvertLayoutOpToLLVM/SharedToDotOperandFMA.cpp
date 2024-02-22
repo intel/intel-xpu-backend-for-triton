@@ -68,7 +68,7 @@ Value getStructFromValueTable(ArrayRef<Value> vals,
   }
   MLIRContext *ctx = elemTy.getContext();
   Type structTy = struct_ty(elemTypes);
-  return typeConverter->packLLElements(loc, elems, rewriter, structTy);
+  return packLLElements(loc, typeConverter, elems, rewriter, structTy);
 }
 
 ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
@@ -78,7 +78,7 @@ ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
                                    TritonGPUToLLVMTypeConverter *typeConverter,
                                    Type type) {
   ValueTable res;
-  auto elems = typeConverter->unpackLLElements(loc, val, rewriter);
+  auto elems = unpackLLElements(loc, val, rewriter);
   int index = 0;
   for (unsigned k = 0; k < K; ++k) {
     for (unsigned m = 0; m < n0; m += shapePerCTA)

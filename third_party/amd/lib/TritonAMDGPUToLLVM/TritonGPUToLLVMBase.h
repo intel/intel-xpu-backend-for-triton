@@ -13,16 +13,11 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Target/PTX/TmaMetadata.h"
 #include <set>
 #include <type_traits>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
-constexpr ::llvm::StringLiteral kAttrNumTMALoadDescsName =
-    "triton_gpu.num-tma-load";
-constexpr ::llvm::StringLiteral kAttrNumTMAStoreDescsName =
-    "triton_gpu.num-tma-store";
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -34,7 +29,6 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::MfmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
-using ::mlir::triton::gpu::TMAMetadataTy;
 namespace ttng = ::mlir::triton::nvidia_gpu;
 
 typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
@@ -211,12 +205,6 @@ public:
       : converter(&typeConverter), allocation(&allocation),
         indexCacheInfo(indexCacheInfo) {}
 
-  explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      TMAMetadataTy *tmaMetadata)
-      : converter(&typeConverter), allocation(&allocation),
-        tmaMetadata(tmaMetadata) {}
-
   TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
 
   static Value
@@ -244,22 +232,11 @@ public:
     return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
   }
 
-  // Returns CTA level thread idx for not ws mode.
-  // Returns agent level thread idx for ws mode.
+  // Returns CTA level thread idx.
   Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) const {
     Value tid = getThreadIdInCTA(rewriter, loc);
     auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    if (ttng::TritonNvidiaGPUDialect::getWSSupportedAttr(mod)) {
-      Value _128 = rewriter.create<arith::ConstantIntOp>(loc, 128, 32);
-      tid = rewriter.create<arith::RemSIOp>(loc, tid, _128);
-    }
     return tid;
-  }
-
-  Value GetCanonicalWarpId(ConversionPatternRewriter &rewriter,
-                           Location loc) const {
-    return rewriter.create<triton::nvgpu::CanonicalWarpIdOp>(
-        loc, rewriter.getI32Type());
   }
 
   Value getClusterCTAId(ConversionPatternRewriter &rewriter,
@@ -463,8 +440,7 @@ public:
                           ConversionPatternRewriter &rewriter) const {
     auto dstTy = dst.getType().cast<RankedTensorType>();
     auto dstShape = dstTy.getShape();
-    assert(dstShape.size() == 2 &&
-           "Unexpected rank of loadSharedToDistributed");
+    assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
     auto srcTy = src.getType().cast<RankedTensorType>();
     auto dstDistributedLayout = dstTy.getEncoding();
     if (auto mmaLayout =
@@ -485,7 +461,7 @@ public:
     unsigned inVec = srcSharedLayout.getVec();
     unsigned minVec = std::min(outVec, inVec);
     unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
-    SmallVector<Value> offsetVals = {i32_val(0), i32_val(0)};
+    SmallVector<Value> offsetVals(smemObj.strides.size(), i32_val(0));
     assert(outElems == dstIndices.size());
 
     DenseMap<unsigned, Value> sharedPtrs =
@@ -1294,7 +1270,6 @@ protected:
   TritonGPUToLLVMTypeConverter *converter;
   ModuleAllocation *allocation;
   IndexCacheInfo indexCacheInfo;
-  mlir::triton::gpu::TMAMetadataTy *tmaMetadata;
 };
 
 template <typename SourceOp>
@@ -1327,13 +1302,6 @@ public:
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation,
                                             indexCacheInfo) {}
-
-  explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonGPUToLLVMTypeConverter &typeConverter, ModuleAllocation &allocation,
-      mlir::triton::gpu::TMAMetadataTy *tmaMetadata, PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
-        ConvertTritonGPUOpToLLVMPatternBase(typeConverter, allocation,
-                                            tmaMetadata) {}
 
 protected:
   TritonGPUToLLVMTypeConverter *getTypeConverter() const {

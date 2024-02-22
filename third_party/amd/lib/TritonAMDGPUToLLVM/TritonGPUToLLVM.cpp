@@ -84,8 +84,8 @@ struct BroadcastOpConversion
     Location loc = op->getLoc();
     Value src = adaptor.getSrc();
     Value result = op.getResult();
-    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
-    auto resultTy = result.getType().cast<RankedTensorType>();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType resultTy = op.getType();
     auto srcLayout = srcTy.getEncoding();
     auto resultLayout = resultTy.getEncoding();
     auto srcShape = srcTy.getShape();
@@ -522,14 +522,14 @@ struct MakeRangeOpConversion
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto rankedTy = op.getResult().getType().cast<RankedTensorType>();
-    auto shape = rankedTy.getShape();
-    auto layout = rankedTy.getEncoding();
+    RankedTensorType ty = op.getType();
+    auto shape = ty.getShape();
+    auto layout = ty.getEncoding();
 
-    auto elemTy = rankedTy.getElementType();
+    auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs = emitIndices(loc, rewriter, layout, rankedTy);
+    auto idxs = emitIndices(loc, rewriter, layout, ty);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.
@@ -540,7 +540,7 @@ struct MakeRangeOpConversion
       retVals[multiDim.index()] = add(multiDim.value()[0], start);
     }
     Value result =
-        getTypeConverter()->packLLElements(loc, retVals, rewriter, rankedTy);
+        getTypeConverter()->packLLElements(loc, retVals, rewriter, ty);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -611,51 +611,6 @@ struct GetNumProgramsOpConversion
     rewriter.replaceOp(op, numPrograms);
     return success();
 #endif
-  }
-};
-
-// TODO[goostavz]: GetThreadIdOp/GetClusterCTAIdOp is a temporary solution
-// before async dialect is done. These concepts should appear in ttgpu
-// level, and they are planned to be deprecated along with ttgpu.mbarrier_xxx
-// ops.
-struct GetThreadIdOpConversion : public ConvertTritonGPUOpToLLVMPattern<
-                                     triton::nvidia_gpu::GetThreadIdOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::GetThreadIdOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::GetThreadIdOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, getThreadId(rewriter, op->getLoc()));
-    return success();
-  }
-};
-
-struct GetCanonicalWarpIdConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::GetCanonicalWarpId> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::GetCanonicalWarpId>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::GetCanonicalWarpId op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, GetCanonicalWarpId(rewriter, op->getLoc()));
-    return success();
-  }
-};
-
-struct GetClusterCTAIdOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::GetClusterCTAIdOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::GetClusterCTAIdOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::GetClusterCTAIdOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, getClusterCTAId(rewriter, op->getLoc()));
-    return success();
   }
 };
 
@@ -763,7 +718,7 @@ struct ExtractSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // %dst = extract_slice %src[%offsets]
     Location loc = op->getLoc();
-    auto srcTy = op.getSource().getType().dyn_cast<RankedTensorType>();
+    auto srcTy = op.getSrc().getType().dyn_cast<RankedTensorType>();
     auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
     assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
     assert(op.hasUnitStride() &&
@@ -773,7 +728,7 @@ struct ExtractSliceOpConversion
 
     // newBase = base + offset
     // Triton supports either static and dynamic offsets
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSource(),
+    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     SmallVector<Value, 4> opOffsetVals;
     SmallVector<Value, 4> offsetVals;
@@ -920,9 +875,6 @@ void populateTritonGPUToLLVMPatterns(
                                          benefit);
   patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
-  patterns.add<GetThreadIdOpConversion>(typeConverter, benefit);
-  patterns.add<GetCanonicalWarpIdConversion>(typeConverter, benefit);
-  patterns.add<GetClusterCTAIdOpConversion>(typeConverter, benefit);
   patterns.add<MakeRangeOpConversion>(typeConverter, indexCacheInfo, benefit);
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<PrintOpConversion>(typeConverter, benefit);

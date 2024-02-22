@@ -168,17 +168,17 @@ public:
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    Value input = adaptor.getInput();
-    SmallVector<Value> srcValues =
-        getTypeConverter()->unpackLLElements(loc, input, rewriter);
-    int numBins =
-        op.getResult().getType().cast<RankedTensorType>().getDimSize(0);
-    int numThreadsPerWarp = 32;
+    Value input = adaptor.getSrc();
+    auto typeConverter = getTypeConverter();
+    SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
+    int numBins = op.getType().getDimSize(0);
+    int numThreadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.
     numBins = std::max(numBins, numThreadsPerWarp);
     Value threadId = getThreadId(rewriter, loc);
-    auto srcType = op.getInput().getType().cast<RankedTensorType>();
+    auto srcType = op.getSrc().getType();
     // First compute a warp local histogram based on values owned by each warps.
     SmallVector<Value> warpLevelHistogram = computeWarpLevelHistogram(
         loc, srcType, srcValues, numBins, numThreadsPerWarp, threadId, rewriter,
@@ -190,7 +190,7 @@ public:
     // data in the default blocked layout.
     Value baseSharedMemPtr =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
-    auto dstType = op.getResult().getType().cast<RankedTensorType>();
+    auto dstType = op.getType();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     Attribute dstEncoding = dstType.getEncoding();
@@ -203,8 +203,8 @@ public:
         loc, rewriter, srcType, baseSharedMemPtr, warpLevelHistogram, numBins,
         numThreadsPerWarp, innerDimIndices, threadId, numWarps);
 
-    Value results = getTypeConverter()->packLLElements(
-        loc, histogramValue, rewriter, op.getResult().getType());
+    Value results = packLLElements(loc, typeConverter, histogramValue, rewriter,
+                                   op.getType());
     rewriter.replaceOp(op, results);
     return success();
   }
@@ -213,7 +213,6 @@ public:
 
 void mlir::triton::populateHistogramOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    int numWarps, ModuleAxisInfoAnalysis &axisInfoAnalysis, Target target,
-    PatternBenefit benefit) {
+    Target target, PatternBenefit benefit) {
   patterns.add<HistogramOpConversion>(typeConverter, target, benefit);
 }

@@ -193,7 +193,7 @@ private:
   Value descriptor;
 };
 
-DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
+DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
@@ -230,7 +230,7 @@ DotOpMmaV3SmemLoader loadA(TritonGPUToLLVMTypeConverter *typeConverter,
           loc};
 }
 
-DotOpMmaV3SmemLoader loadB(TritonGPUToLLVMTypeConverter *typeConverter,
+DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            NvidiaMmaEncodingAttr &mmaEncoding, Value tensor,
                            Value base, Value thread) {
@@ -367,7 +367,7 @@ static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
   return results;
 }
 
-LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
+LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Operation *op, Value a, Value b, Value c, Value d,
                          Value loadedA, Value loadedB, Value loadedC,
@@ -415,12 +415,12 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
     aLoader =
         loadA(typeConverter, rewriter, loc, mmaEncoding, a, baseA, thread);
   } else {
-    structA = typeConverter->unpackLLElements(loc, loadedA, rewriter);
+    structA = unpackLLElements(loc, loadedA, rewriter);
   }
   DotOpMmaV3SmemLoader bLoader =
       loadB(typeConverter, rewriter, loc, mmaEncoding, b, baseB, thread);
 
-  auto fc = typeConverter->unpackLLElements(loc, loadedC, rewriter);
+  auto fc = unpackLLElements(loc, loadedC, rewriter);
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
   triton::nvgpu::WGMMAEltType eltTypeA = getMmaOperandType(a, allowTF32);
@@ -432,14 +432,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
                                               : triton::nvgpu::WGMMALayout::col;
 
   auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
-  int numTMADescs =
-      func->getAttr(kAttrNumTMALoadDescsName).cast<IntegerAttr>().getInt();
-  Operation *startSequence = nullptr;
-  if (numTMADescs == 0)
-    startSequence = rewriter.create<triton::nvgpu::FenceAsyncSharedOp>(loc, 0);
-  Operation *fenceOp = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
-  if (startSequence == nullptr)
-    startSequence = fenceOp;
+  Operation *startSequence = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
   // WGMMA fp8 -> fp32 accumulates in lower precision than fp32.
   bool needsPartialAccumulator = isFP8(eltTypeA) &&
                                  eltTypeC == triton::nvgpu::WGMMAEltType::f32 &&
@@ -457,7 +450,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
           LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
       Value d;
       if (!zeroAcc)
-        d = typeConverter->packLLElements(loc, mmaOut, rewriter, accTy);
+        d = packLLElements(loc, typeConverter, mmaOut, rewriter, accTy);
       uint32_t numLowPrecisionAcc = 0;
       Value partialAcc;
       for (int k = 0; k < numRepK; ++k) {
@@ -472,7 +465,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
           auto regATy = LLVM::LLVMStructType::getLiteral(
               rewriter.getContext(),
               SmallVector<Type>(regA.size(), regA[0].getType()));
-          a = typeConverter->packLLElements(loc, regA, rewriter, regATy);
+          a = packLLElements(loc, typeConverter, regA, rewriter, regATy);
         }
         auto b = bLoader.smemLoad(n, k, rewriter, loc);
         ValueRange operands{a, b, d};
@@ -498,7 +491,7 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
           partialAcc = Value();
         }
       }
-      auto acc = typeConverter->unpackLLElements(loc, d, rewriter);
+      auto acc = unpackLLElements(loc, d, rewriter);
       for (int i = 0; i < acc.size(); ++i) {
         mmaResults.push_back(acc[i]);
       }
@@ -516,59 +509,39 @@ LogicalResult convertDot(TritonGPUToLLVMTypeConverter *typeConverter,
   Type structTy = LLVM::LLVMStructType::getLiteral(
       mmaEncoding.getContext(),
       SmallVector<Type>(results.size(), dTensorTy.getElementType()));
-  auto res = typeConverter->packLLElements(loc, results, rewriter, structTy);
+  auto res = packLLElements(loc, typeConverter, results, rewriter, structTy);
   rewriter.replaceOp(op, res);
   return success();
 }
 
 LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                           TritonGPUToLLVMTypeConverter *typeConverter,
+                           const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread) {
-  auto loc = op.getLoc();
-  Value A = op.getA();
-  Value B = op.getB();
-  Value C = op.getC();
-  auto ATensorTy = A.getType().cast<RankedTensorType>();
-  auto BTensorTy = B.getType().cast<RankedTensorType>();
-
-  assert(ATensorTy.getEncoding().isa<SharedEncodingAttr>() ||
-         ATensorTy.getEncoding().isa<DotOperandEncodingAttr>());
-  assert(BTensorTy.getEncoding().isa<SharedEncodingAttr>() &&
+  auto AEnc = op.getA().getType().getEncoding();
+  auto BEnc = op.getB().getType().getEncoding();
+  assert(AEnc.isa<SharedEncodingAttr>() || AEnc.isa<DotOperandEncodingAttr>());
+  assert(BEnc.isa<SharedEncodingAttr>() &&
          "Operand B should use Shared layout.");
-
-  Value llA, llB, llC;
-  llA = adaptor.getA();
-  llB = adaptor.getB();
-  llC = adaptor.getC();
-
-  return convertDot(typeConverter, rewriter, loc, op.getOperation(), A, B, C,
-                    op.getD(), llA, llB, llC, op.getAllowTF32(),
-                    op.getMaxNumImpreciseAcc(), true, thread);
+  return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
+                    op.getA(), op.getB(), op.getC(), op.getD(),              //
+                    adaptor.getA(), adaptor.getB(), adaptor.getC(),          //
+                    op.getAllowTF32(), op.getMaxNumImpreciseAcc(), true,
+                    thread);
 }
 
 LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                                 triton::nvidia_gpu::DotAsyncOp::Adaptor adaptor,
-                                TritonGPUToLLVMTypeConverter *typeConverter,
+                                const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter,
                                 Value thread) {
-  auto loc = op.getLoc();
-  Value A = op.getA();
-  Value B = op.getB();
-  Value C = op.getC();
-  auto ATensorTy = A.getType().cast<RankedTensorType>();
-  auto BTensorTy = B.getType().cast<RankedTensorType>();
-
-  assert(ATensorTy.getEncoding().isa<SharedEncodingAttr>() ||
-         ATensorTy.getEncoding().isa<DotOperandEncodingAttr>());
-  assert(BTensorTy.getEncoding().isa<SharedEncodingAttr>() &&
+  auto AEnc = op.getA().getType().getEncoding();
+  auto BEnc = op.getB().getType().getEncoding();
+  assert(AEnc.isa<SharedEncodingAttr>() || AEnc.isa<DotOperandEncodingAttr>());
+  assert(BEnc.isa<SharedEncodingAttr>() &&
          "Operand B should use Shared layout.");
-
-  Value llA, llB, llC;
-  llA = adaptor.getA();
-  llB = adaptor.getB();
-  llC = adaptor.getC();
-
-  return convertDot(typeConverter, rewriter, loc, op.getOperation(), A, B, C,
-                    op.getD(), llA, llB, llC, op.getAllowTF32(),
-                    op.getMaxNumImpreciseAcc(), false, thread);
+  return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
+                    op.getA(), op.getB(), op.getC(), op.getD(),              //
+                    adaptor.getA(), adaptor.getB(), adaptor.getC(),
+                    op.getAllowTF32(), op.getMaxNumImpreciseAcc(), false,
+                    thread);
 }

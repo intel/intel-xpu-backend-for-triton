@@ -84,6 +84,9 @@ def ty_to_cpp(ty):
         "i16": "int16_t",
         "i32": "int32_t",
         "i64": "int64_t",
+        "u1": "uint32_t",
+        "u8": "uint8_t",
+        "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
         "fp16": "float",
@@ -94,36 +97,16 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def generate_cu_signature(constants, signature, ids):
-    # CUtensorMap*s are always the last arguments
-    num_regular_signatures = max(signature.keys()) + 1 if len(signature) > 0 else 0
-    if ids["ids_of_tensormaps"] is not None:
-        for i, _ in enumerate(ids["ids_of_tensormaps"]):
-            signature[num_regular_signatures + i] = '*CUtensorMap'
-    return signature, num_regular_signatures
-
 
 def make_launcher(constants, signature, ids):
     # Record the end of regular arguments;
-    # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    signature, desc_start_idx = generate_cu_signature(constants, signature, ids)
+    # subsequent arguments are architecture-specific descriptors.
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
         if ty[0] == '*':
             return "PyObject*"
-        return {
-            'i1': 'int32_t',
-            'i32': 'int32_t',
-            'i64': 'int64_t',
-            'u32': 'uint32_t',
-            'u64': 'uint64_t',
-            'fp16': 'float',
-            'bf16': 'float',
-            'fp32': 'float',
-            'f32': 'float',
-            'fp64': 'double',
-        }[ty]
+        return ty_to_cpp(ty)
 
     def format_of(ty):
         return {
@@ -131,10 +114,14 @@ def make_launcher(constants, signature, ids):
             "float": "f",
             "double": "d",
             "long": "l",
-            "uint32_t": "I",
+            "int8_t": "b",
+            "int16_t": "h",
             "int32_t": "i",
+            "int64_t": "l",
+            "uint8_t": "B",
+            "uint16_t": "H",
+            "uint32_t": "I",
             "uint64_t": "K",
-            "int64_t": "L",
         }[ty]
 
     format = "iiiiiiiiiOKOOO" + ''.join(
@@ -174,12 +161,35 @@ def make_launcher(constants, signature, ids):
       bool valid;
     }} DevicePtrInfo;
 
-    static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
+    static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx, const sycl::queue &queue) {{
+      if (!ptr_info->dev_ptr || !ptr_info->valid) {{
+        return;
+      }}
+      auto context = queue.get_context();
+      auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
+      ze_memory_allocation_properties_t prop;
+      prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
+      prop.pNext = nullptr;
+      ze_device_handle_t device;
+      auto res = zeMemGetAllocProperties((ze_context_handle_t)handle, ptr_info->dev_ptr, &prop, &device);
+      if (res != ZE_RESULT_SUCCESS) {{
+        PyErr_Format(PyExc_ValueError,
+                     "Cannot get memory properties for pointer argument (at %d, err=%d)", idx, res);
+        ptr_info->valid = false;
+      }} else if (prop.type != ZE_MEMORY_TYPE_DEVICE) {{
+        PyErr_Format(PyExc_ValueError,
+                     "Pointer argument (at %d) doesn't reference XPU device memory (cpu tensor?)", idx);
+        ptr_info->valid = false;
+      }}
+    }}
+
+    static inline DevicePtrInfo getPointer(PyObject *obj, int idx, const sycl::queue &queue) {{
       DevicePtrInfo ptr_info;
       ptr_info.dev_ptr = 0;
       ptr_info.valid = true;
       if (PyLong_Check(obj)) {{
         ptr_info.dev_ptr = (void*) PyLong_AsLongLong(obj);
+        checkDevicePointer(&ptr_info, idx, queue);
         return ptr_info;
       }}
       if (obj == Py_None) {{
@@ -201,6 +211,7 @@ def make_launcher(constants, signature, ids):
         if(!ptr_info.dev_ptr) {{
           return ptr_info;
         }}
+        checkDevicePointer(&ptr_info, idx, queue);
         Py_DECREF(ret);  // Thanks ChatGPT!
         return ptr_info;
       }}
@@ -312,7 +323,7 @@ def make_launcher(constants, signature, ids):
            threads_per_warp = PyLong_AsLong(_threads_per_warp);
       }}
 
-      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
       sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
 
       if (launch_exit_hook != Py_None) {{
@@ -356,12 +367,9 @@ class XPULauncher(object):
 
     def __init__(self, src, metadata):
         ids = {
-            "ids_of_tensormaps": metadata.ids_of_tensormaps,
-            "ids_of_folded_args": metadata.ids_of_folded_args,
             "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
         }
         constants = src.constants if hasattr(src, "constants") else dict()
-        enable_warp_specialization = False
         src = make_launcher(constants, src.signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
@@ -392,7 +400,3 @@ class XPUDriver(DriverBase):
     def is_active():
         import torch
         return torch.xpu.is_available()
-
-    def assemble_tensormap_to_arg(self, tensormaps_info, args):
-        args_ptr = tuple([arg.data_ptr() if hasattr(arg, 'data_ptr') else arg for arg in args])
-        return args_ptr

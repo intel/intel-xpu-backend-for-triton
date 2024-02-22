@@ -1,0 +1,26 @@
+name: save
+description: Save a directory to a cache based on a shared directory
+inputs:
+  root:
+    description:
+    default: /cache
+  path:
+    description: Directory to save to a cache
+    required: true
+  dest:
+    description: Directory in cache
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Save ${{ inputs.path }} to cache
+      shell: bash
+      run: |
+        TEMP_ITEM=$(mktemp -d -p ${{ inputs.root }})
+        cp -rT ${{ inputs.path }} $TEMP_ITEM
+        # ignore error if other job created a cache with the same key already
+        if mv -T $TEMP_ITEM ${{ inputs.dest }}; then
+          touch ${{ inputs.dest }}.hit
+        else
+          rm -rf $TEMP_ITEM
+        fi

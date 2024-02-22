@@ -47,8 +47,13 @@ static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
   return 0;
 }
 
-SmallVector<unsigned, 2>
+SmallVector<unsigned>
 warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
+  auto rank = shape.size();
+  // Early exit for batched matmul
+  if (rank == 3)
+    return {(unsigned)numWarps, 1, 1};
+
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion() &&
            !isa<tt::TransOp>(op);
@@ -60,7 +65,6 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
       auto chainedDot = cast<tt::DotOp>(op);
       if (auto mmaEncoding = chainedDot.getResult()
                                  .getType()
-                                 .cast<RankedTensorType>()
                                  .getEncoding()
                                  .dyn_cast<NvidiaMmaEncodingAttr>()) {
         return ttg::getWarpsPerCTA(mmaEncoding);
@@ -76,8 +80,10 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
     }
   }
 
-  SmallVector<unsigned, 2> ret = {1, 1};
-  SmallVector<int64_t, 2> shapePerWarp = {16, 8};
+  SmallVector<unsigned> ret(rank, 1);
+  SmallVector<int64_t> shapePerWarp(rank, 1);
+  shapePerWarp[rank - 1] = 8;
+  shapePerWarp[rank - 2] = 16;
   // TODO (@daadaada): double-check.
   // original logic in
   // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
@@ -156,8 +162,7 @@ class BlockedToMMA : public mlir::RewritePattern {
     getBackwardSlice(x, &slice, opt);
     for (auto op : slice) {
       if (Value arg = op->getOperand(0))
-        if (RankedTensorType argTy =
-                arg.getType().dyn_cast<RankedTensorType>()) {
+        if (auto argTy = arg.getType().dyn_cast<RankedTensorType>()) {
           auto argBitWidth = argTy.getElementType().getIntOrFloatBitWidth();
           if (argBitWidth != origBitWidth) {
             origBitWidth = std::min<int>(origBitWidth, argBitWidth);
@@ -225,13 +230,10 @@ public:
     auto dotOp = cast<tt::DotOp>(op);
     auto ctx = op->getContext();
     // TODO: Check data-types and SM compatibility
-    auto oldRetType = dotOp.getResult().getType().cast<RankedTensorType>();
+    RankedTensorType oldRetType = dotOp.getType();
     if (!oldRetType.getEncoding() ||
         oldRetType.getEncoding().isa<ttg::NvidiaMmaEncodingAttr>())
       return failure();
-
-    auto AType = dotOp.getOperand(0).getType().cast<RankedTensorType>();
-    auto BType = dotOp.getOperand(1).getType().cast<RankedTensorType>();
 
     // get MMA encoding for the given number of warps
     auto retShapePerCTA = ttg::getShapePerCTA(oldRetType);
@@ -243,13 +245,13 @@ public:
     if (!versionMajor)
       return failure();
 
-    auto instrShape =
-        mmaVersionToInstrShape(versionMajor, retShapePerCTA, AType);
+    auto instrShape = mmaVersionToInstrShape(versionMajor, retShapePerCTA,
+                                             dotOp.getA().getType());
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
-    auto oldAType = a.getType().cast<RankedTensorType>();
-    auto oldBType = b.getType().cast<RankedTensorType>();
+    auto oldAType = dotOp.getA().getType();
+    auto oldBType = dotOp.getB().getType();
 
     ttg::NvidiaMmaEncodingAttr mmaEnc;
     if (versionMajor == 1) {
@@ -263,9 +265,8 @@ public:
       // get the source of the first conversion found in slices
       auto getCvtArgOrder = [](Operation *op) {
         return cast<ConvertLayoutOp>(op)
-            .getOperand()
+            .getSrc()
             .getType()
-            .cast<RankedTensorType>()
             .getEncoding()
             .cast<BlockedEncodingAttr>()
             .getOrder();
@@ -366,15 +367,12 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
 // supported.
 static void decomposeMixedModeDotOp(ModuleOp mod) {
   mod.walk([](tt::DotOp dotOp) -> void {
-    Value D = dotOp.getResult();
+    auto D = dotOp.getD();
     OpBuilder builder(dotOp);
-    Type AElType =
-        dotOp.getA().getType().cast<RankedTensorType>().getElementType();
+    Type AElType = dotOp.getA().getType().getElementType();
     Type promoteType;
-    NvidiaMmaEncodingAttr mmaLayout = D.getType()
-                                          .cast<RankedTensorType>()
-                                          .getEncoding()
-                                          .dyn_cast<NvidiaMmaEncodingAttr>();
+    NvidiaMmaEncodingAttr mmaLayout =
+        D.getType().getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
     if (mmaLayout) {
       bool isNativeHopperFP8 =
           AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
@@ -396,9 +394,8 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
       return;
     } else {
       // FMA case.
-      Type AElType =
-          dotOp.getA().getType().cast<RankedTensorType>().getElementType();
-      Type DElType = D.getType().cast<RankedTensorType>().getElementType();
+      Type AElType = dotOp.getA().getType().getElementType();
+      Type DElType = D.getType().getElementType();
       if (AElType == DElType)
         return;
       promoteType = DElType;
