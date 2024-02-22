@@ -13,6 +13,7 @@
 #include <numeric>
 
 using namespace mlir;
+using namespace mlir::LLVM;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::delinearize;
@@ -1079,8 +1080,8 @@ struct InsertSliceAsyncOpConversion
     // decomposeInsertSliceAsyncOp function.
     // FIXME: remove this assertion once a suitable replacement instruction
     // exists for the generated PTX in this function (cp.async.cg.shared.global)
-    assert(target != triton::Target::GENX &&
-           "InsertSliceAsyncOpConversion: genx target not supported yet");
+    // assert(target != triton::Target::GENX &&
+    //        "InsertSliceAsyncOpConversion: genx target not supported yet");
 
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();
@@ -1162,6 +1163,36 @@ struct InsertSliceAsyncOpConversion
         getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy,
                               smemObj, rewriter, offsetVals, srcStrides);
 
+
+    // auto func = moduleOp.lookupSymbol<LLVM::LLVMFuncOp>("_Z22__spirv_GroupAsyncCopyiPU3AS1Dv4_sPU3AS3S_llP13__spirv_Event");
+    auto name = "_Z22__spirv_GroupAsyncCopyiPU3AS1Dv4_sPU3AS3S_llP13__spirv_Event";
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    // make a variable result type that is void
+    Type resultType = LLVMVoidType::get(rewriter.getContext());
+
+    Type intType = IntegerType::get(rewriter.getContext(), 32);
+    // Type float4PtrType = LLVMPointerType::get(VectorType::get(FloatType::getF32(/*context=*/nullptr, VectorType::k4xF32), /*numElements=*/1), /*addressSpace=*/1);
+    Type longLongType = IntegerType::get(rewriter.getContext(), 64);
+    // Type charPtrType = LLVMPointerType::get(IntegerType::get(nullptr, 8), /*addressSpace=*/13);
+
+    // Create an array of the LLVM types
+    Type types[] = {intType, intType, dstPtrTy, longLongType, longLongType, intType};
+
+    // Create an ArrayRef<Type> from the array
+    ArrayRef<Type> paramTypes(types, /*size=*/6);
+    OpBuilder b(moduleOp.getBodyRegion());
+    auto func =  b.create<LLVM::LLVMFuncOp>(
+      moduleOp->getLoc(), name,
+      LLVM::LLVMFunctionType::get(intType, paramTypes));
+
+    //Create a new LLVM::CallOp and put it in a variable of type Value
+    auto callOp = rewriter.create<LLVM::CallOp>(moduleOp->getLoc(), func, ArrayRef<Value>({i32_val(0), i32_val(0), dstPtrBase, i64_val(0), i64_val(0), i32_val(0)}));
+
+    //use the rwriter to remove op
+    // rewriter.eraseOp(op);
+
+    rewriter.replaceOp(op, callOp);
+    
     // A sharedLayout encoding has a "vec" parameter.
     // On the column dimension, if inVec > outVec, it means we have to divide
     // single vector read into multiple ones
@@ -1223,7 +1254,7 @@ struct InsertSliceAsyncOpConversion
       }
     }
 
-    rewriter.replaceOp(op, llDst);
+    // rewriter.replaceOp(op, llDst);
     return success();
   }
 };
