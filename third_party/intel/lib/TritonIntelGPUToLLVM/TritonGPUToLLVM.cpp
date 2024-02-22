@@ -197,6 +197,8 @@ public:
     case Target::GENX:
       addLegalDialect<GENX::GENXDialect>();
       break;
+    default:
+      break;
     }
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
@@ -300,6 +302,8 @@ struct ConvertTritonGPUToLLVM
     case Target::GENX:
       mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
       break;
+    default:
+      break;
     }
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
@@ -340,6 +344,8 @@ private:
     } break;
     case Target::GENX: {
     } break;
+    default:
+      break;
     }
   }
 
