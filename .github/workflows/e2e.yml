@@ -27,6 +27,8 @@ on:
           - all
           - amp_bf16
           - amp_fp16
+          - bfloat16
+          - float16
           - float32
         default: all
   schedule:
@@ -77,7 +79,7 @@ jobs:
             mode='["${{ inputs.mode }}"]'
           fi
           if [[ -z "${{ inputs.dtype }}" || "${{ inputs.dtype }}" == "all" ]]; then
-            dtype='["amp_bf16", "amp_fp16", "float32"]'
+            dtype='["amp_bf16", "amp_fp16", "bfloat16", "float16", "float32"]'
           else
             dtype='["${{ inputs.dtype }}"]'
           fi
