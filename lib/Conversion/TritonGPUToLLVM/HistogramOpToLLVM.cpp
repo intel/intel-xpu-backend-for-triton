@@ -8,30 +8,6 @@ using namespace mlir::triton;
 
 static int log2Int(int64_t num) { return (num > 1) ? 1 + log2Int(num / 2) : 0; }
 
-static Value generateVoteBallot(Location loc, Value bit, int threadMask,
-                                Value threadId, int numThreadPerWarp,
-                                ConversionPatternRewriter &rewriter,
-                                Target target) {
-  if (target == Target::NVVM) {
-    return rewriter.create<NVVM::VoteBallotOp>(loc, i32_ty, i32_val(threadMask),
-                                               bit);
-  }
-
-  assert(target == Target::GENX && "unsupported target");
-  assert(threadMask == -1 && "unsupported thread mask for GENX target");
-
-  // Emulate vote.ballot.sync behavior using shift, shuffle, and or.
-  // TODO: check for more efficient solution.
-  int offs = 1;
-  Value laneId = and_(threadId, i32_val(numThreadPerWarp - 1));
-  Value reduced_val = shl(select(bit, i32_val(1), i32_val(0)), laneId);
-  for (int offs = 1; offs < numThreadPerWarp; offs = offs << 1) {
-    Value other_val = LLVM::shflSync(loc, rewriter, reduced_val, offs, target);
-    reduced_val = or_(reduced_val, other_val);
-  }
-  return reduced_val;
-}
-
 // Compute a histogram within a warp. This uses an algorithm by @apgoucher
 // that does the following:
 // Create a ballot for each bit of the bin index (there
@@ -42,7 +18,7 @@ static SmallVector<Value>
 computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
                           SmallVector<Value> &srcValues, int numBins,
                           int numThreadPerWarp, Value threadId,
-                          ConversionPatternRewriter &rewriter, Target target) {
+                          ConversionPatternRewriter &rewriter) {
   assert(numBins % numThreadPerWarp == 0 &&
          "numBins must be divisible by numThreadPerWarp");
   Value zero = i32_val(0);
@@ -60,8 +36,9 @@ computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
     SmallVector<Value> ballotBits;
     for (int j = 0; j < numBits; ++j) {
       Value bitSet = and_(value, i32_val(1 << j));
-      Value bit = generateVoteBallot(loc, icmp_ne(bitSet, zero), -1, threadId,
-                                     numThreadPerWarp, rewriter, target);
+      Value threadMask = i32_val(-1);
+      Value bit = rewriter.create<NVVM::VoteBallotOp>(loc, i32_ty, threadMask,
+                                                      icmp_ne(bitSet, zero));
       ballotBits.push_back(bit);
     }
     Value fullMask = i32_val(0xFFFFFFFF);
@@ -159,10 +136,9 @@ static SmallVector<Value> computeCrossWarpHistogram(
 
 namespace {
 struct HistogramOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::HistogramOp> {
+    : public ConvertOpToLLVMPattern<triton::HistogramOp> {
 public:
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::HistogramOp>::ConvertTritonGPUOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<triton::HistogramOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
@@ -172,24 +148,23 @@ public:
     auto typeConverter = getTypeConverter();
     SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
     int numBins = op.getType().getDimSize(0);
-    int numThreadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
-        op->getParentOfType<ModuleOp>());
+    int numThreadsPerWarp = 32;
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.
     numBins = std::max(numBins, numThreadsPerWarp);
     Value threadId = getThreadId(rewriter, loc);
     auto srcType = op.getSrc().getType();
     // First compute a warp local histogram based on values owned by each warps.
-    SmallVector<Value> warpLevelHistogram = computeWarpLevelHistogram(
-        loc, srcType, srcValues, numBins, numThreadsPerWarp, threadId, rewriter,
-        target);
+    SmallVector<Value> warpLevelHistogram =
+        computeWarpLevelHistogram(loc, srcType, srcValues, numBins,
+                                  numThreadsPerWarp, threadId, rewriter);
 
     // Then use atomic to update the histogram in shared memory.
     // TODO: we could skip this for cases with num_warps=1 as long as we can
     // generate the right layout. Currently the warp level histogram generates
     // data in the default blocked layout.
     Value baseSharedMemPtr =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto dstType = op.getType();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
@@ -212,7 +187,7 @@ public:
 } // namespace
 
 void mlir::triton::populateHistogramOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
-  patterns.add<HistogramOpConversion>(typeConverter, target, benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
+  patterns.add<HistogramOpConversion>(typeConverter, benefit);
 }

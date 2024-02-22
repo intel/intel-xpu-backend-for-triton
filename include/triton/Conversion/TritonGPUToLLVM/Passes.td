@@ -11,17 +11,6 @@ def DecomposeUnsupportedConversions : Pass<"decompose-unsupported-conversions", 
 def AllocateSharedMemory : Pass<"allocate-shared-memory", "mlir::ModuleOp"> {
     let summary = "Add metadata for shared memory allocation";
     let constructor = "mlir::triton::gpu::createAllocateSharedMemoryPass()";
-    let options = [
-        Option<"target", "target", "enum Target", "mlir::triton::Target::Default",
-               "compile for target compatible LLVM",
-               "llvm::cl::values("
-               "clEnumValN(mlir::triton::Target::NVVM, \"nvvm\", \"compile for "
-               "NVVM-compatible LLVM\"), "
-               "clEnumValN(mlir::triton::Target::ROCDL, \"rocdl\", \"compile for "
-               "ROCDL-compatible LLVM\"), "
-               "clEnumValN(mlir::triton::Target::GENX, \"genx\", \"compile for "
-               "GENX-compatible LLVM\"))">,
-    ];
 }
 
 def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"> {
@@ -40,7 +29,6 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
                              "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                             "mlir::GENX::GENXDialect",
                              "mlir::NVVM::NVVMDialect"];
 
     let options = [
@@ -53,9 +41,7 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                "clEnumValN(mlir::triton::Target::NVVM, \"nvvm\", \"compile for "
                "NVVM-compatible LLVM\"), "
                "clEnumValN(mlir::triton::Target::ROCDL, \"rocdl\", \"compile for "
-               "ROCDL-compatible LLVM\"), "
-               "clEnumValN(mlir::triton::Target::GENX, \"genx\", \"compile for "
-               "GENX-compatible LLVM\"))">,
+               "ROCDL-compatible LLVM\"))">,
     ];
 }
 

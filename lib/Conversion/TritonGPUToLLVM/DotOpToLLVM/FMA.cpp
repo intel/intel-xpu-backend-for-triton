@@ -1,6 +1,4 @@
-#include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
-#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -11,10 +9,11 @@ using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTableFMA = std::map<std::pair<int, int>, Value>;
 
-static ValueTableFMA getValueTableFromStructFMA(
-    Value val, int K, int n0, int shapePerCTATile, int sizePerThread,
-    ConversionPatternRewriter &rewriter, Location loc,
-    TritonGPUToLLVMTypeConverter *typeConverter, Type type) {
+static ValueTableFMA
+getValueTableFromStructFMA(Value val, int K, int n0, int shapePerCTATile,
+                           int sizePerThread,
+                           ConversionPatternRewriter &rewriter, Location loc,
+                           const LLVMTypeConverter *typeConverter, Type type) {
   ValueTableFMA res;
   auto elems = unpackLLElements(loc, val, rewriter);
   int index = 0;
@@ -28,7 +27,7 @@ static ValueTableFMA getValueTableFromStructFMA(
 }
 
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            TritonGPUToLLVMTypeConverter *typeConverter,
+                            const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
   auto *ctx = rewriter.getContext();
   auto loc = op.getLoc();
@@ -90,21 +89,8 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
             int z = isCRow
                         ? mIdx * N / nShapePerCTATile * mSizePerThread + nIdx
                         : nIdx * M / mShapePerCTATile * nSizePerThread + mIdx;
-            Type tgtTy = ret[z].getType();
-            Value opA = has[{m + mm, k}];
-            Value opB = hbs[{n + nn, k}];
-            assert(opA.getType() == tgtTy);
-            assert(opB.getType() == tgtTy);
-
-            llvm::TypeSwitch<Type>(tgtTy)
-                .Case<FloatType>([&](auto) {
-                  ret[z] =
-                      rewriter.create<LLVM::FMulAddOp>(loc, opA, opB, ret[z]);
-                })
-                .Case<IntegerType>([&](auto) {
-                  ret[z] = rewriter.create<LLVM::AddOp>(
-                      loc, rewriter.create<LLVM::MulOp>(loc, opA, opB), ret[z]);
-                });
+            ret[z] = rewriter.create<LLVM::FMulAddOp>(loc, has[{m + mm, k}],
+                                                      hbs[{n + nn, k}], ret[z]);
           }
   }
 

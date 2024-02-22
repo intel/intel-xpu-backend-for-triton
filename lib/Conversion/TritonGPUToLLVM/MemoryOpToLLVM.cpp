@@ -7,16 +7,16 @@ using namespace mlir;
 using namespace mlir::triton;
 
 struct AllocTensorOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::AllocTensorOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::AllocTensorOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::gpu::AllocTensorOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::AllocTensorOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto resultTy = op.getType().dyn_cast<RankedTensorType>();
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     auto typeConverter = getTypeConverter();
@@ -47,9 +47,9 @@ struct AllocTensorOpConversion
 };
 
 struct DeallocTensorOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::DeallocTensorOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::DeallocTensorOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::gpu::DeallocTensorOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::DeallocTensorOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::gpu::DeallocTensorOp op, OpAdaptor adaptor,
@@ -62,8 +62,8 @@ struct DeallocTensorOpConversion
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
-  patterns.add<AllocTensorOpConversion>(typeConverter, target, benefit);
-  patterns.add<DeallocTensorOpConversion>(typeConverter, target, benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
+  patterns.add<AllocTensorOpConversion>(typeConverter, benefit);
+  patterns.add<DeallocTensorOpConversion>(typeConverter, benefit);
 }

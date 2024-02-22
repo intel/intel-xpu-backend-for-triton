@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
 
 using namespace mlir;
@@ -8,10 +9,8 @@ using namespace mlir::triton::gpu;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 
 namespace {
-struct SplatOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::SplatOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::SplatOp>::ConvertTritonGPUOpToLLVMPattern;
+struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
+  using ConvertOpToLLVMPattern<triton::SplatOp>::ConvertOpToLLVMPattern;
 
   // Convert SplatOp or arith::ConstantOp with SplatElementsAttr to a
   // LLVM::StructType value.
@@ -20,7 +19,7 @@ struct SplatOpConversion
   // @resType: the return type of the Splat-like op.
   // @constVal: a LLVM::ConstantOp or other scalar value.
   static Value convertSplatLikeOp(Type elemType, Type resType, Value constVal,
-                                  TritonGPUToLLVMTypeConverter *typeConverter,
+                                  const LLVMTypeConverter *typeConverter,
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) {
     auto tensorTy = resType.cast<RankedTensorType>();
@@ -54,8 +53,9 @@ struct SplatOpConversion
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op->getLoc();
     auto src = adaptor.getSrc();
+    auto typeConverter = getTypeConverter();
     auto llStruct = convertSplatLikeOp(src.getType(), op.getType(), src,
-                                       getTypeConverter(), rewriter, loc);
+                                       typeConverter, rewriter, loc);
     rewriter.replaceOp(op, {llStruct});
     return success();
   }
@@ -65,9 +65,8 @@ struct SplatOpConversion
 // the logic is the same as triton::SplatOp, so the underlying implementation
 // is reused.
 struct ArithConstantSplatOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<arith::ConstantOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      arith::ConstantOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<arith::ConstantOp> {
+  using ConvertOpToLLVMPattern<arith::ConstantOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
@@ -94,21 +93,22 @@ struct ArithConstantSplatOpConversion
     }
 
     auto constOp = rewriter.create<LLVM::ConstantOp>(loc, elemType, val);
+    auto typeConverter = getTypeConverter();
     auto llStruct = SplatOpConversion::convertSplatLikeOp(
-        elemType, op.getType(), constOp, getTypeConverter(), rewriter, loc);
+        elemType, op.getType(), constOp, typeConverter, rewriter, loc);
     rewriter.replaceOp(op, llStruct);
 
     return success();
   }
 };
 
-struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
+struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
   using OpAdaptor = typename CatOp::Adaptor;
 
-  explicit CatOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                           Target target, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<CatOp>(typeConverter, target, benefit) {
-  }
+  explicit CatOpConversion(LLVMTypeConverter &typeConverter,
+
+                           PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
 
   LogicalResult
   matchAndRewrite(CatOp op, OpAdaptor adaptor,
@@ -116,8 +116,8 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
     Location loc = op->getLoc();
     auto resultTy = op.getType().template cast<RankedTensorType>();
     unsigned elems = getTotalElemsPerThread(resultTy);
-    Type elemTy =
-        this->getTypeConverter()->convertType(resultTy.getElementType());
+    auto typeConverter = getTypeConverter();
+    Type elemTy = typeConverter->convertType(resultTy.getElementType());
     SmallVector<Type> types(elems, elemTy);
     // unpack input values
     auto lhsVals = unpackLLElements(loc, adaptor.getLhs(), rewriter);
@@ -129,21 +129,18 @@ struct CatOpConversion : public ConvertTritonGPUOpToLLVMPattern<CatOp> {
     for (Value v : rhsVals)
       retVals.push_back(v);
     // pack and replace
-    Value ret =
-        packLLElements(loc, getTypeConverter(), retVals, rewriter, resultTy);
+    Value ret = packLLElements(loc, typeConverter, retVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
 };
 
-struct JoinOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<ExperimentalJoinOp> {
+struct JoinOpConversion : public ConvertOpToLLVMPattern<ExperimentalJoinOp> {
   using OpAdaptor = typename ExperimentalJoinOp::Adaptor;
 
-  explicit JoinOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                            Target target, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<ExperimentalJoinOp>(typeConverter,
-                                                            target, benefit) {}
+  explicit JoinOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<ExperimentalJoinOp>(typeConverter, benefit) {}
 
   LogicalResult
   matchAndRewrite(ExperimentalJoinOp op, OpAdaptor adaptor,
@@ -182,10 +179,9 @@ struct JoinOpConversion
   }
 };
 
-struct SplitOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<ExperimentalSplitOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      ExperimentalSplitOp>::ConvertTritonGPUOpToLLVMPattern;
+struct SplitOpConversion : public ConvertOpToLLVMPattern<ExperimentalSplitOp> {
+  using OpAdaptor = typename ExperimentalSplitOp::Adaptor;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(ExperimentalSplitOp op, OpAdaptor adaptor,
@@ -223,13 +219,12 @@ struct SplitOpConversion
   }
 };
 
-struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
+struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
   using OpAdaptor = typename ReshapeOp::Adaptor;
-  explicit ReshapeOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit ReshapeOpConversion(LLVMTypeConverter &typeConverter,
 
-                               Target target, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<ReshapeOp>(typeConverter, target,
-                                                   benefit) {}
+                               PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<ReshapeOp>(typeConverter, benefit) {}
 
   LogicalResult
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
@@ -242,26 +237,26 @@ struct ReshapeOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReshapeOp> {
     auto resultTy = op.getType().template cast<RankedTensorType>();
     auto srcTy = op.getSrc().getType().template cast<RankedTensorType>();
 
+    auto typeConverter = getTypeConverter();
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    Value ret =
-        packLLElements(loc, this->getTypeConverter(), vals, rewriter, resultTy);
+    Value ret = packLLElements(loc, typeConverter, vals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
 };
 
-struct ExpandDimsOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp> {
+struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
   using OpAdaptor = typename ExpandDimsOp::Adaptor;
-  explicit ExpandDimsOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
-                                  Target target, PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp>(typeConverter, target,
-                                                      benefit) {}
+  explicit ExpandDimsOpConversion(LLVMTypeConverter &typeConverter,
+
+                                  PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<ExpandDimsOp>(typeConverter, benefit) {}
 
   LogicalResult
   matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    auto typeConverter = getTypeConverter();
     auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
 
     auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
@@ -287,15 +282,15 @@ struct ExpandDimsOpConversion
       offset.erase(offset.begin() + srcLayout.getDim());
       resultVals.push_back(srcValues.at(offset));
     }
-    Value ret = packLLElements(loc, this->getTypeConverter(), resultVals,
-                               rewriter, resultTy);
+    Value ret =
+        packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
 };
 
-struct TransOpConversion : public ConvertTritonGPUOpToLLVMPattern<TransOp> {
-  using ConvertTritonGPUOpToLLVMPattern::ConvertTritonGPUOpToLLVMPattern;
+struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(TransOp op, OpAdaptor adaptor,
@@ -335,9 +330,8 @@ struct TransOpConversion : public ConvertTritonGPUOpToLLVMPattern<TransOp> {
 };
 
 struct BroadcastOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::BroadcastOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::BroadcastOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::BroadcastOp> {
+  using ConvertOpToLLVMPattern<triton::BroadcastOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
@@ -397,15 +391,15 @@ struct BroadcastOpConversion
 } // namespace
 
 void mlir::triton::populateViewOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
-  patterns.add<ReshapeOpConversion>(typeConverter, target, benefit);
-  patterns.add<ExpandDimsOpConversion>(typeConverter, target, benefit);
-  patterns.add<SplatOpConversion>(typeConverter, target, benefit);
-  patterns.add<ArithConstantSplatOpConversion>(typeConverter, target, benefit);
-  patterns.add<CatOpConversion>(typeConverter, target, benefit);
-  patterns.add<JoinOpConversion>(typeConverter, target, benefit);
-  patterns.add<SplitOpConversion>(typeConverter, target, benefit);
-  patterns.add<TransOpConversion>(typeConverter, target, benefit);
-  patterns.add<BroadcastOpConversion>(typeConverter, target, benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
+  patterns.add<ReshapeOpConversion>(typeConverter, benefit);
+  patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
+  patterns.add<SplatOpConversion>(typeConverter, benefit);
+  patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
+  patterns.add<CatOpConversion>(typeConverter, benefit);
+  patterns.add<JoinOpConversion>(typeConverter, benefit);
+  patterns.add<SplitOpConversion>(typeConverter, benefit);
+  patterns.add<TransOpConversion>(typeConverter, benefit);
+  patterns.add<BroadcastOpConversion>(typeConverter, benefit);
 }

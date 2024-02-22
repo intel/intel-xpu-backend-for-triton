@@ -21,15 +21,16 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
 struct MakeTensorPtrOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::MakeTensorPtrOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::MakeTensorPtrOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::MakeTensorPtrOp> {
+  using ConvertOpToLLVMPattern<triton::MakeTensorPtrOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::MakeTensorPtrOp op, OpAdaptor adaptor,
@@ -60,10 +61,8 @@ struct MakeTensorPtrOpConversion
   }
 };
 
-struct AdvanceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::AdvanceOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::AdvanceOp>::ConvertTritonGPUOpToLLVMPattern;
+struct AdvanceOpConversion : public ConvertOpToLLVMPattern<triton::AdvanceOp> {
+  using ConvertOpToLLVMPattern<triton::AdvanceOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::AdvanceOp op, OpAdaptor adaptor,
@@ -96,9 +95,9 @@ struct AdvanceOpConversion
 } // namespace
 
 void mlir::triton::populateTensorPtrOpsToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
-  patterns.add<MakeTensorPtrOpConversion>(typeConverter, target, benefit);
-  patterns.add<AdvanceOpConversion>(typeConverter, target, benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
+  patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
+  patterns.add<AdvanceOpConversion>(typeConverter, benefit);
   return;
 }

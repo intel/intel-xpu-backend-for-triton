@@ -1,4 +1,3 @@
-#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
@@ -21,22 +20,12 @@ namespace {
 struct AllocateSharedMemory
     : public mlir::triton::impl::AllocateSharedMemoryBase<
           AllocateSharedMemory> {
-  using AllocateSharedMemoryBase<
-      AllocateSharedMemory>::AllocateSharedMemoryBase;
-
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
     ModuleAllocation allocation(mod);
 
     mod.walk([&](FunctionOpInterface funcOp) {
-      if (target == Target::GENX && allocation.isRoot(funcOp) &&
-          allocation.getSharedMemorySize()) {
-        LLVM::LLVMPointerType ptrTy =
-            LLVM::LLVMPointerType::get(ctx, GENX::GENXMemorySpace::kWorkgroup);
-        funcOp.insertArgument(funcOp.getNumArguments(), ptrTy, {},
-                              funcOp.getLoc());
-      }
       funcOp.walk([&](Operation *op) {
         auto *funcAllocation = allocation.getFuncData(funcOp);
         auto oBufferId = funcAllocation->getBufferId(op);
@@ -71,10 +60,6 @@ namespace gpu {
 
 std::unique_ptr<OperationPass<ModuleOp>> createAllocateSharedMemoryPass() {
   return std::make_unique<AllocateSharedMemory>();
-}
-std::unique_ptr<OperationPass<ModuleOp>>
-createAllocateSharedMemoryPass(const AllocateSharedMemoryOptions &options) {
-  return std::make_unique<AllocateSharedMemory>(options);
 }
 
 } // namespace gpu

@@ -12,23 +12,19 @@ using namespace mlir::triton;
 //
 // For each operand, we print all of the values contained in this GPU thread,
 // one per line, along with the index of the value in its tensor.
-struct PrintOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::PrintOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::PrintOp>::ConvertTritonGPUOpToLLVMPattern;
+struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
+  using ConvertOpToLLVMPattern<triton::PrintOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto typeConverter = getTypeConverter();
     auto loc = op->getLoc();
-    Value prefixStr = LLVM::addStringToModule(
-        loc, rewriter, "printfPrefix_", op.getPrefix(),
-        (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant : 0);
+    Value prefixStr =
+        LLVM::addStringToModule(loc, rewriter, "printfPrefix_", op.getPrefix());
 
     auto getPid = [&](int axis) {
-      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter,
-                      target);
+      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 
@@ -38,8 +34,7 @@ struct PrintOpConversion
       llvm::raw_string_ostream os(formatStr);
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
-      llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter,
-               target);
+      llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter);
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
@@ -158,9 +153,9 @@ struct PrintOpConversion
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
       if (i == 0) {
-        formatStrValue = llPrintf(formatStr, printfOperands, rewriter, target);
+        formatStrValue = llPrintf(formatStr, printfOperands, rewriter);
       } else {
-        llPrintf(formatStrValue, printfOperands, rewriter, target);
+        llPrintf(formatStrValue, printfOperands, rewriter);
       }
     }
   }
@@ -190,35 +185,6 @@ struct PrintOpConversion
     }
     assert(false && "not supported type");
     return "";
-  }
-
-  // declare __spirv_ocl_printf(i8*, ...) as external function
-  static LLVM::LLVMFuncOp
-  getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter) {
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    StringRef funcName("_Z18__spirv_ocl_printf");
-    Operation *funcOp = moduleOp.lookupSymbol(funcName);
-    if (funcOp)
-      return cast<LLVM::LLVMFuncOp>(*funcOp);
-
-    MLIRContext *context = rewriter.getContext();
-    auto ptrTy = LLVM::LLVMPointerType::get(
-        context, GENX::GENXMemorySpace::kUniformConstant);
-    SmallVector<Type> argsType{ptrTy};
-    auto retType = i32_ty;
-    auto funcType =
-        LLVM::LLVMFunctionType::get(retType, argsType, /*isVarArg*/ true);
-
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
-
-    auto printFunc = rewriter.create<LLVM::LLVMFuncOp>(
-        UnknownLoc::get(context), funcName, funcType, LLVM::Linkage::External,
-        /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC, /*comdat=*/SymbolRefAttr{});
-    printFunc->setAttr("nounwind", rewriter.getUnitAttr());
-
-    return printFunc;
   }
 
   // declare vprintf(i8*, i8*) as external function
@@ -272,26 +238,25 @@ struct PrintOpConversion
 
   // Returns a Value for the format string, which you can reuse.
   static Value llPrintf(StringRef msg, ValueRange args,
-                        ConversionPatternRewriter &rewriter, Target target) {
+                        ConversionPatternRewriter &rewriter) {
     assert(!msg.empty() && "printf with empty string not supported");
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
-    Value msgValue = LLVM::addStringToModule(
-        UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
-        msgNewline,
-        (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant : 0);
-    llPrintf(msgValue, args, rewriter, target);
+    msgNewline.push_back('\0');
+    Value msgValue =
+        LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()),
+                                rewriter, "printfFormat_", msgNewline);
+    llPrintf(msgValue, args, rewriter);
     return msgValue;
   }
 
   static void llPrintf(Value msg, ValueRange args,
-                       ConversionPatternRewriter &rewriter, Target target) {
+                       ConversionPatternRewriter &rewriter) {
     auto *ctx = rewriter.getContext();
     Type ptr = ptr_ty(ctx);
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    auto funcOp = (target == Target::GENX) ? getSpirvPrintfDeclaration(rewriter)
-                                           : getVprintfDeclaration(rewriter);
+    auto funcOp = getVprintfDeclaration(rewriter);
     auto loc = UnknownLoc::get(ctx);
 
     Value one = i32_val(1);
@@ -299,40 +264,32 @@ struct PrintOpConversion
 
     Value bufferPtr = null(ptr);
 
-    SmallVector<Value> operands;
-    operands.push_back(msg);
-    if (target == Target::GENX) {
-      // __spirv_ocl_printf expects the value instead of pointer to value
+    SmallVector<Value, 16> newArgs;
+    if (args.size() >= 1) {
+      SmallVector<Type> argTypes;
       for (auto arg : args) {
-        operands.push_back(arg);
+        Type newType;
+        Value newArg;
+        std::tie(newType, newArg) = promoteValue(rewriter, arg);
+        argTypes.push_back(newType);
+        newArgs.push_back(newArg);
       }
-    } else {
-      SmallVector<Value, 16> newArgs;
-      if (args.size() >= 1) {
-        SmallVector<Type> argTypes;
-        for (auto arg : args) {
-          Type newType;
-          Value newArg;
-          std::tie(newType, newArg) = promoteValue(rewriter, arg);
-          argTypes.push_back(newType);
-          newArgs.push_back(newArg);
-        }
 
-        Type structTy = LLVM::LLVMStructType::getLiteral(ctx, argTypes);
-        auto allocated =
-            rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(ctx), structTy, one,
-                                            /*alignment=*/0);
+      Type structTy = LLVM::LLVMStructType::getLiteral(ctx, argTypes);
+      auto allocated =
+          rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(ctx), structTy, one,
+                                          /*alignment=*/0);
 
-        for (const auto &entry : llvm::enumerate(newArgs)) {
-          auto index = i32_val(entry.index());
-          auto fieldPtr = gep(ptr_ty(ctx), structTy, allocated,
-                              ArrayRef<Value>{zero, index});
-          store(entry.value(), fieldPtr);
-        }
-        bufferPtr = bitcast(allocated, ptr);
+      for (const auto &entry : llvm::enumerate(newArgs)) {
+        auto index = i32_val(entry.index());
+        auto fieldPtr =
+            gep(ptr_ty(ctx), structTy, allocated, ArrayRef<Value>{zero, index});
+        store(entry.value(), fieldPtr);
       }
+      bufferPtr = bitcast(allocated, ptr);
     }
 
+    SmallVector<Value> operands{msg, bufferPtr};
     call(funcOp, operands);
   }
 };
@@ -340,7 +297,7 @@ struct PrintOpConversion
 } // namespace
 
 void mlir::triton::populatePrintOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
-  patterns.add<PrintOpConversion>(typeConverter, target, benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
+  patterns.add<PrintOpConversion>(typeConverter, benefit);
 }

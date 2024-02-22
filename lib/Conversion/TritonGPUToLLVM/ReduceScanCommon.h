@@ -12,7 +12,6 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <set>
 #include <type_traits>
@@ -29,7 +28,6 @@ using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
-using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 namespace ttng = ::mlir::triton::nvidia_gpu;
 
 namespace mlir::triton {
@@ -39,15 +37,14 @@ class ScanOp;
 
 template <typename SourceOp>
 class ConvertTritonGPUReduceScanToLLVMPattern
-    : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
+    : public ConvertOpToLLVMPattern<SourceOp> {
 public:
   // Make sure the class is only instantiated with Reduce and Scan
   static_assert(std::is_same_v<SourceOp, ReduceOp> ||
                 std::is_same_v<SourceOp, ScanOp>);
 
-  using ConvertTritonGPUOpToLLVMPatternBase::getTypeConverter;
-  using ConvertTritonGPUOpToLLVMPattern<
-      SourceOp>::ConvertTritonGPUOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<SourceOp>::getTypeConverter;
+  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
 
   // Return the pointee type of the shared memory pointer for operand i.
   Type getElementType(SourceOp op, int i) const {
@@ -57,8 +54,7 @@ public:
 
   // Helper to compute the smem bases in both reductions and scans
   SmallVector<Value> getSmemBases(SourceOp op, unsigned elems,
-                                  ConversionPatternRewriter &rewriter,
-                                  Target target) const {
+                                  ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     // indices will store the index of the op operands in descending order
     // of their bitwidths
@@ -72,7 +68,7 @@ public:
     // Assign base index to each operand in their order in indices
     std::map<unsigned, Value> indexToBase;
     indexToBase[indices[0]] =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
+        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
       indexToBase[indices[i]] = gep(
           ptr_ty(rewriter.getContext(), 3), getElementType(op, indices[i - 1]),

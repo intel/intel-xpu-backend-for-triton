@@ -22,6 +22,8 @@
  */
 
 #include "PatternTritonGPUOpToLLVM.h"
+#include "Utility.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 using namespace mlir;
@@ -29,9 +31,8 @@ using namespace mlir::triton;
 
 namespace {
 struct BarrierOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<mlir::gpu::BarrierOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      mlir::gpu::BarrierOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<mlir::gpu::BarrierOp> {
+  using ConvertOpToLLVMPattern<mlir::gpu::BarrierOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(mlir::gpu::BarrierOp op, OpAdaptor adaptor,
@@ -52,10 +53,9 @@ struct BarrierOpConversion
 };
 
 struct FenceAsyncSharedOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<
-          triton::nvidia_gpu::FenceAsyncSharedOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::nvidia_gpu::FenceAsyncSharedOp>::ConvertTritonGPUOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncSharedOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::FenceAsyncSharedOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::FenceAsyncSharedOp op, OpAdaptor adaptor,
@@ -69,8 +69,8 @@ struct FenceAsyncSharedOpConversion
 } // namespace
 
 void mlir::triton::populateBarrierOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
-  patterns.add<BarrierOpConversion>(typeConverter, target, benefit);
-  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, target, benefit);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
+  patterns.add<BarrierOpConversion>(typeConverter, benefit);
+  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
 }

@@ -1,10 +1,8 @@
 add_triton_library(TritonGPUToLLVM
-    ConvertLayoutOpToLLVM/SharedToDotOperandDPAS.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
     ConvertLayoutOpToLLVM.cpp
-    DotOpToLLVM/DPAS.cpp
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/MMAv1.cpp
     DotOpToLLVM/MMAv2.cpp
@@ -38,16 +36,13 @@ add_triton_library(TritonGPUToLLVM
     LINK_LIBS PUBLIC
     MLIRIR
     MLIRPass
-    MLIRGENXDialect
     MLIRGPUDialect
-    MLIRGPUToGENXTransforms
     MLIRGPUToNVVMTransforms
     MLIRGPUToROCDLTransforms
     MLIRGPUTransforms
     TritonAnalysis
     TritonIR
     TritonGPUIR
-    TritonIntelGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
     NVGPUIR
