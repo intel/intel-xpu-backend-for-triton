@@ -1,13 +1,21 @@
-name: Docker image runner-base
+name: Build self-hosted runner image
 
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner to build'
+        required: true
+        default: 'base'
+        type: choice
+        options:
+          - base
+          - conda
 
 permissions: read-all
 
 env:
   REGISTRY: docker-registry.docker-registry.svc.cluster.local:5000
-  TAG: triton-runner-base:0.0.6
 
 jobs:
   build:
@@ -18,12 +26,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set base runner env
+        if: inputs.runner == 'base'
+        run: |
+          echo TAG=triton-runner-base:0.0.6 >>$GITHUB_ENV
+          echo INSTALLER_IMAGE=$REGISTRY/oneapi-basekit:2024.0.1 >>$GITHUB_ENV
+          echo RUNNER_PATH=.github/dockerfiles/runner-base/ >>$GITHUB_ENV
+
+      - name: Set conda runner env
+        if: inputs.runner == 'conda' || !inputs.runner
+        run: |
+          echo TAG=triton-runner-conda:0.0.1 >>$GITHUB_ENV
+          echo INSTALLER_IMAGE=$REGISTRY/oneapi-basekit:2024.0.1 >>$GITHUB_ENV
+          echo RUNNER_PATH=.github/dockerfiles/runner-conda/ >>$GITHUB_ENV
+
       - name: Build image
         run: |
-          docker build .github/dockerfiles/runner-base/ \
+          docker build $RUNNER_PATH \
             --tag $REGISTRY/$TAG \
-            --build-arg INSTALLER_IMAGE=$REGISTRY/oneapi-basekit:2024.0.1
+            --build-arg INSTALLER_IMAGE=$INSTALLER_IMAGE
 
       - name: Push image
         run: |
           docker push $REGISTRY/$TAG
+
