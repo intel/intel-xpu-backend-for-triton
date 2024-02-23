@@ -5,6 +5,8 @@ add_triton_library(TritonIntelGPUTransforms
   PrefetchBlock.cpp
   RemoveLayoutConversions.cpp
   RewriteTensorPointer.cpp
+  Pipeliner/MatmulLoopPipeline.cpp
+  Pipeliner/SoftwarePipeliner.cpp
   Utility.cpp
 
   DEPENDS
@@ -13,6 +15,7 @@ add_triton_library(TritonIntelGPUTransforms
   LINK_LIBS PUBLIC
   MLIRTransforms
   MLIRTransformUtils
+  MLIRSCFTransforms
   TritonAnalysis
   TritonIR
   TritonGPUIR

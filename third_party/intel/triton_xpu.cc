@@ -48,6 +48,15 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
     pm.addPass(mlir::triton::gpu::intel::
                    createTritonIntelGPURemoveLayoutConversionsPass());
   });
+  m.def(
+      "add_tritonintelgpu_pipe_line_pass",
+      [](mlir::PassManager &self, int numStages,
+         mlir::triton::gpu::intel::DeviceArch arch) {
+        self.addPass(mlir::triton::gpu::intel::createTritonIntelGPUPipelinePass(
+            numStages, arch));
+      },
+      py::arg("pm"), py::arg("numStages"),
+      py::arg("arch") = mlir::triton::gpu::intel::DeviceArch::UNKNOWN);
 }
 
 void init_triton_intel_passes_ttnvgpuir(py::module &&m) {
