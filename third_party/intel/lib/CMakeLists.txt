@@ -1,2 +1,2 @@
-add_subdirectory(TritonIntelGPUToLLVM)
 add_subdirectory(NVGPUIntelToLLVM)
+add_subdirectory(TritonIntelGPUToLLVM)
