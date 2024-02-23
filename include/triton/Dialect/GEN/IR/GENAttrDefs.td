@@ -23,7 +23,7 @@ def GEN_ShflKindAttr : I32EnumAttr<"ShflKind", "GEN shuffle kind",
 }
 
 /// Enum attribute of the different floating-point rounding modes.
-def GEN_RoundingModeAttr : I32EnumAttr<"RoundingMode", 
+def GEN_RoundingModeAttr : I32EnumAttr<"RoundingMode",
   "GEN floating-point rounding mode",
   [
     I32EnumAttrCase<"UNUSED", 0, "unused">,
@@ -36,7 +36,7 @@ def GEN_RoundingModeAttr : I32EnumAttr<"RoundingMode",
 }
 
 /// Enum attribute of the different precision types.
-def GEN_PrecisionTypeAttr : I32EnumAttr<"PrecisionType", 
+def GEN_PrecisionTypeAttr : I32EnumAttr<"PrecisionType",
   "GEN precision type",
   [
     I32EnumAttrCase<"UNUSED", 0,  "unused">,
