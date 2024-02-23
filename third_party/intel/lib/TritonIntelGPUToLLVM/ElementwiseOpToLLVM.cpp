@@ -1669,10 +1669,7 @@ struct FpToFpOpConversion
     } break;
     case mlir::triton::Target::GENX: {
       auto ctx = rewriter.getContext();
-      // TODO: Remove unnecessary rounding mode.
-      return rewriter.create<GENX::FpToFpOp>(
-          loc, f32_ty, v,
-          GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTE));
+      return rewriter.create<GENX::FpToFpOp>(loc, f32_ty, v);
     }
     default:
       assert(false && "TODO");
