@@ -1,9 +1,11 @@
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
+#include "intel/include/TritonIntelGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include <gtest/gtest.h>
+
+using ::mlir::triton::intel::PTXBuilder;
 
 namespace mlir {
 namespace triton {

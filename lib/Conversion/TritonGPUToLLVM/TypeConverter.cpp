@@ -2,7 +2,6 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -13,7 +12,6 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
-using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
@@ -77,29 +75,6 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   auto dotOpLayout = layout.dyn_cast<DotOperandEncodingAttr>();
   if (!dotOpLayout)
     return elemTy;
-
-  if (auto dpasParent = dotOpLayout.getParent().dyn_cast<DpasEncodingAttr>()) {
-    unsigned RC = dpasParent.getRepeatCount();
-    unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
-
-    if (dotOpLayout.getOpIdx() == 0) {
-      //  Elem. Type | vector size
-      // ------------------------------
-      //  f16/bf16   | vector<8xf16/bf16>
-      //     i8      | vector<16xi8>
-      //     tf32    | vector<4xf32>
-      return vec_ty(elemTy, RC * ((8 * (float)(sizeof(int16_t)) / bitWidth)));
-    } else {
-      //  Elem. Type | vector size
-      // ------------------------------
-      //  f16/bf16   | vector<16xf16/bf16>
-      //     i8      | vector<32xi8>
-      //     tf32    | vector<8xf32>
-      assert(dotOpLayout.getOpIdx() == 1);
-      return vec_ty(elemTy, RC * ((8 * sizeof(int32_t)) / bitWidth));
-    }
-  }
-
   auto mmaParent = dotOpLayout.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
   if (!mmaParent || mmaParent.isHopper())
     return elemTy;

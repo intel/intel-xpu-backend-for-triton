@@ -9,8 +9,9 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
-#include "triton/Conversion/NVGPUToLLVM/Passes.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+// FIXME
+#include "intel/include/NVGPUIntelToLLVM/Passes.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
 
@@ -37,10 +38,11 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestAllocationPass();
   mlir::test::registerTestMembarPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
-  mlir::triton::registerDecomposeUnsupportedConversionsPass();
-  mlir::triton::registerAllocateSharedMemoryPass();
-  mlir::triton::registerConvertTritonGPUToLLVMPass();
-  mlir::triton::registerConvertNVGPUToLLVMPass();
+  // FIXME
+  mlir::triton::registerIntelDecomposeUnsupportedConversionsPass();
+  mlir::triton::registerIntelAllocateSharedMemoryPass();
+  mlir::triton::registerConvertTritonIntelGPUToLLVMPass();
+  mlir::triton::registerConvertNVGPUIntelToLLVMPass();
   mlir::registerLLVMDIScope();
 
   // TODO: register Triton & TritonGPU passes
