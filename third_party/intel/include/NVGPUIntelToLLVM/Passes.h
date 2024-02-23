@@ -4,12 +4,12 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 
-#include "NVGPUIntelToLLVM/NVGPUIntelToLLVMPass.h"
+#include "intel/include/NVGPUIntelToLLVM/NVGPUIntelToLLVMPass.h"
 
 namespace mlir {
 namespace triton {
 #define GEN_PASS_REGISTRATION
-#include "NVGPUIntelToLLVM/Passes.h.inc"
+#include "intel/include/NVGPUIntelToLLVM/Passes.h.inc"
 
 } // namespace triton
 } // namespace mlir

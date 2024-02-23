@@ -1,4 +1,4 @@
-#include "TritonIntelGPUToLLVM/Passes.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
@@ -12,7 +12,7 @@ using namespace mlir::triton;
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_INTELALLOCATESHAREDMEMORY
-#include "TritonIntelGPUToLLVM/Passes.h.inc"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 

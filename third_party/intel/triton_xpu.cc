@@ -25,6 +25,12 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
     pm.addPass(mlir::triton::createConvertTritonIntelGPUToLLVMPass(
         capability, mlir::triton::GENX));
   });
+  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
+    pm.addPass(createIntelDecomposeUnsupportedConversionsPass());
+  });
+  m.def("add_allocate_shared_memory", [](mlir::PassManager &pm) {
+    pm.addPass(createIntelAllocateSharedMemoryPass());
+  });
 }
 
 void init_triton_intel_passes_ttnvgpuir(py::module &&m) {

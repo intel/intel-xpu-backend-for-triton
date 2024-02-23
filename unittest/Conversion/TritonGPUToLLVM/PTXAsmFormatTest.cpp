@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+using ::mlir::triton::intel::PTXBuilder;
+
 namespace mlir {
 namespace triton {
 class PTXAsmFormatTest : public ::testing::Test {

@@ -76,7 +76,7 @@ private:
   // Non-static members are initialized in declaration order
   MLIRContext *context;
   LowerToLLVMOptions option;
-  TritonGPUToLLVMTypeConverter typeConverter;
+  TritonIntelGPUToLLVMTypeConverter typeConverter;
   Block block;
   ConversionPatternRewriter rewriter;
   Location loc;
