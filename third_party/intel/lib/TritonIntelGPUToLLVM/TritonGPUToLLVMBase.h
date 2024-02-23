@@ -42,7 +42,9 @@ public:
       TritonIntelGPUToLLVMTypeConverter &typeConverter, Target target)
       : converter(&typeConverter), target(target) {}
 
-  TritonIntelGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
+  TritonIntelGPUToLLVMTypeConverter *getTypeConverter() const {
+    return converter;
+  }
 
 protected:
   TritonIntelGPUToLLVMTypeConverter *converter;

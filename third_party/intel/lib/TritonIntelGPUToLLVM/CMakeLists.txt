@@ -35,6 +35,10 @@ add_triton_library(TritonIntelGPUToLLVM
     DEPENDS
     TritonIntelGPUConversionPassIncGen
 
+    LINK_LIBS PUBLIC
     TritonNvidiaGPUTransforms
+    MLIRGPUToGENXTransforms
     NVGPUIR
+    TritonIntelGPUIR
+    MLIRGENXDialect
 )
