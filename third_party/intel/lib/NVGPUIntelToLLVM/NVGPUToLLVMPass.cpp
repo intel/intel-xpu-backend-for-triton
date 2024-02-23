@@ -1,4 +1,4 @@
-#include "intel/include/NVGPUIntelToLLVM/NVGPUIntelToLLVMPass.h"
+#include "NVGPUIntelToLLVM/NVGPUIntelToLLVMPass.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
@@ -8,14 +8,14 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 
-#include "intel/include/TritonIntelGPUToLLVM/PTXAsmFormat.h"
+#include "TritonIntelGPUToLLVM/PTXAsmFormat.h"
 
 #include "../TritonIntelGPUToLLVM/Utility.h"
 using namespace mlir;
 using namespace mlir::triton;
 
 #define GEN_PASS_CLASSES
-#include "intel/include/NVGPUIntelToLLVM/Passes.h.inc"
+#include "NVGPUIntelToLLVM/Passes.h.inc"
 
 namespace ttn = mlir::triton::nvgpu;
 using ::mlir::LLVM::utils::getSRegValue;

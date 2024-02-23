@@ -1,4 +1,4 @@
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -31,7 +31,7 @@
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_CONVERTTRITONINTELGPUTOLLVM
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
+#include "TritonIntelGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
