@@ -1669,10 +1669,7 @@ struct FpToFpOpConversion
     } break;
     case mlir::triton::Target::GENX: {
       auto ctx = rewriter.getContext();
-      // TODO: Remove unnecessary rounding mode.
-      return rewriter.create<GENX::FpToFpOp>(
-          loc, f32_ty, v,
-          GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTE));
+      return rewriter.create<GENX::FpToFpOp>(loc, f32_ty, v);
     }
     default:
       assert(false && "TODO");
@@ -1855,11 +1852,12 @@ struct FpToFpOpConversion
               convDesc.numElements};
     } break;
     default: {
-      if (srcTy.getTypeID() == dstTy.getTypeID())
+      if (srcTy.getTypeID() == dstTy.getTypeID()) {
         if (srcTy.getTypeID() == F8E4M3TyID || dstTy.getTypeID() == F8E4M3TyID)
           return {identity_func, 2};
         else
           return {identity_func, 4};
+      }
 
       auto undefRounding = static_cast<RoundingMode>(-1);
       static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>,
