@@ -106,15 +106,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Python build dependencies
-        run: |
-          pip install wheel
-
       - name: Identify versions
         run: |
           echo "PYTORCH_COMMIT_ID=$(git ls-remote $PYTORCH_REPO refs/heads/$PYTORCH_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
@@ -128,6 +119,23 @@ jobs:
           echo "$IPEX_REPO: $IPEX_COMMIT_ID"
           echo "$LLVM_REPO: $LLVM_COMMIT_ID"
           echo "$GITHUB_REPOSITORY: $GITHUB_SHA"
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          # pip cache per commit id just to minimize network traffic
+          key: pip-$PYTHON_VERSION-$GITHUB_SHA
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python build dependencies
+        run: |
+          pip install wheel
 
       - name: Create environment file for building PyTorch
         run: |
@@ -280,8 +288,16 @@ jobs:
         run: |
           pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
 
-      - name: Build torchvision wheels
+      - name: Load torchvision from a cache
         if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        id: torchvision-cache
+        uses: ./.github/actions/load
+        with:
+          path: vision
+          key: torchvision-$PYTHON_VERSION-$TORCHVISION_COMMIT_ID
+
+      - name: Build torchvision wheels
+        if: ${{ (matrix.suite == 'timm_models' || matrix.suite == 'torchbench') && steps.torchvision-cache.outputs.status == 'miss' }}
         run: |
           git clone --single-branch -b main https://github.com/pytorch/vision.git
           cd vision
@@ -294,8 +310,23 @@ jobs:
           pip install vision/dist/*.whl
           python -c "import torchvision; print(torchvision.__version__)"
 
-      - name: Build torchtext wheels
+      - name: Save torchvision to a cache
+        if: ${{ (matrix.suite == 'timm_models' || matrix.suite == 'torchbench') && steps.torchvision-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.torchvision-cache.outputs.path }}
+          dest: ${{ steps.torchvision-cache.outputs.dest }}
+
+      - name: Load torchtext from a cache
         if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        id: torchtext-cache
+        uses: ./.github/actions/load
+        with:
+          path: text
+          key: torchtext-$PYTHON_VERSION-$TORCHTEXT_COMMIT_ID
+
+      - name: Build torchtext wheels
+        if: ${{ (matrix.suite == 'timm_models' || matrix.suite == 'torchbench') && steps.torchtext-cache.outputs.status == 'miss'}}
         run: |
           git clone --recurse-submodules --jobs 8 --single-branch -b main https://github.com/pytorch/text.git
           cd text
@@ -308,8 +339,23 @@ jobs:
           pip install text/dist/*.whl
           python -c "import torchtext; print(torchtext.__version__)"
 
-      - name: Build torchaudio wheels
+      - name: Save torchtext to a cache
+        if: ${{ (matrix.suite == 'timm_models' || matrix.suite == 'torchbench') && steps.torchtext-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.torchtext-cache.outputs.path }}
+          dest: ${{ steps.torchtext-cache.outputs.dest }}
+
+      - name: Load torchaudio from a cache
         if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        id: torchaudio-cache
+        uses: ./.github/actions/load
+        with:
+          path: audio
+          key: torchaudio-$PYTHON_VERSION-$TORCHAUDIO_COMMIT_ID
+
+      - name: Build torchaudio wheels
+        if: ${{ (matrix.suite == 'timm_models' || matrix.suite == 'torchbench') && steps.torchaudio-cache.outputs.status == 'miss' }}
         run: |
           git clone --single-branch -b main https://github.com/pytorch/audio.git
           cd audio
@@ -322,8 +368,15 @@ jobs:
           pip install audio/dist/*.whl
           python -c "import torchaudio; print(torchaudio.__version__)"
 
-      - name: Install PyTorch Benchmarks
-        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+      - name: Save torchaudio to a cache
+        if: ${{ (matrix.suite == 'timm_models' || matrix.suite == 'torchbench') && steps.torchaudio-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.torchaudio-cache.outputs.path }}
+          dest: ${{ steps.torchaudio-cache.outputs.dest }}
+
+      - name: Install pytorch benchmark
+        if: ${{ matrix.suite == 'torchbench' }}
         run: |
           git clone --single-branch -b $BENCHMARK_BRANCH --recurse-submodules --jobs 8 $BENCHMARK_REPO
           cd benchmark
@@ -381,3 +434,10 @@ jobs:
         with:
           name: logs-${{ join(matrix.*, '-') }}
           path: inductor_log
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
