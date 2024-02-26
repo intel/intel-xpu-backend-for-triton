@@ -89,10 +89,11 @@ public:
     Type fp16Ty = type::f16Ty(ctx);
     Type bf16Ty = type::bf16Ty(ctx);
     Type i32Ty = type::i32Ty(ctx);
+    Type i16Ty = type::i16Ty(ctx);
     Type s32Ty = IntegerType::get(ctx, 32, IntegerType::Signed);
 
     unsigned threadsPerWarp = layout.getSubGroupSize();
-    unsigned opsPerChan = layout.getOpsPerChannel();
+    unsigned opsPerChannel = layout.getOpsPerChannel();
     SmallVector<unsigned> shapeC = layout.getShapeC();
     unsigned elemNumC = product<unsigned>(shapeC) / threadsPerWarp;
     SmallVector<unsigned> shapeA = layout.getShapeA();
@@ -102,45 +103,44 @@ public:
     switch (mmaType) {
     case DPASEngineType::FP32_FP32_FP16_FP16: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
-      Type aTy = vec_ty(i32Ty, elemNumA / opsPerChan); // pack scalar to i32.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChan); // pack scalar to i32.
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
     case DPASEngineType::FP16_FP16_FP16_FP16: {
       Type cTy = vec_ty(fp16Ty, elemNumC);
-      Type aTy = vec_ty(i32Ty, elemNumA / opsPerChan); // pack scalar to i32.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChan); // pack scalar to i32.
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
     case DPASEngineType::FP32_FP32_BF16_BF16: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
-      Type aTy = vec_ty(i32Ty, elemNumA / opsPerChan); // pack scalar to i32.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChan); // pack scalar to i32.
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
     case DPASEngineType::BF16_BF16_BF16_BF16: {
       Type cTy = vec_ty(bf16Ty, elemNumC);
-      Type aTy = vec_ty(i32Ty, elemNumA / opsPerChan); // pack scalar to i32.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChan); // pack scalar to i32.
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
     case DPASEngineType::FP32_FP32_TF32_TF32: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
-      Type aTy = vec_ty(i32Ty, elemNumA / opsPerChan); // pack scalar to i32.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChan); // pack scalar to i32.
+      Type aTy = vec_ty(i32Ty, elemNumA);                 // pack scalar to i32.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
     case DPASEngineType::U32_U32_U8_U8: {
       Type cTy = vec_ty(i32Ty, elemNumC);
-      Type aTy = vec_ty(i32Ty, elemNumA / opsPerChan); // pack scalar to i32.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChan); // pack scalar to i32.
-      return {cTy, cTy, aTy, bTy};
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
     case DPASEngineType::S32_S32_S8_S8: {
       Type cTy = vec_ty(s32Ty, elemNumC);
-      Type aTy = vec_ty(i32Ty, elemNumA / opsPerChan); // pack scalar to i32.
-      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChan); // pack scalar to i32.
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
     default:

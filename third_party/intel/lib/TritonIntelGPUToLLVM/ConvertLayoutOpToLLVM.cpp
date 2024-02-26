@@ -272,17 +272,15 @@ private:
 
       // clang-format off
       // For C operand the layout illustration.
-      //                      sub-group size 32
+      //                      sub-group size 16
       //               execution size = 16
       // <------------------------------------------------------------->
       // t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15       ^
-      // t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31       |
       // .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .         | repeat count = 8
       // .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .         |
-      // t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15       |
-      // t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31       v
-      // Then sizePerThreads = [4, 1], and coordinate offset for each element per lane should be:
-      // [0, 0], [2, 0], [4, 0], [6, 0]
+      // t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15       v
+      // Then sizePerThreads = [8, 1], and coordinate offset for each element per lane should be:
+      // [0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0]
       // clang-format on
       auto sizePerThreads = getSizePerThread(dpasLayout);
       int rowsPerWarp = rowsPerWarp =
