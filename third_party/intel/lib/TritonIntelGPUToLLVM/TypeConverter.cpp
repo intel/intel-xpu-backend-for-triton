@@ -78,28 +78,6 @@ Type TritonIntelGPUToLLVMTypeConverter::getElementTypeForStruct(
   if (!dotOpLayout)
     return elemTy;
 
-  if (auto dpasParent = dotOpLayout.getParent().dyn_cast<DpasEncodingAttr>()) {
-    unsigned RC = dpasParent.getRepeatCount();
-    unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
-
-    if (dotOpLayout.getOpIdx() == 0) {
-      //  Elem. Type | vector size
-      // ------------------------------
-      //  f16/bf16   | vector<8xf16/bf16>
-      //     i8      | vector<16xi8>
-      //     tf32    | vector<4xf32>
-      return vec_ty(elemTy, RC * ((8 * (float)(sizeof(int16_t)) / bitWidth)));
-    } else {
-      //  Elem. Type | vector size
-      // ------------------------------
-      //  f16/bf16   | vector<16xf16/bf16>
-      //     i8      | vector<32xi8>
-      //     tf32    | vector<8xf32>
-      assert(dotOpLayout.getOpIdx() == 1);
-      return vec_ty(elemTy, RC * ((8 * sizeof(int32_t)) / bitWidth));
-    }
-  }
-
   auto mmaParent = dotOpLayout.getParent().dyn_cast<NvidiaMmaEncodingAttr>();
   if (!mmaParent || mmaParent.isHopper())
     return elemTy;

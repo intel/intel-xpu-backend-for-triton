@@ -17,6 +17,21 @@ using mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace {
 
+// data type for D_C_A_B.
+enum class DPASEngineType : uint8_t {
+  // floating-point XMX engine instr
+  FP32_FP32_FP16_FP16 = 0, // default
+  FP32_FP32_BF16_BF16,
+  FP32_FP32_TF32_TF32,
+  FP16_FP16_FP16_FP16,
+  BF16_BF16_BF16_BF16,
+  // integer XMX engine instr
+  U32_U32_U8_U8,
+  S32_S32_S8_S8,
+  //
+  NOT_APPLICABLE,
+};
+
 class DotOpDPASConversionHelper {
 public:
   using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
@@ -28,6 +43,131 @@ public:
       : dpasLayout(dpasLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
 
+  static DPASEngineType getDPASType(triton::DotOp op) {
+    Value A = op.getA();
+    Value B = op.getB();
+    auto aTy = A.getType().cast<RankedTensorType>();
+    auto bTy = B.getType().cast<RankedTensorType>();
+    // d = a*b + c
+    auto dTy = op.getD().getType().cast<RankedTensorType>();
+
+    // TODO: add more dpas supported data type.
+    if (dTy.getElementType().isIntOrIndex()) {
+      // Integer
+      if (dTy.getElementType().getIntOrFloatBitWidth() == 32) {
+        if (aTy.getElementType().getIntOrFloatBitWidth() == 8 &&
+            bTy.getElementType().getIntOrFloatBitWidth() == 8)
+          return dTy.getElementType().isSignedInteger()
+                     ? DPASEngineType::S32_S32_S8_S8
+                     : DPASEngineType::U32_U32_U8_U8;
+      }
+    } else {
+      // floating.
+      if (dTy.getElementType().isF32()) {
+        if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
+          return DPASEngineType::FP32_FP32_FP16_FP16;
+        if (aTy.getElementType().isBF16() && bTy.getElementType().isBF16())
+          return DPASEngineType::FP32_FP32_BF16_BF16;
+        if (aTy.getElementType().isF32() && bTy.getElementType().isF32() &&
+            op.getAllowTF32())
+          return DPASEngineType::FP32_FP32_TF32_TF32;
+      } else if (dTy.getElementType().isF16()) {
+        if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
+          return DPASEngineType::FP16_FP16_FP16_FP16;
+      } else if (dTy.getElementType().isBF16()) {
+        if (aTy.getElementType().isBF16() && bTy.getElementType().isBF16())
+          return DPASEngineType::BF16_BF16_BF16_BF16;
+      }
+    }
+
+    return DPASEngineType::NOT_APPLICABLE;
+  }
+
+  std::tuple<Type, Type, Type, Type> static getMmaOperandsType(
+      DPASEngineType mmaType, MLIRContext *ctx, DpasEncodingAttr layout) {
+    Type fp32Ty = type::f32Ty(ctx);
+    Type fp16Ty = type::f16Ty(ctx);
+    Type bf16Ty = type::bf16Ty(ctx);
+    Type i32Ty = type::i32Ty(ctx);
+    Type i16Ty = type::i16Ty(ctx);
+    Type s32Ty = IntegerType::get(ctx, 32, IntegerType::Signed);
+
+    unsigned threadsPerWarp = layout.getSubGroupSize();
+    unsigned opsPerChannel = layout.getOpsPerChannel();
+    SmallVector<unsigned> shapeC = layout.getShapeC();
+    unsigned elemNumC = product<unsigned>(shapeC) / threadsPerWarp;
+    SmallVector<unsigned> shapeA = layout.getShapeA();
+    unsigned elemNumA = product<unsigned>(shapeA) / threadsPerWarp;
+    SmallVector<unsigned> shapeB = layout.getShapeB();
+    unsigned elemNumB = product<unsigned>(shapeB) / threadsPerWarp;
+    switch (mmaType) {
+    case DPASEngineType::FP32_FP32_FP16_FP16: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case DPASEngineType::FP16_FP16_FP16_FP16: {
+      Type cTy = vec_ty(fp16Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case DPASEngineType::FP32_FP32_BF16_BF16: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case DPASEngineType::BF16_BF16_BF16_BF16: {
+      Type cTy = vec_ty(bf16Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case DPASEngineType::FP32_FP32_TF32_TF32: {
+      Type cTy = vec_ty(fp32Ty, elemNumC);
+      Type aTy = vec_ty(i32Ty, elemNumA);                 // pack scalar to i32.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case DPASEngineType::U32_U32_U8_U8: {
+      Type cTy = vec_ty(i32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    case DPASEngineType::S32_S32_S8_S8: {
+      Type cTy = vec_ty(s32Ty, elemNumC);
+      Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
+      Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
+      return {cTy, cTy, aTy, bTy};
+    }
+    default:
+      llvm::report_fatal_error("Unsupported dpas type found");
+    }
+
+    return std::make_tuple<Type, Type, Type, Type>({}, {}, {}, {});
+  }
+
+  /// Generate the GEN dialect dpas operation. Rules (for PVC):
+  ///  - SD = 8
+  ///  - M = RC = 1,2,4,8 (we use 8)
+  ///  - N = exec_size = SIMD_width = 16
+  ///  - Size of A, B element type = {32,16,8}, for {tf32,bf16/f16,u8/i8}
+  ///  - K=SD * num_packed_elems_in_Dword = {8,16,32}, for {tf32,bf16/f16,u8/i8}
+  ///
+  /// The per-lane intrinsic function generated is defined to perform the
+  /// following operation:
+  ///    D[0:M-1,laneId] = C[0:M-1,laneId] + A[0:M-1,laneId] * B[0:K-1,laneId]
+  ///
+  /// Example: A and B elements are f16, K=SD*2=16, SIMD_width=16, each
+  /// lane gets K/SIMD_width=1 column of A
+  ///
+  ///    D[0:M-1,lane_id] =
+  ///      gen.matrix.dpas C, A, B {pa, pb, rc=M, sd=8}
+  ///        : (vector<8xf32>, vector<4xi32>, vector<4xi32>) -> vector<8xf32>
+  ///
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
     Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
     Value loadedA = adaptor.getA(), loadedB = adaptor.getB(),
@@ -54,15 +194,28 @@ public:
 
     unsigned repM = repA[0], repN = repB[1], repK = repA[1];
 
+    auto mmaType = getDPASType(op);
+    auto mmaEncoding = DTensorTy.getEncoding().cast<DpasEncodingAttr>();
+    Type aTy, bTy, cTy, dTy;
+    std::tie(dTy, cTy, aTy, bTy) =
+        getMmaOperandsType(mmaType, op.getContext(), mmaEncoding);
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
-        loadedA, repM, repK, ATensorTy.getElementType());
+        loadedA, repM, repK,
+        typeConverter->convertType(ATensorTy.getElementType()), aTy);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
-        loadedB, repN, repK, BTensorTy.getElementType());
+        loadedB, repN, repK,
+        typeConverter->convertType(BTensorTy.getElementType()), bTy);
+    ValueTable fc = getValuesFromDotOperandLayoutStruct(
+        loadedC, repM, repN,
+        typeConverter->convertType(CTensorTy.getElementType()), cTy);
+
     Type resElemTy = DTensorTy.getElementType();
-    SmallVector<Value> fc = unpackLLElements(loc, loadedC, rewriter);
 
     GENX::PrecisionType APrecision = getElementPrecision(ATensorTy, resElemTy),
                         BPrecision = getElementPrecision(BTensorTy, resElemTy);
+
+    assert(APrecision == BPrecision &&
+           "A and B precision enumerators do not match");
 
     LLVM_DEBUG({
       llvm::dbgs() << "repM = " << repM << "\n";
@@ -71,34 +224,30 @@ public:
       llvm::dbgs() << "fc.size()= " << fc.size() << "\n";
     });
 
-    unsigned RC =
-        AEncoding.getParent().cast<DpasEncodingAttr>().getRepeatCount();
-    auto threadsPerWarp = ADpasEncoding.getSubGroupSize();
-    auto shapeC = ADpasEncoding.getShapeC();
-    unsigned cNumElems = product<unsigned>(shapeC) / threadsPerWarp;
-    auto CTy = vec_ty(resElemTy, cNumElems);
+    auto generateDPASOp = [&](unsigned m, unsigned n, unsigned k) {
+      auto valA = ha.at({m, k});
+      auto valB = hb.at({n, k});
+      auto valc = fc.at({m, n});
 
-    for (unsigned m = 0; m < repM; ++m) {
-      for (unsigned n = 0; n < repN; ++n) {
-        Value C = undef(CTy);
-        for (unsigned v = 0; v < cNumElems; ++v)
-          C = insert_element(
-              CTy, C, fc[m * repN * cNumElems + n * cNumElems + v], i32_val(v));
+      auto pA = GENX::PrecisionTypeAttr::get(A.getContext(), APrecision);
+      auto pB = GENX::PrecisionTypeAttr::get(B.getContext(), BPrecision);
+      auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
+                                 mmaEncoding.getRepeatCount());
 
-        for (size_t k = 0; k < repK; k++) {
-          Value A = ha[{m, k}], B = hb[{n, k}];
-          C = generateDPASOp(C, A, B, RC, APrecision, BPrecision);
-        }
+      auto ret = rewriter.create<GENX::MatrixDPASOp>(loc, dTy, valc, valA, valB,
+                                                     pA, pB, RC);
 
-        for (unsigned v = 0; v < cNumElems; ++v)
-          fc[m * repN * cNumElems + n * cNumElems + v] =
-              extract_element(resElemTy, C, i32_val(v));
-      }
-    }
+      fc.at({m, n}) = ret;
+    };
 
-    Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(fc.size(), resElemTy));
-    Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
+    for (int k = 0; k < repK; ++k)
+      for (int m = 0; m < repM; ++m)
+        for (int n = 0; n < repN; ++n)
+          generateDPASOp(m, n, k);
+
+    Value res =
+        composeValuesToDotOperandLayoutStruct(fc, repM, repN, resElemTy);
+
     rewriter.replaceOp(op, res);
 
     return success();
@@ -128,55 +277,50 @@ private:
     }
   }
 
-  /// Generate the GENX dialect dpas operation. Rules (for PVC):
-  ///  - SD = 8
-  ///  - M = RC = 1,2,4,8 (we use 8)
-  ///  - N = exec_size = SIMD_width = 16
-  ///  - Size of A, B element type = {32,16,8}, for {tf32,bf16/f16,u8/i8}
-  ///  - K=SD * num_packed_elems_in_Dword = {8,16,32}, for {tf32,bf16/f16,u8/i8}
-  ///
-  /// The per-lane intrinsic function generated is defined to perform the
-  /// following operation:
-  ///    D[0:M-1,laneId] = C[0:M-1,laneId] + A[0:M-1,laneId] * B[0:K-1,laneId]
-  ///
-  /// Example: A and B elements are f16, K=SD*2=16, SIMD_width=16, each
-  /// lane gets K/SIMD_width=1 column of A
-  ///
-  ///    D[0:M-1,lane_id] =
-  ///      genx.matrix.dpas C, A, B {pa, pb, rc=M, sd=8}
-  ///        : (vector<8xf32>, vector<8xf16>, vector<16xf16>) -> vector<8xf32>
-  ///
-  Value generateDPASOp(Value C, Value A, Value B, unsigned RepeatCount,
-                       GENX::PrecisionType APrecision,
-                       GENX::PrecisionType BPrecision) const {
-    assert(RepeatCount == 8 && "RepeatCount should be 8");
-    assert(APrecision == BPrecision &&
-           "A and B precision enumerators do not match");
+  Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals,
+                                              int64_t dim0, int64_t dim1,
+                                              Type elemTy) const {
 
-    auto ATy = cast<VectorType>(A.getType()),
-         BTy = cast<VectorType>(B.getType()),
-         CTy = cast<VectorType>(C.getType());
-    VectorType resTy = CTy;
+    std::vector<Value> elems;
+    for (int m = 0; m < dim0; ++m)
+      for (int k = 0; k < dim1; ++k) {
+        auto matVal = vals.at({m, k});
+        auto vecType = matVal.getType().cast<mlir::VectorType>();
+        auto valTy = vecType.getElementType();
+        for (int i = 0; i < vecType.getNumElements(); ++i) {
+          auto val = extract_element(valTy, matVal, i32_val(i));
 
-    assert(ATy.hasRank() && ATy.getRank() == 1 && "Unexpected vector");
-    assert(BTy.hasRank() && BTy.getRank() == 1 && "Unexpected vector");
-    assert(CTy.hasRank() && CTy.getRank() == 1 && "Unexpected vector");
+          elems.push_back(val);
+        }
+      }
 
-    auto pA = GENX::PrecisionTypeAttr::get(A.getContext(), APrecision);
-    auto pB = GENX::PrecisionTypeAttr::get(B.getContext(), BPrecision);
-    auto RC = IntegerAttr::get(rewriter.getIntegerType(32), RepeatCount);
+    assert(!elems.empty() &&
+           "unexpected empty result in composing the DPAS result.");
 
-    return rewriter.create<GENX::MatrixDPASOp>(loc, resTy, C, A, B, pA, pB, RC);
+    Type structTy = LLVM::LLVMStructType::getLiteral(
+        ctx, SmallVector<Type>(elems.size(), elemTy));
+    return packLLElements(loc, typeConverter, elems, rewriter, structTy);
   }
 
   ValueTable getValuesFromDotOperandLayoutStruct(Value val, int64_t dim0,
-                                                 int64_t dim1,
-                                                 Type elemTy) const {
+                                                 int64_t dim1, Type elemTy,
+                                                 Type dotOperandType) const {
     SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
+
+    int offset{};
     ValueTable vals;
-    for (int64_t i = 0; i < dim0; i++) {
-      for (int64_t j = 0; j < dim1; j++)
-        vals[{i, j}] = elems[dim1 * i + j];
+    size_t totalElems = elems.size();
+    size_t numElemsPerOperand = totalElems / (dim0 * dim1);
+    VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
+
+    for (int i = 0; i < dim0; ++i) {
+      for (int j = 0; j < dim1; ++j) {
+        Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
+        for (int k = 0; k < numElemsPerOperand; ++k) {
+          matVal = insert_element(dotOpTy, matVal, elems[offset++], i32_val(k));
+        }
+        vals[{i, j}] = bitcast(matVal, dotOperandType);
+      }
     }
     return vals;
   }
@@ -195,10 +339,10 @@ private:
     if (isa<FloatType>(resElemType)) {
       if (width == 32)
         return GENX::PrecisionType::TF32;
-      if (width == 16)
-        return isa<FloatType>(elemType)
-                   ? GENX::PrecisionType::FP16
-                   : GENX::PrecisionType::BF16; // bf is passed as i16.
+      if (isa<BFloat16Type>(elemType))
+        return GENX::PrecisionType::BF16;
+      if (isa<Float16Type>(elemType))
+        return GENX::PrecisionType::FP16;
     } else if (width == 8) {
       return elemType.isUnsignedInteger() ? GENX::PrecisionType::U8
                                           : GENX::PrecisionType::S8;
