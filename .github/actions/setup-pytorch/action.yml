@@ -1,3 +1,4 @@
+# Clones PyTorch (or loads from cache) to directory "pytorch".
 # Uses the existing Python.
 # Sets the following environment variables:
 # * PYTORCH_REPO
