@@ -249,6 +249,7 @@ void Load2DOp::getEffects(
     effects.emplace_back(MemoryEffects::Write::get(),
                          SideEffects::DefaultResource::get());
 }
+
 } // namespace intel
 } // namespace gpu
 } // namespace triton

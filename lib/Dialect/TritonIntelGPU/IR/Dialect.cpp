@@ -185,7 +185,8 @@ unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperands(
     auto totalElem = product<unsigned>(instrShapeA);
     // dpas operands scalar are evenly sharded to each work item.
     auto elemsPerThreand = (totalElem / threadsPerWarp) * rep[0] * rep[1];
-    // For A operand, pack the bits size <=16 scalar to opaque i16 and bits size = 32 to opaque i32.
+    // For A operand, pack the bits size <=16 scalar to opaque i16 and bits size
+    // = 32 to opaque i32.
     auto opsPerChannel = getOpsPerChannel();
     return opsPerChannel == 4 ? elemsPerThreand / 2 : elemsPerThreand;
   } else { // if (opIdx == 1)

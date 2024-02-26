@@ -103,6 +103,3 @@ def test_block_ptr_matmul_no_scf(shape, num_warps, device):
         num_warps=num_warps)
     golden = torch.matmul(a, b)
     torch.testing.assert_close(c, golden, check_dtype=False)
-
-if __name__ == '__main__':
-    test_block_ptr_matmul_no_scf([64,64,32], 8, 'xpu')

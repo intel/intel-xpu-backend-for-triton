@@ -44,4 +44,3 @@ module attributes {"triton_gpu.compute-capability" = 2 : i32, "triton_gpu.num-ct
     tt.return
   }
 }
-

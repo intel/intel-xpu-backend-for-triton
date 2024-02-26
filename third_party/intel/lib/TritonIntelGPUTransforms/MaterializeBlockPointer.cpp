@@ -11,7 +11,7 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-namespace ttig = mlir::triton::gpu::intel;
+namespace ttgi = mlir::triton::gpu::intel;
 
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
@@ -113,8 +113,14 @@ struct TritonIntelGPUMaterializeBlockPointerPass
 
 public:
   TritonIntelGPUMaterializeBlockPointerPass() = default;
+  TritonIntelGPUMaterializeBlockPointerPass(ttgi::DeviceArch arch) {
+    this->deviceArch = arch;
+  }
 
   void runOnOperation() override {
+    //  Only the PVC has the 2D memory accessing
+    if (deviceArch != ttgi::DeviceArch::PVC)
+      return;
 
     SmallVector<mlir::triton::MakeTensorPtrOp> makeTensorPtrWorkList;
     getOperation()->walk([&](mlir::triton::MakeTensorPtrOp op) {
@@ -127,6 +133,7 @@ public:
       auto offsets = op.getOffsets();
       auto tensorShape = tensorType.getShape();
 
+      // HW 2D block read instruction only supports stride[-1]=1.
       auto fastChangeStride = strides.back();
       if (auto stride =
               dyn_cast<arith::ConstantOp>(fastChangeStride.getDefiningOp())) {
@@ -155,10 +162,8 @@ public:
           if (loadOpWorkSet.count(loadOp) == 0) {
             // Save information
             loadOpWorkSet[loadOp] = TensorPointerInfo();
-          } else {
-            // multiple memory mapping defined for the same loadOp.
-            assert(false && "johnlu todo.");
           }
+          // TODO: support multiple memory mapping defined for the same loadOp.
         }
       }
     }
@@ -166,47 +171,13 @@ public:
     for (auto &iter : loadOpWorkSet) {
       tt::LoadOp &loadOp = iter.getFirst();
       OpBuilder builder(loadOp);
-      auto newResult = builder.create<ttig::Load2DOp>(
+      auto newResult = builder.create<ttgi::Load2DOp>(
           loadOp.getLoc(), loadOp.getResult().getType(), loadOp.getPtr(),
           triton::PaddingOptionAttr::get(loadOp.getContext(),
                                          triton::PaddingOption::PAD_ZERO),
           loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
       loadOp->getResult(0).replaceAllUsesWith(newResult);
       loadOp.erase();
-    }
-
-    SmallVector<mlir::triton::StoreOp> storeOpWorkList;
-    getOperation()->walk([&](mlir::triton::StoreOp op) {
-      auto ptr = op.getPtr();
-      if (auto makeTensorOp =
-              dyn_cast<tt::MakeTensorPtrOp>(ptr.getDefiningOp())) {
-        auto ptrType = makeTensorOp.getType().cast<triton::PointerType>();
-        auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
-
-        auto base = makeTensorOp.getBase();
-        auto shape = makeTensorOp.getShape();
-        auto strides = makeTensorOp.getStrides();
-        auto offsets = makeTensorOp.getOffsets();
-        auto tensorShape = tensorType.getShape();
-
-        auto fastChangeStride = strides.back();
-        if (auto stride =
-                dyn_cast<arith::ConstantOp>(fastChangeStride.getDefiningOp())) {
-          if (auto strideInt = stride.getValue().dyn_cast<IntegerAttr>()) {
-            if (strideInt.getInt() == 1) {
-              storeOpWorkList.push_back(op);
-            }
-          }
-        }
-      }
-    });
-
-    for (auto &storeOp : storeOpWorkList) {
-      OpBuilder builder(storeOp);
-      auto newResult = builder.create<ttig::Store2DOp>(
-          storeOp.getLoc(), storeOp.getPtr(), storeOp.getValue(),
-          storeOp.getCache(), storeOp.getEvict());
-      storeOp.erase();
     }
   }
 
@@ -216,6 +187,7 @@ private:
 } // anonymous namespace
 
 std::unique_ptr<Pass>
-mlir::triton::gpu::intel::createTritonIntelGPUMaterializeBlockPointerPass() {
-  return std::make_unique<TritonIntelGPUMaterializeBlockPointerPass>();
+mlir::triton::gpu::intel::createTritonIntelGPUMaterializeBlockPointerPass(
+    ttgi::DeviceArch arch) {
+  return std::make_unique<TritonIntelGPUMaterializeBlockPointerPass>(arch);
 }

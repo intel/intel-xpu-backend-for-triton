@@ -17,11 +17,6 @@ include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
-//
-// Interfaces
-//
-def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonIntelGPU_Dialect, mnemonic, traits>;
 
