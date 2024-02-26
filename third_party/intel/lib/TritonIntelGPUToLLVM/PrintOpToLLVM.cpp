@@ -24,11 +24,10 @@ struct PrintOpConversion
     auto loc = op->getLoc();
     Value prefixStr = LLVM::utils::addStringToModule(
         loc, rewriter, "printfPrefix_", op.getPrefix(),
-        (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant : 0);
+        GENX::GENXMemorySpace::kUniformConstant);
 
     auto getPid = [&](int axis) {
-      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter,
-                      target);
+      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 
@@ -38,8 +37,7 @@ struct PrintOpConversion
       llvm::raw_string_ostream os(formatStr);
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
-      llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter,
-               target);
+      llPrintf(formatStr, {pid[0], pid[1], pid[2], prefixStr}, rewriter);
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
@@ -158,9 +156,9 @@ struct PrintOpConversion
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
       if (i == 0) {
-        formatStrValue = llPrintf(formatStr, printfOperands, rewriter, target);
+        formatStrValue = llPrintf(formatStr, printfOperands, rewriter);
       } else {
-        llPrintf(formatStrValue, printfOperands, rewriter, target);
+        llPrintf(formatStrValue, printfOperands, rewriter);
       }
     }
   }
@@ -272,26 +270,24 @@ struct PrintOpConversion
 
   // Returns a Value for the format string, which you can reuse.
   static Value llPrintf(StringRef msg, ValueRange args,
-                        ConversionPatternRewriter &rewriter, Target target) {
+                        ConversionPatternRewriter &rewriter) {
     assert(!msg.empty() && "printf with empty string not supported");
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
     Value msgValue = LLVM::utils::addStringToModule(
         UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
-        msgNewline,
-        (target == Target::GENX) ? GENX::GENXMemorySpace::kUniformConstant : 0);
-    llPrintf(msgValue, args, rewriter, target);
+        msgNewline, GENX::GENXMemorySpace::kUniformConstant);
+    llPrintf(msgValue, args, rewriter);
     return msgValue;
   }
 
   static void llPrintf(Value msg, ValueRange args,
-                       ConversionPatternRewriter &rewriter, Target target) {
+                       ConversionPatternRewriter &rewriter) {
     auto *ctx = rewriter.getContext();
     Type ptr = ptr_ty(ctx);
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    auto funcOp = (target == Target::GENX) ? getSpirvPrintfDeclaration(rewriter)
-                                           : getVprintfDeclaration(rewriter);
+    auto funcOp = getSpirvPrintfDeclaration(rewriter);
     auto loc = UnknownLoc::get(ctx);
 
     Value one = i32_val(1);
@@ -301,36 +297,9 @@ struct PrintOpConversion
 
     SmallVector<Value> operands;
     operands.push_back(msg);
-    if (target == Target::GENX) {
-      // __spirv_ocl_printf expects the value instead of pointer to value
-      for (auto arg : args) {
-        operands.push_back(arg);
-      }
-    } else {
-      SmallVector<Value, 16> newArgs;
-      if (args.size() >= 1) {
-        SmallVector<Type> argTypes;
-        for (auto arg : args) {
-          Type newType;
-          Value newArg;
-          std::tie(newType, newArg) = promoteValue(rewriter, arg);
-          argTypes.push_back(newType);
-          newArgs.push_back(newArg);
-        }
-
-        Type structTy = LLVM::LLVMStructType::getLiteral(ctx, argTypes);
-        auto allocated =
-            rewriter.create<LLVM::AllocaOp>(loc, ptr_ty(ctx), structTy, one,
-                                            /*alignment=*/0);
-
-        for (const auto &entry : llvm::enumerate(newArgs)) {
-          auto index = i32_val(entry.index());
-          auto fieldPtr = gep(ptr_ty(ctx), structTy, allocated,
-                              ArrayRef<Value>{zero, index});
-          store(entry.value(), fieldPtr);
-        }
-        bufferPtr = bitcast(allocated, ptr);
-      }
+    // __spirv_ocl_printf expects the value instead of pointer to value
+    for (auto arg : args) {
+      operands.push_back(arg);
     }
 
     call(funcOp, operands);

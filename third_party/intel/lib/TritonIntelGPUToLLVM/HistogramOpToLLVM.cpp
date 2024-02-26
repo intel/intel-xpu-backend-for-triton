@@ -11,14 +11,7 @@ static int log2Int(int64_t num) { return (num > 1) ? 1 + log2Int(num / 2) : 0; }
 
 static Value generateVoteBallot(Location loc, Value bit, int threadMask,
                                 Value threadId, int numThreadPerWarp,
-                                ConversionPatternRewriter &rewriter,
-                                Target target) {
-  if (target == Target::NVVM) {
-    return rewriter.create<NVVM::VoteBallotOp>(loc, i32_ty, i32_val(threadMask),
-                                               bit);
-  }
-
-  assert(target == Target::GENX && "unsupported target");
+                                ConversionPatternRewriter &rewriter) {
   assert(threadMask == -1 && "unsupported thread mask for GENX target");
 
   // Emulate vote.ballot.sync behavior using shift, shuffle, and or.
@@ -27,8 +20,7 @@ static Value generateVoteBallot(Location loc, Value bit, int threadMask,
   Value laneId = and_(threadId, i32_val(numThreadPerWarp - 1));
   Value reduced_val = shl(select(bit, i32_val(1), i32_val(0)), laneId);
   for (int offs = 1; offs < numThreadPerWarp; offs = offs << 1) {
-    Value other_val =
-        LLVM::utils::shflSync(loc, rewriter, reduced_val, offs, target);
+    Value other_val = LLVM::utils::shflSync(loc, rewriter, reduced_val, offs);
     reduced_val = or_(reduced_val, other_val);
   }
   return reduced_val;
@@ -63,7 +55,7 @@ computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
     for (int j = 0; j < numBits; ++j) {
       Value bitSet = and_(value, i32_val(1 << j));
       Value bit = generateVoteBallot(loc, icmp_ne(bitSet, zero), -1, threadId,
-                                     numThreadPerWarp, rewriter, target);
+                                     numThreadPerWarp, rewriter);
       ballotBits.push_back(bit);
     }
     Value fullMask = i32_val(0xFFFFFFFF);
@@ -189,8 +181,8 @@ public:
     // TODO: we could skip this for cases with num_warps=1 as long as we can
     // generate the right layout. Currently the warp level histogram generates
     // data in the default blocked layout.
-    Value baseSharedMemPtr = LLVM::utils::getSharedMemoryBase(
-        loc, rewriter, op.getOperation(), target);
+    Value baseSharedMemPtr =
+        LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto dstType = op.getType();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);

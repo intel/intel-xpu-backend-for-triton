@@ -90,7 +90,7 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
     for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned j = 0; j < acc.size(); ++j) {
-        shfl[j] = shflUpSync(loc, rewriter, acc[j], i * threadStride, target);
+        shfl[j] = shflUpSync(loc, rewriter, acc[j], i * threadStride);
       }
       SmallVector<Value> tempAcc =
           accumulate(rewriter, helper.getCombineOp(), shfl, acc);
@@ -135,7 +135,7 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
     for (unsigned i = 0; i < lastElement.size(); ++i) {
       Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), smemTypes[i],
                            smemBases[i], index);
-      storeShared(rewriter, loc, writePtr, lastElement[i], mask, target);
+      storeShared(rewriter, loc, writePtr, lastElement[i], mask);
     }
     chunkId++;
   }
@@ -230,7 +230,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
     // Update the rest of the contiguous elements.
     SmallVector<Value> lastElement(helper.getNumOperands());
     for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
-      auto elem = shflUpSync(loc, rewriter, temp[i], threadStride, target);
+      auto elem = shflUpSync(loc, rewriter, temp[i], threadStride);
       lastElement[i] = select(maskFirstLane, accumulator.maskedAcc[i], elem);
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
@@ -302,13 +302,13 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
     auto lastElement = srcValues[srcIndex];
     if (scanDim > 1) {
       for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
-        lastElement[i] = shflUpSync(loc, rewriter, srcValues[srcIndex][i],
-                                    threadStride, target);
+        lastElement[i] =
+            shflUpSync(loc, rewriter, srcValues[srcIndex][i], threadStride);
         lastElement[i] = select(maskFirstLane, accumulator[i], lastElement[i]);
         if (numScanBlocks > 1)
           // Update accumulator with the value from the last lane.
-          accumulator[i] = shflIdxSync(loc, rewriter, srcValues[srcIndex][i],
-                                       laneIdLast, target);
+          accumulator[i] =
+              shflIdxSync(loc, rewriter, srcValues[srcIndex][i], laneIdLast);
       }
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
@@ -476,7 +476,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     // Slow path for the case where there are multiple warps with unique data on
     // the axis.
     auto elems = helper.getScratchSizeInElems();
-    SmallVector<Value> smemBases = getSmemBases(op, elems, rewriter, target);
+    SmallVector<Value> smemBases = getSmemBases(op, elems, rewriter);
     SmallVector<Type> smemTypes(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       smemTypes[i] = getElementType(op, i);

@@ -415,19 +415,19 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                 ArrayRef<Value> multiDim, ArrayRef<unsigned> shape);
 
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred, triton::Target target);
+                  Value val, Value pred);
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred, triton::Target target);
+                 Type elemTy, Value pred);
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i, triton::Target target);
+               int i);
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i, triton::Target target);
+                 int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i, triton::Target target);
+                  int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i, triton::Target target);
+                  Value i);
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
@@ -439,30 +439,18 @@ static bool isKernel(FunctionOpInterface funcOp) {
 }
 
 static Value getStackPointer(PatternRewriter &rewriter,
-                             FunctionOpInterface funcOp, Target target) {
+                             FunctionOpInterface funcOp) {
   auto mod = funcOp->getParentOfType<ModuleOp>();
-  if (target == triton::Target::GENX) {
-    LLVM::LLVMPointerType ptrTy =
-        ptr_ty(rewriter.getContext(), GENX::GENXMemorySpace::kWorkgroup);
-    if (mod->getAttrOfType<IntegerAttr>("triton_gpu.shared").getInt() == 0)
-      return rewriter.create<LLVM::UndefOp>(funcOp.getLoc(), ptrTy);
-    return funcOp.getArgument(funcOp.getNumArguments() - 1);
-  }
-  LLVM::GlobalOp globalBase = nullptr;
-  mod.walk([&](LLVM::GlobalOp op) {
-    if (op.getSymName() == "global_smem")
-      globalBase = op;
-  });
-  assert(globalBase);
-  if (isKernel(funcOp))
-    return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
-  else
-    return funcOp.getArgument(funcOp.getNumArguments() - 1);
+  LLVM::LLVMPointerType ptrTy =
+      ptr_ty(rewriter.getContext(), GENX::GENXMemorySpace::kWorkgroup);
+  if (mod->getAttrOfType<IntegerAttr>("triton_gpu.shared").getInt() == 0)
+    return rewriter.create<LLVM::UndefOp>(funcOp.getLoc(), ptrTy);
+  return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
 
 static Value getSharedMemoryBase(Location loc,
                                  ConversionPatternRewriter &rewriter,
-                                 Operation *op, Target target) {
+                                 Operation *op) {
   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
   FunctionOpInterface func =
       op->template getParentOfType<FunctionOpInterface>();
@@ -473,8 +461,7 @@ static Value getSharedMemoryBase(Location loc,
                       .getZExtValue();
   Value offVal = i32_val(offset);
   Value base =
-      gep(ptrTy, i8_ty, LLVM::utils::getStackPointer(rewriter, func, target),
-          offVal);
+      gep(ptrTy, i8_ty, LLVM::utils::getStackPointer(rewriter, func), offVal);
   return base;
 }
 
@@ -1409,30 +1396,17 @@ static Value packLLElements(Location loc,
 }
 
 static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
-                      ConversionPatternRewriter &rewriter,
-                      mlir::triton::Target target) {
+                      ConversionPatternRewriter &rewriter) {
   assert(axis >= 0);
   assert(axis < 3);
   assert(moduleOp);
 
-  if (target == triton::Target::GENX) {
-    constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                             mlir::gpu::Dimension::y,
-                                             mlir::gpu::Dimension::z};
+  constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                           mlir::gpu::Dimension::y,
+                                           mlir::gpu::Dimension::z};
 
-    Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
-    return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
-  }
-
-  // It is not easy to get the compute capability here, so we use numCTAs to
-  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // "%clusterid".
-  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
-  std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
-  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  return LLVM::utils::getSRegValue(rewriter, loc, sreg);
+  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
 } // namespace mlir
