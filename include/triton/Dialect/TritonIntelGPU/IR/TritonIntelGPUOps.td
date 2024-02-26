@@ -14,7 +14,13 @@ include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.td"
 include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+
+//
+// Interfaces
+//
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonIntelGPU_Dialect, mnemonic, traits>;
@@ -114,6 +120,38 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
   let assemblyFormat = [{
     operands attr-dict `:` type($ptr)
   }];
+}
+
+def TTIG_Load2DOp : TTIG_Op<"load_2d", [
+  SameLoadStoreOperandsAndResultShape,
+  SameLoadStoreOperandsAndResultEncoding,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  TypesMatchWith<"result matches ptr type", "ptr", "result", "getPointeeType($_self)">
+]> {
+    let summary = "Intel load 2d block";
+
+    let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr,
+                         OptionalAttr<TT_PaddingOptionAttr>:$padding,
+                         //DenseI32ArrayAttr:$strides, //only support contiguous 2d load.
+                         TT_CacheModifierAttr:$cache,
+                         TT_EvictionPolicyAttr:$evict,
+                         BoolAttr:$isVolatile);
+
+    let results = (outs TT_Type:$result);
+
+    let builders = [
+        // A tensor of pointers or a pointer to a scalar
+        OpBuilder<(ins "Value":$ptr, "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+
+        OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+    ];
+
+    let assemblyFormat = "$ptr attr-dict `:` type($ptr) `->` type($result)";
+
+    let hasCanonicalizer = 1;
 }
 
 #endif

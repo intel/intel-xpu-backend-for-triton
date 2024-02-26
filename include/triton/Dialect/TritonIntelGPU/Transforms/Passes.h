@@ -33,6 +33,8 @@ std::unique_ptr<Pass> createTritonIntelGPURemoveLayoutConversionsPass();
 std::unique_ptr<Pass> createPrefetchBlockPass();
 
 std::unique_ptr<Pass> createMatchTargetSizePass();
+
+std::unique_ptr<Pass> createTritonIntelGPUMaterializeBlockPointerPass();
 } // namespace intel
 } // namespace gpu
 } // namespace triton

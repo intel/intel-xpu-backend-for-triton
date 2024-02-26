@@ -42,7 +42,10 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
     pm.addPass(createIntelDecomposeUnsupportedConversionsPass());
   });
   m.def("add_allocate_shared_memory", [](mlir::PassManager &pm) {
-    pm.addPass(createIntelAllocateSharedMemoryPass());
+     pm.addPass(createIntelAllocateSharedMemoryPass());
+   }).def("add_materialize_block_pointer", [](mlir::PassManager &self) {
+    self.addPass(mlir::triton::gpu::intel::
+                     createTritonIntelGPUMaterializeBlockPointerPass());
   });
 }
 

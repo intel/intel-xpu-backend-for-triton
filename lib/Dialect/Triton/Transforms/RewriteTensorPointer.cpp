@@ -555,13 +555,18 @@ public:
     std::stack<Operation *> eraser;
     visitOperation(getOperation(), eraser);
 
+    //llvm::outs() << "module after rewrite pointer:" << *getOperation() << "\n";
+
     // The operation could not be erased during visit, because they may have
     // later usages, so we erase after visit
     rewritedInfo.clear();
     while (!eraser.empty()) {
       auto op = eraser.top();
       eraser.pop();
-      op->erase();
+      //llvm::outs() << "erase op:" << *op << "\n";
+      //llvm::outs().flush();
+      if (op->use_empty())
+        op->erase();
     }
   }
 };
