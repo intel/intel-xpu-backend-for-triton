@@ -46,7 +46,7 @@ runs:
       uses: actions/checkout@v4
       with:
         repository: ${{ inputs.repository }}
-        ref: ${{ inputs.branch }}
+        ref: ${{ env.PYTORCH_COMMIT_ID }}
         submodules: recursive
         path: pytorch
 
