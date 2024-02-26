@@ -164,8 +164,17 @@ fi
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then
-  # Remove the cached triton.
-  rm -fr /iusers/$USERS/.triton
+  # Remove the cached triton (see setup.py, get_triton_cache_path())
+  if [ -n "$HOME" ]
+  then
+    rm -fr "$HOME/.triton/"
+  elif [ -n "$USERPROFILE" ]
+  then
+    rm -fr "$USERPROFILE/.triton/"
+  elif [ -n "$HOMEPATH" ]
+  then
+    rm -fr "$HOMEPATH/.triton/"
+  fi
 fi
 
 build_triton() {
