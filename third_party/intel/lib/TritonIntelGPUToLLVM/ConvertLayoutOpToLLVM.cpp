@@ -180,7 +180,7 @@ private:
       SmallVector<Value> mmaColIdx(2);
       SmallVector<Value> mmaRowIdx(2);
       Value threadId = getThreadId(rewriter, loc);
-      Value warpSize = getModuleWarpSize(rewriter, loc);
+      Value warpSize = i32_val(32);
       Value laneId = urem(threadId, warpSize);
       Value warpId = udiv(threadId, warpSize);
       // TODO: fix the bug in MMAEncodingAttr document

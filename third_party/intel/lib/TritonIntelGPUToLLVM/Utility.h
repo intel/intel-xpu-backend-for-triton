@@ -778,7 +778,7 @@ static SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV2V3(
   auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
 
   Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = getModuleWarpSize(rewriter, loc);
+  Value warpSize = i32_val(32);
   Value laneId = urem(threadId, warpSize);
   Value warpId = udiv(threadId, warpSize);
 
