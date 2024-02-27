@@ -263,7 +263,8 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
     unsigned threadsPerWarp = product<unsigned>(getThreadsPerWarp(dpasLayout));
     auto matTy = LLVM::LLVMStructType::getLiteral(
         eltTy.getContext(),
-        SmallVector<Type>(totalElem / threadsPerWarp, eltTy));
+        SmallVector<Type>(totalElem / threadsPerWarp,
+                          typeConverter->convertType(eltTy)));
 
     vals[{a, b}] = loader.loadMatrix(a, b, ptrs, matTy, smemTy, cSwizzleOffset);
   };
@@ -283,8 +284,7 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
 
   auto tensorTy = tensor.getType().cast<RankedTensorType>();
   const ArrayRef<int64_t> tensorShape = tensorTy.getShape();
-  auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
-  const ArrayRef<unsigned> order = sharedLayout.getOrder();
+  SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
 
   SmallVector<int64_t> elemsPerInstr;
   if constexpr (opIdx == 0) {

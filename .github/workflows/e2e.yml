@@ -31,6 +31,10 @@ on:
           - float16
           - float32
         default: all
+      TORCH_COMPILE_DEBUG:
+        description: TORCH_COMPILE_DEBUG
+        type: string
+        default: ""
   schedule:
     - cron: "5 1 * * *"
 
@@ -389,6 +393,11 @@ jobs:
         run: |
           source ~/intel/oneapi/setvars.sh
           export WORKSPACE=$GITHUB_WORKSPACE
+          if [[ "${{ inputs.TORCH_COMPILE_DEBUG }}" == "1" ]] ; then
+            export TORCH_COMPILE_DEBUG="1"
+            # torch will save debug logs to $TORCH_COMPILE_DEBUG_DIR/torch_compile_debug
+            export TORCH_COMPILE_DEBUG_DIR=$GITHUB_WORKSPACE
+          fi
           cd pytorch
           $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} accuracy xpu 0
 
@@ -424,6 +433,9 @@ jobs:
 
       - name: Copy reports
         run: |
+          if [[ -d torch_compile_debug ]]; then
+            cp -rT torch_compile_debug inductor_log
+          fi
           mkdir -p /cache/reports/e2e
           TMPDIR=$(mktemp -d -p /cache/reports/e2e XXXXXXXXX.tmp)
           cp -rT $GITHUB_WORKSPACE/inductor_log $TMPDIR
