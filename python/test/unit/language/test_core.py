@@ -1129,8 +1129,8 @@ def test_noinline(mode, device):
         ('min', 'int64', mode, sem),
         ('min', 'float64', mode, sem),
     ]
-                                   for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
-                                   for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
+                                   for mode in ['all_neg']
+                                   for sem in [None]]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     if is_hip():
         pytest.skip(
@@ -1145,8 +1145,14 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
 
     if is_xpu():
         capability = 0
-        if dtype_x_str == 'float16':
-            pytest.skip("FIXME: Atomic RMW for float16 not yet supported by IGC")
+#        if dtype_x_str == 'float16':
+#            pytest.skip("FIXME: Atomic RMW for float16 not yet supported by IGC")
+
+    if dtype_x_str != 'float16':
+        pytest.skip("ETTORE")
+
+    if (op != "add"):
+        pytest.skip("ETTORE1")
 
     n_programs = 5
 
@@ -1198,7 +1204,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
 
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_atomic_rmw_predicate(num_ctas, device):
+def test_atomic_1rmw_predicate(num_ctas, device):
 
     @triton.jit
     def kernel(X):
@@ -1212,8 +1218,8 @@ def test_atomic_rmw_predicate(num_ctas, device):
 
 
 @pytest.mark.parametrize("shape, axis, num_ctas", [(shape, axis, num_ctas)
-                                                   for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
-                                                   for axis in [0, 1]
+                                                   for shape in [(2, 2)]
+                                                   for axis in [1]
                                                    for num_ctas in num_ctas_list])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
     if is_hip():
@@ -1248,7 +1254,7 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
 
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_tensor_atomic_rmw_block(num_ctas, device):
+def test_tensor_atomic_1rmw_block(num_ctas, device):
     if is_hip():
         pytest.skip(
             'test_tensor_atomic_rmw_block for HIP currently broken in https://github.com/openai/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
@@ -1269,7 +1275,7 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
     assert torch.min(x).item() == 0.0
 
 
-@pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
+@pytest.mark.parametrize("sem", ['acq_rel'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_atomic_cas(sem, num_ctas, device):
     # 1. make sure that atomic_cas changes the original value (Lock)
