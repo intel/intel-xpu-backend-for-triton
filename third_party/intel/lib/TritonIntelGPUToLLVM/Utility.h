@@ -542,7 +542,7 @@ static SmallVector<Value> emitBaseIndexWithinCTAForBlockedLayout(
     const BlockedEncodingAttr &blockedLayout, RankedTensorType type) {
   auto shape = type.getShape();
   Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = i32_val(32);
+  Value warpSize = getModuleWarpSize(rewriter, loc);
   Value laneId = urem(threadId, warpSize);
   Value warpId = udiv(threadId, warpSize);
   auto sizePerThread = blockedLayout.getSizePerThread();
