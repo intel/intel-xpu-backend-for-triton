@@ -1,0 +1,76 @@
+# Clones IPEX (or loads from cache) to directory "intel-extension-for-pytorch".
+# Uses the existing Python.
+# Sets the following environment variables:
+# * IPEX_REPO
+# * IPEX_BRANCH
+# * IPEX_COMMIT_ID
+name: setup-ipex
+description: Build and install IPEX wheels
+inputs:
+  oneapi:
+    description: Directory with oneAPI BaseKit
+    default: ~/intel/oneapi
+  repository:
+    description: Repository name with owner
+    default: intel/intel-extension-for-pytorch
+  branch:
+    description: Branch name
+    default: dev/triton-test-3.0
+runs:
+  using: "composite"
+  steps:
+    - name: Identify commit id
+      shell: bash
+      run: |
+        echo "IPEX_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
+        echo "IPEX_BRANCH=${{ inputs.branch }}" >> "$GITHUB_ENV"
+        echo "IPEX_COMMIT_ID=$(git ls-remote https://github.com/${{ inputs.repository }} refs/heads/${{ inputs.branch }} | cut -f1)" >> "$GITHUB_ENV"
+
+    - name: Identify Python version
+      shell: bash
+      run: |
+        if [[ -z "$PYTHON_VERSION" ]]; then
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" >> "$GITHUB_ENV"
+        fi
+
+    - name: Load IPEX wheels from a cache
+      id: ipex-cache
+      uses: ./.github/actions/load
+      with:
+        path: intel-extension-for-pytorch/dist
+        key: ipex-$PYTHON_VERSION-$IPEX_COMMIT_ID
+
+    - name: Clone IPEX repository
+      if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ env.IPEX_COMMIT_ID }}
+        submodules: recursive
+        path: intel-extension-for-pytorch
+
+    - name: Build IPEX
+      if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
+      shell: bash
+      run: |
+        source ${{ inputs.oneapi }}/setvars.sh
+        export USE_AOT_DEVLIST='pvc'
+        cd intel-extension-for-pytorch
+        pip install -r requirements.txt
+        python setup.py bdist_wheel
+
+    - name: Install IPEX
+      shell: bash
+      run: |
+        source ${{ inputs.oneapi }}/setvars.sh
+        pip install intel-extension-for-pytorch/dist/*.whl
+        python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
+
+    - name: Save IPEX wheels to a cache
+      if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.ipex-cache.outputs.path }}
+        dest: ${{ steps.ipex-cache.outputs.dest }}
+

@@ -47,8 +47,6 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   USE_AOT_DEVLIST: pvc
   PYTHON_VERSION: "3.10"
-  IPEX_REPO: https://github.com/intel/intel-extension-for-pytorch.git
-  IPEX_BRANCH: dev/triton-test-3.0
   LLVM_REPO: https://github.com/intel/llvm.git
   LLVM_BRANCH: genx
   BENCHMARK_REPO: https://github.com/weishi-deng/benchmark.git
@@ -110,7 +108,6 @@ jobs:
 
       - name: Identify versions
         run: |
-          echo "IPEX_COMMIT_ID=$(git ls-remote $IPEX_REPO refs/heads/$IPEX_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
           echo "LLVM_COMMIT_ID=$(git ls-remote $LLVM_REPO refs/heads/$LLVM_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
           echo "BENCHMARK_COMMIT_ID=$(git ls-remote $BENCHMARK_REPO refs/heads/$BENCHMARK_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
 
@@ -153,35 +150,8 @@ jobs:
           # install timm dependencies without torch and torchvision
           pip install $(curl -sSL https://raw.githubusercontent.com/huggingface/pytorch-image-models/$TIMM_COMMIT_ID/requirements.txt | grep -vE torch)
 
-      - name: Load IPEX wheels from a cache
-        id: ipex-cache
-        uses: ./.github/actions/load
-        with:
-          path: intel-extension-for-pytorch/dist
-          key: ipex-$PYTHON_VERSION-$IPEX_COMMIT_ID
-
-      - name: Build IPEX
-        if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
-        run: |
-          source ~/intel/oneapi/setvars.sh
-          export USE_AOT_DEVLIST='pvc'
-          git clone --single-branch -b $IPEX_BRANCH --recurse-submodules --jobs 8 $IPEX_REPO
-          cd intel-extension-for-pytorch
-          pip install -r requirements.txt
-          python setup.py bdist_wheel
-
-      - name: Install IPEX
-        run: |
-          source ~/intel/oneapi/setvars.sh
-          pip install intel-extension-for-pytorch/dist/*.whl
-          python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
-
-      - name: Save IPEX wheels to a cache
-        if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.ipex-cache.outputs.path }}
-          dest: ${{ steps.ipex-cache.outputs.dest }}
+      - name: Setup IPEX
+        uses: ./.github/actions/setup-ipex
 
       - name: Generate Triton cache key
         id: triton-key
