@@ -5,6 +5,7 @@ BUILD_LLVM=false
 BUILD_TRITON=false
 CLEAN=false
 VENV=false
+CCACHE=false
 for arg in "$@"; do
   case $arg in
     --llvm)
@@ -23,8 +24,12 @@ for arg in "$@"; do
       VENV=true
       shift
       ;;
+    --ccache)
+      CCACHE=true
+      shift
+      ;;
     --help)
-      echo "Example usage: ./compile-triton.sh [--llvm | --triton | --clean | --venv]"
+      echo "Example usage: ./compile-triton.sh [--llvm | --triton | --clean | --venv | --ccache]"
       exit 1
       ;;
     *)
@@ -127,6 +132,13 @@ fi
 build_llvm() {
   echo "****** Configuring $LLVM_PROJ ******"
 
+  ADDITIONAL_FLAGS=""
+  if [ "$CCACHE" = true ]
+  then
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DCMAKE_C_COMPILER_LAUNCHER=ccache"
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+  fi
+
   cd $LLVM_PROJ_BUILD
   cmake -G Ninja ../llvm \
     -DLLVM_ENABLE_DUMP=1 \
@@ -138,7 +150,8 @@ build_llvm() {
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DCMAKE_INSTALL_PREFIX=$PACKAGES_DIR/llvm \
     -DCMAKE_C_COMPILER=$C_COMPILER \
-    -DCMAKE_CXX_COMPILER=$CXX_COMPILER ..
+    -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
+    $ADDITIONAL_FLAGS
 
   echo "****** Building $LLVM_PROJ ******"
   ninja
@@ -164,8 +177,17 @@ fi
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then
-  # Remove the cached triton.
-  rm -fr /iusers/$USERS/.triton
+  # Remove the cached triton (see setup.py, get_triton_cache_path())
+  if [ -n "$HOME" ]
+  then
+    rm -fr "$HOME/.triton/"
+  elif [ -n "$USERPROFILE" ]
+  then
+    rm -fr "$USERPROFILE/.triton/"
+  elif [ -n "$HOMEPATH" ]
+  then
+    rm -fr "$HOMEPATH/.triton/"
+  fi
 fi
 
 build_triton() {
@@ -174,6 +196,11 @@ build_triton() {
 
   export LLVM_SYSPATH=$PACKAGES_DIR/llvm
   export DEBUG=1
+  if [ "$CCACHE" = true ]
+  then
+    export TRITON_BUILD_WITH_CCACHE=true
+  fi
+
   cd python
   pip install -e .
   check_rc

@@ -2,17 +2,14 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
-#include "triton/Conversion/TritonGPUToLLVM/PTXAsmFormat.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <set>
+
+#define DEBUG_TYPE "ttgpu_to_llvm"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -22,7 +19,6 @@ using namespace mlir::triton;
 #define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
 #define ptrtoint(...) rewriter.create<LLVM::PtrToIntOp>(loc, __VA_ARGS__)
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
-#define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
 #define sext(...) rewriter.create<LLVM::SExtOp>(loc, __VA_ARGS__)
 #define fpext(...) rewriter.create<LLVM::FPExtOp>(loc, __VA_ARGS__)
 #define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
@@ -33,7 +29,6 @@ using namespace mlir::triton;
 #define fadd(...) rewriter.create<LLVM::FAddOp>(loc, __VA_ARGS__)
 #define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
 #define fmul(...) rewriter.create<LLVM::FMulOp>(loc, __VA_ARGS__)
-#define lshr(...) rewriter.create<LLVM::LShrOp>(loc, __VA_ARGS__)
 #define smax(...) rewriter.create<LLVM::SMaxOp>(loc, __VA_ARGS__)
 #define umax(...) rewriter.create<LLVM::UMaxOp>(loc, __VA_ARGS__)
 #define fmax(...) rewriter.create<LLVM::MaxNumOp>(loc, __VA_ARGS__)
@@ -47,6 +42,8 @@ using namespace mlir::triton;
 #define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
 #define bitcast(val__, type__)                                                 \
   rewriter.create<LLVM::BitcastOp>(loc, type__, val__)
+#define addrspacecast(val__, type__)                                           \
+  rewriter.create<LLVM::AddrSpaceCastOp>(loc, type__, val__)
 #define gep(...) rewriter.create<LLVM::GEPOp>(loc, __VA_ARGS__)
 #define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
 #define insert_val(...) rewriter.create<LLVM::InsertValueOp>(loc, __VA_ARGS__)
@@ -91,20 +88,9 @@ using namespace mlir::triton;
 #define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
-#define barSync(rewriter, op, bar, numThreads)                                 \
-  do {                                                                         \
-    ::mlir::triton::PTXBuilder ptxBuilder;                                     \
-    auto &barSyncOp = *ptxBuilder.create<>("bar.sync");                        \
-    barSyncOp(ptxBuilder.newConstantOperand(bar),                              \
-              ptxBuilder.newConstantOperand(numThreads));                      \
-    auto voidTy = void_ty(op->getContext());                                   \
-    ptxBuilder.launch(rewriter, op->getLoc(), voidTy);                         \
-  } while (0)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
-#define addrspacecast(...)                                                     \
-  rewriter.create<LLVM::AddrSpaceCastOp>(loc, __VA_ARGS__)
 
 // Types
 #define int_ty(width) rewriter.getIntegerType(width)
@@ -126,11 +112,9 @@ using namespace mlir::triton;
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
 // Constants
-#define f16_val(...) LLVM::createConstantF16(loc, rewriter, __VA_ARGS__)
 #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
 #define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
 #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
-#define i64_val(...) LLVM::createConstantI64(loc, rewriter, __VA_ARGS__)
 #define int_val(width, val)                                                    \
   LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
 #define tid_val() getThreadId(rewriter, loc)
@@ -205,69 +189,7 @@ T getLinearIndex(llvm::ArrayRef<T> multiDimIndex, llvm::ArrayRef<T> shape,
 namespace LLVM {
 using namespace mlir::triton;
 
-/// Create a predicated block, using \p cond as the condition and \p ops for the
-/// values supplied by the conditional branch to the exit block. The \p
-/// thenOpsFn function is used to inject operations in the 'then' branch:
-///   cf.cond_br %cond, ^br1, ^br2(%ops)
-///   ^br1:
-///     %then_ops = `thenOpsFn()`
-///     cf.br ^br2(%then_ops)
-///   ^br2(%block_ops):
-template <typename ThenOpsFn>
-Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
-                             Value cond, ArrayRef<Value> ops,
-                             ThenOpsFn &&thenOpsFn) {
-  Block *insertionBlock = rewriter.getInsertionBlock();
-  Block *thenBlock =
-      rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
-  Block *endBlock = rewriter.splitBlock(thenBlock, thenBlock->begin());
-
-  rewriter.setInsertionPointToEnd(insertionBlock);
-  rewriter.create<cf::CondBranchOp>(loc, cond, thenBlock, endBlock, ops);
-
-  rewriter.setInsertionPointToStart(thenBlock);
-  auto thenOps = thenOpsFn();
-  assert(thenOps.size() == ops.size() && "Inconsistent size");
-  assert(llvm::all_of(llvm::enumerate(ops, thenOps),
-                      [](const auto &enumerator) {
-                        auto [index, op, thenOp] = enumerator;
-                        return op.getType() == thenOp.getType();
-                      }) &&
-         "type mismatch found");
-
-  if (thenOps.empty())
-    rewriter.create<cf::BranchOp>(loc, endBlock);
-  else
-    rewriter.create<cf::BranchOp>(loc, endBlock, thenOps);
-
-  for (Value op : thenOps)
-    endBlock->addArgument(op.getType(), op.getLoc());
-
-  rewriter.setInsertionPointToStart(endBlock);
-  return *endBlock;
-}
-
-/// Create a predicated block, using \p cond as the condition and \p thenOpsFn
-/// to inject operations in the 'then' branch:
-///   cf.cond_br %cond, ^br1, ^br2
-///   ^br1:
-///     `thenOpsFn()`
-///     cf.br ^br2
-///   ^br2:
-template <typename ThenOpsFn>
-Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
-                             Value cond, ThenOpsFn &&thenOpsFn) {
-  return createPredicatedBlock(rewriter, loc, cond, {}, thenOpsFn);
-}
-
-/// Create a 32-bit integer constant.
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
-
-/// Create a 64-bit integer constant.
-Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v);
-
-/// Create a 16-bit float constant.
-Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
 
 /// Create a 32-bit float constant.
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
@@ -387,7 +309,7 @@ SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
                                 ConversionPatternRewriter &rewriter);
 
-// Convert an \param linear to a multi-dim coordinate given \param shape and
+// Convert an \param index to a multi-dim coordinate given \param shape and
 // \param order.
 SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
                                Location loc, Value linear,
@@ -409,40 +331,24 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
 Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                 ArrayRef<Value> multiDim, ArrayRef<unsigned> shape);
 
-Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred, triton::Target target);
-
-Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred, triton::Target target);
-
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i, triton::Target target);
+               int i);
 Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i, triton::Target target);
+                 int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i, triton::Target target);
+                  int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i, triton::Target target);
-Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
-
+                  Value i);
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
-                        StringRef key, StringRef content,
-                        unsigned addressSpace);
+                        StringRef key, StringRef content);
 
 static bool isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
 }
 
 static Value getStackPointer(PatternRewriter &rewriter,
-                             FunctionOpInterface funcOp, Target target) {
+                             FunctionOpInterface funcOp) {
   auto mod = funcOp->getParentOfType<ModuleOp>();
-  if (target == triton::Target::GENX) {
-    LLVM::LLVMPointerType ptrTy =
-        ptr_ty(rewriter.getContext(), GENX::GENXMemorySpace::kWorkgroup);
-    if (mod->getAttrOfType<IntegerAttr>("triton_gpu.shared").getInt() == 0)
-      return rewriter.create<LLVM::UndefOp>(funcOp.getLoc(), ptrTy);
-    return funcOp.getArgument(funcOp.getNumArguments() - 1);
-  }
   LLVM::GlobalOp globalBase = nullptr;
   mod.walk([&](LLVM::GlobalOp op) {
     if (op.getSymName() == "global_smem")
@@ -457,7 +363,7 @@ static Value getStackPointer(PatternRewriter &rewriter,
 
 static Value getSharedMemoryBase(Location loc,
                                  ConversionPatternRewriter &rewriter,
-                                 Operation *op, Target target) {
+                                 Operation *op) {
   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
   FunctionOpInterface func =
       op->template getParentOfType<FunctionOpInterface>();
@@ -467,11 +373,9 @@ static Value getSharedMemoryBase(Location loc,
                       .getValue()
                       .getZExtValue();
   Value offVal = i32_val(offset);
-  Value base =
-      gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func, target), offVal);
+  Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
 }
-
 } // namespace LLVM
 
 /* ------------------------------------ */
@@ -488,12 +392,6 @@ static Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) {
   Value tid = getThreadIdInCTA(rewriter, loc);
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return tid;
-}
-
-static Value getModuleWarpSize(ConversionPatternRewriter &rewriter,
-                               Location loc) {
-  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
 static Value getClusterCTAId(ConversionPatternRewriter &rewriter,
@@ -514,7 +412,6 @@ using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
-using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 static Value dot(ConversionPatternRewriter &rewriter, Location loc,
                  ArrayRef<Value> offsets, ArrayRef<Value> strides) {
@@ -873,21 +770,6 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
   return resultOffsets;
 }
 
-static void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
-                                 SmallVector<SmallVector<unsigned>> &offsets,
-                                 unsigned ctaOffsetX, unsigned ctaOffsetY) {
-  unsigned elemsPerThreadPerGroup =
-      triton::gpu::getContigPerThread(dpasLayout)[0];
-  unsigned warpSize = triton::gpu::getWarpSize(dpasLayout);
-  SmallVector<unsigned> shapePerCTA =
-      triton::gpu::getShapePerCTATile(dpasLayout);
-
-  for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
-    offsets.push_back(
-        {ctaOffsetX * shapePerCTA[0] + elem, ctaOffsetY * shapePerCTA[1]});
-  }
-}
-
 //
 
 // -----------------------------------------------------------------------
@@ -965,22 +847,6 @@ emitBaseIndexForLayout(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 static SmallVector<SmallVector<unsigned>>
-emitOffsetForDpasLayout(const DpasEncodingAttr &dpasLayout,
-                        RankedTensorType type) {
-  ArrayRef<int64_t> shape = type.getShape();
-  SmallVector<SmallVector<unsigned>> offsets;
-  SmallVector<unsigned> shapePerCTA = getShapePerCTATile(dpasLayout);
-
-  for (unsigned i = 0; i < shape[0]; i += shapePerCTA[0]) {
-    for (unsigned j = 0; j < shape[1]; j += shapePerCTA[1]) {
-      emitDpasOffsetForCTA(dpasLayout, offsets, i, j);
-    }
-  }
-
-  return offsets;
-}
-
-static SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
     return emitOffsetForBlockedLayout(blockedLayout, type);
@@ -992,53 +858,9 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
     if (mmaLayout.isHopper())
       return emitOffsetForMmaLayoutV3(mmaLayout, type);
   }
-  if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
-    return emitOffsetForDpasLayout(dpasLayout, type);
-  }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
     return emitOffsetForSliceLayout(sliceLayout, type);
   llvm_unreachable("unsupported emitOffsetForLayout");
-}
-
-// -----------------------------------------------------------------------
-// Dpas layout indices
-// -----------------------------------------------------------------------
-
-static SmallVector<Value>
-emitBaseIndexForDpasLayout(Location loc, ConversionPatternRewriter &rewriter,
-                           const DpasEncodingAttr &dpasLayout,
-                           RankedTensorType type) {
-  Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = i32_val(triton::gpu::getWarpSize(dpasLayout));
-  Value warpId = udiv(threadId, warpSize);
-  Value laneId = urem(threadId, warpSize);
-
-  SmallVector<Value> warpsPerCTA = {i32_val(dpasLayout.getWarpsPerCTA()[0]),
-                                    i32_val(dpasLayout.getWarpsPerCTA()[1])};
-  ArrayRef<int64_t> shape = type.getShape();
-
-  // Compute the 2-dim coordinates of the warp containing the tensor element
-  // operated on by this thread.
-  SmallVector<unsigned> warpShape = {8, 16};
-  Value rowWarpId =
-      urem(urem(warpId, warpsPerCTA[0]), i32_val(shape[0] / warpShape[0]));
-  Value colWarpId = urem(urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]),
-                         i32_val(shape[1] / warpShape[1]));
-  Value rowWarpOffset = mul(rowWarpId, i32_val(warpShape[0]));
-  Value colWarpOffset = mul(colWarpId, i32_val(warpShape[1]));
-
-  // Compute the 2-dim coordinates of the first element in the warp operated
-  // on by this thread.
-  SmallVector<unsigned> threadsPerWarp = getThreadsPerWarp(dpasLayout);
-  SmallVector<unsigned> contigPerThread = getContigPerThread(dpasLayout);
-  SmallVector<Value> multiDimBase = {
-      add(mul(i32_val(contigPerThread[0]),
-              udiv(laneId, i32_val(threadsPerWarp[1]))),
-          rowWarpOffset),
-      add(mul(i32_val(contigPerThread[1]),
-              urem(laneId, i32_val(threadsPerWarp[1]))),
-          colWarpOffset)};
-  return multiDimBase;
 }
 
 // Emit indices calculation within each ConversionPattern, and returns a
@@ -1393,33 +1215,6 @@ static Value packLLElements(Location loc,
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
-}
-
-static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
-                      ConversionPatternRewriter &rewriter,
-                      mlir::triton::Target target) {
-  assert(axis >= 0);
-  assert(axis < 3);
-  assert(moduleOp);
-
-  if (target == triton::Target::GENX) {
-    constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                             mlir::gpu::Dimension::y,
-                                             mlir::gpu::Dimension::z};
-
-    Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
-    return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
-  }
-
-  // It is not easy to get the compute capability here, so we use numCTAs to
-  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // "%clusterid".
-  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-
-  std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
-  sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
-  return LLVM::getSRegValue(rewriter, loc, sreg);
 }
 
 } // namespace mlir

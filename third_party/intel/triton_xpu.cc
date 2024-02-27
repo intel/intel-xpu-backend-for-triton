@@ -1,10 +1,10 @@
-﻿#include "mlir/Pass/Pass.h"
+﻿#include "NVGPUIntelToLLVM/Passes.h"
+#include "TritonIntelGPUToLLVM/Passes.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/GENX/GENXToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "passes.h"
-#include "triton/Conversion/NVGPUToLLVM/Passes.h"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -22,8 +22,14 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
   m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability) {
-    pm.addPass(
-        createConvertTritonGPUToLLVMPass(capability, mlir::triton::GENX));
+    pm.addPass(mlir::triton::createConvertTritonIntelGPUToLLVMPass(
+        capability, mlir::triton::GENX));
+  });
+  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
+    pm.addPass(createIntelDecomposeUnsupportedConversionsPass());
+  });
+  m.def("add_allocate_shared_memory", [](mlir::PassManager &pm) {
+    pm.addPass(createIntelAllocateSharedMemoryPass());
   });
 }
 
@@ -33,7 +39,7 @@ void init_triton_intel_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fence_insertion",
                      mlir::createTritonNvidiaGPUFenceInsertionPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
-                     mlir::triton::createConvertNVGPUToLLVMPass);
+                     mlir::triton::createConvertNVGPUIntelToLLVMPass);
 }
 
 void init_triton_intel(py::module &&m) {
