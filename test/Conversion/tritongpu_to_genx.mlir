@@ -436,7 +436,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT: llvm.cond_br [[AND1]], ^bb1, ^bb2
     // CHECK-NEXT: ^bb1:
     // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store [[IE2]], [[BCAST2]] : vector<1xi32>, !llvm.ptr<1>
+    // CHECK-NEXT:   llvm.store [[IE2]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     // CHECK-NEXT:   llvm.br ^bb2
     // CHECK-NEXT: ^bb2:
     // CHECK:        [[AND2:%.*]] = llvm.and {{.*}}, [[ARG2_1]] : i1
@@ -446,7 +446,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK:        llvm.cond_br [[AND2]], ^bb3, ^bb4
     // CHECK-NEXT: ^bb3:
     // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store [[IE3]], [[BCAST2]] : vector<1xi32>, !llvm.ptr<1>
+    // CHECK-NEXT:   llvm.store [[IE3]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     // CHECK-NEXT:   llvm.br ^bb4
     // CHECK-NEXT: ^bb4:
     tt.store %ptrs, %vals, %mask : tensor<256xf32, #blocked0>
@@ -866,7 +866,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK:      llvm.cond_br [[TRUE]], ^bb1, ^bb2
     // CHECK-NEXT: ^bb1:
     // CHECK-NEXT:   [[BCAST:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store {{.*}}, [[BCAST]] : vector<1xi32>, !llvm.ptr<1>
+    // CHECK-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     // CHECK-NEXT:   llvm.br ^bb2
     // CHECK-NEXT: ^bb2:
     // CHECK:        [[VEC:%.*]] = llvm.mlir.undef : vector<1xi32>
@@ -875,7 +875,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK:        llvm.cond_br [[TRUE]], ^bb3, ^bb4
     // CHECK-NEXT: ^bb3:
     // CHECK-NEXT:   [[BCAST1:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store [[IE1]], [[BCAST1]] : vector<1xi32>, !llvm.ptr<1>
+    // CHECK-NEXT:   llvm.store [[IE1]], [[BCAST1]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
 
     tt.store %arg0, %arg1 : tensor<256xf32, #blocked0>
     tt.return
@@ -891,7 +891,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK:      llvm.cond_br {{.*}}, ^bb1, ^bb2
     // CHECK-NEXT: ^bb1:
     // CHECK-NEXT:   [[BCAST:%.*]] = llvm.bitcast %arg0 : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store {{.*}}, [[BCAST]] : vector<1xi32>, !llvm.ptr<1>
+    // CHECK-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     tt.store %arg0, %arg1 : f32
     tt.return
   }

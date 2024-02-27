@@ -520,7 +520,8 @@ struct StoreOpConversion
         mlir::LLVM::utils::createPredicatedBlock(rewriter, loc, maskVal, [&] {
           Value addrElem =
               bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-          store(vecWord, addrElem);
+          uint32_t alignment = nWords * width / 8;
+          store(vecWord, addrElem, alignment);
           return ArrayRef<Value>();
         });
       } else {
