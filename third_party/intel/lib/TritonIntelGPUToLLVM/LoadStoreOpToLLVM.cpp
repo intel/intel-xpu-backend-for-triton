@@ -263,7 +263,8 @@ struct LoadOpConversion
             rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
               Value addrElem =
                   bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-              Value ret = load(retTy, addrElem);
+              uint32_t alignment = nWords * width / 8;
+              Value ret = load(retTy, addrElem, alignment);
               return SmallVector<Value, 1>{ret};
             });
         Value ret = *endBlock.args_begin();
@@ -519,7 +520,8 @@ struct StoreOpConversion
         mlir::LLVM::utils::createPredicatedBlock(rewriter, loc, maskVal, [&] {
           Value addrElem =
               bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-          store(vecWord, addrElem);
+          uint32_t alignment = nWords * width / 8;
+          store(vecWord, addrElem, alignment);
           return ArrayRef<Value>();
         });
       } else {
