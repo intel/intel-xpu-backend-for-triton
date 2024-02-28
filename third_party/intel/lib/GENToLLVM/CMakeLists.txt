@@ -10,6 +10,6 @@ add_triton_library(GENToLLVM
   GENConversionPassIncGen
   GenISAIntrinsics
 
-  LINK_LIBS PUBLIC    
+  LINK_LIBS PUBLIC
   GenISAIntrinsics
 )
