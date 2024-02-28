@@ -13,6 +13,7 @@ import os
 import subprocess
 from pathlib import Path
 
+
 def _path_to_binary(binary: str):
     paths = [
         os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),

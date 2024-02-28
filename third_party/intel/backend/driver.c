@@ -89,8 +89,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   case 0x0B:      // PVC GPUs 0Bxx
     gpu_arch = 1; // PVC
     break;
-  default:
-    ; // fall through
+  default:; // fall through
   }
 
   ze_device_compute_properties_t compute_properties = {};
@@ -101,7 +100,8 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int num_subgroup_sizes = compute_properties.numSubGroupSizes;
   PyObject *subgroup_sizes = PyTuple_New(num_subgroup_sizes);
   for (int i = 0; i < num_subgroup_sizes; i++) {
-      PyTuple_SetItem(subgroup_sizes, i, PyLong_FromLong(compute_properties.subGroupSizes[i]));
+    PyTuple_SetItem(subgroup_sizes, i,
+                    PyLong_FromLong(compute_properties.subGroupSizes[i]));
   }
 
   uint32_t memoryCount = 0;
@@ -118,12 +118,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   delete[] pMemoryProperties;
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}", "max_shared_mem",
-                       max_shared_mem, "multiprocessor_count",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}",
+                       "max_shared_mem", max_shared_mem, "multiprocessor_count",
                        multiprocessor_count, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width, "device_arch", gpu_arch,
-                       "max_group_size", max_group_size, "subgroup_sizes", subgroup_sizes);
+                       mem_bus_width, "device_arch", gpu_arch, "max_group_size",
+                       max_group_size, "subgroup_sizes", subgroup_sizes);
 }
 
 /*Sycl code Start*/

@@ -6,10 +6,6 @@ from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import DriverBase
 
-
-
-
-
 dirname = os.getenv("ZE_PATH", default="/usr/local")
 include_dir = [os.path.join(dirname, "include/level_zero")]
 library_dir = [os.path.join(dirname, "lib")]
@@ -70,6 +66,7 @@ class XPUUtils(object):
         import torch
         return torch.xpu.device(device_id).sycl_device
 
+
 # ------------------------
 # Launcher
 # ------------------------
@@ -95,7 +92,6 @@ def ty_to_cpp(ty):
         "f32": "float",
         "fp64": "double",
     }[ty]
-
 
 
 def make_launcher(constants, signature, ids):
@@ -124,8 +120,7 @@ def make_launcher(constants, signature, ids):
             "uint64_t": "K",
         }[ty]
 
-    format = "iiiiiiiiiOKOOO" + ''.join(
-        [format_of(_extracted_type(ty)) for ty in signature.values()])
+    format = "iiiiiiiiiOKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
 
     # generate glue code
     src = f"""
@@ -366,9 +361,7 @@ def make_launcher(constants, signature, ids):
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
-        ids = {
-            "ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()
-        }
+        ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
         src = make_launcher(constants, src.signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
