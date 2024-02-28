@@ -29,63 +29,53 @@ class GEN_Op<string mnemonic, list<Trait> traits = []> :
   LLVM_OpBase<GEN_Dialect, mnemonic, traits> {
 }
 
-class GEN_DeviceFunctionOp<string mnemonic, string fnName,
-                            int arg, list<Trait> traits = []>
-  : GEN_Op<mnemonic, !listconcat(traits, [Pure])>,
-    Results<(outs LLVM_Type:$res)>, Arguments<(ins)> {
-  string llvmBuilder = [{
-    llvm::Type *retType = builder.getInt64Ty();
-    llvm::Type *argType = builder.getInt32Ty();
-    llvm::Value *val = llvm::ConstantInt::get(argType, }] # arg # [{);
-    llvm::CallInst *ci = createDeviceFunctionCall(builder, "}] # fnName # [{",
-        retType, { argType }, { val });
-    llvm::Type *opRetType = cast<llvm::IntegerType>(
-        moduleTranslation.convertType(op->getResultTypes()[0]));
-    if (opRetType == retType)
-      $res = ci;
-    else {
-      llvm::Instruction::CastOps opcode =
-          llvm::CastInst::getCastOpcode(ci, false, opRetType, false);
-      $res = builder.CreateCast(opcode, ci, opRetType);
-    }
-  }];
-
-  let assemblyFormat = "attr-dict `:` type($res)";
-}
-
 //===----------------------------------------------------------------------===//
 // Thread index and Block index
 //===----------------------------------------------------------------------===//
 
-def GEN_ThreadIdXOp : GEN_DeviceFunctionOp<"workitem.id.x",
-                        "_Z12get_local_idj", 0>;
-def GEN_ThreadIdYOp : GEN_DeviceFunctionOp<"workitem.id.y",
-                        "_Z12get_local_idj", 1>;
-def GEN_ThreadIdZOp : GEN_DeviceFunctionOp<"workitem.id.z",
-                        "_Z12get_local_idj", 2>;
-def GEN_BlockIdXOp : GEN_DeviceFunctionOp<"workgroup.id.x",
-                        "_Z12get_group_idj", 0>;
-def GEN_BlockIdYOp : GEN_DeviceFunctionOp<"workgroup.id.y",
-                        "_Z12get_group_idj", 1>;
-def GEN_BlockIdZOp : GEN_DeviceFunctionOp<"workgroup.id.z",
-                        "_Z12get_group_idj", 2>;
+def GEN_ThreadIdXOp : GEN_Op<"workitem.id.x"> {
+  let assemblyFormat = "attr-dict";
+}
+def GEN_ThreadIdYOp : GEN_Op<"workitem.id.y"> {
+  let assemblyFormat = "attr-dict";
+}
+def GEN_ThreadIdZOp : GEN_Op<"workitem.id.z"> {
+  let assemblyFormat = "attr-dict";
+}
+
+def GEN_BlockIdXOp : GEN_Op<"workgroup.id.x"> {
+  let assemblyFormat = "attr-dict";
+}
+def GEN_BlockIdYOp : GEN_Op<"workgroup.id.y"> {
+  let assemblyFormat = "attr-dict";
+}
+def GEN_BlockIdZOp : GEN_Op<"workgroup.id.z"> {
+  let assemblyFormat = "attr-dict";
+}
 
 //===----------------------------------------------------------------------===//
 // Block and Grid range
 //===----------------------------------------------------------------------===//
 
-def GEN_BlockDimXOp : GEN_DeviceFunctionOp<"workgroup.dim.x",
-                        "_Z14get_local_sizej", 0>;
-def GEN_BlockDimYOp : GEN_DeviceFunctionOp<"workgroup.dim.y",
-                        "_Z14get_local_sizej", 1>;
-def GEN_BlockDimZOp : GEN_DeviceFunctionOp<"workgroup.dim.z",
-                        "_Z14get_local_sizej", 2>;
-def GEN_GridDimXOp : GEN_DeviceFunctionOp<"grid.dim.x",
-                        "_Z14get_num_groupsj", 0>;
-def GEN_GridDimYOp : GEN_DeviceFunctionOp<"grid.dim.y",
-                        "_Z14get_num_groupsj", 1>;
-def GEN_GridDimZOp : GEN_DeviceFunctionOp<"grid.dim.z",
-                        "_Z14get_num_groupsj", 2>;
+def GEN_BlockDimXOp : GEN_Op<"workgroup.dim.x"> {
+  let assemblyFormat = "attr-dict";
+}
+def GEN_BlockDimYOp : GEN_Op<"workgroup.dim.y"> {
+  let assemblyFormat = "attr-dict";
+}
+def GEN_BlockDimZOp : GEN_Op<"workgroup.dim.z"> {
+  let assemblyFormat = "attr-dict";
+}
+
+def GEN_GridDimXOp : GEN_Op<"grid.dim.x"> {
+  let assemblyFormat = "attr-dict";
+}
+def GEN_GridDimYOp : GEN_Op<"grid.dim.y"> {
+  let assemblyFormat = "attr-dict";
+}
+def GEN_GridDimZOp : GEN_Op<"grid.dim.z"> {
+  let assemblyFormat = "attr-dict";
+}
 
 //===----------------------------------------------------------------------===//
 // Synchronization
@@ -97,15 +87,6 @@ def GEN_BarrierOp : GEN_Op<"barrier"> {
   string baseDescription = [{
     The `gen.barrier` operation performs a workgroup barrier and ensures all
     outstanding memory transaction using local or global memory are complete.
-  }];
-
-  string llvmBuilder = [{
-    llvm::Type *retType = builder.getVoidTy();
-    llvm::Type *argType = builder.getInt32Ty();
-    int memFence = 3; // local + global memory fence
-    llvm::Value *arg = llvm::ConstantInt::get(argType, memFence);
-    createDeviceFunctionCall(builder, "_Z7barrierj", retType, {argType}, {arg},
-                             true /*convergent*/);
   }];
 
   let assemblyFormat = "attr-dict";
@@ -132,9 +113,7 @@ def GEN_SubGroupShuffleOp : GEN_Op<"sub_group_shuffle", [
     - $kind == DOWN, the current invocation’s subgroup local ID + $mask.
     - $kind == IDX, the subgroup local ID $mask.
   }];
-  string llvmBuilder = [{
-    $res = createSubGroupShuffle(builder, $value, $mask, $kind);
-  }];
+  
   let assemblyFormat = [{
     $kind $value `,` $mask attr-dict `:` type($value) `->` type($res)
   }];
