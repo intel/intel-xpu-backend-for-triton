@@ -47,10 +47,6 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   USE_AOT_DEVLIST: pvc
   PYTHON_VERSION: "3.10"
-  PYTORCH_REPO: https://github.com/Stonepia/pytorch.git
-  PYTORCH_BRANCH: dev/triton-test-3.0
-  IPEX_REPO: https://github.com/intel/intel-extension-for-pytorch.git
-  IPEX_BRANCH: dev/triton-test-3.0
   LLVM_REPO: https://github.com/intel/llvm.git
   LLVM_BRANCH: genx
   BENCHMARK_REPO: https://github.com/weishi-deng/benchmark.git
@@ -112,17 +108,8 @@ jobs:
 
       - name: Identify versions
         run: |
-          echo "PYTORCH_COMMIT_ID=$(git ls-remote $PYTORCH_REPO refs/heads/$PYTORCH_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
-          echo "IPEX_COMMIT_ID=$(git ls-remote $IPEX_REPO refs/heads/$IPEX_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
           echo "LLVM_COMMIT_ID=$(git ls-remote $LLVM_REPO refs/heads/$LLVM_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
           echo "BENCHMARK_COMMIT_ID=$(git ls-remote $BENCHMARK_REPO refs/heads/$BENCHMARK_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
-
-      - name: Print versions
-        run: |
-          echo "$PYTORCH_REPO: $PYTORCH_COMMIT_ID"
-          echo "$IPEX_REPO: $IPEX_COMMIT_ID"
-          echo "$LLVM_REPO: $LLVM_COMMIT_ID"
-          echo "$GITHUB_REPOSITORY: $GITHUB_SHA"
 
       - name: Load pip cache
         id: pip-cache
@@ -141,32 +128,8 @@ jobs:
         run: |
           pip install wheel
 
-      - name: Create environment file for building PyTorch
-        run: |
-          cat <<EOF >~/env.sh
-          source ~/intel/oneapi/compiler/latest/env/vars.sh
-          source ~/intel/oneapi/mkl/latest/env/vars.sh
-          export MKL_DPCPP_ROOT=${HOME}/intel/oneapi/mkl/latest
-          export LD_LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LD_LIBRARY_PATH}
-          export LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LIBRARY_PATH}
-          source ~/intel/oneapi/tbb/latest/env/vars.sh
-          EOF
-
-      - name: Load PyTorch from a cache
-        id: pytorch-cache
-        uses: ./.github/actions/load
-        with:
-          path: pytorch
-          key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
-
-      - name: Build PyTorch
-        if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
-        run: |
-          git clone --single-branch -b $PYTORCH_BRANCH --recurse-submodules --jobs 8 $PYTORCH_REPO
-          source ~/env.sh
-          cd pytorch
-          pip install -r requirements.txt
-          python setup.py bdist_wheel
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
 
       - name: Identify pinned versions
         run: |
@@ -177,8 +140,9 @@ jobs:
           echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" >> "${GITHUB_ENV}"
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" >> "${GITHUB_ENV}"
 
-      # TIMM depends on torch and torchaudio, so in general, it needs to be installed before
-      # installing custom torch and torchaudio.
+      # TIMM depends on torch and torchvision, so, in general, it needs to be installed before
+      # installing custom torch and torchvision, but instead we install its dependencies except
+      # torch and torchvision.
       - name: Install TIMM Models
         run: |
           # install timm without dependencies
@@ -186,47 +150,8 @@ jobs:
           # install timm dependencies without torch and torchvision
           pip install $(curl -sSL https://raw.githubusercontent.com/huggingface/pytorch-image-models/$TIMM_COMMIT_ID/requirements.txt | grep -vE torch)
 
-      - name: Install PyTorch
-        run: |
-          pip install pytorch/dist/*.whl
-          python -c "import torch;print(torch.__version__)"
-
-      - name: Save PyTorch to a cache
-        if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.pytorch-cache.outputs.path }}
-          dest: ${{ steps.pytorch-cache.outputs.dest }}
-
-      - name: Load IPEX wheels from a cache
-        id: ipex-cache
-        uses: ./.github/actions/load
-        with:
-          path: intel-extension-for-pytorch/dist
-          key: ipex-$PYTHON_VERSION-$IPEX_COMMIT_ID
-
-      - name: Build IPEX
-        if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
-        run: |
-          source ~/intel/oneapi/setvars.sh
-          export USE_AOT_DEVLIST='pvc'
-          git clone --single-branch -b $IPEX_BRANCH --recurse-submodules --jobs 8 $IPEX_REPO
-          cd intel-extension-for-pytorch
-          pip install -r requirements.txt
-          python setup.py bdist_wheel
-
-      - name: Install IPEX
-        run: |
-          source ~/intel/oneapi/setvars.sh
-          pip install intel-extension-for-pytorch/dist/*.whl
-          python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
-
-      - name: Save IPEX wheels to a cache
-        if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.ipex-cache.outputs.path }}
-          dest: ${{ steps.ipex-cache.outputs.dest }}
+      - name: Setup IPEX
+        uses: ./.github/actions/setup-ipex
 
       - name: Generate Triton cache key
         id: triton-key

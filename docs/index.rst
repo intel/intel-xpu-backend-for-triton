@@ -16,6 +16,7 @@ Getting Started
    :hidden:
 
    getting-started/installation
+   getting-started/architecture
    getting-started/tutorials/index
 
 
