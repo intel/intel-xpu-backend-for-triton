@@ -12,11 +12,13 @@
 #include "intel/include/GENToLLVM/GENToLLVMPass.h"
 
 namespace mlir {
+namespace triton {
 
 /// Generate the code for registering the conversion pass.
 #define GEN_PASS_REGISTRATION
 #include "intel/include/GENToLLVM/Passes.h.inc"
 
+} // namespace triton
 } // namespace mlir
 
 #endif // GEN_CONVERSION_PASSES_H
