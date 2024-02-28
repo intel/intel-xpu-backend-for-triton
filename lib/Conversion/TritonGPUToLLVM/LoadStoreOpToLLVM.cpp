@@ -4,6 +4,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
@@ -1093,6 +1094,7 @@ struct InsertSliceAsyncOpConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getDst().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    auto srcElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
     assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
             "Unexpected srcLayout in InsertSliceAsyncOpConversion"));
@@ -1114,9 +1116,13 @@ struct InsertSliceAsyncOpConversion
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
     auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
+    
+    //not neccessasrily 4 dims
     SmallVector<Value, 4> offsetVals;
     SmallVector<Value, 4> srcStrides;
     for (auto i = 0; i < dstTy.getShape().size(); ++i) {
+      //This is the dimension we want to replace
+      // %dst[0][0]...[index][0]...[0]
       if (i == axis) {
         offsetVals.emplace_back(llIndex);
       } else {
@@ -1129,6 +1135,7 @@ struct InsertSliceAsyncOpConversion
     auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
     auto dstPtrTy = ptr_ty(rewriter.getContext(), 3);
     Value dstPtrBase = gep(dstPtrTy, resElemTy, smemObj.base, dstOffset);
+    auto srcPtrTy = ptr_ty(rewriter.getContext(), 1);
 
     // %mask
     SmallVector<Value> maskElems;
@@ -1167,36 +1174,32 @@ struct InsertSliceAsyncOpConversion
     // auto func = moduleOp.lookupSymbol<LLVM::LLVMFuncOp>("_Z22__spirv_GroupAsyncCopyiPU3AS1Dv4_sPU3AS3S_llP13__spirv_Event");
     auto name = "_Z22__spirv_GroupAsyncCopyiPU3AS1Dv4_sPU3AS3S_llP13__spirv_Event";
     auto moduleOp = op->getParentOfType<ModuleOp>();
-    // make a variable result type that is void
-    Type resultType = LLVMVoidType::get(rewriter.getContext());
 
     Type intType = IntegerType::get(rewriter.getContext(), 32);
-    // Type float4PtrType = LLVMPointerType::get(VectorType::get(FloatType::getF32(/*context=*/nullptr, VectorType::k4xF32), /*numElements=*/1), /*addressSpace=*/1);
-    Type longLongType = IntegerType::get(rewriter.getContext(), 64);
-    // Type charPtrType = LLVMPointerType::get(IntegerType::get(nullptr, 8), /*addressSpace=*/13);
+
+    //generate a 8 byte aligned opaque pointer type
+    auto opaquePtrType = LLVMPointerType::get(rewriter.getContext(), /*addressSpace=*/0);
+
+    Type srcType = op.getSrc().getType();
 
     // Create an array of the LLVM types
-    Type types[] = {intType, intType, dstPtrTy, longLongType, longLongType, intType};
+    Type types[] = {intType, srcPtrTy, dstPtrTy, intType, intType, intType};
 
     // Create an ArrayRef<Type> from the array
     ArrayRef<Type> paramTypes(types, /*size=*/6);
     OpBuilder b(moduleOp.getBodyRegion());
+
     auto func =  b.create<LLVM::LLVMFuncOp>(
       moduleOp->getLoc(), name,
-      LLVM::LLVMFunctionType::get(intType, paramTypes));
+      LLVM::LLVMFunctionType::get(opaquePtrType, paramTypes));
 
-    //Create a new LLVM::CallOp and put it in a variable of type Value
-    auto callOp = rewriter.create<LLVM::CallOp>(moduleOp->getLoc(), func, ArrayRef<Value>({i32_val(0), i32_val(0), dstPtrBase, i64_val(0), i64_val(0), i32_val(0)}));
 
-    //use the rwriter to remove op
-    // rewriter.eraseOp(op);
-
-    rewriter.replaceOp(op, callOp);
     
     // A sharedLayout encoding has a "vec" parameter.
     // On the column dimension, if inVec > outVec, it means we have to divide
     // single vector read into multiple ones
     auto numVecCols = std::max<unsigned>(inVec / outVec, 1);
+    rewriter.setInsertionPointAfter(op);
 
     for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
       // 16 * 8 = 128bits
@@ -1207,10 +1210,10 @@ struct InsertSliceAsyncOpConversion
       auto numWords = vecBitWidth / bitWidth;
       auto numWordElems = bitWidth / resElemTy.getIntOrFloatBitWidth();
 
-      // Tune CG and CA here.
+      // // Tune CG and CA here.
       auto byteWidth = bitWidth / 8;
-      CacheModifier srcCacheModifier =
-          byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
+      // CacheModifier srcCacheModifier =
+      //     byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
       auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
 
@@ -1218,43 +1221,51 @@ struct InsertSliceAsyncOpConversion
       for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
         PTXBuilder ptxBuilder;
         auto wordElemIdx = wordIdx * numWordElems;
-        auto &copyAsyncOp =
-            *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-        auto *dstOperand =
-            ptxBuilder.newAddrOperand(basePtr, "r", wordElemIdx * resByteWidth);
-        auto *srcOperand =
-            ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
-        auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
-        auto *srcSize = copySize;
-        if (op.getMask()) {
-          // We don't use predicate in this case, setting src-size to 0
-          // if there's any mask. cp.async will automatically fill the
-          // remaining slots with 0 if cp-size > src-size.
-          // XXX(Keren): Always assume other = 0 for now.
-          auto selectOp = select(maskElems[elemIdx + wordElemIdx],
-                                 i32_val(byteWidth), i32_val(0));
-          srcSize = ptxBuilder.newOperand(selectOp, "r");
-        }
+        // auto &copyAsyncOp =
+        // //     *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
+        // auto *dstOperand =
+        //     ptxBuilder.newAddrOperand(basePtr, "r", wordElemIdx * resByteWidth);
+        // auto *srcOperand =
+        //     ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
+        // auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
+        // auto *srcSize = copySize;
+
+
+        Value dstPtr = gep(basePtr.getType(), resElemTy, basePtr, i32_val(wordElemIdx * resByteWidth));
+        // Value srcPtr = gep(srcPtrTy, srcElemTy, srcElems[elemIdx + wordElemIdx], i32_val(0));
+
+        auto callOp = rewriter.create<LLVM::CallOp>(moduleOp->getLoc(), func, ArrayRef<Value>({i32_val(2), srcElems[elemIdx + wordElemIdx], dstPtr, i32_val(byteWidth), i32_val(1), i32_val(0)}));
+
+        // // rewriter.replaceOp(op, callOp);
+        // if (op.getMask()) {
+        //   // We don't use predicate in this case, setting src-size to 0
+        //   // if there's any mask. cp.async will automatically fill the
+        //   // remaining slots with 0 if cp-size > src-size.
+        //   // XXX(Keren): Always assume other = 0 for now.
+        //   auto selectOp = select(maskElems[elemIdx + wordElemIdx],
+        //                          i32_val(byteWidth), i32_val(0));
+        //   srcSize = ptxBuilder.newOperand(selectOp, "r");
+        // }
 
         // When 'other != 0' is supported, we will need to fold the op.getMask()
         // and redundantDataMask() into the same predicate, the way it is done
         // for LoadOp.
-        Value maskVal = redundantDataMask(srcTy, rewriter, loc);
+        // Value maskVal = redundantDataMask(srcTy, rewriter, loc);
 
         // TODO: Masking does not work for CTA multicast with cp.async. This is
         // a quick and dirty workaround to avoid the issue.
-        bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
-        if (!skipMaskForMultiCTA) {
-          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
-              .predicate(maskVal);
-        } else {
-          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
-        }
-        ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
+        // bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
+        // if (!skipMaskForMultiCTA) {
+        //   copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
+        //       .predicate(maskVal);
+        // } else {
+        //   copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        // }
+        // ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
       }
     }
 
-    // rewriter.replaceOp(op, llDst);
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -1352,9 +1363,9 @@ struct AsyncCommitGroupOpConversion
   matchAndRewrite(triton::gpu::AsyncCommitGroupOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
-    PTXBuilder ptxBuilder;
-    ptxBuilder.create<>("cp.async.commit_group")->operator()();
-    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+    // PTXBuilder ptxBuilder;
+    // ptxBuilder.create<>("cp.async.commit_group")->operator()();
+    // ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
     // Safe to remove the op since it doesn't have any return value.
     rewriter.eraseOp(op);
     return success();
