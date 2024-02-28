@@ -26,6 +26,7 @@
 #include "triton/Dialect/GEN/IR/GENOps.h.inc"
 
 namespace mlir {
+namespace triton {
 namespace GEN {
 
 /// GEN memory space identifiers following SPIRV storage class convention
@@ -40,6 +41,7 @@ enum GENMemorySpace {
 };
 
 } // namespace GEN
+} // namespace triton
 } // namespace mlir
 
 #endif // TRITON_DIALECT_GEN_IR_DIALECT_H_

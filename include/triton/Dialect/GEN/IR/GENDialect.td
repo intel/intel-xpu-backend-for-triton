@@ -13,7 +13,7 @@ include "mlir/IR/OpBase.td"
 
 def GEN_Dialect : Dialect {
   let name = "gen";
-  let cppNamespace = "::mlir::GEN";
+  let cppNamespace = "::mlir::triton::GEN";
   let summary = "The GEN dialect in Triton.";
 
   let description = [{

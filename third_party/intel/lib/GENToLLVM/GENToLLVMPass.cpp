@@ -30,7 +30,7 @@ namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_CONVERTGENTOLLVM
 #include "intel/include/GENToLLVM/Passes.h.inc"
-}
+} // namespace triton
 } // namespace mlir
 
 using namespace mlir;
@@ -358,7 +358,8 @@ struct SubGroupShuffleLowering
 //===----------------------------------------------------------------------===//
 
 namespace {
-struct ConvertGENToLLVM : public triton::impl::ConvertGENToLLVMBase<ConvertGENToLLVM> {
+struct ConvertGENToLLVM
+    : public triton::impl::ConvertGENToLLVMBase<ConvertGENToLLVM> {
   using Base::Base;
 
   void runOnOperation() override {

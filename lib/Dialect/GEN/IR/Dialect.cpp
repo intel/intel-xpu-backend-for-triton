@@ -22,7 +22,7 @@
 #include "llvm/Support/SourceMgr.h"
 
 using namespace mlir;
-using namespace mlir::GEN;
+using namespace mlir::triton::GEN;
 
 void GENDialect::initialize() {
   addOperations<

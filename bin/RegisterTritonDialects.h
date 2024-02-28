@@ -53,9 +53,9 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
                   mlir::triton::gpu::intel::TritonIntelGPUDialect,
                   mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-                  mlir::triton::gpu::TritonGPUDialect, mlir::GEN::GENDialect,
-                  mlir::math::MathDialect, mlir::arith::ArithDialect,
-                  mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
-                  mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect,
-                  mlir::triton::nvgpu::NVGPUDialect>();
+                  mlir::triton::gpu::TritonGPUDialect,
+                  mlir::triton::GEN::GENDialect, mlir::math::MathDialect,
+                  mlir::arith::ArithDialect, mlir::scf::SCFDialect,
+                  mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
+                  mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect>();
 }
