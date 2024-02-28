@@ -18,10 +18,10 @@ class LLVMTypeConverter;
 class RewritePatternSet;
 class Pass;
 
-#define GEN_PASS_DECL_CONVERTGENTOLLVM
-#include "intel/include/GENToLLVM/Passes.h.inc"
-
 namespace triton {
+
+#define GEN_PASS_DECL
+#include "intel/include/GENToLLVM/Passes.h.inc"
 
 void populateGENToLLVMConversionPatterns(LLVMTypeConverter &converter,
                                          RewritePatternSet &patterns);
