@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This provides IGC GenISAIntrinsic interfaces for GENX dialect
+// This provides IGC GenISAIntrinsic interfaces for GEN dialect
 //
 //===----------------------------------------------------------------------===//
 

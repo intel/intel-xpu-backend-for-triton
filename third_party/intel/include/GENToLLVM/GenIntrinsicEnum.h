@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This provides GenISAIntrinsic Enum definitions for GENX dialect use
+// This provides GenISAIntrinsic Enum definitions for GEN dialect use
 //
 //===----------------------------------------------------------------------===//
 #pragma once

@@ -35,34 +35,46 @@ class GEN_Op<string mnemonic, list<Trait> traits = []> :
 
 def GEN_ThreadIdXOp : GEN_Op<"workitem.id.x"> {
   let arguments = (ins);
-  let results = (outs I32:$result);
-  let assemblyFormat = "attr-dict";
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 def GEN_ThreadIdYOp : GEN_Op<"workitem.id.y"> {
   let arguments = (ins);
-  let results = (outs I32:$result);
-  let assemblyFormat = "attr-dict";
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 def GEN_ThreadIdZOp : GEN_Op<"workitem.id.z"> {
   let arguments = (ins);
-  let results = (outs I32:$result);
-  let assemblyFormat = "attr-dict";
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 
 def GEN_BlockIdXOp : GEN_Op<"workgroup.id.x"> {
   let arguments = (ins);
-  let results = (outs I32:$result);
-  let assemblyFormat = "attr-dict";
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 def GEN_BlockIdYOp : GEN_Op<"workgroup.id.y"> {
   let arguments = (ins);
-  let results = (outs I32:$result);
-  let assemblyFormat = "attr-dict";
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 def GEN_BlockIdZOp : GEN_Op<"workgroup.id.z"> {
   let arguments = (ins);
-  let results = (outs I32:$result);
-  let assemblyFormat = "attr-dict";
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -70,23 +82,47 @@ def GEN_BlockIdZOp : GEN_Op<"workgroup.id.z"> {
 //===----------------------------------------------------------------------===//
 
 def GEN_BlockDimXOp : GEN_Op<"workgroup.dim.x"> {
-  let assemblyFormat = "attr-dict";
+  let arguments = (ins);
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 def GEN_BlockDimYOp : GEN_Op<"workgroup.dim.y"> {
-  let assemblyFormat = "attr-dict";
+  let arguments = (ins);
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 def GEN_BlockDimZOp : GEN_Op<"workgroup.dim.z"> {
-  let assemblyFormat = "attr-dict";
+  let arguments = (ins);
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 
 def GEN_GridDimXOp : GEN_Op<"grid.dim.x"> {
-  let assemblyFormat = "attr-dict";
+  let arguments = (ins);
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 def GEN_GridDimYOp : GEN_Op<"grid.dim.y"> {
-  let assemblyFormat = "attr-dict";
+  let arguments = (ins);
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 def GEN_GridDimZOp : GEN_Op<"grid.dim.z"> {
-  let assemblyFormat = "attr-dict";
+  let arguments = (ins);
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -101,6 +137,8 @@ def GEN_BarrierOp : GEN_Op<"barrier"> {
     outstanding memory transaction using local or global memory are complete.
   }];
 
+  let arguments = (ins);
+  let results = (outs);
   let assemblyFormat = "attr-dict";
 }
 
