@@ -9,6 +9,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::utils::delinearize;
 using ::mlir::LLVM::utils::linearize;
 using ::mlir::LLVM::utils::shflIdxSync;
+using ::mlir::LLVM::utils::shflSync;
 using ::mlir::LLVM::utils::shflUpSync;
 using ::mlir::LLVM::utils::storeShared;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -122,6 +123,7 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
   unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
   unsigned chunkId = 0;
   unsigned elementStride = helper.getAxisElementStride();
+
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
     unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
     // Only consider the last element of each contiguous chunk of elements.
@@ -131,7 +133,6 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
     Value mask = icmp_eq(laneId, i32_val(scanDim - 1));
     Value index = add(parallelLaneId, mul(warpId, i32_val(numParallelLane)));
     index = add(index, i32_val(chunkId * numParallelLane * axisNumWarps));
-
     for (unsigned i = 0; i < lastElement.size(); ++i) {
       Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), smemTypes[i],
                            smemBases[i], index);
@@ -443,6 +444,25 @@ unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   return srcValues;
 }
 
+// Flip the srcValues. Both reverses the chunks and reverses the lanes.
+// Lane reversal is done with a butterfly shuffle flip (divide and flip).
+SmallVector<SmallVector<Value>> flipSrcValues(
+    Location loc, triton::ScanOp op, ConversionPatternRewriter &rewriter,
+    SmallVector<SmallVector<Value>> srcValues, int iWarpSize, Target target) {
+  SmallVector<SmallVector<Value>> values(srcValues.size());
+  for (int i = 0; i < srcValues.size(); ++i) {
+    int revIndex = srcValues.size() - i - 1;
+    for (unsigned j = 0; j < op.getNumOperands(); ++j) {
+      for (unsigned k = iWarpSize / 2; k >= 1; k = k / 2) {
+        srcValues[revIndex][j] =
+            shflSync(loc, rewriter, srcValues[revIndex][j], k, target);
+      }
+      values[i].push_back(srcValues[revIndex][j]);
+    }
+  }
+  return values;
+}
+
 // Lowering using warp shuffle operations to do warp level scan.
 LogicalResult
 ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
@@ -465,6 +485,18 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   warpIdAxis = urem(warpIdAxis, i32_val(axisNumWarps));
   auto srcValues =
       unpackInputs(loc, op, adaptor, rewriter, *getTypeConverter());
+
+  // For the reverse option we apply flip(scan(flip()) in
+  // order to avoid having a separate code path in the reverse direction.
+  // We do this by 1) reversing chunks, 2) reversing lanes, 3) reversing
+  // warp ids and then undoing this below.
+  // (Note: Tried pretty hard to get shflDownSync to work but I ended up
+  // having to add a lot of the complex cross warp code (if rev switch
+  // first/last etc). Reverse first seems more maintainable.)
+  if (op.getReverse()) {
+    warpIdAxis = sub(i32_val(axisNumWarps - 1), warpIdAxis);
+    srcValues = flipSrcValues(loc, op, rewriter, srcValues, iWarpSize, target);
+  }
 
   // Scan contiguous elements in a thread and update `srcValues`.
   scanThreadContiguousElements(srcValues, rewriter, helper);
@@ -517,6 +549,10 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   };
 
   SmallVector<Value> results(op.getNumOperands());
+  if (op.getReverse()) {
+    srcValues = flipSrcValues(loc, op, rewriter, srcValues, iWarpSize, target);
+  }
+
   auto valuesTransposed = transpose(srcValues);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
     auto resultTy = op.getResult()[i].getType().dyn_cast<RankedTensorType>();
