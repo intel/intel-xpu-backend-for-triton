@@ -19,7 +19,7 @@ def GEN_ShflKindAttr : I32EnumAttr<"ShflKind", "GEN shuffle kind",
     I32EnumAttrCase<"DOWN", 2, "down">,
     I32EnumAttrCase<"IDX",  3, "idx">
   ]> {
-  let cppNamespace = "::mlir::GEN";
+  let cppNamespace = "::mlir::triton::GEN";
 }
 
 /// Enum attribute of the different floating-point rounding modes.
@@ -32,7 +32,7 @@ def GEN_RoundingModeAttr : I32EnumAttr<"RoundingMode",
     I32EnumAttrCase<"RTP",    3, "rtp">, ///< Round toward positive
     I32EnumAttrCase<"RTZ",    4, "rtz">, ///< Round toward zero
   ]> {
-  let cppNamespace = "::mlir::GEN";
+  let cppNamespace = "::mlir::triton::GEN";
 }
 
 /// Enum attribute of the different precision types.
@@ -51,7 +51,7 @@ def GEN_PrecisionTypeAttr : I32EnumAttr<"PrecisionType",
     I32EnumAttrCase<"BF16",   9,  "bf16">,
     I32EnumAttrCase<"FP16",   10, "fp16">
   ]> {
-  let cppNamespace = "::mlir::GEN";
+  let cppNamespace = "::mlir::triton::GEN";
 }
 
 #endif // GEN_ATTRDEFS
