@@ -57,7 +57,7 @@ using namespace mlir::triton;
 #define extract_element(...)                                                   \
   rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
 #define load(...) rewriter.create<LLVM::LoadOp>(loc, __VA_ARGS__)
-#define store(val, ptr) rewriter.create<LLVM::StoreOp>(loc, val, ptr)
+#define store(...) rewriter.create<LLVM::StoreOp>(loc, __VA_ARGS__)
 #define load_dsmem(...) LLVM::utils::createLoadDSmem(loc, rewriter, __VA_ARGS__)
 #define store_dsmem(...)                                                       \
   LLVM::utils::createStoreDSmem(loc, rewriter, __VA_ARGS__)
