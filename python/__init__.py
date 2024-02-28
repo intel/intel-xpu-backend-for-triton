@@ -495,7 +495,8 @@ class XPUBackend(BaseBackend):
         return "spvbin"
 
     def get_architecture_descriptor(self, **kwargs):
-        arch = kwargs.get("cc", None)
+        # arch = kwargs.get("cc", None)
+        arch = None
         if arch is None:
             arch = self.get_device_properties(self.get_current_device())
         max_work_group_size = arch['max_work_group_size']
