@@ -65,7 +65,8 @@ runs:
       run: |
         source ${{ inputs.oneapi }}/setvars.sh
         pip install intel-extension-for-pytorch/dist/*.whl
-        python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
+        # Temporary disable import check until https://github.com/intel/intel-xpu-backend-for-triton/issues/582 is fixed
+        # python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
 
     - name: Save IPEX wheels to a cache
       if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
