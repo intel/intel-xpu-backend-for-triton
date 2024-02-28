@@ -113,7 +113,7 @@ def GEN_SubGroupShuffleOp : GEN_Op<"sub_group_shuffle", [
     - $kind == DOWN, the current invocation’s subgroup local ID + $mask.
     - $kind == IDX, the subgroup local ID $mask.
   }];
-  
+
   let assemblyFormat = [{
     $kind $value `,` $mask attr-dict `:` type($value) `->` type($res)
   }];
