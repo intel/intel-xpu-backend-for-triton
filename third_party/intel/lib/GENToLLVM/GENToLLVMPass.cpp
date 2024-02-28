@@ -22,6 +22,7 @@
 #include "mlir/Support/LogicalResult.h"
 
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include "lib/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/GEN/IR/Dialect.h"
@@ -59,15 +60,14 @@ static LLVM::CallOp createDeviceFunctionCall(
     func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
     if (convergent)
-      assert(false && "Need to set the convergent attribute");
+      func->setAttr("passthrough", rewriter.getArrayAttr(
+                                       StringAttr::get(context, "convergent")));
 
     return func;
   };
 
   LLVM::LLVMFuncOp funcOp = getOrCreateFunction(funcName);
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-  if (convergent)
-    assert(false && "Need to set the convergent attribute");
 
   return callOp;
 }
@@ -129,13 +129,20 @@ namespace {
 
 struct FuncCallLowering {
 protected:
-  LogicalResult rewrite(Operation *op, StringRef funcName, unsigned dim,
-                        ConversionPatternRewriter &rewriter) const {
+  Value rewrite(Operation *op, StringRef funcName, unsigned dim,
+                ConversionPatternRewriter &rewriter) const {
     auto retType = rewriter.getIntegerType(64);
     auto argType = rewriter.getIntegerType(32);
     auto arg = LLVM::createConstantI32(op->getLoc(), rewriter, dim);
-    createDeviceFunctionCall(rewriter, funcName, retType, {argType}, {arg});
-    return success();
+    LLVM::CallOp callOp =
+        createDeviceFunctionCall(rewriter, funcName, retType, {argType}, {arg});
+
+    Type resType = op->getResult(0).getType();
+    if (resType == callOp.getResult().getType())
+      return callOp.getResult();
+
+    return rewriter.create<LLVM::TruncOp>(op->getLoc(), resType,
+                                          callOp.getResult());
   }
 };
 
@@ -143,169 +150,129 @@ protected:
 // ThreadId Ops Lowerings
 //===----------------------------------------------------------------------===//
 
-struct GENThreadIdLowering : public FuncCallLowering {
-protected:
-  const StringRef funcName = "_Z12get_local_idj";
-};
-
-struct GENThreadIdXLowering : public ConvertOpToLLVMPattern<GEN::ThreadIdXOp>,
-                              public GENThreadIdLowering {
-  using ConvertOpToLLVMPattern<GEN::ThreadIdXOp>::ConvertOpToLLVMPattern;
+template <typename SourceOp>
+struct GENThreadIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
+                             public FuncCallLowering {
+  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
 
   LogicalResult
-  matchAndRewrite(GEN::ThreadIdXOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENThreadIdLowering::rewrite(op, funcName, 0, rewriter);
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value res;
+    if (isa<GEN::ThreadIdXOp>(op))
+      res = rewrite(op, "_Z12get_local_idj", 0, rewriter);
+    else if (isa<GEN::ThreadIdYOp>(op))
+      res = rewrite(op, "_Z12get_local_idj", 1, rewriter);
+    else if (isa<GEN::ThreadIdZOp>(op))
+      res = rewrite(op, "_Z12get_local_idj", 2, rewriter);
+    else
+      llvm_unreachable("Unexpected operation");
+
+    rewriter.replaceOp(op, res);
+    return success();
   }
 };
 
-struct GENThreadIdYLowering : public ConvertOpToLLVMPattern<GEN::ThreadIdYOp>,
-                              public GENThreadIdLowering {
-  using ConvertOpToLLVMPattern<GEN::ThreadIdYOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(GEN::ThreadIdYOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENThreadIdLowering::rewrite(op, funcName, 1, rewriter);
-  }
-};
-
-struct GENThreadIdZLowering : public ConvertOpToLLVMPattern<GEN::ThreadIdZOp>,
-                              public GENThreadIdLowering {
-  using ConvertOpToLLVMPattern<GEN::ThreadIdZOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(GEN::ThreadIdZOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENThreadIdLowering::rewrite(op, funcName, 2, rewriter);
-  }
-};
+using GENThreadIdXLowering = GENThreadIdLowering<GEN::ThreadIdXOp>;
+using GENThreadIdYLowering = GENThreadIdLowering<GEN::ThreadIdYOp>;
+using GENThreadIdZLowering = GENThreadIdLowering<GEN::ThreadIdZOp>;
 
 //===----------------------------------------------------------------------===//
 // BlockId Ops Lowerings
 //===----------------------------------------------------------------------===//
 
-struct GENBlockIdLowering : public FuncCallLowering {
-protected:
-  const StringRef funcName = "_Z12get_group_idj";
-};
-
-struct GENBlockIdXLowering : public ConvertOpToLLVMPattern<GEN::BlockIdXOp>,
-                             public GENBlockIdLowering {
-  using ConvertOpToLLVMPattern<GEN::BlockIdXOp>::ConvertOpToLLVMPattern;
+template <typename SourceOp>
+struct GENBlockIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
+                            public FuncCallLowering {
+  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
 
   LogicalResult
-  matchAndRewrite(GEN::BlockIdXOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENBlockIdLowering::rewrite(op, funcName, 0, rewriter);
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value res;
+    if (isa<GEN::BlockIdXOp>(op))
+      res = rewrite(op, "_Z12get_group_idj", 0, rewriter);
+    else if (isa<GEN::BlockIdYOp>(op))
+      res = rewrite(op, "_Z12get_group_idj", 1, rewriter);
+    else if (isa<GEN::BlockIdZOp>(op))
+      res = rewrite(op, "_Z12get_group_idj", 2, rewriter);
+    else
+      llvm_unreachable("Unexpected operation");
+
+    rewriter.replaceOp(op, res);
+    return success();
   }
 };
 
-struct GENBlockIdYLowering : public ConvertOpToLLVMPattern<GEN::BlockIdYOp>,
-                             public GENBlockIdLowering {
-  using ConvertOpToLLVMPattern<GEN::BlockIdYOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(GEN::BlockIdYOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENBlockIdLowering::rewrite(op, funcName, 1, rewriter);
-  }
-};
-
-struct GENBlockIdZLowering : public ConvertOpToLLVMPattern<GEN::BlockIdZOp>,
-                             public GENBlockIdLowering {
-  using ConvertOpToLLVMPattern<GEN::BlockIdZOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(GEN::BlockIdZOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENBlockIdLowering::rewrite(op, funcName, 2, rewriter);
-  }
-};
+using GENBlockIdXLowering = GENBlockIdLowering<GEN::BlockIdXOp>;
+using GENBlockIdYLowering = GENBlockIdLowering<GEN::BlockIdYOp>;
+using GENBlockIdZLowering = GENBlockIdLowering<GEN::BlockIdZOp>;
 
 //===----------------------------------------------------------------------===//
 // BlockDim Ops Lowerings
 //===----------------------------------------------------------------------===//
 
-struct GENBlockDimLowering : public FuncCallLowering {
-protected:
-  const StringRef funcName = "_Z14get_local_sizej";
-};
-
-struct GENBlockDimXLowering : public ConvertOpToLLVMPattern<GEN::BlockDimXOp>,
-                              public GENBlockDimLowering {
-  using ConvertOpToLLVMPattern<GEN::BlockDimXOp>::ConvertOpToLLVMPattern;
+template <typename SourceOp>
+struct GENBlockDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
+                             public FuncCallLowering {
+  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
 
   LogicalResult
-  matchAndRewrite(GEN::BlockDimXOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENBlockDimLowering::rewrite(op, funcName, 0, rewriter);
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value res;
+    if (isa<GEN::BlockDimXOp>(op))
+      res = rewrite(op, "_Z14get_local_sizej", 0, rewriter);
+    else if (isa<GEN::BlockDimYOp>(op))
+      res = rewrite(op, "_Z14get_local_sizej", 1, rewriter);
+    else if (isa<GEN::BlockDimZOp>(op))
+      res = rewrite(op, "_Z14get_local_sizej", 2, rewriter);
+    else
+      llvm_unreachable("Unexpected operation");
+
+    rewriter.replaceOp(op, res);
+    return success();
   }
 };
 
-struct GENBlockDimYLowering : public ConvertOpToLLVMPattern<GEN::BlockDimYOp>,
-                              public GENBlockDimLowering {
-  using ConvertOpToLLVMPattern<GEN::BlockDimYOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(GEN::BlockDimYOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENBlockDimLowering::rewrite(op, funcName, 1, rewriter);
-  }
-};
-
-struct GENBlockDimZLowering : public ConvertOpToLLVMPattern<GEN::BlockDimZOp>,
-                              public GENBlockDimLowering {
-  using ConvertOpToLLVMPattern<GEN::BlockDimZOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(GEN::BlockDimZOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENBlockDimLowering::rewrite(op, funcName, 2, rewriter);
-  }
-};
+using GENBlockDimXLowering = GENBlockDimLowering<GEN::BlockDimXOp>;
+using GENBlockDimYLowering = GENBlockDimLowering<GEN::BlockDimYOp>;
+using GENBlockDimZLowering = GENBlockDimLowering<GEN::BlockDimZOp>;
 
 //===----------------------------------------------------------------------===//
 // GridDim Ops Lowerings
 //===----------------------------------------------------------------------===//
 
-struct GENGridDimLowering : public FuncCallLowering {
-protected:
-  const StringRef funcName = "_Z14get_num_groupsj";
-};
-
-struct GENGridDimXLowering : public ConvertOpToLLVMPattern<GEN::GridDimXOp>,
-                             public GENGridDimLowering {
-  using ConvertOpToLLVMPattern<GEN::GridDimXOp>::ConvertOpToLLVMPattern;
+template <typename SourceOp>
+struct GENGridDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
+                            public FuncCallLowering {
+  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
 
   LogicalResult
-  matchAndRewrite(GEN::GridDimXOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENGridDimLowering::rewrite(op, funcName, 0, rewriter);
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value res;
+    if (isa<GEN::GridDimXOp>(op))
+      res = rewrite(op, "_Z14get_num_groupsj", 0, rewriter);
+    else if (isa<GEN::GridDimYOp>(op))
+      res = rewrite(op, "_Z14get_num_groupsj", 1, rewriter);
+    else if (isa<GEN::GridDimZOp>(op))
+      res = rewrite(op, "_Z14get_num_groupsj", 2, rewriter);
+    else
+      llvm_unreachable("Unexpected operation");
+
+    rewriter.replaceOp(op, res);
+    return success();
   }
 };
 
-struct GENGridDimYLowering : public ConvertOpToLLVMPattern<GEN::GridDimYOp>,
-                             public GENGridDimLowering {
-  using ConvertOpToLLVMPattern<GEN::GridDimYOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(GEN::GridDimYOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENGridDimLowering::rewrite(op, funcName, 1, rewriter);
-  }
-};
-
-struct GENGridDimZLowering : public ConvertOpToLLVMPattern<GEN::GridDimZOp>,
-                             public GENGridDimLowering {
-  using ConvertOpToLLVMPattern<GEN::GridDimZOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(GEN::GridDimZOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    return GENGridDimLowering::rewrite(op, funcName, 2, rewriter);
-  }
-};
+using GENGridDimXLowering = GENGridDimLowering<GEN::GridDimXOp>;
+using GENGridDimYLowering = GENGridDimLowering<GEN::GridDimYOp>;
+using GENGridDimZLowering = GENGridDimLowering<GEN::GridDimZOp>;
 
 //===----------------------------------------------------------------------===//
 // Synchronization Ops Lowerings
@@ -322,16 +289,16 @@ struct GENBarrierLowering : public ConvertOpToLLVMPattern<GEN::BarrierOp> {
   LogicalResult
   matchAndRewrite(GEN::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto retType = LLVM::LLVMVoidType::get(rewriter.getContext());
     auto argType = rewriter.getIntegerType(32);
     auto arg = LLVM::createConstantI32(op->getLoc(), rewriter,
                                        MemFence::Local | MemFence::Global);
-    createDeviceFunctionCall(rewriter, funcName, {}, {argType}, {arg},
-                             true /*convergent*/);
+    LLVM::CallOp callOp =
+        createDeviceFunctionCall(rewriter, "_Z7barrierj", {retType}, {argType},
+                                 {arg}, true /*convergent*/);
+    rewriter.replaceOp(op, callOp);
     return success();
   }
-
-private:
-  const StringRef funcName = "_Z7barrierj";
 };
 
 struct SubGroupShuffleLowering
@@ -344,9 +311,8 @@ struct SubGroupShuffleLowering
     Value val = op.getValue();
     Value mask = op.getMask();
     GEN::ShflKind kind = op.getKind();
-
-    createSubGroupShuffle(rewriter, val, mask, kind);
-
+    LLVM::CallOp callOp = createSubGroupShuffle(rewriter, val, mask, kind);
+    rewriter.replaceOp(op, callOp);
     return success();
   }
 };
@@ -415,7 +381,7 @@ void mlir::triton::populateGENToLLVMConversionPatterns(
                GENGridDimXLowering, GENGridDimYLowering, GENGridDimZLowering>(
       converter);
   // clang-format on
-  patterns.add<GENBarrierLowering>(converter);
+  patterns.add<GENBarrierLowering, SubGroupShuffleLowering>(converter);
 }
 
 void registerConvertGENToLLVMInterface(DialectRegistry &registry) {
