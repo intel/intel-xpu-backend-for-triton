@@ -1,16 +1,13 @@
 #include "Utility.h"
 #include "TypeConverter.h"
-#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 
-using ::mlir::triton::intel::PTXBuilder;
-
+using mlir::triton::intel::PTXBuilder;
+using namespace mlir::triton;
 namespace mlir {
-
 namespace LLVM {
 namespace utils {
-using namespace mlir::triton;
 
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
@@ -324,16 +321,16 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   llvm_unreachable("unsupported triton::Target");
 }
 
-static GENX::ShflKind toGenXShuffleMode(NVVM::ShflKind mode) {
+static GEN::ShflKind toGenShuffleMode(NVVM::ShflKind mode) {
   switch (mode) {
   case NVVM::ShflKind::bfly:
-    return GENX::ShflKind::XOR;
+    return GEN::ShflKind::XOR;
   case NVVM::ShflKind::up:
-    return GENX::ShflKind::UP;
+    return GEN::ShflKind::UP;
   case NVVM::ShflKind::down:
-    return GENX::ShflKind::DOWN;
+    return GEN::ShflKind::DOWN;
   case NVVM::ShflKind::idx:
-    return GENX::ShflKind::IDX;
+    return GEN::ShflKind::IDX;
   }
   llvm_unreachable("unsupported NVVM::ShflKind");
 }
@@ -377,8 +374,8 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     return result;
   }
   case triton::Target::GENX: {
-    return rewriter.create<GENX::SubGroupShuffleOp>(loc, type, val, i,
-                                                    toGenXShuffleMode(mode));
+    return rewriter.create<GEN::SubGroupShuffleOp>(loc, type, val, i,
+                                                   toGenShuffleMode(mode));
   }
   }
   llvm_unreachable("Invalid target");

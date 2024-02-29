@@ -1,8 +1,8 @@
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/GEN/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -32,8 +32,8 @@ struct AllocateSharedMemory
     mod.walk([&](FunctionOpInterface funcOp) {
       if (target == Target::GENX && allocation.isRoot(funcOp) &&
           allocation.getSharedMemorySize()) {
-        LLVM::LLVMPointerType ptrTy =
-            LLVM::LLVMPointerType::get(ctx, GENX::GENXMemorySpace::kWorkgroup);
+        LLVM::LLVMPointerType ptrTy = LLVM::LLVMPointerType::get(
+            ctx, triton::GEN::GENMemorySpace::kWorkgroup);
         funcOp.insertArgument(funcOp.getNumArguments(), ptrTy, {},
                               funcOp.getLoc());
       }

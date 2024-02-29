@@ -5,6 +5,7 @@
 #include "mlir/Target/LLVMIR/Dialect/GENX/GENXToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "passes.h"
+#include "triton/Dialect/GEN/IR/Dialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -66,7 +67,8 @@ void init_triton_intel(py::module &&m) {
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
-    registry.insert<mlir::triton::gpu::intel::TritonIntelGPUDialect,
+    registry.insert<mlir::triton::GEN::GENDialect,
+                    mlir::triton::gpu::intel::TritonIntelGPUDialect,
                     mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
                     mlir::triton::nvgpu::NVGPUDialect>();
     mlir::registerNVVMDialectTranslation(registry);

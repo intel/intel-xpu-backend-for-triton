@@ -61,7 +61,7 @@ struct AssertOpConversion
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     unsigned addrSpace =
-        (target == Target::GENX) ? GENX::GENXMemorySpace::kCrossWorkgroup : 0;
+        (target == Target::GENX) ? GEN::GENMemorySpace::kCrossWorkgroup : 0;
     Value messageString = LLVM::utils::addStringToModule(
         loc, rewriter, "assertMessage_", message, addrSpace);
     Value fileString = LLVM::utils::addStringToModule(
@@ -73,11 +73,11 @@ struct AssertOpConversion
     SmallVector<Value> operands;
     if (target == Target::GENX) {
       Value messageStringPtr = addrspacecast(
-          ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric), messageString);
-      Value fileStringPtr = addrspacecast(
-          ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric), fileString);
-      Value funcStringPtr = addrspacecast(
-          ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric), funcString);
+          ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), messageString);
+      Value fileStringPtr =
+          addrspacecast(ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), fileString);
+      Value funcStringPtr =
+          addrspacecast(ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), funcString);
       operands = {messageStringPtr, fileStringPtr, lineNumber, funcStringPtr};
     } else {
       Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
@@ -113,9 +113,9 @@ struct AssertOpConversion
     auto *ctx = rewriter.getContext();
     SmallVector<Type> argsType;
     if (target == Target::GENX) {
-      argsType = {ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric),
-                  ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric), i32_ty,
-                  ptr_ty(ctx, GENX::GENXMemorySpace::kGeneric)};
+      argsType = {ptr_ty(ctx, GEN::GENMemorySpace::kGeneric),
+                  ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), i32_ty,
+                  ptr_ty(ctx, GEN::GENMemorySpace::kGeneric)};
     } else {
       argsType = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
                   rewriter.getIntegerType(sizeof(size_t) * 8)};

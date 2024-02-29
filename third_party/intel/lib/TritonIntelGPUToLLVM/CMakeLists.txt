@@ -40,4 +40,6 @@ add_triton_library(TritonIntelGPUToLLVM
     NVGPUIR
     TritonIntelGPUIR
     MLIRGENXDialect
+    GENIR
+    GENToLLVM
 )
