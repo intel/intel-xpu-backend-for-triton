@@ -164,7 +164,7 @@ jobs:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/core.xml -vvv -n 4 -m interpreter language/test_core.py --device cpu
+          python3 -m pytest --junitxml=~/reports/interpreter_core.xml -vvv -n 4 -m interpreter language/test_core.py --device cpu
 
       # TODO: merge the two interpreter tests with env TRITON_INTERPRET=1 and device cpu
       - name: Run interpreter tests (test_flash_attention.py)
