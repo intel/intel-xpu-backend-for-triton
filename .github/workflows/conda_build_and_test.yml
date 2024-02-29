@@ -1,0 +1,114 @@
+name: Conda build and test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "5 2 * * *"
+
+permissions: read-all
+
+env:
+  BASE: /home/runner
+  LLVM_SYSPATH: /home/runner/packages/llvm
+  BACKEND: XPU
+  TRITON_DISABLE_LINE_INFO: 1
+
+jobs:
+
+  integration-tests:
+    name: Integration tests
+    runs-on:
+      - glados
+      - spr
+      - conda-0.0.1
+    strategy:
+      matrix:
+        python:
+          - 3.9
+            #          - "3.10"
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ matrix.python }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Calculate env
+        run: |
+          LLVM_COMMIT_ID=$(git ls-remote https://github.com/intel/llvm.git refs/heads/genx | cut -f1)
+          echo "Latest llvm genx commit id: $LLVM_COMMIT_ID"
+          PACKAGES_CACHE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
+          echo "PACKAGES_CACHE_KEY=$PACKAGES_CACHE_KEY" >>$GITHUB_ENV
+          echo $HOME/miniconda3/bin >>$GITHUB_PATH
+
+      - name: Load packages cache
+        id: packages-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 2
+        with:
+          path: $HOME/packages
+          key: conda-packages-${{ env.PACKAGES_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+
+      - name: Load conda cache
+        id: conda-cache
+        uses: ./.github/actions/load
+        env:
+          CACHE_NUMBER: 2
+        with:
+          path: $HOME/miniconda3/envs/triton
+          key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Update conda env
+        if: ${{ steps.conda-cache.outputs.status == 'miss' }}
+        run: |
+          conda create -n triton --override-channels -c conda-forge python=${{ matrix.python }}.*
+          conda env update -f scripts/triton.yml
+
+      - name: Add conda info to log
+        run: |
+          conda info
+          conda list -n triton
+
+      - name: Build packages
+        if: ${{ steps.packages-cache.outputs.status == 'miss' }}
+        run: |
+          conda run --no-capture-output -n triton ./scripts/compile-triton.sh --llvm
+
+      - name: Save packages cache
+        if: ${{ steps.packages-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.packages-cache.outputs.path }}
+          dest: ${{ steps.packages-cache.outputs.dest }}
+
+      - name: Build Triton
+        run: |
+          cd python
+          conda run --no-capture-output -n triton pip install wheel
+          conda run --no-capture-output -n triton pip install --no-build-isolation '.[tests]'
+
+      - name: Save conda cache
+        if: ${{ steps.conda-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.conda-cache.outputs.path }}
+          dest: ${{ steps.conda-cache.outputs.dest }}
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
