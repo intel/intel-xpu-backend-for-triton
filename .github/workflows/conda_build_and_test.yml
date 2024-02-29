@@ -106,77 +106,6 @@ jobs:
           path: ${{ steps.conda-cache.outputs.path }}
           dest: ${{ steps.conda-cache.outputs.dest }}
 
-#      - name: Run lit tests
-#        run: |
-#          pip install lit
-#          cd python
-#          conda run --no-capture-output -n triton lit -v build/*/test
-#
-#      - name: Create directory for tests reports
-#        run: |
-#          mkdir ~/reports
-#
-#      - name: Run core tests
-#        run: |
-#          conda run --no-capture-output -n triton pip install pytest pytest-xdist
-#          conda run --no-capture-output -n triton pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
-#          cd python/test/unit
-#          conda run --no-capture-output -n triton python3 -m pytest --junitxml=~/reports/language.xml -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
-#          # run runtime tests serially to avoid race condition with cache handling.
-#          conda run --no-capture-output -n triton python3 -m pytest --junitxml=~/reports/runtime.xml --device xpu runtime/
-#          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-#          export TRITON_DISABLE_LINE_INFO=0
-#          conda run --no-capture-output -n triton python3 -m pytest --junitxml=~/reports/line_info.xml --verbose --device xpu language/test_line_info.py
-#
-#      - name: Clear cache
-#        run: |
-#          rm -rf ~/.triton
-#
-#      - name: Run interpreter tests
-#        env:
-#          # TRITON_INTERPRET: "1"
-#          CUA_VISIBLE_DEVICES: ""
-#        run: |
-#          cd python/test/unit
-#          conda run --no-capture-output -n triton python3 -m pytest --junitxml=~/reports/flash_attention.xml -vs --device xpu operators/test_flash_attention.py
-#
-#      - name: Run partial operators tests
-#        run: |
-#          cd python/test/unit
-#          conda run --no-capture-output -n triton python3 -m pytest --junitxml=~/reports/operators.xml -n 8 --verbose --device xpu operators
-#
-#      - name: Regression tests
-#        run: |
-#          pip install pytest-rerunfailures
-#          cd python/test/regression
-#          conda run --no-capture-output -n triton python3 -m pytest --junitxml=~/reports/regression.xml -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
-#
-#      - name: Run XPU python tests
-#        run: |
-#          cd python/test/backend/third_party_backends
-#          conda run --no-capture-output -n triton python3 -m pytest -n auto --verbose test_xpu_backend.py
-#
-#      - name: Run Tutorials
-#        run: |
-#          conda run --no-capture-output -n triton pip install matplotlib pandas tabulate
-#          cd python/tutorials
-#          conda run --no-capture-output -n triton python3 01-vector-add.py
-#          conda run --no-capture-output -n triton python3 02-fused-softmax.py
-#          conda run --no-capture-output -n triton python3 03-matrix-multiplication.py
-#          conda run --no-capture-output -n triton python3 04-low-memory-dropout.py
-#          conda run --no-capture-output -n triton python3 05-layer-norm.py
-#          conda run --no-capture-output -n triton python3 06-fused-attention.py
-#          conda run --no-capture-output -n triton python3 07-math-functions.py
-#          conda run --no-capture-output -n triton python3 08-experimental-block-pointer.py
-#          conda run --no-capture-output -n triton python3 09-experimental-tma-matrix-multiplication.py
-#          conda run --no-capture-output -n triton python3 10-experimental-tma-store-matrix-multiplication.py
-#          conda run --no-capture-output -n triton python3 11-grouped-gemm.py
-#
-#      - name: Run CXX unittests
-#        run: |
-#          cd python/build/*cmake*
-#          conda run --no-capture-output -n triton ctest
-#
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/save
@@ -184,10 +113,3 @@ jobs:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
 
-#      - name: Pass rate
-#        run: |
-#          python3 scripts/pass_rate.py --reports ~/reports
-#          mkdir -p /cache/reports/pass-rate
-#          TMPFILE=$(mktemp -p /cache/reports/pass-rate XXXXXXXXXX)
-#          python3 scripts/pass_rate.py --reports ~/reports --json > $TMPFILE
-#          mv $TMPFILE $TMPFILE.json
