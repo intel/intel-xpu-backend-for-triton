@@ -12,7 +12,7 @@ import torch
 from intel_extension_for_pytorch._C import _getCurrentRawStream as get_xpu_stream
 from torch._inductor.triton_heuristics import grid
 
-@pointwise(size_hints=[8388608], filename=__file__, meta={'signature': {0: '*bf16', 1: '*i1', 2: 'i32'}, 'device': 0, 'device_type': 'xpu', 'constants': {}, 'mutated_arg_names': [], 'autotune_hints': set(), 'kernel_name': 'triton_poi_fused_relu_threshold_backward_33', 'configs': [instance_descriptor(divisible_by_16=(0, 1, 2), equal_to_1=(), ids_of_folded_args=(), divisible_by_8=(2,))]})
+@pointwise(size_hints=[8388608], filename=__file__, meta={'signature': {0: '*bf16', 1: '*i1', 2: 'i32'}, 'device': 0, 'device_type': 'xpu', 'constants': {}, 'mutated_arg_names': [], 'autotune_hints': set(), 'kernel_name': 'triton_poi_fused_relu_threshold_backward_33', 'configs': [instance_descriptor(divisible_by_16=(0, 1, 2), equal_to_1=())]})
 @triton.jit
 def triton_poi_fused_relu_threshold_backward_33(in_ptr0, out_ptr0, xnumel, XBLOCK : tl.constexpr):
     xnumel = 8388608

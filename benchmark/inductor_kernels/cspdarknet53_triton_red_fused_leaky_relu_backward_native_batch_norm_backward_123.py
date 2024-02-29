@@ -16,7 +16,7 @@ from torch._inductor.triton_heuristics import grid
     size_hints=[65536, 2048],
     reduction_hint=ReductionHint.OUTER,
     filename=__file__,
-    meta={'signature': {0: '*i1', 1: '*bf16', 2: '*fp32', 3: 'i32', 4: 'i32'}, 'device': 0, 'device_type': 'xpu', 'constants': {}, 'mutated_arg_names': [], 'autotune_hints': set(), 'kernel_name': 'triton_red_fused_leaky_relu_backward_native_batch_norm_backward_123', 'configs': [instance_descriptor(divisible_by_16=(0, 1, 2, 3, 4), equal_to_1=(), ids_of_folded_args=(), divisible_by_8=(3, 4))]}
+    meta={'signature': {0: '*i1', 1: '*bf16', 2: '*fp32', 3: 'i32', 4: 'i32'}, 'device': 0, 'device_type': 'xpu', 'constants': {}, 'mutated_arg_names': [], 'autotune_hints': set(), 'kernel_name': 'triton_red_fused_leaky_relu_backward_native_batch_norm_backward_123', 'configs': [instance_descriptor(divisible_by_16=(0, 1, 2, 3, 4), equal_to_1=())]}
 )
 @triton.jit
 def triton_red_fused_leaky_relu_backward_native_batch_norm_backward_123(in_ptr0, in_ptr1, out_ptr0, xnumel, rnumel, XBLOCK : tl.constexpr, RBLOCK : tl.constexpr):

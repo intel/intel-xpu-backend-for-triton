@@ -16,7 +16,7 @@ from torch._inductor.triton_heuristics import grid
     size_hints=[8192, 65536],
     reduction_hint=ReductionHint.DEFAULT,
     filename=__file__,
-    meta={'signature': {0: '*bf16', 1: '*fp32', 2: 'i32', 3: 'i32'}, 'device': 0, 'device_type': 'xpu', 'constants': {}, 'mutated_arg_names': [], 'autotune_hints': set(), 'kernel_name': 'triton_red_fused__log_softmax__to_copy_21', 'configs': [instance_descriptor(divisible_by_16=(0, 1, 2), equal_to_1=(), ids_of_folded_args=(), divisible_by_8=(2,))]}
+    meta={'signature': {0: '*bf16', 1: '*fp32', 2: 'i32', 3: 'i32'}, 'device': 0, 'device_type': 'xpu', 'constants': {}, 'mutated_arg_names': [], 'autotune_hints': set(), 'kernel_name': 'triton_red_fused__log_softmax__to_copy_21', 'configs': [instance_descriptor(divisible_by_16=(0, 1, 2), equal_to_1=())]}
 )
 @triton.jit
 def triton_red_fused__log_softmax__to_copy_21(in_ptr0, out_ptr2, xnumel, rnumel, XBLOCK : tl.constexpr, RBLOCK : tl.constexpr):

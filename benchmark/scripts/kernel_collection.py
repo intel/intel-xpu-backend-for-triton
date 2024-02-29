@@ -1,28 +1,37 @@
+# Run this script with command
+# $ python kernel_collection.py huggingface amp_bf16 inference performance /path/to/pytorch
 #
 # Auto kernel extraction procedure
-# 1. Auto run 160+ models(HF, torchbench, TIMM) in debug mode
+# 1. Auto run pytorch inductor models(HF, torchbench, TIMM) in debug mode
 #    outputs: kernel performance log, output_code.py
 # 2. Got the name of top 1 xpu time triton kernel from model execution log,
 #    find out kernel corresponding `output_code.py` file path
-# 3. Run kernel extract script to extract 160+ kernels
+# 3. Run kernel extract script to extract kernels
 #
-import os
+import ast
 import json
+import logging
+import os
+import re
 import subprocess
+from typing import Tuple
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 
-def run_model(args):
+def run_model(pytorch_dir, args):
 
     suite, datatype, mode, scenario, device, card, shape, num_shards, shard_id, model = args
-    work_dir = '/home/sdp/liyang/private-pytorch/'
+    work_dir = pytorch_dir
     command = f'bash xpu_run_batch.sh {suite} {datatype} {mode} {scenario} {device} {card} {shape} {num_shards} {shard_id} {model}'
     subprocess.run(command, shell=True, cwd=work_dir)
 
     return
 
 
-def parse_table(suite, model, dtype) -> (str, str):
-    base_dir = '/home/sdp/liyang/private-pytorch/'
+def parse_table(pytorch_dir, suite, model, dtype) -> Tuple[str, str]:
+    base_dir = pytorch_dir
     model_dir = os.path.join(base_dir, 'inductor_log', suite, model, dtype)
     table_path = os.path.join(model_dir, f'graph_table_{model}.txt')
 
@@ -34,17 +43,17 @@ def parse_table(suite, model, dtype) -> (str, str):
     with open(table_path) as fp:
         for line in fp.readlines():
             kernel_name = line.strip().split('  ')[0]
-            if not kernel_name.startswith('XPU Triton kernel'):
+            if not kernel_name.startswith('triton_'):
                 continue
-            # clean kernel name:
-            # i.e. `XPU Triton kernel:triton_poi_fused_view_8_0d1d2de` -> `triton_poi_fused_view_8`
-            kernel_name = kernel_name.strip().split(':')[-1]
-            kernel_patterns = kernel_name.split('_')
-            kernel_name = '_'.join(kernel_patterns[:-1])
+            if re.search(r"(\dd)+$", kernel_name):
+                # clean kernel name:
+                # i.e. `triton_poi_fused_view_8_0d1d2d` -> `triton_poi_fused_view_8`
+                tokens = kernel_name.split('_')
+                kernel_name = '_'.join(tokens[:-1])
             break   # find the first kernel and jump out
 
     # Find the testing file contains the target kernel
-    print(f'Run command: grep -nr "def {kernel_name}" {model_dir}')
+    log.info(f'Run command: grep -nr "def {kernel_name}" {model_dir}')
     command = f'grep -nr "def {kernel_name}" {model_dir}'
     grep_output = subprocess.run(command, shell=True, capture_output=True)
     file_candidates = grep_output.stdout.decode().split('\n')
@@ -60,69 +69,104 @@ def parse_table(suite, model, dtype) -> (str, str):
     return kernel_name, output_file
 
 
-def extract_kernels(model, kernel, src_file):
+def extract_kernel_code(source, kernel_name):
 
-    extractor = '/home/sdp/liyang/private-pytorch/torch/_inductor/tools/micro_kernel_extractor.py'
-    out_file = f'/home/sdp/liyang/private-pytorch/torch/_inductor/tools/triton_kernels/{model}_{kernel}.py'
-    subprocess.run(['python', extractor, kernel, src_file, out_file])
+    src_ast = ast.parse(source)
+    kernel_code = ''
+    for node in src_ast.body:
+        if type(node) is not ast.Assign:
+            continue
+        if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
+            is_fusion = node.value.func.value.id == 'async_compile'
+            match_target = node.targets[0].id == kernel_name
+            if is_fusion and match_target:
+                kernel_code = node.value.args[1].value
+                break
+    return kernel_code
+
+
+def extract_kernels(kernel, src_file, tgt_file):
+
+    with open(src_file) as fp:
+        source = fp.read()
+
+    log.info(f'Extracting kernel {kernel} from {src_file}...')
+    kernel_code = extract_kernel_code(source, kernel)
+    with open(tgt_file, mode='w') as out_fp:
+        out_fp.write(kernel_code)
+    # os.system(f'python -m autopep8 -i {out_file}')
+    log.info(f'Output kernel has been saved to {tgt_file}')
+
     return
 
 
 def main():
-    model_src = ['huggingface', 'timm', 'torchbench']
-    datatype = 'amp_bf16'   # float32 / float16 / amp_bf16 / amp_fp16
-    mode = 'training'       # training / inference
-    scenario = 'performance'  # accuracy / performance
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('suite', type=str, help="one of huggingface / timm / torchbench")
+    parser.add_argument('datatype', type=str, help="one of float32 / float16 / amp_bf16 / amp_fp16")
+    parser.add_argument('mode', type=str, help="one of training / inference")
+    parser.add_argument('scenario', type=str, help="one of accuracy / performance")
+    parser.add_argument('pytorch_dir', type=str)
+    args = parser.parse_args()
+
+    pytorch_dir = args.pytorch_dir
+    suite = args.suite
+    datatype = args.datatype
+    mode = args.mode
+    scenario = args.scenario
     device = 'xpu'
-    card = '3'
+    card = '0'
     shape = 'static'        # static / dynamic
     num_shards = 1
     shard_id = 0
 
     model_count = 0
-    failed_models = {key: [] for key in model_src}
+    failed_models = {suite: []}
+    script_dir = os.path.dirname(__file__)
+    kernel_dir = os.path.join(script_dir, "extracted_kernels")
+    if not os.path.exists(kernel_dir):
+        os.makedirs(kernel_dir)
 
-    with open('/home/sdp/liyang/private-pytorch/torch/_inductor/tools/extract_failed_list.json') as fp:
-        model_dic = json.load(fp)
+    # Ger models name from models lists
+    model_dir = f'{pytorch_dir}/benchmarks/dynamo/'
+    model_list_file = f'{suite}_models_list.txt'
+    with open(os.path.join(model_dir, model_list_file)) as fp:
+        if suite == 'timm':
+            suite_name = 'timm_models'
+            model_list = [line.split(' ')[0] for line in fp.readlines() if line]
+        else:
+            model_list = [line.split(',')[0] for line in fp.readlines() if line]
 
-    # for suite in model_src:
-    #     model_dir = '/home/sdp/liyang/private-pytorch/benchmarks/dynamo/'
-    #     model_list_file = f'{suite}_models_list.txt'
-    #     with open(os.path.join(model_dir, model_list_file)) as fp:
-    #         if suite == 'timm':
-    #             model_list = [line.split(' ')[0] for line in fp.readlines() if line]
-    #             suite_name = 'timm_models'
-    #         else:
-    #             model_list = [line.split(',')[0] for line in fp.readlines() if line]
+    suite_name = suite if suite != 'timm' else "timm_models"
+    # os.chdir(work_dir)
+    for model in model_list:
+        model_count += 1
+        model_args = (suite_name, datatype, mode, scenario, device, card, shape, num_shards, shard_id, model)
+        # Model runing, after that we can get
+        #    1. triton kernels in cache folder;
+        #    2. kernel performance summary table.
+        run_model(pytorch_dir, model_args)
 
-    for suite, model_list in model_dic.items():
-        if suite != 'timm':
+        # Analysis kernel performance summary table to get
+        #    1. Top 1 XPU time cost kernel name
+        #    2. The Source code file that contain the target kernel
+        kernel, src_file = parse_table(pytorch_dir, suite_name, model, datatype)
+        if not kernel or not src_file:
+            failed_models[suite].append(model)
             continue
-        suite_name = suite if suite != 'timm' else "timm_models"
 
-        work_dir = '/home/sdp/liyang/private-pytorch/'
-        os.chdir(work_dir)
-        for model in model_list:
-            model_count += 1
-            model_args = (suite_name, datatype, mode, scenario, device, card, shape, num_shards, shard_id, model)
-            run_model(model_args)
-            kernel, output_file = parse_table(suite_name, model, datatype)
-            if not kernel or not output_file:
-                failed_models[suite].append(model)
-                continue
-            extract_kernels(model, kernel, output_file)
+        # Extract target kernel from Source code file to a seperate file
+        tgt_file = os.path.join(kernel_dir, f"{model}_{kernel}.py")
+        extract_kernels(kernel, src_file, tgt_file)
 
-    for suite in model_src:
-        print(f'Failed model counts: {suite} - {len(failed_models[suite])} / {model_count}')
-    print('failed_model_list: ', )
-    with open('/home/sdp/liyang/private-pytorch/torch/_inductor/tools/extract_failed_list.json', '+a') as fp:
+    log.info(f"Failed model counts: {suite} - {len(failed_models[suite])} / {model_count}")
+    failing_models = os.path.join(script_dir, "failing_models.json")
+    log.info(f"Save failed_model_list to {failing_models}")
+    with open(failing_models, '+a') as fp:
         json.dump(failed_models, fp)
+
 
 if __name__ == '__main__':
     main()
-
-    # parse_table('huggingface', 'AlbertForMaskedLM', 'amp_fp16')
-
-    # kernel_name = 'triton_red_fused__to_copy_add_native_layer_norm_native_layer_norm_backward_sum_19'
-    # output_file = '/home/sdp/liyang/private-pytorch/inductor_log/huggingface/AlbertForMaskedLM/amp_fp16/4p/c4pwo2w7f6arzq2nzfsov3u64yaqopscc7bo4payvcbseypfyo67.debug/output_code.py'
-    # extract_kernels('AlbertForMaskedLM', kernel_name, output_file)
