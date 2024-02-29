@@ -116,13 +116,23 @@ run_core_tests() {
     echo "FAILED: return code $?" ; exit $?
   fi
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu operators/
+  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+  TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
 
-  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-  TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
+  TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 4 -m interpreter language/test_core.py --device cpu
+  if [ $? -ne 0 ]; then
+    echo "FAILED: return code $?" ; exit $?
+  fi
+
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device xpu
+  if [ $? -ne 0 ]; then
+    echo "FAILED: return code $?" ; exit $?
+  fi
+
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu operators/
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
