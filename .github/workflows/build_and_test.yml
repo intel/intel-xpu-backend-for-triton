@@ -160,11 +160,18 @@ jobs:
           rm -rf ~/.triton
 
       - name: Run interpreter tests
+        env:
+          TRITON_INTERPRET: "1"
+        run: |
+          cd python/test/unit
+          python3 -m pytest --junitxml=~/reports/core.xml -vvv -n 4 -m interpreter language/test_core.py --device xpu
+
+      # TODO: merge the two interpreter tests with env TRITON_INTERPRET=1
+      - name: Run interpreter tests (test_flash_attention.py)
         # env:
           # TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/core.xml -vvv -n 4 -m interpreter language/test_core.py --device xpu
           python3 -m pytest --junitxml=~/reports/flash_attention.xml -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device xpu
 
       - name: Run partial operators tests

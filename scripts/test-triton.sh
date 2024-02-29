@@ -122,7 +122,7 @@ run_core_tests() {
     echo "FAILED: return code $?" ; exit $?
   fi
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 4 -m interpreter language/test_core.py --device xpu
+  TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 4 -m interpreter language/test_core.py --device xpu
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
