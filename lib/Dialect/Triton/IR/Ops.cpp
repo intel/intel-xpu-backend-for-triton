@@ -661,8 +661,9 @@ unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
 
 //-- ScanOp --
 void ScanOp::build(OpBuilder &builder, OperationState &state,
-                   ValueRange operands, int axis) {
+                   ValueRange operands, int axis, bool reverse) {
   SmallVector<Type> inferredReturnTypes;
+  state.addAttribute("reverse", builder.getBoolAttr(reverse));
   for (auto arg : operands)
     inferredReturnTypes.push_back(arg.getType());
   ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
@@ -1029,11 +1030,12 @@ LogicalResult ReturnOp::verify() {
   return success();
 }
 
-// -- ExperimentalJoinOp --
-LogicalResult ExperimentalJoinOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
+// -- JoinOp --
+LogicalResult
+JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
+                         ValueRange operands, DictionaryAttr attributes,
+                         OpaqueProperties properties, RegionRange regions,
+                         SmallVectorImpl<Type> &inferredReturnTypes) {
   // These should have been checked by tablegen-generated code.
   assert(operands.size() == 2);
   assert(operands[0].getType() == operands[1].getType());
@@ -1061,8 +1063,8 @@ LogicalResult ExperimentalJoinOp::inferReturnTypes(
   return success();
 }
 
-// -- ExperimentalSplitOp --
-LogicalResult ExperimentalSplitOp::inferReturnTypes(
+// -- SplitOp --
+LogicalResult SplitOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {

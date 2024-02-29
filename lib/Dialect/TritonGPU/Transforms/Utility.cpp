@@ -3,6 +3,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -63,6 +64,54 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
 
 bool isLoadFromTensorPtr(triton::LoadOp op) {
   return mlir::triton::isTensorPointerType(op.getPtr().getType());
+}
+
+SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr) {
+  SmallVector<unsigned, 4> ret(arr.size());
+  std::iota(ret.begin(), ret.end(), 0);
+  std::stable_sort(ret.begin(), ret.end(),
+                   [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
+  return ret;
+}
+
+Value getMemAccessPtr(Operation *op) {
+  if (auto ld = dyn_cast<triton::LoadOp>(op))
+    return ld.getPtr();
+  if (auto atomic = dyn_cast<triton::AtomicRMWOp>(op))
+    return atomic.getPtr();
+  if (auto atomic = dyn_cast<triton::AtomicCASOp>(op))
+    return atomic.getPtr();
+  if (auto insert = dyn_cast<triton::gpu::InsertSliceAsyncOp>(op))
+    return insert.getSrc();
+  if (auto store = dyn_cast<triton::StoreOp>(op))
+    return store.getPtr();
+  return nullptr;
+}
+
+unsigned getElementBitWidth(RankedTensorType type) {
+  auto typeForMem =
+      type.getElementType().isa<PointerType>()
+          ? type.getElementType().cast<PointerType>().getPointeeType()
+          : type.getElementType();
+  return typeForMem.getIntOrFloatBitWidth();
+}
+
+unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
+                                 ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  Value val = getMemAccessPtr(op);
+  assert(val.getType().isa<RankedTensorType>());
+  auto ty = val.getType().cast<RankedTensorType>();
+  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
+  AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
+  unsigned elemNumBits = getElementBitWidth(ty);
+  unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
+  unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
+  unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
+  unsigned maxContig =
+      std::min(valInfo.getContiguity(order[0]), shapePerCTA[order[0]]);
+  unsigned alignment = std::min(maxMultiple, maxContig);
+  unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
+  return currPerThread;
 }
 
 //===----------------------------------------------------------------------===//
@@ -237,8 +286,7 @@ static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
   return sliceEncoding.getParent();
 }
 
-static std::optional<Attribute> inferDstEncoding(ExperimentalJoinOp op,
-                                                 Attribute srcEnc) {
+static std::optional<Attribute> inferDstEncoding(JoinOp op, Attribute srcEnc) {
   Attribute dstEnc;
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
@@ -250,8 +298,7 @@ static std::optional<Attribute> inferDstEncoding(ExperimentalJoinOp op,
   return std::nullopt;
 }
 
-static std::optional<Attribute> inferDstEncoding(ExperimentalSplitOp op,
-                                                 Attribute srcEnc) {
+static std::optional<Attribute> inferDstEncoding(SplitOp op, Attribute srcEnc) {
   Attribute dstEnc;
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
@@ -279,8 +326,7 @@ static std::optional<Attribute> inferSrcEncoding(triton::ExpandDimsOp op,
                                              encoding);
 }
 
-static std::optional<Attribute> inferSrcEncoding(ExperimentalJoinOp op,
-                                                 Attribute dstEnc) {
+static std::optional<Attribute> inferSrcEncoding(JoinOp op, Attribute dstEnc) {
   // Split is the inverse of join.
   Attribute srcEnc;
   if (dstEnc.getDialect()
@@ -292,8 +338,7 @@ static std::optional<Attribute> inferSrcEncoding(ExperimentalJoinOp op,
   return std::nullopt;
 }
 
-static std::optional<Attribute> inferSrcEncoding(ExperimentalSplitOp op,
-                                                 Attribute dstEnc) {
+static std::optional<Attribute> inferSrcEncoding(SplitOp op, Attribute dstEnc) {
   // Join is the inverse of split.
   Attribute srcEnc;
   if (dstEnc.getDialect()
@@ -389,9 +434,9 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferSrcEncoding(expand, encoding);
-  if (auto join = dyn_cast<triton::ExperimentalJoinOp>(op))
+  if (auto join = dyn_cast<triton::JoinOp>(op))
     return inferSrcEncoding(join, encoding);
-  if (auto split = dyn_cast<triton::ExperimentalSplitOp>(op))
+  if (auto split = dyn_cast<triton::SplitOp>(op))
     return inferSrcEncoding(split, encoding);
   if (auto trans = dyn_cast<triton::TransOp>(op))
     return inferSrcEncoding(trans, encoding);
@@ -415,9 +460,9 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
     return inferDstEncoding(expand, encoding);
-  if (auto join = dyn_cast<triton::ExperimentalJoinOp>(op))
+  if (auto join = dyn_cast<triton::JoinOp>(op))
     return inferDstEncoding(join, encoding);
-  if (auto split = dyn_cast<triton::ExperimentalSplitOp>(op))
+  if (auto split = dyn_cast<triton::SplitOp>(op))
     return inferDstEncoding(split, encoding);
   if (auto trans = dyn_cast<triton::TransOp>(op))
     return inferDstEncoding(trans, encoding);

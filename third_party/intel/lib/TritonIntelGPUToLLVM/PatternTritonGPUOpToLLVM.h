@@ -55,10 +55,6 @@ void populateTritonGPUToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, Target target, PatternBenefit benefit);
 
-void populateViewOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, Target target, PatternBenefit benefit);
-
 void populatePrintOpToLLVMPattern(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, Target target, PatternBenefit benefit);
