@@ -33,23 +33,25 @@ class GEN_Op<string mnemonic, list<Trait> traits = []> :
 // Thread index and Block index
 //===----------------------------------------------------------------------===//
 
+def IndexType : AnyTypeOf<[I32, I64]>;
+
 def GEN_ThreadIdXOp : GEN_Op<"workitem.id.x"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
 def GEN_ThreadIdYOp : GEN_Op<"workitem.id.y"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
 def GEN_ThreadIdZOp : GEN_Op<"workitem.id.z"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
@@ -57,21 +59,21 @@ def GEN_ThreadIdZOp : GEN_Op<"workitem.id.z"> {
 
 def GEN_BlockIdXOp : GEN_Op<"workgroup.id.x"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
 def GEN_BlockIdYOp : GEN_Op<"workgroup.id.y"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
 def GEN_BlockIdZOp : GEN_Op<"workgroup.id.z"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
@@ -83,21 +85,21 @@ def GEN_BlockIdZOp : GEN_Op<"workgroup.id.z"> {
 
 def GEN_BlockDimXOp : GEN_Op<"workgroup.dim.x"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
 def GEN_BlockDimYOp : GEN_Op<"workgroup.dim.y"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
 def GEN_BlockDimZOp : GEN_Op<"workgroup.dim.z"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
@@ -105,21 +107,21 @@ def GEN_BlockDimZOp : GEN_Op<"workgroup.dim.z"> {
 
 def GEN_GridDimXOp : GEN_Op<"grid.dim.x"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
 def GEN_GridDimYOp : GEN_Op<"grid.dim.y"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
 def GEN_GridDimZOp : GEN_Op<"grid.dim.z"> {
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
@@ -158,10 +160,10 @@ def GEN_SubGroupShuffleOp : GEN_Op<"sub_group_shuffle", [
     subgroup local IDs. The shuffle kind, $kind, is given to determine how to
     calculate the associated subgroup local ID. It returns the associated
     $value for the work item with subgroup local ID equal to:
-    - $kind == XOR, the current invocation’s subgroup local ID xor’ed with $mask.
-    - $kind == UP, the current invocation’s subgroup local ID - $mask.
-    - $kind == DOWN, the current invocation’s subgroup local ID + $mask.
-    - $kind == IDX, the subgroup local ID $mask.
+    - $kind == xor, the current invocation’s subgroup local ID xor’ed with $mask.
+    - $kind == up, the current invocation’s subgroup local ID - $mask.
+    - $kind == down, the current invocation’s subgroup local ID + $mask.
+    - $kind == idx, the subgroup local ID $mask.
   }];
 
   let assemblyFormat = [{
