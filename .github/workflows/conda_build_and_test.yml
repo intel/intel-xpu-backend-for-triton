@@ -79,7 +79,7 @@ jobs:
       - name: Add conda info to log
         run: |
           conda info
-          conda list -n triton          
+          conda list -n triton
 
       - name: Build packages
         if: ${{ steps.packages-cache.outputs.status == 'miss' }}
