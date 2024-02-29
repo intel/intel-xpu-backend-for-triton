@@ -10,6 +10,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
+#include "triton/Dialect/GEN/IR/Dialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -443,7 +444,7 @@ static Value getStackPointer(PatternRewriter &rewriter,
   auto mod = funcOp->getParentOfType<ModuleOp>();
   if (target == triton::Target::GENX) {
     LLVM::LLVMPointerType ptrTy =
-        ptr_ty(rewriter.getContext(), GENX::GENXMemorySpace::kWorkgroup);
+        ptr_ty(rewriter.getContext(), GEN::GENMemorySpace::kWorkgroup);
     if (mod->getAttrOfType<IntegerAttr>("triton_gpu.shared").getInt() == 0)
       return rewriter.create<LLVM::UndefOp>(funcOp.getLoc(), ptrTy);
     return funcOp.getArgument(funcOp.getNumArguments() - 1);
