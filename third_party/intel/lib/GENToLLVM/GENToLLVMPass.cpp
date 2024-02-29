@@ -24,7 +24,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#include "lib/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/GEN/IR/Dialect.h"
 
 namespace mlir {

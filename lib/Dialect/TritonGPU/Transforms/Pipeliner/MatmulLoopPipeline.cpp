@@ -37,9 +37,6 @@ struct PipelineOpInfo {
   ttg::SharedEncodingAttr sharedEncoding = nullptr;
   // Blocked encoding is used for loads feeding into other loads.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
-  // Dot operand encoding is used for loads feeding into dot ops.
-  ttg::DotOperandEncodingAttr dotOperandEncoding = nullptr;
-  bool needTrans = false;
 };
 
 }; // namespace
@@ -132,40 +129,57 @@ createAsyncLoad(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
 }
 
 // If all the transitive uses of the given value have are used by a convert to
-// the same dot operand encoding, return the encoding. Otherwise return nullptr.
-// Negate `needTrans` when a TransOp is seen on the transitive use chain.
-static ttg::DotOperandEncodingAttr
-allTransitiveUsesHaveDotEncoding(Value val, bool &needTrans) {
-  ttg::DotOperandEncodingAttr attr;
+// the same dot operand encoding, return true and set the shared encoding that
+// needs to be used to be compatible with users' layouts.
+static bool
+allTransitiveUsesHaveDotEncoding(Value val,
+                                 ttg::SharedEncodingAttr &sharedEnc) {
+  ttg::SharedEncodingAttr attr;
   for (Operation *user : val.getUsers()) {
+    ttg::SharedEncodingAttr tempAttr;
     if (user->getNumResults() != 1)
-      return nullptr;
+      return false;
     auto tensorType = user->getResult(0).getType().dyn_cast<RankedTensorType>();
     if (!tensorType)
-      return nullptr;
-    if (isa<triton::TransOp>(user))
-      needTrans = !needTrans;
-    ttg::DotOperandEncodingAttr tempAttr;
+      return false;
     if (tensorType.getEncoding().isa<ttg::SharedEncodingAttr>()) {
-      tempAttr =
-          allTransitiveUsesHaveDotEncoding(user->getResult(0), needTrans);
+      // First time we find a shared encoding in the chain, save it and try to
+      // use it if it is compatible with the other users.
+      if (!tempAttr)
+        tempAttr = tensorType.getEncoding().cast<ttg::SharedEncodingAttr>();
+      ttg::SharedEncodingAttr nextEncoding;
+      bool hasDotEncodingUse =
+          allTransitiveUsesHaveDotEncoding(user->getResult(0), nextEncoding);
+      if (!hasDotEncodingUse)
+        return false;
     } else {
       auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(user);
       if (!convertLayout)
-        return nullptr;
-      tempAttr = convertLayout.getType()
-                     .getEncoding()
-                     .dyn_cast<ttg::DotOperandEncodingAttr>();
+        return false;
+      auto dotOpEnc = convertLayout.getType()
+                          .getEncoding()
+                          .dyn_cast<ttg::DotOperandEncodingAttr>();
+      auto srcTensorType = val.getType().cast<RankedTensorType>();
+      auto CTALayout = ttg::getCTALayout(srcTensorType.getEncoding());
+      auto order = ttg::getOrder(srcTensorType.getEncoding());
+      unsigned bitWidth =
+          srcTensorType.getElementType().getIntOrFloatBitWidth();
+      tempAttr = ttg::SharedEncodingAttr::get(
+          val.getContext(), dotOpEnc, srcTensorType.getShape(), order,
+          CTALayout, bitWidth, /*needTrans=*/false);
     }
+    // We need to check that the shared encoding needed by the users are
+    // compatible.
     if (!tempAttr || (attr != nullptr && attr != tempAttr))
-      return nullptr;
+      return false;
     attr = tempAttr;
   }
-  return attr;
+  sharedEnc = attr;
+  return true;
 }
 
-static std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>>
-loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
+bool loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3,
+                    ttg::SharedEncodingAttr &enc) {
   if (loadOp.getResult().hasOneUse()) {
     Operation *use = *loadOp.getResult().getUsers().begin();
     if (auto convertLayout = llvm::dyn_cast<ttg::ConvertLayoutOp>(use)) {
@@ -185,81 +199,37 @@ loadDotOperand(tt::LoadOp loadOp, bool &hasMMAV3) {
             // TODO: remove this constraint once the LoadOp supports transpose
             // fusion
             hasMMAV3 = true;
-            return std::make_pair(nullptr, false);
+            return true;
           }
         }
       }
     }
   }
-  bool needTrans = false;
-  ttg::DotOperandEncodingAttr attr =
-      allTransitiveUsesHaveDotEncoding(loadOp.getResult(), needTrans);
-  if (!attr)
-    return std::nullopt;
-  return std::make_pair(attr, needTrans);
+  if (allTransitiveUsesHaveDotEncoding(loadOp.getResult(), enc))
+    return true;
+  return false;
 };
-
-// TODO pawel: sync this encoding selection with Coalesce, perhaps move
-// to a common place.
-static RankedTensorType getTensorType(const Value &val) {
-  auto valType = val.getType();
-  if (valType.isa<triton::PointerType>())
-    valType = valType.cast<triton::PointerType>().getPointeeType();
-  return valType.cast<RankedTensorType>();
-}
-
-static unsigned getElementBitWidth(const Value &val) {
-  auto tensorType = getTensorType(val);
-
-  auto typeForMem = tensorType.getElementType().isa<triton::PointerType>()
-                        ? tensorType.getElementType()
-                              .cast<triton::PointerType>()
-                              .getPointeeType()
-                        : tensorType.getElementType();
-  return typeForMem.getIntOrFloatBitWidth();
-}
-
-template <class T> static SmallVector<unsigned, 4> argSort(const T &arr) {
-  SmallVector<unsigned, 4> ret(arr.size());
-  std::iota(ret.begin(), ret.end(), 0);
-  std::stable_sort(ret.begin(), ret.end(),
-                   [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
-  return ret;
-}
 
 static ttg::BlockedEncodingAttr
 getBlockedEncoding(tt::LoadOp loadOp, ModuleAxisInfoAnalysis &axisInfo) {
   Value src = loadOp.getPtr();
   auto ty = src.getType().cast<RankedTensorType>();
-
   auto mod = loadOp->getParentOfType<ModuleOp>();
   int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-
-  AxisInfo *valInfo = axisInfo.getAxisInfo(src);
-
-  AxisInfo::DimVectorT contiguity = valInfo->getContiguity();
+  AxisInfo::DimVectorT contiguity = axisInfo.getAxisInfo(src)->getContiguity();
   SmallVector<unsigned> order = argSort(contiguity);
-  AxisInfo::DimVectorT shapePerCTA = ttg::getShapePerCTA(ty);
-
-  unsigned elemNumBits = getElementBitWidth(src);
-  unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
-  unsigned maxMultipleBytes = valInfo->getDivisibility(order[0]);
-  unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
-  unsigned maxContig =
-      std::min(valInfo->getContiguity(order[0]), shapePerCTA[order[0]]);
-  unsigned alignment = std::min(maxMultiple, maxContig);
-  unsigned currPerThread = std::min(alignment, 128 / elemNumBits);
-
+  unsigned currPerThread = getNumElementsPerThread(loadOp, order, axisInfo);
+  SmallVector<unsigned> sizePerThread(order.size(), 1);
+  sizePerThread[order[0]] = currPerThread;
   ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(ty.getEncoding());
   return ttg::BlockedEncodingAttr::get(loadOp->getContext(), ty.getShape(),
-                                       currPerThread, order, numWarps,
+                                       sizePerThread, order, numWarps,
                                        threadsPerWarp, CTALayout);
 }
 
-static ttg::SharedEncodingAttr
-getSharedEncoding(tt::LoadOp loadOp, Operation *use, bool isMMAV3,
-                  ttg::DotOperandEncodingAttr dotOpEnc, bool needTrans) {
+static ttg::SharedEncodingAttr getSharedEncoding(tt::LoadOp loadOp,
+                                                 Operation *use, bool isMMAV3) {
 
   auto ty = loadOp.getType().cast<RankedTensorType>();
   auto CTALayout = ttg::getCTALayout(ty.getEncoding());
@@ -276,23 +246,12 @@ getSharedEncoding(tt::LoadOp loadOp, Operation *use, bool isMMAV3,
     order = blockedOrder;
   }
   if (isa<tt::DotOp>(use)) {
-    if (dotOpEnc) {
-      assert(!isMMAV3 && "MMAv3 should not have dotOperandEncoding");
-      unsigned bitWidth = ty.getElementType().getIntOrFloatBitWidth();
-      // set needTrans to avoid unnecessary conversion between shared encodings.
-      return ttg::SharedEncodingAttr::get(ty.getContext(), dotOpEnc,
-                                          ty.getShape(), order, CTALayout,
-                                          bitWidth, needTrans);
-    } else {
-      assert(isMMAV3 && "Load used by dot op should be either MMAv3 or have "
-                        "dotOperandEncoding.");
-      return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
-                                          CTALayout, ty.getElementType());
-    }
+    assert(isMMAV3 && "Load used by dot op should be either MMAv3 or have a "
+                      "shared encoding already picked based on users layouts.");
+    return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
+                                        CTALayout, ty.getElementType());
   } else {
-    assert(!dotOpEnc && !isMMAV3 &&
-           "Load used by non-dot op should not have dotOperandEncoding or be "
-           "MMAv3.");
+    assert(!isMMAV3 && "Load used by non-dot op should not be MMAv3.");
     // Use non-swizzled layout for loads that do not feed into dot ops.
     // TODO: This won't be optimal for 2D tensors.
     return ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
@@ -404,19 +363,19 @@ collectOpsToPipeline(scf::ForOp forOp,
     PipelineOpInfo loadInfo;
     bool loadIsMMAV3 = false;
     if (isa<tt::DotOp>(distAndUse.second)) {
-      std::optional<std::pair<ttg::DotOperandEncodingAttr, bool>> loadDotAttr =
-          loadDotOperand(loadOp, loadIsMMAV3);
+      ttg::SharedEncodingAttr sharedEnc;
+      bool isLoadDotOperand = loadDotOperand(loadOp, loadIsMMAV3, sharedEnc);
       hasMMAV3 |= loadIsMMAV3;
-      if (!loadDotAttr.has_value())
+      if (!isLoadDotOperand)
         continue;
-      loadInfo.dotOperandEncoding = loadDotAttr.value().first;
-      loadInfo.needTrans = loadDotAttr.value().second;
+      loadInfo.sharedEncoding = sharedEnc;
     } else {
       loadInfo.blockedEncoding = getBlockedEncoding(loadOp, axisInfoAnalysis);
     }
-    loadInfo.sharedEncoding =
-        getSharedEncoding(loadOp, distAndUse.second, loadIsMMAV3,
-                          loadInfo.dotOperandEncoding, loadInfo.needTrans);
+    // If we haven't already assigned a layout do it now.
+    if (!loadInfo.sharedEncoding)
+      loadInfo.sharedEncoding =
+          getSharedEncoding(loadOp, distAndUse.second, loadIsMMAV3);
     int stage = (maxDistance - distAndUse.first) * stagesBetweenLoads;
     loadInfo.stage = stage;
     loadInfo.use = distAndUse.second;

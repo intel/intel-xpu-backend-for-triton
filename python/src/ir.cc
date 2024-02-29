@@ -1204,11 +1204,11 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_join",
            [](TritonOpBuilder &self, Value &a, Value &b) -> Value {
-             return self.create<ExperimentalJoinOp>(a, b);
+             return self.create<JoinOp>(a, b);
            })
       .def("create_split",
            [](TritonOpBuilder &self, Value &a) -> std::vector<Value> {
-             auto op = self.create<ExperimentalSplitOp>(a);
+             auto op = self.create<SplitOp>(a);
              return std::vector<Value>(op->result_begin(), op->result_end());
            })
       // Implements tl.trans and tl.permute.
@@ -1345,8 +1345,10 @@ void init_triton_ir(py::module &&m) {
              return self.create<ReduceReturnOp>(return_values);
            })
       .def("create_scan",
-           [](TritonOpBuilder &self, std::vector<Value> operands, int axis)
-               -> OpState { return self.create<ScanOp>(operands, axis); })
+           [](TritonOpBuilder &self, std::vector<Value> operands, int axis,
+              bool reverse) -> OpState {
+             return self.create<ScanOp>(operands, axis, reverse);
+           })
       .def("create_scan_ret",
            [](TritonOpBuilder &self, py::args args) -> OpState {
              llvm::SmallVector<Value> return_values;
@@ -1475,6 +1477,9 @@ void init_triton_ir(py::module &&m) {
           makeReproducer(anchorName, passes, op, reproducerPath);
         }
 
+        if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
+          ::llvm::DebugFlag = true;
+        }
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });

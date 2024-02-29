@@ -31,6 +31,8 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TypeConverter.h"
 #include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 namespace mlir {
 namespace triton {
@@ -282,7 +284,8 @@ struct ConvertTritonGPUToLLVM
     populateReduceOpToLLVMPatterns(typeConverter, patterns, computeCapability,
                                    target, benefit);
     populateScanOpToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populateViewOpToLLVMPatterns(typeConverter, patterns, target, benefit);
+    mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
+                                               benefit);
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, target, benefit);
     populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, target,
                                        benefit);
