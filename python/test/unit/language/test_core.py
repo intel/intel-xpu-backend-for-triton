@@ -343,8 +343,9 @@ def _mod_operation_ill_conditioned(dtype_x, dtype_y) -> bool:
     # pytorch/CUDA has slightly different (probably better) rounding on
     # remainders than stock LLVM. We currently don't expect to match it
     # bit-for-bit.
+    if not is_interpreter() and (dtype_x, dtype_y) == ('int16', 'float16'):
+        return True
     return (dtype_x, dtype_y) in [
-        ('int16', 'float16'),
         ('int32', 'bfloat16'),
         ('int32', 'float16'),
         ('int32', 'float32'),

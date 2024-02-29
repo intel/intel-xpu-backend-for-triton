@@ -160,12 +160,12 @@ jobs:
           rm -rf ~/.triton
 
       - name: Run interpreter tests
-        env:
+        # env:
           # TRITON_INTERPRET: "1"
-          CUA_VISIBLE_DEVICES: ""
         run: |
           cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/flash_attention.xml -vs --device xpu operators/test_flash_attention.py
+          python3 -m pytest --junitxml=~/reports/core.xml -vvv -n 4 -m interpreter language/test_core.py --device xpu
+          python3 -m pytest --junitxml=~/reports/flash_attention.xml -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device xpu
 
       - name: Run partial operators tests
         run: |
