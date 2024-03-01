@@ -123,8 +123,7 @@ jobs:
 
       - name: Run interpreter tests
         env:
-          # TRITON_INTERPRET: "1"
-          CUDA_VISIBLE_DEVICES: ""
+          TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
           conda activate triton
