@@ -1082,7 +1082,8 @@ struct FpToFpOpConversion
 
   explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability, PatternBenefit benefit = 1)
+                              int computeCapability,
+                              PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         computeCapability(computeCapability) {}
 
@@ -1554,6 +1555,9 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
 
+  patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
@@ -1576,6 +1580,9 @@ void populateElementwiseOpToLLVMPatterns(
                                                     axisInfoAnalysis, benefit);
   mlir::triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis,
-      true /*hwNanPropagationSupported*/, benefit);
+      false /*hwNanPropagationSupported*/, benefit);
+  mlir::triton::populateClampFOpToLLVMPattern(
+      typeConverter, patterns, axisInfoAnalysis,
+      false /*hwNanPropagationSupported*/, benefit);
 }
 } // namespace AMD
