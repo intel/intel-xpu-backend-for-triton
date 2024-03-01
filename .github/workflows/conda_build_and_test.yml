@@ -127,7 +127,16 @@ jobs:
         run: |
           cd python/test/unit
           conda activate triton
-          python3 -m pytest --junitxml=~/reports/flash_attention.xml --verbose --device xpu operators/test_flash_attention.py
+          python3 -m pytest --junitxml=~/reports/interpreter_core.xml -vvv -n 4 -m interpreter language/test_core.py --device cpu
+
+      # TODO: merge the two interpreter tests with env TRITON_INTERPRET=1 and device cpu
+      - name: Run interpreter tests (test_flash_attention.py)
+        # env:
+          # TRITON_INTERPRET: "1"
+        run: |
+          cd python/test/unit
+          conda activate triton
+          python3 -m pytest --junitxml=~/reports/flash_attention.xml -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device xpu
 
       - name: Run partial operators tests
         run: |
