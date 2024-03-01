@@ -453,6 +453,7 @@ setup(
         "triton/compiler",
         "triton/language",
         "triton/language/extra",
+        "triton/language/extra/intel",
         "triton/ops",
         "triton/ops/blocksparse",
         "triton/runtime",

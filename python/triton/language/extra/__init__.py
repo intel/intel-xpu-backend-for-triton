@@ -1,3 +1,3 @@
-from . import cuda
+from . import intel
 
-__all__ = ['cuda']
+__all__ = ['intel']

@@ -1284,6 +1284,32 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
   llvm_unreachable("unimplemented code path");
 }
 
+inline Type getFunctionType(Type resultType, ValueRange operands) {
+  SmallVector<Type> operandTypes(operands.getTypes());
+  return LLVM::LLVMFunctionType::get(resultType, operandTypes);
+}
+
+inline LLVM::LLVMFuncOp
+appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter, Operation *op,
+                        StringRef funcName, Type funcType,
+                        StringRef libname = "", StringRef libpath = "") {
+  using LLVM::LLVMFuncOp;
+
+  auto funcAttr = StringAttr::get(op->getContext(), funcName);
+  Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
+  if (funcOp)
+    return cast<LLVMFuncOp>(*funcOp);
+
+  auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
+  OpBuilder b(parent);
+  auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+  ret.getOperation()->setAttr("libname",
+                              StringAttr::get(op->getContext(), libname));
+  ret.getOperation()->setAttr("libpath",
+                              StringAttr::get(op->getContext(), libpath));
+  return ret;
+}
+
 inline Type getElementType(Value value) {
   auto type = value.getType();
   if (auto tensorType = type.dyn_cast<RankedTensorType>())
@@ -2117,40 +2143,14 @@ struct ExternElementwiseOpConversion
       llvm::errs() << "ExternElementwiseOpConversion";
 
     Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetFuncOp(rewriter, op, funcName, funcType);
+    LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
+        rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
 
     auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]);
     if (Base::target == mlir::triton::Target::GENX)
       callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
     return {callOp.getResult()};
-  }
-
-private:
-  Type getFunctionType(Type resultType, ValueRange operands) const {
-    SmallVector<Type> operandTypes(operands.getTypes());
-    return LLVM::LLVMFunctionType::get(resultType, operandTypes);
-  }
-
-  LLVM::LLVMFuncOp appendOrGetFuncOp(ConversionPatternRewriter &rewriter,
-                                     ExternElementwiseOp op, StringRef funcName,
-                                     Type funcType) const {
-    using LLVM::LLVMFuncOp;
-
-    auto funcAttr = StringAttr::get(op->getContext(), funcName);
-    Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
-    if (funcOp)
-      return cast<LLVMFuncOp>(*funcOp);
-
-    auto parent = ((Operation *)op)->getParentOfType<LLVM::LLVMFuncOp>();
-    OpBuilder b(parent);
-    auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
-    ret.getOperation()->setAttr(
-        "libname", StringAttr::get(op->getContext(), op.getLibname()));
-    ret.getOperation()->setAttr(
-        "libpath", StringAttr::get(op->getContext(), op.getLibpath()));
-    return ret;
   }
 };
 
@@ -2906,6 +2906,66 @@ struct IndexCastOpLowering
   }
 };
 
+struct MulhiUIOpConversion
+    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
+  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+
+    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
+    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
+
+    StringRef funcName =
+        resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]);
+    if (Base::target == mlir::triton::Target::GENX)
+      callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    return {callOp.getResult()};
+  }
+};
+
+template <typename TritonOp>
+struct OpToExternCallConversion
+    : public ElementwiseOpConversionBase<TritonOp,
+                                         OpToExternCallConversion<TritonOp>> {
+  using Base =
+      ElementwiseOpConversionBase<TritonOp, OpToExternCallConversion<TritonOp>>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  explicit OpToExternCallConversion(
+      TritonIntelGPUToLLVMTypeConverter &typeConverter,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, StringRef externFuncName,
+      Target target, PatternBenefit benefit)
+      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
+                                          target, benefit),
+        funcName(externFuncName) {}
+
+  SmallVector<Value> createDestOps(TritonOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]);
+    if (Base::target == mlir::triton::Target::GENX)
+      callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    return {callOp.getResult()};
+  }
+
+private:
+  StringRef funcName;
+};
+
 struct SelectOpConversion
     : ElementwiseOpConversionBase<arith::SelectOp, SelectOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SelectOp, SelectOpConversion>;
@@ -3015,15 +3075,22 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
+  POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
+  POPULATE_UNARY_OP(math::Log2Op, math::Log2Op)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
   POPULATE_UNARY_OP(math::SinOp, math::SinOp)
   POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
+  POPULATE_UNARY_OP(math::Exp2Op, math::Exp2Op)
+  POPULATE_UNARY_OP(math::ErfOp, math::ErfOp)
   POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
   POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
+
+  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
+      typeConverter, axisInfoAnalysis, "__imf_sqrtf", target, benefit);
 
   patterns.add<AddPtrOpConversion>(typeConverter, target, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, target,
@@ -3070,6 +3137,8 @@ void populateElementwiseOpToLLVMPatterns(
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, target,
                                       benefit);
+  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, target,
+                                    benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, target, benefit);
   PatternBenefit benefitForPropNan = benefit;
