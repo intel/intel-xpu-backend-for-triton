@@ -334,10 +334,10 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
 }
 
 struct ScanOpConversion
-    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp> {
+    : public ConvertTritonIntelGPUReduceScanToLLVMPattern<triton::ScanOp> {
 public:
-  using ConvertTritonGPUReduceScanToLLVMPattern<
-      triton::ScanOp>::ConvertTritonGPUReduceScanToLLVMPattern;
+  using ConvertTritonIntelGPUReduceScanToLLVMPattern<
+      triton::ScanOp>::ConvertTritonIntelGPUReduceScanToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::ScanOp op, OpAdaptor adaptor,

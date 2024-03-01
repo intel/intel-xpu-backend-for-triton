@@ -17,12 +17,12 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
 struct ReduceOpConversion
-    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
+    : public ConvertTritonIntelGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
   ReduceOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
                      int computeCapability, Target target,
                      PatternBenefit benefit)
-      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(
+      : ConvertTritonIntelGPUReduceScanToLLVMPattern<triton::ReduceOp>(
             typeConverter, target, benefit),
         computeCapability(computeCapability) {}
 
