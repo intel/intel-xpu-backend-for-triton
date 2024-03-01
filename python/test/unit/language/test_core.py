@@ -32,7 +32,7 @@ def is_hip():
 
 
 def is_xpu():
-    return triton.runtime.driver.active.get_current_target()[0] == "xpu"
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "xpu"
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
