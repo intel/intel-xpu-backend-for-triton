@@ -7,9 +7,14 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import DriverBase
 
 dirname = os.getenv("ZE_PATH", default="/usr/local")
-include_dir = [os.path.join(dirname, "include/level_zero")]
+oneapi_root = os.getenv("ONEAPI_ROOT", default="/opt/intel/oneapi")
+include_dir = [
+    os.path.join(dirname, "include"),
+    os.path.join(oneapi_root, "compiler/latest/include"),
+    os.path.join(oneapi_root, "compiler/latest/include/sycl")
+]
 library_dir = [os.path.join(dirname, "lib")]
-libraries = ['ze_loader']
+libraries = ['ze_loader', 'sycl']
 
 
 def compile_module_from_src(src, name):

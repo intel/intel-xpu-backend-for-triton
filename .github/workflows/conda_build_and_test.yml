@@ -24,11 +24,11 @@ jobs:
     strategy:
       matrix:
         python:
-          - 3.9
-            #          - "3.10"
+          - "3.9"
+          - "3.10"
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source /home/runner/miniconda3/etc/profile.d/conda.sh; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,7 +38,7 @@ jobs:
         uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
-          CACHE_NUMBER: 1
+          CACHE_NUMBER: 2
         with:
           path: $HOME/.cache/pip
           key: pip-${{ matrix.python }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
@@ -56,7 +56,7 @@ jobs:
         uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
-          CACHE_NUMBER: 2
+          CACHE_NUMBER: 3
         with:
           path: $HOME/packages
           key: conda-packages-${{ env.PACKAGES_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
@@ -65,7 +65,7 @@ jobs:
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 2
+          CACHE_NUMBER: 5
         with:
           path: $HOME/miniconda3/envs/triton
           key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml') }}-${{ env.CACHE_NUMBER }}
@@ -75,6 +75,13 @@ jobs:
         run: |
           conda create -n triton --override-channels -c conda-forge python=${{ matrix.python }}.*
           conda env update -f scripts/triton.yml
+          find /home/runner/intel/oneapi/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniconda3/envs/triton/lib \;
+          ln -snf /usr/include/level_zero $HOME/miniconda3/envs/triton/bin/../x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
+          find /usr -name libze_\* -exec cp -n {} $HOME/miniconda3/envs/triton/lib \;
+          conda activate triton
+          python3 -m pip install lit wheel
+          python3 -m pip install pytest pytest-xdist pytest-rerunfailures
+          python3 -m pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
 
       - name: Add conda info to log
         run: |
@@ -96,8 +103,68 @@ jobs:
       - name: Build Triton
         run: |
           cd python
-          conda run --no-capture-output -n triton pip install wheel
-          conda run --no-capture-output -n triton pip install --no-build-isolation '.[tests]'
+          conda activate triton
+          pip install --no-build-isolation '.[tests]'
+
+      - name: Run core tests
+        run: |
+          conda activate triton
+          pip install pytest pytest-xdist
+          cd python/test/unit
+          python3 -m pytest --junitxml=~/reports/language.xml -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
+          # run runtime tests serially to avoid race condition with cache handling.
+          python3 -m pytest --junitxml=~/reports/runtime.xml --device xpu runtime/
+          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --junitxml=~/reports/line_info.xml --verbose --device xpu language/test_line_info.py
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Run interpreter tests
+        env:
+          # TRITON_INTERPRET: "1"
+          CUDA_VISIBLE_DEVICES: ""
+        run: |
+          cd python/test/unit
+          conda activate triton
+          python3 -m pytest --junitxml=~/reports/flash_attention.xml --verbose --device xpu operators/test_flash_attention.py
+
+      - name: Run partial operators tests
+        run: |
+          cd python/test/unit
+          conda activate triton
+          python3 -m pytest --junitxml=~/reports/operators.xml -n 8 --verbose --device xpu operators
+
+      - name: Regression tests
+        run: |
+          conda activate triton
+          pip install pytest-rerunfailures
+          cd python/test/regression
+          python3 -m pytest --junitxml=~/reports/regression.xml -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
+
+      - name: Run XPU python tests
+        run: |
+          cd python/test/backend/third_party_backends
+          conda activate triton
+          python3 -m pytest -n auto --verbose test_xpu_backend.py
+
+      - name: Run Tutorials
+        run: |
+          conda activate triton
+          pip install matplotlib pandas tabulate
+          cd python/tutorials
+          python3 01-vector-add.py
+          python3 02-fused-softmax.py
+          python3 03-matrix-multiplication.py
+          python3 04-low-memory-dropout.py
+          python3 05-layer-norm.py
+          python3 06-fused-attention.py
+          python3 07-math-functions.py
+          python3 08-experimental-block-pointer.py
+          python3 09-experimental-tma-matrix-multiplication.py
+          python3 10-experimental-tma-store-matrix-multiplication.py
+          python3 11-grouped-gemm.py
 
       - name: Save conda cache
         if: ${{ steps.conda-cache.outputs.status == 'miss' }}
@@ -106,9 +173,22 @@ jobs:
           path: ${{ steps.conda-cache.outputs.path }}
           dest: ${{ steps.conda-cache.outputs.dest }}
 
+      - name: Run CXX unittests
+        run: |
+          cd python/build/*cmake*
+          conda run --no-capture-output -n triton ctest
+
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/save
         with:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Pass rate
+        run: |
+          python3 scripts/pass_rate.py --reports ~/reports
+          mkdir -p /cache/reports/pass-rate
+          TMPFILE=$(mktemp -p /cache/reports/pass-rate XXXXXXXXXX)
+          python3 scripts/pass_rate.py --reports ~/reports --json > $TMPFILE
+          mv $TMPFILE $TMPFILE.json
