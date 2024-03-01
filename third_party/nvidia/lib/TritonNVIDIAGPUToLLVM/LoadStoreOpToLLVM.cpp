@@ -1,3 +1,8 @@
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/LLVMIR/GENXDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
@@ -713,30 +718,143 @@ struct AtomicRMWOpConversion
           resultVals[i + ii] =
               vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
         }
-      } else {
-        auto ASMReturnTy = void_ty(ctx);
-        atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
-        auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
-        if (op->user_begin() == op->user_end()) {
-          rewriter.replaceOp(op, {old});
-          return success();
+      }
+      break;
+    case triton::Target::GENX: {
+      assert((valueElemNBits == 16 || valueElemNBits == 32 ||
+              valueElemNBits == 64) &&
+             "Unexpected width");
+
+      Value zero;
+      llvm::TypeSwitch<mlir::Type>(valueElemTy)
+          .Case<mlir::IntegerType>(
+              [&](auto ty) { zero = int_val(valueElemNBits, 0); })
+          .Case<mlir::Float16Type>([&](auto ty) { zero = f16_val(0); })
+          .Case<mlir::Float32Type>([&](auto ty) { zero = f32_val(0); })
+          .Case<mlir::Float64Type>([&](auto ty) { zero = f64_val(0); });
+
+      Block &endBlock = mlir::LLVM::createPredicatedBlock(
+          rewriter, loc, rmwMask, {zero}, [&] {
+            mlir::LLVM::AtomicBinOp rmwKind;
+            switch (atomicRmwAttr) {
+            case RMWOp::AND:
+              rmwKind = LLVM::AtomicBinOp::_and;
+              break;
+            case RMWOp::OR:
+              rmwKind = LLVM::AtomicBinOp::_or;
+              break;
+            case RMWOp::XOR:
+              rmwKind = LLVM::AtomicBinOp::_xor;
+              break;
+            case RMWOp::ADD:
+              rmwKind = LLVM::AtomicBinOp::add;
+              break;
+            case RMWOp::FADD:
+              rmwKind = LLVM::AtomicBinOp::fadd;
+              break;
+            case RMWOp::MAX:
+              rmwKind = LLVM::AtomicBinOp::max;
+              break;
+            case RMWOp::UMAX:
+              rmwKind = LLVM::AtomicBinOp::umax;
+              break;
+            case RMWOp::MIN:
+              rmwKind = LLVM::AtomicBinOp::min;
+              break;
+            case RMWOp::UMIN:
+              rmwKind = LLVM::AtomicBinOp::umin;
+              break;
+            case RMWOp::XCHG:
+              rmwKind = LLVM::AtomicBinOp::xchg;
+              break;
+            }
+
+            Value atomRMW;
+            if (isa<mlir::Float16Type>(valueElemTy)) {
+              // On PVC atomic RMW operations on f16/bf16 are not supported.
+              // Generate:
+              //   Value oldVal;
+              //   do {
+              //     oldVal = load(rmwPtr)
+              //     newVal = add(oldVal, rmwVal)
+              //     res = cmpxchg[weak](rmwPtr, oldVal, newVal)
+              //     ok = extract_val(res, 1)
+              //   } while(!ok)
+              Block *curBlock = rewriter.getInsertionBlock();
+              Block *newBlock =
+                  curBlock->splitBlock(rewriter.getInsertionPoint());
+
+              rewriter.create<LLVM::BrOp>(loc, newBlock);
+              rewriter.setInsertionPointToStart(newBlock);
+
+              Value origVal = load(valueElemTy, rmwPtr);
+              Value newVal = fadd(origVal, bitcast(rmwVal, valueElemTy));
+
+              Type writeTy = rewriter.getIntegerType(valueElemNBits);
+              auto cmpxchg = rewriter
+                                 .create<LLVM::AtomicCmpXchgOp>(
+                                     loc, rmwPtr, bitcast(origVal, writeTy),
+                                     bitcast(newVal, writeTy),
+                                     LLVM::AtomicOrdering::acq_rel,
+                                     LLVM::AtomicOrdering::monotonic)
+                                 .getRes();
+              atomRMW = bitcast(extract_val(writeTy, cmpxchg, 0), valueElemTy);
+              Value ok = extract_val(int_ty(1), cmpxchg, 1);
+              auto cond = icmp_eq(ok, int_val(1, 1));
+              Block *endBlock =
+                  newBlock->splitBlock(rewriter.getInsertionPoint());
+
+              rewriter.setInsertionPointToEnd(newBlock);
+              auto latch = rewriter.create<LLVM::CondBrOp>(loc, cond, endBlock,
+                                                           newBlock);
+              rewriter.setInsertionPointToEnd(endBlock);
+            } else {
+              atomRMW =
+                  rewriter
+                      .create<LLVM::AtomicRMWOp>(loc, rmwKind, rmwPtr,
+                                                 bitcast(rmwVal, valueElemTy),
+                                                 LLVM::AtomicOrdering::acq_rel)
+                      .getRes();
+            }
+            return SmallVector<Value, 1>{atomRMW};
+          });
+
+      Value ret = endBlock.getArgument(0);
+      Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
+      ret = bitcast(ret, retType);
+
+      if (tensorTy) {
+        for (int ii = 0; ii < vec; ++ii) {
+          resultVals[i + ii] =
+              vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
         }
+      } else {
         Value atomPtr =
-            LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+            LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation(), target);
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
-        PTXBuilder ptxBuilderStore;
-        auto &storeShared =
-            ptxBuilderStore.create<>("st")->shared().o("b" + sBits);
-        auto *ptrOpr = ptxBuilderStore.newAddrOperand(atomPtr, "r");
-        auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
-        storeShared(ptrOpr, valOpr).predicate(rmwMask);
-        ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
+        mlir::LLVM::storeShared(rewriter, loc, atomPtr, ret, rmwMask, target);
         createBarrier(rewriter, loc, numCTAs);
-        Value ret = load(valueElemTy, atomPtr);
+        Value loadVal = load(valueElemTy, atomPtr);
         createBarrier(rewriter, loc, numCTAs);
-        rewriter.replaceOp(op, {ret});
+        rewriter.replaceOp(op, {loadVal});
       }
+      Value atomPtr =
+          LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+      atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
+      // Only threads with rmwMask = True store the result
+      PTXBuilder ptxBuilderStore;
+      auto &storeShared =
+          ptxBuilderStore.create<>("st")->shared().o("b" + sBits);
+      auto *ptrOpr = ptxBuilderStore.newAddrOperand(atomPtr, "r");
+      auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
+      storeShared(ptrOpr, valOpr).predicate(rmwMask);
+      ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
+      createBarrier(rewriter, loc, numCTAs);
+      Value ret = load(valueElemTy, atomPtr);
+      createBarrier(rewriter, loc, numCTAs);
+      rewriter.replaceOp(op, {ret});
+    }
     }
     if (tensorTy) {
       Type structTy = getTypeConverter()->convertType(tensorTy);
@@ -744,6 +862,77 @@ struct AtomicRMWOpConversion
                                           rewriter, structTy);
       rewriter.replaceOp(op, {resultStruct});
     }
+    return success();
+  }
+};
+
+struct InsertSliceOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<tensor::InsertSliceOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      tensor::InsertSliceOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tensor::InsertSliceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    // This function has been removed upstream and should only exist for genx
+    assert(target == triton::Target::GENX &&
+           "InsertSliceOpConversion: genx target not supported yet");
+
+    // %dst = insert_slice %src into %dst[%offsets]
+    Location loc = op->getLoc();
+    Value dst = op.getDest();
+    Value src = op.getSource();
+    Value res = op.getResult();
+    auto funcOp = op->getParentOfType<FunctionOpInterface>();
+
+    auto srcTy = src.getType().dyn_cast<RankedTensorType>();
+    auto srcLayout = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
+    auto srcShape = srcTy.getShape();
+    assert(srcLayout && "Unexpected srcLayout in InsertSliceOpConversion");
+
+    auto dstTy = dst.getType().dyn_cast<RankedTensorType>();
+    auto dstLayout = dstTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+    auto llDst = adaptor.getDest();
+    assert(dstLayout && "Unexpected dstLayout in InsertSliceOpConversion");
+    assert(op.hasUnitStride() &&
+           "Only unit stride supported by InsertSliceOpConversion");
+
+    // newBase = base + offset
+    // Triton support either static and dynamic offsets
+    auto smemObj = getSharedMemoryObjectFromStruct(
+        loc, llDst, dstTy.getElementType(), rewriter);
+    SmallVector<Value, 4> offsets;
+    SmallVector<Value, 4> srcStrides;
+    auto mixedOffsets = op.getMixedOffsets();
+    for (auto i = 0; i < mixedOffsets.size(); ++i) {
+      if (op.isDynamicOffset(i)) {
+        offsets.emplace_back(adaptor.getOffsets()[i]);
+      } else {
+        offsets.emplace_back(i32_val(op.getStaticOffset(i)));
+      }
+      // Like insert_slice_async, we only support slice from one dimension,
+      // which has a slice size of 1
+      if (op.getStaticSize(i) != 1) {
+        srcStrides.emplace_back(smemObj.strides[i]);
+      }
+    }
+
+    // Compute the offset based on the original strides of the shared memory
+    // object
+    auto offset = dot(rewriter, loc, offsets, smemObj.strides);
+    auto elemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    auto smemBase = gep(elemPtrTy, elemTy, smemObj.base, offset);
+
+    auto inVals = unpackLLElements(loc, adaptor.getSource(), rewriter);
+    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, true);
+    storeDistributedToShared(src, inVals, srcStrides, srcIndices, dst, smemBase,
+                             elemTy, loc, rewriter);
+    // Barrier is not necessary.
+    // The membar pass knows that it writes to shared memory and will handle
+    // it properly.
+    rewriter.replaceOp(op, llDst);
     return success();
   }
 };
@@ -764,6 +953,19 @@ struct InsertSliceAsyncOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+<<<<<<< Updated upstream:third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/LoadStoreOpToLLVM.cpp
+=======
+
+    // This function should not be called on the genx target since all
+    // InsertSliceAsyncOps would be decomposed into InsertSliceOps by the
+    // decomposeInsertSliceAsyncOp function.
+    // FIXME: remove this assertion once a suitable replacement instruction
+    // exists for the generated PTX in this function
+    // (cp.async.cg.shared.global)
+    assert(target != triton::Target::GENX &&
+           "InsertSliceAsyncOpConversion: genx target not supported yet");
+
+>>>>>>> Stashed changes:lib/Conversion/TritonGPUToLLVM/LoadStoreOpToLLVM.cpp
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();
     Value res = op.getResult();
@@ -829,9 +1031,10 @@ struct InsertSliceAsyncOpConversion
       assert(srcElems.size() == otherElems.size());
     }
 
-    // We don't use getVec() here because we are copying from memory to memory.
-    // If contiguity > vector size, we can have one pointer maintaining the
-    // start of the vector and the other pointer moving to the next vector.
+    // We don't use getVec() here because we are copying from memory to
+    // memory. If contiguity > vector size, we can have one pointer
+    // maintaining the start of the vector and the other pointer moving to the
+    // next vector.
     unsigned inVec = getContiguity(op.getSrc());
     unsigned outVec = resSharedLayout.getVec();
     unsigned minVec = inVec;
@@ -887,13 +1090,13 @@ struct InsertSliceAsyncOpConversion
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
 
-        // When 'other != 0' is supported, we will need to fold the op.getMask()
-        // and redundantDataMask() into the same predicate, the way it is done
-        // for LoadOp.
+        // When 'other != 0' is supported, we will need to fold the
+        // op.getMask() and redundantDataMask() into the same predicate, the
+        // way it is done for LoadOp.
         Value maskVal = redundantDataMask(srcTy, rewriter, loc);
 
-        // TODO: Masking does not work for CTA multicast with cp.async. This is
-        // a quick and dirty workaround to avoid the issue.
+        // TODO: Masking does not work for CTA multicast with cp.async. This
+        // is a quick and dirty workaround to avoid the issue.
         bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
         if (!skipMaskForMultiCTA) {
           copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
