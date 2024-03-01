@@ -229,7 +229,8 @@ export _GLIBCXX_USE_CXX11_ABI=1
 git submodule sync
 git submodule update --init --recursive --jobs 0
 
-conda install cmake ninja mkl mkl-include
+conda install cmake ninja
+conda install intel::mkl-static intel::mkl-include
 pip install -r requirements.txt
 ```
 
