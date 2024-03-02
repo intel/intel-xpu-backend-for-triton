@@ -216,6 +216,9 @@ jobs:
           pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
           # TODO: Find the fastest Hugging Face model
           $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
+          cat $WORKSPACE/inductor_log/*/*/*.csv
+          grep AlbertForMaskedLM inductor_log/*/*/*.csv | grep ,pass,
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
