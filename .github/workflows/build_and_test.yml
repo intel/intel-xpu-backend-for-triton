@@ -132,12 +132,11 @@ jobs:
       - name: Build Triton
         run: |
           cd python
-          pip install wheel
-          pip install --no-build-isolation '.[tests]'
+          pip install wheel pytest pytest-xdist pytest-rerunfailures
+          pip install --no-build-isolation '.[build,tests,tutorials]'
 
       - name: Run lit tests
         run: |
-          pip install lit
           cd python
           lit -v build/*/test
 
@@ -147,7 +146,6 @@ jobs:
 
       - name: Run core tests
         run: |
-          pip install pytest pytest-xdist
           cd python/test/unit
           python3 -m pytest --junitxml=~/reports/language.xml -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
@@ -181,7 +179,6 @@ jobs:
 
       - name: Regression tests
         run: |
-          pip install pytest-rerunfailures
           cd python/test/regression
           python3 -m pytest --junitxml=~/reports/regression.xml -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
 
@@ -192,7 +189,6 @@ jobs:
 
       - name: Run Tutorials
         run: |
-          pip install matplotlib pandas tabulate
           cd python/tutorials
           python3 01-vector-add.py
           python3 02-fused-softmax.py
