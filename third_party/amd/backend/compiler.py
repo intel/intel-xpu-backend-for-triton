@@ -76,7 +76,7 @@ class HIPOptions:
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
-        return hashlib.md5(key.encode("utf-8")).hexdigest()
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 class HIPBackend(BaseBackend):
@@ -157,6 +157,7 @@ class HIPBackend(BaseBackend):
         pm.run(mod)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        passes.ttgpuir.add_allocate_shared_memory(pm)
         amd.passes.ttgpuir.add_to_llvmir(pm)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)

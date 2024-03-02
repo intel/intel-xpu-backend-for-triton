@@ -19,6 +19,7 @@
 #include "intel/include/GENToLLVM/Passes.h"
 #include "intel/include/NVGPUIntelToLLVM/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
 
