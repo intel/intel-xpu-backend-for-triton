@@ -167,7 +167,7 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
     SmallVector<unsigned> contigPerThread(rank, 1);
     contigPerThread[rank - 1] = 2;
     return contigPerThread;
-  } else if (layout.isa<MfmaEncodingAttr>()) {
+  } else if (layout.isa<AMDMfmaEncodingAttr>()) {
     return {1, 1};
   } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
     auto parentLayout = sliceLayout.getParent();
@@ -288,7 +288,7 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   ArrayRef<unsigned> ref;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>())
     return distributedLayout.getCTAsPerCGA();
-  else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>())
+  else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>())
     return {1, 1};
   else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>())
     ref = sharedLayout.getCTALayout().getCTAsPerCGA();
@@ -301,7 +301,7 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   SmallVector<unsigned> res;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
     return distributedLayout.getCTASplitNum();
-  } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
     res.resize(2);
     res[0] = res[1] = 1;
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
@@ -317,7 +317,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
   SmallVector<unsigned> res;
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
     res = distributedLayout.getCTAOrder();
-  } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>()) {
+  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
     return {0, 1};
   } else if (auto sharedLayout = layout.dyn_cast<SharedEncodingAttr>()) {
     res = SmallVector<unsigned>(sharedLayout.getCTALayout().getCTAOrder());
@@ -370,7 +370,7 @@ unsigned getNumWarpsPerCTA(Attribute layout) {
     // Use the distributed layout interface to get the number of warps per CTA.
     auto distributedLayout = layout.cast<DistributedEncodingTrait>();
     warpsPerCTA = distributedLayout.getWarpsPerCTA();
-  } else if (auto mfmaLayout = layout.dyn_cast<MfmaEncodingAttr>())
+  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>())
     warpsPerCTA = mfmaLayout.getWarpsPerCTA();
   else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
     return getNumWarpsPerCTA(dotLayout.getParent());
@@ -749,12 +749,13 @@ SliceEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
 //
 
 SmallVector<unsigned>
-MfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
+AMDMfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
+                                       Type eltTy) const {
   size_t rank = shape.size();
   assert(rank == 2 && "Unexpected rank of mfma layout");
 
   SmallVector<unsigned> elemsPerThread(rank);
-  auto nonKDim = getNonKDim();
+  auto nonKDim = getMDim();
   auto elemsPerThreadPerTile = (nonKDim == 16 ? 4 : 16);
   if (getIsTransposed()) {
     unsigned elemsCol =
@@ -774,8 +775,8 @@ MfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   return elemsPerThread;
 }
 
-unsigned MfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                  Type eltTy) const {
+unsigned AMDMfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
+                                                     Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
 }
 
@@ -1165,7 +1166,7 @@ void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {
 // MFMA encoding
 //===----------------------------------------------------------------------===//
 
-Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
+Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
   DictionaryAttr dict;
@@ -1174,22 +1175,33 @@ Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
-  unsigned nonKDim = 0;
+  unsigned versionMajor = 0;
+  unsigned versionMinor = 0;
   SmallVector<unsigned> warpsPerCTA;
+  SmallVector<unsigned> instrShape;
   bool isTransposed;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
 
   for (const NamedAttribute &attr : dict) {
-    if (attr.getName() == "nonKDim") {
-      if (parseUInt(parser, attr, nonKDim, "nonKDim").failed())
+    if (attr.getName() == "versionMajor") {
+      if (parseUInt(parser, attr, versionMajor, "versionMajor").failed())
+        return {};
+    }
+    if (attr.getName() == "versionMinor") {
+      if (parseUInt(parser, attr, versionMinor, "versionMinor").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
         return {};
-    } else if (attr.getName() == "isTransposed") {
+    }
+    if (attr.getName() == "instrShape") {
+      if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
+        return {};
+    }
+    if (attr.getName() == "isTransposed") {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
         return {};
     }
@@ -1215,13 +1227,15 @@ Attribute MfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<MfmaEncodingAttr>(
-      parser.getContext(), nonKDim, warpsPerCTA, isTransposed, *CTALayout);
+  return parser.getChecked<AMDMfmaEncodingAttr>(
+      parser.getContext(), versionMajor, versionMinor, warpsPerCTA,
+      instrShape[0], instrShape[1], isTransposed, *CTALayout);
 }
 
-void MfmaEncodingAttr::print(AsmPrinter &printer) const {
+void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "nonKDim = " << getNonKDim()                             //
+          << "versionMajor = " << getVersionMajor()                   //
+          << ", versionMinor = " << getVersionMinor()                 //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]" //
           << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
@@ -1395,32 +1409,32 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
 // TODO: there is a lot of common code with MmaEncoding here
 
 SmallVector<unsigned>
-MfmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
-  auto nonKDim = getNonKDim();
+AMDMfmaEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
+  auto nonKDim = getMDim();
   return {nonKDim * getWarpsPerCTA()[0], nonKDim * getWarpsPerCTA()[1]};
 }
 
-SmallVector<unsigned> MfmaEncodingAttr::getCTAsPerCGA() const {
+SmallVector<unsigned> AMDMfmaEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
 }
-SmallVector<unsigned> MfmaEncodingAttr::getCTAOrder() const {
+SmallVector<unsigned> AMDMfmaEncodingAttr::getCTAOrder() const {
   return SmallVector<unsigned>(getCTALayout().getCTAOrder());
 }
-SmallVector<unsigned> MfmaEncodingAttr::getCTASplitNum() const {
+SmallVector<unsigned> AMDMfmaEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
-SmallVector<unsigned> MfmaEncodingAttr::getWarpsPerCTA() const {
+SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpsPerCTA() const {
   return SmallVector<unsigned>(getWarpsPerCTA__());
 }
-SmallVector<unsigned> MfmaEncodingAttr::getWarpOrder() const {
+SmallVector<unsigned> AMDMfmaEncodingAttr::getWarpOrder() const {
   return ::getOrder(*this);
 }
-SmallVector<unsigned> MfmaEncodingAttr::getThreadOrder() const {
+SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadOrder() const {
   return ::getOrder(*this);
 }
-SmallVector<unsigned> MfmaEncodingAttr::getThreadsPerWarp() const {
+SmallVector<unsigned> AMDMfmaEncodingAttr::getThreadsPerWarp() const {
   unsigned rows, cols;
-  if (getNonKDim() == 32) {
+  if (getMDim() == 32) {
     cols = 2;
     rows = 32;
   } else {
@@ -1434,12 +1448,12 @@ SmallVector<unsigned> MfmaEncodingAttr::getThreadsPerWarp() const {
   }
 }
 
-SmallVector<unsigned> MfmaEncodingAttr::getSizePerThread() const {
+SmallVector<unsigned> AMDMfmaEncodingAttr::getSizePerThread() const {
   unsigned rows, cols;
-  if (getNonKDim() == 32) {
+  if (getMDim() == 32) {
     rows = 16;
     cols = 1;
-  } else if (getNonKDim() == 16) {
+  } else if (getMDim() == 16) {
     rows = 4;
     cols = 1;
   } else
@@ -1453,8 +1467,9 @@ SmallVector<unsigned> MfmaEncodingAttr::getSizePerThread() const {
 }
 
 SmallVector<int64_t>
-MfmaEncodingAttr::getMFMAElemsPerInstrForOperands(int kWidth, int opIdx) const {
-  int64_t nonKDim = getNonKDim();
+AMDMfmaEncodingAttr::getMFMAElemsPerInstrForOperands(int kWidth,
+                                                     int opIdx) const {
+  int64_t nonKDim = getMDim();
   assert(nonKDim == 32 || nonKDim == 16);
   int64_t kDim = kWidth * (nonKDim == 32 ? 2 : 4);
   if (opIdx == 0)
@@ -1466,9 +1481,9 @@ MfmaEncodingAttr::getMFMAElemsPerInstrForOperands(int kWidth, int opIdx) const {
 }
 
 SmallVector<int64_t>
-MfmaEncodingAttr::getMFMARepForOperands(ArrayRef<int64_t> operandShape,
-                                        Type elemType, int kWidth,
-                                        int opIdx) const {
+AMDMfmaEncodingAttr::getMFMARepForOperands(ArrayRef<int64_t> operandShape,
+                                           Type elemType, int kWidth,
+                                           int opIdx) const {
   auto operandTileShape = getMFMAElemsPerInstrForOperands(kWidth, opIdx);
   auto warpsPerCTA = getWarpsPerCTA();
   if (opIdx == 0)
@@ -1483,7 +1498,7 @@ MfmaEncodingAttr::getMFMARepForOperands(ArrayRef<int64_t> operandShape,
   }
 }
 
-unsigned MfmaEncodingAttr::getTotalElemsPerThreadForOperands(
+unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
   int warpsPerCTAM = getWarpsPerCTA()[0];
   int warpsPerCTAN = getWarpsPerCTA()[1];
@@ -1494,7 +1509,7 @@ unsigned MfmaEncodingAttr::getTotalElemsPerThreadForOperands(
 }
 
 SmallVector<unsigned>
-MfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
+AMDMfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   if (opIdx == 0) {
     return {4, 1};
   } else if (opIdx == 1) {
@@ -1506,8 +1521,8 @@ MfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
 }
 
 SmallVector<unsigned>
-MfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
-                                                   int opIdx) const {
+AMDMfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
+                                                      int opIdx) const {
   auto parentShapePerCTA = getShapePerCTATile(shape);
   if (opIdx == 0) {
     return {parentShapePerCTA[0], 32};
