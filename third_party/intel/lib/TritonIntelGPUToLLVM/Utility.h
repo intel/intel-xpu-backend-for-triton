@@ -316,9 +316,10 @@ void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
                       Value ctaId, ArrayRef<Value> values);
 
 /// Helper function to get strides from a given shape and its order
-SmallVector<Value>
-getStridesFromShapeAndOrder(ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
-                            Location loc, ConversionPatternRewriter &rewriter);
+SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
+                                               ArrayRef<unsigned> order,
+                                               Location loc,
+                                               RewriterBase &rewriter);
 struct SharedMemoryObject {
   Value base; // i32 ptr. The start address of the shared memory object after
               // the initial allocation or the last slicing operation.
@@ -348,7 +349,7 @@ struct SharedMemoryObject {
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
                      ArrayRef<unsigned> order, Location loc,
-                     ConversionPatternRewriter &rewriter)
+                     RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
     strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
     offsets.append(order.size(), i32_val(0));
@@ -395,18 +396,15 @@ getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
 
 // Convert an \param linear to a multi-dim coordinate given \param shape and
 // \param order.
-SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
-                               Location loc, Value linear,
-                               ArrayRef<unsigned> shape,
+SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
+                               Value linear, ArrayRef<unsigned> shape,
                                ArrayRef<unsigned> order);
 
-SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
-                               Location loc, unsigned linear,
-                               ArrayRef<unsigned> shape);
+SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
+                               unsigned linear, ArrayRef<unsigned> shape);
 
-SmallVector<Value> delinearize(ConversionPatternRewriter &rewriter,
-                               Location loc, Value linear,
-                               ArrayRef<unsigned> shape);
+SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
+                               Value linear, ArrayRef<unsigned> shape);
 
 Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                 ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
@@ -484,28 +482,25 @@ static Value getSharedMemoryBase(Location loc,
 
 /* ------------------------------------ */
 // Returns CTA level thread idx
-static Value getThreadIdInCTA(ConversionPatternRewriter &rewriter,
-                              Location loc) {
+static Value getThreadIdInCTA(RewriterBase &rewriter, Location loc) {
   Value tid =
       rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
 }
 
 // Returns CTA level thread idx.
-static Value getThreadId(ConversionPatternRewriter &rewriter, Location loc) {
+static Value getThreadId(RewriterBase &rewriter, Location loc) {
   Value tid = getThreadIdInCTA(rewriter, loc);
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return tid;
 }
 
-static Value getModuleWarpSize(ConversionPatternRewriter &rewriter,
-                               Location loc) {
+static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
-static Value getClusterCTAId(ConversionPatternRewriter &rewriter,
-                             Location loc) {
+static Value getClusterCTAId(RewriterBase &rewriter, Location loc) {
   // Clusters of thread blocks aren't supported.
   return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
 }
@@ -523,8 +518,8 @@ using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
-static Value dot(ConversionPatternRewriter &rewriter, Location loc,
-                 ArrayRef<Value> offsets, ArrayRef<Value> strides) {
+static Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
+                 ArrayRef<Value> strides) {
   assert(offsets.size() == strides.size());
   Value ret = i32_val(0);
   for (auto [offset, stride] : llvm::zip(offsets, strides)) {
@@ -538,9 +533,10 @@ static Value dot(ConversionPatternRewriter &rewriter, Location loc,
 // -----------------------------------------------------------------------
 
 // Get an index-base for each dimension for a \param blockedLayout.
-static SmallVector<Value> emitBaseIndexWithinCTAForBlockedLayout(
-    Location loc, ConversionPatternRewriter &rewriter,
-    const BlockedEncodingAttr &blockedLayout, RankedTensorType type) {
+static SmallVector<Value>
+emitBaseIndexWithinCTAForBlockedLayout(Location loc, RewriterBase &rewriter,
+                                       const BlockedEncodingAttr &blockedLayout,
+                                       RankedTensorType type) {
   auto shape = type.getShape();
   Value threadId = getThreadId(rewriter, loc);
   Value warpSize = getModuleWarpSize(rewriter, loc);
@@ -621,9 +617,10 @@ emitOffsetForBlockedLayout(const BlockedEncodingAttr &blockedLayout,
 // Mma layout indices
 // -----------------------------------------------------------------------
 
-static SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV1(
-    Location loc, ConversionPatternRewriter &rewriter,
-    const NvidiaMmaEncodingAttr &mmaLayout, RankedTensorType type) {
+static SmallVector<Value>
+emitBaseIndexWithinCTAForMmaLayoutV1(Location loc, RewriterBase &rewriter,
+                                     const NvidiaMmaEncodingAttr &mmaLayout,
+                                     RankedTensorType type) {
   auto shape = type.getShape();
   auto wpt = mmaLayout.getWarpsPerCTA();
   static constexpr std::array<int, 3> fpw{{2, 2, 1}};
@@ -764,9 +761,10 @@ emitOffsetForMmaLayoutV2(const NvidiaMmaEncodingAttr &mmaLayout,
   return ret;
 }
 
-static SmallVector<Value> emitBaseIndexWithinCTAForMmaLayoutV2V3(
-    Location loc, ConversionPatternRewriter &rewriter,
-    const NvidiaMmaEncodingAttr &mmaLayout, RankedTensorType type) {
+static SmallVector<Value>
+emitBaseIndexWithinCTAForMmaLayoutV2V3(Location loc, RewriterBase &rewriter,
+                                       const NvidiaMmaEncodingAttr &mmaLayout,
+                                       RankedTensorType type) {
   auto shape = type.getShape();
   auto _warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto rank = shape.size();
@@ -855,7 +853,7 @@ emitOffsetForMmaLayoutV3(const NvidiaMmaEncodingAttr &mmaLayout,
 static SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type);
 static SmallVector<Value>
-emitBaseIndexForDpasLayout(Location loc, ConversionPatternRewriter &rewriter,
+emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
                            const DpasEncodingAttr &dpasLayout,
                            RankedTensorType type);
 
@@ -908,9 +906,10 @@ static void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
 // Get offsets / indices for any layout
 // -----------------------------------------------------------------------
 
-static SmallVector<Value>
-emitCTAOffsetForLayout(Location loc, ConversionPatternRewriter &rewriter,
-                       Attribute layout, ArrayRef<int64_t> shape) {
+static SmallVector<Value> emitCTAOffsetForLayout(Location loc,
+                                                 RewriterBase &rewriter,
+                                                 Attribute layout,
+                                                 ArrayRef<int64_t> shape) {
   unsigned rank = shape.size();
   SmallVector<unsigned> CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
   SmallVector<unsigned> CTASplitNum = triton::gpu::getCTASplitNum(layout);
@@ -938,9 +937,8 @@ emitCTAOffsetForLayout(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 static SmallVector<Value>
-emitBaseIndexForLayout(Location loc, ConversionPatternRewriter &rewriter,
-                       Attribute layout, RankedTensorType type,
-                       bool withCTAOffset) {
+emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
+                       RankedTensorType type, bool withCTAOffset) {
   auto shape = type.getShape();
 
   SmallVector<Value> baseIndex;
@@ -1021,7 +1019,7 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
 // -----------------------------------------------------------------------
 
 static SmallVector<Value>
-emitBaseIndexForDpasLayout(Location loc, ConversionPatternRewriter &rewriter,
+emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
                            const DpasEncodingAttr &dpasLayout,
                            RankedTensorType type) {
   Value threadId = getThreadId(rewriter, loc);
@@ -1058,7 +1056,7 @@ emitBaseIndexForDpasLayout(Location loc, ConversionPatternRewriter &rewriter,
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
 static SmallVector<SmallVector<Value>>
-emitIndices(Location loc, ConversionPatternRewriter &rewriter, Attribute layout,
+emitIndices(Location loc, RewriterBase &rewriter, Attribute layout,
             RankedTensorType type, bool withCTAOffset) {
   // step 1, delinearize threadId to get the base index
   auto multiDimBase =
@@ -1084,7 +1082,7 @@ emitIndices(Location loc, ConversionPatternRewriter &rewriter, Attribute layout,
 DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
     Location loc, unsigned inVec, RankedTensorType srcTy,
     triton::gpu::SharedEncodingAttr resSharedLayout, Type resElemTy,
-    SharedMemoryObject smemObj, ConversionPatternRewriter &rewriter,
+    SharedMemoryObject smemObj, RewriterBase &rewriter,
     SmallVectorImpl<Value> &offsetVals, SmallVectorImpl<Value> &srcStrides) {
   // This utility computes the pointers for accessing the provided swizzled
   // shared memory layout `resSharedLayout`. More specifically, it computes,
