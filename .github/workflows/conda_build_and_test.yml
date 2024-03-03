@@ -79,8 +79,7 @@ jobs:
           ln -snf /usr/include/level_zero $HOME/miniconda3/envs/triton/bin/../x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
           find /usr -name libze_\* -exec cp -n {} $HOME/miniconda3/envs/triton/lib \;
           conda activate triton
-          python3 -m pip install lit wheel
-          python3 -m pip install pytest pytest-xdist pytest-rerunfailures
+          python3 -m pip install wheel pytest pytest-xdist pytest-rerunfailures
           python3 -m pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
 
       - name: Add conda info to log
@@ -104,7 +103,7 @@ jobs:
         run: |
           cd python
           conda activate triton
-          pip install --no-build-isolation '.[tests]'
+          pip install --no-build-isolation '.[build,tests,tutorials]'
 
       - name: Run core tests
         run: |
@@ -147,7 +146,6 @@ jobs:
       - name: Regression tests
         run: |
           conda activate triton
-          pip install pytest-rerunfailures
           cd python/test/regression
           python3 -m pytest --junitxml=~/reports/regression.xml -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
 
@@ -160,7 +158,6 @@ jobs:
       - name: Run Tutorials
         run: |
           conda activate triton
-          pip install matplotlib pandas tabulate
           cd python/tutorials
           python3 01-vector-add.py
           python3 02-fused-softmax.py
@@ -185,6 +182,20 @@ jobs:
         run: |
           cd python/build/*cmake*
           conda run --no-capture-output -n triton ctest
+
+      - name: Run E2E test
+        run: |
+          conda activate triton
+          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
+          export WORKSPACE=$GITHUB_WORKSPACE
+          cd pytorch
+          TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
+          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+          # TODO: Find the fastest Hugging Face model
+          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
+          cat $WORKSPACE/inductor_log/*/*/*.csv
+          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
