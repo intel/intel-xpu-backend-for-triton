@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 # Select what to build.
+BUILD_PYTORCH=false
+BUILD_IPEX=false
 BUILD_LLVM=false
 BUILD_TRITON=false
 CLEAN=false
@@ -8,6 +10,14 @@ VENV=false
 CCACHE=false
 for arg in "$@"; do
   case $arg in
+    --pytorch)
+      BUILD_PYTORCH=true
+      shift
+      ;;
+    --ipex)
+      BUILD_IPEX=true
+      shift
+      ;;
     --llvm)
       BUILD_LLVM=true
       shift
@@ -39,7 +49,10 @@ for arg in "$@"; do
   esac
 done
 
-if [ "$BUILD_LLVM" = false ] && [ "$BUILD_TRITON" = false ]; then
+if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ] \
+   && [ "$BUILD_LLVM" = false ] && [ "$BUILD_TRITON" = false ]; then
+  BUILD_PYTORCH=true
+  BUILD_IPEX=true
   BUILD_LLVM=true
   BUILD_TRITON=true
 fi
@@ -53,13 +66,15 @@ fi
 
 export PACKAGES_DIR=$BASE/packages
 export SPIRV_TOOLS=$PACKAGES_DIR/spirv-tools
+export PYTORCH_PROJ=$BASE/pytorch
+export IPEX_PROJ=$BASE/intel-extension-for-pytorch
 export LLVM_PROJ=$BASE/llvm
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 if [ "$CLEAN" = true ]; then
-  echo "**** Cleaning $PACKAGES_DIR, $LLVM_PROJ, and $TRITON_PROJ_BUILD before build ****"
-  rm -rf $PACKAGES_DIR $LLVM_PROJ $TRITON_PROJ_BUILD
+  echo "**** Cleaning $PACKAGES_DIR, $PYTORCH_PROJ, $IPEX_PROJ, $LLVM_PROJ, and $TRITON_PROJ_BUILD before build ****"
+  rm -rf $PACKAGES_DIR $PYTORCH_PROJ $IPEX_PROJ $LLVM_PROJ $TRITON_PROJ_BUILD
 fi
 
 if [ "$VENV" = true ]; then
@@ -99,6 +114,50 @@ if [ ! -d "$SPIRV_TOOLS" ]; then
   sed -i s#prefix=/tmpfs/src/install#prefix=$SPIRV_TOOLS# spirv-tools/lib/pkgconfig/SPIRV-Tools.pc
   sed -i s#prefix=/tmpfs/src/install#prefix=$SPIRV_TOOLS# spirv-tools/lib/pkgconfig/SPIRV-Tools-shared.pc
 fi
+
+############################################################################
+# Clone the PyTorch repository.
+
+if [ ! -d "$PYTORCH_PROJ" ]; then
+  echo "**** Cloning $PYTORCH_PROJ ****"
+  cd $BASE
+  git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git
+fi
+
+############################################################################
+## Configure and build the pytorch project.
+
+build_pytorch() {
+  echo "****** Building $PYTORCH_PROJ ******"
+  cd $PYTORCH_PROJ
+  if [ ! -d "$PYTORCH_PROJ/dist" ]; then
+    pip install -r requirements.txt
+    python setup.py bdist_wheel
+  fi
+  pip install dist/*.whl
+}
+
+############################################################################
+# Clone the IPEX repository.
+
+if [ ! -d "$IPEX_PROJ" ]; then
+  echo "**** Cloning $IPEX_PROJ ****"
+  cd $BASE
+  git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/intel/intel-extension-for-pytorch.git
+fi
+
+############################################################################
+## Configure and build the ipex project.
+
+build_ipex() {
+  echo "****** Building $IPEX_PROJ ******"
+  cd $IPEX_PROJ
+  if [ ! -d "$IPEX_PROJ/dist" ]; then
+    pip install -r requirements.txt
+    python setup.py bdist_wheel
+  fi
+  pip install dist/*.whl
+}
 
 ############################################################################
 # Clone the LLVM repository (with GENX dialect).
@@ -214,6 +273,12 @@ build_triton() {
 }
 
 build() {
+  if [ "$BUILD_PYTORCH" = true ]; then
+    build_pytorch
+  fi
+  if [ "$BUILD_IPEX" = true ]; then
+    build_ipex
+  fi
   if [ "$BUILD_LLVM" = true ]; then
     build_llvm
   fi
