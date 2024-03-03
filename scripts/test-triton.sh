@@ -56,7 +56,6 @@ export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 python3 -m pip install lit
 python3 -m pip install pytest pytest-xdist pytest-rerunfailures
-python3 -m pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
 if [ $? -ne 0 ]; then
   echo "FAILED: return code $?"
   exit $?
