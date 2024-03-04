@@ -20,4 +20,5 @@ std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass();
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
 } // namespace mlir
+
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H
