@@ -73,18 +73,14 @@ check_rc() {
 }
 
 ############################################################################
-# Clone the PyTorch repository.
-
-if [ ! -d "$PYTORCH_PROJ" ]; then
-  echo "**** Cloning $PYTORCH_PROJ ****"
-  cd $BASE
-  git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git
-fi
-
-############################################################################
-## Configure and build the pytorch project.
+# Configure and build the pytorch project.
 
 build_pytorch() {
+  if [ ! -d "$PYTORCH_PROJ" ]; then
+    echo "**** Cloning $PYTORCH_PROJ ****"
+    cd $BASE
+    git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git
+  fi
   echo "****** Building $PYTORCH_PROJ ******"
   cd $PYTORCH_PROJ
   if [ ! -d "$PYTORCH_PROJ/dist" ]; then
@@ -95,18 +91,14 @@ build_pytorch() {
 }
 
 ############################################################################
-# Clone the IPEX repository.
-
-if [ ! -d "$IPEX_PROJ" ]; then
-  echo "**** Cloning $IPEX_PROJ ****"
-  cd $BASE
-  git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/intel/intel-extension-for-pytorch.git
-fi
-
-############################################################################
-## Configure and build the ipex project.
+# Configure and build the ipex project.
 
 build_ipex() {
+  if [ ! -d "$IPEX_PROJ" ]; then
+    echo "**** Cloning $IPEX_PROJ ****"
+    cd $BASE
+    git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/intel/intel-extension-for-pytorch.git
+  fi
   echo "****** Building $IPEX_PROJ ******"
   cd $IPEX_PROJ
   if [ ! -d "$IPEX_PROJ/dist" ]; then
