@@ -51,8 +51,8 @@ done
 
 if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ] \
    && [ "$BUILD_LLVM" = false ] && [ "$BUILD_TRITON" = false ]; then
-  BUILD_PYTORCH=true
-  BUILD_IPEX=true
+  BUILD_PYTORCH=false
+  BUILD_IPEX=false
   BUILD_LLVM=true
   BUILD_TRITON=true
 fi
