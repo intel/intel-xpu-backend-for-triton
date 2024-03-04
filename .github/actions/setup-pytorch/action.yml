@@ -58,6 +58,7 @@ runs:
         source ${{ inputs.oneapi }}/tbb/latest/env/vars.sh
 
         cd pytorch
+        pip install wheel
         pip install -r requirements.txt
         python setup.py bdist_wheel
 

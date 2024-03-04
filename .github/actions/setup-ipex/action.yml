@@ -53,6 +53,7 @@ runs:
         source ${{ inputs.oneapi }}/setvars.sh
         export USE_AOT_DEVLIST='pvc'
         cd intel-extension-for-pytorch
+        pip install wheel
         pip install -r requirements.txt
         python setup.py bdist_wheel
 
