@@ -53,10 +53,15 @@ fi
 
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
+export SCRIPTS_DIR=$(dirname "$0")
 
 python3 -m pip install lit
 python3 -m pip install pytest pytest-xdist pytest-rerunfailures
-python3 -m pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
+if [ "$VENV" = true ]; then
+  $SCRIPTS_DIR/compile-pytorch-ipex.sh --venv
+else
+  $SCRIPTS_DIR/compile-pytorch-ipex.sh
+fi
 if [ $? -ne 0 ]; then
   echo "FAILED: return code $?"
   exit $?
