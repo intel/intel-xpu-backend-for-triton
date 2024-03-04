@@ -1,3 +1,11 @@
+//===- AccelerateMatmul.cpp - Lower tt.dot to Intel DPAS --------*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -16,14 +24,14 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-namespace ttig = mlir::triton::gpu::intel;
+namespace ttgi = mlir::triton::gpu::intel;
 namespace {
 using tt::DotOp;
 using ttg::BlockedEncodingAttr;
 using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
 using ttg::SliceEncodingAttr;
-using ttig::DpasEncodingAttr;
+using ttgi::DpasEncodingAttr;
 
 class BlockedToDPAS : public mlir::RewritePattern {
 public:

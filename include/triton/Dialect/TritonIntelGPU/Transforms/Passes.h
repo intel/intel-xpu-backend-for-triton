@@ -1,5 +1,13 @@
-#ifndef TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H_
-#define TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H_
+//===- Passes.h - Intel Pass Construction and Registration ------*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H
+#define TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H
 
 #include "mlir/Pass/Pass.h"
 
@@ -12,4 +20,4 @@ std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass();
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
 } // namespace mlir
-#endif
+#endif // TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H
