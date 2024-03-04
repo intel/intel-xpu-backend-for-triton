@@ -167,7 +167,7 @@ def check_type_supported(dtype, device):
                 tl.float8e4nv, "float8e4nv", tl.bfloat16, "bfloat16", tl.float8e5, "float8e5", tl.float8e4b15,
                 "float8e4b15", tl.float8e4b15x4, "float8e4b15x4"
         ]:
-            pytest.skip("bfloat16 and float8 are not supported in the interpreter")
+            pytest.xfail("bfloat16 and float8 are not supported in the interpreter")
 
 
 class MmaLayout:
@@ -2759,7 +2759,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                 pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
 
     if is_interpreter() and in_dtype == 'int8':
-        pytest.skip(
+        pytest.xfail(
             "numpy.dot with int8 inputs will overflow while tl.dot doesn't because MMA instruction's accumulator is 32-bit"
         )
 
@@ -3840,7 +3840,7 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
     if is_hip():
         pytest.skip("TODO test_precise_math (added by https://github.com/openai/triton/pull/3172) does not work on HIP")
 
-    if expr_prec == 'tl.math.div_rn(x,y)':
+    if is_xpu() and expr_prec == 'tl.math.div_rn(x,y)':
         pytest.skip("FIXME: Fails to run on XPU")
 
     @triton.jit
