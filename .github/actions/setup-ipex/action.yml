@@ -1,8 +1,7 @@
 # Clones IPEX (or loads from cache) to directory "intel-extension-for-pytorch".
-# Uses the existing Python.
+# Uses the existing Python, requires PyTorch.
 # Sets the following environment variables:
 # * IPEX_REPO
-# * IPEX_BRANCH
 # * IPEX_COMMIT_ID
 name: setup-ipex
 description: Build and install IPEX wheels
@@ -13,18 +12,15 @@ inputs:
   repository:
     description: Repository name with owner
     default: intel/intel-extension-for-pytorch
-  branch:
-    description: Branch name
-    default: dev/triton-test-3.0
 runs:
   using: "composite"
   steps:
     - name: Identify commit id
       shell: bash
       run: |
+        IPEX_COMMIT_ID="$(<.github/pins/ipex.txt)"
         echo "IPEX_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
-        echo "IPEX_BRANCH=${{ inputs.branch }}" >> "$GITHUB_ENV"
-        echo "IPEX_COMMIT_ID=$(git ls-remote https://github.com/${{ inputs.repository }} refs/heads/${{ inputs.branch }} | cut -f1)" >> "$GITHUB_ENV"
+        echo "IPEX_COMMIT_ID=$IPEX_COMMIT_ID" >> "$GITHUB_ENV"
 
     - name: Identify Python version
       shell: bash
