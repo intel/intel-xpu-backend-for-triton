@@ -57,8 +57,9 @@ export IPEX_PROJ=$BASE/intel-extension-for-pytorch
 
 if [ "$CLEAN" = true ]; then
   echo "**** Cleaning $PYTORCH_PROJ and $IPEX_PROJ before build ****"
-  rm -rf $PYTORCH_PROJ $IPEX_PROJ
-  pip uninstall -y torch intel_extension_for_pytorch
+  if rm -rf $PYTORCH_PROJ $IPEX_PROJ &>/dev/null; then
+    pip uninstall -y torch intel_extension_for_pytorch
+  fi
 fi
 
 if [ "$VENV" = true ]; then
