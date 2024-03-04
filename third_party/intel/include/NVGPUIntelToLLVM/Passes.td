@@ -4,7 +4,7 @@
 include "mlir/Pass/PassBase.td"
 
 
-def ConvertNVGPUIntelToLLVM : Pass<"convert-nv-gpu-to-llvm", "mlir::ModuleOp"> {
+def ConvertNVGPUIntelToLLVM : Pass<"convert-nv-gpu-intel-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert NVGPU to LLVM";
     let description = [{
 

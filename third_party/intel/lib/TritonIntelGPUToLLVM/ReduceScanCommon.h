@@ -38,7 +38,7 @@ class ScanOp;
 } // namespace mlir::triton
 
 template <typename SourceOp>
-class ConvertTritonGPUReduceScanToLLVMPattern
+class ConvertTritonIntelGPUReduceScanToLLVMPattern
     : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
 public:
   // Make sure the class is only instantiated with Reduce and Scan
