@@ -24,7 +24,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./compile-triton.sh [--pytorch | --ipex | --clean | --venv]"
+      echo "Example usage: ./compile-pytorch-ipex.sh [--pytorch | --ipex | --clean | --venv]"
       exit 1
       ;;
     *)
@@ -62,12 +62,7 @@ if [ "$CLEAN" = true ]; then
 fi
 
 if [ "$VENV" = true ]; then
-  echo "**** Creating Python virtualenv ****"
-  python3 -m venv .venv --prompt triton
   source .venv/bin/activate
-elif [ -n "$VIRTUAL_ENV" ]; then
-  echo "**** Cleaning up Python virtualenv ****"
-  deactivate
 fi
 
 check_rc() {
