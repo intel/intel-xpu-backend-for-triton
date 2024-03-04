@@ -150,9 +150,6 @@ def test_attention_fwd_bwd(block, dtype, device, input_scale=1.0, scale=1 / 8.0,
         if capability[0] < 7:
             pytest.skip("Only test tl.dot() on devices with sm >= 70")
 
-    # Note: Triton result on XPU is correct compared to the result on CUDA.
-    pytest.skip("FIXME: Torch produces incorrect nan values")
-
     # inputs
     qkv_shape = (batch_size, n_heads, n_ctx, 64)
     qkvs = [
