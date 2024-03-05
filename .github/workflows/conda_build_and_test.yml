@@ -43,10 +43,15 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-${{ matrix.python }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
+      - name: Get LLVM commit id
+        uses: ./.github/actions/get-commit-id
+        with:
+          repository: intel/llvm.git
+          branch: genx
+          variable: LLVM_COMMIT_ID
+
       - name: Calculate env
         run: |
-          LLVM_COMMIT_ID=$(git ls-remote https://github.com/intel/llvm.git refs/heads/genx | cut -f1)
-          echo "Latest llvm genx commit id: $LLVM_COMMIT_ID"
           PACKAGES_CACHE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
           echo "PACKAGES_CACHE_KEY=$PACKAGES_CACHE_KEY" >>$GITHUB_ENV
           echo $HOME/miniconda3/bin >>$GITHUB_PATH
