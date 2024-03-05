@@ -291,8 +291,7 @@ struct GENBarrierLowering : public ConvertOpToLLVMPattern<GEN::BarrierOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto retType = LLVM::LLVMVoidType::get(rewriter.getContext());
     auto argType = rewriter.getIntegerType(32);
-    auto arg = LLVM::createConstantI32(op->getLoc(), rewriter,
-                                       MemFence::Local | MemFence::Global);
+    auto arg = LLVM::createConstantI32(op->getLoc(), rewriter, MemFence::Local);
     LLVM::CallOp callOp =
         createDeviceFunctionCall(rewriter, "_Z7barrierj", {retType}, {argType},
                                  {arg}, true /*convergent*/);
