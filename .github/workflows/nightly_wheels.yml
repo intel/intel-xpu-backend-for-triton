@@ -20,7 +20,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - pvc
+      - runner-0.0.6
     strategy:
       matrix:
         python:
