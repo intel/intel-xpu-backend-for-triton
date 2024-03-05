@@ -294,7 +294,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   tt.func @basic_program_id() {
     // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: [[GRP_ID:%.*]] = llvm.call @_Z12get_group_idj([[ZERO]]) : (i32) -> i64
-    // CHECK-NEXT: llvm.trunc [[GRP_ID]] : i64 to i32    
+    // CHECK-NEXT: llvm.trunc [[GRP_ID]] : i64 to i32
     %0 = tt.get_program_id x : i32
     tt.return
   }
@@ -776,9 +776,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT:   llvm.store [[RES_CAST]], [[BCAST]] : f32, !llvm.ptr<3>
     // CHECK-NEXT:   llvm.br ^bb4
     // CHECK-NEXT: ^bb4:
-    // CHECK:        llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()    
+    // CHECK:        llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
     // CHECK-NEXT:   {{.*}} = llvm.load [[BCAST]] : !llvm.ptr<3> -> f32
-    // CHECK:        llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()    
+    // CHECK:        llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
     %0 = "tt.atomic_cas" (%ptr, %cmp, %val) {sem = 1 : i32, scope = 1 : i32} : (!tt.ptr<f32>, f32, f32) -> f32
     tt.return
   }
@@ -915,9 +915,9 @@ tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
   // CHECK: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: [[GRP_ID_Y:%.*]] = llvm.call @_Z12get_group_idj([[ONE]]) : (i32) -> i64
   // CHECK: llvm.trunc [[GRP_ID_Y]] : i64 to i32
-  // CHECK: [[TWO:%.*]] = llvm.mlir.constant(2 : i32) : i32    
-  // CHECK: [[GRP_ID_Z:%.*]] = llvm.call @_Z12get_group_idj([[TWO]]) : (i32) -> i64    
-  // CHECK: llvm.trunc [[GRP_ID_Z]] : i64 to i32    
+  // CHECK: [[TWO:%.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK: [[GRP_ID_Z:%.*]] = llvm.call @_Z12get_group_idj([[TWO]]) : (i32) -> i64
+  // CHECK: llvm.trunc [[GRP_ID_Z]] : i64 to i32
   %blockidx = tt.get_program_id x: i32
   %blockidy = tt.get_program_id y: i32
   %blockidz = tt.get_program_id z : i32
@@ -943,7 +943,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK: [[GRID_DIM_Y:%.*]] = llvm.call @_Z14get_num_groupsj([[ONE]]) : (i32) -> i64
     // CHECK: llvm.trunc [[GRID_DIM_Y]] : i64 to i32
-    // CHECK: [[TWO:%.*]] = llvm.mlir.constant(2 : i32) : i32    
+    // CHECK: [[TWO:%.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK: [[GRID_DIM_Z:%.*]] = llvm.call @_Z14get_num_groupsj([[TWO]]) : (i32) -> i64
     // CHECK: llvm.trunc [[GRID_DIM_Z]] : i64 to i32
     %blockdimx = tt.get_num_programs {axis=0:i32} : i32
@@ -977,7 +977,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32} {
   // CHECK-LABEL: test_base_index_cache
   tt.func @test_base_index_cache(%arg0: tensor<128x32xf32, #blocked0>) {
-    // CHECK:      llvm.mlir.constant(0 : i32) : i32    
+    // CHECK:      llvm.mlir.constant(0 : i32) : i32
     // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.call @_Z12get_local_idj([[ZERO]]) : (i32) -> i64
     %0 = triton_gpu.convert_layout %arg0 : tensor<128x32xf32, #blocked0> -> tensor<128x32xf32, #shared0>
@@ -992,7 +992,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32} {
   // CHECK-LABEL: test_index_cache_different_block
   tt.func @test_index_cache_different_block(%arg0: tensor<128x32xf32, #blocked0>, %arg1: i1) {
-    // CHECK:      llvm.mlir.constant(0 : i32) : i32        
+    // CHECK:      llvm.mlir.constant(0 : i32) : i32
     // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.call @_Z12get_local_idj([[ZERO]]) : (i32) -> i64
     %0 = triton_gpu.convert_layout %arg0 : tensor<128x32xf32, #blocked0> -> tensor<128x32xf32, #shared0>
