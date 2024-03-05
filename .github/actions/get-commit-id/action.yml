@@ -1,0 +1,41 @@
+name: get-commit-id
+description: Identify the latest commit id in the specific branch
+inputs:
+  repository:
+    description: Repository name with owner
+  branch:
+    description: Branch name
+  variable:
+    description: Environment variable that will contain commit id
+    default: ""
+  retries:
+    description: Number of retries
+    default: "5"
+  delay:
+    description: Delay before retrying (see "man sleep")
+    default: "5s"
+outputs:
+  commit_id:
+    description: Commit id
+    value: ${{ steps.commit_id.outputs.commit_id }}
+runs:
+  using: "composite"
+  steps:
+    - name: Get commit id for ${{ inputs.repository }} ${{ inputs.branch }}
+      id: commit_id
+      shell: bash
+      run: |
+        for ((retry=0; retry<${{ inputs.retries }}; retry++)); do
+          commit_id="$(git ls-remote https://github.com/${{ inputs.repository }} refs/heads/${{ inputs.branch }} | cut -f1)"
+          if [[ $commit_id ]]; then
+            echo "${{ inputs.repository }} ${{ inputs.branch }}: $commit_id"
+            echo "commit_id=$commit_id" >> "$GITHUB_OUTPUT"
+            if [[ "${{ inputs.variable }}" ]]; then
+              echo "${{ inputs.variable }}=$commit_id" >> "$GITHUB_ENV"
+            fi
+            exit 0
+          fi
+          sleep ${{ inputs.delay }}
+        done
+        echo "Failed after ${{ inputs.retries }} retries."
+        exit 1
