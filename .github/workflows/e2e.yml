@@ -116,7 +116,7 @@ jobs:
       - name: Get benchmark commit id
         uses: ./.github/actions/get-commit-id
         with:
-          repository: ${{ env.$BENCHMARK_REPO }}
+          repository: ${{ env.BENCHMARK_REPO }}
           branch: ${{ env.BENCHMARK_BRANCH }}
           variable: BENCHMARK_COMMIT_ID
 
