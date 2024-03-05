@@ -51,7 +51,7 @@ llvm.func @gen_special_regs() -> i32 {
 
 llvm.func @gen.barrier() {
   // CHECK-LABEL: gen.barrier
-  // CHECK: [[CST:%.*]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK: [[CST:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: llvm.call @_Z7barrierj([[CST]]) : (i32) -> ()
   gen.barrier
   llvm.return
