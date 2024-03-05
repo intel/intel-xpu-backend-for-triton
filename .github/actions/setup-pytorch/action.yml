@@ -2,7 +2,6 @@
 # Uses the existing Python.
 # Sets the following environment variables:
 # * PYTORCH_REPO
-# * PYTORCH_BRANCH
 # * PYTORCH_COMMIT_ID
 name: setup-pytorch
 description: Build and install PyTorch wheels
@@ -13,18 +12,15 @@ inputs:
   repository:
     description: Repository name with owner
     default: Stonepia/pytorch
-  branch:
-    description: Branch name
-    default: dev/triton-test-3.0
 runs:
   using: "composite"
   steps:
     - name: Identify commit id
       shell: bash
       run: |
+        PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
         echo "PYTORCH_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
-        echo "PYTORCH_BRANCH=${{ inputs.branch }}" >> "$GITHUB_ENV"
-        echo "PYTORCH_COMMIT_ID=$(git ls-remote https://github.com/${{ inputs.repository }} refs/heads/${{ inputs.branch }} | cut -f1)" >> "$GITHUB_ENV"
+        echo "PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID" >> "$GITHUB_ENV"
 
     - name: Identify Python version
       shell: bash
@@ -62,6 +58,7 @@ runs:
         source ${{ inputs.oneapi }}/tbb/latest/env/vars.sh
 
         cd pytorch
+        pip install wheel
         pip install -r requirements.txt
         python setup.py bdist_wheel
 
