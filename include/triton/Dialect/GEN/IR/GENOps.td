@@ -30,7 +30,7 @@ class GEN_Op<string mnemonic, list<Trait> traits = []> :
 }
 
 //===----------------------------------------------------------------------===//
-// Thread index and Block index
+// Thread and Block index
 //===----------------------------------------------------------------------===//
 
 def IndexType : AnyTypeOf<[I32, I64]>;
@@ -181,7 +181,6 @@ def GEN_FpToFpOp : GEN_Op<"conv.fptofp">,
     AnyFloat:$arg,
     OptionalAttr<GEN_RoundingModeAttr>:$roundingMode
   )> {
-
   let summary = "Convert between floating point types";
 
   string baseDescription = [{
@@ -189,13 +188,11 @@ def GEN_FpToFpOp : GEN_Op<"conv.fptofp">,
     result according to `$roundingMode`.
   }];
 
-  string llvmBuilder = [{
-    $res = createGenISAFpToFp(op, builder, moduleTranslation);
+  let assemblyFormat = [{
+    $arg (` ` `{` `roundingMode` `=` $roundingMode^ `}`)? attr-dict `:` type($arg) `to` type($res)
   }];
 
-  let assemblyFormat = [{
-    $arg attr-dict `:` type($arg) `to` type($res)
-  }];
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//

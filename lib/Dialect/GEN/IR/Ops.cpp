@@ -14,6 +14,21 @@ using namespace mlir;
 using namespace mlir::triton;
 
 //===----------------------------------------------------------------------===//
+// gen.conv.fptofp
+//===----------------------------------------------------------------------===//
+
+LogicalResult GEN::FpToFpOp::verify() {
+  unsigned srcTySizeInBits = getArg().getType().getWidth();
+  unsigned resTySizeInBits = getRes().getType().getWidth();
+  if (srcTySizeInBits == resTySizeInBits)
+    return this->emitOpError(
+        "expecting first argument and result size to be different");
+  if (!getRoundingMode() && srcTySizeInBits >= resTySizeInBits)
+    return this->emitOpError("expecting rounding mode for truncation");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // gen.matrix.dpas
 //===----------------------------------------------------------------------===//
 

@@ -67,3 +67,24 @@ llvm.func @gen.sub_group_shuffle() {
   %16 = gen.sub_group_shuffle xor %15, %0 : f64 -> f64
   llvm.return
 }
+
+llvm.func @gen.fptofp(%a: f32, %b: f16) {
+  // CHECK-LABEL: gen.fptofp
+  // CHECK:      %0 = gen.conv.fptofp %arg0 {roundingMode = rte} : f32 to f16
+  // CHECK-NEXT: %1 = gen.conv.fptofp %arg0 {roundingMode = rtn} : f32 to f16
+  // CHECK-NEXT: %2 = gen.conv.fptofp %arg0 {roundingMode = rtp} : f32 to f16
+  // CHECK-NEXT: %3 = gen.conv.fptofp %arg0 {roundingMode = rtz} : f32 to f16
+  // CHECK-NEXT: %4 = gen.conv.fptofp %arg1 {roundingMode = rte} : f16 to f32
+  // CHECK-NEXT: %5 = gen.conv.fptofp %arg1 {roundingMode = rtn} : f16 to f32
+  // CHECK-NEXT: %6 = gen.conv.fptofp %arg1 {roundingMode = rtp} : f16 to f32
+  // CHECK-NEXT: %7 = gen.conv.fptofp %arg1 {roundingMode = rtz} : f16 to f32
+  %0 = gen.conv.fptofp %a {roundingMode = rte} : f32 to f16
+  %1 = gen.conv.fptofp %a {roundingMode = rtn} : f32 to f16
+  %2 = gen.conv.fptofp %a {roundingMode = rtp} : f32 to f16
+  %3 = gen.conv.fptofp %a {roundingMode = rtz} : f32 to f16
+  %4 = gen.conv.fptofp %b {roundingMode = rte} : f16 to f32
+  %5 = gen.conv.fptofp %b {roundingMode = rtn} : f16 to f32
+  %6 = gen.conv.fptofp %b {roundingMode = rtp} : f16 to f32
+  %7 = gen.conv.fptofp %b {roundingMode = rtz} : f16 to f32
+  llvm.return
+}

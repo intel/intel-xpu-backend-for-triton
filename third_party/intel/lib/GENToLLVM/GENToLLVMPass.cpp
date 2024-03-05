@@ -125,6 +125,49 @@ static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
                                   {value, mask}, true /*convergent*/);
 }
 
+static LLVM::CallIntrinsicOp createFpToFp(GEN::FpToFpOp op,
+                                          ConversionPatternRewriter &rewriter) {
+  MLIRContext *context = rewriter.getContext();
+  Location loc = UnknownLoc::get(context);
+
+  std::optional<int32_t> rounding = std::nullopt;
+  if (op.getRoundingMode())
+    switch (*op.getRoundingMode()) {
+    case GEN::RoundingMode::RTE:
+      rounding = static_cast<int32_t>(llvm::RoundingMode::NearestTiesToEven);
+      break;
+    case GEN::RoundingMode::RTN:
+      rounding = static_cast<int32_t>(llvm::RoundingMode::TowardNegative);
+      break;
+    case GEN::RoundingMode::RTP:
+      rounding = static_cast<int32_t>(llvm::RoundingMode::TowardPositive);
+      break;
+    case GEN::RoundingMode::RTZ:
+      rounding = static_cast<int32_t>(llvm::RoundingMode::TowardZero);
+      break;
+    default:
+      llvm_unreachable("Unhandled rounding mode");
+    }
+
+  Type argType = op.getArg().getType();
+  Type resType = op.getResult().getType();
+  unsigned resTySizeInBits = resType.getIntOrFloatBitWidth();
+  unsigned srcTySizeInBits = argType.getIntOrFloatBitWidth();
+  auto stringAttr =
+      (srcTySizeInBits > resTySizeInBits)
+          ? rewriter.getStringAttr("llvm.experimental.constrained.fptrunc")
+          : rewriter.getStringAttr("llvm.experimental.constrained.fpext");
+
+  if (rounding.has_value()) {
+    auto namedAttr = rewriter.getNamedAttr(
+        "roundingMode",
+        IntegerAttr::get(IntegerType::get(context, 32), rounding.value()));
+  }
+
+  return rewriter.create<LLVM::CallIntrinsicOp>(loc, resType, stringAttr,
+                                                op.getArg());
+}
+
 namespace {
 
 struct FuncCallLowering {
@@ -151,8 +194,8 @@ protected:
 //===----------------------------------------------------------------------===//
 
 template <typename SourceOp>
-struct GENThreadIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
-                             public FuncCallLowering {
+struct ThreadIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
+                          public FuncCallLowering {
   using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
   using OpAdaptor = typename SourceOp::Adaptor;
 
@@ -174,17 +217,17 @@ struct GENThreadIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
   }
 };
 
-using GENThreadIdXLowering = GENThreadIdLowering<GEN::ThreadIdXOp>;
-using GENThreadIdYLowering = GENThreadIdLowering<GEN::ThreadIdYOp>;
-using GENThreadIdZLowering = GENThreadIdLowering<GEN::ThreadIdZOp>;
+using ThreadIdXLowering = ThreadIdLowering<GEN::ThreadIdXOp>;
+using ThreadIdYLowering = ThreadIdLowering<GEN::ThreadIdYOp>;
+using ThreadIdZLowering = ThreadIdLowering<GEN::ThreadIdZOp>;
 
 //===----------------------------------------------------------------------===//
 // BlockId Ops Lowerings
 //===----------------------------------------------------------------------===//
 
 template <typename SourceOp>
-struct GENBlockIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
-                            public FuncCallLowering {
+struct BlockIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
+                         public FuncCallLowering {
   using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
   using OpAdaptor = typename SourceOp::Adaptor;
 
@@ -206,17 +249,17 @@ struct GENBlockIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
   }
 };
 
-using GENBlockIdXLowering = GENBlockIdLowering<GEN::BlockIdXOp>;
-using GENBlockIdYLowering = GENBlockIdLowering<GEN::BlockIdYOp>;
-using GENBlockIdZLowering = GENBlockIdLowering<GEN::BlockIdZOp>;
+using BlockIdXLowering = BlockIdLowering<GEN::BlockIdXOp>;
+using BlockIdYLowering = BlockIdLowering<GEN::BlockIdYOp>;
+using BlockIdZLowering = BlockIdLowering<GEN::BlockIdZOp>;
 
 //===----------------------------------------------------------------------===//
 // BlockDim Ops Lowerings
 //===----------------------------------------------------------------------===//
 
 template <typename SourceOp>
-struct GENBlockDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
-                             public FuncCallLowering {
+struct BlockDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
+                          public FuncCallLowering {
   using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
   using OpAdaptor = typename SourceOp::Adaptor;
 
@@ -238,17 +281,17 @@ struct GENBlockDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
   }
 };
 
-using GENBlockDimXLowering = GENBlockDimLowering<GEN::BlockDimXOp>;
-using GENBlockDimYLowering = GENBlockDimLowering<GEN::BlockDimYOp>;
-using GENBlockDimZLowering = GENBlockDimLowering<GEN::BlockDimZOp>;
+using BlockDimXLowering = BlockDimLowering<GEN::BlockDimXOp>;
+using BlockDimYLowering = BlockDimLowering<GEN::BlockDimYOp>;
+using BlockDimZLowering = BlockDimLowering<GEN::BlockDimZOp>;
 
 //===----------------------------------------------------------------------===//
 // GridDim Ops Lowerings
 //===----------------------------------------------------------------------===//
 
 template <typename SourceOp>
-struct GENGridDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
-                            public FuncCallLowering {
+struct GridDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
+                         public FuncCallLowering {
   using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
   using OpAdaptor = typename SourceOp::Adaptor;
 
@@ -270,15 +313,15 @@ struct GENGridDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
   }
 };
 
-using GENGridDimXLowering = GENGridDimLowering<GEN::GridDimXOp>;
-using GENGridDimYLowering = GENGridDimLowering<GEN::GridDimYOp>;
-using GENGridDimZLowering = GENGridDimLowering<GEN::GridDimZOp>;
+using GridDimXLowering = GridDimLowering<GEN::GridDimXOp>;
+using GridDimYLowering = GridDimLowering<GEN::GridDimYOp>;
+using GridDimZLowering = GridDimLowering<GEN::GridDimZOp>;
 
 //===----------------------------------------------------------------------===//
 // Synchronization Ops Lowerings
 //===----------------------------------------------------------------------===//
 
-struct GENBarrierLowering : public ConvertOpToLLVMPattern<GEN::BarrierOp> {
+struct BarrierLowering : public ConvertOpToLLVMPattern<GEN::BarrierOp> {
   using ConvertOpToLLVMPattern<GEN::BarrierOp>::ConvertOpToLLVMPattern;
 
   enum MemFence {
@@ -311,6 +354,22 @@ struct SubGroupShuffleLowering
     Value mask = op.getMask();
     GEN::ShflKind kind = op.getKind();
     LLVM::CallOp callOp = createSubGroupShuffle(rewriter, val, mask, kind);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Type Conversion Ops Lowerings
+//===----------------------------------------------------------------------===//
+
+struct FpToFpLowering : public ConvertOpToLLVMPattern<GEN::FpToFpOp> {
+  using ConvertOpToLLVMPattern<GEN::FpToFpOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(GEN::FpToFpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM::CallIntrinsicOp callOp = createFpToFp(op, rewriter);
     rewriter.replaceOp(op, callOp);
     return success();
   }
@@ -374,13 +433,14 @@ struct GENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 void mlir::triton::populateGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
   // clang-format off
-  patterns.add<GENThreadIdXLowering, GENThreadIdYLowering, GENThreadIdZLowering,
-               GENBlockIdXLowering, GENBlockIdYLowering, GENBlockIdZLowering,
-               GENBlockDimXLowering, GENBlockDimYLowering, GENBlockDimZLowering,
-               GENGridDimXLowering, GENGridDimYLowering, GENGridDimZLowering>(
+  patterns.add<ThreadIdXLowering, ThreadIdYLowering, ThreadIdZLowering,
+               BlockIdXLowering, BlockIdYLowering, BlockIdZLowering,
+               BlockDimXLowering, BlockDimYLowering, BlockDimZLowering,
+               GridDimXLowering, GridDimYLowering, GridDimZLowering>(
       converter);
   // clang-format on
-  patterns.add<GENBarrierLowering, SubGroupShuffleLowering>(converter);
+  patterns.add<BarrierLowering, SubGroupShuffleLowering>(converter);
+  patterns.add<FpToFpLowering>(converter);
 }
 
 void registerConvertGENToLLVMInterface(DialectRegistry &registry) {
