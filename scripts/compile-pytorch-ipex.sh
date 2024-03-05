@@ -85,6 +85,8 @@ build_pytorch() {
   echo "****** Building $PYTORCH_PROJ ******"
   cd $PYTORCH_PROJ
   if [ ! -d "$PYTORCH_PROJ/dist" ]; then
+    PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
+    git checkout $PYTORCH_COMMIT_ID
     pip install -r requirements.txt
     python setup.py bdist_wheel
   fi
@@ -103,6 +105,8 @@ build_ipex() {
   echo "****** Building $IPEX_PROJ ******"
   cd $IPEX_PROJ
   if [ ! -d "$IPEX_PROJ/dist" ]; then
+    IPEX_COMMIT_ID="$(<.github/pins/ipex.txt)"
+    git checkout $IPEX_COMMIT_ID
     pip install -r requirements.txt
     python setup.py bdist_wheel
   fi
