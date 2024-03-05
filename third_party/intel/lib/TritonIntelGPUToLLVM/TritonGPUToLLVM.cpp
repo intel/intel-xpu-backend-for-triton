@@ -18,6 +18,8 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "intel/include/GENToLLVM/GENToLLVMPass.h"
+#include "intel/include/GPUToGEN/GPUToGENPass.h"
+
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
@@ -310,7 +312,7 @@ struct ConvertTritonGPUToLLVM
     case Target::GENX:
       mlir::triton::populateGENToLLVMConversionPatterns(typeConverter,
                                                         patterns);
-      mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
+      mlir::triton::populateGPUToGENConversionPatterns(typeConverter, patterns);
       break;
     default:
       break;

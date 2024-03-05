@@ -1,4 +1,4 @@
-//===- Passes.h - GEN to LLVM Conversion Passes ---------------------------===//
+//===- Passes.h - GPU to GEN Conversion Passes ----------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,19 +6,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef GEN_TO_LLVM_CONVERSION_PASSES_H
-#define GEN_TO_LLVM_CONVERSION_PASSES_H
+#ifndef GPU_TO_GEN_CONVERSION_PASSES_H
+#define GPU_TO_GEN_CONVERSION_PASSES_H
 
-#include "intel/include/GENToLLVM/GENToLLVMPass.h"
+#include "intel/include/GPUToGEN/GPUToGENPass.h"
 
 namespace mlir {
 namespace triton {
 
 /// Generate the code for registering the conversion pass.
 #define GEN_PASS_REGISTRATION
-#include "intel/include/GENToLLVM/Passes.h.inc"
+#include "intel/include/GPUToGEN/Passes.h.inc"
 
 } // namespace triton
 } // namespace mlir
 
-#endif // GEN_TO_LLVM_CONVERSION_PASSES_H
+#endif // GPU_TO_GEN_CONVERSION_PASSES_H

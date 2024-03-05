@@ -7,7 +7,7 @@ add_triton_library(GENToLLVM
   GENToLLVMPass.cpp
 
   DEPENDS
-  GENConversionPassIncGen
+  GENToLLVMConversionPassIncGen
   GenISAIntrinsics
 
   LINK_LIBS PUBLIC
