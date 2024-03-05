@@ -87,6 +87,7 @@ build_pytorch() {
   if [ ! -d "$PYTORCH_PROJ/dist" ]; then
     PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
     git checkout $PYTORCH_COMMIT_ID
+    pip install cmake ninja
     pip install -r requirements.txt
     python setup.py bdist_wheel
   fi
