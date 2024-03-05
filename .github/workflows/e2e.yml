@@ -47,9 +47,9 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   USE_AOT_DEVLIST: pvc
   PYTHON_VERSION: "3.10"
-  LLVM_REPO: https://github.com/intel/llvm.git
+  LLVM_REPO: intel/llvm.git
   LLVM_BRANCH: genx
-  BENCHMARK_REPO: https://github.com/weishi-deng/benchmark.git
+  BENCHMARK_REPO: weishi-deng/benchmark.git
   BENCHMARK_BRANCH: main
 
 jobs:
@@ -106,10 +106,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Identify versions
-        run: |
-          echo "LLVM_COMMIT_ID=$(git ls-remote $LLVM_REPO refs/heads/$LLVM_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
-          echo "BENCHMARK_COMMIT_ID=$(git ls-remote $BENCHMARK_REPO refs/heads/$BENCHMARK_BRANCH | cut -f1)" >> "${GITHUB_ENV}"
+      - name: Get LLVM commit id
+        uses: ./.github/actions/get-commit-id
+        with:
+          repository: ${{ env.LLVM_REPO }}
+          branch: ${{ env.LLVM_BRANCH }}
+          variable: LLVM_COMMIT_ID
+
+      - name: Get benchmark commit id
+        uses: ./.github/actions/get-commit-id
+        with:
+          repository: ${{ env.$BENCHMARK_REPO }}
+          branch: ${{ env.$BENCHMARK_BRANCH }}
+          variable: BENCHMARK_COMMIT_ID
 
       - name: Load pip cache
         id: pip-cache
