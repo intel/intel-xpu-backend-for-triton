@@ -47,6 +47,8 @@ static LLVM::CallOp createDeviceFunctionCall(
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *context = rewriter.getContext();
   Location loc = UnknownLoc::get(context);
+  auto convergentAttr =
+      rewriter.getArrayAttr(StringAttr::get(context, "convergent"));
 
   auto getOrCreateFunction = [&](StringRef funcName) {
     Operation *funcOp = moduleOp.lookupSymbol(funcName);
@@ -58,16 +60,16 @@ static LLVM::CallOp createDeviceFunctionCall(
     rewriter.setInsertionPointToStart(moduleOp.getBody());
     auto func = rewriter.create<LLVM::LLVMFuncOp>(loc, funcName, funcType);
     func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-
     if (convergent)
-      func->setAttr("passthrough", rewriter.getArrayAttr(
-                                       StringAttr::get(context, "convergent")));
+      func->setAttr("passthrough", convergentAttr);
 
     return func;
   };
 
   LLVM::LLVMFuncOp funcOp = getOrCreateFunction(funcName);
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  if (convergent)
+    callOp->setAttr("passthrough", convergentAttr);
 
   return callOp;
 }

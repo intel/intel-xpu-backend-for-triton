@@ -35,21 +35,21 @@ class GEN_Op<string mnemonic, list<Trait> traits = []> :
 
 def IndexType : AnyTypeOf<[I32, I64]>;
 
-def GEN_ThreadIdXOp : GEN_Op<"workitem.id.x"> {
+def GEN_ThreadIdXOp : GEN_Op<"workitem.id.x", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def GEN_ThreadIdYOp : GEN_Op<"workitem.id.y"> {
+def GEN_ThreadIdYOp : GEN_Op<"workitem.id.y", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def GEN_ThreadIdZOp : GEN_Op<"workitem.id.z"> {
+def GEN_ThreadIdZOp : GEN_Op<"workitem.id.z", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
@@ -57,21 +57,21 @@ def GEN_ThreadIdZOp : GEN_Op<"workitem.id.z"> {
   }];
 }
 
-def GEN_BlockIdXOp : GEN_Op<"workgroup.id.x"> {
+def GEN_BlockIdXOp : GEN_Op<"workgroup.id.x", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def GEN_BlockIdYOp : GEN_Op<"workgroup.id.y"> {
+def GEN_BlockIdYOp : GEN_Op<"workgroup.id.y", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def GEN_BlockIdZOp : GEN_Op<"workgroup.id.z"> {
+def GEN_BlockIdZOp : GEN_Op<"workgroup.id.z", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
@@ -83,21 +83,21 @@ def GEN_BlockIdZOp : GEN_Op<"workgroup.id.z"> {
 // Block and Grid range
 //===----------------------------------------------------------------------===//
 
-def GEN_BlockDimXOp : GEN_Op<"workgroup.dim.x"> {
+def GEN_BlockDimXOp : GEN_Op<"workgroup.dim.x", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def GEN_BlockDimYOp : GEN_Op<"workgroup.dim.y"> {
+def GEN_BlockDimYOp : GEN_Op<"workgroup.dim.y", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def GEN_BlockDimZOp : GEN_Op<"workgroup.dim.z"> {
+def GEN_BlockDimZOp : GEN_Op<"workgroup.dim.z", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
@@ -105,21 +105,21 @@ def GEN_BlockDimZOp : GEN_Op<"workgroup.dim.z"> {
   }];
 }
 
-def GEN_GridDimXOp : GEN_Op<"grid.dim.x"> {
+def GEN_GridDimXOp : GEN_Op<"grid.dim.x", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def GEN_GridDimYOp : GEN_Op<"grid.dim.y"> {
+def GEN_GridDimYOp : GEN_Op<"grid.dim.y", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def GEN_GridDimZOp : GEN_Op<"grid.dim.z"> {
+def GEN_GridDimZOp : GEN_Op<"grid.dim.z", [NoMemoryEffect]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
