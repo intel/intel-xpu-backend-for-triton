@@ -8,6 +8,7 @@
 #include "triton/Dialect/GEN/IR/Dialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
@@ -25,6 +26,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability) {
     pm.addPass(mlir::triton::createConvertTritonIntelGPUToLLVMPass(
         capability, mlir::triton::GENX));
+  });
+  m.def("add_accelerate_matmul", [](mlir::PassManager &self) {
+    self.addPass(mlir::createTritonIntelGPUAccelerateMatmulPass());
   });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(createIntelDecomposeUnsupportedConversionsPass());

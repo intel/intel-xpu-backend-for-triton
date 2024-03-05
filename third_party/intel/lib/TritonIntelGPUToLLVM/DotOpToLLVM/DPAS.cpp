@@ -4,6 +4,7 @@
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -12,25 +13,11 @@
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::gpu::intel;
 using mlir::triton::gpu::DotOperandEncodingAttr;
 using mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace {
-
-// data type for D_C_A_B.
-enum class DPASEngineType : uint8_t {
-  // floating-point XMX engine instr
-  FP32_FP32_FP16_FP16 = 0, // default
-  FP32_FP32_BF16_BF16,
-  FP32_FP32_TF32_TF32,
-  FP16_FP16_FP16_FP16,
-  BF16_BF16_BF16_BF16,
-  // integer XMX engine instr
-  U32_U32_U8_U8,
-  S32_S32_S8_S8,
-  //
-  NOT_APPLICABLE,
-};
 
 class DotOpDPASConversionHelper {
 public:
@@ -43,48 +30,8 @@ public:
       : dpasLayout(dpasLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
 
-  static DPASEngineType getDPASType(triton::DotOp op) {
-    Value A = op.getA();
-    Value B = op.getB();
-    auto aTy = A.getType().cast<RankedTensorType>();
-    auto bTy = B.getType().cast<RankedTensorType>();
-    // d = a*b + c
-    auto dTy = op.getD().getType().cast<RankedTensorType>();
-
-    // TODO: add more dpas supported data type.
-    if (dTy.getElementType().isIntOrIndex()) {
-      // Integer
-      if (dTy.getElementType().getIntOrFloatBitWidth() == 32) {
-        if (aTy.getElementType().getIntOrFloatBitWidth() == 8 &&
-            bTy.getElementType().getIntOrFloatBitWidth() == 8)
-          return dTy.getElementType().isSignedInteger()
-                     ? DPASEngineType::S32_S32_S8_S8
-                     : DPASEngineType::U32_U32_U8_U8;
-      }
-    } else {
-      // floating.
-      if (dTy.getElementType().isF32()) {
-        if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
-          return DPASEngineType::FP32_FP32_FP16_FP16;
-        if (aTy.getElementType().isBF16() && bTy.getElementType().isBF16())
-          return DPASEngineType::FP32_FP32_BF16_BF16;
-        if (aTy.getElementType().isF32() && bTy.getElementType().isF32() &&
-            op.getAllowTF32())
-          return DPASEngineType::FP32_FP32_TF32_TF32;
-      } else if (dTy.getElementType().isF16()) {
-        if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
-          return DPASEngineType::FP16_FP16_FP16_FP16;
-      } else if (dTy.getElementType().isBF16()) {
-        if (aTy.getElementType().isBF16() && bTy.getElementType().isBF16())
-          return DPASEngineType::BF16_BF16_BF16_BF16;
-      }
-    }
-
-    return DPASEngineType::NOT_APPLICABLE;
-  }
-
-  std::tuple<Type, Type, Type, Type> static getMmaOperandsType(
-      DPASEngineType mmaType, MLIRContext *ctx, DpasEncodingAttr layout) {
+  std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
+      DPASEngineType dpasType, MLIRContext *ctx, DpasEncodingAttr layout) {
     Type fp32Ty = type::f32Ty(ctx);
     Type fp16Ty = type::f16Ty(ctx);
     Type bf16Ty = type::bf16Ty(ctx);
@@ -100,7 +47,7 @@ public:
     unsigned elemNumA = product<unsigned>(shapeA) / threadsPerWarp;
     SmallVector<unsigned> shapeB = layout.getShapeB();
     unsigned elemNumB = product<unsigned>(shapeB) / threadsPerWarp;
-    switch (mmaType) {
+    switch (dpasType) {
     case DPASEngineType::FP32_FP32_FP16_FP16: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
       Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
@@ -194,11 +141,11 @@ public:
 
     unsigned repM = repA[0], repN = repB[1], repK = repA[1];
 
-    auto mmaType = getDPASType(op);
-    auto mmaEncoding = DTensorTy.getEncoding().cast<DpasEncodingAttr>();
+    auto dpasType = getDPASType(op);
+    auto dpasEncoding = DTensorTy.getEncoding().cast<DpasEncodingAttr>();
     Type aTy, bTy, cTy, dTy;
     std::tie(dTy, cTy, aTy, bTy) =
-        getMmaOperandsType(mmaType, op.getContext(), mmaEncoding);
+        getDPASOperandsType(dpasType, op.getContext(), dpasEncoding);
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, repM, repK,
         typeConverter->convertType(ATensorTy.getElementType()), aTy);
@@ -232,7 +179,7 @@ public:
       auto pA = GENX::PrecisionTypeAttr::get(A.getContext(), APrecision);
       auto pB = GENX::PrecisionTypeAttr::get(B.getContext(), BPrecision);
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
-                                 mmaEncoding.getRepeatCount());
+                                 dpasEncoding.getRepeatCount());
 
       auto ret = rewriter.create<GENX::MatrixDPASOp>(loc, dTy, valc, valA, valB,
                                                      pA, pB, RC);
