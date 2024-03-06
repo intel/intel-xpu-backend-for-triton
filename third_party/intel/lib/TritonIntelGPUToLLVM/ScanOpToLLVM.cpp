@@ -300,13 +300,13 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
     auto lastElement = srcValues[srcIndex];
     if (scanDim > 1) {
       for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
-        lastElement[i] = shflUpSync(loc, rewriter, srcValues[srcIndex][i],
-                                    threadStride);
+        lastElement[i] =
+            shflUpSync(loc, rewriter, srcValues[srcIndex][i], threadStride);
         lastElement[i] = select(maskFirstLane, accumulator[i], lastElement[i]);
         if (numScanBlocks > 1)
           // Update accumulator with the value from the last lane.
-          accumulator[i] = shflIdxSync(loc, rewriter, srcValues[srcIndex][i],
-                                       laneIdLast);
+          accumulator[i] =
+              shflIdxSync(loc, rewriter, srcValues[srcIndex][i], laneIdLast);
       }
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
@@ -443,9 +443,10 @@ unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 
 // Flip the srcValues. Both reverses the chunks and reverses the lanes.
 // Lane reversal is done with a butterfly shuffle flip (divide and flip).
-SmallVector<SmallVector<Value>> flipSrcValues(
-    Location loc, triton::ScanOp op, ConversionPatternRewriter &rewriter,
-    SmallVector<SmallVector<Value>> srcValues, int iWarpSize) {
+SmallVector<SmallVector<Value>>
+flipSrcValues(Location loc, triton::ScanOp op,
+              ConversionPatternRewriter &rewriter,
+              SmallVector<SmallVector<Value>> srcValues, int iWarpSize) {
   SmallVector<SmallVector<Value>> values(srcValues.size());
   for (int i = 0; i < srcValues.size(); ++i) {
     int revIndex = srcValues.size() - i - 1;
