@@ -116,8 +116,8 @@ jobs:
       - name: Get benchmark commit id
         uses: ./.github/actions/get-commit-id
         with:
-          repository: ${{ env.$BENCHMARK_REPO }}
-          branch: ${{ env.$BENCHMARK_BRANCH }}
+          repository: ${{ env.BENCHMARK_REPO }}
+          branch: ${{ env.BENCHMARK_BRANCH }}
           variable: BENCHMARK_COMMIT_ID
 
       - name: Load pip cache
@@ -313,10 +313,18 @@ jobs:
           path: ${{ steps.torchaudio-cache.outputs.path }}
           dest: ${{ steps.torchaudio-cache.outputs.dest }}
 
+      - name: Clone pytorch benchmark
+        if: ${{ matrix.suite == 'torchbench' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BENCHMARK_REPO }}
+          ref: ${{ env.BENCHMARK_BRANCH }}
+          submodules: recursive
+          path: benchmark
+
       - name: Install pytorch benchmark
         if: ${{ matrix.suite == 'torchbench' }}
         run: |
-          git clone --single-branch -b $BENCHMARK_BRANCH --recurse-submodules --jobs 8 $BENCHMARK_REPO
           cd benchmark
           python install.py
           pip install -e .
