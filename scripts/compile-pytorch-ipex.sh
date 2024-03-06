@@ -34,17 +34,6 @@ for arg in "$@"; do
   esac
 done
 
-if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ]; then
-  # Avoid overriding the user's existing PyTorch by default.
-  if ! pip show torch &>/dev/null; then
-    BUILD_PYTORCH=true
-  fi
-  # Avoid overriding the user's existing IPEX by default.
-  if ! pip show intel_extension_for_pytorch &>/dev/null; then
-    BUILD_IPEX=true
-  fi
-fi
-
 set +o xtrace
 if [ -z "$BASE" ]; then
   echo "**** BASE is not given *****"
@@ -59,6 +48,17 @@ if [ "$CLEAN" = true ]; then
   echo "**** Cleaning $PYTORCH_PROJ and $IPEX_PROJ before build ****"
   if rm -rf $PYTORCH_PROJ $IPEX_PROJ &>/dev/null; then
     pip uninstall -y torch intel_extension_for_pytorch
+  fi
+fi
+
+if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ]; then
+  # Avoid overriding the user's existing PyTorch by default.
+  if ! pip show torch &>/dev/null; then
+    BUILD_PYTORCH=true
+  fi
+  # Avoid overriding the user's existing IPEX by default.
+  if ! pip show intel_extension_for_pytorch &>/dev/null; then
+    BUILD_IPEX=true
   fi
 fi
 
@@ -89,10 +89,12 @@ build_pytorch() {
     git checkout $PYTORCH_COMMIT_ID
     git submodule update --recursive
     pip install cmake ninja
+    pip install mkl-static mkl-include
     pip install -r requirements.txt
     python setup.py bdist_wheel
   fi
   pip install dist/*.whl
+  cd $BASE
   python -c "import torch;print(torch.__version__)"
   check_rc
 }
@@ -116,6 +118,7 @@ build_ipex() {
     python setup.py bdist_wheel
   fi
   pip install dist/*.whl
+  cd $BASE
   python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
   check_rc
 }
