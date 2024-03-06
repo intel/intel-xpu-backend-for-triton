@@ -33,9 +33,12 @@ runs:
     - name: Load PyTorch from a cache
       id: pytorch-cache
       uses: ./.github/actions/load
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: "1"
       with:
         path: pytorch
-        key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID
+        key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID-$CACHE_NUMBER
 
     - name: Clone PyTorch repository
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
@@ -56,6 +59,7 @@ runs:
         export LD_LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LD_LIBRARY_PATH}
         export LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LIBRARY_PATH}
         source ${{ inputs.oneapi }}/tbb/latest/env/vars.sh
+        source ${{ inputs.oneapi }}/mkl/latest/env/vars.sh
 
         cd pytorch
         pip install wheel
