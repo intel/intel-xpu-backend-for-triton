@@ -528,8 +528,8 @@ private:
     auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
-    Value smemBase = LLVM::utils::getSharedMemoryBase(
-        loc, rewriter, op.getOperation(), target);
+    Value smemBase =
+        LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
     smemBase = bitcast(smemBase, elemPtrTy);
     auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
 
@@ -608,8 +608,8 @@ private:
 
     if (shouldUseDistSmem(srcLayout, dstLayout))
       return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
-    Value smemBase = LLVM::utils::getSharedMemoryBase(
-        loc, rewriter, op.getOperation(), target);
+    Value smemBase =
+        LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
@@ -874,8 +874,8 @@ private:
     assert(srcTy.getShape().size() == 2 ||
            (srcTy.getShape().size() <= 3 && outOrd[2] == 0) &&
                "Unexpected rank of ConvertLayout(blocked->shared)");
-    Value smemBase = LLVM::utils::getSharedMemoryBase(
-        loc, rewriter, op.getOperation(), target);
+    Value smemBase =
+        LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
@@ -1115,6 +1115,6 @@ private:
 
 void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, Target target, PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, target, benefit);
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
 }

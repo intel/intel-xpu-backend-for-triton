@@ -62,7 +62,7 @@ static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx, Target target)
+  explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
@@ -77,9 +77,8 @@ public:
 
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   triton::Target target, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps),
-        target(target) {}
+                   PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
 
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
@@ -142,35 +141,17 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     }
 
     auto ctx = funcOp->getContext();
-
-    switch (target) {
-    case Target::NVVM:
-    case Target::ROCDL:
-      if (LLVM::utils::isKernel(funcOp)) {
-        // Set an attribute to indicate this function is a kernel entry.
-        newFuncOp->setAttr("nvvm.kernel",
-                           rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-      }
-      // Set an attribute for maxntidx, it could be used in latter LLVM codegen
-      // for `nvvm.annotation` metadata.
-      newFuncOp->setAttr("nvvm.maxntid",
-                         rewriter.getDenseI32ArrayAttr(32 * numWarps));
-      break;
-    case Target::GENX:
-      NamedAttrList attrs;
-      auto mod = funcOp->getParentOfType<ModuleOp>();
-      int threadsPerWarp =
-          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-      if (LLVM::utils::isKernel(funcOp))
-        attrs.append(GENX::GENXDialect::getKernelFuncAttrName(),
-                     rewriter.getI32IntegerAttr(1));
-      attrs.append(GENX::GENXDialect::getMaxWorkGroupSizeAttrName(),
-                   rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
-      attrs.append(GENX::GENXDialect::getReqdSubGroupSizeAttrName(),
-                   rewriter.getI32ArrayAttr(threadsPerWarp));
-      newFuncOp->setDialectAttrs(attrs);
-      break;
-    }
+    NamedAttrList attrs;
+    auto mod = funcOp->getParentOfType<ModuleOp>();
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    if (LLVM::utils::isKernel(funcOp))
+      attrs.append(GENX::GENXDialect::getKernelFuncAttrName(),
+                   rewriter.getI32IntegerAttr(1));
+    attrs.append(GENX::GENXDialect::getMaxWorkGroupSizeAttrName(),
+                 rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
+    attrs.append(GENX::GENXDialect::getReqdSubGroupSizeAttrName(),
+                 rewriter.getI32ArrayAttr(threadsPerWarp));
+    newFuncOp->setDialectAttrs(attrs);
     if (!LLVM::utils::isKernel(funcOp)) {
       // The noinline attribute will be used by the LLVM codegen to prevent
       // inlining.
@@ -187,25 +168,14 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
 private:
   int numWarps{0};
-  triton::Target target;
 };
 
 class TritonLLVMConversionTarget : public ConversionTarget {
 public:
-  explicit TritonLLVMConversionTarget(MLIRContext &ctx, Target target)
+  explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    switch (target) {
-    case Target::NVVM:
-      addLegalDialect<NVVM::NVVMDialect>();
-      addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
-      break;
-    case Target::GENX:
-      addLegalDialect<GENX::GENXDialect>();
-      break;
-    default:
-      break;
-    }
+    addLegalDialect<GENX::GENXDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
@@ -225,8 +195,8 @@ struct ConvertTritonGPUToLLVM
                     NVVM::NVVMDialect, GEN::GENDialect, GENX::GENXDialect>();
   }
 
-  ConvertTritonGPUToLLVM(int32_t computeCapability, Target target)
-      : ConvertTritonIntelGPUToLLVMBase({computeCapability, target}) {}
+  ConvertTritonGPUToLLVM(int32_t computeCapability)
+      : ConvertTritonIntelGPUToLLVMBase({computeCapability}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -235,7 +205,7 @@ struct ConvertTritonGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option);
-    TritonLLVMConversionTarget convTarget(*context, target);
+    TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -252,9 +222,9 @@ struct ConvertTritonGPUToLLVM
     {
       mlir::LowerToLLVMOptions option(context);
       TritonIntelGPUToLLVMTypeConverter typeConverter(context, option);
-      TritonLLVMFunctionConversionTarget funcTarget(*context, target);
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, target,
+      funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                          /*benefit=*/1);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
@@ -263,58 +233,40 @@ struct ConvertTritonGPUToLLVM
         return signalPassFailure();
     }
 
-    // initSharedMemory is run before the conversion of call and ret ops,
-    // because the call op has to know the shared memory base address of each
-    // function
-    initSharedMemory(typeConverter, target);
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
     int benefit = 10;
     using namespace mlir::triton::intel;
-    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, target,
-                                          benefit);
-    populateDotOpToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
-                                        axisInfoAnalysis, computeCapability,
-                                        target, benefit);
+    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populateElementwiseOpToLLVMPatterns(
+        typeConverter, patterns, axisInfoAnalysis, computeCapability, benefit);
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
-                                      target, benefit);
+                                      benefit);
     populateReduceOpToLLVMPatterns(typeConverter, patterns, computeCapability,
-                                   target, benefit);
-    populateScanOpToLLVMPatterns(typeConverter, patterns, target, benefit);
+                                   benefit);
+    populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
-    populateBarrierOpToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, target,
-                                       benefit);
-    populateClusterOpsToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populateHistogramOpToLLVMPatterns(typeConverter, patterns, target, benefit);
-    populatePrintOpToLLVMPattern(typeConverter, patterns, target, benefit);
-    populateAssertOpToLLVMPattern(typeConverter, patterns, target, benefit);
-    populateMemoryOpToLLVMPattern(typeConverter, patterns, target, benefit);
-    populateControlFlowOpToLLVMPattern(typeConverter, patterns, target,
-                                       benefit);
-    populateMakeRangeOpToLLVMPattern(typeConverter, patterns, target, benefit);
-    populateSPMDOpToLLVMPattern(typeConverter, patterns, target, benefit);
+    populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
+    populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
+    populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
+    populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
+    populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
+    populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
+    populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
+    populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    switch (target) {
-    case Target::NVVM:
-      mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
-      break;
-    case Target::GENX:
-      mlir::triton::populateGENToLLVMConversionPatterns(typeConverter,
-                                                        patterns);
-      mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
-      break;
-    default:
-      break;
-    }
+    mlir::triton::populateGENToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
@@ -331,34 +283,6 @@ struct ConvertTritonGPUToLLVM
   }
 
 private:
-  void initSharedMemory(LLVMTypeConverter &typeConverter, Target target) {
-    ModuleOp mod = getOperation();
-    OpBuilder b(mod.getBodyRegion());
-    auto ctx = mod.getContext();
-    auto loc = mod.getLoc();
-    auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-    switch (target) {
-    case Target::NVVM:
-    case Target::ROCDL: {
-      // Set array size 0 and external linkage indicates that we use dynamic
-      // shared allocation to allow a larger shared memory size for each kernel.
-      //
-      // Ask for 16B alignment on global_smem because that's the largest we
-      // should ever need (4xi32).
-      auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-      auto global = b.create<LLVM::GlobalOp>(
-          loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
-          "global_smem", /*value=*/Attribute(), /*alignment=*/16,
-          // Add ROCm support.
-          static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
-    } break;
-    case Target::GENX: {
-    } break;
-    default:
-      break;
-    }
-  }
-
   // pass ws related named attrs.
   static void addWSNamedAttrs(Operation *op,
                               ArrayRef<mlir::NamedAttribute> attrs) {
@@ -369,14 +293,6 @@ private:
   }
 
   void decomposeInsertSliceAsyncOp(ModuleOp mod) const {
-
-    // The function has been deprecated upstream but is required to work on
-    // genx. The current rewrite pattern for InsertSliceAsync generates PTX and
-    // there is no matching instruciton on genx at the moment.
-    // FIXME: remove this function once a suitable replacement is available.
-    if (target != triton::Target::GENX)
-      return;
-
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     // TODO(Keren): This is a hacky knob that may cause performance regression
     // when decomposition has been performed. We should remove this knob once we
@@ -499,9 +415,8 @@ createConvertTritonIntelGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
 }
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonIntelGPUToLLVMPass(int32_t computeCapability,
-                                      Target target) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, target);
+createConvertTritonIntelGPUToLLVMPass(int32_t computeCapability) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
 }
 
 } // namespace triton
