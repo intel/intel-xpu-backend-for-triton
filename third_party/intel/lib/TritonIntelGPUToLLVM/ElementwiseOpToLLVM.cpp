@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 
 using ::mlir::triton::intel::PTXBuilder;
@@ -1695,7 +1696,7 @@ struct FpToFpOpConversion
     } break;
     case mlir::triton::Target::GENX: {
       auto ctx = rewriter.getContext();
-      return rewriter.create<GEN::FpToFpOp>(loc, f32_ty, v);
+      return rewriter.create<GENX::FpToFpOp>(loc, f32_ty, v);
     }
     default:
       assert(false && "TODO");
@@ -1785,13 +1786,13 @@ struct FpToFpOpConversion
       auto ctx = rewriter.getContext();
       switch (rounding) {
       case RoundingMode::RTNE:
-        return rewriter.create<GEN::FpToFpOp>(
+        return rewriter.create<GENX::FpToFpOp>(
             loc, f16_ty, v,
-            GEN::RoundingModeAttr::get(ctx, GEN::RoundingMode::RTE));
+            GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTE));
       case RoundingMode::RTZ:
-        return rewriter.create<GEN::FpToFpOp>(
+        return rewriter.create<GENX::FpToFpOp>(
             loc, f16_ty, v,
-            GEN::RoundingModeAttr::get(ctx, GEN::RoundingMode::RTZ));
+            GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTZ));
       default:
         llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
                         "conversion: "

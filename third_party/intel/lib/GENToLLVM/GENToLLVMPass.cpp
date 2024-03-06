@@ -166,6 +166,8 @@ static LLVM::CallIntrinsicOp createFpToFp(GEN::FpToFpOp op,
         IntegerAttr::get(IntegerType::get(context, 32), rounding.value()));
   }
 
+  // TODO: currently the LLVM dialect is unable to translate an intrinsic call
+  // with metadata correctly.
   return rewriter.create<LLVM::CallIntrinsicOp>(loc, resType, stringAttr,
                                                 op.getArg());
 }
