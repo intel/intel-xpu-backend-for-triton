@@ -59,10 +59,10 @@ runs:
         export LD_LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LD_LIBRARY_PATH}
         export LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LIBRARY_PATH}
         source ${{ inputs.oneapi }}/tbb/latest/env/vars.sh
-        source ${{ inputs.oneapi }}/mkl/latest/env/vars.sh
 
         cd pytorch
         pip install wheel
+        pip install mkl-static mkl-include
         pip install -r requirements.txt
         python setup.py bdist_wheel
 
