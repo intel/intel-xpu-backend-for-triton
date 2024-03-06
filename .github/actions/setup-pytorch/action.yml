@@ -53,22 +53,16 @@ runs:
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
       shell: bash
       run: |
-        source ${{ inputs.oneapi }}/compiler/latest/env/vars.sh
-        source ${{ inputs.oneapi }}/mkl/latest/env/vars.sh
-        export MKL_DPCPP_ROOT=${{ inputs.oneapi }}/mkl/latest
-        export LD_LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LD_LIBRARY_PATH}
-        export LIBRARY_PATH=${MKL_DPCPP_ROOT}/lib:${MKL_DPCPP_ROOT}/lib64:${MKL_DPCPP_ROOT}/lib/intel64:${LIBRARY_PATH}
-        source ${{ inputs.oneapi }}/tbb/latest/env/vars.sh
-
+        source ${{ inputs.oneapi }}/setvars.sh
         cd pytorch
         pip install wheel
-        pip install mkl-static mkl-include
         pip install -r requirements.txt
         python setup.py bdist_wheel
 
     - name: Install PyTorch
       shell: bash
       run: |
+        source ${{ inputs.oneapi }}/setvars.sh
         pip install pytorch/dist/*.whl
         python -c "import torch;print(torch.__version__)"
 
