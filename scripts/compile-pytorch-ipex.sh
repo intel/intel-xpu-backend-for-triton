@@ -93,6 +93,8 @@ build_pytorch() {
     python setup.py bdist_wheel
   fi
   pip install dist/*.whl
+  python -c "import torch;print(torch.__version__)"
+  check_rc
 }
 
 ############################################################################
@@ -114,6 +116,8 @@ build_ipex() {
     python setup.py bdist_wheel
   fi
   pip install dist/*.whl
+  python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
+  check_rc
 }
 
 build() {
