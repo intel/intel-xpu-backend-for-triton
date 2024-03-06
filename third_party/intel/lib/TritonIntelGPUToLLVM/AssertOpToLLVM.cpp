@@ -33,7 +33,7 @@ struct AssertOpConversion
       }
     }
     llAssert(op, condition, adaptor.getMessage(), adaptor.getFile(),
-             adaptor.getFunc(), adaptor.getLine(), rewriter, target);
+             adaptor.getFunc(), adaptor.getLine(), rewriter);
     rewriter.eraseOp(op);
     return success();
   }
@@ -42,7 +42,7 @@ struct AssertOpConversion
   // know about the op to split the block.
   static void llAssert(Operation *op, Value condition, StringRef message,
                        StringRef file, StringRef func, int line,
-                       ConversionPatternRewriter &rewriter, Target target) {
+                       ConversionPatternRewriter &rewriter) {
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
     auto ctx = rewriter.getContext();
     auto loc = op->getLoc();
@@ -57,11 +57,10 @@ struct AssertOpConversion
     Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
     rewriter.setInsertionPointToStart(ifBlock);
 
-    auto funcOp = getAssertfailDeclaration(rewriter, target);
+    auto funcOp = getAssertfailDeclaration(rewriter);
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    unsigned addrSpace =
-        (target == Target::GENX) ? GEN::GENMemorySpace::kCrossWorkgroup : 0;
+    unsigned addrSpace = GEN::GENMemorySpace::kCrossWorkgroup;
     Value messageString = LLVM::utils::addStringToModule(
         loc, rewriter, "assertMessage_", message, addrSpace);
     Value fileString = LLVM::utils::addStringToModule(
@@ -71,24 +70,15 @@ struct AssertOpConversion
     Value lineNumber = i32_val(line);
 
     SmallVector<Value> operands;
-    if (target == Target::GENX) {
-      Value messageStringPtr = addrspacecast(
-          ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), messageString);
-      Value fileStringPtr =
-          addrspacecast(ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), fileString);
-      Value funcStringPtr =
-          addrspacecast(ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), funcString);
-      operands = {messageStringPtr, fileStringPtr, lineNumber, funcStringPtr};
-    } else {
-      Value charSize = int_val(sizeof(size_t) * 8, sizeof(char));
-      operands = {messageString, fileString, lineNumber, funcString,
-                  int_val(sizeof(size_t) * 8, sizeof(char))};
-    }
+    Value messageStringPtr = addrspacecast(
+        ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), messageString);
+    Value fileStringPtr =
+        addrspacecast(ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), fileString);
+    Value funcStringPtr =
+        addrspacecast(ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), funcString);
+    operands = {messageStringPtr, fileStringPtr, lineNumber, funcStringPtr};
     auto ret = call(funcOp, operands);
-
-    if (target == Target::GENX) {
-      ret.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    }
+    ret.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
     // Split a block after the call.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
@@ -99,11 +89,10 @@ struct AssertOpConversion
   }
 
   static LLVM::LLVMFuncOp
-  getAssertfailDeclaration(ConversionPatternRewriter &rewriter, Target target) {
+  getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    StringRef funcName =
-        (target == Target::GENX) ? "__assert_fail" : "__assertfail";
+    StringRef funcName = "__assert_fail";
     Operation *funcOp = moduleOp.lookupSymbol(funcName);
     if (funcOp)
       return cast<LLVM::LLVMFuncOp>(*funcOp);
@@ -112,14 +101,9 @@ struct AssertOpConversion
     // int line, const char * function);
     auto *ctx = rewriter.getContext();
     SmallVector<Type> argsType;
-    if (target == Target::GENX) {
-      argsType = {ptr_ty(ctx, GEN::GENMemorySpace::kGeneric),
-                  ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), i32_ty,
-                  ptr_ty(ctx, GEN::GENMemorySpace::kGeneric)};
-    } else {
-      argsType = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
-                  rewriter.getIntegerType(sizeof(size_t) * 8)};
-    }
+    argsType = {ptr_ty(ctx, GEN::GENMemorySpace::kGeneric),
+                ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), i32_ty,
+                ptr_ty(ctx, GEN::GENMemorySpace::kGeneric)};
     auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
 
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
@@ -127,9 +111,7 @@ struct AssertOpConversion
 
     auto func = rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx),
                                                   funcName, funcType);
-    if (target == Target::GENX) {
-      func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    }
+    func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
     return func;
   }
 };
@@ -138,6 +120,6 @@ struct AssertOpConversion
 
 void mlir::triton::intel::populateAssertOpToLLVMPattern(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, Target target, PatternBenefit benefit) {
-  patterns.add<AssertOpConversion>(typeConverter, target, benefit);
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<AssertOpConversion>(typeConverter, benefit);
 }

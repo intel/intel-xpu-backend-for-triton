@@ -15,8 +15,8 @@ struct AllocTensorOpConversion
   matchAndRewrite(triton::gpu::AllocTensorOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    Value smemBase = LLVM::utils::getSharedMemoryBase(
-        loc, rewriter, op.getOperation(), target);
+    Value smemBase =
+        LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto resultTy = op.getType().dyn_cast<RankedTensorType>();
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     auto typeConverter = getTypeConverter();
@@ -63,7 +63,7 @@ struct DeallocTensorOpConversion
 
 void mlir::triton::intel::populateMemoryOpToLLVMPattern(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, Target target, PatternBenefit benefit) {
-  patterns.add<AllocTensorOpConversion>(typeConverter, target, benefit);
-  patterns.add<DeallocTensorOpConversion>(typeConverter, target, benefit);
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<AllocTensorOpConversion>(typeConverter, benefit);
+  patterns.add<DeallocTensorOpConversion>(typeConverter, benefit);
 }

@@ -21,11 +21,8 @@ namespace py = pybind11;
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton::gpu;
-  // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
-  // nvidia-specificontext
   m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability) {
-    pm.addPass(mlir::triton::createConvertTritonIntelGPUToLLVMPass(
-        capability, mlir::triton::GENX));
+    pm.addPass(mlir::triton::createConvertTritonIntelGPUToLLVMPass(capability));
   });
   m.def("add_accelerate_matmul", [](mlir::PassManager &self) {
     self.addPass(mlir::createTritonIntelGPUAccelerateMatmulPass());

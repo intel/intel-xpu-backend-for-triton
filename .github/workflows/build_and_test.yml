@@ -137,12 +137,11 @@ jobs:
       - name: Build Triton
         run: |
           cd python
-          pip install wheel
-          pip install --no-build-isolation '.[tests]'
+          pip install wheel pytest pytest-xdist pytest-rerunfailures
+          pip install --no-build-isolation '.[build,tests,tutorials]'
 
       - name: Run lit tests
         run: |
-          pip install lit
           cd python
           lit -v build/*/test
 
@@ -152,7 +151,6 @@ jobs:
 
       - name: Run core tests
         run: |
-          pip install pytest pytest-xdist
           cd python/test/unit
           python3 -m pytest --junitxml=~/reports/language.xml -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
           # run runtime tests serially to avoid race condition with cache handling.
@@ -186,7 +184,6 @@ jobs:
 
       - name: Regression tests
         run: |
-          pip install pytest-rerunfailures
           cd python/test/regression
           python3 -m pytest --junitxml=~/reports/regression.xml -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
 
@@ -197,7 +194,6 @@ jobs:
 
       - name: Run Tutorials
         run: |
-          pip install matplotlib pandas tabulate
           cd python/tutorials
           python3 01-vector-add.py
           python3 02-fused-softmax.py
@@ -215,6 +211,19 @@ jobs:
         run: |
           cd python/build/*cmake*
           ctest
+
+      - name: Run E2E test
+        run: |
+          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
+          export WORKSPACE=$GITHUB_WORKSPACE
+          cd pytorch
+          TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
+          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+          # TODO: Find the fastest Hugging Face model
+          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
+          cat $WORKSPACE/inductor_log/*/*/*.csv
+          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
