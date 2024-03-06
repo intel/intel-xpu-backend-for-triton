@@ -182,3 +182,8 @@ void mlir::triton::populateGPUToGENConversionPatterns(
   populateOpPatterns<math::SinOp>(converter, patterns, (prefix + "sinf").str(),
                                   (prefix + "sind").str());
 }
+
+std::unique_ptr<OperationPass<mlir::gpu::GPUModuleOp>>
+mlir::triton::createLowerGPUToGENPass(unsigned indexBitwidth) {
+  return std::make_unique<GPUToGENPass>(indexBitwidth);
+}

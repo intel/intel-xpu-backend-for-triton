@@ -34,6 +34,9 @@ void populateGPUToGENConversionPatterns(LLVMTypeConverter &converter,
 
 void configureGPUToGENConversionLegality(ConversionTarget &target);
 
+std::unique_ptr<OperationPass<mlir::gpu::GPUModuleOp>>
+createLowerGPUToGENPass(unsigned indexBitwidth);
+
 } // namespace triton
 } // namespace mlir
 

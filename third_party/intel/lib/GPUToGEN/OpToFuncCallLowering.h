@@ -5,8 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-#ifndef MLIR_CONVERSION_GPUCOMMON_OPTOFUNCCALLLOWERING_H_
-#define MLIR_CONVERSION_GPUCOMMON_OPTOFUNCCALLLOWERING_H_
+
+#ifndef TRITON_CONVERSION_GPUTOGEN_OPTOFUNCCALLLOWERING_H
+#define TRITON_CONVERSION_GPUTOGEN_OPTOFUNCCALLLOWERING_H
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -117,4 +118,4 @@ private:
 
 } // namespace mlir
 
-#endif // MLIR_CONVERSION_GPUCOMMON_OPTOFUNCCALLLOWERING_H_
+#endif // TRITON_CONVERSION_GPUTOGEN_OPTOFUNCCALLLOWERING_H
