@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory="target=genx"  --convert-triton-intel-gpu-to-llvm="target=genx" | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory  --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>)
@@ -481,7 +481,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK: llvm.store
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
     // CHECK: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK-NEXT: llvm.call @_Z7barrierj([[ONE]]) : (i32) -> ()
+    // CHECK-NEXT: llvm.call @_Z7barrierj([[ONE]]) {passthrough = ["convergent"]} : (i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
@@ -515,7 +515,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK: llvm.store
     // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK-NEXT: llvm.call @_Z7barrierj([[ONE]]) : (i32) -> ()
+    // CHECK-NEXT: llvm.call @_Z7barrierj([[ONE]]) {passthrough = ["convergent"]} : (i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     // CHECK: llvm.load
@@ -535,15 +535,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK: llvm.store
     // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: [[ONE_1:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK-NEXT: llvm.call @_Z7barrierj([[ONE_1]]) : (i32) -> ()
+    // CHECK-NEXT: llvm.call @_Z7barrierj([[ONE_1]]) {passthrough = ["convergent"]} : (i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
-    // CHECK: llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
+    // CHECK: llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
     // CHECK: llvm.store
     // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
-    // CHECK: llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
+    // CHECK: llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     // CHECK: llvm.load
@@ -657,7 +657,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
+    // CHECK: llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     %0 = triton_gpu.convert_layout %arg0 : tensor<32x16xf32, #mma> -> tensor<32x16xf32, #blocked0>
@@ -680,7 +680,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
+    // CHECK: llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     %0 = triton_gpu.convert_layout %arg0 : tensor<32x64xf32, #mma> -> tensor<32x64xf32, #blocked>
@@ -738,7 +738,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   tt.func @convert_blocked_to_blocked_ptr(%src:tensor<32x!tt.ptr<f32>, #blocked0>) {
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.store
-    // CHECK: llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
+    // CHECK: llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
     // CHECK: llvm.inttoptr
     // CHECK-COUNT-4: llvm.insertvalue
     %cvt = triton_gpu.convert_layout %src : tensor<32x!tt.ptr<f32>, #blocked0> -> tensor<32x!tt.ptr<f32>, #blocked1>
@@ -767,7 +767,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT:   llvm.br ^bb2([[CMPXCHG_RES]] : i32)
     // CHECK-NEXT: ^bb2([[RES:%.*]]: i32):
     // CHECK-NEXT:   [[RES_CAST:%.*]] = llvm.bitcast [[RES]] : i32 to f32
-    // CHECK:        llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
+    // CHECK:        llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
     // CHECK-NEXT:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT:   [[GEP:%.*]] = llvm.getelementptr %arg3[[[ZERO]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>
     // CHECK-NEXT:   [[BCAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
@@ -776,9 +776,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT:   llvm.store [[RES_CAST]], [[BCAST]] : f32, !llvm.ptr<3>
     // CHECK-NEXT:   llvm.br ^bb4
     // CHECK-NEXT: ^bb4:
-    // CHECK:        llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
+    // CHECK:        llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
     // CHECK-NEXT:   {{.*}} = llvm.load [[BCAST]] : !llvm.ptr<3> -> f32
-    // CHECK:        llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
+    // CHECK:        llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
     %0 = "tt.atomic_cas" (%ptr, %cmp, %val) {sem = 1 : i32, scope = 1 : i32} : (!tt.ptr<f32>, f32, f32) -> f32
     tt.return
   }
@@ -850,7 +850,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT:    llvm.store [[RMW_CAST]], [[BCAST_GEP]] : f32, !llvm.ptr<3>
     // CHECK-NEXT:    llvm.br ^bb4
     // CHECK-NEXT:  ^bb4:
-    // CHECK:         llvm.call @_Z7barrierj({{.*}}) : (i32) -> ()
+    // CHECK:         llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
     %0 = "tt.atomic_rmw" (%arg0, %arg2, %arg1) {atomic_rmw_op = 5 : i32, sem = 1 : i32, scope = 1 : i32} : (!tt.ptr<f32>, f32, i1) -> f32
     tt.return
   }

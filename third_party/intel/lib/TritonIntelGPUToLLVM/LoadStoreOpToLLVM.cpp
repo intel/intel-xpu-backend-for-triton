@@ -140,9 +140,8 @@ struct LoadOpConversion
 
   LoadOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
-                   triton::Target target, PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, target,
-                                                        benefit),
+                   PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -221,188 +220,72 @@ struct LoadOpConversion
 
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
 
-      if (target == triton::Target::GENX) {
-        SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
-        Type retTy = retTys.size() > 1
-                         ? vec_ty(IntegerType::get(ctx, width), nWords)
-                         : retTys[0];
+      SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
+      Type retTy = retTys.size() > 1
+                       ? vec_ty(IntegerType::get(ctx, width), nWords)
+                       : retTys[0];
 
-        Value other_ = undef(retTy);
-        if (other) {
-          for (size_t ii = 0; ii < nWords; ++ii) {
-            size_t size = width / valueElemNBits;
+      Value other_ = undef(retTy);
+      if (other) {
+        for (size_t ii = 0; ii < nWords; ++ii) {
+          size_t size = width / valueElemNBits;
 
-            auto vecTy = vec_ty(valueElemTy, size);
-            Value v = undef(vecTy);
-            for (size_t s = 0; s < size; ++s) {
-              Value falseVal = otherElems[vecStart + ii * size + s];
-              Value sVal = createIndexAttrConstant(
-                  rewriter, loc, this->getTypeConverter()->getIndexType(), s);
-              v = insert_element(vecTy, v, falseVal, sVal);
-            }
-            v = bitcast(v, IntegerType::get(ctx, width));
-
-            if (otherIsSplatConstInt) {
-              for (size_t s = 0; s < 32; s += valueElemNBits)
-                splatVal |= splatVal << valueElemNBits;
-              v = int_val(width, splatVal);
-            }
-
-            Value iiVal = createIndexAttrConstant(
-                rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
-            if (nWords > 1) {
-              other_ = insert_element(retTy, other_, v, iiVal);
-            } else {
-              other_ = v;
-            }
+          auto vecTy = vec_ty(valueElemTy, size);
+          Value v = undef(vecTy);
+          for (size_t s = 0; s < size; ++s) {
+            Value falseVal = otherElems[vecStart + ii * size + s];
+            Value sVal = createIndexAttrConstant(
+                rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+            v = insert_element(vecTy, v, falseVal, sVal);
           }
-        }
+          v = bitcast(v, IntegerType::get(ctx, width));
 
-        // Create a predicated load operation.
-        Block &endBlock = LLVM::utils::createPredicatedBlock(
-            rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
-              Value addrElem =
-                  bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-              uint32_t alignment = nWords * width / 8;
-              Value ret = load(retTy, addrElem, alignment);
-              return SmallVector<Value, 1>{ret};
-            });
-        Value ret = *endBlock.args_begin();
+          if (otherIsSplatConstInt) {
+            for (size_t s = 0; s < 32; s += valueElemNBits)
+              splatVal |= splatVal << valueElemNBits;
+            v = int_val(width, splatVal);
+          }
 
-        // Extract and store return values
-        SmallVector<Value> rets;
-        for (unsigned int ii = 0; ii < nWords; ++ii) {
-          Value curr;
-          if (retTy.isa<VectorType>()) {
-            curr =
-                extract_element(IntegerType::get(ctx, width), ret, i32_val(ii));
+          Value iiVal = createIndexAttrConstant(
+              rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
+          if (nWords > 1) {
+            other_ = insert_element(retTy, other_, v, iiVal);
           } else {
-            curr = ret;
-          }
-          curr = bitcast(curr, LLVM::getFixedVectorType(
-                                   valueElemTy, width / valueElemNBits));
-          rets.push_back(curr);
-        }
-        int tmp = width / valueElemNBits;
-        for (size_t ii = 0; ii < vec; ++ii) {
-          Value loaded =
-              extract_element(valueElemTy, rets[ii / tmp], i32_val(ii % tmp));
-          loadedVals.push_back(loaded);
-        }
-      } else { // Not target::SPIRV || target::GENX
-
-        // TODO(Superjomn) Add cache policy fields to StoreOp.
-        // TODO(Superjomn) Deal with cache policy here.
-        const bool hasL2EvictPolicy = false;
-
-        PTXBuilder ptxBuilder;
-
-        const std::string readConstraint =
-            (width == 64) ? "l" : ((width == 32) ? "r" : "c");
-        const std::string writeConstraint =
-            (width == 64) ? "=l" : ((width == 32) ? "=r" : "=c");
-
-        // prepare asm operands
-        auto *dstsOpr = ptxBuilder.newListOperand();
-        for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
-          auto *opr = ptxBuilder.newOperand(writeConstraint,
-                                            /*init=*/true); // =r operations
-          dstsOpr->listAppend(opr);
-        }
-
-        auto *addrOpr =
-            ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
-
-        // Define the instruction opcode
-        auto &ld = ptxBuilder.create<>("ld")
-                       ->o("volatile", op.getIsVolatile())
-                       .global()
-                       .o("ca", op.getCache() == triton::CacheModifier::CA)
-                       .o("cg", op.getCache() == triton::CacheModifier::CG)
-                       .o("L1::evict_first",
-                          op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
-                       .o("L1::evict_last",
-                          op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
-                       .o("L1::cache_hint", hasL2EvictPolicy)
-                       .v(nWords)
-                       .b(width);
-
-        PTXBuilder::Operand *evictOpr{};
-
-        // Here lack a mlir::Value to bind to this operation, so disabled.
-        // if (has_l2_evict_policy)
-        //   evictOpr = ptxBuilder.newOperand(l2Evict, "l");
-
-        if (!evictOpr)
-          ld(dstsOpr, addrOpr).predicate(pred, "b");
-        else
-          ld(dstsOpr, addrOpr, evictOpr).predicate(pred, "b");
-
-        if (other) {
-          for (size_t ii = 0; ii < nWords; ++ii) {
-            // PTX doesn't support mov.u8, so we need to use mov.u16
-            PTXInstr &mov =
-                ptxBuilder.create<>("mov")->o("u" + std::to_string(movWidth));
-
-            size_t size = width / valueElemNBits;
-
-            auto vecTy = LLVM::getFixedVectorType(valueElemTy, size);
-            Value v = undef(vecTy);
-            for (size_t s = 0; s < size; ++s) {
-              Value falseVal = otherElems[vecStart + ii * size + s];
-              Value sVal = createIndexAttrConstant(
-                  rewriter, loc, this->getTypeConverter()->getIndexType(), s);
-              v = insert_element(vecTy, v, falseVal, sVal);
-            }
-            v = bitcast(v, IntegerType::get(getContext(), width));
-
-            PTXInstr::Operand *opr{};
-
-            if (otherIsSplatConstInt) {
-              for (size_t s = 0; s < 32; s += valueElemNBits)
-                splatVal |= splatVal << valueElemNBits;
-              opr = ptxBuilder.newConstantOperand(splatVal);
-            } else
-              opr = ptxBuilder.newOperand(v, readConstraint);
-
-            mov(dstsOpr->listGet(ii), opr).predicateNot(pred, "b");
+            other_ = v;
           }
         }
+      }
 
-        // Create inline ASM signature
-        SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
-        Type retTy =
-            retTys.size() > 1
-                ? LLVM::LLVMStructType::getLiteral(getContext(), retTys)
-                : retTys[0];
+      // Create a predicated load operation.
+      Block &endBlock = LLVM::utils::createPredicatedBlock(
+          rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
+            Value addrElem =
+                bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+            uint32_t alignment = nWords * width / 8;
+            Value ret = load(retTy, addrElem, alignment);
+            return SmallVector<Value, 1>{ret};
+          });
+      Value ret = *endBlock.args_begin();
 
-        // TODO: if (has_l2_evict_policy)
-        // auto asmDialectAttr =
-        // LLVM::AsmDialectAttr::get(rewriter.getContext(),
-        //                                                 LLVM::AsmDialect::AD_ATT);
-        Value ret = ptxBuilder.launch(rewriter, loc, retTy);
-
-        // Extract and store return values
-        SmallVector<Value> rets;
-        for (unsigned int ii = 0; ii < nWords; ++ii) {
-          Value curr;
-          if (retTy.isa<LLVM::LLVMStructType>()) {
-            curr = extract_val(IntegerType::get(getContext(), width), ret, ii);
-          } else {
-            curr = ret;
-          }
-          curr = bitcast(curr, LLVM::getFixedVectorType(
-                                   valueElemTy, width / valueElemNBits));
-          rets.push_back(curr);
+      // Extract and store return values
+      SmallVector<Value> rets;
+      for (unsigned int ii = 0; ii < nWords; ++ii) {
+        Value curr;
+        if (retTy.isa<VectorType>()) {
+          curr =
+              extract_element(IntegerType::get(ctx, width), ret, i32_val(ii));
+        } else {
+          curr = ret;
         }
-        int tmp = width / valueElemNBits;
-        for (size_t ii = 0; ii < vec; ++ii) {
-          Value vecIdx = createIndexAttrConstant(
-              rewriter, loc, this->getTypeConverter()->getIndexType(),
-              ii % tmp);
-          Value loaded = extract_element(valueElemTy, rets[ii / tmp], vecIdx);
-          loadedVals.push_back(loaded);
-        }
+        curr = bitcast(curr, LLVM::getFixedVectorType(valueElemTy,
+                                                      width / valueElemNBits));
+        rets.push_back(curr);
+      }
+      int tmp = width / valueElemNBits;
+      for (size_t ii = 0; ii < vec; ++ii) {
+        Value loaded =
+            extract_element(valueElemTy, rets[ii / tmp], i32_val(ii % tmp));
+        loadedVals.push_back(loaded);
       }
     } // end vec
 
@@ -422,9 +305,8 @@ struct StoreOpConversion
 
   StoreOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
-                    triton::Target target, PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, target,
-                                                         benefit),
+                    PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -508,54 +390,20 @@ struct StoreOpConversion
 
       Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
 
-      if (target == triton::Target::GENX) {
-        auto vecTy = vec_ty(valArgTy, nWords);
-        Value vecWord = undef(vecTy);
-        for (int index = 0; index < asmArgs.size(); ++index) {
-          auto llWord = asmArgs[index].first;
-          vecWord = insert_element(vecTy, vecWord, llWord, i32_val(index));
-        }
-
-        // Create a predicated store operation.
-        mlir::LLVM::utils::createPredicatedBlock(rewriter, loc, maskVal, [&] {
-          Value addrElem =
-              bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-          uint32_t alignment = nWords * width / 8;
-          store(vecWord, addrElem, alignment);
-          return ArrayRef<Value>();
-        });
-      } else {
-        // Prepare the PTX inline asm.
-        PTXBuilder ptxBuilder;
-        auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
-
-        auto *asmAddr =
-            ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
-
-        auto &ptxStoreInstr =
-            ptxBuilder.create<>("st")
-                ->global()
-                .o("wb", op.getCache() == triton::CacheModifier::WB)
-                .o("cg", op.getCache() == triton::CacheModifier::CG)
-                .o("cs", op.getCache() == triton::CacheModifier::CS)
-                .o("wt", op.getCache() == triton::CacheModifier::WT)
-                .o("L1::evict_first",
-                   op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
-                .o("L1::evict_last",
-                   op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
-                .v(nWords)
-                .b(width);
-        ptxStoreInstr(asmAddr, asmArgList).predicate(maskVal, "b");
-
-        Type boolTy =
-            getTypeConverter()->convertType(rewriter.getIntegerType(1));
-        llvm::SmallVector<Type> argTys({boolTy, ptr.getType()});
-        argTys.insert(argTys.end(), nWords, valArgTy);
-
-        auto asmReturnTy = void_ty(ctx);
-
-        ptxBuilder.launch(rewriter, loc, asmReturnTy);
+      auto vecTy = vec_ty(valArgTy, nWords);
+      Value vecWord = undef(vecTy);
+      for (int index = 0; index < asmArgs.size(); ++index) {
+        auto llWord = asmArgs[index].first;
+        vecWord = insert_element(vecTy, vecWord, llWord, i32_val(index));
       }
+
+      // Create a predicated store operation.
+      mlir::LLVM::utils::createPredicatedBlock(rewriter, loc, maskVal, [&] {
+        Value addrElem = bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+        uint32_t alignment = nWords * width / 8;
+        store(vecWord, addrElem, alignment);
+        return ArrayRef<Value>();
+      });
     } // for
     rewriter.eraseOp(op);
     return success();
@@ -579,8 +427,8 @@ struct AtomicCASOpConversion
 
   AtomicCASOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
-                        triton::Target target, PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(converter, target,
+                        PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(converter,
                                                              benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
@@ -633,98 +481,43 @@ struct AtomicCASOpConversion
       Value casCmp = cmpElements[i];
       casVal = valElements[i];
 
-      switch (target) {
-      case triton::Target::ROCDL:
-      case triton::Target::NVVM: {
-        PTXBuilder ptxBuilderAtomicCAS;
-        std::string tyId = valueElemNBits * vec == 64
-                               ? "l"
-                               : (valueElemNBits * vec == 32 ? "r" : "h");
-        auto *dstOpr =
-            ptxBuilderAtomicCAS.newOperand("=" + tyId, /*init=*/true);
-        auto *ptrOpr = ptxBuilderAtomicCAS.newAddrOperand(casPtr, "l");
-        auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, tyId);
-        auto *valOpr = ptxBuilderAtomicCAS.newOperand(casVal, tyId);
-        auto &atom = *ptxBuilderAtomicCAS.create<PTXInstr>("atom");
-        auto sTy = "b" + std::to_string(valueElemNBits);
-        std::string semStr;
-        llvm::raw_string_ostream os(semStr);
-        os << op.getSem();
-        auto scope = stringifyMemSyncScope(op.getScope()).str();
-        atom.global().o(semStr).o(scope).o("cas").o(sTy);
-        atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
+      assert((valueElemNBits == 32 || valueElemNBits == 64) &&
+             "Unexpected width");
 
-        if (tensorTy) {
-          auto retType = vec == 1 ? valueElemTy : vecTy;
-          auto ret = ptxBuilderAtomicCAS.launch(rewriter, loc, retType);
-          for (int ii = 0; ii < vec; ++ii) {
-            resultVals[i + ii] =
-                vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
-          }
-        } else {
-          auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
-          createBarrier(rewriter, loc, numCTAs);
-          Value atomPtr = LLVM::utils::getSharedMemoryBase(
-              loc, rewriter, op.getOperation(), target);
-          atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
-          // Only threads with mask = True store the result
-          PTXBuilder ptxBuilderStore;
-          auto *dstOprStore = ptxBuilderStore.newAddrOperand(atomPtr, "r");
-          auto *valOprStore = ptxBuilderStore.newOperand(old, "r");
-          auto &st = *ptxBuilderStore.create<PTXInstr>("st");
-          st.shared().o(sTy);
-          st(dstOprStore, valOprStore).predicate(mask);
-          auto ASMReturnTy = void_ty(ctx);
-          ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
-          createBarrier(rewriter, loc, numCTAs);
-          Value ret = load(valueElemTy, atomPtr);
-          createBarrier(rewriter, loc, numCTAs);
-          rewriter.replaceOp(op, {ret});
+      Value zero = (valueElemNBits == 32) ? i32_val(0) : i64_val(0);
+      Block &endBlock = mlir::LLVM::utils::createPredicatedBlock(
+          rewriter, loc, mask, {zero}, [&] {
+            // casPtr = bitcast(casPtr, ptr_ty(ctx, 1));
+            casCmp = bitcast(casCmp, zero.getType());
+            casVal = bitcast(casVal, zero.getType());
+
+            auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+                loc, casPtr, casCmp, casVal, LLVM::AtomicOrdering::acq_rel,
+                LLVM::AtomicOrdering::monotonic);
+            Value newLoaded =
+                rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+            return SmallVector<Value, 1>{newLoaded};
+          });
+
+      Value ret = endBlock.getArgument(0);
+      Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
+      ret = bitcast(ret, retType);
+
+      if (tensorTy) {
+        for (int ii = 0; ii < vec; ++ii) {
+          resultVals[i + ii] =
+              vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
         }
-      } break;
-      case triton::Target::GENX: {
-        assert((valueElemNBits == 32 || valueElemNBits == 64) &&
-               "Unexpected width");
-
-        Value zero = (valueElemNBits == 32) ? i32_val(0) : i64_val(0);
-        Block &endBlock = mlir::LLVM::utils::createPredicatedBlock(
-            rewriter, loc, mask, {zero}, [&] {
-              // casPtr = bitcast(casPtr, ptr_ty(ctx, 1));
-              casCmp = bitcast(casCmp, zero.getType());
-              casVal = bitcast(casVal, zero.getType());
-
-              auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-                  loc, casPtr, casCmp, casVal, LLVM::AtomicOrdering::acq_rel,
-                  LLVM::AtomicOrdering::monotonic);
-              Value newLoaded =
-                  rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
-              return SmallVector<Value, 1>{newLoaded};
-            });
-
-        Value ret = endBlock.getArgument(0);
-        Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
-        ret = bitcast(ret, retType);
-
-        if (tensorTy) {
-          for (int ii = 0; ii < vec; ++ii) {
-            resultVals[i + ii] =
-                vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
-          }
-        } else {
-          createBarrier(rewriter, loc, numCTAs);
-          Value atomPtr = LLVM::utils::getSharedMemoryBase(
-              loc, rewriter, op.getOperation(), target);
-          atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
-          mlir::LLVM::utils::storeShared(rewriter, loc, atomPtr, ret, mask,
-                                         target);
-          createBarrier(rewriter, loc, numCTAs);
-          Value ret = load(valueElemTy, atomPtr);
-          createBarrier(rewriter, loc, numCTAs);
-          rewriter.replaceOp(op, {ret});
-        }
-      } break;
-      default:
-        llvm_unreachable("Unhandled target");
+      } else {
+        createBarrier(rewriter, loc, numCTAs);
+        Value atomPtr =
+            LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
+        mlir::LLVM::utils::storeShared(rewriter, loc, atomPtr, ret, mask);
+        createBarrier(rewriter, loc, numCTAs);
+        Value ret = load(valueElemTy, atomPtr);
+        createBarrier(rewriter, loc, numCTAs);
+        rewriter.replaceOp(op, {ret});
       }
     }
 
@@ -746,8 +539,8 @@ struct AtomicRMWOpConversion
 
   AtomicRMWOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
-                        triton::Target target, PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter, target,
+                        PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter,
                                                              benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
@@ -808,178 +601,79 @@ struct AtomicRMWOpConversion
       Value rmwPtr = ptrElements[i];
       Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
 
-      switch (target) {
-      case triton::Target::ROCDL:
-      case triton::Target::NVVM: {
-        std::string sTy;
-        PTXBuilder ptxBuilderAtomicRMW;
-        std::string tyId = valueElemNBits * vec == 64
-                               ? "l"
-                               : (valueElemNBits * vec == 32 ? "r" : "h");
-        auto *dstOpr =
-            ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
-        auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(rmwPtr, "l");
-        auto *valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
+      assert((valueElemNBits == 16 || valueElemNBits == 32 ||
+              valueElemNBits == 64) &&
+             "Unexpected width");
 
-        auto scope = stringifyMemSyncScope(op.getScope()).str();
-        auto &atom = ptxBuilderAtomicRMW.create<>("atom")->global().o(scope);
-        auto rmwOp = stringifyRMWOp(atomicRmwAttr).str();
-        auto sBits = std::to_string(valueElemNBits);
-        switch (atomicRmwAttr) {
-        case RMWOp::AND:
-          sTy = "b" + sBits;
-          break;
-        case RMWOp::OR:
-          sTy = "b" + sBits;
-          break;
-        case RMWOp::XOR:
-          sTy = "b" + sBits;
-          break;
-        case RMWOp::ADD:
-          sTy = "u" + sBits;
-          break;
-        case RMWOp::FADD:
-          rmwOp = "add";
-          rmwOp += (valueElemNBits == 16 ? ".noftz" : "");
-          sTy = "f" + sBits;
-          sTy += (vec == 2 && valueElemNBits == 16) ? "x2" : "";
-          break;
-        case RMWOp::MAX:
-          sTy = "s" + sBits;
-          break;
-        case RMWOp::MIN:
-          sTy = "s" + sBits;
-          break;
-        case RMWOp::UMAX:
-          rmwOp = "max";
-          sTy = "u" + sBits;
-          break;
-        case RMWOp::UMIN:
-          rmwOp = "min";
-          sTy = "u" + sBits;
-          break;
-        case RMWOp::XCHG:
-          sTy = "b" + sBits;
-          break;
-        default:
-          return failure();
+      Value zero;
+      llvm::TypeSwitch<mlir::Type>(valueElemTy)
+          .Case<mlir::IntegerType>(
+              [&](auto ty) { zero = int_val(valueElemNBits, 0); })
+          .Case<mlir::Float16Type>([&](auto ty) { zero = f16_val(0); })
+          .Case<mlir::Float32Type>([&](auto ty) { zero = f32_val(0); })
+          .Case<mlir::Float64Type>([&](auto ty) { zero = f64_val(0); });
+
+      Block &endBlock = mlir::LLVM::utils::createPredicatedBlock(
+          rewriter, loc, rmwMask, {zero}, [&] {
+            mlir::LLVM::AtomicBinOp rmwKind;
+            switch (atomicRmwAttr) {
+            case RMWOp::AND:
+              rmwKind = LLVM::AtomicBinOp::_and;
+              break;
+            case RMWOp::OR:
+              rmwKind = LLVM::AtomicBinOp::_or;
+              break;
+            case RMWOp::XOR:
+              rmwKind = LLVM::AtomicBinOp::_xor;
+              break;
+            case RMWOp::ADD:
+              rmwKind = LLVM::AtomicBinOp::add;
+              break;
+            case RMWOp::FADD:
+              rmwKind = LLVM::AtomicBinOp::fadd;
+              break;
+            case RMWOp::MAX:
+              rmwKind = LLVM::AtomicBinOp::max;
+              break;
+            case RMWOp::UMAX:
+              rmwKind = LLVM::AtomicBinOp::umax;
+              break;
+            case RMWOp::MIN:
+              rmwKind = LLVM::AtomicBinOp::min;
+              break;
+            case RMWOp::UMIN:
+              rmwKind = LLVM::AtomicBinOp::umin;
+              break;
+            case RMWOp::XCHG:
+              rmwKind = LLVM::AtomicBinOp::xchg;
+              break;
+            }
+
+            rmwVal = bitcast(rmwVal, valueElemTy);
+            auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
+                loc, rmwKind, rmwPtr, rmwVal, LLVM::AtomicOrdering::acq_rel);
+            return SmallVector<Value, 1>{atomRMW.getRes()};
+          });
+
+      Value ret = endBlock.getArgument(0);
+      Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
+      ret = bitcast(ret, retType);
+
+      if (tensorTy) {
+        for (int ii = 0; ii < vec; ++ii) {
+          resultVals[i + ii] =
+              vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
         }
-        std::string semStr;
-        llvm::raw_string_ostream os(semStr);
-        os << op.getSem();
-        atom.o(semStr).o(rmwOp).o(sTy);
-        if (tensorTy) {
-          atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
-          auto retType = vec == 1 ? valueElemTy : vecTy;
-          auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
-          for (int ii = 0; ii < vec; ++ii) {
-            resultVals[i + ii] =
-                vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
-          }
-        } else {
-          auto ASMReturnTy = void_ty(ctx);
-          atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
-          auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
-          if (op->user_begin() == op->user_end()) {
-            rewriter.replaceOp(op, {old});
-            return success();
-          }
-          Value atomPtr = LLVM::utils::getSharedMemoryBase(
-              loc, rewriter, op.getOperation(), target);
-          atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
-          // Only threads with rmwMask = True store the result
-          PTXBuilder ptxBuilderStore;
-          auto &storeShared =
-              ptxBuilderStore.create<>("st")->shared().o("b" + sBits);
-          auto *ptrOpr = ptxBuilderStore.newAddrOperand(atomPtr, "r");
-          auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
-          storeShared(ptrOpr, valOpr).predicate(rmwMask);
-          ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
-          createBarrier(rewriter, loc, numCTAs);
-          Value ret = load(valueElemTy, atomPtr);
-          createBarrier(rewriter, loc, numCTAs);
-          rewriter.replaceOp(op, {ret});
-        }
-      } break;
-      case triton::Target::GENX: {
-        assert((valueElemNBits == 16 || valueElemNBits == 32 ||
-                valueElemNBits == 64) &&
-               "Unexpected width");
-
-        Value zero;
-        llvm::TypeSwitch<mlir::Type>(valueElemTy)
-            .Case<mlir::IntegerType>(
-                [&](auto ty) { zero = int_val(valueElemNBits, 0); })
-            .Case<mlir::Float16Type>([&](auto ty) { zero = f16_val(0); })
-            .Case<mlir::Float32Type>([&](auto ty) { zero = f32_val(0); })
-            .Case<mlir::Float64Type>([&](auto ty) { zero = f64_val(0); });
-
-        Block &endBlock = mlir::LLVM::utils::createPredicatedBlock(
-            rewriter, loc, rmwMask, {zero}, [&] {
-              mlir::LLVM::AtomicBinOp rmwKind;
-              switch (atomicRmwAttr) {
-              case RMWOp::AND:
-                rmwKind = LLVM::AtomicBinOp::_and;
-                break;
-              case RMWOp::OR:
-                rmwKind = LLVM::AtomicBinOp::_or;
-                break;
-              case RMWOp::XOR:
-                rmwKind = LLVM::AtomicBinOp::_xor;
-                break;
-              case RMWOp::ADD:
-                rmwKind = LLVM::AtomicBinOp::add;
-                break;
-              case RMWOp::FADD:
-                rmwKind = LLVM::AtomicBinOp::fadd;
-                break;
-              case RMWOp::MAX:
-                rmwKind = LLVM::AtomicBinOp::max;
-                break;
-              case RMWOp::UMAX:
-                rmwKind = LLVM::AtomicBinOp::umax;
-                break;
-              case RMWOp::MIN:
-                rmwKind = LLVM::AtomicBinOp::min;
-                break;
-              case RMWOp::UMIN:
-                rmwKind = LLVM::AtomicBinOp::umin;
-                break;
-              case RMWOp::XCHG:
-                rmwKind = LLVM::AtomicBinOp::xchg;
-                break;
-              }
-
-              rmwVal = bitcast(rmwVal, valueElemTy);
-              auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
-                  loc, rmwKind, rmwPtr, rmwVal, LLVM::AtomicOrdering::acq_rel);
-              return SmallVector<Value, 1>{atomRMW.getRes()};
-            });
-
-        Value ret = endBlock.getArgument(0);
-        Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
-        ret = bitcast(ret, retType);
-
-        if (tensorTy) {
-          for (int ii = 0; ii < vec; ++ii) {
-            resultVals[i + ii] =
-                vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
-          }
-        } else {
-          Value atomPtr = LLVM::utils::getSharedMemoryBase(
-              loc, rewriter, op.getOperation(), target);
-          atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
-          // Only threads with rmwMask = True store the result
-          mlir::LLVM::utils::storeShared(rewriter, loc, atomPtr, ret, rmwMask,
-                                         target);
-          createBarrier(rewriter, loc, numCTAs);
-          Value loadVal = load(valueElemTy, atomPtr);
-          createBarrier(rewriter, loc, numCTAs);
-          rewriter.replaceOp(op, {loadVal});
-        }
-      } break;
-      default:
-        llvm_unreachable("Unhandled target");
+      } else {
+        Value atomPtr =
+            LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
+        // Only threads with rmwMask = True store the result
+        mlir::LLVM::utils::storeShared(rewriter, loc, atomPtr, ret, rmwMask);
+        createBarrier(rewriter, loc, numCTAs);
+        Value loadVal = load(valueElemTy, atomPtr);
+        createBarrier(rewriter, loc, numCTAs);
+        rewriter.replaceOp(op, {loadVal});
       }
     }
 
@@ -1001,11 +695,6 @@ struct InsertSliceOpConversion
   LogicalResult
   matchAndRewrite(tensor::InsertSliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
-    // This function has been removed upstream and should only exist for genx
-    assert(target == triton::Target::GENX &&
-           "InsertSliceOpConversion: genx target not supported yet");
-
     // %dst = insert_slice %src into %dst[%offsets]
     Location loc = op->getLoc();
     Value dst = op.getDest();
@@ -1072,9 +761,9 @@ struct InsertSliceAsyncOpConversion
 
   InsertSliceAsyncOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               Target target, PatternBenefit benefit)
+                               PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>(
-            converter, target, benefit),
+            converter, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
@@ -1086,7 +775,7 @@ struct InsertSliceAsyncOpConversion
     // decomposeInsertSliceAsyncOp function.
     // FIXME: remove this assertion once a suitable replacement instruction
     // exists for the generated PTX in this function (cp.async.cg.shared.global)
-    assert(target != triton::Target::GENX &&
+    assert(false &&
            "InsertSliceAsyncOpConversion: genx target not supported yet");
 
     // insert_slice_async %src, %dst, %index, %mask, %other
@@ -1385,22 +1074,17 @@ struct AsyncBulkCommitGroupOpConversion
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    Target target, PatternBenefit benefit) {
-  patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, target,
-                                 benefit);
-  patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, target,
-                                  benefit);
-  patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, target,
-                                      benefit);
-  patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, target,
-                                      benefit);
-  patterns.add<InsertSliceOpConversion>(typeConverter, target, benefit);
+    PatternBenefit benefit) {
+  patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<InsertSliceOpConversion>(typeConverter, benefit);
   patterns.add<InsertSliceAsyncOpConversion>(typeConverter, axisInfoAnalysis,
-                                             target, benefit);
-  patterns.add<ExtractSliceOpConversion>(typeConverter, target, benefit);
-  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, target, benefit);
-  patterns.add<AsyncWaitOpConversion>(typeConverter, target, benefit);
-  patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, target,
-                                                 benefit);
-  patterns.add<AsyncBulkWaitOpConversion>(typeConverter, target, benefit);
+                                             benefit);
+  patterns.add<ExtractSliceOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncBulkWaitOpConversion>(typeConverter, benefit);
 }

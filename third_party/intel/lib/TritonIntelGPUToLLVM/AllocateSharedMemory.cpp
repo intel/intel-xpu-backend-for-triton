@@ -30,8 +30,7 @@ struct AllocateSharedMemory
     ModuleAllocation allocation(mod);
 
     mod.walk([&](FunctionOpInterface funcOp) {
-      if (target == Target::GENX && allocation.isRoot(funcOp) &&
-          allocation.getSharedMemorySize()) {
+      if (allocation.isRoot(funcOp) && allocation.getSharedMemorySize()) {
         LLVM::LLVMPointerType ptrTy = LLVM::LLVMPointerType::get(
             ctx, triton::GEN::GENMemorySpace::kWorkgroup);
         funcOp.insertArgument(funcOp.getNumArguments(), ptrTy, {},
@@ -71,10 +70,6 @@ namespace gpu {
 
 std::unique_ptr<OperationPass<ModuleOp>> createIntelAllocateSharedMemoryPass() {
   return std::make_unique<AllocateSharedMemory>();
-}
-std::unique_ptr<OperationPass<ModuleOp>> createIntelAllocateSharedMemoryPass(
-    const IntelAllocateSharedMemoryOptions &options) {
-  return std::make_unique<AllocateSharedMemory>(options);
 }
 
 } // namespace gpu

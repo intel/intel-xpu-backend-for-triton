@@ -61,7 +61,7 @@ static LLVM::CallOp createDeviceFunctionCall(
     auto func = rewriter.create<LLVM::LLVMFuncOp>(loc, funcName, funcType);
     func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
     if (convergent)
-      func->setAttr("passthrough", convergentAttr);
+      func.setPassthroughAttr(convergentAttr);
 
     return func;
   };
