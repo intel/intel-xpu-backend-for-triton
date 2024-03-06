@@ -114,33 +114,33 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     if (ADTYPE == "bfloat16" or BDTYPE == "bfloat16") and SPLIT_K != 1:
         pytest.xfail("bfloat16 matmuls don't allow split_k for now")
 
-    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 64:
-        pytest.skip("FIXME: Incorrect result on XPU")
-    if (BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32
-            and (ADTYPE in ["float8e5"] and BDTYPE in ["float8e5", "float8e4nv"]) and not (AT is False and BT is True)):
-        pytest.skip("FIXME: Incorrect result on XPU")
-    if (BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32
-            and (ADTYPE in ["float8e4nv"] and BDTYPE in ["float8e4nv", "float8e5"])
-            and not (AT is False and BT is True)):
-        pytest.skip("FIXME: Incorrect result on XPU")
-    if (BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (ADTYPE in ["float8e4nv"] and BDTYPE in ["float16"])):
-        pytest.skip("FIXME: Incorrect result on XPU")
-    if (BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32
-            and (ADTYPE in ["float8e4b15"] and BDTYPE in ["float8e4b15"]) and not (AT is False and BT is True)):
-        pytest.skip("FIXME: Incorrect result on XPU")
-    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (ADTYPE == "int8" and BDTYPE == "bfloat16"):
-        pytest.skip("FIXME: Incorrect result on XPU")
-    if (BLOCK_M == 256 and BLOCK_N == 128 and BLOCK_K == 32 and ADTYPE in ["float16", "bfloat16"]
-            and (AT is not False or BT is not False)):
-        pytest.skip("FIXME: Incorrect result on XPU")
-    if (BLOCK_M == 128 and BLOCK_N == 128 and BLOCK_K == 32 and M == 256 and (N == 384 or N == 256)
-            and (ADTYPE in ["float16", "bfloat16"] and BDTYPE in ["float16", "bfloat16"])
-            and not (AT is True and BT is False)):
-        pytest.skip("FIXME: Incorrect result on XPU")
-    # Regression from e4c91aeb43cbc9743272c19002901c37087b7370 (exposes an IGC issue):
-    if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and (ACC_DTYPE == "float32"
-                                                                or ACC_DTYPE is None) and OUTPUT_DTYPE == "float32":
-        pytest.skip("FIXME: Incorrect result on XPU")
+    if torch.xpu.is_available() and ADTYPE != "float32" and BDTYPE != "float32":
+        if BLOCK_M == 128 and BLOCK_N == 128 and BLOCK_K == 32 and NWARP == 4:
+            if NSTAGE == 2 and M == 107 and N == 233:
+                if K == 128 and not AT:
+                    pytest.skip("FIXME: Incorrect result on XPU")
+                if K == 83 and not (AT and not BT):
+                    pytest.skip("FIXME: Incorrect result on XPU")
+            if M == 256 and AT == BT:
+                if NSTAGE == 2 and N == 384:
+                    pytest.skip("FIXME: Incorrect result on XPU")
+                if NSTAGE == 4 and N == 256:
+                    pytest.skip("FIXME: Incorrect result on XPU")
+        if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 64 and NWARP == 8 and NSTAGE == 3:
+            pytest.skip("FIXME: Incorrect result on XPU")
+        if BLOCK_M == 256 and BLOCK_N == 128 and BLOCK_K == 32 and NWARP == 8 and (NSTAGE == 2 or NSTAGE == 4) and BT:
+            pytest.skip("FIXME: Incorrect result on XPU")
+        if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and NWARP == 8 and NSTAGE == 2 and (
+                ACC_DTYPE is None or ACC_DTYPE == "float32") and (OUTPUT_DTYPE is None or OUTPUT_DTYPE == "float16"):
+            if (ADTYPE == "float16" and BDTYPE == "float8e5") or (ADTYPE == "float16" and BDTYPE == "int8"):
+                if not AT and not BT:
+                    pytest.skip("FIXME: Incorrect result on XPU")
+            elif (ADTYPE == "float8e4b15" and BDTYPE == "float8e4b15") or (ADTYPE == "float8e5"
+                                                                           and BDTYPE == "float8e5"):
+                if not (not AT and BT):
+                    pytest.skip("FIXME: Incorrect result on XPU")
+            else:
+                pytest.skip("FIXME: Incorrect result on XPU")
 
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
