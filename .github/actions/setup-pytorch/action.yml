@@ -30,6 +30,20 @@ runs:
           echo "PYTHON_VERSION=$PYTHON_VERSION" >> "$GITHUB_ENV"
         fi
 
+    # PyTorch build process expects Intel oneAPI in /opt/intel/oneapi
+    # https://github.com/Stonepia/pytorch/blob/c9153c96f547f269581743e7443aa86d7e003505/cmake/Modules/FindMKL.cmake#L44
+    - name: Set up oneAPI
+      shell: bash
+      run: |
+        if [[ -d /opt/intel/oneapi ]]; then
+          exit 0
+        fi
+        if [[ -L /opt/intel/oneapi ]]; then
+          exit 0
+        fi
+        sudo mkdir -p /opt/intel
+        sudo ln -sfT ${{ inputs.oneapi }} /opt/intel/oneapi
+
     - name: Load PyTorch from a cache
       id: pytorch-cache
       uses: ./.github/actions/load
