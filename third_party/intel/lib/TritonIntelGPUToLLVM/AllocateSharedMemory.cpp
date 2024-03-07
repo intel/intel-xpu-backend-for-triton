@@ -2,8 +2,8 @@
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/GEN/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
@@ -32,7 +32,7 @@ struct AllocateSharedMemory
     mod.walk([&](FunctionOpInterface funcOp) {
       if (allocation.isRoot(funcOp) && allocation.getSharedMemorySize()) {
         LLVM::LLVMPointerType ptrTy = LLVM::LLVMPointerType::get(
-            ctx, triton::GEN::GENMemorySpace::kWorkgroup);
+            ctx, triton::TritonGEN::TritonGENMemorySpace::kWorkgroup);
         funcOp.insertArgument(funcOp.getNumArguments(), ptrTy, {},
                               funcOp.getLoc());
       }

@@ -17,15 +17,15 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-#include "intel/include/GENToLLVM/GENToLLVMPass.h"
-#include "intel/include/GPUToGEN/GPUToGENPass.h"
+#include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
+#include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
-#include "triton/Dialect/GEN/IR/Dialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetPlatform.hpp"
@@ -182,7 +182,7 @@ public:
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
-    addIllegalDialect<triton::GEN::GENDialect>();
+    addIllegalDialect<triton::TritonGEN::TritonGENDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -194,7 +194,8 @@ struct ConvertTritonGPUToLLVM
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
-                    NVVM::NVVMDialect, GEN::GENDialect, GENX::GENXDialect>();
+                    NVVM::NVVMDialect, TritonGEN::TritonGENDialect,
+                    GENX::GENXDialect>();
   }
 
   ConvertTritonGPUToLLVM(int32_t computeCapability)
@@ -267,8 +268,10 @@ struct ConvertTritonGPUToLLVM
     // to help convert scalar expression to LLVM.
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::triton::populateGENToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::triton::populateGPUToGENConversionPatterns(typeConverter, patterns);
+    mlir::triton::populateTritonGENToLLVMConversionPatterns(typeConverter,
+                                                            patterns);
+    mlir::triton::populateGPUToTritonGENConversionPatterns(typeConverter,
+                                                           patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
