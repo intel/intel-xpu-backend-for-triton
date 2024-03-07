@@ -136,43 +136,48 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
                                      ConversionPatternRewriter &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *context = rewriter.getContext();
+  Type resType = op->getResultTypes()[0];
   TypeRange opTypes = op->getOperandTypes();
   Location loc = op->getLoc();
 
+  IntegerType int1Ty = rewriter.getIntegerType(1);
+  IntegerType int16Ty = rewriter.getIntegerType(16);
+  IntegerType int32Ty = rewriter.getIntegerType(32);
+
   Value a = op.getA();
-  auto aTy = VectorType::get(op.getRc(), rewriter.getIntegerType(64));
+  auto aTy = VectorType::get(op.getRc(), int16Ty);
   if (a.getType() != aTy)
     a = rewriter.create<LLVM::BitcastOp>(loc, aTy, a);
 
   Value b = op.getB();
-  auto bTy = VectorType::get(8, rewriter.getIntegerType(32));
+  auto bTy = VectorType::get(8, int32Ty);
   if (b.getType() != bTy)
     b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
 
   llvm::LLVMContext llvmContext;
   LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+  auto llvmResTy = typeTranslator.translateType(resType);
   auto llvmCTy = typeTranslator.translateType(opTypes[0]);
   auto llvmATy = typeTranslator.translateType(aTy);
   auto llvmBTy = typeTranslator.translateType(bTy);
-  SmallVector<llvm::Type *> llvmTypes{llvmCTy, llvmATy, llvmBTy};
+  SmallVector<llvm::Type *> llvmTypes{llvmResTy, llvmCTy, llvmATy, llvmBTy};
   std::string funcName = llvm::GenISAIntrinsic::getName(
       llvm::GenISAIntrinsic::GenISA_sub_group_dpas, llvmTypes);
 
-  Type resType = op->getResultTypes()[0];
   LLVM::LLVMFuncOp funcOp = getOrCreateFunction(
-      funcName, resType, {opTypes[0], aTy, bTy}, moduleOp, loc, rewriter);
+      funcName, resType,
+      {opTypes[0], aTy, bTy, int32Ty, int32Ty, int32Ty, int32Ty, int1Ty},
+      moduleOp, loc, rewriter);
   funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
-  IntegerType int32Ty = rewriter.getIntegerType(32);
   auto precA = rewriter.create<LLVM::ConstantOp>(loc, int32Ty,
                                                  static_cast<int>(op.getPa()));
   auto precB = rewriter.create<LLVM::ConstantOp>(loc, int32Ty,
                                                  static_cast<int>(op.getPa()));
-  auto sysDepth = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 8);
+  auto sysDepth =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 8 /* systolic depth */);
   auto RC = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getRc());
-  auto False =
-      rewriter.create<LLVM::ConstantOp>(loc, rewriter.getIntegerType(1), false);
-
+  auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   ArrayRef<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 

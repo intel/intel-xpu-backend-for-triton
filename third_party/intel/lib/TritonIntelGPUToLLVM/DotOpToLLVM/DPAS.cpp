@@ -1,8 +1,8 @@
 #include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 
-#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -158,8 +158,10 @@ public:
 
     Type resElemTy = DTensorTy.getElementType();
 
-    GENX::PrecisionType APrecision = getElementPrecision(ATensorTy, resElemTy),
-                        BPrecision = getElementPrecision(BTensorTy, resElemTy);
+    TritonGEN::PrecisionType APrecision =
+                                 getElementPrecision(ATensorTy, resElemTy),
+                             BPrecision =
+                                 getElementPrecision(BTensorTy, resElemTy);
 
     assert(APrecision == BPrecision &&
            "A and B precision enumerators do not match");
@@ -176,13 +178,13 @@ public:
       auto valB = hb.at({n, k});
       auto valc = fc.at({m, n});
 
-      auto pA = GENX::PrecisionTypeAttr::get(A.getContext(), APrecision);
-      auto pB = GENX::PrecisionTypeAttr::get(B.getContext(), BPrecision);
+      auto pA = TritonGEN::PrecisionTypeAttr::get(A.getContext(), APrecision);
+      auto pB = TritonGEN::PrecisionTypeAttr::get(B.getContext(), BPrecision);
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
 
-      auto ret = rewriter.create<GENX::MatrixDPASOp>(loc, dTy, valc, valA, valB,
-                                                     pA, pB, RC);
+      auto ret = rewriter.create<TritonGEN::MatrixDPASOp>(loc, dTy, valc, valA,
+                                                          valB, pA, pB, RC);
 
       fc.at({m, n}) = ret;
     };
@@ -203,21 +205,21 @@ public:
 private:
   /// Return the bit width corresponding to the given precision or std::nullopt
   /// if it cannot be computed.
-  std::optional<unsigned> getBitWidth(GENX::PrecisionType PT) const {
+  std::optional<unsigned> getBitWidth(TritonGEN::PrecisionType PT) const {
     switch (PT) {
-    case GENX::PrecisionType::U2:
-    case GENX::PrecisionType::S2:
+    case TritonGEN::PrecisionType::U2:
+    case TritonGEN::PrecisionType::S2:
       return 2;
-    case GENX::PrecisionType::U4:
-    case GENX::PrecisionType::S4:
+    case TritonGEN::PrecisionType::U4:
+    case TritonGEN::PrecisionType::S4:
       return 4;
-    case GENX::PrecisionType::U8:
-    case GENX::PrecisionType::S8:
+    case TritonGEN::PrecisionType::U8:
+    case TritonGEN::PrecisionType::S8:
       return 8;
-    case GENX::PrecisionType::BF16:
-    case GENX::PrecisionType::FP16:
+    case TritonGEN::PrecisionType::BF16:
+    case TritonGEN::PrecisionType::FP16:
       return 16;
-    case GENX::PrecisionType::TF32:
+    case TritonGEN::PrecisionType::TF32:
       return 32;
     default:
       return std::nullopt;
@@ -274,8 +276,8 @@ private:
 
   /// Return the precision for the given tensor type (the type of A or B) and
   /// result element type.
-  GENX::PrecisionType getElementPrecision(RankedTensorType tensorTy,
-                                          Type resElemType) const {
+  TritonGEN::PrecisionType getElementPrecision(RankedTensorType tensorTy,
+                                               Type resElemType) const {
     assert((isa<IntegerType>(resElemType) || isa<FloatType>(resElemType)) &&
            "Expecting an integer or floating point type");
 
@@ -285,17 +287,17 @@ private:
 
     if (isa<FloatType>(resElemType)) {
       if (width == 32)
-        return GENX::PrecisionType::TF32;
+        return TritonGEN::PrecisionType::TF32;
       if (isa<BFloat16Type>(elemType))
-        return GENX::PrecisionType::BF16;
+        return TritonGEN::PrecisionType::BF16;
       if (isa<Float16Type>(elemType))
-        return GENX::PrecisionType::FP16;
+        return TritonGEN::PrecisionType::FP16;
     } else if (width == 8) {
-      return elemType.isUnsignedInteger() ? GENX::PrecisionType::U8
-                                          : GENX::PrecisionType::S8;
+      return elemType.isUnsignedInteger() ? TritonGEN::PrecisionType::U8
+                                          : TritonGEN::PrecisionType::S8;
     }
 
-    return GENX::PrecisionType::PRECISION_UNUSED;
+    return TritonGEN::PrecisionType::UNUSED;
   }
 
   DpasEncodingAttr dpasLayout;

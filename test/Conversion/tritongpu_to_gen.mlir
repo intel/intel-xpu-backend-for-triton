@@ -562,7 +562,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: dot_f32_f16_f16_f32_1
   tt.func @dot_f32_f16_f16_f32_1(%a: tensor<8x16xf16, #dot_operand_a>, %b: tensor<16x16xf16, #dot_operand_b>, %c: tensor<8x16xf32, #mma>) {
-    // CHECK: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<FP16>, pb = #genx.precision_type<FP16>, rc = 8 : i32} : (vector<8xf32>, vector<8xi16>, vector<8xi32>) -> vector<8xf32>
+    // CHECK: llvm.call @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v8i16.v8i32
     %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<8x16xf32, #mma>
     tt.return
   }
@@ -578,7 +578,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   // CHECK-LABEL: dot_f32_f16_f16_f32_2
   tt.func @dot_f32_f16_f16_f32_2(%a: tensor<16x16xf16, #dot_operand_a>, %b: tensor<16x16xf16, #dot_operand_b>, %c: tensor<16x16xf32, #mma>) {
     // COM: 2 repetitions along axis for M.
-    // CHECK-COUNT-2: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<FP16>, pb = #genx.precision_type<FP16>, rc = 8 : i32} : (vector<8xf32>, vector<8xi16>, vector<8xi32>) -> vector<8xf32>
+    // CHECK-COUNT-2: llvm.call @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v8i16.v8i32
     %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<16x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<16x16xf32, #mma>
     tt.return
   }
@@ -593,7 +593,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: dot_i32_i8_i8_i32_1
   tt.func @dot_i32_i8_i8_i32_1(%a: tensor<8x32xi8, #dot_operand_a>, %b: tensor<32x16xi8, #dot_operand_b>, %c: tensor<8x16xi32, #mma>) {
-    // CHECK: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<S8>, pb = #genx.precision_type<S8>, rc = 8 : i32} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>
+    // CHECK: llvm.call @llvm.genx.GenISA.sub.group.dpas.v8i32.v8i32.v8i16.v8i32
     %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x32xi8, #dot_operand_a> * tensor<32x16xi8, #dot_operand_b> -> tensor<8x16xi32, #mma>
     tt.return
   }
@@ -609,7 +609,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   // CHECK-LABEL: dot_i32_i8_i8_i32_2
   tt.func @dot_i32_i8_i8_i32_2(%a: tensor<8x64xi8, #dot_operand_a>, %b: tensor<64x16xi8, #dot_operand_b>, %c: tensor<8x16xi32, #mma>) {
     // COM: 2 repetition along axis for K.
-    // CHECK: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<S8>, pb = #genx.precision_type<S8>, rc = 8 : i32} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>
+    // CHECK: llvm.call @llvm.genx.GenISA.sub.group.dpas.v8i32.v8i32.v8i16.v8i32
     %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x64xi8, #dot_operand_a> * tensor<64x16xi8, #dot_operand_b> -> tensor<8x16xi32, #mma>
     tt.return
   }
@@ -624,7 +624,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: dot_f32_tf32_tf32_f32_1
   tt.func @dot_f32_tf32_tf32_f32_1(%a: tensor<8x8xf32, #dot_operand_a>, %b: tensor<8x16xf32, #dot_operand_b>, %c: tensor<8x16xf32, #mma>) {
-    // CHECK: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<TF32>, pb = #genx.precision_type<TF32>, rc = 8 : i32} : (vector<8xf32>, vector<4xi32>, vector<8xi32>) -> vector<8xf32>
+    // CHECK: llvm.call @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v8i16.v8i32
     %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x8xf32, #dot_operand_a> * tensor<8x16xf32, #dot_operand_b> -> tensor<8x16xf32, #mma>
     tt.return
   }
@@ -640,7 +640,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   // CHECK-LABEL: dot_f32_tf32_tf32_f32_2
   tt.func @dot_f32_tf32_tf32_f32_2(%a: tensor<8x8xf32, #dot_operand_a>, %b: tensor<8x32xf32, #dot_operand_b>, %c: tensor<8x32xf32, #mma>) {
     // COM: 2 repetitions along axis for N.
-    // CHECK-COUNT-2: genx.matrix.dpas {{.*}}, {{.*}}, {{.*}} {pa = #genx.precision_type<TF32>, pb = #genx.precision_type<TF32>, rc = 8 : i32} : (vector<8xf32>, vector<4xi32>, vector<8xi32>) -> vector<8xf32>
+    // CHECK-COUNT-2: llvm.call @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v8i16.v8i32
     %0 = tt.dot %a, %b, %c {allowTF32 = true, maxNumImpreciseAcc = 0 : i32, transA = false, transB = false} : tensor<8x8xf32, #dot_operand_a> * tensor<8x32xf32, #dot_operand_b> -> tensor<8x32xf32, #mma>
     tt.return
   }
