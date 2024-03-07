@@ -67,3 +67,9 @@ llvm.func @triton_gen.sub_group_shuffle() {
   %16 = triton_gen.sub_group_shuffle xor %15, %0 : f64 -> f64
   llvm.return
 }
+
+llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<16xi8>, %b : vector<32xi8>) {
+  // CHECK: %0 = triton_gen.matrix.dpas %arg0, %arg1, %arg2 {pa = s8, pb = s8, rc = 8} : (vector<8xi32>, vector<16xi8>, vector<32xi8>) -> vector<8xi32>
+  %0 = triton_gen.matrix.dpas %c, %a, %b {pa=s8, pb=s8, rc=8} : (vector<8xi32>, vector<16xi8>, vector<32xi8>) -> vector<8xi32>
+  llvm.return
+}
