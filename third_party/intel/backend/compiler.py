@@ -41,9 +41,21 @@ class XPUOptions:
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     allow_fp8e4nv: bool = False
-    max_num_imprecise_acc_default: bool = None
+    max_num_imprecise_acc_default: bool = False  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
+
+    # device properties
+    # TODO: remove unnecessary fields
+    dev_name: str = None
+    platform_name: str = None
+    vendor: str = None
+    driver_version: str = None
+    version: str = None
+    max_work_group_size: int = None
+    max_num_sub_groups: int = None
+    sub_group_sizes: list = None
+    support_fp64: bool = None
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -52,7 +64,7 @@ class XPUOptions:
             extern_libs['libdevice'] = str(default_libdir / 'libsycl-spir64-unknown-unknown.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
-               "num_warps must be a power of 2"
+            "num_warps must be a power of 2"
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -67,14 +79,22 @@ class XPUBackend(BaseBackend):
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        self.capability = target[1]
-        assert isinstance(self.capability, int)
+        assert isinstance(target, tuple) and len(target) == 2
+        assert isinstance(target[1], dict)
+        print("target[1]: ", target[1])
+        # TODO: Deprecate capability in XPU compilation
+        self.capability = 80  # compute capability for A100
+        self.properties = self._parse_target(target[1])
         self.binary_ext = "spv"
+
+    def _parse_target(self, tgt_prop) -> dict:
+        dev_prop = {k: tgt_prop[k] for k in XPUOptions.__dataclass_fields__.keys() if k in tgt_prop}
+        return dev_prop
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
+        args.update(self.properties)
         args["allow_fp8e4nv"] = True
-        args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return XPUOptions(**args)
 
     def load_dialects(self, ctx):
@@ -191,4 +211,5 @@ class XPUBackend(BaseBackend):
     @functools.lru_cache()
     def hash(self):
         version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"])
-        return f'{version}-{self.capability}'
+        # TODO: Fix this if the hash string is too long
+        return f'{version}-{self.properties}'
