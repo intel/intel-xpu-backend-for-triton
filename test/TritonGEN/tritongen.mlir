@@ -78,6 +78,7 @@ llvm.func @triton_gen.fptofp(%a: f32, %b: f16) {
   // CHECK-NEXT: %5 = triton_gen.conv.fptofp %arg1 {roundingMode = rtn} : f16 to f32
   // CHECK-NEXT: %6 = triton_gen.conv.fptofp %arg1 {roundingMode = rtp} : f16 to f32
   // CHECK-NEXT: %7 = triton_gen.conv.fptofp %arg1 {roundingMode = rtz} : f16 to f32
+  // CHECK-NEXT: %8 = triton_gen.conv.fptofp %arg1 : f16 to f32  
   %0 = triton_gen.conv.fptofp %a {roundingMode = rte} : f32 to f16
   %1 = triton_gen.conv.fptofp %a {roundingMode = rtn} : f32 to f16
   %2 = triton_gen.conv.fptofp %a {roundingMode = rtp} : f32 to f16
@@ -86,5 +87,6 @@ llvm.func @triton_gen.fptofp(%a: f32, %b: f16) {
   %5 = triton_gen.conv.fptofp %b {roundingMode = rtn} : f16 to f32
   %6 = triton_gen.conv.fptofp %b {roundingMode = rtp} : f16 to f32
   %7 = triton_gen.conv.fptofp %b {roundingMode = rtz} : f16 to f32
+  %8 = triton_gen.conv.fptofp %a : f32 to f16
   llvm.return
 }
