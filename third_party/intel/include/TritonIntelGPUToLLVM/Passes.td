@@ -29,7 +29,7 @@ def ConvertTritonIntelGPUToLLVM : Pass<"convert-triton-intel-gpu-to-llvm", "mlir
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
                              "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                             "mlir::triton::GEN::GENDialect",
+                             "mlir::triton::TritonGEN::TritonGENDialect",
                              "mlir::GENX::GENXDialect",
                              "mlir::NVVM::NVVMDialect"];
 
