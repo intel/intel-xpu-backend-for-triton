@@ -1,3 +1,4 @@
 add_subdirectory(GENToLLVM)
+add_subdirectory(GPUToGEN)
 add_subdirectory(NVGPUIntelToLLVM)
 add_subdirectory(TritonIntelGPUToLLVM)

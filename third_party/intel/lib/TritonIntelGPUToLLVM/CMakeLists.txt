@@ -42,4 +42,5 @@ add_triton_library(TritonIntelGPUToLLVM
     MLIRGENXDialect
     GENIR
     GENToLLVM
+    GPUToGEN
 )

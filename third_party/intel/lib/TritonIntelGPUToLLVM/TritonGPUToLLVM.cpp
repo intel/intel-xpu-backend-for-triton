@@ -18,6 +18,8 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "intel/include/GENToLLVM/GENToLLVMPass.h"
+#include "intel/include/GPUToGEN/GPUToGENPass.h"
+
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
@@ -266,7 +268,7 @@ struct ConvertTritonGPUToLLVM
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
     mlir::triton::populateGENToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::populateGpuToGENXConversionPatterns(typeConverter, patterns);
+    mlir::triton::populateGPUToGENConversionPatterns(typeConverter, patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
