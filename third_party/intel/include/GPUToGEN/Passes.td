@@ -13,7 +13,7 @@ include "mlir/Pass/PassBase.td"
 
 def ConvertGPUToGEN : Pass<"convert-gpu-to-gen", "mlir::gpu::GPUModuleOp"> {
   let summary = "Generate GEN operations for gpu operations";
-  let constructor = "mlir::createLowerGpuOpsToGENOpsPass()";
+  let constructor = "mlir::createLowerGPUToGENPass()";
   // TODO: attempt to remove CF and memref dialect.
   let dependentDialects = [
     "mlir::cf::ControlFlowDialect",
