@@ -102,6 +102,9 @@ jobs:
       max-parallel: 2
       fail-fast: false
     timeout-minutes: 720
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -333,7 +336,6 @@ jobs:
         env:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
-          source ~/intel/oneapi/setvars.sh
           export WORKSPACE=$GITHUB_WORKSPACE
           if [[ "${{ inputs.TORCH_COMPILE_DEBUG }}" == "1" ]] ; then
             export TORCH_COMPILE_DEBUG="1"
