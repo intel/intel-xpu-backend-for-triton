@@ -5,7 +5,7 @@ import os
 
 import triton
 import triton.ops
-import pdb
+
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize('Z, H, N_CTX, D_HEAD', [  #
