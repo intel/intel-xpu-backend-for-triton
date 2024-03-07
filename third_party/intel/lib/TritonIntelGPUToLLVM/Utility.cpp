@@ -280,16 +280,16 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   return *endBlock.args_begin();
 }
 
-static GEN::ShflKind toGenShuffleMode(NVVM::ShflKind mode) {
+static TritonGEN::ShflKind toGenShuffleMode(NVVM::ShflKind mode) {
   switch (mode) {
   case NVVM::ShflKind::bfly:
-    return GEN::ShflKind::XOR;
+    return TritonGEN::ShflKind::XOR;
   case NVVM::ShflKind::up:
-    return GEN::ShflKind::UP;
+    return TritonGEN::ShflKind::UP;
   case NVVM::ShflKind::down:
-    return GEN::ShflKind::DOWN;
+    return TritonGEN::ShflKind::DOWN;
   case NVVM::ShflKind::idx:
-    return GEN::ShflKind::IDX;
+    return TritonGEN::ShflKind::IDX;
   }
   llvm_unreachable("unsupported NVVM::ShflKind");
 }
@@ -312,8 +312,8 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
     return bitcast(vec, val.getType());
   }
   Type type = val.getType();
-  return rewriter.create<GEN::SubGroupShuffleOp>(loc, type, val, i,
-                                                 toGenShuffleMode(mode));
+  return rewriter.create<TritonGEN::SubGroupShuffleOp>(loc, type, val, i,
+                                                       toGenShuffleMode(mode));
 }
 
 Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,

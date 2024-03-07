@@ -60,7 +60,7 @@ struct AssertOpConversion
     auto funcOp = getAssertfailDeclaration(rewriter);
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    unsigned addrSpace = GEN::GENMemorySpace::kCrossWorkgroup;
+    unsigned addrSpace = TritonGEN::TritonGENMemorySpace::kCrossWorkgroup;
     Value messageString = LLVM::utils::addStringToModule(
         loc, rewriter, "assertMessage_", message, addrSpace);
     Value fileString = LLVM::utils::addStringToModule(
@@ -71,11 +71,11 @@ struct AssertOpConversion
 
     SmallVector<Value> operands;
     Value messageStringPtr = addrspacecast(
-        ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), messageString);
-    Value fileStringPtr =
-        addrspacecast(ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), fileString);
-    Value funcStringPtr =
-        addrspacecast(ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), funcString);
+        ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), messageString);
+    Value fileStringPtr = addrspacecast(
+        ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), fileString);
+    Value funcStringPtr = addrspacecast(
+        ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), funcString);
     operands = {messageStringPtr, fileStringPtr, lineNumber, funcStringPtr};
     auto ret = call(funcOp, operands);
     ret.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
@@ -101,9 +101,9 @@ struct AssertOpConversion
     // int line, const char * function);
     auto *ctx = rewriter.getContext();
     SmallVector<Type> argsType;
-    argsType = {ptr_ty(ctx, GEN::GENMemorySpace::kGeneric),
-                ptr_ty(ctx, GEN::GENMemorySpace::kGeneric), i32_ty,
-                ptr_ty(ctx, GEN::GENMemorySpace::kGeneric)};
+    argsType = {ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric),
+                ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), i32_ty,
+                ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric)};
     auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
 
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
