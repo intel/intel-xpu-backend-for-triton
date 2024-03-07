@@ -1,5 +1,4 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
 
 using ::mlir::triton::intel::PTXBuilder;
