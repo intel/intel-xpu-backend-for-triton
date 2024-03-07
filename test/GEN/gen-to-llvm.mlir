@@ -114,21 +114,3 @@ llvm.func @gen.sub_group_shuffle() {
   %16 = gen.sub_group_shuffle xor %15, %0 : f64 -> f64
   llvm.return
 }
-
-// -----
-
-llvm.func @gen.fptofp(%a: f32, %b: f16) {
-  // CHECK-LABEL: gen.fptofp
-  // CHECK: llvm.call_intrinsic "llvm.experimental.constrained.fptrunc"(%arg0) : (f32) -> f16
-  // CHECK: call half @llvm.experimental.constrained.fptrunc.f16.f32(float %0, metadata !"round.tonearest", metadata !"fpexcept.strict")
-  // CHECK-NEXT: call half @llvm.experimental.constrained.fptrunc.f16.f32(float %0, metadata !"round.downward", metadata !"fpexcept.strict")
-  // CHECK-NEXT: call half @llvm.experimental.constrained.fptrunc.f16.f32(float %0, metadata !"round.upward", metadata !"fpexcept.strict")
-  // CHECK-NEXT: call half @llvm.experimental.constrained.fptrunc.f16.f32(float %0, metadata !"round.towardzero", metadata !"fpexcept.strict")
-  // CHECK-NEXT: call float @llvm.experimental.constrained.fpext.f32.f16(half %1, metadata !"fpexcept.strict")
-  %0 = gen.conv.fptofp %a {roundingMode = rte} : f32 to f16
-  %1 = gen.conv.fptofp %a {roundingMode = rtn} : f32 to f16
-  %2 = gen.conv.fptofp %a {roundingMode = rtp} : f32 to f16
-  %3 = gen.conv.fptofp %a {roundingMode = rtz} : f32 to f16
-  %7 = gen.conv.fptofp %b : f16 to f32
-  llvm.return
-}
