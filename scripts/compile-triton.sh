@@ -39,23 +39,15 @@ for arg in "$@"; do
   esac
 done
 
+SCRIPTS_DIR=$(dirname "$0")
+source "$SCRIPTS_DIR"/functions.sh
+
+set_env
+
 if [ "$BUILD_LLVM" = false ] && [ "$BUILD_TRITON" = false ]; then
   BUILD_LLVM=true
   BUILD_TRITON=true
 fi
-
-set +o xtrace
-if [ -z "$BASE" ]; then
-  echo "**** BASE is not given *****"
-  BASE=$(cd $(dirname "$0")/../.. && pwd)
-  echo "**** Default BASE is set to $BASE ****"
-fi
-
-export PACKAGES_DIR=$BASE/packages
-export SPIRV_TOOLS=$PACKAGES_DIR/spirv-tools
-export LLVM_PROJ=$BASE/llvm
-export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
-export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 if [ "$CLEAN" = true ]; then
   echo "**** Cleaning $PACKAGES_DIR, $LLVM_PROJ, and $TRITON_PROJ_BUILD before build ****"
@@ -67,24 +59,13 @@ if [ "$VENV" = true ]; then
   python3 -m venv .venv --prompt triton
   source .venv/bin/activate
   pip install ninja cmake wheel
-elif [ -n "$VIRTUAL_ENV" ]; then
+elif [ ! -z ${VIRTUAL_ENV+x} ]
+then
   echo "**** Cleaning up Python virtualenv ****"
   deactivate
 fi
 
-check_rc() {
-  if [ $? != 0 ]; then
-    echo "Command failed with rc: $rc"
-    exit 1
-  fi
-}
-
-if [ ! -d "$PACKAGES_DIR" ]; then
-  mkdir $PACKAGES_DIR
-fi
-if [ $BASE != $HOME ]; then
-  ln -s $PACKAGES_DIR $HOME/packages
-fi
+mkdir -p "$PACKAGES_DIR"
 
 ############################################################################
 # Download the Kronos SPIRV-Tools.
@@ -115,11 +96,11 @@ fi
 ############################################################################
 ## Configure and build the llvm project.
 
-if [ -z "$C_COMPILER" ]; then
+if [ -z ${C_COMPILER:+x} ]; then
   C_COMPILER=${GCC:-$(which gcc)}
   echo "**** C_COMPILER is set to $C_COMPILER ****"
 fi
-if [ -z "$CXX_COMPILER" ]; then
+if [ -z ${CXX_COMPILER:+x} ]; then
   CXX_COMPILER=${GXX:-$(which g++)}
   echo "**** CXX_COMPILER is set to $CXX_COMPILER ****"
 fi
@@ -155,22 +136,9 @@ build_llvm() {
 
   echo "****** Building $LLVM_PROJ ******"
   ninja
-  check_rc
   ninja install
-  check_rc
   ninja check-mlir
-  check_rc
 }
-
-############################################################################
-# Clone the Triton project fork if it does not exists.
-
-if [ ! -d "$TRITON_PROJ" ]
-then
-  echo "****** Cloning $TRITON_PROJ ******"
-  cd $BASE
-  git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
-fi
 
 ############################################################################
 ## Configure and build the Triton project.
@@ -203,11 +171,9 @@ build_triton() {
 
   cd python
   pip install -e .
-  check_rc
 
   # Install triton tests.
   pip install -vvv -e '.[tests]'
-  check_rc
 
   # Copy compile_commands.json in the build directory (so that cland vscode plugin can find it).
   cp $TRITON_PROJ_BUILD/"$(ls $TRITON_PROJ_BUILD)"/compile_commands.json $TRITON_PROJ/

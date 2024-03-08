@@ -34,12 +34,10 @@ for arg in "$@"; do
   esac
 done
 
-set +o xtrace
-if [ -z "$BASE" ]; then
-  echo "**** BASE is not given *****"
-  BASE=$(cd $(dirname "$0")/../.. && pwd)
-  echo "**** Default BASE is set to $BASE ****"
-fi
+SCRIPTS_DIR=$(dirname "$0")
+source "$SCRIPTS_DIR"/functions.sh
+
+set_env
 
 export PYTORCH_PROJ=$BASE/pytorch
 export IPEX_PROJ=$BASE/intel-extension-for-pytorch
@@ -66,13 +64,6 @@ if [ "$VENV" = true ]; then
   source .venv/bin/activate
 fi
 
-check_rc() {
-  if [ $? != 0 ]; then
-    echo "Command failed with rc: $rc"
-    exit 1
-  fi
-}
-
 ############################################################################
 # Configure and build the pytorch project.
 
@@ -85,7 +76,7 @@ build_pytorch() {
   echo "****** Building $PYTORCH_PROJ ******"
   cd $PYTORCH_PROJ
   if [ ! -d "$PYTORCH_PROJ/dist" ]; then
-    PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
+    PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)" || true
     git checkout $PYTORCH_COMMIT_ID
     git submodule update --recursive
     pip install cmake ninja
@@ -96,7 +87,6 @@ build_pytorch() {
   pip install dist/*.whl
   cd $BASE
   python -c "import torch;print(torch.__version__)"
-  check_rc
 }
 
 ############################################################################
@@ -111,7 +101,7 @@ build_ipex() {
   echo "****** Building $IPEX_PROJ ******"
   cd $IPEX_PROJ
   if [ ! -d "$IPEX_PROJ/dist" ]; then
-    IPEX_COMMIT_ID="$(<.github/pins/ipex.txt)"
+    IPEX_COMMIT_ID="$(<.github/pins/ipex.txt)" || true
     git checkout $IPEX_COMMIT_ID
     git submodule update --recursive
     pip install -r requirements.txt
@@ -120,7 +110,6 @@ build_ipex() {
   pip install dist/*.whl
   cd $BASE
   python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
-  check_rc
 }
 
 build() {

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 
+set -eu
+
 # Select which tests to run.
 TEST_CORE=false
 TEST_TUTORIAL=false
 TEST_UNIT=false
 VENV=false
+ACTIVATE_CONDA=false
 for arg in "$@"; do
   case $arg in
     --core)
@@ -21,6 +24,10 @@ for arg in "$@"; do
       ;;
     --venv)
       VENV=true
+      shift
+      ;;
+    --conda)
+      ACTIVATE_CONDA=true
       shift
       ;;
     --help)
@@ -40,28 +47,29 @@ if [ "$TEST_CORE" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_UNIT" = 
   TEST_UNIT=true
 fi
 
-set +o xtrace
-if [ ! -d "$BASE" ]; then
-  echo "**** BASE is not given *****"
-  BASE=$(cd $(dirname "$0")/../.. && pwd)
-  echo "**** Default BASE is set to $BASE ****"
-fi
+SCRIPTS_DIR=$(dirname "$0")
+source "$SCRIPTS_DIR"/functions.sh
 
-if [ "$VENV" = true ]; then
+set_env
+
+if "$VENV"
+then
   source .venv/bin/activate
 fi
 
-export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
-export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
-export SCRIPTS_DIR=$(dirname "$0")
+set +u
+if "$ACTIVATE_CONDA"
+then
+  CONDA_BASE_PREFIX=$(conda run -n base sh -c "echo \$CONDA_PREFIX")
+  [ -d "$CONDA_BASE_PREFIX"/envs/triton ] || conda env update -f "$SCRIPTS_DIR/triton.yml"
+  source "$CONDA_BASE_PREFIX/etc/profile.d/conda.sh"
+  conda activate triton
+fi
+set -u
 
 python3 -m pip install lit
 python3 -m pip install pytest pytest-xdist pytest-rerunfailures
 $SCRIPTS_DIR/compile-pytorch-ipex.sh
-if [ $? -ne 0 ]; then
-  echo "FAILED: return code $?"
-  exit $?
-fi
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then
