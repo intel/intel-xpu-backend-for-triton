@@ -1,7 +1,7 @@
 #pragma once
-#include "triton/Dialect/GEN/IR/Dialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -17,8 +17,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
 // FIXME
-#include "intel/include/GENToLLVM/Passes.h"
 #include "intel/include/NVGPUIntelToLLVM/Passes.h"
+#include "intel/include/TritonGENToLLVM/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "nvidia/include/NVGPUToLLVM/Passes.h"
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h"
@@ -59,9 +59,9 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerIntelDecomposeUnsupportedConversionsPass();
   mlir::triton::registerIntelAllocateSharedMemoryPass();
   mlir::triton::registerConvertTritonIntelGPUToLLVMPass();
-  mlir::triton::registerConvertGENToLLVM();
+  mlir::triton::registerConvertTritonGENToLLVM();
   mlir::triton::registerConvertNVGPUIntelToLLVMPass();
-  mlir::triton::registerGENToLLVMPasses();
+  mlir::triton::registerTritonGENToLLVMPasses();
 
 #ifdef USE_ROCM
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
@@ -90,8 +90,9 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
                   mlir::triton::gpu::intel::TritonIntelGPUDialect,
                   mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
                   mlir::triton::gpu::TritonGPUDialect,
-                  mlir::triton::GEN::GENDialect, mlir::math::MathDialect,
-                  mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-                  mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
-                  mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect>();
+                  mlir::triton::TritonGEN::TritonGENDialect,
+                  mlir::math::MathDialect, mlir::arith::ArithDialect,
+                  mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
+                  mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect,
+                  mlir::triton::nvgpu::NVGPUDialect>();
 }

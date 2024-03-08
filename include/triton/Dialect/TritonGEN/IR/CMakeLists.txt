@@ -1,0 +1,18 @@
+set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
+
+set(LLVM_TARGET_DEFINITIONS TritonGENOps.td)
+mlir_tablegen(TritonGENDialect.h.inc -gen-dialect-decls -dialect=triton_gen)
+mlir_tablegen(TritonGENDialect.cpp.inc -gen-dialect-defs -dialect=triton_gen)
+mlir_tablegen(TritonGENOpsConversions.inc -gen-llvmir-conversions)
+mlir_tablegen(TritonGENOps.h.inc -gen-op-decls)
+mlir_tablegen(TritonGENOps.cpp.inc -gen-op-defs)
+mlir_tablegen(TritonGENOpsEnums.h.inc -gen-enum-decls)
+mlir_tablegen(TritonGENOpsEnums.cpp.inc -gen-enum-defs)
+add_mlir_doc(TritonGENDialect TritonGENDialect dialects/ -gen-dialect-doc)
+add_mlir_doc(TritonGENOps TritonGENOps dialects/ -gen-op-doc)
+add_public_tablegen_target(TritonGENTableGen)
+
+set(LLVM_TARGET_DEFINITIONS TritonGENAttrDefs.td)
+mlir_tablegen(TritonGENOpsAttrDefs.h.inc -gen-attrdef-decls)
+mlir_tablegen(TritonGENOpsAttrDefs.cpp.inc -gen-attrdef-defs)
+add_public_tablegen_target(TritonGENAttrDefsIncGen)

@@ -38,9 +38,9 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonNvidiaGPUTransforms
     MLIRGPUToGENXTransforms
     NVGPUIR
+    TritonGENIR
+    TritonGENToLLVM
     TritonIntelGPUIR
     MLIRGENXDialect
-    GENIR
-    GENToLLVM
-    GPUToGEN
+    GPUToTritonGEN
 )
