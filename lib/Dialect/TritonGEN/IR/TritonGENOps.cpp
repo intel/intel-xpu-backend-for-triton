@@ -98,7 +98,7 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
-// gen.matrix.2Dblockload
+// gen.2Dblockload
 //===----------------------------------------------------------------------===//
 
 static std::optional<int> getConstantInt(Value v) {
@@ -169,7 +169,7 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
 }
 
 //===----------------------------------------------------------------------===//
-// gen.matrix.2Dblockload
+// gen.2Dblockload
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
@@ -177,7 +177,7 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
-// gen.matrix.2Dblockstore
+// gen.2Dblockstore
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {

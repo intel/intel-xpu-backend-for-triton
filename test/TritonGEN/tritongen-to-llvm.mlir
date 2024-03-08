@@ -127,6 +127,6 @@ llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vect
   // CHECK-DAG:  [[CST_FALSE:%.*]] = llvm.mlir.constant(false) : i1
   // CHECK-NEXT: llvm.call @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v8i16.v8i32
   // CHEC-SAME:    (%arg0, [[A]], [[B]], [[CST_8a]], [[CST_8b]], [[CST_8c]], [[CST_8d]], [[CST_FALSE]]) : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i32, i32, i32, i32, i1) -> vector<8xf32>
-  %0 = triton_gen.matrix.dpas %c, %a, %b {pa = tf32, pb = tf32, rc = 8} : (vector<8xf32>, vector<4xf32>, vector<8xf32>) -> vector<8xf32>
+  %0 = triton_gen.dpas %c, %a, %b {pa = tf32, pb = tf32, rc = 8} : (vector<8xf32>, vector<4xf32>, vector<8xf32>) -> vector<8xf32>
   llvm.return
 }
