@@ -24,6 +24,7 @@
 #include "mlir/Target/LLVMIR/TypeToLLVM.h"
 
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -130,6 +131,56 @@ static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
   return createDeviceFunctionCall(rewriter, fnName, value.getType(),
                                   {value.getType(), mask.getType()},
                                   {value, mask}, true /*convergent*/);
+}
+
+static LLVM::CallIntrinsicOp createFpToFp(TritonGEN::FpToFpOp op,
+                                          ConversionPatternRewriter &rewriter) {
+  MLIRContext *context = rewriter.getContext();
+  Location loc = UnknownLoc::get(context);
+
+  // TODO: MLIR offers a mechanism to convert attributes to different dialects,
+  // we should replace this switch with it.
+  std::optional<int32_t> rounding = std::nullopt;
+  if (op.getRoundingMode())
+    switch (*op.getRoundingMode()) {
+    case TritonGEN::RoundingMode::RTE:
+      rounding = static_cast<int32_t>(llvm::RoundingMode::NearestTiesToEven);
+      break;
+    case TritonGEN::RoundingMode::RTN:
+      rounding = static_cast<int32_t>(llvm::RoundingMode::TowardNegative);
+      break;
+    case TritonGEN::RoundingMode::RTP:
+      rounding = static_cast<int32_t>(llvm::RoundingMode::TowardPositive);
+      break;
+    case TritonGEN::RoundingMode::RTZ:
+      rounding = static_cast<int32_t>(llvm::RoundingMode::TowardZero);
+      break;
+    default:
+      llvm_unreachable("Unhandled rounding mode");
+    }
+
+  Type argType = op.getArg().getType();
+  Type resType = op.getResult().getType();
+  unsigned resTySizeInBits = resType.getIntOrFloatBitWidth();
+  unsigned srcTySizeInBits = argType.getIntOrFloatBitWidth();
+  // TODO: add these intrinsics to the llvm dialect as first class operations.
+  auto stringAttr =
+      (srcTySizeInBits > resTySizeInBits)
+          ? rewriter.getStringAttr(llvm::Intrinsic::getBaseName(
+                llvm::Intrinsic::experimental_constrained_fptrunc))
+          : rewriter.getStringAttr(llvm::Intrinsic::getBaseName(
+                llvm::Intrinsic::experimental_constrained_fpext));
+
+  if (rounding.has_value()) {
+    auto namedAttr = rewriter.getNamedAttr(
+        "roundingMode",
+        IntegerAttr::get(IntegerType::get(context, 32), rounding.value()));
+  }
+
+  // TODO: currently the LLVM dialect is unable to translate an intrinsic call
+  // with metadata correctly.
+  return rewriter.create<LLVM::CallIntrinsicOp>(loc, resType, stringAttr,
+                                                op.getArg());
 }
 
 static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
@@ -390,6 +441,23 @@ struct TritonSubGroupShuffleLowering
 };
 
 //===----------------------------------------------------------------------===//
+// Type Conversion Ops Lowerings
+//===----------------------------------------------------------------------===//
+
+struct TritonGENFpToFpLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::FpToFpOp> {
+  using ConvertOpToLLVMPattern<TritonGEN::FpToFpOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::FpToFpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM::CallIntrinsicOp callOp = createFpToFp(op, rewriter);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
 
@@ -469,8 +537,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
                TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
                TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
                TritonGENGridDimYLowering, TritonGENGridDimZLowering>(converter);
-  patterns.add<TritonGENBarrierLowering, TritonSubGroupShuffleLowering>(
-      converter);
+  patterns.add<TritonGENBarrierLowering, TritonSubGroupShuffleLowering,
+               TritonGENFpToFpLowering>(converter);
   patterns.add<TritonMatrixDPASLowering>(converter);
 }
 
