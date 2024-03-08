@@ -379,11 +379,20 @@ class XPULauncher(object):
 class XPUDriver(DriverBase):
 
     def __init__(self):
-        self.utils = XPUUtils()
         self.binary_ext = "spv"
         self.launcher_cls = XPULauncher
-        self.get_current_stream = self.get_current_stream
-        self.get_current_device = self.utils.get_current_device
+
+    def __getattr__(self, name):
+        # Lazily initialize utils to avoid unnecessary XPU runtime invocations.
+        # See https://github.com/intel/intel-xpu-backend-for-triton/issues/624
+        if name == "utils":
+            self.utils = XPUUtils()
+            return self.utils
+        else:
+            raise AttributeError
+
+    def get_current_device(self):
+        return self.utils.get_current_device()
 
     def get_current_stream(self, device):
         import torch
