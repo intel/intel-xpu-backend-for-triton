@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+# shellcheck shell=bash
 
 set -ueo pipefail
 
@@ -22,4 +22,3 @@ print_failed() {
   echo "FAILED ($code): $lineno: $msg"
 }
 trap 'print_failed $? $LINENO "$BASH_COMMAND"' ERR
-
