@@ -175,7 +175,7 @@ def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
 // Type Conversions
 //===----------------------------------------------------------------------===//
 
-def TritonGEN_FpToFpOp : TritonGEN_Op<"conv.fptofp">,
+def TritonGEN_FpToFpOp : TritonGEN_Op<"fptofp">,
   Results<(outs AnyFloat:$res)>,
   Arguments<(ins
     AnyFloat:$arg,

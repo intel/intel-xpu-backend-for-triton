@@ -22,6 +22,7 @@
 #include "mlir/Support/LogicalResult.h"
 
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -132,6 +133,8 @@ static LLVM::CallIntrinsicOp createFpToFp(TritonGEN::FpToFpOp op,
   MLIRContext *context = rewriter.getContext();
   Location loc = UnknownLoc::get(context);
 
+  // TODO: MLIR offers a mechanism to convert attributes to different dialects,
+  // we should replace this switch with it.
   std::optional<int32_t> rounding = std::nullopt;
   if (op.getRoundingMode())
     switch (*op.getRoundingMode()) {
@@ -155,10 +158,13 @@ static LLVM::CallIntrinsicOp createFpToFp(TritonGEN::FpToFpOp op,
   Type resType = op.getResult().getType();
   unsigned resTySizeInBits = resType.getIntOrFloatBitWidth();
   unsigned srcTySizeInBits = argType.getIntOrFloatBitWidth();
+  // TODO: add these intrinsics to the llvm dialect as first class operations.
   auto stringAttr =
       (srcTySizeInBits > resTySizeInBits)
-          ? rewriter.getStringAttr("llvm.experimental.constrained.fptrunc")
-          : rewriter.getStringAttr("llvm.experimental.constrained.fpext");
+          ? rewriter.getStringAttr(llvm::Intrinsic::getBaseName(
+                llvm::Intrinsic::experimental_constrained_fptrunc))
+          : rewriter.getStringAttr(llvm::Intrinsic::getBaseName(
+                llvm::Intrinsic::experimental_constrained_fpext));
 
   if (rounding.has_value()) {
     auto namedAttr = rewriter.getNamedAttr(

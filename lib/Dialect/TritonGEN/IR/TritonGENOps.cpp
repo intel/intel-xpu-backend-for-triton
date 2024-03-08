@@ -14,7 +14,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 //===----------------------------------------------------------------------===//
-// gen.conv.fptofp
+// gen.fptofp
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::FpToFpOp::verify() {

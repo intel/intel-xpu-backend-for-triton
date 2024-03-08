@@ -70,23 +70,23 @@ llvm.func @triton_gen.sub_group_shuffle() {
 
 llvm.func @triton_gen.fptofp(%a: f32, %b: f16) {
   // CHECK-LABEL: triton_gen.fptofp
-  // CHECK:      %0 = triton_gen.conv.fptofp %arg0 {roundingMode = rte} : f32 to f16
-  // CHECK-NEXT: %1 = triton_gen.conv.fptofp %arg0 {roundingMode = rtn} : f32 to f16
-  // CHECK-NEXT: %2 = triton_gen.conv.fptofp %arg0 {roundingMode = rtp} : f32 to f16
-  // CHECK-NEXT: %3 = triton_gen.conv.fptofp %arg0 {roundingMode = rtz} : f32 to f16
-  // CHECK-NEXT: %4 = triton_gen.conv.fptofp %arg1 {roundingMode = rte} : f16 to f32
-  // CHECK-NEXT: %5 = triton_gen.conv.fptofp %arg1 {roundingMode = rtn} : f16 to f32
-  // CHECK-NEXT: %6 = triton_gen.conv.fptofp %arg1 {roundingMode = rtp} : f16 to f32
-  // CHECK-NEXT: %7 = triton_gen.conv.fptofp %arg1 {roundingMode = rtz} : f16 to f32
-  // CHECK-NEXT: %8 = triton_gen.conv.fptofp %arg1 : f16 to f32
-  %0 = triton_gen.conv.fptofp %a {roundingMode = rte} : f32 to f16
-  %1 = triton_gen.conv.fptofp %a {roundingMode = rtn} : f32 to f16
-  %2 = triton_gen.conv.fptofp %a {roundingMode = rtp} : f32 to f16
-  %3 = triton_gen.conv.fptofp %a {roundingMode = rtz} : f32 to f16
-  %4 = triton_gen.conv.fptofp %b {roundingMode = rte} : f16 to f32
-  %5 = triton_gen.conv.fptofp %b {roundingMode = rtn} : f16 to f32
-  %6 = triton_gen.conv.fptofp %b {roundingMode = rtp} : f16 to f32
-  %7 = triton_gen.conv.fptofp %b {roundingMode = rtz} : f16 to f32
-  %8 = triton_gen.conv.fptofp %a : f32 to f16
+  // CHECK:      %0 = triton_gen.fptofp %arg0 {roundingMode = rte} : f32 to f16
+  // CHECK-NEXT: %1 = triton_gen.fptofp %arg0 {roundingMode = rtn} : f32 to f16
+  // CHECK-NEXT: %2 = triton_gen.fptofp %arg0 {roundingMode = rtp} : f32 to f16
+  // CHECK-NEXT: %3 = triton_gen.fptofp %arg0 {roundingMode = rtz} : f32 to f16
+  // CHECK-NEXT: %4 = triton_gen.fptofp %arg1 {roundingMode = rte} : f16 to f32
+  // CHECK-NEXT: %5 = triton_gen.fptofp %arg1 {roundingMode = rtn} : f16 to f32
+  // CHECK-NEXT: %6 = triton_gen.fptofp %arg1 {roundingMode = rtp} : f16 to f32
+  // CHECK-NEXT: %7 = triton_gen.fptofp %arg1 {roundingMode = rtz} : f16 to f32
+  // CHECK-NEXT: %8 = triton_gen.fptofp %arg1 : f16 to f32
+  %0 = triton_gen.fptofp %a {roundingMode = rte} : f32 to f16
+  %1 = triton_gen.fptofp %a {roundingMode = rtn} : f32 to f16
+  %2 = triton_gen.fptofp %a {roundingMode = rtp} : f32 to f16
+  %3 = triton_gen.fptofp %a {roundingMode = rtz} : f32 to f16
+  %4 = triton_gen.fptofp %b {roundingMode = rte} : f16 to f32
+  %5 = triton_gen.fptofp %b {roundingMode = rtn} : f16 to f32
+  %6 = triton_gen.fptofp %b {roundingMode = rtp} : f16 to f32
+  %7 = triton_gen.fptofp %b {roundingMode = rtz} : f16 to f32
+  %8 = triton_gen.fptofp %b : f16 to f32
   llvm.return
 }
