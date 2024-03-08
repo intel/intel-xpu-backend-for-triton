@@ -41,7 +41,7 @@ class XPUOptions:
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     allow_fp8e4nv: bool = False
-    max_num_imprecise_acc_default: bool = False  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
+    max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
 
