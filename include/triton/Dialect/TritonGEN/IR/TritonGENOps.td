@@ -259,7 +259,7 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"matrix.dpas">,
   let hasVerifier = 1;
 }
 
-def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"matrix.2Dblockload">,
+def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
   Results<(outs FixedVectorOf<[TritonGEN_MatrixElemType]>:$res)>,
   Arguments<(ins
     Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr,
@@ -279,7 +279,7 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"matrix.2Dblockload">,
   let summary = "GEN 2D block load";
 
   string baseDescription = [{
-    The 'gen.matrix.2Dblockload' operation loads a submatrix from an array in memory.
+    The 'gen.2Dblockload' operation loads a submatrix from an array in memory.
     $ptr - the base address of the memory array
     $base_width, $base_height, $base_pitch - the shape of the memory array
     $x, $y, $tile_width, $tile_height - the starting offsets and shape of the submatrix to load
@@ -295,18 +295,14 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"matrix.2Dblockload">,
     If the submatrix contains out of bound elements of the memory array, they are filled with 0.
   }];
 
-  string llvmBuilder = [{
-    $res = createGenISA2DBlockRead(op, builder, moduleTranslation);
-  }];
-
   let assemblyFormat = [{
-    operands attr-dict `:` functional-type(operands, results)
+    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,` `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,` `vnni_transform` `=` $vnni_transform `}` attr-dict `:` functional-type(operands, results)
   }];
 
   let hasVerifier = 1;
 }
 
-def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"matrix.2Dblockstore">,
+def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
   Arguments<(ins
     Arg<LLVM_AnyPointer, "", [MemWrite]>:$ptr,
     I32:$base_width,
@@ -326,7 +322,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"matrix.2Dblockstore">,
   let summary = "GEN 2D block store";
 
   string baseDescription = [{
-    The 'gen.matrix.2Dblockstore' operation stores to a submatrix from an array in memory.
+    The 'gen.2Dblockstore' operation stores to a submatrix from an array in memory.
     $ptr - the base address of the memory array
     $base_width, $base_height, $base_pitch - the shape of the memory array
     $x, $y, $tile_width, $tile_height - the starting offsets and shape of the submatrix to load
@@ -343,12 +339,8 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"matrix.2Dblockstore">,
     If the submatrix contains out of bound elements of the memory array, they are filled with 0.
   }];
 
-  string llvmBuilder = [{
-    createGenISA2DBlockWrite(op, builder, moduleTranslation);
-  }];
-
   let assemblyFormat = [{
-    operands attr-dict `:` `(` type(operands) `)`
+    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,` `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,` `vnni_transform` `=` $vnni_transform `}` attr-dict `:` `(` type(operands) `)`
   }];
 
   let hasVerifier = 1;
