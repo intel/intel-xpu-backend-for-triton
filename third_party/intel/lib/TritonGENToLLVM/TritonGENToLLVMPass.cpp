@@ -230,9 +230,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   auto RC = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getRc());
   auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   ArrayRef<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
-  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-
-  return callOp;
+  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
 namespace {
