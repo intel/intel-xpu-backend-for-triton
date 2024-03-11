@@ -136,6 +136,7 @@ jobs:
 
       - name: Build Triton
         run: |
+          export DEBUG=1
           cd python
           pip install wheel pytest pytest-xdist pytest-rerunfailures
           pip install --no-build-isolation '.[build,tests,tutorials]'
