@@ -113,7 +113,7 @@ jobs:
           # Increase this value to reset cache
           CACHE_NUMBER: 1
         with:
-          path: $HOME/packages
+          path: ${{ github.workspace }}/../packages
           key: packages-${{ env.PACKAGES_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
 
       - name: Build packages
