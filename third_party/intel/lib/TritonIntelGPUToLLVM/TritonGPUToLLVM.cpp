@@ -214,7 +214,7 @@ struct ConvertTritonGPUToLLVM
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Preprocess
-    decomposeInsertSliceAsyncOp(mod);
+    // decomposeInsertSliceAsyncOp(mod);
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);

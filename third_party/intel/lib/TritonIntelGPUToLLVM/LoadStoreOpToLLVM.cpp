@@ -3,6 +3,7 @@
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/SymbolTable.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
@@ -13,6 +14,7 @@
 #include <numeric>
 
 using namespace mlir;
+using namespace mlir::LLVM;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::utils::delinearize;
@@ -753,6 +755,18 @@ struct InsertSliceOpConversion
   }
 };
 
+// bool isSymbolDefined(ModuleOp module, StringAttr symbolName) {
+//     // Iterate through all operations in the module
+//     for (Operation &op : module.getBody()->getOperations()) {
+//         // Check if the operation defines a symbol with the given name
+//         if (SymbolTable::symbolKnownUseEmpty(symbolName, &op))
+//             return true;
+//     }
+//     // Symbol not found in the module
+//     return false;
+// }
+
+
 struct InsertSliceAsyncOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>,
       public LoadStoreConversionBase {
@@ -775,8 +789,8 @@ struct InsertSliceAsyncOpConversion
     // decomposeInsertSliceAsyncOp function.
     // FIXME: remove this assertion once a suitable replacement instruction
     // exists for the generated PTX in this function (cp.async.cg.shared.global)
-    assert(false &&
-           "InsertSliceAsyncOpConversion: genx target not supported yet");
+    // assert(false &&
+    //        "InsertSliceAsyncOpConversion: genx target not supported yet");
 
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();
@@ -824,6 +838,7 @@ struct InsertSliceAsyncOpConversion
     auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
     auto dstPtrTy = ptr_ty(rewriter.getContext(), 3);
     Value dstPtrBase = gep(dstPtrTy, resElemTy, smemObj.base, dstOffset);
+    auto srcPtrTy = ptr_ty(rewriter.getContext(), 1);
 
     // %mask
     SmallVector<Value> maskElems;
@@ -857,12 +872,34 @@ struct InsertSliceAsyncOpConversion
     DenseMap<unsigned, Value> sharedPtrs =
         getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy,
                               smemObj, rewriter, offsetVals, srcStrides);
+    
+    StringRef funcName("_Z22__spirv_GroupAsyncCopyiPU3AS1Dv4_sPU3AS3S_llP13__spirv_Event");
+    auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+
+    LLVMFuncOp func;
+    if(!moduleOp.lookupSymbol(funcName)){
+      Type intType = IntegerType::get(rewriter.getContext(), 32);
+      //generate a 8 byte aligned opaque pointer type
+      auto opaquePtrType = LLVMPointerType::get(rewriter.getContext(), /*addressSpace=*/0);
+      Type types[] = {intType, srcPtrTy, dstPtrTy, intType, intType, intType};
+      // Create an ArrayRef<Type> from the array
+      ArrayRef<Type> paramTypes(types, /*size=*/6);
+      OpBuilder b(moduleOp.getBodyRegion());
+      func =  b.create<LLVM::LLVMFuncOp>(
+        loc, funcName,
+        LLVM::LLVMFunctionType::get(opaquePtrType, paramTypes));
+    }else{
+      func = cast<LLVM::LLVMFuncOp>(*(moduleOp.lookupSymbol(funcName)));
+    }
+
 
     // A sharedLayout encoding has a "vec" parameter.
     // On the column dimension, if inVec > outVec, it means we have to divide
     // single vector read into multiple ones
     auto numVecCols = std::max<unsigned>(inVec / outVec, 1);
+    rewriter.setInsertionPointAfter(op);
 
+    LLVM::CallOp callOp;
     for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
       // 16 * 8 = 128bits
       auto maxBitWidth =
@@ -874,51 +911,54 @@ struct InsertSliceAsyncOpConversion
 
       // Tune CG and CA here.
       auto byteWidth = bitWidth / 8;
-      CacheModifier srcCacheModifier =
-          byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
+      // CacheModifier srcCacheModifier =
+      //     byteWidth == 16 ? CacheModifier::CG : CacheModifier::CA;
       assert(byteWidth == 16 || byteWidth == 8 || byteWidth == 4);
       auto resByteWidth = resElemTy.getIntOrFloatBitWidth() / 8;
 
       Value basePtr = sharedPtrs[elemIdx];
       for (size_t wordIdx = 0; wordIdx < numWords; ++wordIdx) {
-        PTXBuilder ptxBuilder;
+        // PTXBuilder ptxBuilder;
         auto wordElemIdx = wordIdx * numWordElems;
-        auto &copyAsyncOp =
-            *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-        auto *dstOperand =
-            ptxBuilder.newAddrOperand(basePtr, "r", wordElemIdx * resByteWidth);
-        auto *srcOperand =
-            ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
-        auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
-        auto *srcSize = copySize;
-        if (op.getMask()) {
-          // We don't use predicate in this case, setting src-size to 0
-          // if there's any mask. cp.async will automatically fill the
-          // remaining slots with 0 if cp-size > src-size.
-          // XXX(Keren): Always assume other = 0 for now.
-          auto selectOp = select(maskElems[elemIdx + wordElemIdx],
-                                 i32_val(byteWidth), i32_val(0));
-          srcSize = ptxBuilder.newOperand(selectOp, "r");
-        }
+        // auto &copyAsyncOp =
+        //     *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
+        // auto *dstOperand =
+        //     ptxBuilder.newAddrOperand(basePtr, "r", wordElemIdx * resByteWidth);
+        // auto *srcOperand =
+        //     ptxBuilder.newAddrOperand(srcElems[elemIdx + wordElemIdx], "l");
+        // auto *copySize = ptxBuilder.newConstantOperand(byteWidth);
+        // auto *srcSize = copySize;
+
+        Value dstPtr = gep(basePtr.getType(), resElemTy, basePtr, i32_val(wordElemIdx * resByteWidth));
+        callOp = rewriter.create<LLVM::CallOp>(loc, func, ArrayRef<Value>({i32_val(2), srcElems[elemIdx + wordElemIdx], dstPtr, i32_val(byteWidth), i32_val(1), i32_val(0)}));
+        // if (op.getMask()) {
+        //   // We don't use predicate in this case, setting src-size to 0
+        //   // if there's any mask. cp.async will automatically fill the
+        //   // remaining slots with 0 if cp-size > src-size.
+        //   // XXX(Keren): Always assume other = 0 for now.
+        //   auto selectOp = select(maskElems[elemIdx + wordElemIdx],
+        //                          i32_val(byteWidth), i32_val(0));
+        //   srcSize = ptxBuilder.newOperand(selectOp, "r");
+        // }
 
         // When 'other != 0' is supported, we will need to fold the op.getMask()
         // and redundantDataMask() into the same predicate, the way it is done
         // for LoadOp.
-        Value maskVal = redundantDataMask(srcTy, rewriter, loc);
+        // Value maskVal = redundantDataMask(srcTy, rewriter, loc);
 
         // TODO: Masking does not work for CTA multicast with cp.async. This is
         // a quick and dirty workaround to avoid the issue.
-        bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
-        if (!skipMaskForMultiCTA) {
-          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
-              .predicate(maskVal);
-        } else {
-          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
-        }
-        ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
+        // bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
+        // if (!skipMaskForMultiCTA) {
+        //   copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
+        //       .predicate(maskVal);
+        // } else {
+        //   copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        // }
+        // ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
       }
     }
-
+    // rewriter.eraseOp(op);
     rewriter.replaceOp(op, llDst);
     return success();
   }
@@ -992,15 +1032,15 @@ struct AsyncWaitOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    PTXBuilder ptxBuilder;
-    auto &asyncWaitOp = *ptxBuilder.create<>("cp.async.wait_group");
-    auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
-    asyncWaitOp(ptxBuilder.newConstantOperand(num));
+    // PTXBuilder ptxBuilder;
+    // auto &asyncWaitOp = *ptxBuilder.create<>("cp.async.wait_group");
+    // auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
+    // asyncWaitOp(ptxBuilder.newConstantOperand(num));
 
-    auto ctx = op.getContext();
-    auto loc = op.getLoc();
-    auto voidTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, voidTy);
+    // auto ctx = op.getContext();
+    // auto loc = op.getLoc();
+    // auto voidTy = void_ty(ctx);
+    // ptxBuilder.launch(rewriter, loc, voidTy);
 
     // Safe to remove the op since it doesn't have any return value.
     rewriter.eraseOp(op);
@@ -1017,9 +1057,9 @@ struct AsyncCommitGroupOpConversion
   matchAndRewrite(triton::gpu::AsyncCommitGroupOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
-    PTXBuilder ptxBuilder;
-    ptxBuilder.create<>("cp.async.commit_group")->operator()();
-    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+    // PTXBuilder ptxBuilder;
+    // ptxBuilder.create<>("cp.async.commit_group")->operator()();
+    // ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
     // Safe to remove the op since it doesn't have any return value.
     rewriter.eraseOp(op);
     return success();
