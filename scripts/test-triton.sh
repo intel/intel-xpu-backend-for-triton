@@ -128,7 +128,7 @@ run_core_tests() {
     echo "FAILED: return code $?" ; exit $?
   fi
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device xpu
+  TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
