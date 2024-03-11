@@ -316,7 +316,7 @@ static PyObject *initContext(PyObject *self, PyObject *args) {
   void *queue = NULL;
   if (!PyArg_ParseTuple(args, "O", &cap))
     return NULL;
-  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
+  if (!(queue = PyLong_AsVoidPtr(cap)))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
@@ -331,7 +331,7 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   void *queue = NULL;
   if (!PyArg_ParseTuple(args, "O", &cap))
     return NULL;
-  if (!(queue = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
+  if (!(queue = PyLong_AsVoidPtr(cap)))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
 
