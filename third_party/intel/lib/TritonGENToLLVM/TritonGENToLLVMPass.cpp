@@ -7,10 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+#include "intel/include/TritonGENToLLVM/GenIntrinsics.h"
 
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
@@ -20,6 +22,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
+#include "mlir/Target/LLVMIR/TypeToLLVM.h"
 
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Intrinsics.h"
@@ -51,23 +54,12 @@ static LLVM::CallOp createDeviceFunctionCall(
   auto convergentAttr =
       rewriter.getArrayAttr(StringAttr::get(context, "convergent"));
 
-  auto getOrCreateFunction = [&](StringRef funcName) {
-    Operation *funcOp = moduleOp.lookupSymbol(funcName);
-    if (funcOp)
-      return cast<LLVM::LLVMFuncOp>(funcOp);
+  LLVM::LLVMFuncOp funcOp =
+      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, retType);
+  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  if (convergent)
+    funcOp.setPassthroughAttr(convergentAttr);
 
-    auto funcType = LLVM::LLVMFunctionType::get(retType, argTypes);
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
-    auto func = rewriter.create<LLVM::LLVMFuncOp>(loc, funcName, funcType);
-    func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    if (convergent)
-      func.setPassthroughAttr(convergentAttr);
-
-    return func;
-  };
-
-  LLVM::LLVMFuncOp funcOp = getOrCreateFunction(funcName);
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
   if (convergent)
     callOp->setAttr("passthrough", convergentAttr);
@@ -176,6 +168,56 @@ static LLVM::CallIntrinsicOp createFpToFp(TritonGEN::FpToFpOp op,
   // with metadata correctly.
   return rewriter.create<LLVM::CallIntrinsicOp>(loc, resType, stringAttr,
                                                 op.getArg());
+}
+
+static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
+                                     ConversionPatternRewriter &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  MLIRContext *context = rewriter.getContext();
+  Type resType = op->getResultTypes()[0];
+  TypeRange opTypes = op->getOperandTypes();
+  Location loc = op->getLoc();
+
+  IntegerType int1Ty = rewriter.getIntegerType(1);
+  IntegerType int16Ty = rewriter.getIntegerType(16);
+  IntegerType int32Ty = rewriter.getIntegerType(32);
+
+  Value a = op.getA();
+  auto aTy = VectorType::get(op.getRc(), int16Ty);
+  if (a.getType() != aTy)
+    a = rewriter.create<LLVM::BitcastOp>(loc, aTy, a);
+
+  Value b = op.getB();
+  auto bTy = VectorType::get(8, int32Ty);
+  if (b.getType() != bTy)
+    b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
+
+  llvm::LLVMContext llvmContext;
+  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+  auto llvmResTy = typeTranslator.translateType(resType);
+  auto llvmCTy = typeTranslator.translateType(opTypes[0]);
+  auto llvmATy = typeTranslator.translateType(aTy);
+  auto llvmBTy = typeTranslator.translateType(bTy);
+  SmallVector<llvm::Type *> llvmTypes{llvmResTy, llvmCTy, llvmATy, llvmBTy};
+  std::string funcName = llvm::GenISAIntrinsic::getName(
+      llvm::GenISAIntrinsic::GenISA_sub_group_dpas, llvmTypes);
+
+  ArrayRef<Type> argTypes{opTypes[0], aTy,     bTy,     int32Ty,
+                          int32Ty,    int32Ty, int32Ty, int1Ty};
+  LLVM::LLVMFuncOp funcOp =
+      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, resType);
+  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+  auto precA = rewriter.create<LLVM::ConstantOp>(loc, int32Ty,
+                                                 static_cast<int>(op.getPa()));
+  auto precB = rewriter.create<LLVM::ConstantOp>(loc, int32Ty,
+                                                 static_cast<int>(op.getPa()));
+  auto sysDepth =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 8 /* systolic depth */);
+  auto RC = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getRc());
+  auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
+  ArrayRef<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
+  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
 namespace {
@@ -400,6 +442,23 @@ struct TritonGENFpToFpLowering
   }
 };
 
+//===----------------------------------------------------------------------===//
+// Matrix operations
+//===----------------------------------------------------------------------===//
+
+struct TritonMatrixDPASLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::MatrixDPASOp> {
+  using ConvertOpToLLVMPattern<TritonGEN::MatrixDPASOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::MatrixDPASOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM::CallOp callOp = createGenISADPAS(op, rewriter);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -463,9 +522,9 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
                TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
                TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
                TritonGENGridDimYLowering, TritonGENGridDimZLowering>(converter);
-  patterns.add<TritonGENBarrierLowering, TritonSubGroupShuffleLowering>(
-      converter);
-  patterns.add<TritonGENFpToFpLowering>(converter);
+  patterns.add<TritonGENBarrierLowering, TritonSubGroupShuffleLowering,
+               TritonGENFpToFpLowering>(converter);
+  patterns.add<TritonMatrixDPASLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
