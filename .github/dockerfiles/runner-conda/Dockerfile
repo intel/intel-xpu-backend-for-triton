@@ -34,7 +34,6 @@ RUN set -ex; \
 
 USER runner
 SHELL ["/bin/bash", "-xec"]
-ENV BASE=$HOME
 
 COPY --from=installer /l_BaseKit*.sh $HOME/
 

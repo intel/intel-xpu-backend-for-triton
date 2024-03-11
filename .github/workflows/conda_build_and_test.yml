@@ -8,8 +8,6 @@ on:
 permissions: read-all
 
 env:
-  BASE: /home/runner
-  LLVM_SYSPATH: /home/runner/packages/llvm
   BACKEND: XPU
   TRITON_DISABLE_LINE_INFO: 1
 
@@ -38,7 +36,7 @@ jobs:
         uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
-          CACHE_NUMBER: 2
+          CACHE_NUMBER: 3
         with:
           path: $HOME/.cache/pip
           key: pip-${{ matrix.python }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
@@ -61,9 +59,9 @@ jobs:
         uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
-          CACHE_NUMBER: 3
+          CACHE_NUMBER: 4
         with:
-          path: $HOME/packages
+          path: ${{ github.workspace }}/../packages
           key: conda-packages-${{ env.PACKAGES_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
 
       - name: Load conda cache
@@ -83,9 +81,6 @@ jobs:
           find /home/runner/intel/oneapi/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniconda3/envs/triton/lib \;
           ln -snf /usr/include/level_zero $HOME/miniconda3/envs/triton/bin/../x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
           find /usr -name libze_\* -exec cp -n {} $HOME/miniconda3/envs/triton/lib \;
-          conda activate triton
-          python3 -m pip install wheel pytest pytest-xdist pytest-rerunfailures
-          python3 -m pip install torch==2.1.0a0+cxx11.abi intel_extension_for_pytorch==2.1.10+xpu -f https://developer.intel.com/ipex-whl-stable-xpu
 
       - name: Add conda info to log
         run: |
@@ -106,75 +101,11 @@ jobs:
 
       - name: Build Triton
         run: |
-          cd python
-          conda activate triton
-          pip install --no-build-isolation '.[build,tests,tutorials]'
+          conda run -n triton scripts/compile-triton.sh --triton
 
       - name: Run core tests
         run: |
-          conda activate triton
-          pip install pytest pytest-xdist
-          cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/language.xml -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
-          # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest --junitxml=~/reports/runtime.xml --device xpu runtime/
-          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --junitxml=~/reports/line_info.xml --verbose --device xpu language/test_line_info.py
-
-      - name: Clear cache
-        run: |
-          rm -rf ~/.triton
-
-      - name: Run interpreter tests
-        env:
-          TRITON_INTERPRET: "1"
-        run: |
-          cd python/test/unit
-          conda activate triton
-          python3 -m pytest --junitxml=~/reports/interpreter_core.xml -vvv -n 4 -m interpreter language/test_core.py --device cpu
-
-      # TODO: merge the two interpreter tests with env TRITON_INTERPRET=1 and device cpu
-      - name: Run interpreter tests (test_flash_attention.py)
-        # env:
-          # TRITON_INTERPRET: "1"
-        run: |
-          cd python/test/unit
-          conda activate triton
-          python3 -m pytest --junitxml=~/reports/flash_attention.xml -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device xpu
-
-      - name: Run partial operators tests
-        run: |
-          cd python/test/unit
-          conda activate triton
-          python3 -m pytest --junitxml=~/reports/operators.xml -n 8 --verbose --device xpu operators
-
-      - name: Regression tests
-        run: |
-          conda activate triton
-          cd python/test/regression
-          python3 -m pytest --junitxml=~/reports/regression.xml -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
-
-      - name: Run XPU python tests
-        run: |
-          cd python/test/backend/third_party_backends
-          conda activate triton
-          python3 -m pytest -n auto --verbose test_xpu_backend.py
-
-      - name: Run Tutorials
-        run: |
-          conda activate triton
-          cd python/tutorials
-          python3 01-vector-add.py
-          python3 02-fused-softmax.py
-          python3 03-matrix-multiplication.py
-          python3 04-low-memory-dropout.py
-          python3 05-layer-norm.py
-          python3 06-fused-attention.py
-          python3 07-extern-functions.py
-          python3 08-experimental-block-pointer.py
-          python3 09-experimental-tma-matrix-multiplication.py
-          python3 10-experimental-tma-store-matrix-multiplication.py
-          python3 11-grouped-gemm.py
+          conda run -n triton scripts/test-triton.sh
 
       - name: Save conda cache
         if: ${{ steps.conda-cache.outputs.status == 'miss' }}
@@ -183,17 +114,12 @@ jobs:
           path: ${{ steps.conda-cache.outputs.path }}
           dest: ${{ steps.conda-cache.outputs.dest }}
 
-      - name: Run CXX unittests
-        run: |
-          cd python/build/*cmake*
-          conda run --no-capture-output -n triton ctest
-
       - name: Run E2E test
         run: |
           conda activate triton
           # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
           export WORKSPACE=$GITHUB_WORKSPACE
-          cd pytorch
+          cd ../pytorch
           TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
           pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
           # TODO: Find the fastest Hugging Face model
@@ -208,11 +134,3 @@ jobs:
         with:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
-
-      - name: Pass rate
-        run: |
-          python3 scripts/pass_rate.py --reports ~/reports
-          mkdir -p /cache/reports/pass-rate
-          TMPFILE=$(mktemp -p /cache/reports/pass-rate XXXXXXXXXX)
-          python3 scripts/pass_rate.py --reports ~/reports --json > $TMPFILE
-          mv $TMPFILE $TMPFILE.json

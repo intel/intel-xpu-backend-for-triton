@@ -44,7 +44,6 @@ if [ "$BUILD_LLVM" = false ] && [ "$BUILD_TRITON" = false ]; then
   BUILD_TRITON=true
 fi
 
-set +o xtrace
 if [ -z "$BASE" ]; then
   echo "**** BASE is not given *****"
   BASE=$(cd $(dirname "$0")/../.. && pwd)
