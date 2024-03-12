@@ -40,7 +40,6 @@ if [ "$TEST_CORE" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_UNIT" = 
   TEST_UNIT=true
 fi
 
-set +o xtrace
 if [ ! -d "$BASE" ]; then
   echo "**** BASE is not given *****"
   BASE=$(cd $(dirname "$0")/../.. && pwd)
@@ -57,7 +56,8 @@ export SCRIPTS_DIR=$(dirname "$0")
 
 python3 -m pip install lit
 python3 -m pip install pytest pytest-xdist pytest-rerunfailures
-$SCRIPTS_DIR/compile-pytorch-ipex.sh
+
+$SCRIPTS_DIR/compile-pytorch-ipex.sh $ARGS
 if [ $? -ne 0 ]; then
   echo "FAILED: return code $?"
   exit $?

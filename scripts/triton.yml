@@ -9,3 +9,4 @@ dependencies:
   - zlib
   - cmake   3.22.*
   - ninja   1.10.*
+  - sysroot_linux-64 >=2.17
