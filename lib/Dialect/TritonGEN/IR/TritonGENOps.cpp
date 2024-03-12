@@ -56,9 +56,6 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
   Type AElemTy = ATy.getElementType();
   Type BElemTy = BTy.getElementType();
   Type CElemTy = CTy.getElementType();
-  if (AElemTy != BElemTy)
-    return this->emitOpError(
-        "element type of 2nd (A) and 3rd (B) operands must match");
 
   // ATy is required to be vector<RC x i16> as hard coded by IGC.
   if (ATy.getNumElements() * AElemTy.getIntOrFloatBitWidth() != getRc() * 16)
@@ -71,71 +68,52 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
     return this->emitOpError(
         "3rd operand (B) bit-size should be systolic depth (8) times 32");
 
-  return TypeSwitch<Type, LogicalResult>(AElemTy)
-      .Case<Float32Type>([&](auto ty) -> LogicalResult {
-        if (precision != TritonGEN::PrecisionType::TF32)
-          return this->emitOpError("precision should be TF32 when 2nd (A) or "
-                                   "3rd (B) operand element type is f32");
-        if (!CElemTy.isF32())
-          return this->emitOpError("the element type for 1st operand (C) and "
-                                   "the result should be f32");
-        return success();
-      })
-      .Case<BFloat16Type>([&](auto ty) -> LogicalResult {
-        if (precision != TritonGEN::PrecisionType::BF16)
-          return this->emitOpError(
-              "precision should be BF16 when 2nd (A) or 3rd (B) operand "
-              "element type is bf16");
-        if (!CElemTy.isF32())
-          return this->emitOpError(
-              "the element type for 1st operand (C) and the "
-              "result should be f32");
-        return success();
-      })
-      .Case<Float16Type>([&](auto ty) -> LogicalResult {
-        if (precision != TritonGEN::PrecisionType::FP16)
-          return this->emitOpError("precision should be FP16 when 2nd (A) or "
-                                   "3rd (B) operand element type is f16");
-        if (!CElemTy.isF32())
-          return this->emitOpError(
-              "the element type for 1st operand (C) and the "
-              "result should be f32");
-        return success();
-      })
-      .Case<IntegerType>([&](auto ty) -> LogicalResult {
-        if (!ty.isInteger(8))
-          return this->emitOpError(
-              "expecting 2nd (A) or 3rd (B) operand element type to be f32, "
-              "bf16, f16, or i8");
+  if (precision == TritonGEN::PrecisionType::U8 ||
+      precision == TritonGEN::PrecisionType::S8) {
+    if (!CElemTy.isInteger(32))
+      return this->emitOpError("the element type for 1st operand (C) and "
+                               "the result should be i32");
+  } else if (!CElemTy.isF32())
+    return this->emitOpError("the element type for 1st operand (C) and the "
+                             "result should be f32");
 
-        if (precision == TritonGEN::PrecisionType::U8) {
-          if (ty.isSigned())
-            return this->emitOpError(
-                "precision should be S8 when 2nd (A) or 3rd (B) operand "
-                "element type is signed i8");
-        } else if (precision == TritonGEN::PrecisionType::S8) {
-          if (ty.isUnsigned())
-            return this->emitOpError(
-                "precision should be U8 when 2nd (A) or 3rd (B) operand "
-                "element type is unsigned i8");
-        } else
-          return this->emitOpError("precision should be U8 or S8 when 2nd (A) "
-                                   "or 3rd (B) operand element type is i8");
-
-        if (!CElemTy.isInteger(32))
-          return this->emitOpError("the element type for 1st operand (C) and "
-                                   "the result should be i32");
-
-        return success();
-      })
-      .Default([&](mlir::Type) -> LogicalResult {
-        return this->emitOpError("expecting 2nd (A) or 3rd (B) operand element "
-                                 "type to be f32, bf16, f16, or i8");
-      });
+  switch (precision) {
+  case TritonGEN::PrecisionType::TF32:
+    if (!AElemTy.isa<Float32Type>() && !AElemTy.isInteger(32))
+      return this->emitOpError("A and B operand element type should be f32 or "
+                               "i32 when precision type is tf32");
+    break;
+  case TritonGEN::PrecisionType::BF16:
+    if (!AElemTy.isa<BFloat16Type>() && !AElemTy.isInteger(16))
+      return this->emitOpError("A and B operand element type should be bf16 or "
+                               "i16 when precision type is bf16");
+    break;
+  case TritonGEN::PrecisionType::FP16:
+    if (!AElemTy.isa<Float16Type>() && !AElemTy.isInteger(16))
+      return this->emitOpError("A and B operand element type should be f16 or "
+                               "i16 when precision type is f16");
+    break;
+  case TritonGEN::PrecisionType::U8:
+    if (!(AElemTy.isInteger(8) && !AElemTy.cast<IntegerType>().isSigned()) &&
+        !AElemTy.isInteger(16))
+      return this->emitOpError("A and B operand element type should be u8, i8, "
+                               "or i16 when precision type is u8");
+    break;
+  case TritonGEN::PrecisionType::S8:
+    if (!(AElemTy.isInteger(8) && !AElemTy.cast<IntegerType>().isUnsigned()) &&
+        !AElemTy.isInteger(16))
+      return this->emitOpError("A and B operand element type should be s8, i8, "
+                               "or i16 when precision type is s8");
+    break;
+  default:
+    return this->emitOpError(
+        "expecting precision type to be tf32, bf16, fp16, u8, or s8");
+  }
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
-// gen.matrix.2Dblockload
+// gen.2Dblockload
 //===----------------------------------------------------------------------===//
 
 static std::optional<int> getConstantInt(Value v) {
@@ -206,7 +184,7 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
 }
 
 //===----------------------------------------------------------------------===//
-// gen.matrix.2Dblockload
+// gen.2Dblockload
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
@@ -214,7 +192,7 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
-// gen.matrix.2Dblockstore
+// gen.2Dblockstore
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
