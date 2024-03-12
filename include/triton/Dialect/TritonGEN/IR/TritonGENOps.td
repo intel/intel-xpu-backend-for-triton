@@ -291,12 +291,8 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
     If the submatrix contains out of bound elements of the memory array, they are filled with 0.
   }];
 
-  string llvmBuilder = [{
-    $res = createGenISA2DBlockRead(op, builder, moduleTranslation);
-  }];
-
   let assemblyFormat = [{
-    operands attr-dict `:` functional-type(operands, results)
+    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,` `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,` `vnni_transform` `=` $vnni_transform `}` attr-dict `:` functional-type(operands, results)
   }];
 
   let hasVerifier = 1;
@@ -339,12 +335,8 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
     If the submatrix contains out of bound elements of the memory array, they are filled with 0.
   }];
 
-  string llvmBuilder = [{
-    createGenISA2DBlockWrite(op, builder, moduleTranslation);
-  }];
-
   let assemblyFormat = [{
-    operands attr-dict `:` `(` type(operands) `)`
+    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,` `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,` `vnni_transform` `=` $vnni_transform `}` attr-dict `:` `(` type(operands) `)`
   }];
 
   let hasVerifier = 1;

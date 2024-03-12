@@ -118,6 +118,7 @@ llvm.func @triton_gen.sub_group_shuffle() {
 // -----
 
 llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vector<8xf32>) {
+  // CHECK:     llvm.func @triton_gen.dpas.f32(%arg0: vector<8xf32>, %arg1: vector<4xf32>, %arg2: vector<8xf32>) {
   // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<4xf32> to vector<8xi16>
   // CHECK-DAG:  [[B:%.*]] = llvm.bitcast %arg2 : vector<8xf32> to vector<8xi32>
   // CHECK-DAG:  [[CST_8a:%.*]] = llvm.mlir.constant(8 : i32) : i32
@@ -128,5 +129,43 @@ llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vect
   // CHECK-NEXT: llvm.call @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v8i16.v8i32
   // CHEC-SAME:    (%arg0, [[A]], [[B]], [[CST_8a]], [[CST_8b]], [[CST_8c]], [[CST_8d]], [[CST_FALSE]]) : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i32, i32, i32, i32, i1) -> vector<8xf32>
   %0 = triton_gen.dpas %c, %a, %b {pa = tf32, pb = tf32, rc = 8} : (vector<8xf32>, vector<4xf32>, vector<8xf32>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v8f32(i64, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
+
+llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
+  // CHECK-DAG:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
+  // CHECK-DAG:  [[CST_32:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK-DAG:  [[CST_8a:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK-DAG:  [[CST_8b:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK-DAG:  [[CST_1:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK-DAG:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v8f32([[PTR]], %arg1, %arg2, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+// CHECK:  llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8f32(i64, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>)
+
+llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xf32>) {
+  // CHECK:     llvm.func @triton_gen.2Dblockstore(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: vector<8xf32>) {
+  // CHECK-DAG:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
+  // CHECK-DAG:  [[CST_32:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK-DAG:  [[CST_8a:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK-DAG:  [[CST_8b:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK-DAG:  [[CST_1:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK-DAG:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockWrite.v8f32([[PTR]], %arg1, %arg2, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]], %arg6) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>) -> ()
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xf32>)
   llvm.return
 }
