@@ -97,15 +97,20 @@ jobs:
         run: |
           conda run -n triton scripts/test-triton.sh
 
-      - name: Prepare E2E env
-        if: ${{ steps.conda-cache.outputs.status == 'miss' }}
+      - name: Run E2E test
         run: |
-          cd ../pytorch
+          cd ../pytorch || {
+            PYTORCH_COMMIT_ID=$(<.github/pins/pytorch.txt)
+            cd ..
+            git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules https://github.com/Stonepia/pytorch.git
+            cd pytorch
+            git branch pin-branch $PYTORCH_COMMIT_ID
+            git switch pin-branch
+          }
+
           TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
           conda run -n triton pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
 
-      - name: Run E2E test
-        run: |
           # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
           export WORKSPACE=$GITHUB_WORKSPACE
           # TODO: Find the fastest Hugging Face model
