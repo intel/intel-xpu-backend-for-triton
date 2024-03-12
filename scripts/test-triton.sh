@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 # Select which tests to run.
 TEST_CORE=false
 TEST_TUTORIAL=false
@@ -40,7 +42,7 @@ if [ "$TEST_CORE" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_UNIT" = 
   TEST_UNIT=true
 fi
 
-if [ ! -d "$BASE" ]; then
+if [ -z ${BASE:+x} ]; then
   echo "**** BASE is not given *****"
   BASE=$(cd $(dirname "$0")/../.. && pwd)
   echo "**** Default BASE is set to $BASE ****"
