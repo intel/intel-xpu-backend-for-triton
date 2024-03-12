@@ -220,6 +220,146 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
+static LLVM::CallOp
+createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
+                        ConversionPatternRewriter &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  MLIRContext *context = rewriter.getContext();
+  Type resType = op->getResultTypes()[0];
+  Location loc = op->getLoc();
+
+  Value ptr = op.getPtr();
+  Value baseWidth = op.getBaseWidth();
+  Value baseHeight = op.getBaseHeight();
+  Value basePitch = op.getBasePitch();
+  Value x = op.getX();
+  Value y = op.getY();
+
+  llvm::LLVMContext llvmContext;
+  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+  auto llvmResTy = typeTranslator.translateType(resType);
+  SmallVector<llvm::Type *> llvmTypes{llvmResTy};
+  std::string funcName = llvm::GenISAIntrinsic::getName(
+      llvm::GenISAIntrinsic::GenISA_LSC2DBlockRead, llvmTypes);
+
+  IntegerType int1Ty = rewriter.getIntegerType(1);
+  IntegerType int32Ty = rewriter.getIntegerType(32);
+  IntegerType int64Ty = rewriter.getIntegerType(64);
+
+  // The IGC intrinsic requires the first argument be int64
+  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
+
+  ArrayRef<Type> argTypes{int64Ty,
+                          baseWidth.getType(),
+                          baseHeight.getType(),
+                          x.getType(),
+                          y.getType(),
+                          int32Ty,
+                          int32Ty,
+                          int32Ty,
+                          int32Ty,
+                          int1Ty,
+                          int1Ty,
+                          int32Ty};
+
+  LLVM::LLVMFuncOp funcOp =
+      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, resType);
+  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+  auto elemSize =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getElemSizeInBits());
+  auto tileWidth =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileWidth());
+  auto tileHeight =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileHeight());
+  auto vBlocks =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getVBlocks());
+  auto useTranspose =
+      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getTranspose());
+  auto vnniTransform =
+      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getVnniTransform());
+  // FIXME: Add argument to control cache.
+  auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
+
+  ArrayRef<Value> args{ptr,     baseWidth,    baseHeight,    x,
+                       y,       elemSize,     tileWidth,     tileHeight,
+                       vBlocks, useTranspose, vnniTransform, cache};
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+
+  return callOp;
+}
+
+static LLVM::CallOp
+createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
+                         ConversionPatternRewriter &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  MLIRContext *context = rewriter.getContext();
+  Location loc = op->getLoc();
+
+  Value ptr = op.getPtr();
+  Value baseWidth = op.getBaseWidth();
+  Value baseHeight = op.getBaseHeight();
+  Value basePitch = op.getBasePitch();
+  Value x = op.getX();
+  Value y = op.getY();
+  Value storeVal = op.getStoredVal();
+
+  llvm::LLVMContext llvmContext;
+  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+  auto storeTy = typeTranslator.translateType(storeVal.getType());
+  SmallVector<llvm::Type *> llvmTypes{storeTy};
+  std::string funcName = llvm::GenISAIntrinsic::getName(
+      llvm::GenISAIntrinsic::GenISA_LSC2DBlockWrite, llvmTypes);
+
+  IntegerType int1Ty = rewriter.getIntegerType(1);
+  IntegerType int32Ty = rewriter.getIntegerType(32);
+  IntegerType int64Ty = rewriter.getIntegerType(64);
+
+  // The IGC intrinsic requires the first argument be int64
+  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
+
+  ArrayRef<Type> argTypes{int64Ty,
+                          baseWidth.getType(),
+                          baseHeight.getType(),
+                          x.getType(),
+                          y.getType(),
+                          int32Ty,
+                          int32Ty,
+                          int32Ty,
+                          int32Ty,
+                          int1Ty,
+                          int1Ty,
+                          int32Ty,
+                          storeVal.getType()};
+
+  LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
+      moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(context));
+  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+  auto elemSize =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getElemSizeInBits());
+  auto tileWidth =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileWidth());
+  auto tileHeight =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileHeight());
+  auto vBlocks =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getVBlocks());
+  auto useTranspose =
+      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getTranspose());
+  auto vnniTransform =
+      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getVnniTransform());
+  // FIXME: Add argument to control cache.
+  auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
+
+  ArrayRef<Value> args{ptr,     baseWidth,    baseHeight,    x,
+                       y,       elemSize,     tileWidth,     tileHeight,
+                       vBlocks, useTranspose, vnniTransform, cache,
+                       storeVal};
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+
+  return callOp;
+}
+
 namespace {
 
 struct FuncCallLowering {
@@ -459,6 +599,34 @@ struct TritonMatrixDPASLowering
   }
 };
 
+struct TritonMatrix2DBlockLoadLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockLoadOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::Matrix2DBlockLoadOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM::CallOp callOp = createGenISA2DBlockRead(op, rewriter);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
+struct TritonMatrix2DBlockStoreLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockStoreOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::Matrix2DBlockStoreOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM::CallOp callOp = createGenISA2DBlockWrite(op, rewriter);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -524,7 +692,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
                TritonGENGridDimYLowering, TritonGENGridDimZLowering>(converter);
   patterns.add<TritonGENBarrierLowering, TritonSubGroupShuffleLowering,
                TritonGENFpToFpLowering>(converter);
-  patterns.add<TritonMatrixDPASLowering>(converter);
+  patterns.add<TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+               TritonMatrix2DBlockStoreLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
