@@ -45,20 +45,6 @@ using namespace mlir::triton;
 // Helper Functions
 //===----------------------------------------------------------------------===//
 
-static LLVM::LLVMFuncOp
-getOrCreateFunction(StringRef funcName, Type retType, ArrayRef<Type> argTypes,
-                    ModuleOp moduleOp, Location loc,
-                    ConversionPatternRewriter &rewriter) {
-  Operation *funcOp = moduleOp.lookupSymbol(funcName);
-  if (funcOp)
-    return cast<LLVM::LLVMFuncOp>(funcOp);
-
-  auto funcType = LLVM::LLVMFunctionType::get(retType, argTypes);
-  ConversionPatternRewriter::InsertionGuard guard(rewriter);
-  rewriter.setInsertionPointToStart(moduleOp.getBody());
-  return rewriter.create<LLVM::LLVMFuncOp>(loc, funcName, funcType);
-};
-
 static LLVM::CallOp createDeviceFunctionCall(
     ConversionPatternRewriter &rewriter, StringRef funcName, Type retType,
     ArrayRef<Type> argTypes, ArrayRef<Value> args, bool convergent = false) {
@@ -277,7 +263,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                           int32Ty};
 
   LLVM::LLVMFuncOp funcOp =
-      getOrCreateFunction(funcName, resType, argTypes, moduleOp, loc, rewriter);
+      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, resType);
   funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
   auto elemSize =
@@ -346,9 +332,8 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                           int32Ty,
                           storeVal.getType()};
 
-  LLVM::LLVMFuncOp funcOp =
-      getOrCreateFunction(funcName, LLVM::LLVMVoidType::get(context), argTypes,
-                          moduleOp, loc, rewriter);
+  LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
+      moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(context));
   funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
   auto elemSize =
