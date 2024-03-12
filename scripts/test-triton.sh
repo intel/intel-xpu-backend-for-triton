@@ -56,7 +56,8 @@ export SCRIPTS_DIR=$(dirname "$0")
 
 python3 -m pip install lit
 python3 -m pip install pytest pytest-xdist pytest-rerunfailures
-$SCRIPTS_DIR/compile-pytorch-ipex.sh
+
+$SCRIPTS_DIR/compile-pytorch-ipex.sh $ARGS
 if [ $? -ne 0 ]; then
   echo "FAILED: return code $?"
   exit $?

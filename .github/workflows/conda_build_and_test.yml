@@ -105,7 +105,7 @@ jobs:
 
       - name: Run core tests
         run: |
-          conda run -n triton scripts/test-triton.sh
+          conda run -n triton scripts/test-triton.sh --pytorch --ipex
 
       - name: Save conda cache
         if: ${{ steps.conda-cache.outputs.status == 'miss' }}
