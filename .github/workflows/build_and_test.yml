@@ -136,6 +136,7 @@ jobs:
 
       - name: Build Triton
         run: |
+          export DEBUG=1
           cd python
           pip install wheel pytest pytest-xdist pytest-rerunfailures
           pip install --no-build-isolation '.[build,tests,tutorials]'
@@ -168,14 +169,7 @@ jobs:
         run: |
           cd python/test/unit
           python3 -m pytest --junitxml=~/reports/interpreter_core.xml -vvv -n 4 -m interpreter language/test_core.py --device cpu
-
-      # TODO: merge the two interpreter tests with env TRITON_INTERPRET=1 and device cpu
-      - name: Run interpreter tests (test_flash_attention.py)
-        # env:
-          # TRITON_INTERPRET: "1"
-        run: |
-          cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/flash_attention.xml -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device xpu
+          python3 -m pytest --junitxml=~/reports/interpreter_flash_attention.xml -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial operators tests
         run: |

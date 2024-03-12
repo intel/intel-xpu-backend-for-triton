@@ -208,7 +208,7 @@ class FixedVectorOfRankAndType<list<int> allowedRanks,
 
 def TritonGEN_MatrixElemType : AnyTypeOf<[AnyI8, AnyI16, AnyI32, F32, F16, BF16]>;
 
-def TritonGEN_MatrixDPASOp : TritonGEN_Op<"matrix.dpas">,
+def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
   Results<(outs FixedVectorOf<[TritonGEN_MatrixElemType]>:$d)>,
   Arguments<(ins
     FixedVectorOfRankAndType<[1], [TritonGEN_MatrixElemType]>:$c,
@@ -222,38 +222,34 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"matrix.dpas">,
   let summary = "GEN matrix multiply-add (for PVC)";
 
   string baseDescription = [{
-    The 'gen.matrix.dpas' operation is a matrix multiply-add operation as follows:
+    The 'gen.dpas' operation is a matrix multiply-add operation as follows:
 
-       D = C + A x B
+      D = C + A x B
 
-       where
-          D : MxN
-          C : MxN
-          A : MxK
-          B : KxN
+      where
+        D : MxN
+        C : MxN
+        A : MxK
+        B : KxN
 
-          M : repeat count ($rc), must be 1, 2, 4, or 8
-          N : fixed execution size, must be 16
-          K : depth * OPS_PER_CHAN
-              OPS_PER_CHAN
-                 1 : for TF32
-                 2 : for 16-bit precision(BF, HF)
-                 4 : for 8-bit precision (FP8, UB, B)
-                 8 : for less-then 8 bit precision (U4/S4, U2/S2).
+        M : repeat count, must be 1, 2, 4, or 8
+        N : fixed execution size, must be 16
+        K : depth * OPS_PER_CHAN
+            OPS_PER_CHAN
+              1 : for TF32
+              2 : for 16-bit precision(BF, HF)
+              4 : for 8-bit precision (FP8, UB, B)
+              8 : for less-then 8 bit precision (U4/S4, U2/S2).
 
-              If depth is 8, K would be 8, 16, 32, or 64 (based on OPS_PER_CHAN).
+            If depth is 8, K would be 8, 16, 32, or 64 (based on OPS_PER_CHAN).
 
     $a, $b, $c, $d - matrix A, B, C, D, respectively
     $pa, $pb - precision of matrix A and B resepectively
-    $rc - repect count
-  }];
-
-  string llvmBuilder = [{
-    $d = createGenISADPAS(op, builder, moduleTranslation);
+    $rc - repeat count
   }];
 
   let assemblyFormat = [{
-    operands attr-dict `:` functional-type(operands, results)
+    operands ` ` `{` `pa` `=` $pa `,` `pb` `=` $pb `,` `rc` `=` $rc `}` attr-dict `:` functional-type(operands, results)
   }];
 
   let hasVerifier = 1;

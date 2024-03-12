@@ -106,6 +106,7 @@ jobs:
 
       - name: Build Triton
         run: |
+          export DEBUG=1
           cd python
           conda activate triton
           pip install --no-build-isolation '.[build,tests,tutorials]'
