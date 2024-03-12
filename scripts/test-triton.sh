@@ -7,6 +7,7 @@ TEST_CORE=false
 TEST_TUTORIAL=false
 TEST_UNIT=false
 VENV=false
+ARGS=
 for arg in "$@"; do
   case $arg in
     --core)
