@@ -12,7 +12,7 @@ static int log2Int(int64_t num) { return (num > 1) ? 1 + log2Int(num / 2) : 0; }
 static Value generateVoteBallot(Location loc, Value bit, int threadMask,
                                 Value threadId, int numThreadPerWarp,
                                 ConversionPatternRewriter &rewriter) {
-  assert(threadMask == -1 && "unsupported thread mask for GENX target");
+  assert(threadMask == -1 && "unsupported thread mask for TritonGEN target");
 
   // Emulate vote.ballot.sync behavior using shift, shuffle, and or.
   // TODO: check for more efficient solution.

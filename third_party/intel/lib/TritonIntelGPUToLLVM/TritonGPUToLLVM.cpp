@@ -3,7 +3,6 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
-#include "mlir/Conversion/GPUToGENX/GPUToGENXPass.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
@@ -147,11 +146,11 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto mod = funcOp->getParentOfType<ModuleOp>();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     if (LLVM::utils::isKernel(funcOp))
-      attrs.append(GENX::GENXDialect::getKernelFuncAttrName(),
+      attrs.append(TritonGEN::TritonGENDialect::getKernelFuncAttrName(),
                    rewriter.getI32IntegerAttr(1));
-    attrs.append(GENX::GENXDialect::getMaxWorkGroupSizeAttrName(),
+    attrs.append(TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
                  rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
-    attrs.append(GENX::GENXDialect::getReqdSubGroupSizeAttrName(),
+    attrs.append(TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName(),
                  rewriter.getI32ArrayAttr(threadsPerWarp));
     newFuncOp->setDialectAttrs(attrs);
     if (!LLVM::utils::isKernel(funcOp)) {

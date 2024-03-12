@@ -24,24 +24,24 @@ def TritonGEN_Dialect : Dialect {
 
   let extraClassDeclaration = [{
     /// Get the name of the attribute used to annotate kernels.
-    static StringRef getKernelFuncAttrName() { return "gen.kernel"; }
+    static StringRef getKernelFuncAttrName() { return "genx.kernel"; }
 
     /// Get the name of the attribute used to annotate max work group size
     /// required for kernels.
     static constexpr ::llvm::StringLiteral getMaxWorkGroupSizeAttrName() {
-      return ::llvm::StringLiteral("gen.max_work_group_size");
+      return ::llvm::StringLiteral("genx.max_work_group_size");
     }
 
     /// Get the name of the attribute used to annotate exact work group size
     /// required for kernels.
     static constexpr ::llvm::StringLiteral getReqdWorkGroupSizeAttrName() {
-      return ::llvm::StringLiteral("gen.reqd_work_group_size");
+      return ::llvm::StringLiteral("genx.reqd_work_group_size");
     }
 
     /// Get the name for the attribute used to annotate the exact sub group
     /// size required for kernels.
     static constexpr ::llvm::StringLiteral getReqdSubGroupSizeAttrName() {
-      return ::llvm::StringLiteral("gen.intel_reqd_sub_group_size");
+      return ::llvm::StringLiteral("genx.intel_reqd_sub_group_size");
     }
   }];
 }
