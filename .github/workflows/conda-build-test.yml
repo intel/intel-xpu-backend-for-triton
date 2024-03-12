@@ -97,19 +97,19 @@ jobs:
         run: |
           conda run -n triton scripts/test-triton.sh
 
+      - name: Prepare E2E env
+        if: ${{ steps.conda-cache.outputs.status == 'miss' }}
+        run: |
+          cd ../pytorch
+          TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
+          conda run -n triton pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+
       - name: Run E2E test
         run: |
-          source /home/runner/miniconda3/etc/profile.d/conda.sh
-          conda activate triton
           # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
           export WORKSPACE=$GITHUB_WORKSPACE
-          test ! -d ../pytorch || {
-              cd ../pytorch
-              TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
-              pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
-          }
           # TODO: Find the fastest Hugging Face model
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          conda run -n triton $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
           # The script above always returns 0, so we need an additional check to see if the accuracy test passed
           cat $WORKSPACE/inductor_log/*/*/*.csv
           grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
