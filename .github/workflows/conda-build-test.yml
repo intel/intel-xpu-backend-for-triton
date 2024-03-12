@@ -26,20 +26,10 @@ jobs:
           - "3.10"
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source /home/runner/miniconda3/etc/profile.d/conda.sh; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Load pip cache
-        id: pip-cache
-        uses: ./.github/actions/load
-        env:
-          # Increase this value to reset cache
-          CACHE_NUMBER: 3
-        with:
-          path: $HOME/.cache/pip
-          key: pip-${{ matrix.python }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Get LLVM commit id
         uses: ./.github/actions/get-commit-id
@@ -68,10 +58,10 @@ jobs:
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 5
+          CACHE_NUMBER: 6
         with:
           path: $HOME/miniconda3/envs/triton
-          key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml') }}-${{ env.CACHE_NUMBER }}
+          key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
 
       - name: Update conda env
         if: ${{ steps.conda-cache.outputs.status == 'miss' }}
@@ -105,7 +95,29 @@ jobs:
 
       - name: Run core tests
         run: |
-          conda run -n triton scripts/test-triton.sh --pytorch --ipex
+          conda run -n triton scripts/test-triton.sh
+
+      - name: Run E2E test
+        run: |
+          cd ../pytorch || {
+            PYTORCH_COMMIT_ID=$(<.github/pins/pytorch.txt)
+            cd ..
+            git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules https://github.com/Stonepia/pytorch.git
+            cd pytorch
+            git branch pin-branch $PYTORCH_COMMIT_ID
+            git switch pin-branch
+          }
+
+          TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
+          conda run -n triton pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+
+          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
+          export WORKSPACE=$GITHUB_WORKSPACE
+          # TODO: Find the fastest Hugging Face model
+          conda run -n triton $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
+          cat $WORKSPACE/inductor_log/*/*/*.csv
+          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
 
       - name: Save conda cache
         if: ${{ steps.conda-cache.outputs.status == 'miss' }}
@@ -113,24 +125,3 @@ jobs:
         with:
           path: ${{ steps.conda-cache.outputs.path }}
           dest: ${{ steps.conda-cache.outputs.dest }}
-
-      - name: Run E2E test
-        run: |
-          conda activate triton
-          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
-          export WORKSPACE=$GITHUB_WORKSPACE
-          cd ../pytorch
-          TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
-          # TODO: Find the fastest Hugging Face model
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
-          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
-          cat $WORKSPACE/inductor_log/*/*/*.csv
-          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
-
-      - name: Save pip cache
-        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.pip-cache.outputs.path }}
-          dest: ${{ steps.pip-cache.outputs.dest }}
