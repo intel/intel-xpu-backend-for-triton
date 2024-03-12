@@ -142,6 +142,10 @@ using namespace mlir::triton;
 #define i32_arr_attr(...) rewriter.getI32ArrayAttr({__VA_ARGS__})
 #define i64_arr_attr(...) rewriter.getI64ArrayAttr({__VA_ARGS__})
 
+// Kernel printf
+#define kernel_printf(fmt, ...)                                                \
+  LLVM::utils::llPrintf(rewriter, fmt, ValueRange{__VA_ARGS__})
+
 namespace mlir {
 namespace triton {
 // namespace intel {
@@ -463,6 +467,12 @@ static Value getSharedMemoryBase(Location loc,
       gep(ptrTy, i8_ty, LLVM::utils::getStackPointer(rewriter, func), offVal);
   return base;
 }
+
+// Returns a Value for the format string, which you can reuse.
+Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
+               ValueRange args);
+
+void llPrintf(ConversionPatternRewriter &rewriter, Value msg, ValueRange args);
 
 } // namespace utils
 } // namespace LLVM
