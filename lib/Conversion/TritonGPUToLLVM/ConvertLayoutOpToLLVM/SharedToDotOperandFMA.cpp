@@ -91,7 +91,7 @@ ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
 Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
                Location loc, const LLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter) {
-  auto aTensorTy = A.getType().cast<MemDescType>();
+  auto aTensorTy = A.getType().cast<RankedTensorType>();
   auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto aShapePerCTA = getShapePerCTA(aTensorTy);
 
@@ -129,7 +129,8 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
   for (int i = 0; i < aNumPtr; ++i) {
     aOff[i] = add(mul(offA0, strideA0), mul(offA1, strideA1));
   }
-  auto elemTy = typeConverter->convertType(aTensorTy.getElementType());
+  auto elemTy = typeConverter->convertType(
+      A.getType().cast<RankedTensorType>().getElementType());
 
   Type ptrTy = ptr_ty(rewriter.getContext(), 3);
   SmallVector<Value> aPtrs(aNumPtr);
@@ -157,7 +158,7 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
 Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
                Location loc, const LLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter) {
-  auto bTensorTy = B.getType().cast<MemDescType>();
+  auto bTensorTy = B.getType().cast<RankedTensorType>();
   auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto bShapePerCTA = getShapePerCTA(bTensorTy);
 
@@ -195,7 +196,8 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
   for (int i = 0; i < bNumPtr; ++i) {
     bOff[i] = add(mul(offB0, strideB0), mul(offB1, strideB1));
   }
-  auto elemTy = typeConverter->convertType(bTensorTy.getElementType());
+  auto elemTy = typeConverter->convertType(
+      B.getType().cast<RankedTensorType>().getElementType());
 
   Type ptrTy = ptr_ty(rewriter.getContext(), 3);
   SmallVector<Value> bPtrs(bNumPtr);

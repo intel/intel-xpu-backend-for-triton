@@ -21,26 +21,16 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
-#define TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
-
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Dialect.h"
-
-// TritonNvidiaGPU depends on Triton
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Traits.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Traits.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Types.h"
+#include "triton/Analysis/Utility.h"
 
-#define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"
+mlir::LogicalResult
+mlir::OpTrait::impl::verifySource1IsSharedEncoding(Operation *op) {
+  if (failed(verifyAtLeastNOperands(op, 2)))
+    return failure();
 
-#define GET_OP_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/IR/Ops.h.inc"
+  if (!mlir::triton::gpu::hasSharedEncoding(op->getOperand(1)))
+    return op->emitOpError() << "requires operand 1 to be shared encoding";
 
-#endif // TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
+  return success();
+};

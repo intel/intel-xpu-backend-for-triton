@@ -21,26 +21,33 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
-#define TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
+#ifndef TRITON_NVIDIA_GPU_IR_TRAITS_H_
+#define TRITON_NVIDIA_GPU_IR_TRAITS_H_
 
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Dialect.h"
+#include "mlir/IR/OpDefinition.h"
 
-// TritonNvidiaGPU depends on Triton
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Traits.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Traits.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Types.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Support/LogicalResult.h"
 
-#define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"
+namespace mlir {
+namespace OpTrait {
 
-#define GET_OP_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/IR/Ops.h.inc"
+// These functions are out-of-line implementations of the methods in the
+// corresponding trait classes.  This avoids them being template
+// instantiated/duplicated.
+namespace impl {
+LogicalResult verifySource1IsSharedEncoding(Operation *op);
+} // namespace impl
 
-#endif // TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
+template <typename ConcreteType>
+class Source1IsSharedEncoding
+    : public TraitBase<ConcreteType, Source1IsSharedEncoding> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySource1IsSharedEncoding(op);
+  }
+};
+} // namespace OpTrait
+} // namespace mlir
+
+#endif

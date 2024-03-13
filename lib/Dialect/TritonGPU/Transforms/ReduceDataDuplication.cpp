@@ -60,16 +60,16 @@ public:
       } else {
         sharedOrder = srcOrder;
       }
-      auto tmpType = triton::MemDescType::get(
+      auto tmpType = RankedTensorType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SharedEncodingAttr::get(
               mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
               triton::gpu::getCTALayout(srcEncoding),
               srcType.getElementType()));
-      auto tmp = builder.create<triton::gpu::LocalAllocOp>(
+      auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
           cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-      auto newConvert = builder.create<triton::gpu::LocalLoadOp>(cvtOp.getLoc(),
-                                                                 dstType, tmp);
+      auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+          cvtOp.getLoc(), dstType, tmp);
       cvtOp.replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();
     });

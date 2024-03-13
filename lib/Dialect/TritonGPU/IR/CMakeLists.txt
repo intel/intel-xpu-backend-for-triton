@@ -1,5 +1,6 @@
 add_triton_library(TritonGPUIR
   Dialect.cpp
+  Traits.cpp
   Types.cpp
 
   DEPENDS

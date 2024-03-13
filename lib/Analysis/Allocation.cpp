@@ -196,19 +196,19 @@ private:
     // For example: %a = scf.if -> yield
     // %a must be allocated elsewhere by other operations.
     // FIXME(Keren): extract and insert are always alias for now
-    if (!maybeSharedAllocationOp(op))
+    if (!maybeSharedAllocationOp(op) || maybeAliasOp(op))
       return;
 
     // XXX(Keren): Why this hard-coded alignment?
     size_t kAlignment = 8;
     for (Value result : op->getResults()) {
-      if (auto alloc = result.getDefiningOp<triton::gpu::LocalAllocOp>()) {
+      if (triton::gpu::hasSharedEncoding(result)) {
         // Bytes could be a different value once we support padding or other
         // allocation policies.
-        auto allocType = alloc.getType();
-        auto shapePerCTA = triton::gpu::getShapePerCTA(allocType);
+        auto tensorType = result.getType().dyn_cast<RankedTensorType>();
+        auto shapePerCTA = triton::gpu::getShapePerCTA(tensorType);
         auto bytes = product<int64_t>(shapePerCTA) *
-                     allocType.getElementTypeBitWidth() / 8;
+                     tensorType.getElementTypeBitWidth() / 8;
 
         // XXX(Keren): magic numbers 256 and 1024
         // benzh@maybe alignment should be passed in.
