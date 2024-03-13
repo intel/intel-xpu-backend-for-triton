@@ -51,7 +51,7 @@ GPU_DIALECT = "triton_gpu"
 if is_interpreter():
     THREADS_PER_WARP = 1
 elif is_hip():
-    THREADS_PER_WARP = 64
+    THREADS_PER_WARP = triton.runtime.driver.active.get_current_target()[2]
 else:
     THREADS_PER_WARP = 32
 
@@ -175,13 +175,13 @@ class MmaLayout:
     def __init__(self, version, warps_per_cta, ctas_per_cga, cta_split_num, cta_order, instr_shape):
         self.version = version
         self.warps_per_cta = warps_per_cta
-        self.ctas_per_cga = str(ctas_per_cga)
-        self.cta_split_num = str(cta_split_num)
-        self.cta_order = str(cta_order)
-        self.instr_shape = str(instr_shape)
+        self.ctas_per_cga = ctas_per_cga
+        self.cta_split_num = cta_split_num
+        self.cta_order = cta_order
+        self.instr_shape = instr_shape
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={str(self.warps_per_cta)}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
+        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
 
 
 class DpasLayout:
@@ -201,13 +201,13 @@ class DpasLayout:
 class BlockedLayout:
 
     def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga, cta_split_num, cta_order):
-        self.sz_per_thread = str(size_per_thread)
-        self.threads_per_warp = str(threads_per_warp)
-        self.warps_per_cta = str(warps_per_cta)
-        self.order = str(order)
-        self.ctas_per_cga = str(ctas_per_cga)
-        self.cta_split_num = str(cta_split_num)
-        self.cta_order = str(cta_order)
+        self.sz_per_thread = size_per_thread
+        self.threads_per_warp = threads_per_warp
+        self.warps_per_cta = warps_per_cta
+        self.order = order
+        self.ctas_per_cga = ctas_per_cga
+        self.cta_split_num = cta_split_num
+        self.cta_order = cta_order
 
     def __str__(self):
         return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
@@ -216,13 +216,13 @@ class BlockedLayout:
 class SharedLayout:
 
     def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order):
-        self.vec = str(vec)
-        self.per_phase = str(per_phase)
-        self.max_phase = str(max_phase)
-        self.order = str(order)
-        self.ctas_per_cga = str(ctas_per_cga)
-        self.cta_split_num = str(cta_split_num)
-        self.cta_order = str(cta_order)
+        self.vec = vec
+        self.per_phase = per_phase
+        self.max_phase = max_phase
+        self.order = order
+        self.ctas_per_cga = ctas_per_cga
+        self.cta_split_num = cta_split_num
+        self.cta_order = cta_order
 
     def __str__(self):
         return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
@@ -264,7 +264,7 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
     z_ref = eval(expr if numpy_expr is None else numpy_expr)
     # triton result
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
-    z_tri = to_triton(np.empty_like(z_ref), device=device, dst_type=dtype_x)
+    z_tri = to_triton(np.empty_like(x), device=device, dst_type=dtype_x)
     kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
     # compare
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
@@ -502,8 +502,8 @@ def test_bitwise_op(dtype_x, dtype_y, op, num_ctas, device):
         numpy_expr = None
     if 'float' in dtype_x + dtype_y:
         # The CompilationError must have been caused by a C++ exception with this text.
-        error = triton.CompilationError if not is_interpreter() else tl.semantic.IncompatibleTypeErrorImpl
-        with pytest.raises(error, match='invalid operands of type'):
+        error_class = tl.semantic.IncompatibleTypeErrorImpl if is_interpreter() else triton.CompilationError
+        with pytest.raises(error_class, match='invalid operands of type'):
             _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
     else:
         _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
@@ -558,8 +558,10 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, num_ctas, device):
 # ---------------
 # test broadcast
 # ---------------
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", dtypes_with_bfloat16)
 def test_broadcast(dtype, device):
+    check_type_supported(dtype, device)
 
     @triton.jit
     def broadcast_kernel(x_ptr, y_ptr, y_broadcasted_ptr, M: tl.constexpr, N: tl.constexpr):
@@ -590,6 +592,7 @@ def test_broadcast(dtype, device):
 # ----------
 
 
+@pytest.mark.interpreter
 def test_slice(device):
 
     @triton.jit
@@ -620,6 +623,7 @@ def test_slice(device):
 # ------------------
 
 
+@pytest.mark.interpreter
 def test_invalid_slice(device):
     dst = torch.empty(128, device=device)
 
@@ -627,13 +631,15 @@ def test_invalid_slice(device):
     def _kernel(dst):
         dst[10:]
 
-    with pytest.raises(triton.CompilationError, match='unsupported tensor index'):
+    error_class = ValueError if is_interpreter() else triton.CompilationError
+    with pytest.raises(error_class, match='unsupported tensor index'):
         _kernel[(1, )](dst=dst)
 
 
 # ----------------
 # test expand_dims
 # ----------------
+@pytest.mark.interpreter
 def test_expand_dims(device):
 
     @triton.jit
@@ -681,6 +687,7 @@ def test_expand_dims(device):
     expand_dims_kernel[(1, )](dummy_tensor, N)
 
 
+@pytest.mark.interpreter
 def test_expand_dims_error_cases(device):
 
     @triton.jit
@@ -718,31 +725,39 @@ def test_expand_dims_error_cases(device):
 
     N = 32
     dummy_tensor = torch.empty((), device=device)
+    error_class = ValueError if is_interpreter() else triton.CompilationError
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    def get_error_message(e):
+        if is_interpreter():
+            return str(e.value)
+        else:
+            return str(e.value.__cause__)
+
+    with pytest.raises(error_class) as exc_info:
         dim_out_of_range1[(1, )](dummy_tensor, N)
-    assert "invalid axis -3" in str(exc_info.value.__cause__)
+    assert "invalid axis -3" in get_error_message(exc_info)
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         dim_out_of_range2[(1, )](dummy_tensor, N)
-    assert "invalid axis 2" in str(exc_info.value.__cause__)
+    assert "invalid axis 2" in get_error_message(exc_info)
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         dim_out_of_range3[(1, )](dummy_tensor, N)
-    assert "invalid axis 1" in str(exc_info.value.__cause__)
+    assert "invalid axis 1" in get_error_message(exc_info)
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         duplicate_dim1[(1, )](dummy_tensor, N)
-    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", get_error_message(exc_info))
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    with pytest.raises(error_class) as exc_info:
         duplicate_dim2[(1, )](dummy_tensor, N)
-    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", str(exc_info.value.__cause__))
+    assert re.search(r"duplicate axes, normalized axes = \[0, 0\]", get_error_message(exc_info))
 
 
 # ----------------------------
 # test invalid program id axis
 # ----------------------------
+@pytest.mark.interpreter
 def test_invalid_pid_axis(device):
     dst = torch.empty(128, device=device)
 
@@ -750,14 +765,17 @@ def test_invalid_pid_axis(device):
     def _kernel(dst):
         pid = tl.program_id(20)
 
-    with pytest.raises(triton.CompilationError) as exc_info:
+    error_class = ValueError if is_interpreter() else triton.CompilationError
+    with pytest.raises(error_class) as exc_info:
         _kernel[(1, )](dst)
-    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", str(exc_info.value.__cause__))
+    error_msg = str(exc_info.value) if is_interpreter() else str(exc_info.value.__cause__)
+    assert re.search(r"program_id axis must be 0, 1, or 2 but got 20", error_msg)
 
 
 # ---------------
 # test where
 # ---------------
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", dtypes_with_bfloat16 + ["*int32"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_where(dtype, num_ctas, device):
@@ -809,6 +827,7 @@ def test_where(dtype, num_ctas, device):
         assert (z == to_numpy(z_tri)).all()
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_where_broadcast(num_ctas, device):
 
@@ -852,6 +871,7 @@ def test_where_broadcast(num_ctas, device):
 # ---------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, expr",
                          [(dtype_x, ' -x') for dtype_x in dtypes_with_bfloat16] + [(dtype_x, ' ~x')
                                                                                    for dtype_x in int_dtypes])
@@ -865,6 +885,7 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
 # ----------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, expr, x", [(dtype_x, expr, x)
                                               for dtype_x in ["float32", "float64"]
                                               for expr in ['exp', 'log', 'cos', 'sin']
@@ -878,6 +899,7 @@ def test_math_op(dtype_x, expr, device, x):
 # ----------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x", [(dtype_x) for dtype_x in dtypes_with_bfloat16])
 def test_abs(dtype_x, device):
     _test_unary(dtype_x, 'tl.abs(x)', 'np.abs(x) ', device=device)
@@ -1998,9 +2020,6 @@ def roll(a1, b1_last, b1_cur, a2, b2_last, b2_cur):
 @pytest.mark.parametrize("op, dtype_str, shape, axis, reverse, num_warps", scan_configs + negative_config)
 def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     check_type_supported(dtype_str, device)
-
-    if is_hip() and reverse:
-        pytest.skip("TODO reverse scan (added in https://github.com/openai/triton/pull/3177) not support on HIP")
 
     # triton kernel
     @triton.jit
@@ -4425,18 +4444,42 @@ intermediate_layouts = [
 ]
 
 
+def compute_rep_shape(layout):
+    if type(layout) is BlockedLayout:
+        warp_shape = np.multiply(layout.sz_per_thread, layout.threads_per_warp)
+        rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
+        return rep_shape
+    else:
+        assert "TODO: support compute_rep_shape for layout " + str(type(layout))
+
+
+# This function gives a lower bound approximation of scratch buffer shape for convert_layout operation
+def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
+    src_rep_shape = compute_rep_shape(src_layout)
+    dst_rep_shape = compute_rep_shape(dst_layout)
+    full_scratch_shape = np.maximum(src_rep_shape, dst_rep_shape)
+    return np.minimum(full_scratch_shape, shape)
+
+
 @pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [128, 128], [1, 64]])
 @pytest.mark.parametrize("dtype", ['float16'])
 @pytest.mark.parametrize("src_layout", layouts)
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
-    if is_hip():
-        pytest.skip("TODO some tests fail due to out of LDS")
     if (M == 1 or N == 1) and interm_layout:
         pytest.xfail("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.xfail("Do not convert same layout")
+    if is_hip():
+        scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        lds_size = 65536
+        # consider int32 dtype in scratch buffer size,
+        # because it is the largest dtype used in convert_layout in this test
+        int32_size = 4
+        # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
+        if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
+            pytest.skip("Scratch buffer is too large")
 
     layouts = f"""
     #src = {src_layout}
