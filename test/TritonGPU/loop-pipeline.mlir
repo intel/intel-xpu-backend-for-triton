@@ -859,12 +859,12 @@ module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-c
 } // end module
 
 // -----
-// CHECK: #[[SHARED_LAYOUT:shared.*]] = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+// CHECK: #[[$SHARED_LAYOUT:shared.*]] = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
 // CHECK-LABEL: tt.func @indirect_load_shared_layout
 // CHECK: scf.for
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: triton_gpu.insert_slice_async %[[NEXT_BUFFER_1]]
-// CHECK: %[[IND_BUFFER_0:.*]] = triton_gpu.extract_slice {{.*}} : tensor<1x16xi64, #[[SHARED_LAYOUT]]> to tensor<16xi64, #[[SHARED_LAYOUT]]>
+// CHECK: %[[IND_BUFFER_0:.*]] = triton_gpu.extract_slice {{.*}} : tensor<1x16xi64, #[[$SHARED_LAYOUT]]> to tensor<16xi64, #[[$SHARED_LAYOUT]]>
 // CHECK: %[[IND_BUFFER_1:.*]] = triton_gpu.convert_layout %[[IND_BUFFER_0]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.expand_dims %[[IND_BUFFER_1]] {axis = 1 : i32}
 // CHECK: %[[IND_BUFFER_3:.*]] = tt.broadcast %[[IND_BUFFER_2]]
@@ -964,6 +964,8 @@ module attributes {"triton_gpu.compute-capability" = 86 : i32, "triton_gpu.num-c
 // -----
 
 // CHECK-LABEL: @add_kernel
+// CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
+// CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK:   %[[ABUFFER:.*]] = triton_gpu.alloc_tensor
 // CHECK:   %[[BBUFFER:.*]] = triton_gpu.alloc_tensor
 // CHECK:   %[[A0BUFFER:.*]] = triton_gpu.insert_slice_async {{.*}}, {{.*}}, %[[CONSTANT_0]]
