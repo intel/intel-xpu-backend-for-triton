@@ -175,7 +175,6 @@ void mlir::triton::populateGPUToTritonGENConversionPatterns(
                       TritonGEN::TritonGENDialect::getKernelFuncAttrName()));
 
   const llvm::StringRef prefix("_Z15__spirv_ocl_");
-
   populateOpPatterns<math::ExpOp>(converter, patterns, (prefix + "expf").str(),
                                   (prefix + "expd").str());
   populateOpPatterns<math::LogOp>(converter, patterns, (prefix + "logf").str(),
@@ -184,6 +183,37 @@ void mlir::triton::populateGPUToTritonGENConversionPatterns(
                                   (prefix + "cosd").str());
   populateOpPatterns<math::SinOp>(converter, patterns, (prefix + "sinf").str(),
                                   (prefix + "sind").str());
+
+  populateOpPatterns<math::AbsFOp>(converter, patterns, "__imf_fabsf",
+                                   "__imf_fabs");
+  populateOpPatterns<math::AtanOp>(converter, patterns, "__imf_atanf",
+                                   "__imf_atan");
+  populateOpPatterns<math::Atan2Op>(converter, patterns, "__imf_atan2f",
+                                    "__imf_atan2");
+  populateOpPatterns<math::CbrtOp>(converter, patterns, "__imf_cbrtf",
+                                   "__imf_cbrt");
+  populateOpPatterns<math::CeilOp>(converter, patterns, "__imf_ceilf",
+                                   "__imf_ceil");
+  populateOpPatterns<math::ErfOp>(converter, patterns, "__imf_erff",
+                                  "__imf_erf");
+  populateOpPatterns<math::ExpM1Op>(converter, patterns, "__imf_expm1f",
+                                    "__imf_expm1");
+  populateOpPatterns<arith::RemFOp>(converter, patterns, "__imf_fmodf",
+                                    "__imf_fmod");
+  populateOpPatterns<math::Log1pOp>(converter, patterns, "__imf_log1pf",
+                                    "__imf_log1p");
+  populateOpPatterns<math::Log10Op>(converter, patterns, "__imf_log10f",
+                                    "__imf_log10");
+  populateOpPatterns<math::PowFOp>(converter, patterns, "__imf_powf",
+                                   "__imf_pow");
+  populateOpPatterns<math::RsqrtOp>(converter, patterns, "__imf_rsqrtf",
+                                    "__imf_rsqrt");
+  populateOpPatterns<math::TanhOp>(converter, patterns, "__imf_tanhf",
+                                   "__imf_tanh");
+  populateOpPatterns<math::TanOp>(converter, patterns, "__imf_tanf",
+                                  "__imf_tan");
+  populateOpPatterns<math::ErfOp>(converter, patterns, "__imf_erff",
+                                  "__imf_erf");
 }
 
 std::unique_ptr<OperationPass<mlir::gpu::GPUModuleOp>>
