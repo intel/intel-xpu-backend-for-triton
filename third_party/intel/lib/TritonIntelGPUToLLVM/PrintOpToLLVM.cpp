@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
+#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 namespace {
 
@@ -24,7 +25,7 @@ struct PrintOpConversion
     auto loc = op->getLoc();
     Value prefixStr = LLVM::utils::addStringToModule(
         loc, rewriter, "printfPrefix_", op.getPrefix(),
-        GENX::GENXMemorySpace::kUniformConstant);
+        TritonGEN::TritonGENMemorySpace::kUniformConstant);
 
     auto getPid = [&](int axis) {
       return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
@@ -224,7 +225,7 @@ struct PrintOpConversion
 
     MLIRContext *context = rewriter.getContext();
     auto ptrTy = LLVM::LLVMPointerType::get(
-        context, GENX::GENXMemorySpace::kUniformConstant);
+        context, TritonGEN::TritonGENMemorySpace::kUniformConstant);
     SmallVector<Type> argsType{ptrTy};
     auto retType = i32_ty;
     auto funcType =
@@ -298,7 +299,7 @@ struct PrintOpConversion
     msgNewline.push_back('\n');
     Value msgValue = LLVM::utils::addStringToModule(
         UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
-        msgNewline, GENX::GENXMemorySpace::kUniformConstant);
+        msgNewline, TritonGEN::TritonGENMemorySpace::kUniformConstant);
     llPrintf(msgValue, args, rewriter);
     return msgValue;
   }
