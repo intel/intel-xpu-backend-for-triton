@@ -29,7 +29,6 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::SharedEncodingAttr;
-using ::AMD::TritonGPUToLLVMTypeConverter;
 
 namespace {
 
@@ -396,7 +395,7 @@ bool isKMajor(::llvm::ArrayRef<unsigned> order, int opIdx) {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
-                    TritonGPUToLLVMTypeConverter *typeConverter, Value thread) {
+                    const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
 
   int kDimIdx = opIdx == 0 ? 1 : 0;
@@ -409,7 +408,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
-  auto aTensorTy = tensor.getType().cast<RankedTensorType>();
+  auto aTensorTy = tensor.getType().cast<MemDescType>();
   ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto sharedLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
   auto order = sharedLayout.getOrder();
@@ -545,7 +544,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(loadedValues.size(), loadedValues[0].getType()));
   auto result =
-      typeConverter->packLLElements(loc, loadedValues, rewriter, structTy);
+      packLLElements(loc, typeConverter, loadedValues, rewriter, structTy);
   return result;
 }
 
