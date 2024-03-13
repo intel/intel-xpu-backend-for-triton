@@ -218,16 +218,20 @@ DpasEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
 SmallVector<unsigned>
 DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   if (opIdx == 0) {
-    auto shapeA = getShapeA();
-    auto subGroupSize = getSubGroupSize();
-    auto systolicDepth = getSystolicDepth();
-    if (subGroupSize < systolicDepth) {
+    SmallVector<unsigned> shapeA = getShapeA();
+    unsigned subGroupSize = getSubGroupSize();
+    unsigned opsPerChannel = getOpsPerChannel();
+
+    // pack the value to i16 for scalar bit width <=16.
+    unsigned packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
+    unsigned packedColNum = shapeA[1] / packedOpsPerLane;
+
+    if (subGroupSize < packedColNum) {
       llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
-                               "be smaller than the systolic depth");
+                               "be smaller than the threads required per row.");
     }
-    SmallVector<unsigned, 2> threadsPerWarp = {subGroupSize / systolicDepth,
-                                               systolicDepth};
-    return {shapeA[0] / threadsPerWarp[0], shapeA[1] / threadsPerWarp[1]};
+    unsigned rowsPerWarp = subGroupSize / packedColNum;
+    return {shapeA[0] / rowsPerWarp, packedOpsPerLane};
   } else if (opIdx == 1) {
     auto shapeB = getShapeB();
     auto subGroupSize = getSubGroupSize();

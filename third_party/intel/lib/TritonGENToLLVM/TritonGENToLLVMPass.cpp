@@ -183,12 +183,19 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   IntegerType int32Ty = rewriter.getIntegerType(32);
 
   Value a = op.getA();
-  auto aTy = VectorType::get(op.getRc(), int16Ty);
+  auto aOrigTy = cast<VectorType>(a.getType());
+  auto bitWidth = aOrigTy.getNumElements() *
+                  aOrigTy.getElementType().getIntOrFloatBitWidth();
+  auto aTy = VectorType::get(bitWidth / 16, int16Ty);
   if (a.getType() != aTy)
     a = rewriter.create<LLVM::BitcastOp>(loc, aTy, a);
 
   Value b = op.getB();
-  auto bTy = VectorType::get(8, int32Ty);
+
+  auto bOrigTy = cast<VectorType>(b.getType());
+  bitWidth = bOrigTy.getNumElements() *
+             bOrigTy.getElementType().getIntOrFloatBitWidth();
+  auto bTy = VectorType::get(bitWidth / 32, int32Ty);
   if (b.getType() != bTy)
     b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
 
