@@ -5,7 +5,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -14,7 +13,6 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-namespace ttig = mlir::triton::gpu::intel;
 namespace {
 using tt::DotOp;
 using ttg::BlockedEncodingAttr;
@@ -22,7 +20,6 @@ using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
 using ttg::NvidiaMmaEncodingAttr;
 using ttg::SliceEncodingAttr;
-using ttig::DpasEncodingAttr;
 
 // higher mma version is preferred, will fallback to lower version if not
 // supported
@@ -381,17 +378,6 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
       if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
         return;
       promoteType = builder.getF16Type();
-    } else if (auto dpasLayout = D.getType()
-                                     .cast<RankedTensorType>()
-                                     .getEncoding()
-                                     .dyn_cast<DpasEncodingAttr>()) {
-      Type BElType =
-          dotOp.getB().getType().cast<RankedTensorType>().getElementType();
-
-      auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
-                                  BElType.getIntOrFloatBitWidth());
-
-      return;
     } else {
       // FMA case.
       Type AElType = dotOp.getA().getType().getElementType();

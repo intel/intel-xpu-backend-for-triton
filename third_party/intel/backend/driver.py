@@ -316,7 +316,7 @@ def make_launcher(constants, signature, ids):
 
       sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
       sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
-      int threads_per_warp = 32;
+      int threads_per_warp = 16;
       if (PyObject_HasAttrString(compiled_kernel, "threads_per_warp")) {{
         PyObject* _threads_per_warp = PyObject_GetAttrString(compiled_kernel, "threads_per_warp");
         if (PyLong_Check(_threads_per_warp))
@@ -400,8 +400,8 @@ class XPUDriver(DriverBase):
 
     def get_current_target(self):
         device = self.get_current_device()
-        device_arch = self.utils.get_device_properties(device)['device_arch']
-        return ("xpu", device_arch)
+        properties = self.utils.get_device_properties(device)
+        return ("xpu", properties['device_arch'], properties)
 
     @staticmethod
     def is_active():

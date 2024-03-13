@@ -149,6 +149,20 @@ public:
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, repM, repK,
         typeConverter->convertType(ATensorTy.getElementType()), aTy);
+
+//    Value programId =
+//        llGetPid(0, op->getLoc(), op->getParentOfType<ModuleOp>(), rewriter);
+//    Value warpSize = getModuleWarpSize(rewriter, loc);
+//    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
+//    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+//    for (auto &valA : ha) {
+//      auto coord = valA.first;
+//      Value p = bitcast(valA.second, vec_ty(type::f16Ty(ctx), 8));
+//      kernel_printf("A pid=%d, sgid=%d, tid=%d, repM=%d, repK=%d, val=%f",
+//                    programId, warpId, laneId, i32_val(coord.first),
+//                    i32_val(coord.second), p);
+//    }
+
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
         loadedB, repN, repK,
         typeConverter->convertType(BTensorTy.getElementType()), bTy);

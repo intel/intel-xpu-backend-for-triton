@@ -14,7 +14,20 @@ namespace triton {
 namespace gpu {
 namespace intel {
 
-bool supportDPAS(DotOp op) {
+bool supportDPAS(DotOp op, DeviceArch arch) {
+  auto mod = op->getParentOfType<mlir::ModuleOp>();
+  int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+
+  if (arch == DeviceArch::PVC && threadsPerWarp != 16) {
+    // Only support threadsPerWarp 16 for PVC now.
+    return false;
+  }
+
+  //  if (arch == DeviceArch::ATS && threadsPerWarp != 8) {
+  //    // Only support threadsPerWarp 8 for ATS now.
+  //    return false;
+  //  }
+
   return getDPASType(op) != DPASEngineType::NOT_APPLICABLE;
 }
 

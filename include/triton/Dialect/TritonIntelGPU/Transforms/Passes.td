@@ -27,6 +27,12 @@ def TritonIntelGPUAccelerateMatmul
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
     "mlir::triton::TritonDialect"
   ];
+
+  let options = [
+    Option<"deviceArch", "device architecture",
+            "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::UNKNOWN",
+            "device architecture">
+  ];
 }
 
 #endif // TRITON_INTEL_GPU_PASSES

@@ -37,7 +37,7 @@ class XPUOptions:
     num_ctas: int = 1
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
-    threads_per_warp: int = 32
+    threads_per_warp: int = 16
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     allow_fp8e4nv: bool = False
@@ -74,6 +74,19 @@ class XPUBackend(BaseBackend):
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = True
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
+
+        capability = self.target[2]
+        threads_per_warp = args['threads_per_warp'] if 'threads_per_warp' in args else 16
+        sub_group_sizes = capability['subgroup_sizes']
+        assert threads_per_warp in sub_group_sizes, "Device '{}' does not support threads_per_warp {}".format(
+            capability['dev_name'], threads_per_warp)  # noqa: E501
+
+        max_work_group_size = capability['max_group_size']
+        num_warps = args['num_warps'] if 'num_warps' in args else max_work_group_size // threads_per_warp
+
+        args['num_warps'] = num_warps if num_warps is not None else max_work_group_size // threads_per_warp
+        args['threads_per_warp'] = threads_per_warp
+
         return XPUOptions(**args)
 
     def load_dialects(self, ctx):
@@ -111,7 +124,12 @@ class XPUBackend(BaseBackend):
         intel.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        passes.ttgpuir.add_accelerate_matmul(pm, capability)
+        arch = intel.DEVICE_ARCH.UNKNOWN.value
+        if capability == intel.DEVICE_ARCH.ATS.value:
+            arch = intel.DEVICE_ARCH.ATS
+        elif capability == intel.DEVICE_ARCH.PVC.value:
+            arch = intel.DEVICE_ARCH.PVC
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, arch)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         if opt.optimize_epilogue:
             passes.ttgpuir.add_optimize_epilogue(pm)
