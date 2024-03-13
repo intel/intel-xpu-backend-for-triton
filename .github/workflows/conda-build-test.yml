@@ -49,7 +49,7 @@ jobs:
         uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
-          CACHE_NUMBER: 4
+          CACHE_NUMBER: 5
         with:
           path: ${{ github.workspace }}/../packages
           key: conda-packages-${{ env.PACKAGES_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
