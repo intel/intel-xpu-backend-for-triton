@@ -702,7 +702,7 @@ def isnan(arg0, _builder=None):
             arg0,
         ], {
             (core.dtype("fp32"), ): ("__imf_isnanf", core.dtype("int32")),
-            (core.dtype("fp64"), ): ("__imf_isnand", core.dtype("int32")),
+            (core.dtype("fp64"), ): ("__imf_isnan", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
 
 
@@ -738,7 +738,7 @@ def isinf(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_isinff", core.dtype("int32")),
-            (core.dtype("fp64"), ): ("__imf_isinfd", core.dtype("int32")),
+            (core.dtype("fp64"), ): ("__imf_isinf", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
 
 
