@@ -84,7 +84,7 @@ if [ ! -d "$PACKAGES_DIR" ]; then
   mkdir $PACKAGES_DIR
 fi
 if [ $BASE != $HOME ]; then
-  ln -s $PACKAGES_DIR $HOME/packages
+  ln -sfT $PACKAGES_DIR $HOME/packages
 fi
 
 ############################################################################
