@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 
 using ::mlir::triton::intel::PTXBuilder;
 using ::mlir::triton::intel::PTXInstr;
@@ -1670,7 +1671,7 @@ struct FpToFpOpConversion
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     auto ctx = rewriter.getContext();
-    return rewriter.create<GENX::FpToFpOp>(loc, f32_ty, v);
+    return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
   }
 
   static Value convertFp32ToBf16(Location loc,
