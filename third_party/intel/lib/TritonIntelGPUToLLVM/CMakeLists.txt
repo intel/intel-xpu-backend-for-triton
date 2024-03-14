@@ -24,7 +24,6 @@ add_triton_library(TritonIntelGPUToLLVM
     SPMDOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
-    TypeConverter.cpp
     Utility.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp

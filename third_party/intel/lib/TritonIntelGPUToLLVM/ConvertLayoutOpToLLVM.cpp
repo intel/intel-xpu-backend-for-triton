@@ -37,7 +37,7 @@ SmallVector<CoordTy> getMNCoords(Value thread, Location loc,
 
 Value convertLayout(int opIdx, Value tensor, const SharedMemoryObject &smemObj,
                     Value thread, Location loc,
-                    TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                    TritonGPUToLLVMTypeConverter *typeConverter,
                     ConversionPatternRewriter &rewriter, Type resultTy);
 
 } // namespace intel
@@ -58,7 +58,7 @@ namespace SharedToDotOperandFMA {
 namespace intel {
 Value convertLayout(int opIdx, Value B, Value llB, BlockedEncodingAttr dLayout,
                     Value thread, Location loc,
-                    TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                    TritonGPUToLLVMTypeConverter *typeConverter,
                     ConversionPatternRewriter &rewriter);
 
 } // namespace intel
@@ -70,8 +70,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
-                    TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                    Value thread);
+                    TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
 
 } // namespace intel
 } // namespace SharedToDotOperandDPAS
@@ -1114,7 +1113,7 @@ private:
 } // namespace
 
 void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
 }
