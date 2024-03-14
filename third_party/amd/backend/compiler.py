@@ -87,7 +87,7 @@ class HIPBackend(BaseBackend):
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        assert isinstance(target, tuple) and len(target) == 2
+        assert isinstance(target, tuple) and len(target) == 3
         assert isinstance(target[1], str)
 
     def parse_options(self, opts) -> Any:
@@ -152,6 +152,7 @@ class HIPBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         pm.run(mod)

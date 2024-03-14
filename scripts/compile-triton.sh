@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 # Select what to build.
 BUILD_LLVM=false
 BUILD_TRITON=false
@@ -44,7 +46,7 @@ if [ "$BUILD_LLVM" = false ] && [ "$BUILD_TRITON" = false ]; then
   BUILD_TRITON=true
 fi
 
-if [ -z "$BASE" ]; then
+if [ ! -v BASE ]; then
   echo "**** BASE is not given *****"
   BASE=$(cd $(dirname "$0")/../.. && pwd)
   echo "**** Default BASE is set to $BASE ****"
@@ -66,7 +68,7 @@ if [ "$VENV" = true ]; then
   python3 -m venv .venv --prompt triton
   source .venv/bin/activate
   pip install ninja cmake wheel
-elif [ -n "$VIRTUAL_ENV" ]; then
+elif [ -v VIRTUAL_ENV ]; then
   echo "**** Cleaning up Python virtualenv ****"
   deactivate
 fi
@@ -82,7 +84,7 @@ if [ ! -d "$PACKAGES_DIR" ]; then
   mkdir $PACKAGES_DIR
 fi
 if [ $BASE != $HOME ]; then
-  ln -s $PACKAGES_DIR $HOME/packages
+  ln -sfT $PACKAGES_DIR $HOME/packages
 fi
 
 ############################################################################
@@ -114,11 +116,11 @@ fi
 ############################################################################
 ## Configure and build the llvm project.
 
-if [ -z "$C_COMPILER" ]; then
+if [ ! -v C_COMPILER ]; then
   C_COMPILER=${GCC:-$(which gcc)}
   echo "**** C_COMPILER is set to $C_COMPILER ****"
 fi
-if [ -z "$CXX_COMPILER" ]; then
+if [ ! -v CXX_COMPILER ]; then
   CXX_COMPILER=${GXX:-$(which g++)}
   echo "**** CXX_COMPILER is set to $CXX_COMPILER ****"
 fi

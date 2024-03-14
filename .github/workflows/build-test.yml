@@ -153,11 +153,12 @@ jobs:
       - name: Run core tests
         run: |
           cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/language.xml -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
-          # run runtime tests serially to avoid race condition with cache handling.
-          python3 -m pytest --junitxml=~/reports/runtime.xml --device xpu runtime/
-          # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --junitxml=~/reports/line_info.xml --verbose --device xpu language/test_line_info.py
+          python3 -m pytest --junitxml=~/reports/language.xml -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest --junitxml=~/reports/subprocess.xml -vvv -n 8 language/test_subprocess.py
+          # Run runtime tests serially to avoid race condition with cache handling
+          python3 -m pytest --junitxml=~/reports/runtime.xml -vvv --device xpu runtime/
+          # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --junitxml=~/reports/line_info.xml -vvv --device xpu language/test_line_info.py
 
       - name: Clear cache
         run: |
@@ -174,7 +175,7 @@ jobs:
       - name: Run partial operators tests
         run: |
           cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/operators.xml -n 8 --verbose --device xpu operators
+          python3 -m pytest --junitxml=~/reports/operators.xml -vvv -n 8 --device xpu operators
 
       - name: Regression tests
         run: |

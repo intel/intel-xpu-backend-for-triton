@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 # Select what to build.
 BUILD_PYTORCH=false
 BUILD_IPEX=false
@@ -35,7 +37,7 @@ for arg in "$@"; do
 done
 
 set +o xtrace
-if [ -z "$BASE" ]; then
+if [ ! -v BASE ]; then
   echo "**** BASE is not given *****"
   BASE=$(cd $(dirname "$0")/../.. && pwd)
   echo "**** Default BASE is set to $BASE ****"
