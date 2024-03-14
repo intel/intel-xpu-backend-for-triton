@@ -19,7 +19,8 @@ constexpr static char AttrNumThreadsPerWarp[] = "triton_gpu.threads-per-warp";
 
 // Create the pass with numWarps passed from cl::opt.
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUPass();
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUWarpPass();
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonToTritonGPUWarpPass();
 
 // Create the pass with numWarps set explicitly.
 std::unique_ptr<OperationPass<ModuleOp>>
