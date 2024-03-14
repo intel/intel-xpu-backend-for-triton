@@ -59,7 +59,7 @@ int getSizePerThreadForMN(BlockedEncodingAttr layout, bool isM) {
 
 Value getStructFromValueTable(ArrayRef<Value> vals,
                               ConversionPatternRewriter &rewriter, Location loc,
-                              TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                              TritonGPUToLLVMTypeConverter *typeConverter,
                               Type elemTy) {
   SmallVector<Type> elemTypes(vals.size(), elemTy);
   SmallVector<Value> elems;
@@ -72,10 +72,12 @@ Value getStructFromValueTable(ArrayRef<Value> vals,
   return packLLElements(loc, typeConverter, elems, rewriter, structTy);
 }
 
-ValueTable getValueTableFromStruct(
-    Value val, int K, int n0, int shapePerCTA, int sizePerThread,
-    ConversionPatternRewriter &rewriter, Location loc,
-    TritonIntelGPUToLLVMTypeConverter *typeConverter, Type type) {
+ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
+                                   int sizePerThread,
+                                   ConversionPatternRewriter &rewriter,
+                                   Location loc,
+                                   TritonGPUToLLVMTypeConverter *typeConverter,
+                                   Type type) {
   ValueTable res;
   auto elems = unpackLLElements(loc, val, rewriter);
   int index = 0;
@@ -89,7 +91,7 @@ ValueTable getValueTableFromStruct(
 }
 
 Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
-               Location loc, TritonIntelGPUToLLVMTypeConverter *typeConverter,
+               Location loc, TritonGPUToLLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter) {
   auto aTensorTy = A.getType().cast<RankedTensorType>();
   auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -156,7 +158,7 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
 }
 
 Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
-               Location loc, TritonIntelGPUToLLVMTypeConverter *typeConverter,
+               Location loc, TritonGPUToLLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter) {
   auto bTensorTy = B.getType().cast<RankedTensorType>();
   auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
@@ -227,7 +229,7 @@ namespace SharedToDotOperandFMA {
 namespace intel {
 Value convertLayout(int opIdx, Value val, Value llVal,
                     BlockedEncodingAttr dLayout, Value thread, Location loc,
-                    TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                    TritonGPUToLLVMTypeConverter *typeConverter,
                     ConversionPatternRewriter &rewriter) {
   if (opIdx == 0)
     return loadAFMA(val, llVal, dLayout, thread, loc, typeConverter, rewriter);
