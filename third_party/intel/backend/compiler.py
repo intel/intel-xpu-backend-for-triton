@@ -46,16 +46,18 @@ class XPUOptions:
     debug: bool = False
 
     # device properties
-    # TODO: remove unnecessary fields
-    dev_name: str = None
+    # TODO: include triton required fields here, refer to https://registry.khronos.org/SYCL/specs/sycl-2020/html/sycl-2020.html#_device_information_descriptors
+    name: str = None
     platform_name: str = None
     vendor: str = None
     driver_version: str = None
     version: str = None
+    gpu_eu_count: int = None
+    gpu_subslice_count: int = None
     max_work_group_size: int = None
     max_num_sub_groups: int = None
     sub_group_sizes: list = None
-    support_fp64: bool = None
+    has_fp64: bool = None
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -81,7 +83,6 @@ class XPUBackend(BaseBackend):
         super().__init__(target)
         assert isinstance(target, tuple) and len(target) == 2
         assert isinstance(target[1], dict)
-        print("target[1]: ", target[1])
         # TODO: Deprecate capability in XPU compilation
         self.capability = 80  # compute capability for A100
         self.properties = self._parse_target(target[1])
