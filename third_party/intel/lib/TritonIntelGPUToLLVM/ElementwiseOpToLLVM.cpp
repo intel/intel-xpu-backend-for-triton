@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/GENXDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 
 using ::mlir::triton::intel::PTXBuilder;
 using ::mlir::triton::intel::PTXInstr;
@@ -1460,7 +1461,7 @@ public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ElementwiseOpConversionBase(
-      TritonIntelGPUToLLVMTypeConverter &typeConverter,
+      TritonGPUToLLVMTypeConverter &typeConverter,
       ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         axisAnalysisPass(axisAnalysisPass) {}
@@ -1651,7 +1652,7 @@ struct FpToFpOpConversion
   using ElementwiseOpConversionBase<
       FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
 
-  explicit FpToFpOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
+  explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -1670,7 +1671,7 @@ struct FpToFpOpConversion
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     auto ctx = rewriter.getContext();
-    return rewriter.create<GENX::FpToFpOp>(loc, f32_ty, v);
+    return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
   }
 
   static Value convertFp32ToBf16(Location loc,
@@ -2466,7 +2467,7 @@ struct MinMaxFOpConversion
       typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
                                 LLVM::MinNumOp, LLVM::MaxNumOp>::type;
 
-  explicit MinMaxFOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
+  explicit MinMaxFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
                                int computeCapability,
                                PatternBenefit benefit = 1)
@@ -2509,7 +2510,7 @@ struct ClampFOpConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  explicit ClampFOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
+  explicit ClampFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -2690,10 +2691,10 @@ struct OpToExternCallConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  explicit OpToExternCallConversion(
-      TritonIntelGPUToLLVMTypeConverter &typeConverter,
-      ModuleAxisInfoAnalysis &axisAnalysisPass, StringRef externFuncName,
-      PatternBenefit benefit)
+  explicit OpToExternCallConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                                    ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                    StringRef externFuncName,
+                                    PatternBenefit benefit)
       : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
                                           benefit),
         funcName(externFuncName) {}
@@ -2781,9 +2782,9 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
 
 namespace intel {
 void populateElementwiseOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    int computeCapability, PatternBenefit benefit) {
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
+    PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \

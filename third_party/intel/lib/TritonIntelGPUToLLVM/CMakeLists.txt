@@ -1,14 +1,8 @@
 add_triton_library(TritonIntelGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandDPAS.cpp
-    ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
-    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv1.cpp
-    ConvertLayoutOpToLLVM/SharedToDotOperandMMAv2.cpp
     ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM/DPAS.cpp
     DotOpToLLVM/FMA.cpp
-    DotOpToLLVM/MMAv1.cpp
-    DotOpToLLVM/MMAv2.cpp
-    DotOpToLLVM/WGMMA.cpp
     DotOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
@@ -24,7 +18,6 @@ add_triton_library(TritonIntelGPUToLLVM
     SPMDOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
-    TypeConverter.cpp
     Utility.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp

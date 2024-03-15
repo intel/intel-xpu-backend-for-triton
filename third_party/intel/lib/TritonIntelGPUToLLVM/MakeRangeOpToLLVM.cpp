@@ -9,7 +9,7 @@ using namespace mlir::triton;
 struct MakeRangeOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp> {
 
-  MakeRangeOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
+  MakeRangeOpConversion(TritonGPUToLLVMTypeConverter &converter,
                         PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(converter,
                                                              benefit) {}
@@ -45,7 +45,7 @@ struct MakeRangeOpConversion
 } // namespace
 
 void mlir::triton::intel::populateMakeRangeOpToLLVMPattern(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
   patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
 }

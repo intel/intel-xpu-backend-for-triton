@@ -463,6 +463,12 @@ static Value getSharedMemoryBase(Location loc,
   return base;
 }
 
+// Returns a Value for the format string, which you can reuse.
+Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
+               ValueRange args);
+
+void llPrintf(ConversionPatternRewriter &rewriter, Value msg, ValueRange args);
+
 } // namespace utils
 } // namespace LLVM
 

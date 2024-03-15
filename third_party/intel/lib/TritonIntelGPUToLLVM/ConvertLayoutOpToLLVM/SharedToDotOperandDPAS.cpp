@@ -17,8 +17,7 @@ public:
                    unsigned warpsPerTile, ArrayRef<Value> smemStrides,
                    SmallVector<int64_t> instrShape,
                    ConversionPatternRewriter &rewriter,
-                   TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                   Location loc)
+                   TritonGPUToLLVMTypeConverter *typeConverter, Location loc)
       : dpasLayout(dpasLayout), tensorTy(tensorTy), smemStrides(smemStrides),
         rewriter(rewriter), loc(loc) {
     static_assert(opIdx == 0 || opIdx == 1);
@@ -86,14 +85,21 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   unsigned threadsPerWarp = getThreadsPerWarp();
 
   Value laneRowIndex, laneColIndex;
-  unsigned repRowsPerInst, rowsPerWarp;
+  unsigned repRowsPerInst, rowsPerWarp, repOpsPerRow;
   switch (opIdx) {
   case 0: {
-    rowsPerWarp = threadsPerWarp / systolicDepth;
+    assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
+           "invalid opsPerChannel number.");
+    SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
+    // Unlike the operand B, to pack the value to i16 for scalar bit width <=16.
+    unsigned packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
+    unsigned packedColNum = shapeA[1] / packedOpsPerLane;
+    rowsPerWarp = threadsPerWarp / packedColNum;
     repRowsPerInst = repeatCount / rowsPerWarp;
-    laneRowIndex = udiv(laneId, i32_val(systolicDepth));
-    laneColIndex = urem(laneId, i32_val(systolicDepth));
-    laneColIndex = mul(laneColIndex, i32_val(opsPerChannel));
+    laneRowIndex = udiv(laneId, i32_val(packedColNum));
+    laneColIndex = urem(laneId, i32_val(packedColNum));
+    laneColIndex = mul(laneColIndex, i32_val(packedOpsPerLane));
+    repOpsPerRow = packedOpsPerLane;
   } break;
   case 1: {
     rowsPerWarp = threadsPerWarp / executionSize;
@@ -102,6 +108,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
     laneRowIndex = udiv(laneId, i32_val(executionSize));
     laneRowIndex = mul(laneRowIndex, i32_val(opsPerChannel));
     laneColIndex = urem(laneId, i32_val(executionSize));
+    repOpsPerRow = opsPerChannel;
   } break;
   }
 
@@ -123,7 +130,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
 
   for (int rep = 0; rep < repRowsPerInst; ++rep) {
     Value repRowIndex = mul(i32_val(rep), rowsPerWarpVal);
-    for (unsigned opsIdx = 0; opsIdx < opsPerChannel; ++opsIdx) {
+    for (unsigned opsIdx = 0; opsIdx < repOpsPerRow; ++opsIdx) {
       // inner index base
       Value jBase = laneColIndex;
       // outer index base
@@ -183,7 +190,7 @@ Value DpasMatmulLoader<opIdx>::loadMatrix(int repOuter, int repInner,
 
 Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int n0, int n1,
-    TritonIntelGPUToLLVMTypeConverter *typeConverter, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter) {
   std::vector<Value> elems;
   for (int m = 0; m < n0; ++m) {
@@ -227,7 +234,7 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
                 DpasEncodingAttr dpasLayout, unsigned warpsPerTile,
                 SmallVector<int64_t> instrShape, Value warpId,
                 Value outerWarpDim, Value laneId, ValueTable &vals,
-                TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                TritonGPUToLLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
   static_assert(opIdx == 0 || opIdx == 1);
 
@@ -275,8 +282,8 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
 template <unsigned opIdx>
 Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
                   Value threadId, DotOperandEncodingAttr encoding,
-                  TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                  Value tensor, const SharedMemoryObject &smemObj) {
+                  TritonGPUToLLVMTypeConverter *typeConverter, Value tensor,
+                  const SharedMemoryObject &smemObj) {
   static_assert(opIdx == 0 || opIdx == 1);
 
   auto dpasLayout = encoding.getParent().cast<DpasEncodingAttr>();
@@ -336,7 +343,7 @@ namespace intel {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
-                    TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                    TritonGPUToLLVMTypeConverter *typeConverter,
                     Value threadId) {
   switch (opIdx) {
   case 0:
