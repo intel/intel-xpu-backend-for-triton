@@ -1,3 +1,21 @@
+//===- TritonToTritonGPUWarpPass.cpp -  ------------------------*- C++ -*-===//
+//
+// Copyright 2024 Intel Corporation
+// Part of the intel-xpu-backend-for-trito Project, under the Apache License
+// v2.0 with LLVM Exceptions. See https://llvm.org/LICENSE.txt for license
+// information. SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// This file implements a pass to convert triton to tritongpu with warp
+/// distribute annotation. This pass first analyze the kernel's workload
+/// pattern(elementwise/reduction/gemm/attention),
+/// and then figure out the best layout for key/anchor operation( dot in
+/// gemm case). afterwards, we get all other operation’s layout
+/// through def/use chain. finally, each tensor operation is annotated
+/// with layout attribute describing what each warp should do.
+//===----------------------------------------------------------------------===//
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -11,6 +29,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "llvm/ADT/APSInt.h"
+#include "llvm/Support/Debug.h"
 #include <numeric>
 
 using namespace mlir;
@@ -19,6 +38,10 @@ namespace ttg = mlir::triton::gpu;
 
 #define GEN_PASS_CLASSES
 #include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
+
+#define DEBUG_TYPE "convert-triton-to-tritongpu-warp"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace {
 constexpr static char AttrWorkloadName[] = "triton_gpu.workload";
@@ -50,28 +73,28 @@ struct DotInfo {
   SmallVector<Value> chainOpsC;
   void dump() {
     dot.dump();
-    llvm::outs() << "***** chain ops of dotA *****\n";
+    LDBG("***** chain ops of dotA *****\n");
     for (auto val : chainOpsA)
       val.dump();
-    llvm::outs() << "***** chain ops end *********\n";
+    LDBG("***** chain ops end *********\n");
     if (loadA)
       loadA.dump();
     if (advanceA)
       advanceA.dump();
-    llvm::outs() << "\n";
-    llvm::outs() << "***** chain ops of dotB *****\n";
+    LDBG("\n");
+    LDBG("***** chain ops of dotB *****\n");
     for (auto val : chainOpsB)
       val.dump();
-    llvm::outs() << "***** chain ops end *********\n";
+    LDBG("***** chain ops end *********\n");
     if (loadB)
       loadB.dump();
     if (advanceB)
       advanceB.dump();
-    llvm::outs() << "\n";
-    llvm::outs() << "***** chain ops of dotC *****\n";
+    LDBG("\n");
+    LDBG("***** chain ops of dotC *****\n");
     for (auto val : chainOpsC)
       val.dump();
-    llvm::outs() << "***** chain ops end *********\n";
+    LDBG("***** chain ops end *********\n");
   }
 };
 // only support at most 2 dot in a loop for now
@@ -82,15 +105,15 @@ struct LoopDotInfo {
   bool connectDotB = false;
   bool connectDotC = false;
   void dump() {
-    llvm::outs() << "\n";
-    llvm::outs() << "***** first dot info *****\n";
+    LDBG("\n");
+    LDBG("***** first dot info *****\n");
     dotInfo0.dump();
     if (dotInfo1.dot) {
-      llvm::outs() << "\n";
-      llvm::outs() << "connect to first DotA " << connectDotA << "\n";
-      llvm::outs() << "connect to first DotB " << connectDotB << "\n";
-      llvm::outs() << "connect to first DotC " << connectDotC << "\n";
-      llvm::outs() << "***** second dot info *****\n";
+      LDBG("\n");
+      LDBG("connect to first DotA " << connectDotA << "\n");
+      LDBG("connect to first DotB " << connectDotB << "\n");
+      LDBG("connect to first DotC " << connectDotC << "\n");
+      LDBG("***** second dot info *****\n");
       dotInfo1.dump();
     }
   }
@@ -100,7 +123,7 @@ class ConvertTritonToTritonGPUWarp
     : public ConvertTritonToTritonGPUWarpBase<ConvertTritonToTritonGPUWarp> {
 public:
   ConvertTritonToTritonGPUWarp() = default;
-  ConvertTritonToTritonGPUWarp(int numWarps) { this->numWarps = numWarps; }
+  ConvertTritonToTritonGPUWarp(unsigned numWarps) { this->numWarps = numWarps; }
 
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
@@ -139,23 +162,24 @@ public:
         assert(dots.size() <= 2 && "only support 1/2 dot in a loop");
         LoopDotInfo loopDotInfo;
         collectLoopDotInfo(loop, dots[0], loopDotInfo);
-        loopDotInfo.dump();
+        LLVM_DEBUG(loopDotInfo.dump());
         loopMap[loop] = loopDotInfo;
         // DAG pattern match
         auto workLoadKind = matchLoopWorkload(loop, loopDotInfo);
         if (workLoadKind == Workload::None) {
-          llvm::outs() << "\n";
-          llvm::outs() << "***********************************************\n";
-          llvm::outs() << "this has tt.dot, but workload do not match any \n";
-          llvm::outs() << "***********************************************\n";
-          llvm::outs() << "\n";
+          LDBG("\n");
+          LDBG("***********************************************\n");
+          LDBG("this has tt.dot, but workload do not match any \n");
+          LDBG("***********************************************\n");
+          LDBG("\n");
           return;
         }
         loop->setAttr(AttrWorkloadName,
                       IntegerAttr::get(i32Ty, int64_t(workLoadKind)));
 
         /// get tensor layout attr according to workload pattern
-        if (workLoadKind == Workload::Gemm) {
+        switch (workLoadKind) {
+        case Workload::Gemm: {
           auto &info0 = loopDotInfo.dotInfo0;
           auto dot = info0.dot;
           auto aType = dot.getA().getType().cast<RankedTensorType>();
@@ -182,8 +206,10 @@ public:
             valueAttrMap[info0.advanceA] = dotALayout;
           if (info0.advanceB)
             valueAttrMap[info0.advanceB] = dotBLayout;
-        } else if (workLoadKind == Workload::Attention) {
-          llvm::outs() << "match workload attention \n";
+          break;
+        }
+        case Workload::Attention: {
+          LDBG("match workload attention \n");
           auto &info0 = loopDotInfo.dotInfo0;
           auto &info1 = loopDotInfo.dotInfo1;
           auto dot0 = info0.dot;
@@ -192,8 +218,8 @@ public:
           unsigned Br = aType.getShape()[0];
           unsigned d = bType.getShape()[0];
           unsigned Bc = bType.getShape()[1];
-          assert(Br % numWarps == 0);
-          assert(Bc % numWarps == 0);
+          assert(Br % numWarps == 0 && "should be divisible by numWarps");
+          assert(Bc % numWarps == 0 && "should be divisible by numWarps");
           SmallVector<unsigned> warpsPerCTA{numWarps, 1};
           SmallVector<unsigned> sizePerWarpQ{Br / numWarps, d};
           SmallVector<unsigned> sizePerWarpK{d, Bc};
@@ -225,14 +251,16 @@ public:
           if (info0.advanceB)
             valueAttrMap[info0.advanceB] = kLayout;
 
-          assert(info1.chainOpsA.empty());
+          assert(info1.chainOpsA.empty() && "ops A should be empty");
           for (auto op : info1.chainOpsB)
             valueAttrMap[op] = vLayout;
           for (auto op : info1.chainOpsC)
             valueAttrMap[op] = oLayout;
-          assert(!info1.advanceA);
+          assert(!info1.advanceA && "advance should exist");
           if (info1.advanceB)
             valueAttrMap[info1.advanceB] = vLayout;
+          break;
+        }
         }
       }
 
@@ -261,7 +289,7 @@ public:
         } else if (auto store = dyn_cast<tt::StoreOp>(op)) {
           transformStoreOp(store);
         } else if (numResults != 0) {
-          assert(numResults == 1);
+          assert(numResults == 1 && "only support 1 result");
           transformGenericOp(op, valueAttrMap);
         }
         return WalkResult::advance();
@@ -354,7 +382,7 @@ public:
     SmallVector<unsigned> sizePerWarp(2);
     SmallVector<unsigned> warpsPerCTA(2);
 
-    // assume llvm/spirv dot size is 8x16
+    // assume llvm dot size is 8x16
     //((n % 16) == 0 && (m % 8) == 0)
     auto maxWarpsX = n / 16;
     auto maxWarpsY = m / 8;
@@ -527,7 +555,7 @@ public:
 } // namespace
 
 std::unique_ptr<OperationPass<ModuleOp>>
-mlir::triton::createConvertTritonToTritonGPUWarpPass(int numWarps) {
+mlir::triton::createConvertTritonToTritonGPUWarpPass(unsigned numWarps) {
   return std::make_unique<::ConvertTritonToTritonGPUWarp>(numWarps);
 }
 

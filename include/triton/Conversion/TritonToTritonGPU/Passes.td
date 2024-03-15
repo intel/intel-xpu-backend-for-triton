@@ -37,13 +37,15 @@ def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleO
 def ConvertTritonToTritonGPUWarp: Pass<"convert-triton-to-tritongpu-warp", "mlir::ModuleOp"> {
     let summary = "Convert Triton to TritonGPU with warp distribute annotation";
     let description = [{
-
+        this pass first analyze the kernel's workload pattern(elementwise/reduction/gemm/attention),
+        and then figure out the best layout for key/anchor operation( dot in gemm case).
+        afterwards, we can get all other operation’s layout through def/use chain.
+        finally, each tensor operation is annotated with layout attribute describing what each warp should do.
     }];
     let constructor = "mlir::triton::createConvertTritonToTritonGPUWarpPass()";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
-                             // TODO: Does this pass depend on SCF?
                              "mlir::scf::SCFDialect",
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect"];

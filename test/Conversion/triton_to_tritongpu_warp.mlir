@@ -1,7 +1,14 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-to-tritongpu-warp="num-warps=32"  | FileCheck %s
 // CHECK: #triton_gpu.blocked<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], warpsPerCTA = [8, 4], order = [1, 0]}>
+// CHECK: "triton_gpu.num-warps" = 32
 module {
-  tt.func public @matmul_kernel_with_block_pointers_0d1d2d3d4d5d(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    // CHECK: tt.load
+    // CHECK-SAME: tensor<256x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}
+    // CHECK: tt.load
+    // CHECK-SAME: tensor<32x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}
+    // CHECK: tt.dot
+    // CHECK-SAME: -> tensor<256x256xf32, #blocked>
     %c64_i32 = arith.constant 64 : i32
     %c16_i32 = arith.constant 16 : i32
     %c4096_i32 = arith.constant 4096 : i32
