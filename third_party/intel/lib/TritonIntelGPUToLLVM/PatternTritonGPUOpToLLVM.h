@@ -1,6 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 #define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_PATTERNS_TRITON_GPU_OP_TO_LLVM_H
 
+#include "TargetInfo.h"
 #include "TritonGPUToLLVMBase.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -38,11 +39,11 @@ void populateLoadStoreOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
 
-void populateReduceOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
+void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
-                                    int computeCapability,
+                                    const TargetInfoBase &targetInfo,
                                     PatternBenefit benefit);
-void populateScanOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
+void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   PatternBenefit benefit);
 
