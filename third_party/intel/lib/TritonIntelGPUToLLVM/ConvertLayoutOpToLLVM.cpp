@@ -30,8 +30,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
-                    TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                    Value thread);
+                    TritonGPUToLLVMTypeConverter *typeConverter, Value thread);
 
 } // namespace intel
 } // namespace SharedToDotOperandDPAS
@@ -615,7 +614,7 @@ private:
 } // namespace
 
 void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
 }

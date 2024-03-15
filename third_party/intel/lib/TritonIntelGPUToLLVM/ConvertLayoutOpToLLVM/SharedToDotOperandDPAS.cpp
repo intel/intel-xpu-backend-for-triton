@@ -17,8 +17,7 @@ public:
                    unsigned warpsPerTile, ArrayRef<Value> smemStrides,
                    SmallVector<int64_t> instrShape,
                    ConversionPatternRewriter &rewriter,
-                   TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                   Location loc)
+                   TritonGPUToLLVMTypeConverter *typeConverter, Location loc)
       : dpasLayout(dpasLayout), tensorTy(tensorTy), smemStrides(smemStrides),
         rewriter(rewriter), loc(loc) {
     static_assert(opIdx == 0 || opIdx == 1);
@@ -191,7 +190,7 @@ Value DpasMatmulLoader<opIdx>::loadMatrix(int repOuter, int repInner,
 
 Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int n0, int n1,
-    TritonIntelGPUToLLVMTypeConverter *typeConverter, Location loc,
+    TritonGPUToLLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter) {
   std::vector<Value> elems;
   for (int m = 0; m < n0; ++m) {
@@ -235,7 +234,7 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
                 DpasEncodingAttr dpasLayout, unsigned warpsPerTile,
                 SmallVector<int64_t> instrShape, Value warpId,
                 Value outerWarpDim, Value laneId, ValueTable &vals,
-                TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                TritonGPUToLLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
   static_assert(opIdx == 0 || opIdx == 1);
 
@@ -283,8 +282,8 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
 template <unsigned opIdx>
 Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
                   Value threadId, DotOperandEncodingAttr encoding,
-                  TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                  Value tensor, const SharedMemoryObject &smemObj) {
+                  TritonGPUToLLVMTypeConverter *typeConverter, Value tensor,
+                  const SharedMemoryObject &smemObj) {
   static_assert(opIdx == 0 || opIdx == 1);
 
   auto dpasLayout = encoding.getParent().cast<DpasEncodingAttr>();
@@ -344,7 +343,7 @@ namespace intel {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
-                    TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                    TritonGPUToLLVMTypeConverter *typeConverter,
                     Value threadId) {
   switch (opIdx) {
   case 0:

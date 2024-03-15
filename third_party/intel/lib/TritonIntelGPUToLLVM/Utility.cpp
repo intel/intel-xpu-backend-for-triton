@@ -1,5 +1,4 @@
 #include "Utility.h"
-#include "TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 

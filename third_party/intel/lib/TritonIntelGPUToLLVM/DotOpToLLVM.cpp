@@ -13,11 +13,11 @@ using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace fma_details {
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                            TritonGPUToLLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
 
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                          TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                          TritonGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
 } // namespace fma_details
 
@@ -62,7 +62,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 } // namespace
 
 void mlir::triton::intel::populateDotOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, benefit);
 }
