@@ -86,9 +86,7 @@ jobs:
     name: Test
     needs: matrix
     runs-on:
-      - glados
-      - spr
-      - runner-0.0.7
+      - max1100
     strategy:
       matrix:
         suite: ${{ fromJson(needs.matrix.outputs.suite) }}
