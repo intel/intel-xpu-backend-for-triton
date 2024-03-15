@@ -1,13 +1,36 @@
-// this pass add prefetch mechanism for target that supports memory prefetch
-// this pass match pattern of certain scf.loop with tt.load
-// this pass only support cases with block pointer
-// this pass should be run after triton-to-tritongpu
-// this pass also add blockLayout Attr to newly created ops
-/// a new make_tensor_ptr(advanceOp)
-/// a new tt.prefetch(tt.load with no use)
-/// scf.for     a new iterarg
-///   a newPreftch
-///   a newAdvance
+//===-------------- PrefetchBlock.cpp -  ------------------------*- C++ -*-===//
+//
+// Copyright 2024 Intel Corporation
+// Part of the intel-xpu-backend-for-trito Project, under the Apache License
+// v2.0 with LLVM Exceptions. See https://llvm.org/LICENSE.txt for license
+// information. SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// This file implements a pass to add prefetch mechanism for target that
+/// supports memory prefetch.
+/// this pass match pattern of certain scf.loop with tt.load and then add
+/// prefetch both in the loop preheader(3 stages in advance) and loop body.
+/// this pass only support cases with block pointer.
+/// this pass should be run after triton-to-tritongpu-warp.
+/// this pass also add blockLayout Attr to newly created ops.
+///
+/// before this pass:
+///  scf.for
+///    tt.load
+///    tt.advance
+///
+/// after this pass:
+/// tt.make_tensor_ptr
+/// tt.prefetch
+/// tt.advance
+///  scf.for
+///    tt.load
+///    tt.advance
+///    tt.prefetch
+///    tt.advance
+//===----------------------------------------------------------------------===//
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/IRMapping.h"
@@ -36,10 +59,7 @@ namespace {
 struct LoadInfo {
   tt::LoadOp load;
   tt::AdvanceOp advance;
-  // SmallVector<int64_t> offsets;
   SmallVector<Value> offsets;
-  // fixme: assume load ptr is a direct makeTensorPtr
-  // Value blockPtr;
   tt::MakeTensorPtrOp blockPtr;
 };
 void expandDefChain(scf::ForOp loop, Value val, tt::MakeTensorPtrOp &blockPtr) {
@@ -63,7 +83,6 @@ void expandDefChain(scf::ForOp loop, Value val, tt::MakeTensorPtrOp &blockPtr) {
 
 // typical numWarps 4, 8, 16, 32, 64
 Type annotatePrefetchType(Type type, unsigned numWarps) {
-  // Type elementType;
   RankedTensorType tType;
   auto ptrType = dyn_cast<tt::PointerType>(type);
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
@@ -72,9 +91,7 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
     tType = cast<RankedTensorType>(ptrType.getPointeeType());
   }
   auto shape = tType.getShape();
-
-  // fixme:
-  assert(shape.size() == 2);
+  assert(shape.size() == 2 && "add more support for 1d/2d shape");
   SmallVector<unsigned> sizePerWarp(2);
   SmallVector<unsigned> warpsPerCTA(2);
   auto m = shape[0];
@@ -126,7 +143,7 @@ public:
         if (auto load = dyn_cast<tt::LoadOp>(op)) {
           if (!isa<tt::PointerType>(load.getPtr().getType()))
             return WalkResult::interrupt();
-          // only support for now: loop is immediate parent of load
+          // assume loop is immediate parent of load for now
           if (auto loop = dyn_cast<scf::ForOp>(load->getParentOp())) {
             hasBlockLoadInLoop = true;
             loopLoads[loop].push_back(load);
@@ -136,6 +153,7 @@ public:
       });
       if (result == WalkResult::interrupt() || !hasBlockLoadInLoop)
         return;
+
       // match load pattern
       // scf.for ...      iter_args(%ptr = %init)
       //   %ld = tt.load %ptr
@@ -143,11 +161,10 @@ public:
       //   %newPtr = tt.advance %ptr
       for (auto [loop, loads] : loopLoads) {
         SmallVector<LoadInfo> loadInfos;
-        // get load info
         for (auto load : loads) {
           LoadInfo loadInfo;
           loadInfo.load = load;
-          // fixme: make it strict for now
+          // make it strict for now
           // assert(load.getPtr().getUsers().size() == 2);
           for (auto user : load.getPtr().getUsers()) {
             if (user == load)
@@ -168,15 +185,10 @@ public:
           expandDefChain(loop, load.getPtr(), loadInfo.blockPtr);
           if (!loadInfo.blockPtr)
             continue;
-          // fixme: add more check
-          // auto newPtr = loadInfo.advance.getResult();
-          // auto yield = cast<scf::YieldOp>(newPtr.getUser());
-          // yield operand number == ptr.getArgNumber
           loadInfos.push_back(loadInfo);
         }
-        // add prefetch related ops
 
-        /// add loop pre-head prefetch
+        /// add prefetch in the loop pre-header
         OpBuilder b(loop);
         auto loc = loop.getLoc();
         SmallVector<Value> prefetchPtrs;
@@ -187,10 +199,8 @@ public:
           auto newType = annotatePrefetchType(ptr.getType(), numWarps);
           ptr.getResult().setType(cast<tt::PointerType>(newType));
           loc = ptr.getLoc();
-          // prefetch num == 3
-          // assume offsets dominate ptr
+          // prefetch 3 stages in advance
           auto load = loadInfo.load;
-          // use load with use to function as prefetch for now
           auto prefetch0 = b.create<tt::PrefetchOp>(
               loc, ptr, load.getCache(), load.getEvict(), load.getIsVolatile());
           auto prePtr0 = b.create<tt::AdvanceOp>(loc, ptr.getType(), ptr,
@@ -208,9 +218,7 @@ public:
           prefetchPtrs.push_back(prePtr2);
         }
 
-        // b.create<set barrier info>();
-
-        /// change loop
+        /// mutate loop
         b.setInsertionPoint(loop);
         loc = loop.getLoc();
         SmallVector<Value> iterArgs = loop.getInitArgs();
@@ -228,23 +236,18 @@ public:
             std::prev(newLoop.getBody()->end()),
             loop.getBody()->getOperations());
         auto yield = cast<scf::YieldOp>(newLoop.getBody()->getTerminator());
-        newLoop.dump();
         loop.erase();
-        // loop.getInitArgsMutable().append({prePtr2});
-        // // loop.getResults().append({prePtr2});
-        // auto ptrArg = loop.getBody()->addArgument(prePtr2.getType(), loc);
 
-        /// add barrier arrive(check if can merge barrier for all loads)
-        /// add in-loop prefetch
-        // all the below i == 0 branch is ad-hoc
+        /// add prefetch in the loop body
         SmallVector<Value> advances;
         for (auto i = 0; i < loadInfos.size(); i++) {
           auto info = loadInfos[i];
           auto load = info.load;
           b.setInsertionPoint(load);
           loc = load.getLoc();
-          if (i == 0)
-            b.create<gpu::BarrierOp>(loc);
+          // add barrier every iteration
+          // if (i == 0)
+          //   b.create<gpu::BarrierOp>(loc);
           b.setInsertionPoint(info.advance);
           loc = info.advance.getLoc();
           auto prefetchInLoop =
@@ -256,8 +259,6 @@ public:
           advances.push_back(advance);
         }
         yield.getResultsMutable().append(advances);
-        newLoop.dump();
-        /// add in-loop barrier wait(check if can merge barrier for all loads)
       }
     }
   }
@@ -266,10 +267,6 @@ public:
 } // namespace
 
 std::unique_ptr<mlir::Pass>
-mlir::triton::gpu::createPrefetchBlockPass(int numWarps) {
+mlir::triton::gpu::createPrefetchBlockPass(unsigned numWarps) {
   return std::make_unique<PrefetchBlockPass>(numWarps);
 }
-
-// std::unique_ptr<mlir::Pass> mlir::createTritonGPUPrefetchBlockPass() {
-//   return std::make_unique<PrefetchBlockPass>();
-// }
