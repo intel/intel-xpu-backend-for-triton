@@ -46,6 +46,8 @@ env:
   PYTHON_VERSION: "3.10"
   BENCHMARK_REPO: weishi-deng/benchmark.git
   BENCHMARK_BRANCH: main
+  # runner max1100 has limited memory, reducing compilation jobs to avoid OOM kills
+  MAX_JOBS: 8
 
 jobs:
   matrix:
