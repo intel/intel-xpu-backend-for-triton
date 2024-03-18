@@ -887,8 +887,7 @@ static void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
   for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
     uint32_t elemRowIndex = (elem / sizePerThreads[1]) * rowsPerWarp;
     uint32_t elemColIndex = elem % sizePerThreads[1];
-    offsets.push_back({ctaOffsetX + elemRowIndex,
-                       ctaOffsetY + elemColIndex});
+    offsets.push_back({ctaOffsetX + elemRowIndex, ctaOffsetY + elemColIndex});
   }
 }
 
