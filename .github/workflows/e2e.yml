@@ -300,6 +300,7 @@ jobs:
         env:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
+          python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
           export WORKSPACE=$GITHUB_WORKSPACE
           if [[ "${{ inputs.TORCH_COMPILE_DEBUG }}" == "1" ]] ; then
             export TORCH_COMPILE_DEBUG="1"
