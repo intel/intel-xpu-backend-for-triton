@@ -37,7 +37,7 @@ class XPUOptions:
     num_ctas: int = 1
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
-    threads_per_warp: int = 32
+    threads_per_warp: int = 16
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     default_dot_input_precision: str = "tf32"
@@ -120,6 +120,17 @@ class XPUBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = True
+
+        properties = self.properties
+        threads_per_warp = args['threads_per_warp'] if 'threads_per_warp' in args else 16
+        assert threads_per_warp in properties[
+            'sub_group_sizes'], "Device '{}' does not support threads_per_warp {}".format(
+                properties['name'], threads_per_warp)  # noqa: E501
+
+        args['num_warps'] = args[
+            'num_warps'] if 'num_warps' in args else properties['max_work_group_size'] // threads_per_warp
+        args['threads_per_warp'] = threads_per_warp
+
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
