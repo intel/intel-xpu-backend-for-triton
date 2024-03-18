@@ -174,4 +174,13 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
   }
   return false;
 }
+
+bool TargetInfo::processReplicaUsingStMatrix(
+    ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
+    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
+    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
+    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const {
+  return false;
+}
+
 } // namespace mlir::triton::intel
