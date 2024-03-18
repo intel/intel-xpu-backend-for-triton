@@ -310,7 +310,7 @@ def make_launcher(constants, signature, ids):
         PyObject_CallObject(launch_enter_hook, args);
       }}
 
-      void * pStream = PyCapsule_GetPointer(py_obj_stream, PyCapsule_GetName(py_obj_stream));
+      void * pStream = PyLong_AsVoidPtr(py_obj_stream);
       //error;
       if(pStream == nullptr || pKrnl == nullptr) return NULL;
 
