@@ -1775,6 +1775,7 @@ def get_reduced_dtype(dtype_str, op):
     return dtype_str
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("op, dtype_str, shape", [(op, dtype, shape) for op in [
     'min',
     'max',
@@ -1883,6 +1884,7 @@ keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
                                                   for op in ['min', 'max', 'sum']]
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize(
     "op, dtype_str, shape, axis, keep_dims", reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config +
     negative_config + keep_dims_2d_configs + keep_dims_3d_configs)
@@ -1955,7 +1957,8 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
     if axis is not None and axis >= len(shape):
-        with pytest.raises(triton.CompilationError):
+        error_class = ValueError if is_interpreter() else triton.CompilationError
+        with pytest.raises(error_class):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
                           KEEP_DIMS=keep_dims, num_ctas=num_ctas)
         return
@@ -2192,13 +2195,12 @@ def test_histogram(M, N, device):
     assert (z_torch == z).all()
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("op", ['sum', 'max', 'min'])
 @pytest.mark.parametrize("BLOCK_N", [32, 64, 128])
 @pytest.mark.parametrize("N", [512, 1024, 2048])
 @pytest.mark.parametrize("num_pid_n", [2, 4])
 def test_locality(op, BLOCK_N, N, num_pid_n, device):
-    if is_hip():
-        pytest.skip('TODO test_locality is WIP on HIP')
 
     @triton.jit
     def kernel(X, Y, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
@@ -2235,8 +2237,9 @@ def test_locality(op, BLOCK_N, N, num_pid_n, device):
     x = torch.randn((BLOCK_M, N), dtype=torch.float32, device=device)
     y = torch.randn((BLOCK_M, num_pid_n), dtype=torch.float32, device=device)
     h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N)
-    assert h.asm['ttgir'].count(
-        '"tt.reduce"') == 2, "tt.reduce should be called twice, otherwise the optimization didn't work"
+    if not is_interpreter():
+        assert h.asm['ttgir'].count(
+            '"tt.reduce"') == 2, "tt.reduce should be called twice, otherwise the optimization didn't work"
     y_ref = numpy_op(x.cpu().numpy(), axis=1, keepdims=True)
     y_tri = numpy_op(y.cpu().numpy(), axis=1, keepdims=True)
     np.testing.assert_allclose(y_tri, y_ref, rtol=0.01, atol=1e-3)
@@ -3908,9 +3911,6 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
     if is_hip():
         pytest.skip("TODO test_precise_math (added by https://github.com/openai/triton/pull/3172) does not work on HIP")
 
-    if is_xpu() and expr_prec == 'tl.math.div_rn(x,y)':
-        pytest.skip("FIXME: Fails to run on XPU")
-
     @triton.jit
     def kernel(X, Y, OUT, OUT_REF, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
@@ -3936,6 +3936,10 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
     kernel = patch_kernel(kernel, {'PREC_CALC': expr_prec, 'REF_CALC': expr_ref})
 
     kernel[(1, )](x, y, out, out_ref, BLOCK=shape[0], num_ctas=num_ctas)
+
+    if is_xpu() and expr_prec == 'tl.math.div_rn(x,y)':
+        np.testing.assert_allclose(to_numpy(out), to_numpy(out_ref), rtol=1e-6)
+        pytest.skip("FIXME: Fail accuracy")
     assert torch.all(out == out_ref)  # bitwise exact
 
 
