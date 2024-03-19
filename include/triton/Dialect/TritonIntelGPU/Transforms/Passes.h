@@ -12,8 +12,23 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+namespace triton {
+namespace gpu {
+namespace intel {
 
-std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass();
+enum class DeviceArch {
+  UNKNOWN = 0,
+  ATS,
+  PVC,
+};
+
+} // namespace intel
+} // namespace gpu
+} // namespace triton
+
+std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass(
+    triton::gpu::intel::DeviceArch arch =
+        triton::gpu::intel::DeviceArch::UNKNOWN);
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
