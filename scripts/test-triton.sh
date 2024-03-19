@@ -60,10 +60,47 @@ export SCRIPTS_DIR=$(dirname "$0")
 python3 -m pip install lit
 python3 -m pip install pytest pytest-xdist pytest-rerunfailures
 
-$SCRIPTS_DIR/compile-pytorch-ipex.sh $ARGS
-if [ $? -ne 0 ]; then
-  echo "FAILED: return code $?"
-  exit $?
+# Determine if the installed PyTorch version is the same as the pinned version.
+INSTALL_PYTORCH=true
+if pip show torch &>/dev/null; then
+  PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
+  PYTORCH_CURRENT_COMMIT=`python -c "import torch;print(torch.__version__)"`
+  PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
+  if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
+    INSTALL_PYTORCH=false
+  fi 
+fi
+# Determine if the installed IPEX version is the same as the pinned version.
+INSTALL_IPEX=true
+if pip show intel_extension_for_pytorch &>/dev/null; then
+  IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
+  IPEX_CURRENT_COMMIT=`python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"`
+  IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
+  if [[ "$IPEX_PINNED_COMMIT" = "$IPEX_CURRENT_COMMIT"* ]]; then
+    INSTALL_IPEX=false
+  fi 
+fi
+
+if [ "$INSTALL_PYTORCH" = true || "$INSTALL_IPEX" = true ]; then
+   if which gh &> /dev/null && which jq &> /dev/null; then
+     TEMP_DIR=`mktemp -d`
+     gh run download $(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId | jq '.[0].databaseId') -R intel/intel-xpu-backend-for-triton
+     if python -c 'import sys; assert sys.version_info[:2] == (3,10)' > /dev/null; then
+       cd wheels-py3.10* 
+     else
+       cd wheels-py3.9* 
+     fi
+     pip install torch-* intel_extension_for_pytorch-*
+     rm -r $TEMP_DIR
+   else
+     echo "****** WARNING: gh or jq is missing ******"
+     echo "**** Building PyTorch and IPEX from source ****"
+     $SCRIPTS_DIR/compile-pytorch-ipex.sh $ARGS
+     if [ $? -ne 0 ]; then
+       echo "FAILED: return code $?"
+       exit $?
+     fi
+   fi
 fi
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
