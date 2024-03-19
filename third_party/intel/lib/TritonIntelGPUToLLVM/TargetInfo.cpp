@@ -135,6 +135,11 @@ Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
                         i32_val(0x1f));
 }
 
+Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
+                            ModuleOp moduleOp, int axis) const {
+  return LLVM::utils::llGetPid(loc, rewriter, moduleOp, axis);
+}
+
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce) const {
