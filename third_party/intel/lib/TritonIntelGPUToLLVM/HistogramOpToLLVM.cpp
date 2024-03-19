@@ -58,18 +58,7 @@ computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
       ballotBits.push_back(bit);
     }
 
-    uint64_t fullMaskValue = 0x0;
-    switch (numThreadPerWarp) {
-    case 32:
-      fullMaskValue = 0xFFFFFFFF;
-      break;
-    case 16:
-      fullMaskValue = 0xFFFF;
-      break;
-    default:
-      llvm_unreachable("Unexpected numThreadPerWarp value");
-    }
-
+    uint64_t fullMaskValue = (1u << numThreadPerWarp) - 1u;
     Value fullMask = i32_val(fullMaskValue);
     Value mask = fullMask;
     // If not all threads have unique data, mask out the redundant ones.
@@ -179,8 +168,8 @@ public:
     int numBins = op.getType().getDimSize(0);
     int numThreadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
         op->getParentOfType<ModuleOp>());
-    assert((numThreadsPerWarp == 16 || numThreadsPerWarp == 32) &&
-           "Only supports 16 or 32 threads per warp");
+    assert(numThreadsPerWarp < 64 &&
+           "Only supports threads per warp less than 64");
 
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.
