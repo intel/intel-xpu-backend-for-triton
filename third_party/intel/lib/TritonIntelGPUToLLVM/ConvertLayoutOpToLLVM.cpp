@@ -44,11 +44,10 @@ Value lowerSharedToDotOperandDPAS(
     const DpasEncodingAttr &dpasLayout,
     const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) {
   auto loc = op.getLoc();
-  Value src = op.getSrc();
+  auto src = op.getSrc();
   Value dst = op.getResult();
 
-  auto llvmElemTy = typeConverter->convertType(
-      src.getType().cast<RankedTensorType>().getElementType());
+  auto llvmElemTy = typeConverter->convertType(src.getType().getElementType());
 
   auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                  llvmElemTy, rewriter);
