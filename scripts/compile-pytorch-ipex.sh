@@ -20,6 +20,7 @@ for arg in "$@"; do
       shift
       ;;
     --pinned)
+      # Build the pinned commit (from source if --source is used, otherwise download the wheel from github)
       BUILD_PINNED=true
       shift
       ;;
@@ -53,14 +54,6 @@ if [ ! -v BASE ]; then
   echo "**** Default BASE is set to $BASE ****"
 fi
 
-if `! which gh &> /dev/null` || `! which jq &> /dev/null`; then
-  echo "****** WARNING: gh or jq is missing ******"
-  BUILD_FROM_SOURCE=true
-fi
-if [ "$BUILD_PINNED" = false ]; then
-  BUILD_FROM_SOURCE=true
-fi
-
 if [ "$BUILD_PINNED" = true ]; then
   # Determine if the installed PyTorch version is the same as the pinned version.
   INSTALL_PYTORCH=true
@@ -86,6 +79,17 @@ if [ "$BUILD_PINNED" = true ]; then
   if [[ "$INSTALL_PYTORCH" = false && "$INSTALL_IPEX" = false ]]; then
     exit 0
   fi
+fi
+
+if [ "$BUILD_FROM_SOURCE" = false ]; then
+  if `! which gh &> /dev/null` || `! which jq &> /dev/null`; then
+    echo "****** WARNING: gh or jq is missing ******"
+    BUILD_FROM_SOURCE=true
+  fi
+fi
+
+if [ "$BUILD_PINNED" = false ]; then
+  BUILD_FROM_SOURCE=true
 fi
 
 if [ "$BUILD_FROM_SOURCE" = false ]; then
@@ -138,13 +142,16 @@ build_pytorch() {
     echo "**** Cloning $PYTORCH_PROJ ****"
     cd $BASE
     git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git
-    PYTORCH_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
-    git checkout $PYTORCH_COMMIT_ID
-    git submodule update --recursive
   fi
   echo "****** Building $PYTORCH_PROJ ******"
   cd $PYTORCH_PROJ
   if [ ! -d "$PYTORCH_PROJ/dist" ]; then
+    if [ "$BUILD_PINNED" = true ]; then
+      git fetch --all
+      PYTORCH_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
+      git checkout $PYTORCH_COMMIT_ID
+      git submodule update --recursive
+    fi
     pip install cmake ninja
     pip install mkl-static mkl-include
     pip install -r requirements.txt
@@ -164,13 +171,16 @@ build_ipex() {
     echo "**** Cloning $IPEX_PROJ ****"
     cd $BASE
     git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/intel/intel-extension-for-pytorch.git
-    IPEX_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
-    git checkout $IPEX_COMMIT_ID
-    git submodule update --recursive
   fi
   echo "****** Building $IPEX_PROJ ******"
   cd $IPEX_PROJ
   if [ ! -d "$IPEX_PROJ/dist" ]; then
+    if [ "$BUILD_PINNED" = true ]; then
+      git fetch --all
+      IPEX_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
+      git checkout $IPEX_COMMIT_ID
+      git submodule update --recursive
+    fi
     pip install -r requirements.txt
     python setup.py bdist_wheel
   fi
