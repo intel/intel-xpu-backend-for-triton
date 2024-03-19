@@ -58,7 +58,7 @@ computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
       ballotBits.push_back(bit);
     }
 
-    uint64_t fullMaskValue = (1u << numThreadPerWarp) - 1u;
+    uint64_t fullMaskValue = (1ll << numThreadPerWarp) - 1u;
     Value fullMask = i32_val(fullMaskValue);
     Value mask = fullMask;
     // If not all threads have unique data, mask out the redundant ones.
