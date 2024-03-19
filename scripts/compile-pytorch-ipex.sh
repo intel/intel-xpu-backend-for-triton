@@ -61,7 +61,7 @@ if [ "$BUILD_PINNED" = false ]; then
   BUILD_FROM_SOURCE=true
 fi
 
-if [ "$BUILD_FROM_SOURCE" = false ]; then
+if [ "$BUILD_PINNED" = true ]; then
   # Determine if the installed PyTorch version is the same as the pinned version.
   INSTALL_PYTORCH=true
   if pip show torch &>/dev/null; then
@@ -83,15 +83,18 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
     fi
   fi
 
-  if [[ "$INSTALL_PYTORCH" = true || "$INSTALL_IPEX" = true ]]; then
-    TEMP_DIR=`mktemp -d`
-    gh run download $(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId | jq '.[0].databaseId') -R intel/intel-xpu-backend-for-triton
-    PYTHON_VERSION=$( python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" )
-    cd wheels-py${PYTHON_VERSION}*
-    pip install torch-* intel_extension_for_pytorch-*
-    rm -r $TEMP_DIR
+  if [[ "$INSTALL_PYTORCH" = false && "$INSTALL_IPEX" = false ]]; then
+    exit 0
   fi
+fi
 
+if [ "$BUILD_FROM_SOURCE" = false ]; then
+  TEMP_DIR=`mktemp -d`
+  gh run download $(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId | jq '.[0].databaseId') -R intel/intel-xpu-backend-for-triton
+  PYTHON_VERSION=$( python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" )
+  cd wheels-py${PYTHON_VERSION}*
+  pip install torch-* intel_extension_for_pytorch-*
+  rm -r $TEMP_DIR
   exit 0
 fi
 
