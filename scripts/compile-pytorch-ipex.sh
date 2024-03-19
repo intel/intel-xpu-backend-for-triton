@@ -70,7 +70,7 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
     PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
     if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
       INSTALL_PYTORCH=false
-    fi 
+    fi
   fi
   # Determine if the installed IPEX version is the same as the pinned version.
   INSTALL_IPEX=true
@@ -80,7 +80,7 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
     IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
     if [[ "$IPEX_PINNED_COMMIT" = "$IPEX_CURRENT_COMMIT"* ]]; then
       INSTALL_IPEX=false
-    fi 
+    fi
   fi
 
   if [[ "$INSTALL_PYTORCH" = true || "$INSTALL_IPEX" = true ]]; then
