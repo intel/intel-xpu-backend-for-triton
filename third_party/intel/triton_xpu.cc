@@ -21,12 +21,25 @@ namespace py = pybind11;
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton::gpu;
+
+  // Device arch
+  py::enum_<mlir::triton::gpu::intel::DeviceArch>(m, "DEVICE_ARCH",
+                                                  py::module_local())
+      .value("UNKNOWN", mlir::triton::gpu::intel::DeviceArch::UNKNOWN)
+      .value("ATS", mlir::triton::gpu::intel::DeviceArch::ATS)
+      .value("PVC", mlir::triton::gpu::intel::DeviceArch::PVC)
+      .export_values();
+
   m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability) {
     pm.addPass(mlir::triton::createConvertTritonIntelGPUToLLVMPass(capability));
   });
-  m.def("add_accelerate_matmul", [](mlir::PassManager &self) {
-    self.addPass(mlir::createTritonIntelGPUAccelerateMatmulPass());
-  });
+  m.def(
+      "add_accelerate_matmul",
+      [](mlir::PassManager &pm, mlir::triton::gpu::intel::DeviceArch arch) {
+        pm.addPass(mlir::createTritonIntelGPUAccelerateMatmulPass(arch));
+      },
+      py::arg("pm"),
+      py::arg("arch") = mlir::triton::gpu::intel::DeviceArch::UNKNOWN);
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(createIntelDecomposeUnsupportedConversionsPass());
   });
