@@ -240,7 +240,6 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   static_assert(opIdx == 0 || opIdx == 1);
 
   auto shapePerCTA = getShapePerCTA(descTy);
-  //  auto tensorTy = tensor.getType().cast<RankedTensorType>();
   Type eltTy = descTy.getElementType();
 
   auto sharedLayout = descTy.getEncoding().cast<SharedEncodingAttr>();
