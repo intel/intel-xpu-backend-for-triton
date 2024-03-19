@@ -86,11 +86,8 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
   if [[ "$INSTALL_PYTORCH" = true || "$INSTALL_IPEX" = true ]]; then
     TEMP_DIR=`mktemp -d`
     gh run download $(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId | jq '.[0].databaseId') -R intel/intel-xpu-backend-for-triton
-    if python -c 'import sys; assert sys.version_info[:2] == (3,10)' > /dev/null; then
-      cd wheels-py3.10* 
-    else
-      cd wheels-py3.9* 
-    fi
+    PYTHON_VERSION=$( python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" )
+    cd wheels-py${PYTHON_VERSION}*
     pip install torch-* intel_extension_for_pytorch-*
     rm -r $TEMP_DIR
   fi
