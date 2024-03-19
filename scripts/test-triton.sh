@@ -115,7 +115,7 @@ run_core_tests() {
   fi
 
   # run runtime tests serially to avoid race condition with cache handling.
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu runtime/ --ignore=runtime/test_jit.py
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu runtime/
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
