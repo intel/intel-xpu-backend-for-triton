@@ -54,6 +54,20 @@ if [ ! -v BASE ]; then
   echo "**** Default BASE is set to $BASE ****"
 fi
 
+if [ "$VENV" = true ]; then
+  source .venv/bin/activate
+fi
+
+export PYTORCH_PROJ=$BASE/pytorch
+export IPEX_PROJ=$BASE/intel-extension-for-pytorch
+
+if [ "$CLEAN" = true ]; then
+  echo "**** Cleaning $PYTORCH_PROJ and $IPEX_PROJ before build ****"
+  if rm -rf $PYTORCH_PROJ $IPEX_PROJ &>/dev/null; then
+    pip uninstall -y torch intel_extension_for_pytorch
+  fi
+fi
+
 if [ "$BUILD_PINNED" = true ]; then
   # Determine if the installed PyTorch version is the same as the pinned version.
   INSTALL_PYTORCH=true
@@ -94,6 +108,7 @@ fi
 
 if [ "$BUILD_FROM_SOURCE" = false ]; then
   TEMP_DIR=`mktemp -d`
+  cd $TEMP_DIR
   gh run download $(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId | jq '.[0].databaseId') -R intel/intel-xpu-backend-for-triton
   PYTHON_VERSION=$( python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" )
   cd wheels-py${PYTHON_VERSION}*
@@ -102,15 +117,6 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
   exit 0
 fi
 
-export PYTORCH_PROJ=$BASE/pytorch
-export IPEX_PROJ=$BASE/intel-extension-for-pytorch
-
-if [ "$CLEAN" = true ]; then
-  echo "**** Cleaning $PYTORCH_PROJ and $IPEX_PROJ before build ****"
-  if rm -rf $PYTORCH_PROJ $IPEX_PROJ &>/dev/null; then
-    pip uninstall -y torch intel_extension_for_pytorch
-  fi
-fi
 
 if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ]; then
   # Avoid overriding the user's existing PyTorch by default.
@@ -121,10 +127,10 @@ if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ]; then
   if ! pip show intel_extension_for_pytorch &>/dev/null; then
     BUILD_IPEX=true
   fi
-fi
-
-if [ "$VENV" = true ]; then
-  source .venv/bin/activate
+  if [ "$BUILD_PINNED" = true ]; then
+    BUILD_PYTORCH=true
+    BUILD_IPEX=true
+  fi
 fi
 
 check_rc() {
