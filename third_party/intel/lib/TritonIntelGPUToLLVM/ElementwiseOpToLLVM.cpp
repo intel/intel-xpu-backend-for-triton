@@ -1709,6 +1709,9 @@ struct FpToFpOpConversion
     MLIRContext *ctx = rewriter.getContext();
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+
+    // FIXME: Avoid using `llvm.genx.GenISA` calls (use arith dialect instead
+    // once it has been enhanced).
     std::string funcName = "llvm.genx.GenISA.ftof.";
 
     switch (rounding) {
