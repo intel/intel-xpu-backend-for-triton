@@ -1,6 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/MLIRContext.h"
 
 using ::mlir::triton::intel::PTXBuilder;
 using ::mlir::triton::intel::PTXInstr;
@@ -1706,22 +1706,42 @@ struct FpToFpOpConversion
   static Value convertFp32ToFp16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v, const RoundingMode rounding) {
-    auto ctx = rewriter.getContext();
+    MLIRContext *ctx = rewriter.getContext();
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    std::string funcName = "llvm.genx.GenISA.ftof.";
+
     switch (rounding) {
     case RoundingMode::RTNE:
-      return rewriter.create<GENX::FpToFpOp>(
-          loc, f16_ty, v,
-          GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTE));
+      funcName.append("rte.f32.f16");
+      break;
     case RoundingMode::RTZ:
-      return rewriter.create<GENX::FpToFpOp>(
-          loc, f16_ty, v,
-          GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTZ));
+      funcName.append("rtz.f32.f16");
+      break;
     default:
       llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
                       "conversion: "
                    << stringifyRoundingMode(rounding) << "\n";
       llvm_unreachable("");
     }
+
+    Operation *funcOp = moduleOp.lookupSymbol(funcName);
+    if (!funcOp) {
+      auto funcType =
+          LLVM::LLVMFunctionType::get(f16_ty, {f32_ty}, /*isVarArg*/ false);
+      ConversionPatternRewriter::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(moduleOp.getBody());
+      funcOp = rewriter.create<LLVM::LLVMFuncOp>(
+          loc, funcName, funcType, LLVM::Linkage::External,
+          /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC,
+          /*comdat=*/SymbolRefAttr{});
+    }
+
+    SmallVector<Value> operands{v};
+    auto callOp = call(cast<LLVM::LLVMFuncOp>(funcOp), operands);
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+    return callOp.getResult();
   }
 
   std::pair<ConverterT, size_t>
