@@ -877,9 +877,10 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
   return resultOffsets;
 }
 
-static void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
-                                 SmallVector<SmallVector<unsigned>> &offsets,
-                                 unsigned ctaOffsetX, unsigned ctaOffsetY) {
+static void
+emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
+                              SmallVector<SmallVector<unsigned>> &offsets,
+                              unsigned ctaOffsetX, unsigned ctaOffsetY) {
   SmallVector<unsigned> sizePerThreads = getSizePerThread(dpasLayout);
   uint32_t elemsPerThreadPerGroup = product<unsigned>(sizePerThreads);
   uint32_t rowsPerWarp =
@@ -890,8 +891,7 @@ static void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
   for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
     uint32_t elemRowIndex = (elem / sizePerThreads[1]) * rowsPerWarp;
     uint32_t elemColIndex = elem % sizePerThreads[1];
-    offsets.push_back({ctaOffsetX * shapePerCTA[0] + elemRowIndex,
-                       ctaOffsetY * shapePerCTA[1] + elemColIndex});
+    offsets.push_back({ctaOffsetX + elemRowIndex, ctaOffsetY + elemColIndex});
   }
 }
 
@@ -982,7 +982,7 @@ emitOffsetForDpasLayout(const DpasEncodingAttr &dpasLayout,
 
   for (unsigned i = 0; i < shape[0]; i += shapePerCTA[0]) {
     for (unsigned j = 0; j < shape[1]; j += shapePerCTA[1]) {
-      emitDpasOffsetForCTA(dpasLayout, offsets, i, j);
+      emitOffsetForDpasLayoutPerCTA(dpasLayout, offsets, i, j);
     }
   }
 
