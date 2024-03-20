@@ -30,11 +30,9 @@ add_triton_library(TritonIntelGPUToLLVM
 
     LINK_LIBS PUBLIC
     TritonNvidiaGPUTransforms
-    MLIRGPUToGENXTransforms
     NVGPUIR
     TritonGENIR
     TritonGENToLLVM
     TritonIntelGPUIR
-    MLIRGENXDialect
     GPUToTritonGEN
 )

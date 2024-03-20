@@ -10,7 +10,6 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/Index/IR/IndexOps.h"
-#include "mlir/Dialect/LLVMIR/GENXDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -175,7 +174,6 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    addLegalDialect<GENX::GENXDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
@@ -192,8 +190,7 @@ struct ConvertTritonGPUToLLVM
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
-                    NVVM::NVVMDialect, TritonGEN::TritonGENDialect,
-                    GENX::GENXDialect>();
+                    NVVM::NVVMDialect, TritonGEN::TritonGENDialect>();
   }
 
   ConvertTritonGPUToLLVM(int32_t computeCapability)
