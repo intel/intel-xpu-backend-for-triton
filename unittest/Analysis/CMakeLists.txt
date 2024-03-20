@@ -5,6 +5,4 @@ add_triton_ut(
     TritonAnalysis
     TritonIR
     TritonGPUIR
-    ${dialect_libs}
-    ${triton_libs}
 )

@@ -28,7 +28,8 @@ struct PrintOpConversion
         TritonGEN::TritonGENMemorySpace::kUniformConstant);
 
     auto getPid = [&](int axis) {
-      return llGetPid(axis, loc, op->getParentOfType<ModuleOp>(), rewriter);
+      return mlir::LLVM::utils::llGetPid(loc, rewriter,
+                                         op->getParentOfType<ModuleOp>(), axis);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 

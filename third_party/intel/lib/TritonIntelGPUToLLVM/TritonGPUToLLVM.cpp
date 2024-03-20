@@ -235,6 +235,7 @@ struct ConvertTritonGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
+    mlir::triton::intel::TargetInfo targetInfo(computeCapability);
     int benefit = 10;
     using namespace mlir::triton::intel;
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
@@ -243,8 +244,8 @@ struct ConvertTritonGPUToLLVM
         typeConverter, patterns, axisInfoAnalysis, computeCapability, benefit);
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
                                       benefit);
-    populateReduceOpToLLVMPatterns(typeConverter, patterns, computeCapability,
-                                   benefit);
+    mlir::triton::intel::populateReduceOpToLLVMPatterns(typeConverter, patterns,
+                                                        targetInfo, benefit);
     populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);

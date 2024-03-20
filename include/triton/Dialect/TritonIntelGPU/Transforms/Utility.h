@@ -32,7 +32,7 @@ enum class DPASEngineType : uint8_t {
   NOT_APPLICABLE,
 };
 
-bool supportDPAS(DotOp op);
+bool supportDPAS(DotOp op, DeviceArch arch);
 DPASEngineType getDPASType(DotOp op);
 
 } // namespace intel
