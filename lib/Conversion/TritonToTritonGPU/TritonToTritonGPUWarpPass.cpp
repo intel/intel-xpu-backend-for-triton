@@ -10,10 +10,10 @@
 /// \file
 /// This file implements a pass to convert triton to tritongpu with warp
 /// distribute annotation. This pass first analyze the kernel's workload
-/// pattern(elementwise/reduction/gemm/attention),
-/// and then figure out the best layout for key/anchor operation( dot in
-/// gemm case). afterwards, we get all other operation’s layout
-/// through def/use chain. finally, each tensor operation is annotated
+/// pattern (elementwise/reduction/gemm/attention),
+/// and then figure out the best layout for key/anchor operation (dot in
+/// gemm case). Afterwards, we get all other operation’s layout
+/// through def/use chain. Finally, each tensor operation is annotated
 /// with layout attribute describing what each warp should do.
 //===----------------------------------------------------------------------===//
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
