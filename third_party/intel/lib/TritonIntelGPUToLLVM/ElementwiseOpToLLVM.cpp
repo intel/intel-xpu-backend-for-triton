@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "mlir/Dialect/LLVMIR/GENXDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/MLIRContext.h"
 
 using ::mlir::triton::intel::PTXBuilder;
 using ::mlir::triton::intel::PTXInstr;
@@ -1460,7 +1461,7 @@ public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ElementwiseOpConversionBase(
-      TritonIntelGPUToLLVMTypeConverter &typeConverter,
+      TritonGPUToLLVMTypeConverter &typeConverter,
       ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         axisAnalysisPass(axisAnalysisPass) {}
@@ -1651,7 +1652,7 @@ struct FpToFpOpConversion
   using ElementwiseOpConversionBase<
       FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
 
-  explicit FpToFpOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
+  explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -1670,7 +1671,7 @@ struct FpToFpOpConversion
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     auto ctx = rewriter.getContext();
-    return rewriter.create<GENX::FpToFpOp>(loc, f32_ty, v);
+    return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
   }
 
   static Value convertFp32ToBf16(Location loc,
@@ -1705,22 +1706,45 @@ struct FpToFpOpConversion
   static Value convertFp32ToFp16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v, const RoundingMode rounding) {
-    auto ctx = rewriter.getContext();
+    MLIRContext *ctx = rewriter.getContext();
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+
+    // FIXME: Avoid using `llvm.genx.GenISA` calls (use arith dialect instead
+    // once it has been enhanced).
+    std::string funcName = "llvm.genx.GenISA.ftof.";
+
     switch (rounding) {
     case RoundingMode::RTNE:
-      return rewriter.create<GENX::FpToFpOp>(
-          loc, f16_ty, v,
-          GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTE));
+      funcName.append("rte.f32.f16");
+      break;
     case RoundingMode::RTZ:
-      return rewriter.create<GENX::FpToFpOp>(
-          loc, f16_ty, v,
-          GENX::RoundingModeAttr::get(ctx, GENX::RoundingMode::RTZ));
+      funcName.append("rtz.f32.f16");
+      break;
     default:
       llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
                       "conversion: "
                    << stringifyRoundingMode(rounding) << "\n";
       llvm_unreachable("");
     }
+
+    Operation *funcOp = moduleOp.lookupSymbol(funcName);
+    if (!funcOp) {
+      auto funcType =
+          LLVM::LLVMFunctionType::get(f16_ty, {f32_ty}, /*isVarArg*/ false);
+      ConversionPatternRewriter::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(moduleOp.getBody());
+      funcOp = rewriter.create<LLVM::LLVMFuncOp>(
+          loc, funcName, funcType, LLVM::Linkage::External,
+          /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC,
+          /*comdat=*/SymbolRefAttr{});
+    }
+
+    SmallVector<Value> operands{v};
+    auto callOp = call(cast<LLVM::LLVMFuncOp>(funcOp), operands);
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+    return callOp.getResult();
   }
 
   std::pair<ConverterT, size_t>
@@ -2466,7 +2490,7 @@ struct MinMaxFOpConversion
       typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
                                 LLVM::MinNumOp, LLVM::MaxNumOp>::type;
 
-  explicit MinMaxFOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
+  explicit MinMaxFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
                                int computeCapability,
                                PatternBenefit benefit = 1)
@@ -2509,7 +2533,7 @@ struct ClampFOpConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  explicit ClampFOpConversion(TritonIntelGPUToLLVMTypeConverter &typeConverter,
+  explicit ClampFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -2690,10 +2714,10 @@ struct OpToExternCallConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  explicit OpToExternCallConversion(
-      TritonIntelGPUToLLVMTypeConverter &typeConverter,
-      ModuleAxisInfoAnalysis &axisAnalysisPass, StringRef externFuncName,
-      PatternBenefit benefit)
+  explicit OpToExternCallConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+                                    ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                    StringRef externFuncName,
+                                    PatternBenefit benefit)
       : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
                                           benefit),
         funcName(externFuncName) {}
@@ -2781,9 +2805,9 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
 
 namespace intel {
 void populateElementwiseOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    int computeCapability, PatternBenefit benefit) {
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
+    PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
@@ -2839,6 +2863,8 @@ void populateElementwiseOpToLLVMPatterns(
 
   patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
       typeConverter, axisInfoAnalysis, "__imf_sqrtf", benefit);
+  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
+      typeConverter, axisInfoAnalysis, "__imf_fdiv_rn", benefit);
 
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);

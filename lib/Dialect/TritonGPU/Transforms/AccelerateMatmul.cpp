@@ -5,7 +5,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -14,7 +13,6 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-namespace ttig = mlir::triton::gpu::intel;
 namespace {
 using tt::DotOp;
 using ttg::BlockedEncodingAttr;
@@ -22,10 +20,8 @@ using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
 using ttg::NvidiaMmaEncodingAttr;
 using ttg::SliceEncodingAttr;
-using ttig::DpasEncodingAttr;
 
-// higher mma version is preferred, will fallback to lower version if not
-// supported
+// Get the highest version supported for the hardware and the dot.
 static int getMMAVersionSafe(int computeCapability, tt::DotOp op) {
   int baseVersion = 0;
   if (computeCapability < 75) {
@@ -194,6 +190,7 @@ public:
 
   static Value getMMAv3Operand(Value v, mlir::PatternRewriter &rewriter,
                                int opIdx) {
+    OpBuilder::InsertionGuard g(rewriter);
     Value arg = v;
     if (auto cvtOp = v.getDefiningOp<ttg::ConvertLayoutOp>())
       arg = cvtOp.getSrc();
@@ -216,10 +213,10 @@ public:
     auto newLayout = ttg::SharedEncodingAttr::get(
         argType.getContext(), argType.getShape(), newOrder, CTALayout,
         argType.getElementType());
-    auto newType = RankedTensorType::get(argType.getShape(),
-                                         argType.getElementType(), newLayout);
-
-    return rewriter.create<ttg::ConvertLayoutOp>(arg.getLoc(), newType, arg);
+    auto newType = tt::MemDescType::get(argType.getShape(),
+                                        argType.getElementType(), newLayout);
+    rewriter.setInsertionPointAfterValue(arg);
+    return rewriter.create<ttg::LocalAllocOp>(arg.getLoc(), newType, arg);
   }
 
   mlir::LogicalResult
@@ -381,17 +378,6 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
       if (!isFP8 || (isNativeHopperFP8 && mmaLayout.isHopper()))
         return;
       promoteType = builder.getF16Type();
-    } else if (auto dpasLayout = D.getType()
-                                     .cast<RankedTensorType>()
-                                     .getEncoding()
-                                     .dyn_cast<DpasEncodingAttr>()) {
-      Type BElType =
-          dotOp.getB().getType().cast<RankedTensorType>().getElementType();
-
-      auto maxBitWidth = std::max(AElType.getIntOrFloatBitWidth(),
-                                  BElType.getIntOrFloatBitWidth());
-
-      return;
     } else {
       // FMA case.
       Type AElType = dotOp.getA().getType().getElementType();
@@ -427,7 +413,7 @@ public:
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
-    // now that we pick the mma type decompose dot that are not natively
+    // Now that we have picked the mma type, decompose dot that are not natively
     // supported.
     decomposeMixedModeDotOp(m);
   }

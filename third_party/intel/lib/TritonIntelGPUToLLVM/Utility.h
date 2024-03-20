@@ -428,6 +428,9 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i);
 Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 
+Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
+               ModuleOp moduleOp, int axis);
+
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content,
                         unsigned addressSpace);
@@ -462,6 +465,12 @@ static Value getSharedMemoryBase(Location loc,
       gep(ptrTy, i8_ty, LLVM::utils::getStackPointer(rewriter, func), offVal);
   return base;
 }
+
+// Returns a Value for the format string, which you can reuse.
+Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
+               ValueRange args);
+
+void llPrintf(ConversionPatternRewriter &rewriter, Value msg, ValueRange args);
 
 } // namespace utils
 } // namespace LLVM
@@ -868,9 +877,10 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
   return resultOffsets;
 }
 
-static void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
-                                 SmallVector<SmallVector<unsigned>> &offsets,
-                                 unsigned ctaOffsetX, unsigned ctaOffsetY) {
+static void
+emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
+                              SmallVector<SmallVector<unsigned>> &offsets,
+                              unsigned ctaOffsetX, unsigned ctaOffsetY) {
   SmallVector<unsigned> sizePerThreads = getSizePerThread(dpasLayout);
   uint32_t elemsPerThreadPerGroup = product<unsigned>(sizePerThreads);
   uint32_t rowsPerWarp =
@@ -881,8 +891,7 @@ static void emitDpasOffsetForCTA(const DpasEncodingAttr &dpasLayout,
   for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
     uint32_t elemRowIndex = (elem / sizePerThreads[1]) * rowsPerWarp;
     uint32_t elemColIndex = elem % sizePerThreads[1];
-    offsets.push_back({ctaOffsetX * shapePerCTA[0] + elemRowIndex,
-                       ctaOffsetY * shapePerCTA[1] + elemColIndex});
+    offsets.push_back({ctaOffsetX + elemRowIndex, ctaOffsetY + elemColIndex});
   }
 }
 
@@ -973,7 +982,7 @@ emitOffsetForDpasLayout(const DpasEncodingAttr &dpasLayout,
 
   for (unsigned i = 0; i < shape[0]; i += shapePerCTA[0]) {
     for (unsigned j = 0; j < shape[1]; j += shapePerCTA[1]) {
-      emitDpasOffsetForCTA(dpasLayout, offsets, i, j);
+      emitOffsetForDpasLayoutPerCTA(dpasLayout, offsets, i, j);
     }
   }
 
@@ -1231,7 +1240,7 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   auto dstTy = dst.getType().cast<RankedTensorType>();
   auto dstShape = dstTy.getShape();
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
-  auto srcTy = src.getType().cast<RankedTensorType>();
+  auto srcTy = src.getType().cast<MemDescType>();
   auto dstDistributedLayout = dstTy.getEncoding();
   if (auto mmaLayout = dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     assert((!mmaLayout.isVolta()) &&
@@ -1283,7 +1292,7 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   auto rank = srcShape.size();
   assert(rank == 2 ||
          rank == 3 && "Unexpected rank of storeDistributedToShared");
-  auto dstTy = dst.getType().cast<RankedTensorType>();
+  auto dstTy = dst.getType().cast<MemDescType>();
   auto srcDistributedLayout = srcTy.getEncoding();
   if (auto mmaLayout = srcDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
     assert((!mmaLayout.isVolta()) &&
@@ -1391,20 +1400,6 @@ static Value packLLElements(Location loc,
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
-}
-
-static Value llGetPid(int axis, Location loc, ModuleOp moduleOp,
-                      ConversionPatternRewriter &rewriter) {
-  assert(axis >= 0);
-  assert(axis < 3);
-  assert(moduleOp);
-
-  constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
-                                           mlir::gpu::Dimension::y,
-                                           mlir::gpu::Dimension::z};
-
-  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
-  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
 } // namespace mlir

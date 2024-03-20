@@ -76,6 +76,30 @@ def _get_signed_np_dtype(dtype):
     return dtype
 
 
+def _get_np_dtype(tt_dtype):
+    if isinstance(tt_dtype, tl.pointer_type):
+        return np.dtype(np.uint64)
+    np_types = {
+        tl.int1: np.dtype(bool),
+        tl.float16: np.dtype(np.float16),
+        tl.float32: np.dtype(np.float32),
+        tl.float64: np.dtype(np.float64),
+        tl.int8: np.dtype(np.int8),
+        tl.uint8: np.dtype(np.uint8),
+        tl.int16: np.dtype(np.int16),
+        tl.uint16: np.dtype(np.uint16),
+        tl.int32: np.dtype(np.int32),
+        tl.uint32: np.dtype(np.uint32),
+        tl.int64: np.dtype(np.int64),
+        tl.uint64: np.dtype(np.uint64),
+    }
+    if isinstance(tt_dtype, tl.block_type):
+        if isinstance(tt_dtype.element_ty, tl.pointer_type):
+            return np.dtype(np.uint64)
+        return np_types[tt_dtype.element_ty]
+    return np_types[tt_dtype]
+
+
 class Builder:
 
     def __init__(self) -> None:
@@ -92,30 +116,8 @@ class Builder:
     def set_grid_dim(self, nx, ny, nz):
         self.grid_dim = (nx, ny, nz)
 
-    def np_dtype(self, tt_dtype):
-        if isinstance(tt_dtype, tl.pointer_type):
-            return np.dtype(np.uint64)
-        np_types = {
-            tl.int1: np.dtype(bool),
-            tl.float16: np.dtype(np.float16),
-            tl.float32: np.dtype(np.float32),
-            tl.float64: np.dtype(np.float64),
-            tl.int8: np.dtype(np.int8),
-            tl.uint8: np.dtype(np.uint8),
-            tl.int16: np.dtype(np.int16),
-            tl.uint16: np.dtype(np.uint16),
-            tl.int32: np.dtype(np.int32),
-            tl.uint32: np.dtype(np.uint32),
-            tl.int64: np.dtype(np.int64),
-            tl.uint64: np.dtype(np.uint64),
-        }
-        if isinstance(tt_dtype, tl.block_type):
-            if isinstance(tt_dtype.element_ty, tl.pointer_type):
-                return np.dtype(np.uint64)
-            return np_types[tt_dtype.element_ty]
-        return np_types[tt_dtype]
-
     # constants
+
     def get_half_ty(self):
         return tl.float16
 
@@ -158,11 +160,26 @@ class Builder:
     def get_int1(self, value):
         return TensorHandle(np.array([value], dtype=bool), tl.int1)
 
+    def get_uint8(self, value):
+        return TensorHandle(np.array([value], dtype=np.uint8), tl.uint8)
+
+    def get_int8(self, value):
+        return TensorHandle(np.array([value], dtype=np.int8), tl.int8)
+
+    def get_uint16(self, value):
+        return TensorHandle(np.array([value], dtype=np.uint16), tl.uint16)
+
+    def get_int16(self, value):
+        return TensorHandle(np.array([value], dtype=np.int16), tl.int16)
+
     def get_uint32(self, value):
         return TensorHandle(np.array([value], dtype=np.uint32), tl.uint32)
 
     def get_int32(self, value):
         return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
+
+    def get_uint64(self, value):
+        return TensorHandle(np.array([value], dtype=np.uint64), tl.uint64)
 
     def get_int64(self, value):
         return TensorHandle(np.array([value], dtype=np.int64), tl.int64)
@@ -173,8 +190,11 @@ class Builder:
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
 
+    def get_fp64(self, value):
+        return TensorHandle(np.array([value], dtype=np.float64), tl.float64)
+
     def get_null_value(self, type):
-        return TensorHandle(np.array([0], dtype=self.np_dtype(type)), type)
+        return TensorHandle(np.array([0], dtype=_get_np_dtype(type)), type)
 
     # programming model
     def create_get_program_id(self, axis):
@@ -196,7 +216,7 @@ class Builder:
 
     def create_masked_load(self, ptrs, mask, other, cache_modifier, eviction_policy, is_volatile):
         dtype_tt = ptrs.get_element_ty()
-        dtype_np = self.np_dtype(dtype_tt)
+        dtype_np = _get_np_dtype(dtype_tt)
         if other is None:
             other = TensorHandle(np.ones_like(ptrs.data, dtype=dtype_np), dtype_tt)
         ret = _interpreter.load(ptrs.data, mask.data, other.data, dtype_np)
@@ -207,7 +227,7 @@ class Builder:
 
     # casting ops
     def cast_impl(self, src, dst_type):
-        return TensorHandle(src.data.astype(self.np_dtype(dst_type)), dst_type)
+        return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type)
 
     create_si_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_ui_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
@@ -221,7 +241,7 @@ class Builder:
         assert "float8 not NotImplemented yet"
 
     def create_bitcast(self, src, dst_type):
-        return TensorHandle(src.data.view(self.np_dtype(dst_type)), dst_type)
+        return TensorHandle(src.data.view(_get_np_dtype(dst_type)), dst_type)
 
     # binary operators
     def binary_op(self, lhs, rhs, op):
@@ -357,10 +377,10 @@ class Builder:
 
     def create_splat(self, arg, shape):
         if isinstance(arg.dtype, tl.block_type):
-            return TensorHandle(np.full(shape, arg.data[0], dtype=self.np_dtype(arg.dtype)), arg.dtype)
+            return TensorHandle(np.full(shape, arg.data[0], dtype=_get_np_dtype(arg.dtype)), arg.dtype)
         else:  # scalar
             block_type = tl.block_type(arg.dtype, shape)
-            return TensorHandle(np.full(shape, arg.data, dtype=self.np_dtype(arg.dtype)), block_type)
+            return TensorHandle(np.full(shape, arg.data, dtype=_get_np_dtype(arg.dtype)), block_type)
 
     # def create_atomic_cas(self, ptr, cmp, val, sem):
     #     pass
@@ -404,7 +424,7 @@ class Builder:
         return ret
 
     def get_all_ones_value(self, type):
-        np_type = self.np_dtype(type)
+        np_type = _get_np_dtype(type)
         if "int" in np_type.name:
             return TensorHandle(np.full(1, -1, dtype=np_type), type)
         else:
@@ -426,16 +446,18 @@ def _patch_lang_tensor(tensor, builder):
     tensor.__index__ = lambda self: int(self.handle.data)
 
     def _get_bool(self):
-        if self is None:
-            return False
         data = self.handle.data
         # in triton, only scalars can be converted to booleans
         # here we need this hack because all scalars are tensors
         return bool(data) if data.size == 1 else True
 
+    def _get_transpose(self):
+        return tl.core.tensor(TensorHandle(np.transpose(self.handle.data), self.handle.dtype), self.dtype)
+
     tensor.__bool__ = lambda self: _get_bool(self)
     tensor.__repr__ = lambda self: repr(self.handle.data)
     tensor.__str__ = lambda self: str(self.handle.data)
+    tensor.T = property(_get_transpose)
 
 
 def _patch_lang_core(lang, builder):
@@ -445,21 +467,62 @@ def _patch_lang_core(lang, builder):
     # reduce is better off with a separate patch due to how
     # the builder currently interfaces with custom functions
 
-    def _new_reduce(input, axis, combine_fn, keep_dims=False):
+    def _new_reduce(input, axis, combine_fn, **kwargs):
+        if axis is not None and axis >= len(input.shape):
+            raise ValueError(f"axis {axis} out of bounds for shape {input.shape}")
+
+        def _to_tensor(ret, dtype):
+            if ret.shape:
+                ret_type = tl.block_type(dtype, ret.shape)
+            else:
+                ret = np.array([ret], dtype=_get_np_dtype(dtype))
+                ret_type = dtype
+            return tl.core.tensor(TensorHandle(ret, dtype), ret_type)
+
+        def _min_max(input, val_reduce_op, idx_reduce_op=None, axis=None, return_indices_tie_break_left=True,
+                     keepdims=False):
+            assert return_indices_tie_break_left is True, "return_indices_tie_break_fast not supported"
+            val = None
+            idx = None
+            if val_reduce_op:
+                val = _to_tensor(val_reduce_op(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
+            if idx_reduce_op:
+                idx = _to_tensor(idx_reduce_op(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
+            if val and idx:
+                return val, idx
+            elif val:
+                return val
+            elif idx:
+                return idx
+            else:
+                assert False, "val_reduce_op and idx_reduce_op can't be both None"
+
+        def _sum(input, axis=None, keepdims=False):
+            return _to_tensor(np.sum(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
+
+        keep_dims = kwargs.get("keep_dims", False)
+        return_indices = kwargs.get("return_indices", False)
+        return_indices_tile_break_left = kwargs.get("return_indices_tile_break_left", True)
         fn = combine_fn.fn.__name__
         mapping = {
-            "_elementwise_min": np.min,
-            "_elementwise_max": np.max,
-            "_sum_combine": np.sum,
+            "_elementwise_min":  #
+            functools.partial(_min_max, val_reduce_op=np.min, idx_reduce_op=np.argmin if return_indices else None,
+                              return_indices_tie_break_left=return_indices_tile_break_left),  #
+            "_elementwise_max":  #
+            functools.partial(_min_max, val_reduce_op=np.max, idx_reduce_op=np.argmax if return_indices else None,
+                              return_indices_tie_break_left=return_indices_tile_break_left),  #
+            "_argmin_combine":  #
+            functools.partial(_min_max, val_reduce_op=None, idx_reduce_op=np.argmin,
+                              return_indices_tie_break_left=return_indices_tile_break_left),  #
+            "_argmax_combine":  #
+            functools.partial(_min_max, val_reduce_op=None, idx_reduce_op=np.argmax,
+                              return_indices_tie_break_left=return_indices_tile_break_left),  #
+            "_sum_combine": _sum
         }
-        ret = mapping[fn](input.handle.data, axis=axis, keepdims=keep_dims)
-        if ret.shape:
-            ret_type = tl.block_type(input.dtype, ret.shape)
-        else:
-            ret_type = input.dtype
-        return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
+        assert fn in mapping, f"fn {fn} not supported"
+        return mapping[fn](input, axis=axis, keepdims=keep_dims)
 
-    def _new_scan(input, axis, combine_fn, keep_dims=False):
+    def _new_scan(input, axis, combine_fn, **kwargs):
         fn = combine_fn.fn.__name__
         mapping = {
             "_sum_combine": np.cumsum,
@@ -468,16 +531,19 @@ def _patch_lang_core(lang, builder):
         ret_type = tl.block_type(input.dtype, ret.shape)
         return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
 
-    def _new_reduce_scan_wrapper(mode, input, axis=None, return_indices=False, return_indices_tie_break_left=True,
-                                 keep_dims=False):
+    def _new_reduce_scan_wrapper(mode, input, axis=None, **kwargs):
         impl_fn = _new_scan if mode.startswith("cum") else _new_reduce
         mode = mode[3:] if mode.startswith("cum") else mode
         combine_fn = {
-            "min": tl.standard._elementwise_min, "max": tl.standard._elementwise_max, "sum": tl.standard._sum_combine
+            "min": tl.standard._elementwise_min,
+            "max": tl.standard._elementwise_max,
+            "sum": tl.standard._sum_combine,
+            "argmin": tl.standard._argmin_combine,
+            "argmax": tl.standard._argmax_combine,
         }
         if mode not in combine_fn:
             raise ValueError(f"mode {mode} not supported")
-        return impl_fn(input, axis, combine_fn[mode], keep_dims)
+        return impl_fn(input, axis, combine_fn[mode], **kwargs)
 
     def _new_to_ir(self, builder):
         # We need to specify signedness for integer types in the numpy mode
@@ -523,11 +589,13 @@ def _patch_lang_core(lang, builder):
     lang.min = functools.partial(_new_reduce_scan_wrapper, "min")
     lang.max = functools.partial(_new_reduce_scan_wrapper, "max")
     lang.sum = functools.partial(_new_reduce_scan_wrapper, "sum")
+    lang.argmin = functools.partial(_new_reduce_scan_wrapper, "argmin")
+    lang.argmax = functools.partial(_new_reduce_scan_wrapper, "argmax")
     lang.cumsum = functools.partial(_new_reduce_scan_wrapper, "cumsum")
 
     # can't just map lang.static_range to `range`, because `tl.static_range`
     # can get `step` passed by keyword
-    def _static_range(arg1, arg2=None, step=None):
+    def _range(arg1, arg2=None, step=None, **kwargs):
         if step is None:
             step = 1
         if arg2 is None:
@@ -539,21 +607,26 @@ def _patch_lang_core(lang, builder):
     def _static_assert(cond, msg=""):
         assert cond, msg
 
-    lang.static_range = _static_range
+    lang.range = _range
+    lang.static_range = _range
     lang.static_assert = _static_assert
     lang.dtype.to_ir = _new_to_ir
 
 
 def _patch_lang_math(lang, builder):
     math = lang.math
+
     mapping = {
-        "abs": "abs",
-        "acos": "arccos",
-        "asin": "arcsin",
-        "exp2": "exp2",
-        "log2": "log2",
-        "max": "maximum",
-        "floor": "floor",
+        "abs": np.abs,
+        "acos": np.arccos,
+        "asin": np.arcsin,
+        "exp2": np.exp2,
+        "log2": np.log2,
+        "max": np.maximum,
+        "floor": np.floor,
+        "div_rn": np.divide,
+        "sqrt_rn": np.sqrt,
+        "sqrt": np.sqrt,
     }
 
     def make_numpy(name):
@@ -564,7 +637,7 @@ def _patch_lang_math(lang, builder):
             args = [arg.handle.data for arg in args if isinstance(arg, tl.core.tensor)]
             # remove the _builder kwarg
             kwargs = {k: v.handle.data for k, v in kwargs.items() if k != "_builder"}
-            ret = getattr(np, mapping[name])(*args, **kwargs)
+            ret = mapping[name](*args, **kwargs)
             ret = tl.core.tensor(TensorHandle(ret, ret_dtype), ret_type)
             return ret
 
@@ -591,7 +664,7 @@ to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
 def _patch_lang(fn):
     lang = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
     assert len(lang) == 1, "triton.language must be visible from within jit'd function"
-    _patch_lang_tensor(getattr(lang[0], "tensor"), builder)
+    _patch_lang_tensor(lang[0].tensor, builder)
     _patch_lang_core(lang[0], builder)
     if lang[0] == tl:
         _patch_lang_math(lang[0], builder)

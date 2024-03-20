@@ -6,7 +6,7 @@
 // and <atomic>
 #include "triton/Analysis/Allocation.h"
 
-#include "TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 //
 #include "TritonIntelGPUToLLVM/Passes.h"
 #include "Utility.h"
@@ -39,15 +39,13 @@ typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
 class ConvertTritonGPUOpToLLVMPatternBase {
 public:
   explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonIntelGPUToLLVMTypeConverter &typeConverter)
+      TritonGPUToLLVMTypeConverter &typeConverter)
       : converter(&typeConverter) {}
 
-  TritonIntelGPUToLLVMTypeConverter *getTypeConverter() const {
-    return converter;
-  }
+  TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
 
 protected:
-  TritonIntelGPUToLLVMTypeConverter *converter;
+  TritonGPUToLLVMTypeConverter *converter;
 };
 
 template <typename SourceOp>
@@ -58,16 +56,15 @@ public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
   explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonIntelGPUToLLVMTypeConverter &typeConverter,
-      PatternBenefit benefit = 1)
+      TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
 
 protected:
-  TritonIntelGPUToLLVMTypeConverter *getTypeConverter() const {
+  TritonGPUToLLVMTypeConverter *getTypeConverter() const {
     LLVMTypeConverter *ret =
         ((ConvertTritonGPUOpToLLVMPatternBase *)this)->getTypeConverter();
-    return (TritonIntelGPUToLLVMTypeConverter *)ret;
+    return (TritonGPUToLLVMTypeConverter *)ret;
   }
 };
 

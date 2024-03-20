@@ -6,7 +6,7 @@
 // and <atomic>
 #include "triton/Analysis/Allocation.h"
 
-#include "TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 //
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -39,15 +39,14 @@ class ScanOp;
 
 template <typename SourceOp>
 class ConvertTritonIntelGPUReduceScanToLLVMPattern
-    : public ConvertTritonGPUOpToLLVMPattern<SourceOp> {
+    : public ConvertOpToLLVMPattern<SourceOp> {
 public:
   // Make sure the class is only instantiated with Reduce and Scan
   static_assert(std::is_same_v<SourceOp, ReduceOp> ||
                 std::is_same_v<SourceOp, ScanOp>);
 
-  using ConvertTritonGPUOpToLLVMPatternBase::getTypeConverter;
-  using ConvertTritonGPUOpToLLVMPattern<
-      SourceOp>::ConvertTritonGPUOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<SourceOp>::getTypeConverter;
+  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
 
   // Return the pointee type of the shared memory pointer for operand i.
   Type getElementType(SourceOp op, int i) const {

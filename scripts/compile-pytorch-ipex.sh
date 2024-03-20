@@ -5,6 +5,8 @@ set -euo pipefail
 # Select what to build.
 BUILD_PYTORCH=false
 BUILD_IPEX=false
+BUILD_PINNED=false
+BUILD_FROM_SOURCE=false
 CLEAN=false
 VENV=false
 for arg in "$@"; do
@@ -17,6 +19,15 @@ for arg in "$@"; do
       BUILD_IPEX=true
       shift
       ;;
+    --pinned)
+      # Build the pinned commit (from source if --source is used, otherwise download the wheel from github)
+      BUILD_PINNED=true
+      shift
+      ;;
+    --source)
+      BUILD_FROM_SOURCE=true
+      shift
+      ;;
     --clean)
       CLEAN=true
       shift
@@ -26,7 +37,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./compile-pytorch-ipex.sh [--pytorch | --ipex | --clean | --venv]"
+      echo "Example usage: ./compile-pytorch-ipex.sh [--pytorch | --ipex | --pinned | --source | --clean | --venv]"
       exit 1
       ;;
     *)
@@ -43,6 +54,10 @@ if [ ! -v BASE ]; then
   echo "**** Default BASE is set to $BASE ****"
 fi
 
+if [ "$VENV" = true ]; then
+  source .venv/bin/activate
+fi
+
 export PYTORCH_PROJ=$BASE/pytorch
 export IPEX_PROJ=$BASE/intel-extension-for-pytorch
 
@@ -53,6 +68,56 @@ if [ "$CLEAN" = true ]; then
   fi
 fi
 
+if [ "$BUILD_PINNED" = true ]; then
+  # Determine if the installed PyTorch version is the same as the pinned version.
+  INSTALL_PYTORCH=true
+  if pip show torch &>/dev/null; then
+    PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
+    PYTORCH_CURRENT_COMMIT=`python -c "import torch;print(torch.__version__)"`
+    PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
+    if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
+      INSTALL_PYTORCH=false
+    fi
+  fi
+  # Determine if the installed IPEX version is the same as the pinned version.
+  INSTALL_IPEX=true
+  if pip show intel_extension_for_pytorch &>/dev/null; then
+    IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
+    IPEX_CURRENT_COMMIT=`python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"`
+    IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
+    if [[ "$IPEX_PINNED_COMMIT" = "$IPEX_CURRENT_COMMIT"* ]]; then
+      INSTALL_IPEX=false
+    fi
+  fi
+
+  if [[ "$INSTALL_PYTORCH" = false && "$INSTALL_IPEX" = false ]]; then
+    exit 0
+  fi
+fi
+
+if [ "$BUILD_FROM_SOURCE" = false ]; then
+  if `! which gh &> /dev/null` || `! which jq &> /dev/null`; then
+    echo "****** WARNING: gh or jq is missing ******"
+    BUILD_FROM_SOURCE=true
+  fi
+fi
+
+if [ "$BUILD_PINNED" = false ]; then
+  BUILD_FROM_SOURCE=true
+fi
+
+if [ "$BUILD_FROM_SOURCE" = false ]; then
+  TEMP_DIR=`mktemp -d`
+  cd $TEMP_DIR
+  gh run download $(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId | jq '.[0].databaseId') -R intel/intel-xpu-backend-for-triton
+  PYTHON_VERSION=$( python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" )
+  cd wheels-py${PYTHON_VERSION}*
+  pip install torch-* intel_extension_for_pytorch-*
+  rm -r $TEMP_DIR
+  exit 0
+fi
+
+
 if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ]; then
   # Avoid overriding the user's existing PyTorch by default.
   if ! pip show torch &>/dev/null; then
@@ -62,10 +127,10 @@ if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ]; then
   if ! pip show intel_extension_for_pytorch &>/dev/null; then
     BUILD_IPEX=true
   fi
-fi
-
-if [ "$VENV" = true ]; then
-  source .venv/bin/activate
+  if [ "$BUILD_PINNED" = true ]; then
+    BUILD_PYTORCH=true
+    BUILD_IPEX=true
+  fi
 fi
 
 check_rc() {
@@ -87,10 +152,12 @@ build_pytorch() {
   echo "****** Building $PYTORCH_PROJ ******"
   cd $PYTORCH_PROJ
   if [ ! -d "$PYTORCH_PROJ/dist" ]; then
-    git fetch --all
-    PYTORCH_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
-    git checkout $PYTORCH_COMMIT_ID
-    git submodule update --recursive
+    if [ "$BUILD_PINNED" = true ]; then
+      git fetch --all
+      PYTORCH_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
+      git checkout $PYTORCH_COMMIT_ID
+      git submodule update --recursive
+    fi
     pip install cmake ninja
     pip install mkl-static mkl-include
     pip install -r requirements.txt
@@ -114,10 +181,12 @@ build_ipex() {
   echo "****** Building $IPEX_PROJ ******"
   cd $IPEX_PROJ
   if [ ! -d "$IPEX_PROJ/dist" ]; then
-    git fetch --all
-    IPEX_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
-    git checkout $IPEX_COMMIT_ID
-    git submodule update --recursive
+    if [ "$BUILD_PINNED" = true ]; then
+      git fetch --all
+      IPEX_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
+      git checkout $IPEX_COMMIT_ID
+      git submodule update --recursive
+    fi
     pip install -r requirements.txt
     python setup.py bdist_wheel
   fi

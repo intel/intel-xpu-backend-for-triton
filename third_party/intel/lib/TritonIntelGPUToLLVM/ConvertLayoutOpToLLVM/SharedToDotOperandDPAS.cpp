@@ -5,6 +5,7 @@
 #include "llvm/Support/ErrorHandling.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;
+using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
@@ -13,13 +14,12 @@ namespace {
 // Data loader for DPAS instruction.
 template <unsigned opIdx> class DpasMatmulLoader {
 public:
-  DpasMatmulLoader(DpasEncodingAttr dpasLayout, RankedTensorType tensorTy,
+  DpasMatmulLoader(DpasEncodingAttr dpasLayout, MemDescType descTy,
                    unsigned warpsPerTile, ArrayRef<Value> smemStrides,
                    SmallVector<int64_t> instrShape,
                    ConversionPatternRewriter &rewriter,
-                   TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                   Location loc)
-      : dpasLayout(dpasLayout), tensorTy(tensorTy), smemStrides(smemStrides),
+                   const LLVMTypeConverter *typeConverter, Location loc)
+      : dpasLayout(dpasLayout), descTy(descTy), smemStrides(smemStrides),
         rewriter(rewriter), loc(loc) {
     static_assert(opIdx == 0 || opIdx == 1);
 
@@ -59,7 +59,7 @@ private:
   }
 
   DpasEncodingAttr dpasLayout;
-  RankedTensorType tensorTy;
+  MemDescType descTy;
 
   SmallVector<Value> smemStrides;
   Value repNonKDimStride;
@@ -86,14 +86,21 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   unsigned threadsPerWarp = getThreadsPerWarp();
 
   Value laneRowIndex, laneColIndex;
-  unsigned repRowsPerInst, rowsPerWarp;
+  unsigned repRowsPerInst, rowsPerWarp, repOpsPerRow;
   switch (opIdx) {
   case 0: {
-    rowsPerWarp = threadsPerWarp / systolicDepth;
+    assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
+           "invalid opsPerChannel number.");
+    SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
+    // Unlike the operand B, to pack the value to i16 for scalar bit width <=16.
+    unsigned packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
+    unsigned packedColNum = shapeA[1] / packedOpsPerLane;
+    rowsPerWarp = threadsPerWarp / packedColNum;
     repRowsPerInst = repeatCount / rowsPerWarp;
-    laneRowIndex = udiv(laneId, i32_val(systolicDepth));
-    laneColIndex = urem(laneId, i32_val(systolicDepth));
-    laneColIndex = mul(laneColIndex, i32_val(opsPerChannel));
+    laneRowIndex = udiv(laneId, i32_val(packedColNum));
+    laneColIndex = urem(laneId, i32_val(packedColNum));
+    laneColIndex = mul(laneColIndex, i32_val(packedOpsPerLane));
+    repOpsPerRow = packedOpsPerLane;
   } break;
   case 1: {
     rowsPerWarp = threadsPerWarp / executionSize;
@@ -102,6 +109,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
     laneRowIndex = udiv(laneId, i32_val(executionSize));
     laneRowIndex = mul(laneRowIndex, i32_val(opsPerChannel));
     laneColIndex = urem(laneId, i32_val(executionSize));
+    repOpsPerRow = opsPerChannel;
   } break;
   }
 
@@ -109,7 +117,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   Value iOff = mul(warpId, warpMatStride);
 
   SharedEncodingAttr sharedLayout =
-      tensorTy.getEncoding().cast<SharedEncodingAttr>();
+      descTy.getEncoding().cast<SharedEncodingAttr>();
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
   const int vec = sharedLayout.getVec();
@@ -123,7 +131,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
 
   for (int rep = 0; rep < repRowsPerInst; ++rep) {
     Value repRowIndex = mul(i32_val(rep), rowsPerWarpVal);
-    for (unsigned opsIdx = 0; opsIdx < opsPerChannel; ++opsIdx) {
+    for (unsigned opsIdx = 0; opsIdx < repOpsPerRow; ++opsIdx) {
       // inner index base
       Value jBase = laneColIndex;
       // outer index base
@@ -183,7 +191,7 @@ Value DpasMatmulLoader<opIdx>::loadMatrix(int repOuter, int repInner,
 
 Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int n0, int n1,
-    TritonIntelGPUToLLVMTypeConverter *typeConverter, Location loc,
+    const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter) {
   std::vector<Value> elems;
   for (int m = 0; m < n0; ++m) {
@@ -223,23 +231,23 @@ Type getSharedMemTy(Type argType) {
 
 template <unsigned opIdx>
 std::function<void(int, int)>
-getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
+getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
                 DpasEncodingAttr dpasLayout, unsigned warpsPerTile,
                 SmallVector<int64_t> instrShape, Value warpId,
                 Value outerWarpDim, Value laneId, ValueTable &vals,
-                TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
   static_assert(opIdx == 0 || opIdx == 1);
 
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
-  Type eltTy = tensorTy.getElementType();
+  auto shapePerCTA = getShapePerCTA(descTy);
+  Type eltTy = descTy.getElementType();
 
-  auto sharedLayout = tensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto sharedLayout = descTy.getEncoding().cast<SharedEncodingAttr>();
   ArrayRef<unsigned> order = sharedLayout.getOrder();
 
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int a, int b) {
-    DpasMatmulLoader<opIdx> loader(dpasLayout, tensorTy, warpsPerTile,
+    DpasMatmulLoader<opIdx> loader(dpasLayout, descTy, warpsPerTile,
                                    smemObj.strides, instrShape, rewriter,
                                    typeConverter, loc);
 
@@ -274,16 +282,15 @@ getLoadMatrixFn(Value tensor, const SharedMemoryObject &smemObj,
 
 template <unsigned opIdx>
 Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
-                  Value threadId, DotOperandEncodingAttr encoding,
-                  TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                  Value tensor, const SharedMemoryObject &smemObj) {
+                  MemDescType descTy, DotOperandEncodingAttr encoding,
+                  const SharedMemoryObject &smemObj,
+                  const LLVMTypeConverter *typeConverter, Value threadId) {
   static_assert(opIdx == 0 || opIdx == 1);
 
+  auto shapePerCTA = getShapePerCTA(descTy);
   auto dpasLayout = encoding.getParent().cast<DpasEncodingAttr>();
   const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
 
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
-  const ArrayRef<int64_t> tensorShape = tensorTy.getShape();
   SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
 
   SmallVector<int64_t> elemsPerInstr;
@@ -295,7 +302,7 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
     elemsPerInstr = {shapeB[0], shapeB[1]};
   }
   SmallVector<int64_t> numReps =
-      dpasLayout.getDPASRepetitions(tensorShape, opIdx);
+      dpasLayout.getDPASRepetitions(shapePerCTA, opIdx);
 
   Value warpSize = i32_val(triton::gpu::getWarpSize(dpasLayout));
   Value warpId = udiv(threadId, warpSize);
@@ -305,14 +312,14 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
       mlir::LLVM::utils::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
   double ceilRes =
-      ceil(static_cast<double>(tensorShape[opIdx]) / elemsPerInstr[opIdx]);
+      ceil(static_cast<double>(shapePerCTA[opIdx]) / elemsPerInstr[opIdx]);
   Value outerWarpDim = urem(multiDimWarpId[opIdx], i32_val(ceilRes));
   int warpsPerTile = std::min<int>(warpsPerCTA[opIdx], ceilRes);
 
   // Get the function to use to load the operand.
   ValueTable vals;
   std::function<void(int, int)> loadFn = getLoadMatrixFn<opIdx>(
-      tensor, smemObj, dpasLayout, warpsPerTile, elemsPerInstr, warpId,
+      descTy, smemObj, dpasLayout, warpsPerTile, elemsPerInstr, warpId,
       outerWarpDim, laneId, vals, typeConverter, rewriter, loc);
 
   // Load the operand.
@@ -336,15 +343,15 @@ namespace intel {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
-                    TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                    Value threadId) {
+                    const LLVMTypeConverter *typeConverter, Value threadId) {
+  auto descTy = tensor.getType().cast<MemDescType>();
   switch (opIdx) {
   case 0:
-    return loadOperand<0>(rewriter, loc, threadId, encoding, typeConverter,
-                          tensor, smemObj);
+    return loadOperand<0>(rewriter, loc, descTy, encoding, smemObj,
+                          typeConverter, threadId);
   case 1:
-    return loadOperand<1>(rewriter, loc, threadId, encoding, typeConverter,
-                          tensor, smemObj);
+    return loadOperand<1>(rewriter, loc, descTy, encoding, smemObj,
+                          typeConverter, threadId);
   default:
     llvm_unreachable("unexpected operand idx");
   }

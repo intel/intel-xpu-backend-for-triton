@@ -137,7 +137,7 @@ struct LoadOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::LoadOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  LoadOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
+  LoadOpConversion(TritonGPUToLLVMTypeConverter &converter,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
@@ -302,7 +302,7 @@ struct StoreOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::StoreOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  StoreOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
+  StoreOpConversion(TritonGPUToLLVMTypeConverter &converter,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
@@ -424,7 +424,7 @@ struct AtomicCASOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::AtomicCASOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  AtomicCASOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
+  AtomicCASOpConversion(TritonGPUToLLVMTypeConverter &converter,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(converter,
@@ -536,7 +536,7 @@ struct AtomicRMWOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::AtomicRMWOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  AtomicRMWOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
+  AtomicRMWOpConversion(TritonGPUToLLVMTypeConverter &converter,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter,
@@ -686,96 +686,31 @@ struct AtomicRMWOpConversion
   }
 };
 
-struct InsertSliceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<tensor::InsertSliceOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      tensor::InsertSliceOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(tensor::InsertSliceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // %dst = insert_slice %src into %dst[%offsets]
-    Location loc = op->getLoc();
-    Value dst = op.getDest();
-    Value src = op.getSource();
-    Value res = op.getResult();
-    auto funcOp = op->getParentOfType<FunctionOpInterface>();
-
-    auto srcTy = src.getType().dyn_cast<RankedTensorType>();
-    auto srcLayout = srcTy.getEncoding().dyn_cast<BlockedEncodingAttr>();
-    auto srcShape = srcTy.getShape();
-    assert(srcLayout && "Unexpected srcLayout in InsertSliceOpConversion");
-
-    auto dstTy = dst.getType().dyn_cast<RankedTensorType>();
-    auto dstLayout = dstTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    auto llDst = adaptor.getDest();
-    assert(dstLayout && "Unexpected dstLayout in InsertSliceOpConversion");
-    assert(op.hasUnitStride() &&
-           "Only unit stride supported by InsertSliceOpConversion");
-
-    // newBase = base + offset
-    // Triton support either static and dynamic offsets
-    auto smemObj = getSharedMemoryObjectFromStruct(
-        loc, llDst, dstTy.getElementType(), rewriter);
-    SmallVector<Value, 4> offsets;
-    SmallVector<Value, 4> srcStrides;
-    auto mixedOffsets = op.getMixedOffsets();
-    for (auto i = 0; i < mixedOffsets.size(); ++i) {
-      if (op.isDynamicOffset(i)) {
-        offsets.emplace_back(adaptor.getOffsets()[i]);
-      } else {
-        offsets.emplace_back(i32_val(op.getStaticOffset(i)));
-      }
-      // Like insert_slice_async, we only support slice from one dimension,
-      // which has a slice size of 1
-      if (op.getStaticSize(i) != 1) {
-        srcStrides.emplace_back(smemObj.strides[i]);
-      }
-    }
-
-    // Compute the offset based on the original strides of the shared memory
-    // object
-    auto offset = dot(rewriter, loc, offsets, smemObj.strides);
-    auto elemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    auto smemBase = gep(elemPtrTy, elemTy, smemObj.base, offset);
-
-    auto inVals = unpackLLElements(loc, adaptor.getSource(), rewriter);
-    auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, true);
-    storeDistributedToShared(src, inVals, srcStrides, srcIndices, dst, smemBase,
-                             elemTy, loc, rewriter);
-    // Barrier is not necessary.
-    // The membar pass knows that it writes to shared memory and will handle it
-    // properly.
-    rewriter.replaceOp(op, llDst);
-    return success();
-  }
-};
-
-struct InsertSliceAsyncOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>,
+struct AsyncCopyGlobalToLocalOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::gpu::AsyncCopyGlobalToLocalOp>,
       public LoadStoreConversionBase {
   using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::InsertSliceAsyncOp>::ConvertTritonGPUOpToLLVMPattern;
+      triton::gpu::AsyncCopyGlobalToLocalOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  InsertSliceAsyncOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
-                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::InsertSliceAsyncOp>(
+  AsyncCopyGlobalToLocalOpConversion(TritonGPUToLLVMTypeConverter &converter,
+                                     ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                     PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>(
             converter, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
-  matchAndRewrite(triton::gpu::InsertSliceAsyncOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     // This function should not be called on the genx target since all
-    // InsertSliceAsyncOps would be decomposed into InsertSliceOps by the
-    // decomposeInsertSliceAsyncOp function.
+    // AsyncCopyGlobalToLocalOps would be decomposed into InsertSliceOps by the
+    // decomposeAsyncCopyGlobalToLocalOp function.
     // FIXME: remove this assertion once a suitable replacement instruction
     // exists for the generated PTX in this function (cp.async.cg.shared.global)
     assert(false &&
-           "InsertSliceAsyncOpConversion: genx target not supported yet");
+           "AsyncCopyGlobalToLocalOpConversion: genx target not supported yet");
 
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();
@@ -789,7 +724,7 @@ struct InsertSliceAsyncOpConversion
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
     assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
-            "Unexpected srcLayout in InsertSliceAsyncOpConversion"));
+            "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
     auto resSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
     auto srcShape = srcTy.getShape();
     assert((srcShape.size() <= 3) &&
@@ -799,7 +734,6 @@ struct InsertSliceAsyncOpConversion
     Value llSrc = adaptor.getSrc();
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
-    Value llIndex = adaptor.getIndex();
 
     // %src
     auto srcElems = unpackLLElements(loc, llSrc, rewriter);
@@ -807,22 +741,6 @@ struct InsertSliceAsyncOpConversion
     // %dst
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
-    auto axis = op->getAttrOfType<IntegerAttr>("axis").getInt();
-    SmallVector<Value, 4> offsetVals;
-    SmallVector<Value, 4> srcStrides;
-    for (auto i = 0; i < dstTy.getShape().size(); ++i) {
-      if (i == axis) {
-        offsetVals.emplace_back(llIndex);
-      } else {
-        offsetVals.emplace_back(i32_val(0));
-        srcStrides.emplace_back(smemObj.strides[i]);
-      }
-    }
-    // Compute the offset based on the original dimensions of the shared
-    // memory object
-    auto dstOffset = dot(rewriter, loc, offsetVals, smemObj.strides);
-    auto dstPtrTy = ptr_ty(rewriter.getContext(), 3);
-    Value dstPtrBase = gep(dstPtrTy, resElemTy, smemObj.base, dstOffset);
 
     // %mask
     SmallVector<Value> maskElems;
@@ -853,9 +771,10 @@ struct InsertSliceAsyncOpConversion
     unsigned numElems = getTotalElemsPerThread(srcTy);
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();
+    SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
     DenseMap<unsigned, Value> sharedPtrs =
         getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy,
-                              smemObj, rewriter, offsetVals, srcStrides);
+                              smemObj, rewriter, offsetVals, smemObj.strides);
 
     // A sharedLayout encoding has a "vec" parameter.
     // On the column dimension, if inVec > outVec, it means we have to divide
@@ -918,67 +837,11 @@ struct InsertSliceAsyncOpConversion
       }
     }
 
-    rewriter.replaceOp(op, llDst);
-    return success();
-  }
-};
-
-struct ExtractSliceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ExtractSliceOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::ExtractSliceOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::ExtractSliceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // %dst = extract_slice %src[%offsets]
-    Location loc = op->getLoc();
-    auto srcTy = op.getSrc().getType();
-    auto srcLayout = srcTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-    assert(srcLayout && "Unexpected resultLayout in ExtractSliceOpConversion");
-    assert(op.hasUnitStride() &&
-           "Only unit stride supported by ExtractSliceOpConversion");
-
-    auto typeConverter = getTypeConverter();
-    auto llvmElemTy = typeConverter->convertType(srcTy.getElementType());
-
-    // newBase = base + offset
-    // Triton supports either static and dynamic offsets
-    auto smemObj = LLVM::utils::getSharedMemoryObjectFromStruct(
-        loc, adaptor.getSrc(), llvmElemTy, rewriter);
-    SmallVector<Value, 4> opOffsetVals;
-    SmallVector<Value, 4> offsetVals;
-    auto mixedOffsets = op.getMixedOffsets();
-    for (auto i = 0, j = 0; i < mixedOffsets.size(); ++i) {
-      if (op.isDynamicOffset(i)) {
-        // adaptor.getOffsets() returns list of variable offsets. the size of
-        // the list may not be the same as mixedOffsets
-        opOffsetVals.emplace_back(adaptor.getOffsets()[j]);
-        ++j;
-      } else
-        opOffsetVals.emplace_back(i32_val(op.getStaticOffset(i)));
-      offsetVals.emplace_back(add(smemObj.offsets[i], opOffsetVals[i]));
-    }
-    // Compute the offset based on the original strides of the shared memory
-    // object
-    auto offset = dot(rewriter, loc, opOffsetVals, smemObj.strides);
-    // newShape = rank_reduce(shape)
-    // Triton only supports static tensor sizes
-    SmallVector<Value, 4> strideVals;
-    for (auto i = 0; i < op.getStaticSizes().size(); ++i) {
-      if (op.getStaticSize(i) == 1) {
-        offsetVals.erase(offsetVals.begin() + i);
-      } else {
-        strideVals.emplace_back(smemObj.strides[i]);
-      }
-    }
-
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    smemObj =
-        SharedMemoryObject(gep(elemPtrTy, llvmElemTy, smemObj.base, offset),
-                           llvmElemTy, strideVals, offsetVals);
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
-    rewriter.replaceOp(op, retVal);
+    // Drop the result token.
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), IntegerType::get(op.getContext(), 32),
+        rewriter.getI32IntegerAttr(0));
+    rewriter.replaceOp(op, zero);
     return success();
   }
 };
@@ -1071,17 +934,14 @@ struct AsyncBulkCommitGroupOpConversion
 } // namespace
 
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit) {
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<InsertSliceOpConversion>(typeConverter, benefit);
-  patterns.add<InsertSliceAsyncOpConversion>(typeConverter, axisInfoAnalysis,
-                                             benefit);
-  patterns.add<ExtractSliceOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncCopyGlobalToLocalOpConversion>(typeConverter,
+                                                   axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<AsyncBulkCommitGroupOpConversion>(typeConverter, benefit);
