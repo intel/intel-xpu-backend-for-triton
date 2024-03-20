@@ -54,10 +54,10 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
 def TritonGPUPrefetchBlock : Pass<"tritongpu-prefetch-block", "mlir::ModuleOp"> {
   let summary = "prefetch a tensor block around loop";
   let description = [{
-    this pass match pattern of certain scf.loop with tt.load and then
+    This pass match pattern of certain scf.loop with tt.load and then
     add prefetch both in the loop preheader(3 stages in advance) and loop body.
-    this pass only support block pointer.
-    this pass only support target that has a dedicated prefetch instruction.
+    This pass only support block pointer.
+    This pass only support target that has a dedicated prefetch instruction.
   }];
   let constructor = "mlir::triton::gpu::createPrefetchBlockPass()";
   let dependentDialects = ["mlir::triton::TritonDialect",

@@ -10,11 +10,11 @@
 /// \file
 /// This file implements a pass to add prefetch mechanism for target that
 /// supports memory prefetch.
-/// this pass match pattern of certain scf.loop with tt.load and then add
+/// This pass match certain pattern of scf.loop with tt.load and then add
 /// prefetch both in the loop preheader(3 stages in advance) and loop body.
-/// this pass only support cases with block pointer.
-/// this pass should be run after triton-to-tritongpu-warp.
-/// this pass also add blockLayout Attr to newly created ops.
+/// This pass only support cases with block pointer.
+/// This pass should be run after triton-to-tritongpu-warp.
+/// This pass also add layout Attr to newly created ops.
 ///
 /// before this pass:
 ///  scf.for
@@ -46,7 +46,6 @@
 #include <memory>
 
 namespace mlir {
-// #define GEN_PASS_DEF_TRITONGPUPREFETCHBLOCK
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 } // namespace mlir
@@ -81,7 +80,6 @@ void expandDefChain(scf::ForOp loop, Value val, tt::MakeTensorPtrOp &blockPtr) {
   return;
 }
 
-// typical numWarps 4, 8, 16, 32, 64
 Type annotatePrefetchType(Type type, unsigned numWarps) {
   RankedTensorType tType;
   auto ptrType = dyn_cast<tt::PointerType>(type);
@@ -91,16 +89,17 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
     tType = cast<RankedTensorType>(ptrType.getPointeeType());
   }
   auto shape = tType.getShape();
-  assert(shape.size() == 2 && "add more support for 1d/2d shape");
+  assert(shape.size() == 2 && "add more support other than 2d shape");
   SmallVector<unsigned> sizePerWarp(2);
   SmallVector<unsigned> warpsPerCTA(2);
   auto m = shape[0];
   auto n = shape[1];
 
+  // typical numWarps 4, 8, 16, 32, 64
   // naive way to get warp distribute
-  auto root = std::sqrt(numWarps);
   auto sizeX = n < 32 ? n : 32; // elementtype
   auto numWarpsX = n / sizeX;
+  // auto root = std::sqrt(numWarps);
   // assert(n >= 16);
   // if (n / 16 <= root)
   //   numWarpsX = n / 16;
@@ -164,8 +163,6 @@ public:
         for (auto load : loads) {
           LoadInfo loadInfo;
           loadInfo.load = load;
-          // make it strict for now
-          // assert(load.getPtr().getUsers().size() == 2);
           for (auto user : load.getPtr().getUsers()) {
             if (user == load)
               continue;
@@ -245,7 +242,7 @@ public:
           auto load = info.load;
           b.setInsertionPoint(load);
           loc = load.getLoc();
-          // add barrier every iteration
+          // fixme: add barrier every 8 iteration
           // if (i == 0)
           //   b.create<gpu::BarrierOp>(loc);
           b.setInsertionPoint(info.advance);
