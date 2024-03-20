@@ -172,30 +172,6 @@ def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
 }
 
 //===----------------------------------------------------------------------===//
-// Type Conversions
-//===----------------------------------------------------------------------===//
-
-def TritonGEN_FpToFpOp : TritonGEN_Op<"fptofp">,
-  Results<(outs AnyFloat:$res)>,
-  Arguments<(ins
-    AnyFloat:$arg,
-    OptionalAttr<TritonGEN_RoundingModeAttr>:$roundingMode
-  )> {
-  let summary = "Convert between floating point types";
-
-  string baseDescription = [{
-    Convert `$arg` to the type of the result `$res`. If necessary, round the
-    result according to `$roundingMode`.
-  }];
-
-  let assemblyFormat = [{
-    $arg (` ` `{` `roundingMode` `=` $roundingMode^ `}`)? attr-dict `:` type($arg) `to` type($res)
-  }];
-
-  let hasVerifier = 1;
-}
-
-//===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
 

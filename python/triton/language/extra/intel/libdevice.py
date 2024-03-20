@@ -1062,6 +1062,42 @@ def rcbrt(arg0, _builder=None):
 
 
 @core.extern
+def j0(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__imf_j0f", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_j0", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def j1(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__imf_j1f", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_j1", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def y0(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__imf_y0f", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_y0", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def y1(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__imf_y1f", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_y1", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
 def erf(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {

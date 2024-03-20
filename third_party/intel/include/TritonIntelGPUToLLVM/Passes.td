@@ -30,7 +30,6 @@ def ConvertTritonIntelGPUToLLVM : Pass<"convert-triton-intel-gpu-to-llvm", "mlir
                              "mlir::triton::gpu::TritonGPUDialect",
                              "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                              "mlir::triton::TritonGEN::TritonGENDialect",
-                             "mlir::GENX::GENXDialect",
                              "mlir::NVVM::NVVMDialect"];
 
     let options = [

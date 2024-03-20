@@ -179,7 +179,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         ret = torch.empty_strided(x.shape, x.stride(), dtype=torch.float16, device=x.device)
         grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']), )
         dtype = getattr(tl, dtype)
-        kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
+        kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024, threads_per_warp=16)
         return ret
 
     def upcast_if_fp8(x, dtype):
