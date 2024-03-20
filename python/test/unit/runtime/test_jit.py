@@ -1,12 +1,13 @@
 import itertools
 import pytest
 import torch
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
 
 
-def test_pre_call_hooks():
+def test_pre_call_hooks(device):
 
     @triton.jit
     def add_kernel(
@@ -35,7 +36,7 @@ def test_pre_call_hooks():
 
     add_kernel.add_pre_run_hook(my_hook)
 
-    x = torch.randn(4).cuda()
+    x = torch.randn(4, device=device)
     y = MyTensor(x)
     out = torch.zeros_like(x)
     with pytest.raises(Exception):
