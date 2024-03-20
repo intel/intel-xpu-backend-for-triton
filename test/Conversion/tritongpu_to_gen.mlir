@@ -902,9 +902,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: [[TWO:%.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK: [[GRID_DIM_Z:%.*]] = llvm.call @_Z14get_num_groupsj([[TWO]]) : (i32) -> i64
     // CHECK: llvm.trunc [[GRID_DIM_Z]] : i64 to i32
-    %blockdimx = tt.get_num_programs {axis=0:i32} : i32
-    %blockdimy = tt.get_num_programs {axis=1:i32} : i32
-    %blockdimz = tt.get_num_programs {axis=2:i32} : i32
+    %blockdimx = tt.get_num_programs x : i32
+    %blockdimy = tt.get_num_programs y : i32
+    %blockdimz = tt.get_num_programs z : i32
     %v0 = arith.addi %blockdimx, %blockdimy : i32
     %v1 = arith.addi %v0, %blockdimz : i32
     %0 = tt.splat %v1 : i32 -> tensor<32xi32, #blocked0>
