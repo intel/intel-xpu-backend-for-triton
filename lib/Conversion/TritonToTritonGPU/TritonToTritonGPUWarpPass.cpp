@@ -159,7 +159,7 @@ public:
       DenseMap<scf::ForOp, LoopDotInfo> loopMap;
       for (auto loop : loops) {
         auto dots = llvm::to_vector(loop.getOps<tt::DotOp>());
-        assert(dots.size() <= 2 && "only support 1/2 dot in a loop");
+        assert(dots.size() <= 2 && "only support 1 or 2 dot in a loop");
         LoopDotInfo loopDotInfo;
         collectLoopDotInfo(loop, dots[0], loopDotInfo);
         LLVM_DEBUG(loopDotInfo.dump());
