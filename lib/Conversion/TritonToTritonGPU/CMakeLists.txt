@@ -1,6 +1,7 @@
 add_triton_library(TritonToTritonGPU
     TritonGPUConversion.cpp
     TritonToTritonGPUPass.cpp
+    TritonToTritonGPUWarpPass.cpp
 
     DEPENDS
     TritonConversionPassIncGen
