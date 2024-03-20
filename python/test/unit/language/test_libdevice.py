@@ -15,6 +15,8 @@ from triton.language.extra.intel import libdevice
         ("j1", "bessel_j1"),
         ("y0", "bessel_y0"),
         ("y1", "bessel_y1"),
+        ("cyl_bessel_i0", "i0"),
+        ("cyl_bessel_i1", "i1"),
     ],
 )
 def test_bessel(dtype_str, libdevice_fn, torch_special_fn, device):
