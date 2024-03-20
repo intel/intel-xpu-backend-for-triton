@@ -168,8 +168,8 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   std::string funcName = llvm::GenISAIntrinsic::getName(
       llvm::GenISAIntrinsic::GenISA_sub_group_dpas, llvmTypes);
 
-  ArrayRef<Type> argTypes{opTypes[0], aTy,     bTy,     int32Ty,
-                          int32Ty,    int32Ty, int32Ty, int1Ty};
+  SmallVector<Type> argTypes{opTypes[0], aTy,     bTy,     int32Ty,
+                             int32Ty,    int32Ty, int32Ty, int1Ty};
   LLVM::LLVMFuncOp funcOp =
       LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, resType);
   funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
@@ -182,7 +182,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
       rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 8 /* systolic depth */);
   auto RC = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getRc());
   auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
-  ArrayRef<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
+  SmallVector<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
@@ -215,18 +215,18 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   // The IGC intrinsic requires the first argument be int64
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
 
-  ArrayRef<Type> argTypes{int64Ty,
-                          baseWidth.getType(),
-                          baseHeight.getType(),
-                          x.getType(),
-                          y.getType(),
-                          int32Ty,
-                          int32Ty,
-                          int32Ty,
-                          int32Ty,
-                          int1Ty,
-                          int1Ty,
-                          int32Ty};
+  SmallVector<Type> argTypes{int64Ty,
+                             baseWidth.getType(),
+                             baseHeight.getType(),
+                             x.getType(),
+                             y.getType(),
+                             int32Ty,
+                             int32Ty,
+                             int32Ty,
+                             int32Ty,
+                             int1Ty,
+                             int1Ty,
+                             int32Ty};
 
   LLVM::LLVMFuncOp funcOp =
       LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, resType);
@@ -247,9 +247,9 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   // FIXME: Add argument to control cache.
   auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
 
-  ArrayRef<Value> args{ptr,     baseWidth,    baseHeight,    x,
-                       y,       elemSize,     tileWidth,     tileHeight,
-                       vBlocks, useTranspose, vnniTransform, cache};
+  SmallVector<Value> args{ptr,     baseWidth,    baseHeight,    x,
+                          y,       elemSize,     tileWidth,     tileHeight,
+                          vBlocks, useTranspose, vnniTransform, cache};
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 
   return callOp;
@@ -284,19 +284,19 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   // The IGC intrinsic requires the first argument be int64
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
 
-  ArrayRef<Type> argTypes{int64Ty,
-                          baseWidth.getType(),
-                          baseHeight.getType(),
-                          x.getType(),
-                          y.getType(),
-                          int32Ty,
-                          int32Ty,
-                          int32Ty,
-                          int32Ty,
-                          int1Ty,
-                          int1Ty,
-                          int32Ty,
-                          storeVal.getType()};
+  SmallVector<Type> argTypes{int64Ty,
+                             baseWidth.getType(),
+                             baseHeight.getType(),
+                             x.getType(),
+                             y.getType(),
+                             int32Ty,
+                             int32Ty,
+                             int32Ty,
+                             int32Ty,
+                             int1Ty,
+                             int1Ty,
+                             int32Ty,
+                             storeVal.getType()};
 
   LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
       moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(context));
@@ -317,10 +317,10 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   // FIXME: Add argument to control cache.
   auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
 
-  ArrayRef<Value> args{ptr,     baseWidth,    baseHeight,    x,
-                       y,       elemSize,     tileWidth,     tileHeight,
-                       vBlocks, useTranspose, vnniTransform, cache,
-                       storeVal};
+  SmallVector<Value> args{ptr,     baseWidth,    baseHeight,    x,
+                          y,       elemSize,     tileWidth,     tileHeight,
+                          vBlocks, useTranspose, vnniTransform, cache,
+                          storeVal};
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 
   return callOp;
