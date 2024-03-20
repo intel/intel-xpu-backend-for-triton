@@ -26,6 +26,18 @@ def compile_module_from_src(src, name):
             src_path = os.path.join(tmpdir, "main.cpp")
             with open(src_path, "w") as f:
                 f.write(src)
+            import intel_extension_for_pytorch as ipex
+            import torch
+            torch_path = os.path.join(torch.utils.cmake_prefix_path, "../../")
+            torch_include_dir = os.path.join(torch_path, "include")
+            include_dir.append(torch_include_dir)
+            ipex_path = os.path.join(ipex.cmake_prefix_path, "../../")
+            ipex_include_dir = os.path.join(ipex_path, "include")
+            ipex_library_dir = os.path.join(ipex_path, "lib")
+            ipex_library = "intel-ext-pt-gpu"
+            library_dir.append(ipex_library_dir)
+            include_dir.append(ipex_include_dir)
+            libraries.append(ipex_library)
             so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
@@ -140,6 +152,8 @@ def make_launcher(constants, signature, ids):
     #include <Python.h>
     #include <stdio.h>
     #include <numpy/arrayobject.h>
+    #include <ipex.h>
+    #include <ATen/record_function.h>
 
     static inline void gpuAssert(ze_result_t code, const char *file, int line)
     {{
@@ -243,8 +257,8 @@ def make_launcher(constants, signature, ids):
       }}
   }}
   static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
+    RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
     void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
     uint32_t num_params = sizeof(params)/sizeof(params[0]);
     uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
@@ -274,6 +288,7 @@ def make_launcher(constants, signature, ids):
       }}
       }};
     auto event = stream.submit(cgf);
+    xpu::profiler_record(kernel_name, event);
   }}
 // end sycl
     static PyObject* launch(PyObject* self, PyObject* args) {{
