@@ -46,7 +46,7 @@ namespace ttg = mlir::triton::gpu;
 namespace {
 constexpr static char AttrWorkloadName[] = "triton_gpu.workload";
 
-// pass named attrs (e.g., tt.contiguity) from Triton to Triton
+// pass named attrs (e.g., tt.contiguity) from Triton to TritonGPU
 static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
   for (const NamedAttribute attr : dictAttrs.getValue())
     if (!op->hasAttr(attr.getName()))
@@ -72,28 +72,28 @@ struct DotInfo {
   tt::AdvanceOp advanceB;
   SmallVector<Value> chainOpsC;
   void dump() {
-    dot.dump();
+    LLVM_DEBUG(dot.dump());
     LDBG("***** chain ops of dotA *****\n");
     for (auto val : chainOpsA)
-      val.dump();
+      LLVM_DEBUG(val.dump());
     LDBG("***** chain ops end *********\n");
     if (loadA)
-      loadA.dump();
+      LLVM_DEBUG(loadA.dump());
     if (advanceA)
-      advanceA.dump();
+      LLVM_DEBUG(advanceA.dump());
     LDBG("\n");
     LDBG("***** chain ops of dotB *****\n");
     for (auto val : chainOpsB)
-      val.dump();
+      LLVM_DEBUG(val.dump());
     LDBG("***** chain ops end *********\n");
     if (loadB)
-      loadB.dump();
+      LLVM_DEBUG(loadB.dump());
     if (advanceB)
-      advanceB.dump();
+      LLVM_DEBUG(advanceB.dump());
     LDBG("\n");
     LDBG("***** chain ops of dotC *****\n");
     for (auto val : chainOpsC)
-      val.dump();
+      LLVM_DEBUG(val.dump());
     LDBG("***** chain ops end *********\n");
   }
 };
@@ -107,14 +107,14 @@ struct LoopDotInfo {
   void dump() {
     LDBG("\n");
     LDBG("***** first dot info *****\n");
-    dotInfo0.dump();
+    LLVM_DEBUG(dotInfo0.dump());
     if (dotInfo1.dot) {
       LDBG("\n");
       LDBG("connect to first DotA " << connectDotA << "\n");
       LDBG("connect to first DotB " << connectDotB << "\n");
       LDBG("connect to first DotC " << connectDotC << "\n");
       LDBG("***** second dot info *****\n");
-      dotInfo1.dump();
+      LLVM_DEBUG(dotInfo1.dump());
     }
   }
 };
@@ -185,7 +185,6 @@ public:
           auto aType = dot.getA().getType().cast<RankedTensorType>();
           auto bType = dot.getB().getType().cast<RankedTensorType>();
           auto m = aType.getShape()[0];
-          // auto k = aType.getShape()[1];
           auto n = bType.getShape()[1];
           auto [sizePerWarp, warpsPerCTA] = determineDotConfig(m, n, numWarps);
           auto ctaLayout = ttg::CTALayoutAttr::get(ctx, {1, 1}, {1, 1}, {1, 0});
