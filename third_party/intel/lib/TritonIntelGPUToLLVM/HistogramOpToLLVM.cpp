@@ -16,7 +16,6 @@ static Value generateVoteBallot(Location loc, Value bit, int threadMask,
 
   // Emulate vote.ballot.sync behavior using shift, shuffle, and or.
   // TODO: check for more efficient solution.
-  int offs = 1;
   Value laneId = and_(threadId, i32_val(numThreadPerWarp - 1));
   Value reduced_val = shl(select(bit, i32_val(1), i32_val(0)), laneId);
   for (int offs = 1; offs < numThreadPerWarp; offs = offs << 1) {
@@ -58,7 +57,9 @@ computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
                                      numThreadPerWarp, rewriter);
       ballotBits.push_back(bit);
     }
-    Value fullMask = i32_val(0xFFFFFFFF);
+
+    uint64_t fullMaskValue = (1ll << numThreadPerWarp) - 1u;
+    Value fullMask = i32_val(fullMaskValue);
     Value mask = fullMask;
     // If not all threads have unique data, mask out the redundant ones.
     if (numThreadWithUniqueData < numThreadPerWarp)
@@ -74,7 +75,7 @@ computeWarpLevelHistogram(Location loc, RankedTensorType srcType,
     for (int k = 0; k < warpLevelHistogram.size(); k++) {
       Value binMask = mask;
       for (int j = 0; j < numBits - numBitsLaneId; j++) {
-        Value updateMask = i32_val(((k & (1 << j)) ? 0 : 0xffffffff));
+        Value updateMask = i32_val((k & (1 << j)) ? 0 : fullMaskValue);
         binMask = and_(binMask, xor_(ballotBits[j], updateMask));
       }
       // at this point, 'bin_mask' tells you which elements are in the kth bin
@@ -167,6 +168,9 @@ public:
     int numBins = op.getType().getDimSize(0);
     int numThreadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
         op->getParentOfType<ModuleOp>());
+    assert(numThreadsPerWarp < 64 &&
+           "Only supports threads per warp less than 64");
+
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.
     numBins = std::max(numBins, numThreadsPerWarp);
