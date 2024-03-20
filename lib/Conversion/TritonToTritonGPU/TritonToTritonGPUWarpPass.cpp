@@ -54,7 +54,7 @@ static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
 }
 
 enum class Workload {
-  // add more
+  // TODO: add more
   None = 0, // pattern not match any of below
   ElementWise = 1,
   Reduction = 2,
