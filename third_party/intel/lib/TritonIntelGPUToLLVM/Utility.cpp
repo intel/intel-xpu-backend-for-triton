@@ -348,6 +348,20 @@ Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
   return val;
 }
 
+Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
+               ModuleOp moduleOp, int axis) {
+  assert(axis >= 0);
+  assert(axis < 3);
+  assert(moduleOp);
+
+  constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                           mlir::gpu::Dimension::y,
+                                           mlir::gpu::Dimension::z};
+
+  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+}
+
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content,
                         unsigned addressSpace) {
