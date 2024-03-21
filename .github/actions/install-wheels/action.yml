@@ -1,0 +1,33 @@
+# Installs wheels from the latest run of a specified workflow
+name: install-wheels
+description: Install latest wheels from a specified workflow using a custom wildcard
+inputs:
+  workflow:
+    description: Name of the workflow to install wheels from
+    default: Triton wheels
+  repository:
+    description: Repository name with owner
+    default: intel/intel-xpu-backend-for-triton
+  wheels_pattern:
+    # Example of specifying only some packages to install: {intel_extension_for_pytorch-*,torch-*}
+    description: Pattern to match the wheel files to download
+    default: *
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install wheels from specified workflow artifacts
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        WORKFLOW_ID=$(gh run list -w "${{ input.workflow }}" -R ${{ input.repository }} --json databaseId | jq '.[0].databaseId')
+        PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        TEMP_DIR=`mktemp -d`
+        pushd ${TEMP_DIR}
+        gh auth status
+        gh run download ${WORKFLOW_ID} -R ${{ input.repository }} --pattern 'wheels-py${PYTHON_VERSION}*'
+        cd wheels-py${PYTHON_VERSION}*
+        pip install ${{ input.wheels_pattern }}
+        popd
+        rm -rf ${TEMP_DIR}
