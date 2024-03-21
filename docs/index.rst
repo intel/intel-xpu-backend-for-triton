@@ -25,7 +25,7 @@ Getting Started
 Programming Guide
 -----------------
 
-Check out the following documents to learn more about Triton and how it compares against other DSLs for DNNs:
+Check out the following documents to learn more about Triton and its comparison with other DSLs for Deep Neural Networks (DNNs):
 
 - Chapter 1: :doc:`Introduction <programming-guide/chapter-1/introduction>`      
 - Chapter 2: :doc:`Related Work <programming-guide/chapter-2/related-work>`

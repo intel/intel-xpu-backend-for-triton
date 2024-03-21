@@ -1,25 +1,25 @@
 ###################
-Triton architecture
+Triton Architecture
 ###################
 
-The goal of this document is to describe the high-level architecture and roadmap of the solution outlining components and interactions. The intended audience is triton & triton backend developers. No a priori knowledge is assumed, however, the introduction is concise (use links to familiarize yourself with the basics as necessary).
+The goal of this document is to describe the high-level architecture and roadmap of the solution outlining components and interactions. The intended audience is Triton & Triton backend developers. No prior knowledge is assumed. The document provides a brief introduction to Triton. Use provided links to learn the basics if needed.
 
 ************
 Introduction
 ************
 
-Triton [c1]_ [c10]_ has two main use cases: triton language JIT compiler and pytorch 2.0 [c2]_ low-level backend compiler. Here we focus on the latter but keep the former in mind (as well as supporting other frameworks).
+Triton [c1]_ [c10]_ serves two main purposes: as a Triton language JIT compiler and as a low-level backend compiler for PyTorch 2.0 [c2]_. While we mainly discuss the latter, we also consider the former and support other frameworks.
 
 .. image :: ../pics/pt2.png
 
-From PyTorch point of view, a model FX graph [c3]_ is captured by Dynamo [c4]_ (and AOT Autograd if necessary) which is passed to Inductor [c5]_. The Inductor converts the broad set of PyTorch’s ATen operators into a narrower set of stable primitive operators (PrimTorch) [c6]_ via “decompositions” (a customizable mechanism for complex operator expansion). The resulting graph is translated into Triton kernels which are decorated python functions produced by the Inductor [c7]_. Triton frontend consumes function sources, the internals follow traditional compiler architecture: an AST is built and traversed to produce an MLIR module. The module is progressively lowered into the LLVM dialect. A regular LLVM module is then produced and converted to an appropriate representation depending on the target (e.g., PTX for Nvidia). A compiled kernel is then returned with a launcher stub. Kernels are then executed by PyTorch through Inductor’s scheduling & wrapper interfaces.
+From PyTorch perspective, a model FX graph [c3]_ is captured by Dynamo [c4]_ (and AOT Autograd if necessary) which is then passed to Inductor [c5]_. The Inductor converts the broad set of PyTorch’s ATen operators into a narrower set of stable primitive operators (PrimTorch) [c6]_ via “decompositions” (a customizable mechanism for complex operator expansion). The resulting graph is translated into Triton kernels which are decorated Python functions produced by the Inductor [c7]_. Triton frontend consumes function sources, the internals follow traditional compiler architecture: an AST is built and traversed to produce an MLIR module. The module is progressively lowered into the LLVM dialect. A regular LLVM module is then produced and converted to an appropriate representation depending on the target (for example, PTX for Nvidia). A compiled kernel is then returned with a launcher stub. Kernels are then executed by PyTorch through Inductor’s scheduling & wrapper interfaces.
 
 
 ****************************
-Triton MLIR compiler details
+Triton MLIR Compiler Details
 ****************************
 
-Code generation overview
+Code Generation Overview
 ========================
 
 
@@ -27,25 +27,25 @@ The Triton structure can be broken down into three major parts, following the cl
 
 1. The frontend consumes a decorated Python kernel and transforms it into Triton IR (MLIR Triton dialect).
 2. The middle-end consumes the IR and progressively lowers it to the TritonGPU dialect applying optimizations.
-3. The backend lowers TritonGPU dialect to LLVM dialect, then converts it to LLVM IR and an appropriate format depending on the target (e.g., ptx/cubin in Nvidia case).
+3. The backend lowers TritonGPU dialect to LLVM dialect, then converts it to LLVM IR and an appropriate format depending on the target (for example, ptx/cubin in Nvidia case).
 
 There are three main IR stages on which most of the optimizations are done: Triton dialect, TritonGPU dialect [c8]_, and LLVM IR. Note: Vendor-specific backends introduce additional dialects to help with TritonGPU lowering.
 
 .. image :: ../pics/triton.png
 
-In addition to the custom dialects Triton reuses upstream ones like arith & math for math, scf/cf for control flow, index, func, nvvm for low-level GPU operations. Triton also introduces some Nvidia-specific dialects for lowering to Hopper target.
+In addition to the custom dialects, Triton reuses upstream ones like arith & math for math, scf/cf for control flow, index, func, nvvm for low-level GPU operations. Triton also introduces some Nvidia-specific dialects for lowering to Hopper target.
 
 Torch Inductor IR (input language)
 ----------------------------------
 Torch Inductor is a pure Python compiler of PyTorch models. The Inductor uses “define-by-run” loop level IR. It supports dynamic shapes/strides. The Inductor primarily targets GPUs with Triton and CPUs by generating C++ sources with OpenMP. At a high-level Inductor  performs:
 
 * **Graph operators’ decomposition** into a smaller set of operators (~250 PrimTorch ops instead of ~2k PyTorch ops [c11]_; Note: the sets are not stabilized!).
-* **Loop-level IR graph lowering**: remove views, broadcasting, indexing simplification, materialization vs reuse decisions, layout optimization, loop reordering.
+* **Loop-level IR graph lowering**: removing views, broadcasting, indexing simplification, materialization vs reuse decisions, layout optimization, loop reordering.
 * **Scheduling**: horizontal/vertical/reduction fusion , tiling, memory planning, buffer reuse, autotuning.
 * **Backend code generation** (depending on the target).
 * **Wrapper code generation**: basically, an unrolled interpreter loop to run the generated kernel (gather the inputs, symbolic shape processing, allocate the tensors, and invoke the kernel).
 
-The sequence of the above steps produces a ``call`` function that controls the guards [c13]_ and then calls a sequence of Aten/Extern kernels intermixed with generated triton functions. Former are resolved through an algorithm selection mechanism [c12]_. The latter is a Python function with ``@triton.jit`` decorator, e.g. (fused bias from a linear layer and a Relu):
+The sequence of the above steps produces a ``call`` function that controls the guards [c13]_ and then calls a sequence of Aten/Extern kernels intermixed with generated Triton functions. Former are resolved through an algorithm selection mechanism [c12]_. The latter is a Python function with ``@triton.jit`` decorator, for example (fused bias from a linear layer and a Relu):
 
 .. code-block:: python
   import torch
@@ -67,7 +67,7 @@ The sequence of the above steps produces a ``call`` function that controls the g
       tl.store(in_out_ptr0 + (x2), tmp3, xmask)
 
 
-Each kernel will additionally be annotated with meta information such as size hints, signature, device type, mutated args, and others.
+Each kernel additionally annotates with meta information such as size hints, signature, device type, mutated args, and others.
 By default, Inductor reuses efficient implementations of compute-heavy operations such as matrix multiplication or flash attention via dispatching a call to the operator's native implementation in Aten. Consider a model:
 
 .. code-block:: python
@@ -169,12 +169,12 @@ The generated code for a single causal attention block would look like the follo
           triton_poi_fused_native_dropout_0.run(buf13, buf10, buf12, 0, 65536, grid=grid(65536), stream=stream0)
           return (buf13, reinterpret_tensor(primals_3, (128, 512), (512, 1), 0), reinterpret_tensor(buf0, (1, 8, 128, 64), (0, 64, 1536, 1), 0), reinterpret_tensor(buf0, (1, 8, 128, 64), (0, 64, 1536, 1), 512), reinterpret_tensor(buf0, (1, 8, 128, 64), (0, 64, 1536, 1), 1024), buf2, buf3, buf4, buf5, buf6, buf7, reinterpret_tensor(buf2, (128, 512), (512, 1), 0), buf12, reinterpret_tensor(primals_2, (512, 512), (512, 1), 0), )
 
-It is worth noting that Inductor can replace these native aten implementations with triton templated kernels.
+Note that Inductor can replace these native aten implementations with Triton templated kernels.
 Inductor then passes the generated kernels (Triton source code) to the Triton compiler.
 
-Triton frontend
+Triton Frontend
 ---------------
-Triton frontend is responsible for converting the input python-like language to the intermediate representation (Triton MLIR dialect). Consider an example kernel for softmax calculation.
+Triton frontend is responsible for converting the input Python-like language to the intermediate representation (Triton MLIR dialect). Consider an example kernel for softmax calculation.
 
 .. code-block:: python
 
@@ -230,24 +230,24 @@ The resulting IR follows the input language almost 1 to 1:
 .. image :: ../pics/prog-model.png
   :width: 400
 
-As seen in the example above, Triton relies on pointer arithmetic mixed with a wide set of ‘built  -ins’ (e.g., ``tl.program_id()``) calls to produce the IR. There is tensor creation, shape manipulation, math, memory, and some other built-ins available (see [c16]_ for the complete set). The program model (SPMD) assumes that an executor runs a number of ‘programs’ that process different data. The kernel can accept torch tensors and treat them as a tensor of pointers. Each kernel is assumed to be single-threaded, each working on a ‘block’ of data (e.g., ``BLOCK_SIZE: tl.constexpr`` in the kernel example above; in this case happens to equal 1024). Triton “automatically” parallelizes the execution across the range of data. Since the block size affects hardware mapping (e.g., shared memory access) the value is a compile-time constant. Automatic parallelization basically means that users do not need to explicitly control and synchronize (e.g., for shared memory access). Calls to math functions are emitted as additional functions usually containing libdevice calls (or similar).
+As seen in the example above, Triton relies on pointer arithmetic mixed with a wide set of ‘built  -ins’ (for example, ``tl.program_id()``) calls to produce the IR. There is tensor creation, shape manipulation, math, memory, and some other built-ins available (see [c16]_ for the complete set). The program model (SPMD) assumes that an executor runs a number of ‘programs’ that process different data. The kernel can accept torch tensors and treat them as a tensor of pointers. Each kernel is assumed to be single-threaded, each working on a ‘block’ of data (for example, ``BLOCK_SIZE: tl.constexpr`` in the kernel example above; in this case, it equals 1024). Triton “automatically” parallelizes the execution across the range of data. Since the block size affects hardware mapping (for example, shared memory access) the value is a compile-time constant. Automatic parallelization basically means that users do not need to explicitly control and synchronize (for example, for shared memory access). Calls to math functions are emitted as additional functions usually containing libdevice calls (or similar).
 Additionally, Triton provides a runtime and a JIT, and caches previously compiled kernels for reuse. Python binding is done through pybind11 [c24]_.
 The resulting IR is passed to the optimizer (middle-end).
 
-Triton optimizations
+Triton Optimizations
 ====================
-Triton’s optimizer uses custom MLIR and default LLVM optimization passes to improve kernel performance. Passes are primarily run over Triton dialect, TritonGPU dialect, and LLVM IR. There’re some common passes like inline, LICM, CSE, DSE that are run at each stage as well as dialect specific optimizations that are described below.
+Triton’s optimizer uses custom MLIR and default LLVM optimization passes to improve kernel performance. Passes are primarily run over Triton dialect, TritonGPU dialect, and LLVM IR. There are some common passes like inline, LICM, CSE, DSE that are run at each stage as well as dialect specific optimizations that are described below.
 
-Triton dialect
+Triton Dialect
 --------------
-Triton dialect [c17]_ closely mimics the language built-ins exposed to the user. Its input types are basic types like floating point of different formats, pointers, and tensors of basic types. The operations are: tensor creation and shape manipulation, tensor pointer arithmetic, SPMD primitives, loads/stores, reductions, scans, atomics, debug ops, and some others (e.g., some weird like a modified func.call op).
-At this level the optimizer runs:
+Triton dialect [c17]_ closely mimics the language built-ins exposed to the user. Its input types are basic types like floating point of different formats, pointers, and tensors of basic types. The operations are: tensor creation and shape manipulation, tensor pointer arithmetic, SPMD primitives, loads/stores, reductions, scans, atomics, debug ops, and some others (for example, some weird like a modified func.call op).
+At this level, the optimizer runs:
 
 * Combine pass – applying rewrite rules for IR simplification.
 * Broadcast reordering.
 * Tensor pointer rewriting.
 
-TritonGPU dialect
+TritonGPU Dialect
 -----------------
 TritonGPU dialect [c18]_ exposes GPU-specific operators. After converting Trition dialect to TritonGPU the following set of optimizations are run:
 
@@ -263,7 +263,7 @@ TritonGPU dialect [c18]_ exposes GPU-specific operators. After converting Tritio
 
 The most important thing about the dialect is that it changes how tensors are represented by adding a layout. The layout attribute determines how the data should be partitioned across GPU threads. There are two classes of layouts: shared and distributed.
 
-Shared layout class
+Shared Layout Class
 ^^^^^^^^^^^^^^^^^^^
 This layout is used for tensors that can be accessed within shared memory by different GPU threads. The layout describes elements swizzling to avoid shared memory access bank conflicts. The main purpose of the layout is to, as the name suggests, shared memory mapping.
 Example:
@@ -287,9 +287,9 @@ An actual shared layout is described by the following parameters:
     * Multiple consecutive rows can have the same swizzling pattern. The number of rows that have the same swizzling pattern is **perPhase**. Calculated based on the parent MMFA/MMA encoding.
     * **maxPhase** – represents the total number of patterns. This is usually set according to how shared memory is accessed to minimize bank conflicts.
 
-* **Order** – an array, fastest changing axis first
+* **Order** – an array, fastest changing axis first.
 * **CTA Layout** – containing CTAs (groups) per CGA (grid), CTASplitNum, and CTAOrder.
-* **hasLeadingOffset** – Boolean value when set to true means when matrix is stored shared memory, there will be an offset not only in the stride dimension, but also in the leading dimension. For example, a matrix of size 16x128 and data type I8 is stored in the shared memory with 64B-swizzle mode. The offset of the element with index (0, 64) will be 16*64, compared to 1*64 when the hasLeadingOffset is false.
+* **hasLeadingOffset** – Boolean value; when set to true, means when matrix is stored in shared memory, there will be an offset not only in the stride dimension, but also in the leading dimension. For example, a matrix of size 16x128 and data type I8 is stored in the shared memory with 64B-swizzle mode. The offset of the element with index (0, 64) will be 16*64, compared to 1*64 when the hasLeadingOffset is false.
 
 Example [c20]_. Assume 16 (M) by 16 (N) tensor A and each element is a f32. And we want to do swizzling along the N dim (row).
 
@@ -302,7 +302,7 @@ The data layout in shared memory becomes:
 
 The solid line unites tensor elements that are processed by a single thread.
 
-Distributed layout class
+Distributed Layout Class
 ^^^^^^^^^^^^^^^^^^^^^^^^
 The Distributed encoding describes the layout tensor:math:`L` with the 4-level hierarchy of multiple threads on GPU. It is abstracted from the top to the bottom as Groups Per Grid->Subgroups per Group->Threads Per Subgroup->Values Per Thread. For Groups (CTA) Per Grid (CGA) and Subgroups (Warps) Per Group (CTA) level, the linear id is distributed contiguously with the shape and order.
 For example, a shape/order pair defines a distribution layout:
@@ -327,19 +327,19 @@ The layout function :math:`L` of this layout is then defined, for an index :math
 
 The two presented classes form additional layout encodings.
 
-Blocked layout
+Blocked Layout
 ^^^^^^^^^^^^^^
 The blocked layout is a distributed layout where each subgroup (warp) owns a contiguous portion of the target tensor. This is typically the kind of data layout used to promote memory coalescing in LoadInst and StoreInst. It is characterized by three tuples – thread tile size, subgroup (warp) tile size, and block tile size – which specify the number of elements owned by each GPU thread, subgroup, and group respectively. The purpose of the blocked layout is to describe the register file mapping.
 The actual parameter set is the following:
 
-* **sizePerThread** – defines the thread tile size, e.g., a tuple {2, 2} would mean each thread owns a 2 by 2 square matrix of elements.
-* **threadsPerWarp** – defines the subgroup or warp tile size. Since a subgroup size has very limited options this would look like e.g. {8, 4} for SIMD32. The example would mean that each subgroup will process a set of 8 elements in 4 rows (and the assignment to the thread is determined by sizePerThread).
+* **sizePerThread** – defines the thread tile size, for example, a tuple {2, 2} would mean each thread owns a 2 by 2 square matrix of elements.
+* **threadsPerWarp** – defines the subgroup or warp tile size. Since a subgroup size has very limited options this would look like for example {8, 4} for SIMD32. The example would mean that each subgroup will process a set of 8 elements in 4 rows (and the assignment to the thread is determined by sizePerThread).
 * **warpsPerCTA** – defines how a tensor is split between the subgroups that build up a group. E.g., a {2, 1} would mean a “horizontal” tensor partitioning and {1, 2} – “vertical”.
-* **Order** – an array, fastest changing axis first
+* **Order** – an array, fastest changing axis first.
 * **CTA Layout** – containing CTAs (groups) per CGA (grid), CTASplitNum, and CTAOrder.
 
 Todo: example of non-contiguous access.
-Following are a couple of examples from Triton’s inline doc (numbers mean thread ID, positions mean elements in a tensor):
+Below you can find a couple of examples from Triton’s inline doc (numbers mean thread ID, positions mean elements in a tensor):
 Example 1, a row-major coalesced layout may partition a 16x16 tensor over 2 warps (i.e. 64 threads) as follows:
 
 .. code-block:: none
@@ -430,15 +430,15 @@ for
 
 The last piece of the puzzle for dot operator lowering (see Dot product optimization & layout lowering) is the matrix multiplication input (dot) and output (mma) operands layouts.
 
-Dot operand layout
+Dot Operand Layout
 ^^^^^^^^^^^^^^^^^^
 In the TritonGPU dialect, considering ``d = tt.dot a, b, c``. ``tt.dot``'s operands ``a`` and ``b`` must be of DotOperandEncodingAttr distributed layout.
 
-MMA layout
+MMA Layout
 ^^^^^^^^^^
-MMA layouts provide the register file mapping for the result of a matrix multiplication instruction. There are different layouts for different hardware (e.g., MFMA for AMD, NvidiaMma for Nvidia, DPAS for Intel). See Nvidia’s examples at [c26]_.
+MMA layouts provide the register file mapping for the result of a matrix multiplication instruction. There are different layouts for different hardware (for example, MFMA for AMD, NvidiaMma for Nvidia, DPAS for Intel). See Nvidia’s examples at [c26]_.
 
-Dot product optimization & layout lowering
+Dot Product Optimization & Layout Lowering
 ==========================================
 GPUs provide specific instructions for efficient matrix multiplication (Nvidia’s MMA [c21]_, Intel’s DPAS [c22]_, and AMD’s MFMA [c23]_). These are usually implemented as systolic arrays and produce/consume a tile of input and output values (as opposed to regular instructions consuming 1 operand at a time). The performance of workloads using these instructions is highly dependent on data throughput, thus the overall flow looks like the following:
 
@@ -450,11 +450,11 @@ Layouts dependency example (an arrow from Dot layout to MMA layout means MMA is 
 
 .. image :: ../pics/encoding.png
 
-A single dot operator is likely to be mapped to multiple MMA instructions. For Nvidia flow, these will be emitted as inline assembly into LLVM (e.g., ``llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 …``).
+A single dot operator is likely to be mapped to multiple MMA instructions. For Nvidia flow, these are emitted as inline assembly into LLVM (for example, ``llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 …``).
 
-Layout conversion
+Layout Conversion
 =================
-To produce the desired memory behavior described in the previous section, triton GPU introduces layouts conversion (by means of ConvertLayoutOp). An input tensor represented in a blocked layout is sliced and inserted into a shared layout, e.g.:
+To produce the desired memory behavior described in the previous section, Triton GPU introduces layouts conversion (by means of ConvertLayoutOp). An input tensor represented in a blocked layout is sliced and inserted into a shared layout, for example:
 
 .. code-block:: none
 
@@ -462,7 +462,7 @@ To produce the desired memory behavior described in the previous section, triton
   triton_gpu.async_commit_group
 
 
-The main loop of the GEMM would then extract a slice (a reimplementation of tensor.extract_slice [c25]_) from the shared memory, converting arguments to the dot layout and producing mma layout with the dot operator, e.g.:
+The main loop of the GEMM would then extract a slice (a reimplementation of tensor.extract_slice [c25]_) from the shared memory, converting arguments to the dot layout and producing mma layout with the dot operator, for example:
 
 .. raw:: html
 
@@ -477,7 +477,7 @@ The main loop of the GEMM would then extract a slice (a reimplementation of tens
       ...
   </pre></div></div>
 
-The result of the processing is then converted back to blocked layout to be stored to the main GPU memory, e.g.:
+The result of the processing is then converted back to blocked layout to be stored to the main GPU memory, for example:
 
 .. code-block:: none
 
@@ -487,7 +487,7 @@ The result of the processing is then converted back to blocked layout to be stor
 
 See TritonDotPattern.
 
-Pipelining optimization
+Pipelining Optimization
 =======================
 The pipelining pass is split in two parts. The first one creates a modulo schedule. The second – emits prologue and epilogue and rewrites the inner loop. There is currently a single ad hoc scheduling for the matmul. It creates the schedule and inserts async loads as well as wait ops. An example of the expansion in case we break the loop into three stages (S0, S1, S2) is as follows:
 
@@ -503,7 +503,7 @@ The pipelining pass is split in two parts. The first one creates a modulo schedu
 
 Prefetches insertion
 Prefetch pass attempts to prefetch the operands of a tt.dot op. It adds slice extraction from an input tensor and inserts layout conversion ops. The latter ones will then be lowered to shared memory loads.
-Here’s an example of the transformation:
+Here is an example of the transformation:
 
 .. code-block:: none
 
@@ -531,9 +531,9 @@ Is translated to:
   }
 
 *****************
-Intel GPU backend
+Intel GPU Backend
 *****************
-Intel GPU backend [c27]_ for Triton reuses most of the Triton upstream infrastructure and optimizations arriving at a similar representation for device specific lowering (TritonGPU -> LLVMIR). At this point the backend provides custom passes, layouts, and dialects to adjust the emitted LLVM IR. The IR is then translated to the Standard Portable Intermediate Representation (SPIR-V) [c28]_ to be consumed by Intel Graphics Compiler (IGC) [c29]_.
+Intel GPU backend [c27]_ for Triton reuses most of the Triton upstream infrastructure and optimizations arriving at a similar representation for device-specific lowering (TritonGPU -> LLVMIR). At this point, the backend provides custom passes, layouts, and dialects to adjust the emitted LLVM IR. The IR is then translated to the Standard Portable Intermediate Representation (SPIR-V) [c28]_ to be consumed by Intel Graphics Compiler (IGC) [c29]_.
 
 Components
 ==========
@@ -542,27 +542,27 @@ The Intel GPU backend consists of three major components:
 * Triton fork for upstream work
 * Intel GPU backend (plugin)
 
-SIMD vs SIMT code generation
+SIMD vs SIMT Code Generation
 ============================
 IGC provides two distinct ways of compiling a compute kernel:
 
-* **Scalar path** – OpenCL-like kernels, SIMT programming model, when a value in the IR represents an OpenCL’s Work Item [c30]_ (or a logical thread). The logical thread is usually mapped to a SIMD lane (e.g., there usually will be 32 of logical threads in a warp; so, APIs provide synchronization primitives for scalar values that communicate to the whole warp by the compiler inserting the right asm instructions).
+* **Scalar path** – OpenCL-like kernels, SIMT programming model, when a value in the IR represents an OpenCL’s Work Item [c30]_ (or a logical thread). The logical thread is usually mapped to a SIMD lane (for example, there usually will be 32 of logical threads in a warp; so, APIs provide synchronization primitives for scalar values that communicate to the whole warp by the compiler inserting the right asm instructions).
 * **Vector path** – SIMD-kernels, in this programming model the IR operates on vectors that are mapped to a physical thread. The compiler (originates from the C-for-Metal [c31]_) operates with explicit vectors and vector sizes.
 The modes are mostly separate within IGC and make different assumptions about the input IR. Each path exposes a set of intrinsics: GenISA intrinsics [c32]_ for the scalar path with scalar arguments and GenX intrinsics [c33]_ (or vc-instrinsics – the open source name) for the vector path with explicitly vector arguments.
 
-From the execution point of view the two modes are incompatible (in the driver), however, there’s a feature to allow for kernels to do cross-context calls (in dpc++ these are invoke_simd and invoke_spmd, e.g., [c34]_). Those have an overhead and are tricky to use.
-Intel GPU backed has thus two paths for Triton kernels compilation:
+From the execution perspective, the two modes are incompatible (in the driver), however, there’s a feature to allow for kernels to do cross-context calls (in dpc++ these are invoke_simd and invoke_spmd, for example, [c34]_). Those have an overhead and are tricky to use.
+Thus, Intel GPU backed has two paths for Triton kernels compilation:
 
 * SIMT – the default approach (same as AMD/Nvidia) that lowers TritonGPU IR using the layouts described above.
 * SIMD – an approach suitable for dense operations that transforms TritonGPU to “warp-level” IR (similar to auto-vectorization), adjusts operator argument sizes and maps the result to XeGPU dialect [c35]_.
 
-At a higher level, the two approaches represent only the way the IR is looked at (e.g., Triton IR can be thought of "SIMD" in a way that it operates on tensors; and autovectorization converts initial sizes to appropriate hardware-defined vector widths for actual instructions).
+At a higher level, the two approaches represent only the way the IR is looked at (for example, Triton IR can be thought of "SIMD" in a way that it operates on tensors; and autovectorization converts initial sizes to appropriate hardware-defined vector widths for actual instructions).
 
 Runtime
 =======
-Current state & Motivation
+Current State & Motivation
 --------------------------
-Triton backend for Intel GPU uses an API to interact with the GPU driver. `Upstream work <https://github.com/pytorch/pytorch/issues/114723>`_ on eager mode operator implementation relies on SYCL runtime to allocate and move device memory, invoke kernels, and synchronize those GPU queues. Current packaging assumes users install oneAPI base toolkit to have access to the runtime library. Triton’s initial runtime implementation is Level Zero based. It faced synchronization problems when interacting with IPEX and the currently proposed solution is to introduce SYCL runtime dependency for Triton./
+Triton backend for Intel GPU uses an API to interact with the GPU driver. `Upstream work <https://github.com/pytorch/pytorch/issues/114723>`_ on eager mode operator implementation relies on SYCL runtime to allocate and move device memory, invoke kernels, and synchronize those GPU queues. Current packaging assumes users install Intel® oneAPI Base Toolkit to have access to the runtime library. Triton’s initial runtime implementation is based on Level Zero. It faced synchronization problems when interacting with IPEX and the currently proposed solution is to introduce SYCL runtime dependency for Triton./
 
 Thoroughly designing components interaction provides an opportunity for user experience and performance improvements.
 
@@ -570,16 +570,16 @@ Analysis results
 ----------------
 Triton needs a runtime to bundle a kernel invocation as well as memory movement to and from GPUs. The are three main options to consider: `SYCL runtime <https://registry.khronos.org/SYCL/specs/sycl-2020/html/sycl-2020.html>`_, `Level Zero runtime <https://github.com/oneapi-src/level-zero>`_, and `Unified runtime <https://github.com/oneapi-src/unified-runtime>`_.
 
-Triton is usually used together with PyTorch in a sense that Triton kernels consume PyTorch tensors and often represent some custom operation. Hence, Triton runtime needs to interact with PyTorch components to guarantee synchronization. These components include:
+TTriton is typically used with PyTorch, where Triton kernels consume PyTorch tensors to represent custom operations. As a result, the Triton runtime must interact with PyTorch components to ensure synchronization. These components include:
 
-* The basic device memory allocation & movement (e.g., ``torch.randn(1823, 781, device='xpu')``)
+* The basic device memory allocation & movement (for example, ``torch.randn(1823, 781, device='xpu')``)
 * Aten operators’ implementations via oneDNN
 * Pytorch distributed modes via oneCCL
 * Habana’s Synapse backend (oneDNN + custom compiler)
 
-Fundamentally, a PyTorch+triton package needs to be able to allocate and move device memory, run kernels, and synchronize on events. All of these can be done at the lowest level (L0).
+Fundamentally, a PyTorch+Triton package needs to be able to allocate and move device memory, run kernels, and synchronize on events. All of these can be done at the lowest level (L0).
 
-Using the lowest level possible has following benefits:
+Using the lowest level possible has the following benefits:
 
 * Minimizing the number of dependencies of the package. E.g., Level Zero is a self-contained small (~200KB) loader library that is easily packaged.
 * Minimizing the overhead of operation invocations. I.e., SYCL introduces additional layers of abstraction atop Leve Zero API.
@@ -589,15 +589,15 @@ Using the lowest level possible has following benefits:
 Using SYCL runtime benefits are:
 
 * Improving the quality of SYCL components by exposing them to more usage scenarios.
-* Tactical short-term development speed-up as some of the functionality can be reused (e.g., IPEX memory management).
+* Tactical short-term development speed-up as some of the functionality can be reused (for example, IPEX memory management).
 
 The key to providing seamless access to Intel’s hardware is frictionless user experience. From user’s perspective, a library is expected to have the minimal possible set of dependencies, not have conflicts with other installations that they might have and be “debugable” and well documented. Triton as a component has no meaningful dependency on SYCL runtime, so applying the above principles it should use the lowest layer possible.
 
-The main technical obstacle in using L0 or Unified runtime for all the components is the presence of the host part of SYCL kernels developed by oneDNN. Internal wrapper structures and integration headers make it complex to execute SYCL fat binaries to be executed by a lower-level runtime. Although possible via dumping the IR/assembly generated by the SYCL compiler and feeding them to lower-level runtime directly for device code and generating the integration headers (e.g., similar technique is used by Unified runtime for CTS tests), the mechanism is ad-hoc.
+The main technical obstacle in using L0 or Unified runtime for all the components is the presence of the host part of SYCL kernels developed by oneDNN. Internal wrapper structures and integration headers make it complex to execute SYCL fat binaries to be executed by a lower-level runtime. Although possible via dumping the IR/assembly generated by the SYCL compiler and feeding them to lower-level runtime directly for device code and generating the integration headers (for example, similar technique is used by Unified runtime for CTS tests), the mechanism is ad-hoc.
 
-Components interaction surface is limited to synchronization, that is, passing and consuming events and waiting on them. Having one component use low-level runtime and the other one a high-level creates interoperability issue. This is partially covered by existing functionality such as `Native Driver Access <https://oneapi-src.github.io/unified-runtime/core/PROG.html#native-driver-access>`_ but there are scenarios in which the support is not enough. An example of this would be a component using L0 runtime submitting a kernel and passing control flow to a component that uses SYCL runtime. The latter does not wait on the native L0 queue to drain before reading the data.
+Components interaction surface is limited to synchronization, that is, passing and consuming events and waiting on them. Having one component use a low-level runtime while the other uses a high-level one creates interoperability issues. This is partially covered by existing functionality such as `Native Driver Access <https://oneapi-src.github.io/unified-runtime/core/PROG.html#native-driver-access>`_ but there are scenarios in which the support is not enough. An example of this would be a component using L0 runtime submitting a kernel and passing control flow to a component that uses SYCL runtime. The latter does not wait on the native L0 queue to drain before reading the data.
 
-Ultimately this means that Triton is forced to have a dependency on SYCL runtime only to wrap the native queue handles for other components to respect the synchronization point.
+Ultimately, this means that Triton is forced to have a dependency on SYCL runtime only to wrap the native queue handles for other components to respect the synchronization point.
 
 Directions
 ----------
@@ -607,9 +607,11 @@ Memory allocation and movement does not depend on SYCL and can be consumed by SY
 
 Pytorch has a `mechanism of streams <https://pytorch.org/docs/stable/generated/torch.cuda.Stream.html#torch.cuda.Stream>`_ (a linear sequence of execution that belongs to a specific device) to orchestrate kernel invocation and data movement. Using PyTorch’s synchronization abstractions can help decouple Triton kernels and Aten operator implementations by communicating via a stream (handled at the Inductor level). The stream can use a low-level runtime and have wrappers for SYCL-based consumers. Its implementation will live inside PyTorch as a separate component.
 
-There is also an option to introduce SYCL kernel invocation support into Unified runtime to make it indifferent to the input. This path allows for putting Unified runtime as the first-class citizen tool for all the components.
+Another option is to integrate SYCL kernel invocation support into the Unified runtime, making it agnostic to the input. This approach positions the Unified runtime as a versatile tool for all components.
 
-Triton will have an opportunity to be used without PyTorch while not having a redundant dependency on SYCL runtime and display all the beneficial qualities of relying on a low-level runtime.
+This enhancement enables Triton to operate independently of PyTorch, eliminating unnecessary dependencies on SYCL runtime, while still leveraging the beneficial attributes of a low-level runtime.
+
+Triton will be able to operate independently of PyTorch, eliminating the need for redundant dependencies on the SYCL runtime. This allows Triton to showcase all the advantageous qualities of relying on a low-level runtime.
 
 *******************
 Links and materials
