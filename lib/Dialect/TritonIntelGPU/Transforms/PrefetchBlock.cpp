@@ -41,18 +41,20 @@
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include <memory>
 
 namespace mlir {
 #define GEN_PASS_CLASSES
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttig = mlir::triton::gpu::intel;
 
 namespace {
 struct LoadInfo {
@@ -125,7 +127,8 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
     return newType;
 }
 
-class PrefetchBlockPass : public TritonGPUPrefetchBlockBase<PrefetchBlockPass> {
+class PrefetchBlockPass
+    : public TritonIntelGPUPrefetchBlockBase<PrefetchBlockPass> {
 public:
   PrefetchBlockPass() = default;
   PrefetchBlockPass(int numWarps) { this->numWarps = numWarps; }
@@ -198,18 +201,18 @@ public:
           loc = ptr.getLoc();
           // prefetch 3 stages in advance
           auto load = loadInfo.load;
-          auto prefetch0 = b.create<tt::PrefetchOp>(
+          auto prefetch0 = b.create<ttig::PrefetchOp>(
               loc, ptr, load.getCache(), load.getEvict(), load.getIsVolatile());
           auto prePtr0 = b.create<tt::AdvanceOp>(loc, ptr.getType(), ptr,
                                                  loadInfo.offsets);
           auto prefetch1 =
-              b.create<tt::PrefetchOp>(loc, prePtr0, load.getCache(),
-                                       load.getEvict(), load.getIsVolatile());
+              b.create<ttig::PrefetchOp>(loc, prePtr0, load.getCache(),
+                                         load.getEvict(), load.getIsVolatile());
           auto prePtr1 = b.create<tt::AdvanceOp>(loc, ptr.getType(), prePtr0,
                                                  loadInfo.offsets);
           auto prefetch2 =
-              b.create<tt::PrefetchOp>(loc, prePtr1, load.getCache(),
-                                       load.getEvict(), load.getIsVolatile());
+              b.create<ttig::PrefetchOp>(loc, prePtr1, load.getCache(),
+                                         load.getEvict(), load.getIsVolatile());
           auto prePtr2 = b.create<tt::AdvanceOp>(loc, ptr.getType(), prePtr1,
                                                  loadInfo.offsets);
           prefetchPtrs.push_back(prePtr2);
@@ -247,9 +250,9 @@ public:
           //   b.create<gpu::BarrierOp>(loc);
           b.setInsertionPoint(info.advance);
           loc = info.advance.getLoc();
-          auto prefetchInLoop =
-              b.create<tt::PrefetchOp>(loc, args[num + 1 + i], load.getCache(),
-                                       load.getEvict(), load.getIsVolatile());
+          auto prefetchInLoop = b.create<ttig::PrefetchOp>(
+              loc, args[num + 1 + i], load.getCache(), load.getEvict(),
+              load.getIsVolatile());
           auto advance =
               b.create<tt::AdvanceOp>(loc, args[num + 1 + i].getType(),
                                       args[num + 1 + i], info.offsets);
@@ -264,6 +267,6 @@ public:
 } // namespace
 
 std::unique_ptr<mlir::Pass>
-mlir::triton::gpu::createPrefetchBlockPass(unsigned numWarps) {
+mlir::triton::gpu::intel::createPrefetchBlockPass(unsigned numWarps) {
   return std::make_unique<PrefetchBlockPass>(numWarps);
 }
