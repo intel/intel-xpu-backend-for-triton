@@ -16,8 +16,6 @@ std::unique_ptr<Pass> createAccelerateMatmulPass(int computeCapability = 80);
 
 std::unique_ptr<Pass> createPrefetchPass();
 
-std::unique_ptr<Pass> createPrefetchBlockPass(unsigned numWarps = 4);
-
 std::unique_ptr<Pass> createCoalescePass();
 
 std::unique_ptr<Pass> createReorderInstructionsPass();

@@ -265,23 +265,6 @@ def TT_LoadOp : TT_Op<"load",
     let hasCanonicalizer = 1;
 }
 
-def TT_PrefetchOp : TT_Op<"prefetch",
-                      [MemoryEffects<[MemWrite, MemRead]>
-                                      ]> {
-    let summary = "prefetch  from a tensor pointer";
-
-    let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
-                         TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
-
-    let results = (outs);
-
-    let assemblyFormat = [{
-      $ptr attr-dict `:` type($ptr)
-    }];
-
-    let hasCanonicalizer = 0;
-}
-
 def TT_StoreOp : TT_Op<"store",
                        [SameLoadStoreOperandsShape,
                         SameLoadStoreOperandsEncoding,

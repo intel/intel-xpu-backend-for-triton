@@ -51,26 +51,6 @@ def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
                            "mlir::arith::ArithDialect"];
 }
 
-def TritonGPUPrefetchBlock : Pass<"tritongpu-prefetch-block", "mlir::ModuleOp"> {
-  let summary = "prefetch a tensor block around loop";
-  let description = [{
-    This pass match pattern of certain scf.loop with tt.load and then
-    add prefetch both in the loop preheader(3 stages in advance) and loop body.
-    This pass only support block pointer.
-    This pass only support target that has a dedicated prefetch instruction.
-  }];
-  let constructor = "mlir::triton::gpu::createPrefetchBlockPass()";
-  let dependentDialects = ["mlir::triton::TritonDialect",
-                           "mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::scf::SCFDialect",
-                           "mlir::gpu::GPUDialect"];
-  let options = [
-    Option<"numWarps", "num-warps",
-           "unsigned", /*default*/"4",
-           "number of warps per block">];
-}
-
-
 def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::ModuleOp"> {
   let summary = "accelerate matmul";
 
