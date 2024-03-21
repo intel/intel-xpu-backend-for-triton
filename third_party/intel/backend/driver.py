@@ -379,7 +379,6 @@ class XPULauncher(object):
 class XPUDriver(DriverBase):
 
     def __init__(self):
-        self.binary_ext = "spv"
         self.launcher_cls = XPULauncher
 
     def __getattr__(self, name):
