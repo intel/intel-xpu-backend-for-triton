@@ -31,6 +31,10 @@ on:
           - float16
           - float32
         default: all
+      only_one_model:
+        description: Run only this one model
+        type: string
+        default: ""
       TORCH_COMPILE_DEBUG:
         description: TORCH_COMPILE_DEBUG
         type: string
@@ -256,8 +260,11 @@ jobs:
             # torch will save debug logs to $TORCH_COMPILE_DEBUG_DIR/torch_compile_debug
             export TORCH_COMPILE_DEBUG_DIR=$GITHUB_WORKSPACE
           fi
+          if [[ -n "${{ inputs.only_one_model }}" ]]; then
+            MODEL_ARGS="static 1 0 ${{ inputs.only_one_model }}"
+          fi
           cd pytorch
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0
+          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0 ${MODEL_ARGS}
 
       - name: Report environment details
         run: |
