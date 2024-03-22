@@ -72,6 +72,10 @@ then
   exit 1
 fi
 
+if [ -n "$CONDA_PREFIX" ]; then
+  export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$CONDA_PREFIX/lib"
+fi
+
 run_unit_tests() {
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
