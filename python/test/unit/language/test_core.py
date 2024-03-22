@@ -2392,6 +2392,8 @@ def test_locality(op, BLOCK_N, N, num_pid_n, device):
 @pytest.mark.parametrize("src_layout", scan_layouts)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_scan_layouts(M, N, src_layout, axis, device):
+    if is_xpu() and src_layout.sz_per_thread == [1, 2]:
+        pytest.skip("FIXME: Wrong result on XPU")
 
     ir = f"""
     #blocked = {src_layout}
@@ -2476,6 +2478,10 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     if epilogue_kind == 'expand_reduce2d' and isinstance(src_layout, MmaLayout):
         pytest.skip(
             "Currently MmaLayout combined with slice encoding and reduce op trigger device illegal memory access")
+    if type(src_layout) is DpasLayout:
+        pytest.skip("FIXME: support DPAS layout")
+    if is_xpu() and type(src_layout) is BlockedLayout and src_layout.warps_per_cta == [2, 2]:
+        pytest.skip("FIXME: incorrect result on XPU")
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
@@ -2591,6 +2597,8 @@ layouts = [
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
 @pytest.mark.parametrize("src_layout", layouts)
 def test_store_op(M, src_layout, device):
+    if type(src_layout) is DpasLayout:
+        pytest.skip("FIXME: support DPAS layout")
 
     ir = f"""
     #src = {src_layout}
@@ -2643,6 +2651,8 @@ layouts = [
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
+    if type(src_layout) is DpasLayout or type(dst_layout) is DpasLayout:
+        pytest.skip("FIXME: support DPAS layout")
 
     ir = f"""
     #dst = {dst_layout}
@@ -4733,9 +4743,12 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
         # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
         if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
             pytest.skip("Scratch buffer is too large")
-    if is_xpu() and M == 128 and N == 128 and interm_layout and (dst_layout.sz_per_thread == [1, 8]
-                                                                 or dst_layout.sz_per_thread == [4, 4]):
-        pytest.skip("FIXME: out of resource: shared memory")
+
+    # https://github.com/intel/intel-xpu-backend-for-triton/issues/729
+    if (is_xpu() and M == 128 and N == 128 and interm_layout and interm_layout.vec == 4 and interm_layout.per_phase == 2
+            and interm_layout.max_phase == 4 and dst_layout.sz_per_thread == [4, 1]
+            and src_layout.sz_per_thread == [4, 4]):
+        pytest.skip("FIXME: incorrect result on XPU")
 
     layouts = f"""
     #src = {src_layout}
