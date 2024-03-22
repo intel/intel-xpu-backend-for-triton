@@ -117,7 +117,7 @@ fi
 if [ ! -d "$LLVM_PROJ" ]; then
   echo "**** Cloning $LLVM_PROJ ****"
   cd $BASE
-  git clone --recursive https://github.com/llvm/llvm-project.git 
+  git clone --recursive https://github.com/llvm/llvm-project.git
 
   TRITON_LLVM_COMMIT_FILE="$TRITON_PROJ/cmake/llvm-hash.txt"
   if [ ! -f "$TRITON_LLVM_COMMIT_FILE" ]; then
