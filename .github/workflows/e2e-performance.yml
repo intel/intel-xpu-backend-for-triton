@@ -145,6 +145,8 @@ jobs:
   
       - name: Install latest nightly wheels
         uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Identify pinned versions
         run: |

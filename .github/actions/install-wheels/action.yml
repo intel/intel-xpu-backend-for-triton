@@ -12,6 +12,9 @@ inputs:
     # Example of specifying only some packages to install: {intel_extension_for_pytorch-*,torch-*}
     description: Pattern to match the wheel files to download
     default: '*'
+  gh_token:
+    description: GitHub token
+    required: true
 
 runs:
   using: "composite"
@@ -19,7 +22,7 @@ runs:
     - name: Install wheels from specified workflow artifacts
       shell: bash
       env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ inputs.gh_token }}
       run: |
         WORKFLOW_ID=$(gh run list -w "${{ input.workflow }}" -R ${{ input.repository }} --json databaseId | jq '.[0].databaseId')
         PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
