@@ -111,7 +111,7 @@ static uint32_t findKernels(llvm::Module &M,
   for (llvm::Function &function : M.functions())
     if (function.getCallingConv() == CallingConv::SPIR_KERNEL) {
       functions.insert(&function);
-      numKernels++;
+      ++numKernels;
     }
   return numKernels;
 }
