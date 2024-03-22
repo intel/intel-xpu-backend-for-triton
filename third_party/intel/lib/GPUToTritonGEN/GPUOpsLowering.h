@@ -39,12 +39,11 @@ private:
 struct GPUFuncOpLowering : ConvertOpToLLVMPattern<gpu::GPUFuncOp> {
   GPUFuncOpLowering(
       const LLVMTypeConverter &converter, unsigned allocaAddrSpace,
-      unsigned workgroupAddrSpace, StringAttr kernelAttributeName,
+      unsigned workgroupAddrSpace,
       std::optional<StringAttr> kernelBlockSizeAttributeName = std::nullopt)
       : ConvertOpToLLVMPattern<gpu::GPUFuncOp>(converter),
         allocaAddrSpace(allocaAddrSpace),
         workgroupAddrSpace(workgroupAddrSpace),
-        kernelAttributeName(kernelAttributeName),
         kernelBlockSizeAttributeName(kernelBlockSizeAttributeName) {}
 
   LogicalResult
@@ -56,10 +55,6 @@ private:
   unsigned allocaAddrSpace;
   /// The address space to use declaring workgroup memory.
   unsigned workgroupAddrSpace;
-
-  /// The attribute name to use instead of `gpu.kernel`.
-  StringAttr kernelAttributeName;
-
   /// The attribute name to to set block size
   std::optional<StringAttr> kernelBlockSizeAttributeName;
 };

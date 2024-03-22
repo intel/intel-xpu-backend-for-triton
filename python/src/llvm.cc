@@ -1,6 +1,6 @@
 ﻿#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
-#include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
+#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
@@ -104,10 +104,80 @@ std::string translateLLVMIRToASM(llvm::Module &module,
 
 using ret = py::return_value_policy;
 
-void findKernels(llvm::Module &M, std::set<llvm::Function *> &functions) {
+static uint32_t findKernels(llvm::Module &M,
+                            std::set<llvm::Function *> &functions) {
+  assert(functions.empty() && "Expecting an empty set");
+  uint32_t numKernels = 0;
   for (llvm::Function &function : M.functions())
-    if (function.getCallingConv() == CallingConv::SPIR_KERNEL)
+    if (function.getCallingConv() == CallingConv::SPIR_KERNEL) {
       functions.insert(&function);
+      numKernels++;
+    }
+  return numKernels;
+}
+
+/// Amend SPIR kernels in the given LLVM module by translating GEN passthrough
+/// attributes into LLVM metadata.
+static void amendLLVMIR(llvm::Module &llvmMod, llvm::LLVMContext &ctx) {
+  // Collect SPIR kernels.
+  std::set<llvm::Function *> kernels;
+  uint32_t numKernels = findKernels(llvmMod, kernels);
+  assert(numKernels == 1 && "Expecting a single SPIR kernel");
+  llvm::Function *kernel = *kernels.begin();
+
+  // Given a string \p str of the form "n1,n2,...", parse it as a
+  // vector of integers (n1,n2,...).
+  auto extractFromString = [](StringRef str) -> SmallVector<int64_t> {
+    auto parseAsInt = [](StringRef str, int64_t &intVal) {
+      bool failed = str.getAsInteger(10, intVal);
+      return !failed;
+    };
+
+    SmallVector<int64_t> result;
+    std::pair<StringRef, StringRef> pair;
+    do {
+      pair = str.split(',');
+      str = pair.second;
+      int64_t intVal;
+      if (!parseAsInt(pair.first, intVal))
+        break;
+
+      result.push_back(intVal);
+    } while (true);
+
+    return result;
+  };
+
+  // Attach metadata to \p func given its name \p attrName and value \p attrVal.
+  auto attachMetadata = [&](StringRef attrName, StringRef attrVal,
+                            llvm::Function *func) {
+    SmallVector<llvm::Metadata *, 3> metadata;
+    llvm::Type *i64 = llvm::IntegerType::get(ctx, 64);
+    for (int64_t val : extractFromString(attrVal))
+      metadata.push_back(
+          llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(i64, val)));
+
+    llvm::MDNode *node = llvm::MDNode::get(ctx, metadata);
+    func->setMetadata(attrName, node);
+  };
+
+  // Attach required metadata to the kernel.
+  using namespace mlir::triton;
+  SmallVector<llvm::StringLiteral> genAttrs{
+      TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
+      TritonGEN::TritonGENDialect::getReqdWorkGroupSizeAttrName(),
+      TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName()};
+
+  for (llvm::StringLiteral genAttr : genAttrs) {
+    if (!kernel->hasFnAttribute(genAttr))
+      continue;
+
+    Attribute fnAttr = kernel->getFnAttribute(genAttr);
+    assert(fnAttr.isStringAttribute() && "Expecting a string attribute");
+    attachMetadata(fnAttr.getKindAsString().split('.').second,
+                   fnAttr.getValueAsString(), kernel);
+    kernel->removeFnAttr(genAttr);
+  }
 }
 
 void init_triton_llvm(py::module &&m) {
@@ -163,7 +233,10 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "to_module",
       [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
-        return mlir::translateModuleToLLVMIR(mod, ctx);
+        std::unique_ptr<llvm::Module> llvmMod =
+            mlir::translateModuleToLLVMIR(mod, ctx);
+        amendLLVMIR(*llvmMod, ctx);
+        return llvmMod;
       },
       py::keep_alive<0, 2>());
 
@@ -241,8 +314,8 @@ void init_triton_llvm(py::module &&m) {
         }
         // Get name of kernel in the module
         std::set<llvm::Function *> kernels;
-        findKernels(*module, kernels);
-        assert(kernels.size() == 1);
+        uint32_t numKernels = findKernels(*module, kernels);
+        assert(numKernels == 1 && "Expecting a single SPIR kernel");
         std::string name = (*kernels.begin())->getName().str();
         std::string spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
         return std::make_tuple(py::bytes(spirvBitcode), name);

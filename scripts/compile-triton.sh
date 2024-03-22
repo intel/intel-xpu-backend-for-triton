@@ -54,7 +54,8 @@ fi
 
 export PACKAGES_DIR=$BASE/packages
 export SPIRV_TOOLS=$PACKAGES_DIR/spirv-tools
-export LLVM_PROJ=$BASE/llvm
+export LLVM_PROJ=$BASE/llvm-project
+export LLVM_PROJ_BUILD=$LLVM_PROJ/build
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
@@ -102,15 +103,31 @@ if [ ! -d "$SPIRV_TOOLS" ]; then
 fi
 
 ############################################################################
-# Clone the LLVM repository (with GENX dialect).
+# Clone the Triton project fork if it does not exists.
 
-export LLVM_PROJ_BUILD=$LLVM_PROJ/build
+if [ ! -d "$TRITON_PROJ" ]; then
+  echo "****** Cloning $TRITON_PROJ ******"
+  cd $BASE
+  git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
+fi
+
+############################################################################
+# Clone the LLVM repository if it does not exists, and checkout the commit used by Triton.
 
 if [ ! -d "$LLVM_PROJ" ]; then
   echo "**** Cloning $LLVM_PROJ ****"
   cd $BASE
+  git clone --recursive https://github.com/llvm/llvm-project.git 
 
-  git clone --recursive https://github.com/intel/llvm.git -b genx
+  TRITON_LLVM_COMMIT_FILE="$TRITON_PROJ/cmake/llvm-hash.txt"
+  if [ ! -f "$TRITON_LLVM_COMMIT_FILE" ]; then
+    echo "ERROR: TRITON LLVM commit file $TRITON_LLVM_COMMIT_FILE not found."
+    abort
+  fi
+
+  TRITON_LLVM_COMMIT="$(<$TRITON_LLVM_COMMIT_FILE)"
+  cd $LLVM_PROJ
+  git checkout $TRITON_LLVM_COMMIT
 fi
 
 ############################################################################
@@ -164,16 +181,6 @@ build_llvm() {
 }
 
 ############################################################################
-# Clone the Triton project fork if it does not exists.
-
-if [ ! -d "$TRITON_PROJ" ]
-then
-  echo "****** Cloning $TRITON_PROJ ******"
-  cd $BASE
-  git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
-fi
-
-############################################################################
 ## Configure and build the Triton project.
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
@@ -218,9 +225,6 @@ build() {
   if [ "$BUILD_LLVM" = true ]; then
     build_llvm
   fi
-
-  # Install libGenISAIntrinsics.a
-  cp $LLVM_PROJ/mlir/lib/Target/LLVMIR/Dialect/GENX/libGenISAIntrinsics.a $PACKAGES_DIR/llvm/lib
 
   if [ "$BUILD_TRITON" = true ]; then
     build_triton

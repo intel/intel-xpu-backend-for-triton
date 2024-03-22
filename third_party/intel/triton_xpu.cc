@@ -2,7 +2,6 @@
 #include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Target/LLVMIR/Dialect/GENX/GENXToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "passes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
@@ -86,7 +85,6 @@ void init_triton_intel(py::module &&m) {
                     mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
                     mlir::triton::nvgpu::NVGPUDialect>();
     mlir::registerNVVMDialectTranslation(registry);
-    mlir::registerGENXDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });

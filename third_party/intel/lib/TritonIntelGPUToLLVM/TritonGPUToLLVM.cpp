@@ -135,26 +135,28 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
         amendedFuncOp, rewriter, *getTypeConverter());
-    if (!newFuncOp) {
+    if (!newFuncOp)
       return failure();
-    }
 
-    auto ctx = funcOp->getContext();
-    NamedAttrList attrs;
+    MLIRContext *ctx = funcOp->getContext();
     auto mod = funcOp->getParentOfType<ModuleOp>();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     if (LLVM::utils::isKernel(funcOp))
-      attrs.append(TritonGEN::TritonGENDialect::getKernelFuncAttrName(),
-                   rewriter.getI32IntegerAttr(1));
-    attrs.append(TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
-                 rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
-    attrs.append(TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName(),
-                 rewriter.getI32ArrayAttr(threadsPerWarp));
-    newFuncOp->setDialectAttrs(attrs);
+      newFuncOp.setCConv(LLVM::CConv::SPIR_KERNEL);
+
+    auto maxWorkGroupSizeAttr = rewriter.getArrayAttr(
+        {rewriter.getStringAttr(
+             TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName()),
+         rewriter.getStringAttr(std::to_string(threadsPerWarp * numWarps) +
+                                ",1,1")});
+    auto reqSubGroupSizeAttr = rewriter.getArrayAttr(
+        {rewriter.getStringAttr(
+             TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName()),
+         rewriter.getStringAttr(std::to_string(threadsPerWarp))});
+    newFuncOp.setPassthroughAttr(
+        ArrayAttr::get(ctx, {reqSubGroupSizeAttr, maxWorkGroupSizeAttr}));
+
     if (!LLVM::utils::isKernel(funcOp)) {
-      // The noinline attribute will be used by the LLVM codegen to prevent
-      // inlining.
-      // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Dialect/LLVMIR/IR/LLVMInlining.cpp#L267
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       rewriter.eraseOp(amendedFuncOp);
