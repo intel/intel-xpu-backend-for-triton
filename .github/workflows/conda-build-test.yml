@@ -27,7 +27,7 @@ jobs:
           - "3.10"
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail
+        shell: bash -noprofile --norc -eo pipefail -c "source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
