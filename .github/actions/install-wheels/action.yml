@@ -33,7 +33,7 @@ runs:
         TEMP_DIR=`mktemp -d`
         echo TEMP_DIR=$TEMP_DIR
         pushd ${TEMP_DIR}
-        gh run download ${WORKFLOW_ID} -R ${{ inputs.repository }} --pattern 'wheels-py${PYTHON_VERSION}*'
+        gh run download ${WORKFLOW_ID} -R ${{ inputs.repository }} --pattern "wheels-py${PYTHON_VERSION}*"
         cd wheels-py${PYTHON_VERSION}*
         pip install ${{ inputs.wheels_pattern }}
         popd
