@@ -24,13 +24,13 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.gh_token }}
       run: |
-        WORKFLOW_ID=$(gh run list -w "${{ input.workflow }}" -R ${{ input.repository }} --json databaseId | jq '.[0].databaseId')
+        WORKFLOW_ID=$(gh run list -w "${{ inputs.workflow }}" -R ${{ inputs.repository }} --json databaseId | jq '.[0].databaseId')
         PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
         TEMP_DIR=`mktemp -d`
         pushd ${TEMP_DIR}
         gh auth status
-        gh run download ${WORKFLOW_ID} -R ${{ input.repository }} --pattern 'wheels-py${PYTHON_VERSION}*'
+        gh run download ${WORKFLOW_ID} -R ${{ inputs.repository }} --pattern 'wheels-py${PYTHON_VERSION}*'
         cd wheels-py${PYTHON_VERSION}*
-        pip install ${{ input.wheels_pattern }}
+        pip install ${{ inputs.wheels_pattern }}
         popd
         rm -rf ${TEMP_DIR}
