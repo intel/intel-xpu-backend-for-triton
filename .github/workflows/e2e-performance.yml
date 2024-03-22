@@ -57,6 +57,12 @@ env:
   BENCHMARK_BRANCH: main
 
 jobs:
+  print_inputs:
+    runs-on: Linux
+    steps:
+        - name: Print Inputs
+          run: echo "${{ toJSON(github.event.inputs) }}"
+
   matrix:
     name: Matrix
     runs-on:
