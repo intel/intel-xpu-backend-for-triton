@@ -84,6 +84,37 @@ public:
   }
 };
 
+template <typename SourceOp, typename TargetOp>
+class SingleDimLaunchConfigLowering : public ConvertOpToLLVMPattern<SourceOp> {
+private:
+  unsigned indexBitwidth;
+
+public:
+  explicit SingleDimLaunchConfigLowering(LLVMTypeConverter &typeConverter)
+      : ConvertOpToLLVMPattern<SourceOp>(typeConverter),
+        indexBitwidth(typeConverter.getIndexTypeBitwidth()) {}
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    MLIRContext *context = rewriter.getContext();
+    Operation *newOp = newOp =
+        rewriter.create<TargetOp>(loc, IntegerType::get(context, 32));
+
+    if (indexBitwidth > 32) {
+      newOp = rewriter.create<LLVM::SExtOp>(
+          loc, IntegerType::get(context, indexBitwidth), newOp->getResult(0));
+    } else if (indexBitwidth < 32) {
+      newOp = rewriter.create<LLVM::TruncOp>(
+          loc, IntegerType::get(context, indexBitwidth), newOp->getResult(0));
+    }
+
+    rewriter.replaceOp(op, newOp->getResults());
+    return success();
+  }
+};
+
 } // namespace mlir
 
 #endif // TRITON_CONVERSION_GPUTOGEN_INDEXINTRINSICSOPLOWERING_H

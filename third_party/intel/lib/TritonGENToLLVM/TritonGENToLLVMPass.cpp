@@ -488,6 +488,25 @@ using TritonGENGridDimZLowering =
     TritonGENGridDimLowering<TritonGEN::GridDimZOp>;
 
 //===----------------------------------------------------------------------===//
+// SubgroupID Op Lowering
+//===----------------------------------------------------------------------===//
+
+struct TritonGENSubgroupIdLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubgroupIdOp> {
+  using ConvertOpToLLVMPattern<TritonGEN::SubgroupIdOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubgroupIdOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto retType = rewriter.getIntegerType(32);
+    LLVM::CallOp callOp = createDeviceFunctionCall(
+        rewriter, "_Z16get_sub_group_id", retType, {}, {});
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Synchronization Ops Lowerings
 //===----------------------------------------------------------------------===//
 
@@ -633,15 +652,17 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  patterns.add<TritonGENThreadIdXLowering, TritonGENThreadIdYLowering,
-               TritonGENThreadIdZLowering, TritonGENBlockIdXLowering,
-               TritonGENBlockIdYLowering, TritonGENBlockIdZLowering,
-               TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
-               TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
-               TritonGENGridDimYLowering, TritonGENGridDimZLowering,
-               TritonGENBarrierLowering, TritonSubGroupShuffleLowering,
-               TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-               TritonMatrix2DBlockStoreLowering>(converter);
+  patterns
+      .add<TritonGENThreadIdXLowering, TritonGENThreadIdYLowering,
+           TritonGENThreadIdZLowering, TritonGENBlockIdXLowering,
+           TritonGENBlockIdYLowering, TritonGENBlockIdZLowering,
+           TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
+           TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
+           TritonGENGridDimYLowering, TritonGENGridDimZLowering,
+           TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
+           TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
+           TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering>(
+          converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
