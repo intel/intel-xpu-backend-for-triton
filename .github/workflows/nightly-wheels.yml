@@ -11,8 +11,6 @@ env:
   BASE: /home/runner
   LLVM_SYSPATH: /home/runner/packages/llvm
   USE_AOT_DEVLIST: pvc
-  LLVM_REPO: intel/llvm.git
-  LLVM_BRANCH: genx
 
 jobs:
   build:
@@ -55,9 +53,10 @@ jobs:
       - name: Setup IPEX
         uses: ./.github/actions/setup-ipex
 
-      - name: Identify LLVM commit id
+      - name: Get LLVM commit id
         run: |
-          echo "LLVM_COMMIT_ID=$(git ls-remote https://github.com/$LLVM_REPO refs/heads/$LLVM_BRANCH | cut -f1)" >> $GITHUB_ENV
+          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
+          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
       - name: Identify Triton commit id
         run: |
@@ -230,7 +229,7 @@ jobs:
           PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
           IPEX_REPO=$IPEX_REPO
           IPEX_COMMIT_ID=$IPEX_COMMIT_ID
-          LLVM_REPO=$LLVM_REPO
+          LLVM_REPO=llvm/llvm-project
           LLVM_COMMIT_ID=$LLVM_COMMIT_ID
           TRITON_REPO=intel/intel-xpu-backend-for-triton
           TRITON_COMMIT_ID=$TRITON_COMMIT_ID
