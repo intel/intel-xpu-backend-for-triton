@@ -12,13 +12,13 @@ dependencies:
 # ipex
   - sysroot_linux-64 >=2.17
 # basekit
-  - onemkl-sycl-blas
-  - onemkl-sycl-datafitting
-  - onemkl-sycl-dft
-  - onemkl-sycl-lapack
-  - onemkl-sycl-rng
-  - onemkl-sycl-sparse
-  - onemkl-sycl-stats
-  - onemkl-sycl-vm
-  - intel::onednn-devel
-  - impi_rt
+  - onemkl-sycl-blas 2024.0.0  
+  - onemkl-sycl-datafitting 2024.0.0  
+  - onemkl-sycl-dft 2024.0.0  
+  - onemkl-sycl-lapack 2024.0.0  
+  - onemkl-sycl-rng 2024.0.0  
+  - onemkl-sycl-sparse 2024.0.0  
+  - onemkl-sycl-stats 2024.0.0  
+  - onemkl-sycl-vm 2024.0.0  
+  - intel::onednn-devel 2024.0.0
+  - impi_rt 2021.11.0
