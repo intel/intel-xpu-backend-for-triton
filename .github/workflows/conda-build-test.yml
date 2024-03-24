@@ -91,12 +91,12 @@ jobs:
 
       - name: Build Triton
         run: |
-          conda run -n triton scripts/compile-triton.sh --triton
+          conda run --no-capture-output -n triton scripts/compile-triton.sh --triton
 
       - name: Run core tests
         run: |
           conda run --no-capture-output -n triton scripts/compile-pytorch-ipex.sh --pytorch
-          conda install -y -n triton dpcpp_linux-64=2024.0.0
+          conda install -y -n triton -c conda-forge dpcpp_linux-64=2024.0.0
           conda run -n triton scripts/test-triton.sh
 
       - name: Run E2E test
@@ -111,7 +111,7 @@ jobs:
           }
 
           TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
-          conda run -n triton pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+          conda run --no-capture-output -n triton pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
 
           # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
           export WORKSPACE=$GITHUB_WORKSPACE
