@@ -6,8 +6,8 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::utils::delinearize;
-using ::mlir::LLVM::utils::linearize;
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::linearize;
 using ::mlir::LLVM::utils::shflIdxSync;
 using ::mlir::LLVM::utils::shflSync;
 using ::mlir::LLVM::utils::shflUpSync;

@@ -15,9 +15,9 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::utils::delinearize;
-using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::utils::linearize;
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -32,7 +32,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
   Value mask = int_val(1, 1);
   auto tid = tid_val();
-  auto clusterCTAId = getClusterCTAId(rewriter, loc);
+  auto clusterCTAId = getClusterCTAIdIntel(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
     auto shape = tensorTy.getShape();

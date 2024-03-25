@@ -7,8 +7,8 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::utils::delinearize;
-using ::mlir::LLVM::utils::linearize;
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::linearize;
 using ::mlir::LLVM::utils::loadShared;
 using ::mlir::LLVM::utils::shflSync;
 using ::mlir::LLVM::utils::storeShared;
@@ -147,11 +147,11 @@ private:
     RankedTensorType operandType = op.getInputTypes()[0];
     // Assumes offsets don't actually depend on type
     SmallVector<SmallVector<unsigned>> offset =
-        emitOffsetForLayout(helper.getSrcLayout(), operandType);
+        ::intel::emitOffsetForLayout(helper.getSrcLayout(), operandType);
     unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
-    auto srcIndices = emitIndices(op.getLoc(), rewriter, helper.getSrcLayout(),
-                                  operandType, true);
+    auto srcIndices = ::intel::emitIndices(
+        op.getLoc(), rewriter, helper.getSrcLayout(), operandType, true);
     // reduce within threads
     for (unsigned i = 0; i < srcElems; ++i) {
       SmallVector<unsigned> key = offset[i];
@@ -208,7 +208,7 @@ private:
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getTotalElemsPerThread(resultTy);
         SmallVector<SmallVector<unsigned>> resultOffset =
-            emitOffsetForLayout(resultLayout, resultTy);
+            ::intel::emitOffsetForLayout(resultLayout, resultTy);
         SmallVector<Value> resultVals;
         for (int j = 0; j < resultElems; j++) {
           auto key = resultOffset[j];
@@ -405,7 +405,7 @@ private:
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getTotalElemsPerThread(resultTy);
         auto resultIndices =
-            emitIndices(loc, rewriter, resultLayout, resultTy, true);
+            ::intel::emitIndices(loc, rewriter, resultLayout, resultTy, true);
         auto resultShape = resultTy.getShape();
         auto resultCTATile = getShapePerCTATile(resultLayout, resultShape);
         assert(resultIndices.size() == resultElems);

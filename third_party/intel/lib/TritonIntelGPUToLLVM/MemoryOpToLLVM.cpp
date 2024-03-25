@@ -29,9 +29,10 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
   int32_t elemSize = elemTy.getIntOrFloatBitWidth();
   auto mmaLayout = srcLayout.dyn_cast<DpasEncodingAttr>();
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
-  auto dstStrides = LLVM::utils::getStridesFromShapeAndOrder(
-      dstShapePerCTA, outOrd, loc, rewriter);
-  auto srcIndices = emitIndices(loc, rewriter, srcLayout, srcTy, false);
+  auto dstStrides =
+      LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
+  auto srcIndices = ::mlir::triton::intel::emitIndices(loc, rewriter, srcLayout,
+                                                       srcTy, false);
   auto inVals = unpackLLElements(loc, adaptor.getInit(), rewriter);
   storeDistributedToShared(op.getInit(), inVals, dstStrides, srcIndices,
                            op.getResult(), smemBase, elemTy, loc, rewriter);

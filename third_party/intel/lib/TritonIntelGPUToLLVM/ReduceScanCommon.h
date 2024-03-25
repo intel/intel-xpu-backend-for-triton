@@ -22,8 +22,8 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::utils::delinearize;
-using ::mlir::LLVM::utils::SharedMemoryObject;
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;

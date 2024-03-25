@@ -6,12 +6,10 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
-using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::utils::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::utils::linearize;
+using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::getStridesFromShapeAndOrder;
+using ::mlir::LLVM::linearize;
 
-using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::utils::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;
@@ -118,9 +116,9 @@ LogicalResult lowerSharedToDistributed(triton::gpu::LocalLoadOp op,
 
   auto srcStrides =
       getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
-  auto dstIndices = emitIndices(loc, rewriter, dstLayout, dstTy, true);
+  auto dstIndices = ::intel::emitIndices(loc, rewriter, dstLayout, dstTy, true);
 
-  SmallVector<Value> outVals = loadSharedToDistributed(
+  SmallVector<Value> outVals = ::intel::loadSharedToDistributed(
       op.getResult(), dstIndices, op.getSrc(), smemObj, elemTy, loc, rewriter);
 
   Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
@@ -185,8 +183,8 @@ private:
     auto shape = type.getShape();
     unsigned rank = shape.size();
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-      auto multiDimOffsetFirstElem =
-          emitBaseIndexForLayout(loc, rewriter, blockedLayout, type, false);
+      auto multiDimOffsetFirstElem = ::intel::emitBaseIndexForLayout(
+          loc, rewriter, blockedLayout, type, false);
       SmallVector<Value> multiDimOffset(rank);
       SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
           elemId, getSizePerThread(layout), getOrder(layout));
@@ -205,8 +203,9 @@ private:
       auto parentShape = sliceLayout.paddedShape(shape);
       auto parentTy = RankedTensorType::get(parentShape, type.getElementType(),
                                             parentEncoding);
-      auto offsets = emitOffsetForLayout(layout, type);
-      auto parentOffset = emitOffsetForLayout(parentEncoding, parentTy);
+      auto offsets = ::intel::emitOffsetForLayout(layout, type);
+      auto parentOffset =
+          ::intel::emitOffsetForLayout(parentEncoding, parentTy);
       SmallVector<int> idxs;
       for (SmallVector<unsigned> off : offsets) {
         off.insert(off.begin() + dim, 0);
@@ -228,7 +227,7 @@ private:
     }
     if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
       SmallVector<Value> multiDimBase =
-          emitBaseIndexForLayout(loc, rewriter, layout, type, false);
+          ::intel::emitBaseIndexForLayout(loc, rewriter, layout, type, false);
 
       // clang-format off
       // For C operand the layout illustration.
@@ -396,8 +395,8 @@ private:
     // Store to local shared memory
     {
       auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      auto inIndices =
-          emitIndices(loc, rewriter, srcLayout, srcTy, /*withCTAOffset*/ false);
+      auto inIndices = ::intel::emitIndices(loc, rewriter, srcLayout, srcTy,
+                                            /*withCTAOffset*/ false);
 
       assert(inIndices.size() == inVals.size() &&
              "Unexpected number of indices emitted");
@@ -420,8 +419,8 @@ private:
         srcShapePerCTACache.push_back(i32_val(srcShapePerCTA[i]));
 
       SmallVector<Value> outVals;
-      auto outIndices =
-          emitIndices(loc, rewriter, dstLayout, dstTy, /*withCTAOffset*/ true);
+      auto outIndices = ::intel::emitIndices(loc, rewriter, dstLayout, dstTy,
+                                             /*withCTAOffset*/ true);
 
       for (unsigned i = 0; i < outIndices.size(); ++i) {
         auto coord = outIndices[i];
