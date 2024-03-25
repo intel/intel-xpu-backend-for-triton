@@ -8,7 +8,9 @@
 
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
+
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+
 namespace mlir::triton::intel {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
