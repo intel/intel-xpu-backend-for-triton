@@ -1,5 +1,3 @@
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -17,6 +15,7 @@
 
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -26,6 +25,7 @@
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "PatternTritonGPUOpToLLVM.h"
@@ -201,6 +201,12 @@ struct ConvertTritonGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+    auto enableBlockPtr =
+        mlir::triton::tools::getBoolEnv("INTEL_ENABLE_BLOCK_PTR");
+    // fixme: set subgroupSize 16 for now
+    if (enableBlockPtr)
+      mod->setAttr("triton_gpu.threads-per-warp",
+                   IntegerAttr::get(IntegerType::get(context, 32), 16));
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
@@ -210,10 +216,12 @@ struct ConvertTritonGPUToLLVM
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-    // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation);
-    membarPass.run();
+    if (!enableBlockPtr) {
+      // Allocate shared memory and set barrier
+      ModuleAllocation allocation(mod);
+      ModuleMembarAnalysis membarPass(&allocation);
+      membarPass.run();
+    }
 
     // Lower functions
     {
@@ -223,12 +231,14 @@ struct ConvertTritonGPUToLLVM
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                          /*benefit=*/1);
-      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                            funcPatterns);
+      if (!enableBlockPtr)
+        mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                              funcPatterns);
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
     }
+    mod->dump();
 
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     OpBuilder::InsertPoint indexInsertPoint;
@@ -237,26 +247,33 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::intel::TargetInfo targetInfo(computeCapability);
     int benefit = 10;
     using namespace mlir::triton::intel;
-    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
-    populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
-    populateElementwiseOpToLLVMPatterns(
-        typeConverter, patterns, axisInfoAnalysis, computeCapability, benefit);
-    populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
-                                      benefit);
-    mlir::triton::intel::populateReduceOpToLLVMPatterns(typeConverter, patterns,
-                                                        targetInfo, benefit);
-    populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
-    mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
-                                               benefit);
+    if (enableBlockPtr) {
+      mlir::triton::intel::populateTritonOpsToLLVMPatterns(typeConverter,
+                                                           patterns, benefit);
+      populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
+    } else {
+      populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
+      populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
+      populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
+                                          axisInfoAnalysis, computeCapability,
+                                          benefit);
+      populateLoadStoreOpToLLVMPatterns(typeConverter, patterns,
+                                        axisInfoAnalysis, benefit);
+      mlir::triton::intel::populateReduceOpToLLVMPatterns(
+          typeConverter, patterns, targetInfo, benefit);
+      populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
+      mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
+                                                 benefit);
 
-    populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
-    populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
-    populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
-    populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
+      populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
+      populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
+      populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
+      populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
+      populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
+      populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
+      populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
+      populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
+    }
     populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns

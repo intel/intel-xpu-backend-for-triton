@@ -27,6 +27,7 @@ add_triton_library(TritonGPUToLLVM
     MLIRGPUToNVVMTransforms
     MLIRGPUToROCDLTransforms
     MLIRGPUTransforms
+    MLIRSCFToControlFlow
     TritonAnalysis
     TritonIR
     TritonGPUIR

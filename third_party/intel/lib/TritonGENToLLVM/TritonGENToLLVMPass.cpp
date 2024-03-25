@@ -218,6 +218,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
                              baseHeight.getType(),
+                             basePitch.getType(),
                              x.getType(),
                              y.getType(),
                              int32Ty,
@@ -247,9 +248,10 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   // FIXME: Add argument to control cache.
   auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
 
-  SmallVector<Value> args{ptr,     baseWidth,    baseHeight,    x,
-                          y,       elemSize,     tileWidth,     tileHeight,
-                          vBlocks, useTranspose, vnniTransform, cache};
+  SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
+                          x,          y,         elemSize,     tileWidth,
+                          tileHeight, vBlocks,   useTranspose, vnniTransform,
+                          cache};
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
@@ -285,6 +287,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
                              baseHeight.getType(),
+                             basePitch.getType(),
                              x.getType(),
                              y.getType(),
                              int32Ty,
@@ -315,10 +318,10 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   // FIXME: Add argument to control cache.
   auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
 
-  SmallVector<Value> args{ptr,     baseWidth,    baseHeight,    x,
-                          y,       elemSize,     tileWidth,     tileHeight,
-                          vBlocks, useTranspose, vnniTransform, cache,
-                          storeVal};
+  SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
+                          x,          y,         elemSize,     tileWidth,
+                          tileHeight, vBlocks,   useTranspose, vnniTransform,
+                          cache,      storeVal};
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
@@ -347,6 +350,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
                              baseHeight.getType(),
+                             basePitch.getType(),
                              x.getType(),
                              y.getType(),
                              int32Ty,
@@ -376,9 +380,10 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   auto cache = rewriter.create<LLVM::ConstantOp>(
       loc, int32Ty, static_cast<int>(op.getCacheControl()));
 
-  SmallVector<Value> args{ptr,     baseWidth,    baseHeight,    x,
-                          y,       elemSize,     tileWidth,     tileHeight,
-                          vBlocks, useTranspose, vnniTransform, cache};
+  SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
+                          x,          y,         elemSize,     tileWidth,
+                          tileHeight, vBlocks,   useTranspose, vnniTransform,
+                          cache};
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
