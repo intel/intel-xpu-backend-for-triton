@@ -43,7 +43,7 @@ llvm.func @gen_special_regs() -> i32 {
   // CHECK: llvm.call @_Z14get_num_groupsj([[TWO3]]) : (i32) -> i64
   %12 = triton_gen.grid.dim.z : i32
 
-  // CHECK: llvm.call @_Z16get_sub_group_id() : () -> i32
+  // CHECK: llvm.call @_Z16get_sub_group_idv() : () -> i32
   %13 = triton_gen.subgroup.id : i32
 
   llvm.return %1 : i32
