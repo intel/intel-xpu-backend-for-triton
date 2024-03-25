@@ -1,9 +1,9 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory  --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK: llvm.func @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>)
+  // CHECK: llvm.func spir_kernelcc @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>)
   // Here the 128 comes from the 4 in module attribute multiples 32
-  // CHECK-SAME: attributes {genx.intel_reqd_sub_group_size = [32 : i32], genx.kernel = 1 : i32, genx.max_work_group_size = [128 : i32, 1 : i32, 1 : i32]} {
+  // CHECK-SAME: attributes {passthrough = {{.*}}"gen.intel_reqd_sub_group_size", "32"{{.*}}"gen.max_work_group_size", "128,1,1"{{.*}}} {
   tt.func @test_empty_kernel(%lb : index, %A : !tt.ptr<f16>) {
     // CHECK:  llvm.return
     tt.return
@@ -902,9 +902,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: [[TWO:%.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK: [[GRID_DIM_Z:%.*]] = llvm.call @_Z14get_num_groupsj([[TWO]]) : (i32) -> i64
     // CHECK: llvm.trunc [[GRID_DIM_Z]] : i64 to i32
-    %blockdimx = tt.get_num_programs {axis=0:i32} : i32
-    %blockdimy = tt.get_num_programs {axis=1:i32} : i32
-    %blockdimz = tt.get_num_programs {axis=2:i32} : i32
+    %blockdimx = tt.get_num_programs x : i32
+    %blockdimy = tt.get_num_programs y : i32
+    %blockdimz = tt.get_num_programs z : i32
     %v0 = arith.addi %blockdimx, %blockdimy : i32
     %v1 = arith.addi %v0, %blockdimz : i32
     %0 = tt.splat %v1 : i32 -> tensor<32xi32, #blocked0>

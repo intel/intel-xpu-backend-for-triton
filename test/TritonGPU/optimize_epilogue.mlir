@@ -1,6 +1,4 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-optimize-epilogue | FileCheck --check-prefixes=GCN %s
-// FIXME: Unknown command line argument '--tritonamdgpu-optimize-epilogue'
-// XFAIL: *
 
 #mfma = #triton_gpu.amd_mfma<{warpsPerCTA=[1,1], instrShape=[32,32], isTranspose=false}>
 #blocked = #triton_gpu.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 16], warpsPerCTA = [1, 1], order = [1, 0]}>

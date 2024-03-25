@@ -69,6 +69,7 @@ class XPUBackend(BaseBackend):
         super().__init__(target)
         self.capability = target[1]
         assert isinstance(self.capability, int)
+        self.binary_ext = "spv"
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}

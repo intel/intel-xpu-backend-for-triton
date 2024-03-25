@@ -31,6 +31,10 @@ on:
           - float16
           - float32
         default: all
+      only_one_model:
+        description: Run only this one model
+        type: string
+        default: ""
       TORCH_COMPILE_DEBUG:
         description: TORCH_COMPILE_DEBUG
         type: string
@@ -47,12 +51,16 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   USE_AOT_DEVLIST: pvc
   PYTHON_VERSION: "3.10"
-  LLVM_REPO: intel/llvm.git
-  LLVM_BRANCH: genx
   BENCHMARK_REPO: weishi-deng/benchmark.git
   BENCHMARK_BRANCH: main
 
 jobs:
+  print_inputs:
+    runs-on: Linux
+    steps:
+        - name: Print Inputs
+          run: echo "${{ toJSON(github.event.inputs) }}"
+
   matrix:
     name: Matrix
     runs-on:
@@ -93,7 +101,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.6
+      - runner-0.0.7
     strategy:
       matrix:
         suite: ${{ fromJson(needs.matrix.outputs.suite) }}
@@ -110,11 +118,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Get LLVM commit id
-        uses: ./.github/actions/get-commit-id
-        with:
-          repository: ${{ env.LLVM_REPO }}
-          branch: ${{ env.LLVM_BRANCH }}
-          variable: LLVM_COMMIT_ID
+        run: |
+          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
+          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
       - name: Get benchmark commit id
         uses: ./.github/actions/get-commit-id
@@ -143,12 +149,14 @@ jobs:
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
 
+      - name: Install latest nightly wheels
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Identify pinned versions
         run: |
           cd pytorch
-          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" >> "${GITHUB_ENV}"
-          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" >> "${GITHUB_ENV}"
-          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> "${GITHUB_ENV}"
           echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" >> "${GITHUB_ENV}"
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" >> "${GITHUB_ENV}"
 
@@ -156,14 +164,12 @@ jobs:
       # installing custom torch and torchvision, but instead we install its dependencies except
       # torch and torchvision.
       - name: Install TIMM Models
+        if: ${{ matrix.suite == 'timm_models' }}
         run: |
           # install timm without dependencies
           pip install --no-deps git+https://github.com/huggingface/pytorch-image-models@$TIMM_COMMIT_ID
           # install timm dependencies without torch and torchvision
           pip install $(curl -sSL https://raw.githubusercontent.com/huggingface/pytorch-image-models/$TIMM_COMMIT_ID/requirements.txt | grep -vE torch)
-
-      - name: Setup IPEX
-        uses: ./.github/actions/setup-ipex
 
       - name: Generate Triton cache key
         id: triton-key
@@ -230,93 +236,6 @@ jobs:
         run: |
           pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
 
-      - name: Load torchvision from a cache
-        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
-        id: torchvision-cache
-        uses: ./.github/actions/load
-        with:
-          path: vision
-          key: torchvision-$PYTHON_VERSION-$TORCHVISION_COMMIT_ID
-
-      - name: Build torchvision wheels
-        if: ${{ (matrix.suite == 'timm_models' || matrix.suite == 'torchbench') && steps.torchvision-cache.outputs.status == 'miss' }}
-        run: |
-          git clone --single-branch -b main https://github.com/pytorch/vision.git
-          cd vision
-          git checkout $TORCHVISION_COMMIT_ID
-          python setup.py bdist_wheel
-
-      - name: Install torchvision
-        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
-        run: |
-          pip install vision/dist/*.whl
-          python -c "import torchvision; print(torchvision.__version__)"
-
-      - name: Save torchvision to a cache
-        if: ${{ (matrix.suite == 'timm_models' || matrix.suite == 'torchbench') && steps.torchvision-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.torchvision-cache.outputs.path }}
-          dest: ${{ steps.torchvision-cache.outputs.dest }}
-
-      - name: Load torchtext from a cache
-        if: ${{ matrix.suite == 'torchbench' }}
-        id: torchtext-cache
-        uses: ./.github/actions/load
-        with:
-          path: text
-          key: torchtext-$PYTHON_VERSION-$TORCHTEXT_COMMIT_ID
-
-      - name: Build torchtext wheels
-        if: ${{ matrix.suite == 'torchbench' && steps.torchtext-cache.outputs.status == 'miss'}}
-        run: |
-          git clone --recurse-submodules --jobs 8 --single-branch -b main https://github.com/pytorch/text.git
-          cd text
-          git checkout $TORCHTEXT_COMMIT_ID
-          python setup.py bdist_wheel
-
-      - name: Install torchtext
-        if: ${{ matrix.suite == 'torchbench' }}
-        run: |
-          pip install text/dist/*.whl
-          python -c "import torchtext; print(torchtext.__version__)"
-
-      - name: Save torchtext to a cache
-        if: ${{ matrix.suite == 'torchbench' && steps.torchtext-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.torchtext-cache.outputs.path }}
-          dest: ${{ steps.torchtext-cache.outputs.dest }}
-
-      - name: Load torchaudio from a cache
-        if: ${{ matrix.suite == 'torchbench' }}
-        id: torchaudio-cache
-        uses: ./.github/actions/load
-        with:
-          path: audio
-          key: torchaudio-$PYTHON_VERSION-$TORCHAUDIO_COMMIT_ID
-
-      - name: Build torchaudio wheels
-        if: ${{ matrix.suite == 'torchbench' && steps.torchaudio-cache.outputs.status == 'miss' }}
-        run: |
-          git clone --single-branch -b main https://github.com/pytorch/audio.git
-          cd audio
-          git checkout $TORCHAUDIO_COMMIT_ID
-          python setup.py bdist_wheel
-
-      - name: Install torchaudio
-        if: ${{ matrix.suite == 'torchbench' }}
-        run: |
-          pip install audio/dist/*.whl
-          python -c "import torchaudio; print(torchaudio.__version__)"
-
-      - name: Save torchaudio to a cache
-        if: ${{ matrix.suite == 'torchbench' && steps.torchaudio-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.torchaudio-cache.outputs.path }}
-          dest: ${{ steps.torchaudio-cache.outputs.dest }}
-
       - name: Clone pytorch benchmark
         if: ${{ matrix.suite == 'torchbench' }}
         uses: actions/checkout@v4
@@ -333,7 +252,7 @@ jobs:
           python install.py
           pip install -e .
 
-      - name: Run e2e tests
+      - name: Run e2e performance benchmarks
         env:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
@@ -343,8 +262,11 @@ jobs:
             # torch will save debug logs to $TORCH_COMPILE_DEBUG_DIR/torch_compile_debug
             export TORCH_COMPILE_DEBUG_DIR=$GITHUB_WORKSPACE
           fi
+          if [[ -n "${{ inputs.only_one_model }}" ]]; then
+            MODEL_ARGS="static 1 0 ${{ inputs.only_one_model }}"
+          fi
           cd pytorch
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0
+          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0 ${MODEL_ARGS}
 
       - name: Report environment details
         run: |
@@ -363,7 +285,7 @@ jobs:
           PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
           IPEX_REPO=$IPEX_REPO
           IPEX_COMMIT_ID=$IPEX_COMMIT_ID
-          LLVM_REPO=$LLVM_REPO
+          LLVM_REPO=llvm/llvm-project
           LLVM_COMMIT_ID=$LLVM_COMMIT_ID
           BENCHMARK_REPO=$BENCHMARK_REPO
           BENCHMARK_COMMIT_ID=$BENCHMARK_COMMIT_ID

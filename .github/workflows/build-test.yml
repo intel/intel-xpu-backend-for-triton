@@ -66,7 +66,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.6
+      - runner-0.0.7
     strategy:
       matrix:
         python:
@@ -95,11 +95,9 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Get LLVM commit id
-        uses: ./.github/actions/get-commit-id
-        with:
-          repository: intel/llvm.git
-          branch: genx
-          variable: LLVM_COMMIT_ID
+        run: |
+          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
+          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
       - name: Calculate packages cache key
         run: |
@@ -169,7 +167,7 @@ jobs:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/interpreter_core.xml -vvv -n 4 -m interpreter language/test_core.py --device cpu
+          python3 -m pytest --junitxml=~/reports/interpreter_core.xml -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py --device cpu
           python3 -m pytest --junitxml=~/reports/interpreter_flash_attention.xml -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial operators tests
@@ -197,10 +195,8 @@ jobs:
           python3 05-layer-norm.py
           python3 06-fused-attention.py
           python3 07-extern-functions.py
-          python3 08-experimental-block-pointer.py
-          python3 09-experimental-tma-matrix-multiplication.py
-          python3 10-experimental-tma-store-matrix-multiplication.py
-          python3 11-grouped-gemm.py
+          python3 08-grouped-gemm.py
+          python3 09-experimental-block-pointer.py
 
       - name: Run CXX unittests
         run: |

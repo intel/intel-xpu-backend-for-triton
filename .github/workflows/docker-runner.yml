@@ -29,7 +29,7 @@ jobs:
       - name: Set base runner env
         if: inputs.runner == 'base'
         run: |
-          echo TAG=triton-runner-base:0.0.6 >>$GITHUB_ENV
+          echo TAG=triton-runner-base:0.0.7 >>$GITHUB_ENV
           echo INSTALLER_IMAGE=$REGISTRY/oneapi-basekit:2024.0.1 >>$GITHUB_ENV
           echo RUNNER_PATH=.github/dockerfiles/runner-base/ >>$GITHUB_ENV
 

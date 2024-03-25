@@ -198,7 +198,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRTargetLLVMIRExport
     MLIRMathToLLVM
     MLIRROCDLToLLVMIRTranslation
-    MLIRGENXToLLVMIRTranslation
     MLIRGPUDialect
     MLIRSCFToControlFlow
     MLIRIndexToLLVM
