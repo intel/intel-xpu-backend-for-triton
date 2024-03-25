@@ -16,7 +16,6 @@ struct ReturnOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
     if (funcOp->hasAttr("nvvm.kernel")) {
-      llvm_unreachable("TODO");
       // A GPU kernel
       if (op.getNumOperands() > 0) {
         return rewriter.notifyMatchFailure(
