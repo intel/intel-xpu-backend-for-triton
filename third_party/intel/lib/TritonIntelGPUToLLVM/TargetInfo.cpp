@@ -8,7 +8,6 @@
 
 #include "TargetInfo.h"
 #include "Utility.h"
-#include "intel/include/TritonIntelGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
@@ -16,9 +15,7 @@
 using namespace mlir;
 namespace mlir::triton::intel {
 
-bool TargetInfo::supportMaximumMinimum() const {
-  return computeCapability >= 80;
-}
+bool TargetInfo::supportMaximumMinimum() const { return true; }
 Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
                          Type type, Value cmp) const {
   assert("TODO: implement ballot on XPU");
