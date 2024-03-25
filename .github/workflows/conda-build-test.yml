@@ -97,7 +97,7 @@ jobs:
       - name: Run core tests
         run: |
           conda run --no-capture-output -n triton scripts/compile-pytorch-ipex.sh --pytorch
-          export PATH=/opt/intel/oneapi/2024.0/bin:$PATH
+          export PATH=/home/runner/intel/oneapi/2024.0/bin:$PATH
           conda run -n triton scripts/test-triton.sh
 
       - name: Run E2E test
