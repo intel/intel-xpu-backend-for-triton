@@ -290,15 +290,16 @@ struct SharedMemoryObject {
     return offsets[order];
   }
 
-  //missing sub
+  //TODO: missing sub
   
-  // Value getBaseBeforeSlice(int order, Location loc,
-  //                          ConversionPatternRewriter &rewriter) const {
-  //   Value cSwizzleOffset = getCSwizzleOffset(order);
-  //   Value offset = sub(i32_val(0), cSwizzleOffset);
-  //   Type type = base.getType();
-  //   return gep(type, baseElemType, base, offset);
-  // }
+  Value getBaseBeforeSlice(int order, Location loc,
+                           ConversionPatternRewriter &rewriter) const {
+    Value cSwizzleOffset = getCSwizzleOffset(order);
+    // Value offset = sub(i32_val(0), cSwizzleOffset);
+    Value offset = rewriter.create<LLVM::SubOp>(loc, i32_val(0), cSwizzleOffset);
+    Type type = base.getType();
+    return gep(type, baseElemType, base, offset);
+  }
 };
 
 SharedMemoryObject
@@ -365,7 +366,7 @@ static Value getStackPointer(PatternRewriter &rewriter,
     return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
 
-//missing sub macro 
+//TODO: missing sub macro 
 
 // static Value getSharedMemoryBase(Location loc,
 //                                  ConversionPatternRewriter &rewriter,
@@ -410,7 +411,7 @@ static Value getClusterCTAId(RewriterBase &rewriter, Location loc) {
 // using LLVM::getMultiDimIndex;
 // using LLVM::SharedMemoryObject;
 using ::mlir::LLVM::delinearize;
-// using ::mlir::LLVM::SharedMemoryObject;
+using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;

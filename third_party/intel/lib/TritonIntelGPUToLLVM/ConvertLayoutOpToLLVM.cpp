@@ -6,11 +6,10 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
-using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::utils::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::utils::linearize;
 
-using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::utils::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
