@@ -23,6 +23,7 @@ enum class DeviceArch {
 };
 
 std::unique_ptr<Pass> createPrefetchBlockPass(unsigned numWarps = 4);
+std::unique_ptr<Pass> createMatchTargetSizePass();
 
 } // namespace intel
 } // namespace gpu
