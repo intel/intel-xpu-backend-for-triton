@@ -44,6 +44,7 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return *endBlock.args_begin();
 }
 
+// FIXME: Copy ShflKind from NVVM dialect to GEN dialect.
 static TritonGEN::ShflKind toGenShuffleMode(NVVM::ShflKind mode) {
   switch (mode) {
   case NVVM::ShflKind::bfly:

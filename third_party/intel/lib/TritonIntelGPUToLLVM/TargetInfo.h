@@ -42,6 +42,7 @@ public:
       ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const override;
 
 private:
+  // TODO: revisit the computeCapability field, as it should not be used on XPU.
   int computeCapability;
 };
 } // namespace mlir::triton::intel
