@@ -93,18 +93,6 @@ using namespace mlir::triton;
 #define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
-
-#if 0
-#define barSync(rewriter, op, bar, numThreads)                                 \
-  do {                                                                         \
-    ::mlir::triton::intel::PTXBuilder ptxBuilder;                              \
-    auto &barSyncOp = *ptxBuilder.create<>("bar.sync");                        \
-    barSyncOp(ptxBuilder.newConstantOperand(bar),                              \
-              ptxBuilder.newConstantOperand(numThreads));                      \
-    auto voidTy = void_ty(op->getContext());                                   \
-    ptxBuilder.launch(rewriter, op->getLoc(), voidTy);                         \
-  } while (0)
-#endif
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
