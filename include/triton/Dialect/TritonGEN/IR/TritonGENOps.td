@@ -35,21 +35,21 @@ class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
 
 def IndexType : AnyTypeOf<[I32, I64]>;
 
-def TritonGEN_ThreadIdXOp : TritonGEN_Op<"workitem.id.x", [NoMemoryEffect]> {
+def TritonGEN_ThreadIdXOp : TritonGEN_Op<"workitem.id.x", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def TritonGEN_ThreadIdYOp : TritonGEN_Op<"workitem.id.y", [NoMemoryEffect]> {
+def TritonGEN_ThreadIdYOp : TritonGEN_Op<"workitem.id.y", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def TritonGEN_ThreadIdZOp : TritonGEN_Op<"workitem.id.z", [NoMemoryEffect]> {
+def TritonGEN_ThreadIdZOp : TritonGEN_Op<"workitem.id.z", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
@@ -57,21 +57,21 @@ def TritonGEN_ThreadIdZOp : TritonGEN_Op<"workitem.id.z", [NoMemoryEffect]> {
   }];
 }
 
-def TritonGEN_BlockIdXOp : TritonGEN_Op<"workgroup.id.x", [NoMemoryEffect]> {
+def TritonGEN_BlockIdXOp : TritonGEN_Op<"workgroup.id.x", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def TritonGEN_BlockIdYOp : TritonGEN_Op<"workgroup.id.y", [NoMemoryEffect]> {
+def TritonGEN_BlockIdYOp : TritonGEN_Op<"workgroup.id.y", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def TritonGEN_BlockIdZOp : TritonGEN_Op<"workgroup.id.z", [NoMemoryEffect]> {
+def TritonGEN_BlockIdZOp : TritonGEN_Op<"workgroup.id.z", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
@@ -83,21 +83,21 @@ def TritonGEN_BlockIdZOp : TritonGEN_Op<"workgroup.id.z", [NoMemoryEffect]> {
 // Block and Grid range
 //===----------------------------------------------------------------------===//
 
-def TritonGEN_BlockDimXOp : TritonGEN_Op<"workgroup.dim.x", [NoMemoryEffect]> {
+def TritonGEN_BlockDimXOp : TritonGEN_Op<"workgroup.dim.x", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def TritonGEN_BlockDimYOp : TritonGEN_Op<"workgroup.dim.y", [NoMemoryEffect]> {
+def TritonGEN_BlockDimYOp : TritonGEN_Op<"workgroup.dim.y", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def TritonGEN_BlockDimZOp : TritonGEN_Op<"workgroup.dim.z", [NoMemoryEffect]> {
+def TritonGEN_BlockDimZOp : TritonGEN_Op<"workgroup.dim.z", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
@@ -105,21 +105,21 @@ def TritonGEN_BlockDimZOp : TritonGEN_Op<"workgroup.dim.z", [NoMemoryEffect]> {
   }];
 }
 
-def TritonGEN_GridDimXOp : TritonGEN_Op<"grid.dim.x", [NoMemoryEffect]> {
+def TritonGEN_GridDimXOp : TritonGEN_Op<"grid.dim.x", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def TritonGEN_GridDimYOp : TritonGEN_Op<"grid.dim.y", [NoMemoryEffect]> {
+def TritonGEN_GridDimYOp : TritonGEN_Op<"grid.dim.y", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
 }
-def TritonGEN_GridDimZOp : TritonGEN_Op<"grid.dim.z", [NoMemoryEffect]> {
+def TritonGEN_GridDimZOp : TritonGEN_Op<"grid.dim.z", [Pure]> {
   let arguments = (ins);
   let results = (outs IndexType:$res);
   let assemblyFormat = [{
