@@ -99,7 +99,7 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     MLIRContext *context = rewriter.getContext();
-    Operation *newOp = newOp =
+    Operation *newOp =
         rewriter.create<TargetOp>(loc, IntegerType::get(context, 32));
 
     if (indexBitwidth > 32) {
