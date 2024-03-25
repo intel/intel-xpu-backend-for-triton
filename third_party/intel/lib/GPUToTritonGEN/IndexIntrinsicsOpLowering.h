@@ -97,15 +97,16 @@ public:
   LogicalResult
   matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op->getLoc();
+    Location loc = op->getLoc();
     MLIRContext *context = rewriter.getContext();
+    const unsigned resBitWidth = 32;
     Operation *newOp =
-        rewriter.create<TargetOp>(loc, IntegerType::get(context, 32));
+        rewriter.create<TargetOp>(loc, IntegerType::get(context, resBitWidth));
 
-    if (indexBitwidth > 32) {
+    if (indexBitwidth > resBitWidth) {
       newOp = rewriter.create<LLVM::SExtOp>(
           loc, IntegerType::get(context, indexBitwidth), newOp->getResult(0));
-    } else if (indexBitwidth < 32) {
+    } else if (indexBitwidth < resBitWidth) {
       newOp = rewriter.create<LLVM::TruncOp>(
           loc, IntegerType::get(context, indexBitwidth), newOp->getResult(0));
     }

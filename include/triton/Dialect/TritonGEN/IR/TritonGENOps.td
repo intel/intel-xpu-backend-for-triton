@@ -131,7 +131,7 @@ def TritonGEN_GridDimZOp : TritonGEN_Op<"grid.dim.z", [Pure]> {
 // Subgroup index
 //===----------------------------------------------------------------------===//
 
-def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [NoMemoryEffect]> {
+def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
   let arguments = (ins);
   let results = (outs I32:$res);
   let assemblyFormat = [{
