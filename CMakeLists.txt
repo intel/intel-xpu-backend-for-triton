@@ -248,7 +248,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   else()
     target_link_libraries(triton PRIVATE z)
   endif()
-  target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+  target_link_options(triton PUBLIC ${LLVM_LDFLAGS})
 endif()
 
 if(UNIX AND NOT APPLE)
@@ -263,7 +263,7 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
     set(PYTHON_LDFLAGS "-undefined dynamic_lookup -flto")
   endif()
 
-  target_link_libraries(triton PRIVATE ${PYTHON_LDFLAGS})
+  target_link_libraries(triton PUBLIC ${PYTHON_LDFLAGS})
 endif()
 
 if(NOT TRITON_BUILD_PYTHON_MODULE)
