@@ -15,7 +15,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::utils::delinearize;
+using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::utils::linearize;
 using ::mlir::triton::gpu::getCTALayout;

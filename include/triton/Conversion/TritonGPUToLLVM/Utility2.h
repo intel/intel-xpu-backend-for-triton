@@ -404,4 +404,19 @@ static Value getClusterCTAId(RewriterBase &rewriter, Location loc) {
                                                         rewriter.getI32Type());
 }
 
+// -----------------------------------------------------------------------
+// Shared memory utilities
+// -----------------------------------------------------------------------
+// using LLVM::getMultiDimIndex;
+// using LLVM::SharedMemoryObject;
+using ::mlir::LLVM::delinearize;
+// using ::mlir::LLVM::SharedMemoryObject;
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
+using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
+using ::mlir::triton::gpu::BlockedEncodingAttr;
+using ::mlir::triton::gpu::CTALayoutAttr;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::triton::gpu::SliceEncodingAttr;
+
 } //namespace mlir

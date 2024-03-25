@@ -238,15 +238,15 @@ getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
 
 // Convert an \param linear to a multi-dim coordinate given \param shape and
 // \param order.
-SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
-                               Value linear, ArrayRef<unsigned> shape,
-                               ArrayRef<unsigned> order);
+// SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
+//                                Value linear, ArrayRef<unsigned> shape,
+//                                ArrayRef<unsigned> order);
 
-SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
-                               unsigned linear, ArrayRef<unsigned> shape);
+// SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
+//                                unsigned linear, ArrayRef<unsigned> shape);
 
-SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
-                               Value linear, ArrayRef<unsigned> shape);
+// SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
+//                                Value linear, ArrayRef<unsigned> shape);
 
 Value linearize(ConversionPatternRewriter &rewriter, Location loc,
                 ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
@@ -325,7 +325,7 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
 // -----------------------------------------------------------------------
 // Shared memory utilities
 // -----------------------------------------------------------------------
-using ::mlir::LLVM::utils::delinearize;
+// using ::mlir::LLVM::utils::delinearize;
 using ::mlir::LLVM::utils::SharedMemoryObject;
 using ::mlir::triton::getMultiDimIndex;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
