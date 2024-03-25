@@ -128,6 +128,23 @@ def TritonGEN_GridDimZOp : TritonGEN_Op<"grid.dim.z", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Subgroup index
+//===----------------------------------------------------------------------===//
+
+def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
+  let summary = "Subgroup Index";
+  string baseDescription = [{
+    The `gen.subgroup.id` operation returns the subgroup ID which is a number
+    from 0 to the number of subgroups minus one.
+  }];
+  let arguments = (ins);
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Synchronization
 //===----------------------------------------------------------------------===//
 

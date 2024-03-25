@@ -26,6 +26,8 @@ llvm.func @triton_gen_special_regs() -> i32 {
   %10 = triton_gen.grid.dim.y : i32
   // CHECK: triton_gen.grid.dim.z : i32
   %11 = triton_gen.grid.dim.z : i32
+  // CHECK: triton_gen.subgroup.id : i32
+  %12 = triton_gen.subgroup.id : i32
   llvm.return %0 : i32
 }
 
