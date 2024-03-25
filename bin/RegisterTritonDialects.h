@@ -17,7 +17,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
 // FIXME
-#include "intel/include/NVGPUIntelToLLVM/Passes.h"
+// #include "intel/include/NVGPUIntelToLLVM/Passes.h"
 #include "intel/include/TritonGENToLLVM/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "nvidia/include/NVGPUToLLVM/Passes.h"
@@ -62,7 +62,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerIntelAllocateSharedMemoryPass();
   mlir::triton::registerConvertTritonIntelGPUToLLVMPass();
   mlir::triton::registerConvertTritonGENToLLVM();
-  mlir::triton::registerConvertNVGPUIntelToLLVMPass();
+  //  mlir::triton::registerConvertNVGPUIntelToLLVMPass();
   mlir::triton::registerTritonGENToLLVMPasses();
 
 #ifdef USE_ROCM

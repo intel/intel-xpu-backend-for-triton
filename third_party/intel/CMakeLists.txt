@@ -9,5 +9,5 @@ add_triton_plugin(TritonXPU
   LINK_LIBS
   TritonIntelGPUToLLVM
   TritonGENToLLVM
-  NVGPUIntelToLLVM
+#  NVGPUIntelToLLVM
 )

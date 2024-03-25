@@ -28,6 +28,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
+#if 0
 struct BarrierOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<mlir::gpu::BarrierOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -66,11 +67,12 @@ struct FenceAsyncSharedOpConversion
     return success();
   }
 };
+#endif
 } // namespace
 
 void mlir::triton::intel::populateBarrierOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<BarrierOpConversion>(typeConverter, benefit);
-  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
+  //  patterns.add<BarrierOpConversion>(typeConverter, benefit);
+  // patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
 }

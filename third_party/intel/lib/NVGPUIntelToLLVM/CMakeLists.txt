@@ -1,6 +1,6 @@
-add_triton_library(NVGPUIntelToLLVM
-    NVGPUToLLVMPass.cpp
+#add_triton_library(NVGPUIntelToLLVM
+#    NVGPUToLLVMPass.cpp
 
-    DEPENDS
-    NVGPUIntelConversionPassIncGen
-)
+#    DEPENDS
+#    NVGPUIntelConversionPassIncGen
+#)

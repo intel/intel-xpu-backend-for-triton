@@ -8,7 +8,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 
-#include "intel/include/TritonIntelGPUToLLVM/PTXAsmFormat.h"
+// #include "intel/include/TritonIntelGPUToLLVM/PTXAsmFormat.h"
 
 #include "../TritonIntelGPUToLLVM/Utility.h"
 using namespace mlir;
@@ -18,12 +18,13 @@ using namespace mlir::triton;
 #include "intel/include/NVGPUIntelToLLVM/Passes.h.inc"
 
 namespace ttn = mlir::triton::nvgpu;
-using ::mlir::LLVM::utils::getSRegValue;
-using ::mlir::triton::intel::PTXBuilder;
-using ::mlir::triton::intel::PTXInstr;
+// using ::mlir::LLVM::utils::getSRegValue;
+// using ::mlir::triton::intel::PTXBuilder;
+// using ::mlir::triton::intel::PTXInstr;
 
 namespace {
 
+#if 0
 using OperandsAndConstraints = std::vector<std::pair<mlir::Value, std::string>>;
 typedef std::vector<std::string> Constraints;
 
@@ -702,6 +703,7 @@ public:
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
+#if 0
 #define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
   patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \
                                               Constraints());
@@ -720,8 +722,9 @@ public:
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }
-};
-
+#endif
+  };
+#endif
 } // anonymous namespace
 
 namespace mlir {
@@ -729,7 +732,8 @@ namespace triton {
 // namespace intel {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUIntelToLLVMPass() {
-  return std::make_unique<::ConvertNVGPUToLLVM>();
+  // return std::make_unique<::ConvertNVGPUToLLVM>();
+  return nullptr;
 }
 
 // } // namespace intel

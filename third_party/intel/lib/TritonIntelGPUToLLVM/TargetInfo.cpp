@@ -1,6 +1,5 @@
 #include "TargetInfo.h"
 #include "Utility.h"
-#include "intel/include/TritonIntelGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
