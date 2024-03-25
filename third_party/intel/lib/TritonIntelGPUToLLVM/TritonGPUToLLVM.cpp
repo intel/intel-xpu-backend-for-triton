@@ -201,6 +201,8 @@ struct ConvertTritonGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+    auto enableBlockPtr =
+        mlir::triton::tools::getBoolEnv("INTEL_ENABLE_BLOCK_PTR");
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
@@ -223,8 +225,9 @@ struct ConvertTritonGPUToLLVM
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                          /*benefit=*/1);
-      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                            funcPatterns);
+      if (!enableBlockPtr)
+        mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                              funcPatterns);
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
@@ -237,6 +240,11 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::intel::TargetInfo targetInfo(computeCapability);
     int benefit = 10;
     using namespace mlir::triton::intel;
+    if (enableBlockPtr) {
+      populateTritonOpsToLLVMPatterns(typeConverter, patterns, target, benefit);
+      populateControlFlowOpToLLVMPattern(typeConverter, patterns, target,
+                                         benefit);
+    } else {
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     mlir::triton::intel::populateElementwiseOpToLLVMPatterns(
@@ -265,8 +273,8 @@ struct ConvertTritonGPUToLLVM
                                                             patterns, benefit);
     mlir::triton::intel::populateMakeRangeOpToLLVMPattern(typeConverter,
                                                           patterns, benefit);
-    mlir::triton::intel::populateSPMDOpToLLVMPattern(typeConverter, patterns,
-                                                     targetInfo, benefit);
+    }
+    populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.

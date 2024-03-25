@@ -10,6 +10,10 @@ namespace mlir {
 namespace triton {
 namespace intel {
 
+void populateTritonOpsToLLVMPatterns(
+    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    Target target, PatternBenefit benefit);
+
 void populateBarrierOpToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit);
