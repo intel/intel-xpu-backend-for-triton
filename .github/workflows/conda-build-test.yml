@@ -69,6 +69,7 @@ jobs:
         run: |
           conda create -n triton --override-channels -c conda-forge python=${{ matrix.python }}.*
           conda env update -f scripts/triton.yml
+          find /home/runner/intel/oneapi/compiler \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniconda3/envs/triton/lib \;
           ln -snf /usr/include/level_zero $HOME/miniconda3/envs/triton/bin/../x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
           find /usr -name libze_\* -exec ln -sf {} $HOME/miniconda3/envs/triton/lib/ \;
 
@@ -96,7 +97,7 @@ jobs:
       - name: Run core tests
         run: |
           conda run --no-capture-output -n triton scripts/compile-pytorch-ipex.sh --pytorch
-          conda install -y -n triton -c conda-forge dpcpp_linux-64=2024.0.0
+          export PATH=/opt/intel/oneapi/2024.0/bin:$PATH
           conda run -n triton scripts/test-triton.sh
 
       - name: Run E2E test
@@ -121,10 +122,6 @@ jobs:
           cat $WORKSPACE/inductor_log/*/*/*.csv
           grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
 
-
-      - name: Clean conda env
-        run: |
-          conda remove -y -n triton dpcpp_linux-64
 
       - name: Save conda cache
         if: ${{ steps.conda-cache.outputs.status == 'miss' }}
