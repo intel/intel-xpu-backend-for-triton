@@ -201,6 +201,8 @@ struct ConvertTritonGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+    auto enableBlockPtr =
+        mlir::triton::tools::getBoolEnv("INTEL_ENABLE_BLOCK_PTR");
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
@@ -223,8 +225,9 @@ struct ConvertTritonGPUToLLVM
       RewritePatternSet funcPatterns(context);
       funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                          /*benefit=*/1);
-      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                            funcPatterns);
+      if (!enableBlockPtr)
+        mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                              funcPatterns);
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
@@ -237,26 +240,33 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::intel::TargetInfo targetInfo(computeCapability);
     int benefit = 10;
     using namespace mlir::triton::intel;
-    populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
-    populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
-    populateElementwiseOpToLLVMPatterns(
-        typeConverter, patterns, axisInfoAnalysis, computeCapability, benefit);
-    populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
-                                      benefit);
-    mlir::triton::intel::populateReduceOpToLLVMPatterns(typeConverter, patterns,
-                                                        targetInfo, benefit);
-    populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
-    mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
-                                               benefit);
-    populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
-    populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
-    populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
-    populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
-    populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
+    if (enableBlockPtr) {
+      populateTritonOpsToLLVMPatterns(typeConverter, patterns, target, benefit);
+      populateControlFlowOpToLLVMPattern(typeConverter, patterns, target,
+                                         benefit);
+    } else {
+      populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
+      populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
+      populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
+                                          axisInfoAnalysis, computeCapability,
+                                          benefit);
+      populateLoadStoreOpToLLVMPatterns(typeConverter, patterns,
+                                        axisInfoAnalysis, benefit);
+      mlir::triton::intel::populateReduceOpToLLVMPatterns(
+          typeConverter, patterns, targetInfo, benefit);
+      populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
+      mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
+                                                 benefit);
+      populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
+      populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
+      populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
+      populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
+      populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
+      populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
+      populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
+      populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
+      populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
+    }
     populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
