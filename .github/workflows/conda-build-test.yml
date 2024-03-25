@@ -32,11 +32,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Get LLVM commit id
-        uses: ./.github/actions/get-commit-id
-        with:
-          repository: intel/llvm.git
-          branch: genx
-          variable: LLVM_COMMIT_ID
+        run: |
+          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
+          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
       - name: Calculate env
         run: |

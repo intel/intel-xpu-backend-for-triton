@@ -51,8 +51,11 @@ downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
-1. `git checkout` LLVM at https://github.com/intel/llvm/tree/genx.  Optionally,
-   make additional modifications to LLVM.
+Find the version of LLVM that Triton builds against. Check cmake/llvm-hash.txt to
+see the current version. For example, if it says: 49af6502c6dcb4a7f7520178bd14df396f78240c
+checkout that version:
+
+1. `git checkout 49af6502c6dcb4a7f7520178bd14df396f78240c ` LLVM at https://github.com/llvm/llvm-project
 
 2. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
 

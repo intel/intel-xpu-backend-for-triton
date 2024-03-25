@@ -1,6 +1,4 @@
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm | FileCheck %s
-// FIXME: Currently unable to invoke amd passes.
-// XFAIL: *
 
 //  CHECK-LABEL: f16_to_f32
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>

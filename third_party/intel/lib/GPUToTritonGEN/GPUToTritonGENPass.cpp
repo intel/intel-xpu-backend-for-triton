@@ -170,9 +170,7 @@ void mlir::triton::populateGPUToTritonGENConversionPatterns(
   patterns.add<GPUFuncOpLowering>(
       converter,
       /*allocaAddrSpace=*/TritonGEN::TritonGENMemorySpace::kFunction,
-      /*workgroupAddrSpace=*/TritonGEN::TritonGENMemorySpace::kWorkgroup,
-      StringAttr::get(&converter.getContext(),
-                      TritonGEN::TritonGENDialect::getKernelFuncAttrName()));
+      /*workgroupAddrSpace=*/TritonGEN::TritonGENMemorySpace::kWorkgroup);
 
   const llvm::StringRef prefix("_Z15__spirv_ocl_");
   populateOpPatterns<math::ExpOp>(converter, patterns, (prefix + "expf").str(),

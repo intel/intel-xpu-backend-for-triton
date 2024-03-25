@@ -704,13 +704,13 @@ struct AsyncCopyGlobalToLocalOpConversion
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
-    // This function should not be called on the genx target since all
+    // This function should not be called on the gen target since all
     // AsyncCopyGlobalToLocalOps would be decomposed into InsertSliceOps by the
     // decomposeAsyncCopyGlobalToLocalOp function.
     // FIXME: remove this assertion once a suitable replacement instruction
     // exists for the generated PTX in this function (cp.async.cg.shared.global)
     assert(false &&
-           "AsyncCopyGlobalToLocalOpConversion: genx target not supported yet");
+           "AsyncCopyGlobalToLocalOpConversion: gen target not supported yet");
 
     // insert_slice_async %src, %dst, %index, %mask, %other
     auto loc = op.getLoc();

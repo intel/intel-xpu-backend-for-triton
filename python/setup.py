@@ -160,7 +160,8 @@ def open_url(url):
         'User-Agent': user_agent,
     }
     request = urllib.request.Request(url, None, headers)
-    return urllib.request.urlopen(request)
+    # Set timeout to 300 seconds to prevent the request from hanging forver
+    return urllib.request.urlopen(request, timeout=300)
 
 
 # ---- package data ---
@@ -396,7 +397,7 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 
-backends = [*BackendInstaller.copy(["intel"]), *BackendInstaller.copy_externals()]
+backends = [*BackendInstaller.copy(["intel", "amd"]), *BackendInstaller.copy_externals()]
 
 
 def add_link_to_backends():
