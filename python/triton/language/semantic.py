@@ -9,6 +9,12 @@ from . import math
 T = TypeVar('T')
 
 
+def _is_not_None(val):
+    if isinstance(val, tl.constexpr):
+        return val.value is not None
+    return val is not None
+
+
 class IncompatibleTypeErrorImpl(Exception):
 
     def __init__(self, type_a, type_b):
@@ -760,7 +766,7 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_ro
         if fp_downcast_rounding is None: fp_downcast_rounding = ir.ROUNDING_MODE.RTNE
         elif fp_downcast_rounding != ir.ROUNDING_MODE.RTNE: use_custom_rounding = True
     else:
-        if fp_downcast_rounding is not None:
+        if _is_not_None(fp_downcast_rounding):
             raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
                              "Source scalar type is " + str(src_sca_ty) + " and destination type is " + str(dst_sca_ty))
 
@@ -990,9 +996,9 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
 
     # Make `mask` and `other` into the same shape as `ptr`
     if ptr.type.is_block():
-        if mask is not None:
+        if _is_not_None(mask):
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
-        if other is not None:
+        if _is_not_None(other):
             other = broadcast_impl_shape(other, ptr.type.get_block_shapes(), builder)
 
     # Get `pointer_type<elt_ty>` and `elt_ty`
@@ -1006,7 +1012,7 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
         ptr = cast(ptr, ptr_ty, builder)
 
     # Cast `other` into `ele_ty` type
-    if other is not None:
+    if _is_not_None(other):
         other = cast(other, elt_ty, builder)
 
     # Create loaded result type `dst_ty`
@@ -1045,7 +1051,7 @@ def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], 
 def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):
     # Store by a block pointer: `pointer_type<block_type<>>`
     # Block pointers can not have the `mask` argument
-    if mask is not None:
+    if _is_not_None(mask):
         raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
 
     # Check same shape and element type
@@ -1092,7 +1098,7 @@ def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
     # Make `mask` and `val` into the same shape as `ptr`
     if ptr.type.is_block():
         val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
-        if mask is not None:
+        if _is_not_None(mask):
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
 
     ptr_ty = ptr.type.scalar
@@ -1158,9 +1164,9 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
     if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
         raise ValueError("atomic_" + op + " does not support " + str(element_ty))
     if ptr.type.is_block():
-        if mask is not None:
+        if _is_not_None(mask):
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
-        if val is not None:
+        if _is_not_None(val):
             val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
     val = cast(val, ptr.type.scalar.element_ty, builder)
     if not mask:
