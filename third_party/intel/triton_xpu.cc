@@ -1,5 +1,4 @@
-﻿// #include "NVGPUIntelToLLVM/Passes.h"
-#include "TritonIntelGPUToLLVM/Passes.h"
+﻿#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
