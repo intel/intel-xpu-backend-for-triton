@@ -302,7 +302,6 @@ class CMakeBuild(build_ext):
             os.getenv("HOMEPATH") or None
         if not user_home:
             raise RuntimeError("Could not find user home directory")
-        llvm_spirv_path = os.path.join(user_home, "packages/llvm-spirv")
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
@@ -315,7 +314,7 @@ class CMakeBuild(build_ext):
             "-G", "Ninja",  # Ninja is much faster than make
             "-DCMAKE_MAKE_PROGRAM=" +
             ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
-            "-DLLVM_SPIRV_DIR=" + llvm_spirv_path, "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DLLVM_ENABLE_WERROR=ON",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir, "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON", "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
             "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON", "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
