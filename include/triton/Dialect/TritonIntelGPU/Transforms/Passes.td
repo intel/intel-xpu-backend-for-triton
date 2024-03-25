@@ -39,4 +39,23 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
+def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "mlir::ModuleOp"> {
+  let summary = "match the target size of specific op (dot, load, store)";
+
+  let description = [{
+    this pass should be run after tritongpu-distribute-to-warps
+  }];
+
+  let constructor = "mlir::triton::gpu::intel::createMatchTargetSizePass()";
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+
+  let options = [
+    ListOption<"dotSize", "dot-size",
+           "int64_t", "target LLVM IR dot operation size(m, n, k)">
+  ];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES

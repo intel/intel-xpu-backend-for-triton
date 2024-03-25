@@ -22,6 +22,8 @@ enum class DeviceArch {
   PVC,
 };
 
+std::unique_ptr<Pass> createMatchTargetSizePass();
+
 } // namespace intel
 } // namespace gpu
 } // namespace triton

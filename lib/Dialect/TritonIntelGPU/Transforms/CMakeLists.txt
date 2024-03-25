@@ -1,5 +1,6 @@
 add_triton_library(TritonIntelGPUTransforms
   AccelerateMatmul.cpp
+  MatchTargetSize.cpp
   Utility.cpp
 
   DEPENDS
