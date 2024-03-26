@@ -126,7 +126,7 @@ run_core_tests() {
     echo "FAILED: return code $?" ; exit $?
   fi
 
-  TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 4 -m interpreter language/test_core.py --device cpu
+  TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py --device cpu
   if [ $? -ne 0 ]; then
     echo "FAILED: return code $?" ; exit $?
   fi
@@ -191,10 +191,8 @@ run_tutorial_tests() {
   run_tutorial_test "05-layer-norm" 05-layer-norm.py
   run_tutorial_test "06-fused-attention.py" 06-fused-attention.py
   run_tutorial_test "07-extern-functions" 07-extern-functions.py
-  run_tutorial_test "08-experimental-block-pointer" 08-experimental-block-pointer.py
-  run_tutorial_test "09-experimental-tma-matrix-multiplication" 09-experimental-tma-matrix-multiplication.py
-  run_tutorial_test "10-experimental-tma-store-matrix-multiplication" 10-experimental-tma-store-matrix-multiplication.py
-  run_tutorial_test "11-grouped-gemm" 11-grouped-gemm.py
+  run_tutorial_test "08-grouped-gemm" 08-grouped-gemm.py
+  run_tutorial_test "09-experimental-block-pointer" 09-experimental-block-pointer.py
 }
 
 test_triton() {

@@ -25,7 +25,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                    N_CTX: tl.constexpr):
+                    N_CTX: tl.constexpr, fp8_v: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
@@ -42,8 +42,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
         k = tl.load(K_block_ptr)
-        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, k)
+        qk = tl.dot(q, k)
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
@@ -61,7 +60,11 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         acc = acc * alpha[:, None]
         # update acc
         v = tl.load(V_block_ptr)
-        acc += tl.dot(p.to(tl.float16), v)
+        if fp8_v:
+            p = p.to(tl.float8e5)
+        else:
+            p = p.to(tl.float16)
+        acc = tl.dot(p, v, acc)
         # update m_i and l_i
         m_i = m_ij
         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
@@ -122,13 +125,14 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         block_shape=(BLOCK_M, BLOCK_DMODEL),
         order=(1, 0),
     )
+    v_order: tl.constexpr = (0, 1) if V.dtype.element_ty == tl.float8e5 else (1, 0)
     V_block_ptr = tl.make_block_ptr(
         base=V + qvk_offset,
         shape=(N_CTX, BLOCK_DMODEL),
         strides=(stride_vk, stride_vn),
         offsets=(0, 0),
         block_shape=(BLOCK_N, BLOCK_DMODEL),
-        order=(1, 0),
+        order=v_order,
     )
     K_block_ptr = tl.make_block_ptr(
         base=K + qvk_offset,
@@ -165,7 +169,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
-                                        4 - STAGE, offs_m, offs_n, N_CTX  #
+                                        4 - STAGE, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5  #
                                         )
     # stage 2: on-band
     if STAGE & 2:
@@ -175,7 +179,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
-                                        2, offs_m, offs_n, N_CTX  #
+                                        2, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5  #
                                         )
     # epilogue
     m_i += tl.math.log2(l_i)
@@ -442,14 +446,30 @@ class _attention(torch.autograd.Function):
     def forward(ctx, q, k, v, causal, sm_scale):
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
-        assert Lq == Lk and Lk == Lv
-        assert Lk in {16, 32, 64, 128}
+        # when v is in float8_e5m2 it is transposed.
+        assert Lq == Lk and (Lk == Lv or v.dtype == torch.float8_e5m2)
+        assert Lk in {16, 32, 64, 128, 256}
         o = torch.empty_like(q)
         BLOCK_M = 128
         BLOCK_N = 64 if Lk <= 64 else 32
         num_stages = 4 if Lk <= 64 else 3
         num_warps = 4
         stage = 3 if causal else 1
+        # Tuning for H100
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 9:
+            num_warps = 8
+            num_stages = 7 if Lk >= 64 else 3
+            if v.dtype == torch.float8_e5m2:
+                if Lk < 256:
+                    BLOCK_M = 64 if not causal else 128
+                    BLOCK_N = 128
+                    num_stages = 3 if Lk == 128 else 4
+                    num_warps = 4
+                else:
+                    BLOCK_M = 128
+                    BLOCK_N = 128
+                    num_stages = 3
+                    num_warps = 8
         grid = (triton.cdiv(q.shape[2], BLOCK_M), q.shape[0] * q.shape[1], 1)
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         _attn_fwd[grid](
@@ -572,31 +592,37 @@ else:
 configs = []
 for mode in ["fwd", "bwd"]:
     for causal in [True, False]:
-        if mode == "bwd" and not causal:
-            continue
-        configs.append(
-            triton.testing.Benchmark(
-                x_names=["N_CTX"],
-                x_vals=[2**i for i in range(10, 15)],
-                line_arg="provider",
-                line_vals=["triton"] + (["flash"] if HAS_FLASH else []),
-                line_names=["Triton"] + (["Flash-2"] if HAS_FLASH else []),
-                styles=[("red", "-"), ("blue", "-")],
-                ylabel="ms",
-                plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}-causal={causal}",
-                args={
-                    "H": N_HEADS,
-                    "BATCH": BATCH,
-                    "D_HEAD": D_HEAD,
-                    "dtype": torch.float16,
-                    "mode": mode,
-                    "causal": causal,
-                },
-            ))
+        for fp8_inputs in [False, True]:
+            if fp8_inputs and ((not TORCH_HAS_FP8) or mode == "bwd"):
+                continue
+            if mode == "bwd" and not causal:
+                continue
+            configs.append(
+                triton.testing.Benchmark(
+                    x_names=["N_CTX"],
+                    x_vals=[2**i for i in range(10, 15)],
+                    line_arg="provider",
+                    line_vals=["triton"] + (["flash"] if HAS_FLASH else []),
+                    line_names=["Triton"] + (["Flash-2"] if HAS_FLASH else []),
+                    styles=[("red", "-"), ("blue", "-")],
+                    ylabel="ms",
+                    plot_name=
+                    f"fused-attention-batch{BATCH}-head{N_HEADS}-d{D_HEAD}-{mode}-causal={causal}-fp8={fp8_inputs}",
+                    args={
+                        "H": N_HEADS,
+                        "BATCH": BATCH,
+                        "D_HEAD": D_HEAD,
+                        "dtype": torch.float16,
+                        "mode": mode,
+                        "causal": causal,
+                        "fp8_inputs": fp8_inputs,
+                    },
+                ))
 
 
 @triton.testing.perf_report(configs)
-def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype=torch.float16, device="xpu"):
+def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, fp8_inputs, dtype=torch.float16,
+                          device="xpu"):
     assert mode in ["fwd", "bwd"]
     # FIXME: change back once tl.dot uses DPAS instruction
     if torch.cuda.is_available():
@@ -609,10 +635,12 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, causal, mode, provider, dtype
     if provider == "triton":
         q = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="xpu", requires_grad=True)
         k = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="xpu", requires_grad=True)
-        if mode == "fwd" and TORCH_HAS_FP8:
+        v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="xpu", requires_grad=True)
+        if mode == "fwd" and TORCH_HAS_FP8 and fp8_inputs:
             q = q.to(torch.float8_e5m2)
             k = k.to(torch.float8_e5m2)
-        v = torch.randn((BATCH, H, N_CTX, D_HEAD), dtype=dtype, device="xpu", requires_grad=True)
+            v = v.permute(0, 1, 3, 2)
+            v = v.to(torch.float8_e5m2)
         sm_scale = 1.3
         fn = lambda: attention(q, k, v, causal, sm_scale)
         if mode == "bwd":

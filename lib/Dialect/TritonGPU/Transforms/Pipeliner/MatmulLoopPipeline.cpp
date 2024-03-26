@@ -115,11 +115,15 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     alloc.replaceAllUsesWith(viewLoad.getResult());
     alloc.erase();
   } else {
+    SmallVector<ttg::LocalAllocOp> allocsToErase;
     for (Operation *user : loadOp->getUsers()) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
         alloc.replaceAllUsesWith(viewLoad.getResult());
-        alloc.erase();
+        allocsToErase.push_back(alloc);
       }
+    }
+    for (auto alloc : allocsToErase) {
+      alloc.erase();
     }
     auto sharedLoad =
         builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
@@ -924,13 +928,13 @@ static void threadValuesThroughWait(ttng::DotWaitOp wait,
   SmallVector<ttng::DotAsyncOp> asyncDots;
   for (Value v : values) {
     BackwardSliceOptions options;
-    options.omitBlockArguments = false;
+    options.omitBlockArguments = true;
     options.filter = [&](Operation *op) {
       if (auto dot = dyn_cast<ttng::DotAsyncOp>(op)) {
         asyncDots.push_back(dot);
         return false;
       }
-      return true;
+      return op->getBlock() == wait->getBlock();
     };
     SetVector<Operation *> slice;
     getBackwardSlice(v, &slice, options);
