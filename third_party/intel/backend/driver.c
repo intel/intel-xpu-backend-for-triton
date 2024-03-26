@@ -139,7 +139,7 @@ ze_module_handle_t create_module(ze_context_handle_t context,
                                  ze_device_handle_t device,
                                  uint32_t *binary_ptr, size_t binary_size) {
   const char *build_flags = "";
-  // fixme: set it according to register usage by kernel analysis
+  // FIXME: set it according to register usage by kernel analysis
   if (getBoolEnv("INTEL_ENABLE_LARGE_GRF"))
     build_flags = "-ze-opt-large-register-file";
 
