@@ -1,16 +1,46 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-prefetch-block | FileCheck %s
 #blocked = #triton_gpu.blocked<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], warpsPerCTA = [8, 4], order = [1, 0]}>
+// CHECK-DAG: #blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 32], threadsPerWarp = [1, 1], warpsPerCTA = [32, 1], order = [1, 0]}>
+// CHECK-DAG: #blocked2 = #triton_gpu.blocked<{sizePerThread = [8, 32], threadsPerWarp = [1, 1], warpsPerCTA = [4, 8], order = [1, 0]}>
 module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    // CHECK: %[[A0:.*]] = tt.make_tensor_ptr
-    // CHECK: prefetch %[[A0]]
-    // CHECK: %[[A1:.*]] = tt.advance %[[A0]]
-    // CHECK: prefetch %[[A1]]
-    // CHECK: %[[A2:.*]] = tt.advance %[[A1]]
-    // CHECK: prefetch %[[A2]]
-    // CHECK: scf.for
-    // CHECK: prefetch
-    // CHECK: advance
+    // CHECK-LABEL: @matmul_kernel_with_block_pointers
+    // CHECK-DAG:  [[CST_ZERO:%.*]] = arith.constant 0 : i32
+    // CHECK-DAG:  [[CST_32:%.*]] = arith.constant 32 : i32       
+    // CHECK-DAG:  [[CST_4096:%.*]] = arith.constant 4096 : i32
+
+    // COM: Prefetch the 1st operand of the `tl.dot` operation 3 iterations in advance 
+    // CHECK:      [[A0:%.*]] = tt.make_tensor_ptr %arg0, {{.*}} : <tensor<256x32xf16, #blocked1>, 1>
+    // CHECK-NEXT: triton_intel_gpu.prefetch [[A0]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>, 1>
+    // CHECK:      [[A1:%.*]] = tt.advance [[A0]], {{.*}} : <tensor<256x32xf16, #blocked1>, 1>
+    // CHECK-NEXT: triton_intel_gpu.prefetch [[A1]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>, 1>
+    // CHECK:      [[A2:%.*]] = tt.advance [[A1]], {{.*}} : <tensor<256x32xf16, #blocked1>, 1>
+    // CHECK-NEXT: triton_intel_gpu.prefetch [[A2]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>, 1>
+    // CHECK-NEXT: [[A3:%.*]] = tt.advance [[A2]], {{.*}} : <tensor<256x32xf16, #blocked1>, 1>
+    // CHECK-NEXT: [[A4:%.*]] = tt.make_tensor_ptr %arg0, {{.*}} : <tensor<256x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>>, 1>
+
+    // COM: Prefetch the 2nd operand of the `tl.dot` operation 3 iterations in advance
+    // CHECK:      [[B0:%.*]] = tt.make_tensor_ptr %arg1, {{.*}} : <tensor<32x256xf16, #blocked2>, 1>
+    // CHECK-NEXT: triton_intel_gpu.prefetch %16 {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>, 1>
+    // CHECK:      [[B1:%.*]] = tt.advance [[B0]], {{.*}} : <tensor<32x256xf16, #blocked2>, 1>
+    // CHECK-NEXT: triton_intel_gpu.prefetch [[B1]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>, 1>
+    // CHECK:      [[B2:%.*]] = tt.advance [[B1]], {{.*}} : <tensor<32x256xf16, #blocked2>, 1>
+    // CHECK-NEXT: triton_intel_gpu.prefetch [[B2]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>, 1>
+    // CHECK-NEXT: [[B3:%.*]] = tt.advance [[B2]], {{.*}} : <tensor<32x256xf16, #blocked2>, 1>
+    // CHECK-NEXT: [[B4:%.*]] = tt.make_tensor_ptr %arg1, {{.*}} : <tensor<32x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>, 1>
+
+    // CHECK:      scf.for [[IV:%.*]] = [[CST_ZERO]] to [[CST_4096]] step [[CST_32]] 
+    // CHECK-SAME:      iter_args([[CST:%.*]] = {{.*}}, [[A6:%.*]] = [[A4]], [[B6:%.*]] = [[B4]], [[A5:%.*]] = [[A3]], [[B5:%.*]] = [[B3]])
+    // CHECK-NEXT:   [[LD_A:%.*]] = tt.load [[A6]]
+    // CHECK-NEXT:   [[LD_B:%.*]] = tt.load [[B6]]
+    // CHECK-NEXT:   [[DOT:%.*]] = tt.dot [[LD_A]], [[LD_B]], [[CST]]
+    // CHECK:        triton_intel_gpu.prefetch [[A5]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>, 1>
+    // CHECK-NEXT:   tt.advance [[A5]], {{.*}} : <tensor<256x32xf16, #blocked1>, 1>
+    // CHECK-DAG:    tt.advance [[A6]], {{.*}} : <tensor<256x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>>, 1>
+    // CHECK:        triton_intel_gpu.prefetch [[B5]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>, 1>
+    // CHECK-NEXT:   tt.advance [[B5]], {{.*}} : <tensor<32x256xf16, #blocked2>, 1>
+    // CHECK-DAG:    tt.advance [[B6]], {{.*}} : <tensor<32x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>, 1>
+
     %c64_i32 = arith.constant 64 : i32
     %c16_i32 = arith.constant 16 : i32
     %c4096_i32 = arith.constant 4096 : i32
