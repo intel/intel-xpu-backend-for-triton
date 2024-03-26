@@ -40,6 +40,8 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     // CHECK:        triton_intel_gpu.prefetch [[B5]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>, 1>
     // CHECK-NEXT:   tt.advance [[B5]], {{.*}} : <tensor<32x256xf16, #blocked2>, 1>
     // CHECK-DAG:    tt.advance [[B6]], {{.*}} : <tensor<32x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>, 1>
+    // CHECK:        scf.yield 
+    // CHECK:      }
 
     %c64_i32 = arith.constant 64 : i32
     %c16_i32 = arith.constant 16 : i32

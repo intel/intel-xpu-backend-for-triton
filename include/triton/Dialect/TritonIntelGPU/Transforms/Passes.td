@@ -13,7 +13,7 @@ include "mlir/Pass/PassBase.td"
 
 def TritonIntelGPUAccelerateMatmul
     : Pass<"tritonintelgpu-accelerate-matmul", "mlir::ModuleOp"> {
-  let summary = "intel accelerate matmul";
+  let summary = "Intel accelerate matmul";
 
   let description = [{
     Optimize the input/output layout of the `tl.dot` operation to make them
@@ -23,7 +23,6 @@ def TritonIntelGPUAccelerateMatmul
   let constructor = "mlir::createTritonIntelGPUAccelerateMatmulPass()";
 
   let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect",
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
     "mlir::triton::TritonDialect"
   ];
@@ -40,7 +39,7 @@ def TritonIntelGPUAccelerateMatmul
 }
 
 def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::ModuleOp"> {
-  let summary = "prefetch a tensor block around loop";
+  let summary = "Prefetch a tensor block around loop";
   let description = [{
     This pass match pattern of certain scf.loop with tt.load and then
     add prefetch both in the loop preheader(3 stages in advance) and loop body.
@@ -49,7 +48,6 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
   }];
   let constructor = "mlir::triton::gpu::intel::createPrefetchBlockPass()";
   let dependentDialects = ["mlir::triton::TritonDialect",
-                           "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::gpu::GPUDialect"];
