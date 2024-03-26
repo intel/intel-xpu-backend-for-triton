@@ -41,9 +41,6 @@ on:
 permissions: read-all
 
 env:
-  BASE: /home/runner
-  LLVM_SYSPATH: /home/runner/packages/llvm
-  BACKEND: XPU
   TRITON_DISABLE_LINE_INFO: 1
   USE_AOT_DEVLIST: pvc
   PYTHON_VERSION: "3.10"
@@ -173,36 +170,6 @@ jobs:
         with:
           path: python/dist
           key: ${{ steps.triton-key.outputs.key }}
-
-      - name: Generate packages cache key
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        id: packages-key
-        env:
-          # Increase this value to reset cache
-          CACHE_NUMBER: 1
-        run: |
-          COMPOSITE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
-          echo "key=packages-$COMPOSITE_KEY-$CACHE_NUMBER" >> $GITHUB_OUTPUT
-
-      - name: Load packages from a cache
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        id: packages-cache
-        uses: ./.github/actions/load
-        with:
-          path: $HOME/packages
-          key: ${{ steps.packages-key.outputs.key }}
-
-      - name: Build packages
-        if: ${{ steps.triton-cache.outputs.status == 'miss' && steps.packages-cache.outputs.status == 'miss' }}
-        run: |
-          ./scripts/compile-triton.sh --llvm
-
-      - name: Save packages to a cache
-        if: ${{ steps.triton-cache.outputs.status == 'miss' && steps.packages-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.packages-cache.outputs.path }}
-          dest: ${{ steps.packages-cache.outputs.dest }}
 
       - name: Build Triton wheels
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}
