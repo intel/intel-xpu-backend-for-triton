@@ -369,9 +369,9 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
   }];
 
   let assemblyFormat = [{
-    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,` 
-      `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,` 
-      `vnni_transform` `=` $vnni_transform `,` `cache_control` `=` $cache_control `}` attr-dict `:` 
+    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,`
+      `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,`
+      `vnni_transform` `=` $vnni_transform `,` `cache_control` `=` $cache_control `}` attr-dict `:`
       `(` type(operands) `)`
   }];
 
