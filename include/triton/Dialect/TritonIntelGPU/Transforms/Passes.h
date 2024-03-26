@@ -22,7 +22,7 @@ enum class DeviceArch {
   PVC,
 };
 
-std::unique_ptr<Pass> createPrefetchBlockPass(unsigned numWarps = 4);
+std::unique_ptr<Pass> createPrefetchBlockPass();
 
 } // namespace intel
 } // namespace gpu

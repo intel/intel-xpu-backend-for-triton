@@ -53,10 +53,6 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::gpu::GPUDialect"];
-  let options = [
-    Option<"numWarps", "num-warps",
-           "unsigned", /*default*/"4",
-           "number of warps per block">];
 }
 
 #endif // TRITON_INTEL_GPU_PASSES

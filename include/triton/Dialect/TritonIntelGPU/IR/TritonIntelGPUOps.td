@@ -27,8 +27,6 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch",
     let assemblyFormat = [{
       $ptr attr-dict `:` type($ptr)
     }];
-
-    let hasCanonicalizer = 0;
 }
 
 #endif

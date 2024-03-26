@@ -1,12 +1,10 @@
 //===-------------- PrefetchBlock.cpp -  ------------------------*- C++ -*-===//
 //
-// Copyright 2024 Intel Corporation
-// Part of the intel-xpu-backend-for-trito Project, under the Apache License
-// v2.0 with LLVM Exceptions. See https://llvm.org/LICENSE.txt for license
-// information. SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-///
 /// \file
 /// This file implements a pass to add prefetch mechanism for target that
 /// supports memory prefetch.
@@ -130,8 +128,6 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
 class PrefetchBlockPass
     : public TritonIntelGPUPrefetchBlockBase<PrefetchBlockPass> {
 public:
-  PrefetchBlockPass() = default;
-  PrefetchBlockPass(int numWarps) { this->numWarps = numWarps; }
   void runOnOperation() override {
     mlir::MLIRContext *context = &getContext();
     mlir::RewritePatternSet patterns(context);
@@ -196,6 +192,7 @@ public:
           b.setInsertionPoint(loadInfo.blockPtr);
           auto clone = b.clone(*loadInfo.blockPtr.getOperation());
           auto ptr = cast<tt::MakeTensorPtrOp>(clone);
+          auto numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
           auto newType = annotatePrefetchType(ptr.getType(), numWarps);
           ptr.getResult().setType(cast<tt::PointerType>(newType));
           loc = ptr.getLoc();
@@ -245,7 +242,7 @@ public:
           auto load = info.load;
           b.setInsertionPoint(load);
           loc = load.getLoc();
-          // fixme: add barrier every 8 iteration
+          // FIXME: add barrier every 8 iteration
           // if (i == 0)
           //   b.create<gpu::BarrierOp>(loc);
           b.setInsertionPoint(info.advance);
@@ -267,6 +264,6 @@ public:
 } // namespace
 
 std::unique_ptr<mlir::Pass>
-mlir::triton::gpu::intel::createPrefetchBlockPass(unsigned numWarps) {
-  return std::make_unique<PrefetchBlockPass>(numWarps);
+mlir::triton::gpu::intel::createPrefetchBlockPass() {
+  return std::make_unique<PrefetchBlockPass>();
 }
