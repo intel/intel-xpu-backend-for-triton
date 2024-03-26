@@ -335,4 +335,32 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
   let hasVerifier = 1;
 }
 
+def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
+  Arguments<(ins
+    Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr,
+    I32:$base_width,
+    I32:$base_height,
+    I32:$base_pitch,
+    I32:$x,
+    I32:$y,
+    TritonGEN_PrefetchCacheControl:$cache_control
+  )> {
+
+  let summary = "GEN 2D block prefetch";
+
+  string baseDescription = [{
+    The 'gen.2Dblockprefetch' operation prefetches a 2D submatrix from memory.
+    $ptr - the base address of the submatrix
+    $base_width, $base_height, $base_pitch - the shape of the submatrix to prefetch
+    $x, $y - the starting offsets of the submatrix to prefetch
+    $cache_control - an enumerator that sets the L1 and L3 cache behaviour
+  }];
+
+  let assemblyFormat = [{
+    operands ` ` `{` `cache_control` `=` $cache_control `}` attr-dict `:` `(` type(operands) `)`
+  }];
+
+  let hasVerifier = 1;
+}
+
 #endif // TRITONGEN_OPS
