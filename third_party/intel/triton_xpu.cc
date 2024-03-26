@@ -1,10 +1,7 @@
-﻿#include "NVGPUIntelToLLVM/Passes.h"
-#include "TritonIntelGPUToLLVM/Passes.h"
+﻿#include "TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "passes.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -52,8 +49,6 @@ void init_triton_intel_passes_ttnvgpuir(py::module &&m) {
                      mlir::triton::nvidia_gpu::ClusterInfo *);
   ADD_PASS_WRAPPER_0("add_fence_insertion",
                      mlir::createTritonNvidiaGPUFenceInsertionPass);
-  ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
-                     mlir::triton::createConvertNVGPUIntelToLLVMPass);
 }
 
 void init_triton_intel(py::module &&m) {
@@ -81,10 +76,7 @@ void init_triton_intel(py::module &&m) {
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::TritonGEN::TritonGENDialect,
-                    mlir::triton::gpu::intel::TritonIntelGPUDialect,
-                    mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-                    mlir::triton::nvgpu::NVGPUDialect>();
-    mlir::registerNVVMDialectTranslation(registry);
+                    mlir::triton::gpu::intel::TritonIntelGPUDialect>();
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });

@@ -2,7 +2,6 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 
-using mlir::triton::intel::PTXBuilder;
 using namespace mlir::triton;
 namespace mlir {
 namespace LLVM {
@@ -336,16 +335,6 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i) {
   return commonShflSync(loc, rewriter, val, i, NVVM::ShflKind::idx,
                         i32_val(0x1f));
-}
-
-Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
-  PTXBuilder builder;
-  auto &mov = builder.create("mov")->o("u32");
-  auto *destOpr = builder.newOperand("=r");
-  auto *sRegOpr = builder.newConstantOperand(sRegStr);
-  mov(destOpr, sRegOpr);
-  Value val = builder.launch(b, loc, b.getIntegerType(32), false);
-  return val;
 }
 
 Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
