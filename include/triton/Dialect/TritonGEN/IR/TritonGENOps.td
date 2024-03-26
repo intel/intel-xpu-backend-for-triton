@@ -315,7 +315,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
     $ptr - the base address of the memory array
     $base_width, $base_height, $base_pitch - the shape of the memory array
     $x, $y, $tile_width, $tile_height - the starting offsets and shape of the submatrix to load
-    $elem_size_in_bits - 32 for f32, bf32; 16 for f16, int16, bf16; 8 for int8, int4, int2 and etc
+    $elem_size_in_bits - 32 for f32, bf32; 16 for f16, int16, bf16; 8 for int8 etc...
     $v_blocks - number of blocks to store
     $transpose - transpose the submatrix in vector register (useful for 32 bit element types)
     $vnni_transform - transpose and pack the submatrix in register (useful for < 32 bit element types)
@@ -343,21 +343,36 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
     I32:$base_pitch,
     I32:$x,
     I32:$y,
+    I32Attr:$elem_size_in_bits,
+    I32Attr:$tile_width,
+    I32Attr:$tile_height,
+    I32Attr:$v_blocks,
+    I1Attr:$transpose,
+    I1Attr:$vnni_transform,
     TritonGEN_PrefetchCacheControl:$cache_control
   )> {
 
   let summary = "GEN 2D block prefetch";
 
   string baseDescription = [{
-    The 'gen.2Dblockprefetch' operation prefetches a 2D submatrix from memory.
-    $ptr - the base address of the submatrix
-    $base_width, $base_height, $base_pitch - the shape of the submatrix to prefetch
-    $x, $y - the starting offsets of the submatrix to prefetch
+    The 'gen.2Dblockprefetch' operation prefetches a 2D block of a larger 2D matrix.
+    $ptr - the base address of the matrix
+    $base_width, $base_height, $base_pitch - the shape of the matrix
+    $x, $y, $tile_width, $tile_height - the starting offsets and shape of 2D block to prefetch
+    $elem_size_in_bits - 32 for f32, bf32; 16 for f16, int16, bf16; 8 for int8, etc...
+    $v_blocks - number of blocks to prefetch
+    $transpose - transpose the submatrix (useful for 32 bit element types)
+    $vnni_transform - transpose and pack the submatrix (useful for < 32 bit element types)
     $cache_control - an enumerator that sets the L1 and L3 cache behaviour
+
+    The $transpose and $vnni_transform are mutual exclusive.
   }];
 
   let assemblyFormat = [{
-    operands ` ` `{` `cache_control` `=` $cache_control `}` attr-dict `:` `(` type(operands) `)`
+    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,` 
+      `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,` 
+      `vnni_transform` `=` $vnni_transform `,` `cache_control` `=` $cache_control `}` attr-dict `:` 
+      `(` type(operands) `)`
   }];
 
   let hasVerifier = 1;

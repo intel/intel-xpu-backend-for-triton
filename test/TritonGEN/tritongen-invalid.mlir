@@ -216,6 +216,6 @@ llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_height : i32, %x : i32
   %base_width = llvm.mlir.constant(4 : i32) : i32
   %base_pitch = llvm.mlir.constant(2 : i32) : i32
   // expected-error @+1 {{'triton_gen.2Dblockprefetch' op 4th operand (base pitch) should be >= 2nd operand (base width)}}
-  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {cache_control = L1UC_L3C} : (!llvm.ptr, i32, i32, i32, i32, i32)
+  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control = L1UC_L3C} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
 }
