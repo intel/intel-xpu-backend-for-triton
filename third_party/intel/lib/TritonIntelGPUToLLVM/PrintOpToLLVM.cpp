@@ -105,7 +105,7 @@ struct PrintOpConversion
       std::string formatStr;
       llvm::raw_string_ostream os(formatStr);
 
-      // nvptx printf can only accept 32 args; if we pass more than that, it
+      // Device printf can only accept 32 args; if we pass more than that, it
       // will print garbage for the trailing args.
       constexpr int kMaxPrintfOperands = 32;
       SmallVector<Value, kMaxPrintfOperands> printfOperands;
