@@ -81,7 +81,6 @@ class XPUBackend(BaseBackend):
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        assert isinstance(target, tuple) and len(target) == 2
         assert isinstance(target[1], dict)
         # TODO: Deprecate capability in XPU compilation
         self.capability = 80  # compute capability for A100
@@ -212,5 +211,4 @@ class XPUBackend(BaseBackend):
     @functools.lru_cache()
     def hash(self):
         version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"])
-        # TODO: Fix this if the hash string is too long
         return f'{version}-{self.properties}'
