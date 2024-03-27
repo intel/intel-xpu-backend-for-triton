@@ -1,8 +1,6 @@
 #ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 
-#include "intel/include/TritonIntelGPUToLLVM/PTXAsmFormat.h"
-
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -93,15 +91,6 @@ using namespace mlir::triton;
 #define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
 #define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
 #define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
-#define barSync(rewriter, op, bar, numThreads)                                 \
-  do {                                                                         \
-    ::mlir::triton::intel::PTXBuilder ptxBuilder;                              \
-    auto &barSyncOp = *ptxBuilder.create<>("bar.sync");                        \
-    barSyncOp(ptxBuilder.newConstantOperand(bar),                              \
-              ptxBuilder.newConstantOperand(numThreads));                      \
-    auto voidTy = void_ty(op->getContext());                                   \
-    ptxBuilder.launch(rewriter, op->getLoc(), voidTy);                         \
-  } while (0)
 #define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
 #define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
@@ -426,7 +415,6 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i);
-Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 
 Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
                ModuleOp moduleOp, int axis);

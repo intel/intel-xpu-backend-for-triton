@@ -487,15 +487,6 @@ def test_floordiv(dtype_x, dtype_y, num_ctas, device):
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
 
-@pytest.mark.interpreter
-@pytest.mark.parametrize("expr", ["tl.math.fdiv(x, y)", "tl.math.div_rn(x, y)"])
-@pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_math_divide_op(expr, device, num_ctas):
-    numpy_expr = "x / y"
-    dtype = "float32"
-    _test_binary(dtype, dtype, expr, numpy_expr, device=device, num_ctas=num_ctas)
-
-
 def test_unsigned_name_mangling(device):
     # Test that uint32 and int32 are mangled differently by the compiler
     SIZE = 128
@@ -925,10 +916,111 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, expr, x", [(dtype_x, expr, x)
                                               for dtype_x in ["float32", "float64"]
-                                              for expr in ['exp', 'log', 'cos', 'sin']
+                                              for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'floor']
                                               for x in ['x', '3.0']])
-def test_math_op(dtype_x, expr, device, x):
+def test_math_op(dtype_x, expr, x, device):
     _test_unary(dtype_x, f'tl.{expr}({x})', f'np.{expr}({x}) ', device=device)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", [dtype for dtype in ["float32", "float64"]])
+def test_math_erf_op(dtype, device):
+    check_type_supported(dtype, device)
+    if is_xpu():
+        pytest.skip("FIXME: Fails to run on XPU")
+    SIZE = 128
+
+    @triton.jit
+    def kernel(Z, X, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        z = tl.math.erf(x)
+        tl.store(Z + off, z)
+
+    torch_dtype = torch.float32 if dtype == "float32" else torch.float64
+    x = torch.randn(SIZE, dtype=torch_dtype, device=device)
+    z_ref = torch.erf(x)
+    z_tri = torch.zeros_like(x)
+    kernel[(1, )](z_tri, x, SIZE=SIZE, num_warps=4)
+    torch.testing.assert_close(z_tri, z_ref)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", [dtype for dtype in ["float32", "float64"]])
+def test_math_fma_op(dtype, device):
+    check_type_supported(dtype, device)
+    if is_xpu():
+        pytest.skip("FIXME: Fails to run on XPU")
+    SIZE = 128
+
+    @triton.jit
+    def kernel(Z, X, Y, W, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        y = tl.load(Y + off)
+        w = tl.load(W + off)
+        z = tl.math.fma(x, y, w)
+        tl.store(Z + off, z)
+
+    torch_dtype = torch.float32 if dtype == "float32" else torch.float64
+    x = torch.randn(SIZE, dtype=torch_dtype, device=device)
+    y = torch.randn(SIZE, dtype=torch_dtype, device=device)
+    w = torch.randn(SIZE, dtype=torch_dtype, device=device)
+    z_ref = x * y + w
+    z_tri = torch.zeros_like(x)
+    kernel[(1, )](z_tri, x, y, w, SIZE=SIZE, num_warps=4)
+    torch.testing.assert_close(z_tri, z_ref)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("expr", ["tl.math.fdiv(x, y)", "tl.math.div_rn(x, y)"])
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_math_divide_op(expr, num_ctas, device):
+    numpy_expr = "x / y"
+    dtype = "float32"
+    _test_binary(dtype, dtype, expr, numpy_expr, device=device, num_ctas=num_ctas)
+
+
+# -------------
+# test precise math
+# -------------
+@pytest.mark.interpreter
+@pytest.mark.parametrize("expr_prec, expr_ref",
+                         [('tl.math.sqrt_rn(x)', 'tl.math.sqrt(x.to(tl.float64)).to(tl.float32)'),
+                          ('tl.math.div_rn(x,y)', '(x.to(tl.float64) / y.to(tl.float64)).to(tl.float32)')])
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_precise_math(expr_prec, expr_ref, num_ctas, device):
+
+    @triton.jit
+    def kernel(X, Y, OUT, OUT_REF, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = tl.load(Y + tl.arange(0, BLOCK))
+        prec = PREC_CALC
+        ref = REF_CALC
+        tl.store(OUT + tl.arange(0, BLOCK), prec)
+        tl.store(OUT_REF + tl.arange(0, BLOCK), ref)
+
+    shape = (128, )
+    out = torch.zeros(shape, dtype=torch.float32, device=device)
+    out_ref = torch.zeros(shape, dtype=torch.float32, device=device)
+
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.randn(shape, dtype=torch.float32, device=device)
+
+    if (expr_prec.count('sqrt') > 0):
+        x = torch.abs(x)
+
+    if (expr_prec.count('div') > 0):
+        y += 1e-6
+
+    kernel = patch_kernel(kernel, {'PREC_CALC': expr_prec, 'REF_CALC': expr_ref})
+
+    kernel[(1, )](x, y, out, out_ref, BLOCK=shape[0], num_ctas=num_ctas)
+
+    if is_xpu() and expr_prec == 'tl.math.div_rn(x,y)':
+        np.testing.assert_allclose(to_numpy(out), to_numpy(out_ref), rtol=1e-6)
+        pytest.skip("FIXME: Fail accuracy")
+    assert torch.all(out == out_ref)  # bitwise exact
 
 
 # ----------------
@@ -2534,14 +2626,11 @@ def test_store_op(M, src_layout, device):
 
 
 layouts = [
-    BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, 32], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    # TODO (lixun): Add MfmaLayout
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
                warps_per_cta=[4, 1])
-] if not is_hip() else [
-    # TODO (lixun): Add MfmaLayout
-    BlockedLayout([1, 4], [1, 64], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, 64], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1])
 ]
 
 
@@ -3235,7 +3324,7 @@ def test_max_num_imprecise_acc(device):
 
 
 @pytest.mark.parametrize('in_dtype', ['float32'])
-def test_dot_mulbroadcastred(in_dtype, device):
+def test_dot_mulbroadcasted(in_dtype, device):
     if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
@@ -3279,10 +3368,9 @@ def test_dot_mulbroadcastred(in_dtype, device):
     if not is_cuda():
         return
     assert "tt.dot" in h.asm['ttir']
-    # when using MMAv3, we will not pipeline the load op for Y
-    # as the loaded value is in rowmajor. But MMAv3 requires it's second
-    # operand is in colmajor because transpose is not supported for MMAv3
-    # with float32 input.
+    # When using MMAv3, we will not pipeline the load op for Y, as the loaded
+    # value is in rowmajor. But MMAv3 requires its second operand is in colmajor
+    # because transpose is not supported for MMAv3 with float32 input.
     if capability[0] >= 9:
         assert re.search(r"triton_gpu.async_wait %.* {num = 1 : i32}", h.asm["ttgir"]) is not None
     else:
@@ -3497,7 +3585,6 @@ def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):
     kernel[(1, )](input, output, input_size, output_size, num_ctas=num_ctas)
 
     reference_out = torch.cat((input, torch.full((size_diff, ), other, dtype=dtype, device=device)))
-    # print((output - reference_out).nonzero())
     torch.testing.assert_close(output, reference_out)
 
 
@@ -4051,48 +4138,6 @@ def test_num_warps_pow2(device):
     _kernel[(1, )](dst=dst, num_warps=1)
     _kernel[(1, )](dst=dst, num_warps=2)
     _kernel[(1, )](dst=dst, num_warps=4)
-
-
-# -------------
-# test precise math
-# -------------
-@pytest.mark.interpreter
-@pytest.mark.parametrize("expr_prec, expr_ref",
-                         [('tl.math.sqrt_rn(x)', 'tl.math.sqrt(x.to(tl.float64)).to(tl.float32)'),
-                          ('tl.math.div_rn(x,y)', '(x.to(tl.float64) / y.to(tl.float64)).to(tl.float32)')])
-@pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_precise_math(expr_prec, expr_ref, num_ctas, device):
-
-    @triton.jit
-    def kernel(X, Y, OUT, OUT_REF, BLOCK: tl.constexpr):
-        x = tl.load(X + tl.arange(0, BLOCK))
-        y = tl.load(Y + tl.arange(0, BLOCK))
-        prec = PREC_CALC
-        ref = REF_CALC
-        tl.store(OUT + tl.arange(0, BLOCK), prec)
-        tl.store(OUT_REF + tl.arange(0, BLOCK), ref)
-
-    shape = (128, )
-    out = torch.zeros(shape, dtype=torch.float32, device=device)
-    out_ref = torch.zeros(shape, dtype=torch.float32, device=device)
-
-    x = torch.randn(shape, dtype=torch.float32, device=device)
-    y = torch.randn(shape, dtype=torch.float32, device=device)
-
-    if (expr_prec.count('sqrt') > 0):
-        x = torch.abs(x)
-
-    if (expr_prec.count('div') > 0):
-        y += 1e-6
-
-    kernel = patch_kernel(kernel, {'PREC_CALC': expr_prec, 'REF_CALC': expr_ref})
-
-    kernel[(1, )](x, y, out, out_ref, BLOCK=shape[0], num_ctas=num_ctas)
-
-    if is_xpu() and expr_prec == 'tl.math.div_rn(x,y)':
-        np.testing.assert_allclose(to_numpy(out), to_numpy(out_ref), rtol=1e-6)
-        pytest.skip("FIXME: Fail accuracy")
-    assert torch.all(out == out_ref)  # bitwise exact
 
 
 # -----------------------
