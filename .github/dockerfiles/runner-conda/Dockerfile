@@ -1,10 +1,18 @@
 ARG INSTALLER_IMAGE=docker-registry.docker-registry.svc.cluster.local:5000/runner-conda:2024.0.1
 
 FROM $INSTALLER_IMAGE as installer
-
 FROM ubuntu:22.04
 
-USER root
+RUN set -ex; \
+    export DEBIAN_FRONTEND=noninteractive; \
+    curl -sSL https://cli.github.com/packages/githubcli-archive-keyring.gpg >/usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    apt-get update -y; \
+    apt-get install -y --no-install-recommends --fix-missing \
+      build-essential \
+      zlib1g-dev \
+      curl \
+      jq; \
+    rm -rf /var/lib/apt/lists/*
 
 RUN set -ex; \
     export DEBIAN_FRONTEND=noninteractive; \
@@ -19,10 +27,7 @@ RUN set -ex; \
       intel-level-zero-gpu \
       level-zero \
       level-zero-dev libigc-dev intel-igc-cm libigdfcl-dev libigfxcmrt-dev \
-      build-essential \
-      zlib1g-dev \
-      wget \
-      gh jq \
+      gh \
     ; \
     rm -rf /var/lib/apt/lists/*
 
