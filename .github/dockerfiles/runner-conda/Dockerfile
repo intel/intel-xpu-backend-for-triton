@@ -9,7 +9,7 @@ RUN set -ex; \
     apt-get update -y; \
     apt-get install -y --no-install-recommends --fix-missing \
       gpg ca-certificates \
-      curl \
+      curl wget \
       jq
 
 RUN set -ex; \
@@ -28,6 +28,8 @@ RUN set -ex; \
     ; \
     rm -rf /var/lib/apt/lists/*
 
+RUN useradd -m runner
+
 USER runner
 SHELL ["/bin/bash", "-xec"]
 
@@ -43,3 +45,4 @@ RUN \
 
 RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && sh Miniconda3-latest-Linux-x86_64.sh -b
 ENV PATH="$PATH:$HOME/miniconda3/bin"
+
