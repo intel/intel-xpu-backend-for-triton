@@ -22,17 +22,9 @@ using namespace mlir::triton;
 #define sub(...) rewriter.create<LLVM::SubOp>(loc, __VA_ARGS__)
 #define store(...) rewriter.create<LLVM::StoreOp>(loc, __VA_ARGS__)
 #define load_dsmem(...) LLVM::utils::createLoadDSmem(loc, rewriter, __VA_ARGS__)
+#undef store_dsmem
 #define store_dsmem(...)                                                       \
   LLVM::utils::createStoreDSmem(loc, rewriter, __VA_ARGS__)
-#define barSync(rewriter, op, bar, numThreads)                                 \
-  do {                                                                         \
-    ::mlir::triton::intel::PTXBuilder ptxBuilder;                              \
-    auto &barSyncOp = *ptxBuilder.create<>("bar.sync");                        \
-    barSyncOp(ptxBuilder.newConstantOperand(bar),                              \
-              ptxBuilder.newConstantOperand(numThreads));                      \
-    auto voidTy = void_ty(op->getContext());                                   \
-    ptxBuilder.launch(rewriter, op->getLoc(), voidTy);                         \
-  } while (0)
 #define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
 #define addrspacecast(...)                                                     \
   rewriter.create<LLVM::AddrSpaceCastOp>(loc, __VA_ARGS__)
@@ -41,10 +33,14 @@ using namespace mlir::triton;
 
 // Constants
 #define f16_val(...) LLVM::utils::createConstantF16(loc, rewriter, __VA_ARGS__)
+#undef f32_val
 #define f32_val(...) LLVM::utils::createConstantF32(loc, rewriter, __VA_ARGS__)
+#undef f64_val
 #define f64_val(...) LLVM::utils::createConstantF64(loc, rewriter, __VA_ARGS__)
+#undef i32_val
 #define i32_val(...) LLVM::utils::createConstantI32(loc, rewriter, __VA_ARGS__)
 #define i64_val(...) LLVM::utils::createConstantI64(loc, rewriter, __VA_ARGS__)
+#undef int_val
 #define int_val(width, val)                                                    \
   LLVM::utils::createLLVMIntegerConstant(rewriter, loc, width, val)
 // #define tid_val() getThreadId(rewriter, loc)
@@ -338,7 +334,6 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i);
-Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr);
 
 Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
                ModuleOp moduleOp, int axis);

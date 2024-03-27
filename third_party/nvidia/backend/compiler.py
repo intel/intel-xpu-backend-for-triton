@@ -14,20 +14,20 @@ import subprocess
 from pathlib import Path
 
 
+@functools.lru_cache()
 def _path_to_binary(binary: str):
     paths = [
         os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
         os.path.join(os.path.dirname(__file__), "bin", binary),
     ]
 
-    for p in paths:
-        bin = p.split(" ")[0]
+    for bin in paths:
         if os.path.exists(bin) and os.path.isfile(bin):
             result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
                 version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
                 if version is not None:
-                    return p, version.group(1)
+                    return bin, version.group(1)
     raise RuntimeError(f"Cannot find {binary}")
 
 
@@ -98,6 +98,7 @@ class CUDABackend(BaseBackend):
         super().__init__(target)
         self.capability = target[1]
         assert isinstance(self.capability, int)
+        self.binary_ext = "cubin"
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}

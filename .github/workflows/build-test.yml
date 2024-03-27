@@ -12,9 +12,6 @@ on:
 permissions: read-all
 
 env:
-  BASE: /home/runner
-  LLVM_SYSPATH: /home/runner/packages/llvm
-  BACKEND: XPU
   TRITON_DISABLE_LINE_INFO: 1
 
 jobs:
@@ -95,38 +92,9 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Get LLVM commit id
-        uses: ./.github/actions/get-commit-id
-        with:
-          repository: intel/llvm.git
-          branch: genx
-          variable: LLVM_COMMIT_ID
-
-      - name: Calculate packages cache key
         run: |
-          PACKAGES_CACHE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
-          echo "PACKAGES_CACHE_KEY=$PACKAGES_CACHE_KEY" >> "${GITHUB_ENV}"
-
-      - name: Load packages cache
-        id: packages-cache
-        uses: ./.github/actions/load
-        env:
-          # Increase this value to reset cache
-          CACHE_NUMBER: 1
-        with:
-          path: $HOME/packages
-          key: packages-${{ env.PACKAGES_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
-
-      - name: Build packages
-        if: ${{ steps.packages-cache.outputs.status == 'miss' }}
-        run: |
-          ./scripts/compile-triton.sh --llvm
-
-      - name: Save packages cache
-        if: ${{ steps.packages-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.packages-cache.outputs.path }}
-          dest: ${{ steps.packages-cache.outputs.dest }}
+          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
+          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
@@ -169,7 +137,7 @@ jobs:
           TRITON_INTERPRET: "1"
         run: |
           cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/interpreter_core.xml -vvv -n 4 -m interpreter language/test_core.py --device cpu
+          python3 -m pytest --junitxml=~/reports/interpreter_core.xml -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py --device cpu
           python3 -m pytest --junitxml=~/reports/interpreter_flash_attention.xml -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial operators tests
@@ -197,10 +165,8 @@ jobs:
           python3 05-layer-norm.py
           python3 06-fused-attention.py
           python3 07-extern-functions.py
-          python3 08-experimental-block-pointer.py
-          python3 09-experimental-tma-matrix-multiplication.py
-          python3 10-experimental-tma-store-matrix-multiplication.py
-          python3 11-grouped-gemm.py
+          python3 08-grouped-gemm.py
+          python3 09-experimental-block-pointer.py
 
       - name: Run CXX unittests
         run: |

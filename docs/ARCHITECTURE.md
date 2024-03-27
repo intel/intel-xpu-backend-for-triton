@@ -482,8 +482,8 @@ The modes are mostly separate within IGC and make different assumptions about th
 
 From the execution point of view the two modes are incompatible (in the driver), however, there’s a feature to allow for kernels to do cross-context calls (in dpc++ these are invoke_simd and invoke_spmd, e.g., [34]). Those have an overhead and are tricky to use.
 Intel GPU backed has thus two paths for Triton kernels compilation:
-* SIMT – the default approach (same as AMD/Nvidia) that lowers TritonGPU IR using the layouts described above, through GenX dialect [35]. The GenX dialect in turn is lowered to either OpenCL built-ins or GenISA instrinsics.
-* SIMD – an approach suitable for dense operations that transforms TritonGPU to “warp-level” IR (similar to auto-vectorization), adjusts operator argument sizes and maps the result to XeGPU dialect [36].
+* SIMT – the default approach (same as AMD/Nvidia) that lowers TritonGPU IR using the layouts described above.
+* SIMD – an approach suitable for dense operations that transforms TritonGPU to “warp-level” IR (similar to auto-vectorization), adjusts operator argument sizes and maps the result to XeGPU dialect [35].
 
 At a higher level, the two approaches represent only the way the IR is looked at (e.g., Triton IR can be thought of "SIMD" in a way that it operates on tensors; and autovectorization converts initial sizes to appropriate hardware-defined vector widths for actual instructions).
 
@@ -571,5 +571,4 @@ Triton will have an opportunity to be used without PyTorch while not having a re
 [32] GenISA intrinsics: https://github.com/intel/intel-graphics-compiler/blob/4a1798982e29564baba0265b19a4752f8f458219/IGC/GenISAIntrinsics/Intrinsic_definitions.py<br>
 [33] GenX intrinsics: https://github.com/intel/vc-intrinsics<br>
 [34] Sycl ext invoke_simd: https://github.com/intel/llvm/blob/d3c8a7e621ba41be5c11ebad1bce8cd1af216117/sycl/doc/extensions/experimental/sycl_ext_oneapi_invoke_simd.asciidoc<br>
-[35] GenX dialect: https://github.com/intel/llvm/tree/genx<br>
-[36] XeGPU dialect: https://github.com/intel/mlir-extensions<br>
+[35] XeGPU dialect: https://github.com/intel/mlir-extensions<br>

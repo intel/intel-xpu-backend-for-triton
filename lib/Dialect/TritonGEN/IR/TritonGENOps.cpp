@@ -6,12 +6,71 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/OpDefinition.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/ADT/STLExtras.h"
+#include <cstdint>
 
 using namespace mlir;
 using namespace mlir::triton;
+
+//===----------------------------------------------------------------------===//
+// Utility functions
+//===----------------------------------------------------------------------===//
+
+template <typename Op> static LogicalResult verifyInput(Op op) {
+  static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
+                                TritonGEN::Matrix2DBlockStoreOp,
+                                TritonGEN::Matrix2DBlockPrefetchOp>::value,
+                "Unexpected template parameter");
+
+  if (op.getElemSizeInBits() != 8 && op.getElemSizeInBits() != 16 &&
+      op.getElemSizeInBits() != 32)
+    return op->emitOpError("expecting 'elem_size_in_bits' to be 8, 16, or 32");
+
+  if (op.getTranspose() && op.getVnniTransform())
+    return op->emitOpError(
+        "transpose and vnni transform are mutually exclusive");
+
+  std::optional<int64_t> width = getConstantIntValue(op.getBaseWidth());
+  std::optional<int64_t> pitch = getConstantIntValue(op.getBasePitch());
+  if (pitch && width && *pitch < *width)
+    return op->emitOpError(
+        "4th operand (base pitch) should be >= 2nd operand (base width)");
+
+  uint32_t TileWidth = op.getTileWidth();
+  uint32_t TileHeight = op.getTileHeight();
+  switch (op.getElemSizeInBits()) {
+  case 32:
+    if (TileWidth != 8)
+      return op->emitOpError("tile_width for 32 bit elements should be equal "
+                             "to systolic depth, i.e., 8 elements");
+    if (TileHeight != 8)
+      return op->emitOpError("tile_height for 32 bit elements should be 8");
+    break;
+
+  case 16:
+    if (TileWidth != 16)
+      return op->emitOpError("tile_width for 16 bit elements should be equal "
+                             "to systolic depth times 2, i.e., 16 elements");
+    if (TileHeight != 16)
+      return op->emitOpError("tile_height for 16 bit elements should be 16");
+    break;
+
+  case 8:
+    if (TileWidth != 32)
+      return op->emitOpError("tile_width for 8 bit elements should be equal "
+                             "to systolic depth times 4, i.e., 32 elements");
+    if (TileHeight != 32)
+      return op->emitOpError("tile_height for 8 bit elements should be 32");
+    break;
+
+  default:
+    return op->emitOpError("element size should be 8, 16 or 32 bits");
+  }
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // gen.matrix.dpas
@@ -101,77 +160,6 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
 // gen.2Dblockload
 //===----------------------------------------------------------------------===//
 
-static std::optional<int> getConstantInt(Value v) {
-  Operation *op = v.getDefiningOp();
-  if (!op)
-    return std::nullopt;
-
-  if (!op->hasTrait<OpTrait::ConstantLike>())
-    return std::nullopt;
-
-  llvm::SmallVector<OpFoldResult> folded;
-  if (failed(op->fold({}, folded)) || folded.size() != 1)
-    return std::nullopt;
-
-  if (!folded.front().is<Attribute>() ||
-      !isa<IntegerAttr>(folded.front().get<Attribute>()))
-    return std::nullopt;
-
-  return cast<IntegerAttr>(folded.front().get<Attribute>()).getInt();
-}
-
-template <typename Op> static LogicalResult verifyInput(Op op) {
-  if (op.getElemSizeInBits() != 8 && op.getElemSizeInBits() != 16 &&
-      op.getElemSizeInBits() != 32)
-    return op->emitOpError("expecting 'elem_size_in_bits' to be 8, 16, or 32");
-
-  if (op.getTranspose() && op.getVnniTransform())
-    return op->emitOpError(
-        "transpose and vnni transform are mutually exclusive");
-
-  std::optional<int> width = getConstantInt(op.getBaseWidth());
-  std::optional<int> pitch = getConstantInt(op.getBasePitch());
-  if (pitch && width && *pitch < *width)
-    return op->emitOpError(
-        "4th operand (base pitch) should be >= 2nd operand (base width)");
-
-  uint32_t TileWidth = op.getTileWidth();
-  uint32_t TileHeight = op.getTileHeight();
-  switch (op.getElemSizeInBits()) {
-  case 32:
-    if (TileWidth != 8)
-      return op->emitOpError("tile_width for 32 bit elements should be equal "
-                             "to systolic depth, i.e., 8 elements");
-    if (TileHeight != 8)
-      return op->emitOpError("tile_height for 32 bit elements should be 8");
-    break;
-
-  case 16:
-    if (TileWidth != 16)
-      return op->emitOpError("tile_width for 16 bit elements should be equal "
-                             "to systolic depth times 2, i.e., 16 elements");
-    if (TileHeight != 16)
-      return op->emitOpError("tile_height for 16 bit elements should be 16");
-    break;
-
-  case 8:
-    if (TileWidth != 32)
-      return op->emitOpError("tile_width for 8 bit elements should be equal "
-                             "to systolic depth times 4, i.e., 32 elements");
-    if (TileHeight != 32)
-      return op->emitOpError("tile_height for 8 bit elements should be 32");
-    break;
-
-  default:
-    return op->emitOpError("element size should be 8, 16 or 32 bits");
-  }
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
-// gen.2Dblockload
-//===----------------------------------------------------------------------===//
-
 LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   return verifyInput(*this);
 }
@@ -181,5 +169,13 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
+  return verifyInput(*this);
+}
+
+//===----------------------------------------------------------------------===//
+// gen.2Dblockprefetch
+//===----------------------------------------------------------------------===//
+
+LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
   return verifyInput(*this);
 }

@@ -297,8 +297,6 @@ def clamp(x: tl.tensor, min: tl.tensor, max: tl.tensor, propagate_nan: tl.Propag
 
     dtype = x.dtype
     if dtype.is_floating():
-        if propagate_nan == tl.PropagateNan.ALL:
-            return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
         return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
     else:
         assert False, f"Unexpected dtype {dtype}. Only floating point clamp is supported"
@@ -1123,6 +1121,9 @@ def store(ptr: tl.tensor, val: tl.tensor, mask: Optional[tl.tensor], boundary_ch
     cache = _str_to_store_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
 
+    if ptr.type.is_const() or ptr.type.scalar.is_const():
+        raise ValueError("Cannot store to a constant pointer")
+
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
         # Store by a block pointer: `pointer_type<block_type<>>`
         return _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder)
@@ -1149,6 +1150,8 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
                                builder: ir.builder) -> Tuple[tl.tensor, tl.tensor, tl.tensor]:
     if not ptr.type.scalar.is_ptr():
         raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
+    if ptr.type.is_const() or ptr.type.element_ty.is_const():
+        raise ValueError("Cannot store to a constant pointer")
     element_ty = ptr.type.scalar.element_ty
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
@@ -1403,19 +1406,14 @@ def wrap_tensor(x, scalar_ty, ret_shape):
 
 def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder: ir.builder) -> Tuple[tl.tensor, ...]:
     if axis is None:
-        new_inputs = []
-        for i in range(len(inputs)):
-            new_shape = [inputs[i].numel.value]
-            new_inputs.append(view(inputs[i], new_shape, builder))
-        inputs = tuple(new_inputs)
+        inputs = tuple(view(t, [t.numel.value], builder) for t in inputs)
         axis = 0
     # get result shape
     shape = inputs[0].type.shape
     rank = len(shape)
     assert axis < rank, f"reduction axis must be < inputs rank ({rank})"
     ret_shape = [s for i, s in enumerate(shape) if i != axis]
-    for t in inputs:
-        assert t.type.shape == shape, "all reduction inputs must have the same shape"
+    assert all(t.type.shape == shape for t in inputs), "all reduction inputs must have the same shape"
 
     reduce_op = builder.create_reduce([t.handle for t in inputs], axis)
     region_builder_fn(reduce_op)
@@ -1499,9 +1497,7 @@ def device_print(prefix: str, args: List[tl.tensor], hex: bool, builder: ir.buil
     if len(prefix) > 2 and not prefix.startswith(" "):
         prefix = " " + prefix
 
-    new_args = []
-    for arg in args:
-        new_args.append(arg.handle)
+    new_args = [arg.handle for arg in args]
     return tl.tensor(builder.create_print(prefix, hex, new_args), tl.void)
 
 

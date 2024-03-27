@@ -114,12 +114,12 @@ using namespace mlir::triton;
 #define struct_ty(...) LLVM::LLVMStructType::getLiteral(ctx, __VA_ARGS__)
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
 
-// // Constants
-// #define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
-// #define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
-// #define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
-// #define int_val(width, val)                                                    \
-//   LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
+// Constants
+#define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
+#define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
+#define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
+#define int_val(width, val)                                                    \
+  LLVM::createLLVMIntegerConstant(rewriter, loc, width, val)
 #define tid_val() getThreadId(rewriter, loc)
 
 // Attributes
@@ -209,6 +209,33 @@ static Value getThreadId(RewriterBase &rewriter, Location loc) {
 //   return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(loc,
 //                                                         rewriter.getI32Type());
 // }
+
+// -----------------------------------------------------------------------
+// Shared memory utilities
+// -----------------------------------------------------------------------
+// using LLVM::getMultiDimIndex;
+// using LLVM::SharedMemoryObject;
+// using ::mlir::LLVM::delinearize;
+// using ::mlir::LLVM::SharedMemoryObject;
+using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
+using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
+using ::mlir::triton::gpu::BlockedEncodingAttr;
+using ::mlir::triton::gpu::CTALayoutAttr;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::triton::gpu::SliceEncodingAttr;
+
+// static Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
+//                  ArrayRef<Value> strides) {
+//   assert(offsets.size() == strides.size());
+//   Value ret = LLVM::createConstantI32(loc, rewriter, 0);
+//   for (auto [offset, stride] : llvm::zip(offsets, strides)) {
+//     ret = add(ret, mul(offset, stride));
+//   }
+//   return ret;
+// }
+
+
 
 } // namespace mlir
 

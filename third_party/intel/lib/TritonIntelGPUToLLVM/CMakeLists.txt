@@ -7,7 +7,6 @@ add_triton_library(TritonIntelGPUToLLVM
     HistogramOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
-    BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
     AssertOpToLLVM.cpp
@@ -21,7 +20,6 @@ add_triton_library(TritonIntelGPUToLLVM
     Utility.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
-    PTXAsmFormat.cpp
     AllocateSharedMemory.cpp
     TargetInfo.cpp
 

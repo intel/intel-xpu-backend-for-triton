@@ -165,14 +165,13 @@ void mlir::triton::populateGPUToTritonGENConversionPatterns(
                                   TritonGEN::BlockDimYOp,
                                   TritonGEN::BlockDimZOp>,
       GPUIndexIntrinsicOpLowering<mlir::gpu::GridDimOp, TritonGEN::GridDimXOp,
-                                  TritonGEN::GridDimYOp,
-                                  TritonGEN::GridDimZOp>>(converter);
+                                  TritonGEN::GridDimYOp, TritonGEN::GridDimZOp>,
+      SingleDimLaunchConfigLowering<mlir::gpu::SubgroupIdOp,
+                                    TritonGEN::SubgroupIdOp>>(converter);
   patterns.add<GPUFuncOpLowering>(
       converter,
       /*allocaAddrSpace=*/TritonGEN::TritonGENMemorySpace::kFunction,
-      /*workgroupAddrSpace=*/TritonGEN::TritonGENMemorySpace::kWorkgroup,
-      StringAttr::get(&converter.getContext(),
-                      TritonGEN::TritonGENDialect::getKernelFuncAttrName()));
+      /*workgroupAddrSpace=*/TritonGEN::TritonGENMemorySpace::kWorkgroup);
 
   const llvm::StringRef prefix("_Z15__spirv_ocl_");
   populateOpPatterns<math::ExpOp>(converter, patterns, (prefix + "expf").str(),

@@ -179,7 +179,7 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             if core.constexpr(input.dtype.is_floating()):
                 input = input.to(core.float32)
             else:
-                assert input.dtype.is_integer_type()
+                assert input.dtype.is_int(), "Expecting input to be integer type"
                 input = input.to(core.int32)
         return core.reduce(input, axis, _elementwise_max, keep_dims=keep_dims)
 
@@ -238,7 +238,7 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             if core.constexpr(input.dtype.is_floating()):
                 input = input.to(core.float32)
             else:
-                assert input.dtype.is_integer_type()
+                assert input.dtype.is_int(), "Expecting input to be integer type"
                 input = input.to(core.int32)
         return core.reduce(input, axis, _elementwise_min, keep_dims=keep_dims)
 
@@ -331,7 +331,7 @@ def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
     left = core.reshape(left, x.shape)
     right = core.reshape(right, x.shape)
     # actual compare-and-swap
-    idtype = core.dtype(f'int{core.constexpr(x.dtype.primitive_bitwidth)}')
+    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
     ileft = left.to(idtype, bitcast=True)
     iright = right.to(idtype, bitcast=True)
     ix = x.to(idtype, bitcast=True)

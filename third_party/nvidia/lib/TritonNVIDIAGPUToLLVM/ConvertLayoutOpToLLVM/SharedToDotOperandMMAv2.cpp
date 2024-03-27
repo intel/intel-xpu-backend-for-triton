@@ -1,5 +1,4 @@
-#include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
-
+#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 
 using namespace mlir;
@@ -542,8 +541,6 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   const int elemBytes = descTy.getElementTypeBitWidth() / 8;
   auto order = sharedLayout.getOrder();
 
-  if (kWidth != (4 / elemBytes))
-    assert(vecPhase == 1 || vecPhase == 4 * kWidth);
   int nPerWarp =
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);
 

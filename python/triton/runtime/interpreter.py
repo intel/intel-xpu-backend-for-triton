@@ -1,11 +1,13 @@
 import inspect
 
+import math
 import numpy as np
 
 import triton
 import triton.language as tl
 import functools
 from dataclasses import dataclass
+from .errors import InterpreterError
 from .._C.libtriton import interpreter as _interpreter
 
 
@@ -100,7 +102,23 @@ def _get_np_dtype(tt_dtype):
     return np_types[tt_dtype]
 
 
-class Builder:
+def _erf(x):
+    # Numpy does not support erf
+    return math.erf(x)
+
+
+def _umulhi_64(a, b):
+    # Numpy does not support 128-bit multiplication
+    # So we have to implement it manually
+    return (int(a) * int(b)) >> 64
+
+
+np_erf_fp32 = np.vectorize(_erf, otypes=[np.float32])
+np_erf_fp64 = np.vectorize(_erf, otypes=[np.float64])
+np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
+
+
+class InterpreterBuilder:
 
     def __init__(self) -> None:
         self.arch = None
@@ -108,9 +126,12 @@ class Builder:
         # pass
 
     def set_grid_idx(self, x, y, z):
-        assert x < self.grid_dim[0]
-        assert y < self.grid_dim[1]
-        assert z < self.grid_dim[2]
+        if not x < self.grid_dim[0]:
+            raise ValueError("x >= grid_dim[0]")
+        if not y < self.grid_dim[1]:
+            raise ValueError("y >= grid_dim[1]")
+        if not z < self.grid_dim[2]:
+            raise ValueError("z >= grid_dim[2]")
         self.grid_idx = (x, y, z)
 
     def set_grid_dim(self, nx, ny, nz):
@@ -158,7 +179,7 @@ class Builder:
         return tl.block_type(dtype, shape)
 
     def get_int1(self, value):
-        return TensorHandle(np.array([value], dtype=bool), tl.int1)
+        return TensorHandle(np.array([value], dtype=np.bool_), tl.int1)
 
     def get_uint8(self, value):
         return TensorHandle(np.array([value], dtype=np.uint8), tl.uint8)
@@ -198,7 +219,8 @@ class Builder:
 
     # programming model
     def create_get_program_id(self, axis):
-        assert self.grid_idx is not None
+        if self.grid_idx is None:
+            raise ValueError("grid_idx is None")
         return TensorHandle(np.array([self.grid_idx[axis]], dtype=np.int32), tl.int32)
 
     def create_get_num_programs(self, axis):
@@ -238,7 +260,7 @@ class Builder:
     create_int_cast = lambda self, src, dst_type, is_signed: self.cast_impl(src, dst_type)
 
     def create_fp_to_fp(self, src, dst_type):
-        assert "float8 not NotImplemented yet"
+        raise NotImplementedError("fp_to_fp not supported in interpreter mode")
 
     def create_bitcast(self, src, dst_type):
         return TensorHandle(src.data.view(_get_np_dtype(dst_type)), dst_type)
@@ -253,6 +275,7 @@ class Builder:
     create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.remainder)
     create_fsub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
+    create_precise_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
     create_sdiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
     create_udiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
     # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
@@ -310,23 +333,46 @@ class Builder:
         rhs.data = rhs.data.astype(rhs_dtype)
         return self.binary_op(lhs, rhs, np.right_shift)
 
+    def create_umulhi(self, lhs, rhs):
+        dtype = lhs.data.dtype
+        if dtype == np.int64 or dtype == np.uint64:
+            return TensorHandle(np_umulhi_u64(lhs.data, rhs.data), lhs.dtype)
+        else:
+            compute_dtype = getattr(np, f"uint{dtype.itemsize * 8 * 2}")
+            lhs_data = lhs.data.astype(compute_dtype)
+            rhs_data = rhs.data.astype(compute_dtype)
+            ret_data = np.multiply(lhs_data, rhs_data) >> (dtype.itemsize * 8)
+            return TensorHandle(ret_data.astype(dtype), lhs.dtype)
+
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
         return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype)
 
+    create_clampf = lambda self, arg, lo, hi, propagate_nans: self.ternary_op(arg, lo, hi, np.clip)
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
+
+    def create_fma(self, x, y, z):
+        return TensorHandle(x.data * y.data + z.data, z.dtype)
 
     # unary functions
     def unary_op(self, arg, op):
         return TensorHandle(op(arg.data), arg.dtype)
 
-    create_exp = lambda self, arg: self.unary_op(arg, np.exp)
     create_cos = lambda self, arg: self.unary_op(arg, np.cos)
-    create_sin = lambda self, arg: self.unary_op(arg, np.sin)
-    create_log = lambda self, arg: self.unary_op(arg, np.log)
-    create_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
+    create_exp = lambda self, arg: self.unary_op(arg, np.exp)
+    create_exp2 = lambda self, arg: self.unary_op(arg, np.exp2)
     create_fabs = lambda self, arg: self.unary_op(arg, np.abs)
     create_iabs = lambda self, arg: self.unary_op(arg, np.abs)
+    create_floor = lambda self, arg: self.unary_op(arg, np.floor)
+    create_log = lambda self, arg: self.unary_op(arg, np.log)
+    create_log2 = lambda self, arg: self.unary_op(arg, np.log2)
+    create_precise_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
+    create_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
+    create_sin = lambda self, arg: self.unary_op(arg, np.sin)
+
+    def create_erf(self, arg):
+        ret = np_erf_fp32(arg.data) if arg.data.dtype == np.float32 else np_erf_fp64(arg.data)
+        return TensorHandle(ret, arg.dtype)
 
     # tensor operators
     create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype)
@@ -335,7 +381,7 @@ class Builder:
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype)
 
     def create_dot(self, a, b, d, allow_tf32, max_num_imprecise_acc):
-        return TensorHandle(np.dot(a.data, b.data) + d.data, d.dtype)
+        return TensorHandle(np.matmul(a.data, b.data) + d.data, d.dtype)
 
     def create_make_range(self, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
@@ -352,7 +398,8 @@ class Builder:
     def create_tensor_pointer_load(self, ptr, boundary_check, padding_option, cache_modifier, eviction_policy,
                                    is_volatile):
         ptrs, masks = ptr.materialize_pointers(boundary_check)
-        assert padding_option is None
+        if padding_option is not None:
+            raise NotImplementedError("padding_option not supported in interpreter mode")
         other = None
         return self.create_masked_load(ptrs, masks, other, cache_modifier, eviction_policy, is_volatile)
 
@@ -372,8 +419,16 @@ class Builder:
     def create_ptr_to_int(self, val, dst_ty):
         return TensorHandle(val.data.astype(np.uint64), dst_ty)
 
-    # def create_cat(self, lhs, rhs):
-    #     pass
+    def create_cat(self, lhs, rhs):
+        return TensorHandle(np.concatenate([lhs.data, rhs.data]), lhs.dtype)
+
+    def create_join(self, lhs, rhs):
+        # Triton only supports joining two original tensors into a new one along the last axis
+        return TensorHandle(np.stack([lhs.data, rhs.data], axis=-1), lhs.dtype)
+
+    def create_split(self, val):
+        # Triton only supports splitting the original tensor into two along the last axis
+        return (TensorHandle(val.data[..., 0], val.dtype), TensorHandle(val.data[..., 1], val.dtype))
 
     def create_splat(self, arg, shape):
         if isinstance(arg.dtype, tl.block_type):
@@ -415,7 +470,8 @@ class Builder:
         return BlockPointerHandle(base, shape, strides, new_offsets, tensor_shape, order)
 
     def create_advance(self, ptr, offsets):
-        assert len(ptr.offsets) == len(offsets)
+        if len(ptr.offsets) != len(offsets):
+            raise ValueError("len(ptr.offsets) != len(offsets)")
         # Create new offsets to avoid modifying the original
         new_offsets = [offset.clone() for offset in ptr.offsets]
         ret = BlockPointerHandle(ptr.base, ptr.shape, ptr.strides, new_offsets, ptr.tensor_shape, ptr.order)
@@ -439,11 +495,13 @@ def _patch_attr(obj, name, member, builder):
     setattr(obj, name, new_member)
 
 
-def _patch_lang_tensor(tensor, builder):
-    for name, member in inspect.getmembers(tensor):
+def _patch_builtin(pkg, builder):
+    for name, member in inspect.getmembers(pkg):
         if tl.core.is_builtin(member):
-            _patch_attr(tensor, name, member, builder)
-    tensor.__index__ = lambda self: int(self.handle.data)
+            _patch_attr(pkg, name, member, builder)
+
+
+def _patch_lang_tensor(tensor):
 
     def _get_bool(self):
         data = self.handle.data
@@ -454,34 +512,96 @@ def _patch_lang_tensor(tensor, builder):
     def _get_transpose(self):
         return tl.core.tensor(TensorHandle(np.transpose(self.handle.data), self.handle.dtype), self.dtype)
 
+    tensor.__index__ = lambda self: int(self.handle.data)
     tensor.__bool__ = lambda self: _get_bool(self)
     tensor.__repr__ = lambda self: repr(self.handle.data)
     tensor.__str__ = lambda self: str(self.handle.data)
     tensor.T = property(_get_transpose)
 
 
-def _patch_lang_core(lang, builder):
-    for name, member in inspect.getmembers(lang):
-        if tl.core.is_builtin(member):
-            _patch_attr(lang, name, member, builder)
-    # reduce is better off with a separate patch due to how
-    # the builder currently interfaces with custom functions
+def _patch_reduce_scan(lang):
 
-    def _new_reduce(input, axis, combine_fn, **kwargs):
-        if axis is not None and axis >= len(input.shape):
-            raise ValueError(f"axis {axis} out of bounds for shape {input.shape}")
+    def _check_axis(tensor, axis):
+        if axis is not None and axis >= len(tensor.shape):
+            raise ValueError(f"axis {axis} out of bounds for shape {tensor.shape}")
 
-        def _to_tensor(ret, dtype):
-            if ret.shape:
-                ret_type = tl.block_type(dtype, ret.shape)
+    def _to_tensor(ret, dtype):
+        if hasattr(ret, "shape") and ret.shape:
+            ret_type = tl.block_type(dtype, ret.shape)
+        else:
+            ret = np.array([ret], dtype=_get_np_dtype(dtype))
+            ret_type = dtype
+        return tl.core.tensor(TensorHandle(ret, dtype), ret_type)
+
+    def _generic_reduce(input, axis, combine_fn, keep_dims):
+
+        def _check_axis_and_unravel(input, axis):
+            ret = []
+            if not isinstance(input, tuple):
+                input = (input, )
+            for data in input:
+                if isinstance(data, tl.core.tensor):
+                    if axis is not None:
+                        _check_axis(data, axis)
+                        ret.append(data)
+                    else:
+                        axis = 0
+                        ret.append(_to_tensor(data.handle.data.flatten(), data.dtype))
+            return tuple(ret), axis
+
+        original_input = input
+        original_axis = axis
+        input, axis = _check_axis_and_unravel(input, axis)
+        input_data = []
+        output_data = []
+        input_shape = None
+        output_shape = None
+        for arg in input:
+            if isinstance(arg, tl.core.tensor):
+                input_shape = arg.handle.data.shape
+                input_data.append(arg.handle.data)
+                output_shape = input_shape[0:axis] + input_shape[axis + 1:]
+                output_data.append(np.zeros(output_shape, dtype=arg.handle.data.dtype))
+        if not input_shape:
+            raise ValueError("no tensors found in input")
+        # Reduce on axis
+        for i in range(input_data[0].size):
+            # Recover input_index from i using input_shape
+            input_index = np.unravel_index(i, input_shape)
+            output_index = input_index[0:axis] + input_index[axis + 1:]
+            input_tuple = tuple(d[input_index] for d in input_data)
+            if input_index[axis] == 0:
+                # First element
+                for j in range(len(output_data)):
+                    output_data[j][output_index] = input_tuple[j]
             else:
-                ret = np.array([ret], dtype=_get_np_dtype(dtype))
-                ret_type = dtype
-            return tl.core.tensor(TensorHandle(ret, dtype), ret_type)
+                acc_tuple = tuple(o[output_index] for o in output_data)
+                acc_tuple = combine_fn.fn(*acc_tuple, *input_tuple)
+                for j in range(len(output_data)):
+                    output_data[j][output_index] = acc_tuple[j]
+        # Pack output
+        ret = []
+        for data in output_data:
+            if keep_dims:
+                if original_axis is not None:
+                    data = np.expand_dims(data, axis)
+                else:
+                    input_shape = original_input[0].handle.data.shape
+                    for _ in range(len(input_shape)):
+                        data = np.expand_dims(data, 0)
 
-        def _min_max(input, val_reduce_op, idx_reduce_op=None, axis=None, return_indices_tie_break_left=True,
-                     keepdims=False):
-            assert return_indices_tie_break_left is True, "return_indices_tie_break_fast not supported"
+            elif original_axis is None:
+                # Take a scalar
+                data = data.item()
+            ret.append(_to_tensor(data, input[0].dtype))
+        return ret[0] if len(ret) == 1 else tuple(ret)
+
+    def _new_reduce(input, axis, combine_fn, keep_dims=False, **kwargs):
+
+        def _min_max(input, val_reduce_op, idx_reduce_op=None, axis=None, keepdims=False):
+            # If input is a tuple, it must be (val, index), and we only take val
+            input = input[0] if isinstance(input, tuple) else input
+            _check_axis(input, axis)
             val = None
             idx = None
             if val_reduce_op:
@@ -495,55 +615,42 @@ def _patch_lang_core(lang, builder):
             elif idx:
                 return idx
             else:
-                assert False, "val_reduce_op and idx_reduce_op can't be both None"
+                raise ValueError("val_reduce_op and idx_reduce_op are both None")
 
         def _sum(input, axis=None, keepdims=False):
+            _check_axis(input, axis)
             return _to_tensor(np.sum(input.handle.data, axis=axis, keepdims=keepdims), input.dtype)
 
-        keep_dims = kwargs.get("keep_dims", False)
-        return_indices = kwargs.get("return_indices", False)
-        return_indices_tile_break_left = kwargs.get("return_indices_tile_break_left", True)
-        fn = combine_fn.fn.__name__
         mapping = {
-            "_elementwise_min":  #
-            functools.partial(_min_max, val_reduce_op=np.min, idx_reduce_op=np.argmin if return_indices else None,
-                              return_indices_tie_break_left=return_indices_tile_break_left),  #
-            "_elementwise_max":  #
-            functools.partial(_min_max, val_reduce_op=np.max, idx_reduce_op=np.argmax if return_indices else None,
-                              return_indices_tie_break_left=return_indices_tile_break_left),  #
-            "_argmin_combine":  #
-            functools.partial(_min_max, val_reduce_op=None, idx_reduce_op=np.argmin,
-                              return_indices_tie_break_left=return_indices_tile_break_left),  #
-            "_argmax_combine":  #
-            functools.partial(_min_max, val_reduce_op=None, idx_reduce_op=np.argmax,
-                              return_indices_tie_break_left=return_indices_tile_break_left),  #
-            "_sum_combine": _sum
+            tl.standard._argmin_combine_tie_break_left:  #
+            functools.partial(_min_max, val_reduce_op=np.min, idx_reduce_op=np.argmin),  #
+            tl.standard._argmax_combine_tie_break_left:  #
+            functools.partial(_min_max, val_reduce_op=np.max, idx_reduce_op=np.argmax),  #
+            tl.standard._elementwise_max: functools.partial(_min_max, val_reduce_op=np.max, idx_reduce_op=None),  #
+            tl.standard._elementwise_min: functools.partial(_min_max, val_reduce_op=np.min, idx_reduce_op=None),  #
+            tl.standard._sum_combine: _sum,  #
         }
-        assert fn in mapping, f"fn {fn} not supported"
-        return mapping[fn](input, axis=axis, keepdims=keep_dims)
+        if combine_fn not in mapping:
+            # Fall back to the slow mode
+            return _generic_reduce(input, axis, combine_fn, keep_dims)
+        return mapping[combine_fn](input, axis=axis, keepdims=keep_dims)
 
     def _new_scan(input, axis, combine_fn, **kwargs):
-        fn = combine_fn.fn.__name__
         mapping = {
-            "_sum_combine": np.cumsum,
+            tl.standard._sum_combine: np.cumsum,
         }
-        ret = mapping[fn](input.handle.data, axis=axis)
+        ret = mapping[combine_fn](input.handle.data, axis=axis)
         ret_type = tl.block_type(input.dtype, ret.shape)
         return tl.core.tensor(TensorHandle(ret, input.dtype), ret_type)
 
-    def _new_reduce_scan_wrapper(mode, input, axis=None, **kwargs):
-        impl_fn = _new_scan if mode.startswith("cum") else _new_reduce
-        mode = mode[3:] if mode.startswith("cum") else mode
-        combine_fn = {
-            "min": tl.standard._elementwise_min,
-            "max": tl.standard._elementwise_max,
-            "sum": tl.standard._sum_combine,
-            "argmin": tl.standard._argmin_combine,
-            "argmax": tl.standard._argmax_combine,
-        }
-        if mode not in combine_fn:
-            raise ValueError(f"mode {mode} not supported")
-        return impl_fn(input, axis, combine_fn[mode], **kwargs)
+    tl.reduce = _new_reduce
+    tl.associative_scan = _new_scan
+    # FIXME(Keren): This is a workaround because some core functions use core.reduce but not tl.reduce
+    tl.core.reduce = _new_reduce
+    tl.core.associative_scan = _new_scan
+
+
+def _patch_lang_core(lang):
 
     def _new_to_ir(self, builder):
         # We need to specify signedness for integer types in the numpy mode
@@ -585,17 +692,9 @@ def _patch_lang_core(lang, builder):
             return builder.get_double_ty()
         raise ValueError(f'fail to convert {self} to ir type')
 
-    lang.reduce = _new_reduce
-    lang.min = functools.partial(_new_reduce_scan_wrapper, "min")
-    lang.max = functools.partial(_new_reduce_scan_wrapper, "max")
-    lang.sum = functools.partial(_new_reduce_scan_wrapper, "sum")
-    lang.argmin = functools.partial(_new_reduce_scan_wrapper, "argmin")
-    lang.argmax = functools.partial(_new_reduce_scan_wrapper, "argmax")
-    lang.cumsum = functools.partial(_new_reduce_scan_wrapper, "cumsum")
-
     # can't just map lang.static_range to `range`, because `tl.static_range`
     # can get `step` passed by keyword
-    def _range(arg1, arg2=None, step=None, **kwargs):
+    def _new_range(arg1, arg2=None, step=None, **kwargs):
         if step is None:
             step = 1
         if arg2 is None:
@@ -604,77 +703,44 @@ def _patch_lang_core(lang, builder):
             start, end = arg1, arg2
         return range(start, end, step)
 
-    def _static_assert(cond, msg=""):
+    def _new_static_assert(cond, msg=""):
         assert cond, msg
 
-    lang.range = _range
-    lang.static_range = _range
-    lang.static_assert = _static_assert
+    lang.range = _new_range
+    lang.static_range = _new_range
+    lang.static_assert = _new_static_assert
     lang.dtype.to_ir = _new_to_ir
 
-
-def _patch_lang_math(lang, builder):
-    math = lang.math
-
-    mapping = {
-        "abs": np.abs,
-        "acos": np.arccos,
-        "asin": np.arcsin,
-        "exp2": np.exp2,
-        "log2": np.log2,
-        "max": np.maximum,
-        "floor": np.floor,
-        "div_rn": np.divide,
-        "sqrt_rn": np.sqrt,
-        "sqrt": np.sqrt,
-    }
-
-    def make_numpy(name):
-
-        def impl(*args, **kwargs):
-            ret_type = args[0].type  # TODO: incorrect
-            ret_dtype = args[0].dtype  # TODO: incorrect
-            args = [arg.handle.data for arg in args if isinstance(arg, tl.core.tensor)]
-            # remove the _builder kwarg
-            kwargs = {k: v.handle.data for k, v in kwargs.items() if k != "_builder"}
-            ret = mapping[name](*args, **kwargs)
-            ret = tl.core.tensor(TensorHandle(ret, ret_dtype), ret_type)
-            return ret
-
-        return impl
-
-    def make_fallback(name):
-
-        def fallback(*args, **kwargs):
-            raise NotImplementedError(f"""
-{name} not supported in interpreter mode: no known numpy implementation.
-If you think that {name} in fact does have a numpy implementation, please add it
-to the mapping in python/triton/interpreter/new_interpreter.py:_patch_lang_math.
-""")
-
-        return fallback
-
-    for name, member in inspect.getmembers(math):
-        if name in mapping:
-            setattr(math, name, make_numpy(name))
-        elif callable(member):  # We only wrap functions
-            setattr(math, name, make_fallback(name))
+    _patch_reduce_scan(lang)
 
 
 def _patch_lang(fn):
     lang = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
     assert len(lang) == 1, "triton.language must be visible from within jit'd function"
-    _patch_lang_tensor(lang[0].tensor, builder)
-    _patch_lang_core(lang[0], builder)
+    _patch_builtin(lang[0], interpreter_builder)
+    _patch_builtin(lang[0].tensor, interpreter_builder)
     if lang[0] == tl:
-        _patch_lang_math(lang[0], builder)
+        _patch_builtin(lang[0].math, interpreter_builder)
+    _patch_lang_tensor(lang[0].tensor)
+    _patch_lang_core(lang[0])
 
 
 # TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
     if isinstance(arg, int):
         ty = tl.str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
-        handle = TensorHandle(np.array([arg], dtype=np.int32), ty)
+        dtype = np.int32
+        if -2**31 <= arg < 2**31:
+            dtype = np.int32
+        elif 2**31 <= arg < 2**32:
+            dtype = np.uint32
+        elif -2**63 <= arg < 2**63:
+            dtype = np.int64
+        elif 2**63 <= arg < 2**64:
+            dtype = np.uint64
+        else:
+            raise ValueError(f"Unsupported integer value {arg}")
+        handle = TensorHandle(np.array([arg], dtype=dtype), ty)
         return tl.tensor(handle, ty)
     if hasattr(arg, "data_ptr"):
         ty = tl.str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
@@ -683,7 +749,7 @@ def _implicit_cvt(arg):
     return arg
 
 
-builder = Builder()
+interpreter_builder = InterpreterBuilder()
 
 # These keywords are not supported by the interpreter
 RESERVED_KWS = ["num_warps", "num_stages", "num_ctas", "enable_fp_fusion", "grid"]
@@ -729,14 +795,17 @@ class GridExecutor:
         args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
         # iterate through grid
         grid = self.grid(args) if callable(self.grid) else self.grid
-        assert len(grid) <= 3
+        assert len(grid) <= 3, "grid must have at most 3 dimensions"
         grid = grid + (1, ) * (3 - len(grid))
-        builder.set_grid_dim(*grid)
-        for x in range(grid[0]):
-            for y in range(grid[1]):
-                for z in range(grid[2]):
-                    builder.set_grid_idx(x, y, z)
-                    self.fn(**args)
+        interpreter_builder.set_grid_dim(*grid)
+        try:
+            for x in range(grid[0]):
+                for y in range(grid[1]):
+                    for z in range(grid[2]):
+                        interpreter_builder.set_grid_idx(x, y, z)
+                        self.fn(**args)
+        except Exception as e:
+            raise InterpreterError(repr(e)) from e
         # copy arguments back to propagate side-effects
         self._restore_args_dev(args_dev, args_hst)
 
@@ -764,4 +833,7 @@ class InterpretedFunction:
     def __call__(self, *args, **kwargs):
         # This is a device function call
         _patch_lang(self.fn)
-        return self.fn(*args, **kwargs)
+        try:
+            return self.fn(*args, **kwargs)
+        except Exception as e:
+            raise InterpreterError(repr(e)) from e

@@ -29,7 +29,7 @@ The Triton structure can be broken down into three major parts, following the cl
 2. The middle-end consumes the IR and progressively lowers it to the TritonGPU dialect applying optimizations.
 3. The backend lowers TritonGPU dialect to LLVM dialect, then converts it to LLVM IR and an appropriate format depending on the target (e.g., ptx/cubin in Nvidia case).
 
-There are three main IR stages on which most of the optimizations are done: Triton dialect, TritonGPU dialect [c8]_, and LLVM IR. Note: Vendor-specific backends introduce additional dialects (e.g., GenX for Intel) to help with TritonGPU lowering.
+There are three main IR stages on which most of the optimizations are done: Triton dialect, TritonGPU dialect [c8]_, and LLVM IR. Note: Vendor-specific backends introduce additional dialects to help with TritonGPU lowering.
 
 .. image :: ../pics/triton.png
 
@@ -538,7 +538,6 @@ Components
 ==========
 The Intel GPU backend consists of three major components:
 
-* LLVM fork for the GenX dialect -> move to the backend
 * Triton fork for upstream work
 * Intel GPU backend (plugin)
 
@@ -553,8 +552,8 @@ The modes are mostly separate within IGC and make different assumptions about th
 From the execution point of view the two modes are incompatible (in the driver), however, there’s a feature to allow for kernels to do cross-context calls (in dpc++ these are invoke_simd and invoke_spmd, e.g., [c34]_). Those have an overhead and are tricky to use.
 Intel GPU backed has thus two paths for Triton kernels compilation:
 
-* SIMT – the default approach (same as AMD/Nvidia) that lowers TritonGPU IR using the layouts described above, through GenX dialect [c35]_. The GenX dialect in turn is lowered to either OpenCL built-ins or GenISA instrinsics.
-* SIMD – an approach suitable for dense operations that transforms TritonGPU to “warp-level” IR (similar to auto-vectorization), adjusts operator argument sizes and maps the result to XeGPU dialect [c36]_.
+* SIMT – the default approach (same as AMD/Nvidia) that lowers TritonGPU IR using the layouts described above.
+* SIMD – an approach suitable for dense operations that transforms TritonGPU to “warp-level” IR (similar to auto-vectorization), adjusts operator argument sizes and maps the result to XeGPU dialect [c35]_.
 
 At a higher level, the two approaches represent only the way the IR is looked at (e.g., Triton IR can be thought of "SIMD" in a way that it operates on tensors; and autovectorization converts initial sizes to appropriate hardware-defined vector widths for actual instructions).
 
@@ -649,5 +648,4 @@ Links and materials
 .. [c32] GenISA intrinsics: https://github.com/intel/intel-graphics-compiler/blob/4a1798982e29564baba0265b19a4752f8f458219/IGC/GenISAIntrinsics/Intrinsic_definitions.py
 .. [c33] GenX intrinsics: https://github.com/intel/vc-intrinsics
 .. [c34] Sycl ext invoke_simd: https://github.com/intel/llvm/blob/d3c8a7e621ba41be5c11ebad1bce8cd1af216117/sycl/doc/extensions/experimental/sycl_ext_oneapi_invoke_simd.asciidoc
-.. [c35] GenX dialect: https://github.com/intel/llvm/tree/genx
-.. [c36] XeGPU dialect: https://github.com/intel/mlir-extensions
+.. [c35] XeGPU dialect: https://github.com/intel/mlir-extensions

@@ -2,8 +2,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
 
-using ::mlir::triton::intel::PTXBuilder;
-using ::mlir::triton::intel::PTXInstr;
 namespace {
 static SmallVector<Value> identity_func(Location loc,
                                         ConversionPatternRewriter &rewriter,
@@ -67,40 +65,6 @@ Fp16_to_Fp8E5M2_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
   return {extract_element(i8_ty, res, i32_val(1))};
 }
 
-struct Fp8ConversionDesc {
-  std::string ptx;
-  int inVecWidthBits;
-  int outVecWidthBits;
-  size_t numElements;
-};
-
-static const Fp8ConversionDesc Fp16_to_Fp8E5M2_RTNE(bool hasNativeFP) {
-  Fp8ConversionDesc ret;
-  if (!hasNativeFP) {
-    ret = {"{                            \n"
-           ".reg .b32 a<2>;              \n"
-           "and.b32 a0, $1, 0xfffefffe;  \n"   // a0 &= 0xfffefffe
-           "and.b32 a1, $2, 0xfffefffe;  \n"   // (strip lowest bit)
-           "add.u32 a0, a0, 0x00800080;  \n"   // a0 += 0x00800080
-           "add.u32 a1, a1, 0x00800080;  \n"   // (round to nearest)
-           "prmt.b32 $0, a0, a1, 0x7531; \n\t" // output = a1a0
-           "}",
-           32, 32, 4};
-  } else {
-    ret = {"cvt.rn.satfinite.e5m2x2.f16x2 $0, $1; \n\t", 32, 16, 2};
-  }
-  return ret;
-}
-
-const Fp8ConversionDesc Fp16_to_Fp8E5M2_RTZ = {
-    "{                            \n"
-    ".reg .b32 a<2>;              \n"
-    "and.b32 a0, $1, 0xfffefffe;  \n"   // a0 &= 0xfffefffe
-    "and.b32 a1, $2, 0xfffefffe;  \n"   // (strip lowest bit)
-    "prmt.b32 $0, a0, a1, 0x7531; \n\t" // output = a1a0
-    "}",
-    32, 32, 4};
-
 static SmallVector<Value>
 Fp8E5M2_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {
@@ -126,20 +90,6 @@ Fp8E5M2_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
           extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
           extract_element(f16_ty, fp16x2Vec1, i32_val(1))};
-}
-
-static const Fp8ConversionDesc Fp8E5M2_to_Fp16(bool hasNativeFP) {
-  Fp8ConversionDesc ret;
-  if (!hasNativeFP) {
-    ret = {"{                           \n"
-           "prmt.b32 $0, 0, $2, 0x5140; \n\t"
-           "prmt.b32 $1, 0, $2, 0x7362; \n\t"
-           "}",
-           32, 32, 4};
-  } else {
-    ret = {"cvt.rn.f16x2.e5m2x2 $0, $1; \n\t", 16, 32, 2};
-  }
-  return ret;
 }
 
 static SmallVector<Value>
@@ -229,58 +179,6 @@ Fp8E5M2_to_Bf16_func(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
           extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
           extract_element(i16_ty, bf16x2Vec1, i32_val(1))};
-}
-
-static const Fp8ConversionDesc Fp8E5M2_to_Bf16(bool hasNativeFP) {
-  Fp8ConversionDesc ret;
-  if (!hasNativeFP) {
-    ret = {
-        "{                                        \n"
-        ".reg .b32 a<2>, b<2>, c<4>, d<4>, e112;  \n" // if input = 0xf1f2f3f4
-        "mov.u32 e112, 0x77800000;                \n"
-        "prmt.b32 a0, 0, $2, 0x5140;              \n" // a0 = 0xf300f400
-        "prmt.b32 a1, 0, $2, 0x7362;              \n" // a1 = 0xf100f200
-        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;    \n" // b0 = a0 & 0x7fff7fff
-        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;    \n" // (strip sign)
-        "shr.b32  b0, b0, 3;                      \n" // b0 >>= 3
-        "shr.b32  b1, b1, 3;                      \n" // shift into bf16
-                                                      // position
-        "and.b32 c0, b0, 0xFFFF0000;              \n" // c0 = f3
-        "shl.b32 c1, b0, 16;                      \n" // c1 = f4
-        "and.b32 c2, b1, 0xFFFF0000;              \n" // c2 = f1
-        "shl.b32 c3, b1, 16;                      \n" // c3 = f2
-        "mul.f32 d0, c0, e112;                    \n" // d0 = c0 * 0x77800000
-        "mul.f32 d1, c1, e112;                    \n" // d1 = c1 * 0x77800000
-        "mul.f32 d2, c2, e112;                    \n" // d2 = c2 * 0x77800000
-        "mul.f32 d3, c3, e112;                    \n" // d3 = c3 * 0x77800000
-        "prmt.b32 b0, d0, d1, 0x3276;             \n" // b0 = 0xd3d4
-        "prmt.b32 b1, d2, d3, 0x3276;             \n" // b1 = 0xd1d2
-        "lop3.b32 $0, b0, 0x80008000, a0, 0xf8;   \n" // out0 =
-                                                      // b0|(0x80008000&a0)
-        "lop3.b32 $1, b1, 0x80008000, a1, 0xf8;   \n" // (restore sign)
-        "}",
-        32, 32, 4};
-  } else {
-    ret = {
-        "{                                       \n"
-        ".reg .b32 a<2>, b<2>;                  \n" // if input = 0xf1f2f3f4
-        ".reg .b32 e112;                        \n"
-        "mov.u32 e112, 0x77807780;              \n" // 2**112 represented as
-                                                    // bf16x2
-        "prmt.b32 a0, 0, $2, 0x5140;            \n" // a0 = 0xf300f400
-        "prmt.b32 a1, 0, $2, 0x7362;            \n" // a1 = 0xf100f200
-        "lop3.b32 b0, a0, 0x7fff7fff, 0, 0xc0;  \n" // b0 = a0 & 0x7fff7fff
-        "lop3.b32 b1, a1, 0x7fff7fff, 0, 0xc0;  \n" // (strip sign)
-        "shr.b32  b0, b0, 3;                    \n" // b0 >>= 3
-        "shr.b32  b1, b1, 3;                    \n" // shift into bf16 position
-        "lop3.b32 b0, b0, 0x80008000, a0, 0xf8; \n" // out0 = b0|(0x80008000&a0)
-        "lop3.b32 b1, b1, 0x80008000, a1, 0xf8; \n" // (restore sign)
-        "mul.rn.bf16x2 $0, b0, e112;            \n" // b0.exp += 2**7-2**4
-        "mul.rn.bf16x2 $1, b1, e112;            \n" // exponent compensate = 112
-        "}",
-        32, 32, 4};
-  }
-  return ret;
 }
 
 static SmallVector<Value>
@@ -417,65 +315,6 @@ Bf16_to_Fp8E5M2_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
   return {extract_element(i8_ty, res, i32_val(1))};
 }
 
-static const Fp8ConversionDesc Bf16_to_Fp8E5M2(bool hasNativeFP) {
-  Fp8ConversionDesc ret;
-  if (!hasNativeFP) {
-    ret = {
-        "{                                           \n" // bf16=fp8>>3 + 112<<7
-        ".reg .u32 sign, sign<2>, nosign, nosign<2>; \n" // fp8_min = 0b00000000
-        ".reg .u32 fp8_min, fp8_max, rn_;            \n" // fp8_max = 0b11111111
-        "mov.u32 fp8_min, 0x38003800;                \n" // so bf16_min = 0x3800
-        "mov.u32 fp8_max, 0x57e057e0;                \n" // so bf16_max = 0x57e0
-        "mov.u32 rn_, 0x00100010;                    \n" // round to nearest
-        "and.b32 sign0, $1, 0x80008000;              \n" // sign0=in0&0x80008000
-        "and.b32 sign1, $2, 0x80008000;              \n" // (store sign)
-        "prmt.b32 sign, sign0, sign1, 0x7531;        \n"
-        "and.b32 nosign0, $1, 0x7fff7fff;            \n" // nosign0=in0&0x7fff7fff
-        "and.b32 nosign1, $2, 0x7fff7fff;            \n" // (strip sign)
-
-        // nosign = clamp(nosign, min, max)
-        ".reg .u32 nosign_0_<2>, nosign_1_<2>;       \n"
-        "and.b32 nosign_0_0, nosign0, 0xffff0000;    \n"
-        "max.u32 nosign_0_0, nosign_0_0, 0x38000000; \n"
-        "min.u32 nosign_0_0, nosign_0_0, 0x57e00000; \n"
-        "and.b32 nosign_0_1, nosign0, 0x0000ffff;    \n"
-        "max.u32 nosign_0_1, nosign_0_1, 0x3800;     \n"
-        "min.u32 nosign_0_1, nosign_0_1, 0x57e0;     \n"
-        "or.b32 nosign0, nosign_0_0, nosign_0_1;     \n"
-        "and.b32 nosign_1_0, nosign1, 0xffff0000;    \n"
-        "max.u32 nosign_1_0, nosign_1_0, 0x38000000; \n"
-        "min.u32 nosign_1_0, nosign_1_0, 0x57e00000; \n"
-        "and.b32 nosign_1_1, nosign1, 0x0000ffff;    \n"
-        "max.u32 nosign_1_1, nosign_1_1, 0x3800;     \n"
-        "min.u32 nosign_1_1, nosign_1_1, 0x57e0;     \n"
-        "or.b32 nosign1, nosign_1_0, nosign_1_1;     \n"
-
-        "add.u32 nosign0, nosign0, rn_;              \n" // nosign0 += rn_
-        "add.u32 nosign1, nosign1, rn_;              \n" // (round to nearest)
-        "sub.u32 nosign0, nosign0, 0x38003800;       \n" // nosign0-=0x38003800
-        "sub.u32 nosign1, nosign1, 0x38003800;       \n" // (compensate offset)
-        "shl.b32 nosign0, nosign0, 3;                \n" // nosign0 <<= 3
-        "shl.b32 nosign1, nosign1, 3;                \n" // shift into to fp8e4
-        "prmt.b32 nosign, nosign0, nosign1, 0x7531;  \n" // nosign0 = 0xf100f200
-                                                         // nosign1 = 0xf300f400
-                                                         // nosign = 0xf3f4f1f2
-        "or.b32 $0, nosign, sign;                    \n" // restore sign
-        "}",
-        32, 32, 4};
-  } else {
-    ret = {"{                                       \n"
-           ".reg .b16 a<2>;                         \n"
-           ".reg .f32 b<2>;                         \n"
-           "mov.b32 {a0, a1}, $1;                   \n"
-           "cvt.f32.bf16 b0, a0;                    \n"
-           "cvt.f32.bf16 b1, a1;                    \n"
-           "cvt.rn.satfinite.e5m2x2.f32 $0, b1, b0; \n"
-           "}",
-           32, 16, 2};
-  }
-  return ret;
-}
-
 /* ----- FP8E4M3B15 ------ */
 // This data-type is a variant of the standard FP8E4M3 format.
 // It was designed for fast software conversion to FP16 on
@@ -521,23 +360,6 @@ Fp8E4M3B15_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(f16_ty, fp16x2Vec1, i32_val(1))};
 }
 
-// This is the same format as FP8E4M3Nv, but:
-//   - the exponent bias is 15 instead of 7
-//   - 0xff and 0x7f are mapped to +-1.750 instead of +-nan
-const Fp8ConversionDesc Fp8E4M3B15_to_Fp16 = {
-    "{                                      \n"
-    ".reg .b32 a<2>, b<2>;                  \n"
-    "prmt.b32 a0, 0, $2, 0x5746;            \n"
-    "and.b32 b0, a0, 0x7f007f00;            \n"
-    "and.b32 b1, a0, 0x00ff00ff;            \n"
-    "and.b32 a1, a0, 0x00800080;            \n"
-    "shr.b32  b0, b0, 1;                    \n"
-    "add.u32 b1, b1, a1;                    \n"
-    "lop3.b32 $0, b0, 0x80008000, a0, 0xf8; \n"
-    "shl.b32 $1, b1, 7;                     \n"
-    "}                                      \n",
-    32, 32, 4};
-
 static SmallVector<Value>
 Fp16_to_Fp8E4M3B15_func(Location loc, ConversionPatternRewriter &rewriter,
                         const SmallVector<Value> &v) {
@@ -581,41 +403,6 @@ Fp16_to_Fp8E4M3B15_func(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(i8_ty, b1, i32_val(3))};
 }
 
-static const Fp8ConversionDesc Fp16_to_Fp8E4M3B15(bool has_minx2) {
-  std::string ret;
-  ret += "{                                      \n"
-         ".reg .pred p<4>;                       \n"
-         ".reg .b32 a<2>, b<2>;                  \n"
-         ".reg .b16 c<4>;                        \n"
-         ".reg .b16 max_val_f16;                 \n"
-         ".reg .b32 max_val_f16x2;               \n"
-         "mov.b16 max_val_f16,   0x3F00;         \n"
-         "mov.b32 max_val_f16x2, 0x3F003F00;     \n"
-         "and.b32 a0, $1, 0x7fff7fff;            \n"
-         "and.b32 a1, $2, 0x7fff7fff;            \n";
-  if (has_minx2)
-    ret += "min.f16x2 a0, a0, max_val_f16x2;      \n"
-           "min.f16x2 a1, a1, max_val_f16x2;      \n";
-  else
-    ret += "setp.lt.f16x2  p0|p1, a0, max_val_f16x2;   \n"
-           "setp.lt.f16x2  p2|p3, a1, max_val_f16x2;   \n"
-           "mov.b32 {c0, c1}, a0;                \n"
-           "mov.b32 {c2, c3}, a1;                \n"
-           "selp.b16  c0, c0, max_val_f16, p0;   \n"
-           "selp.b16  c1, c1, max_val_f16, p1;   \n"
-           "selp.b16  c2, c2, max_val_f16, p2;   \n"
-           "selp.b16  c3, c3, max_val_f16, p3;   \n"
-           "mov.b32 a0, {c0, c1};                \n"
-           "mov.b32 a1, {c2, c3};                \n";
-  ret += "mad.lo.u32 a0, a0, 2, 0x00800080;      \n"
-         "mad.lo.u32 a1, a1, 2, 0x00800080;      \n"
-         "lop3.b32 b0, $1, 0x80008000, a0, 0xea; \n"
-         "lop3.b32 b1, $2, 0x80008000, a1, 0xea; \n"
-         "prmt.b32 $0, b0, b1, 0x7531;           \n"
-         "}";
-  return {ret, 32, 32, 4};
-}
-
 /* ----- FP8E4M3B15X4 ------ */
 // NOTE: NOT USED RIGHT NOW
 // Packed variant of FP8E4M3B15
@@ -653,17 +440,6 @@ Fp8E4M3B15x4_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
           extract_element(f16_ty, fp16x2Vec1, i32_val(1))};
 }
-
-static const Fp8ConversionDesc Fp8E4M3B15x4_to_Fp16 = {
-    "{                                      \n"
-    ".reg .b32 a<2>;                        \n"
-    "add.u32 a0, $2, $2;                    \n"
-    "shl.b32 a1, $2, 7;                     \n"
-    "and.b32  $0, a0, 0x80008000;           \n"
-    "lop3.b32 $0, $0, a1, 0x3f803f80, 0xf8; \n"
-    "and.b32  $1, $2, 0xbf80bf80;           \n"
-    "}",
-    32, 32, 4};
 
 // Fp16 -> Fp8E4M3B15 (packed)
 // fast conversion code provided by Scott Gray @ OpenAI
@@ -704,17 +480,6 @@ Fp16_to_Fp8E4M3B15x4_func(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(i8_ty, fp8x4Vec, i32_val(2)),
           extract_element(i8_ty, fp8x4Vec, i32_val(3))};
 }
-
-static const Fp8ConversionDesc Fp16_to_Fp8E4M3B15x4 = {
-    "{                                       \n"
-    ".reg .b32 a<2>;                         \n"
-    "shr.b32  a0, $1, 1;                     \n"
-    "shr.b32  a1, $1, 7;                     \n"
-    "and.b32  $0,     a0, 0x40004000;        \n"
-    "lop3.b32 $0, $0, a1, 0x007f007f, 0xf8;  \n"
-    "lop3.b32 $0, $0, $2, 0xbf80bf80, 0xf8;  \n"
-    "}",
-    32, 32, 4};
 
 /* ----- FP8E4M3 ------ */
 // Note: when handled by software, this format
@@ -794,13 +559,6 @@ Fp8E4M3Nv_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(f16_ty, fp16x2Vec0, i32_val(1))};
 }
 
-// Fp8E4M3 (x2) -> Fp16 (x2) (packed)
-static const Fp8ConversionDesc Fp8E4M3Nv_to_Fp16 = {
-    "{ \n"
-    "cvt.rn.f16x2.e4m3x2 $0, $1; \n"
-    "}",
-    16, 32, 2};
-
 // Fp16 -> Fp8E4M3 (packed)
 static SmallVector<Value>
 Fp16_to_Fp8E4M3Nv_func(Location loc, ConversionPatternRewriter &rewriter,
@@ -879,13 +637,6 @@ Fp16_to_Fp8E4M3Nv_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
 
   return {extract_element(i8_ty, res, i32_val(1))};
 }
-
-// Fp16 (x2) -> Fp8E4M3 (x2) (packed)
-static const Fp8ConversionDesc Fp16_to_Fp8E4M3Nv = {
-    "{ \n"
-    "cvt.rn.satfinite.e4m3x2.f16x2 $0, $1; \n"
-    "}",
-    32, 16, 2};
 
 static SmallVector<Value>
 Fp8E4M3Nv_to_Bf16_func(Location loc, ConversionPatternRewriter &rewriter,
@@ -986,20 +737,6 @@ Fp8E4M3Nv_to_Bf16_func(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
           extract_element(i16_ty, bf16x2Vec1, i32_val(1))};
 }
-
-// Fp8E4M3 (x2) -> Fp16 (x2) (packed)
-static const Fp8ConversionDesc Fp8E4M3Nv_to_Bf16 = {
-    "{                                       \n"
-    ".reg .b32 a;                            \n"
-    ".reg .f16 a<2>;                         \n"
-    ".reg .b16 b<2>;                         \n"
-    "cvt.rn.f16x2.e4m3x2 a, $1;              \n"
-    "mov.b32 {a0, a1}, a;                    \n"
-    "cvt.bf16.f16 b0, a0;                    \n"
-    "cvt.bf16.f16 b1, a1;                    \n"
-    "mov.b32 $0, {b0, b1};                   \n"
-    "}",
-    16, 32, 2};
 
 static SmallVector<Value>
 Bf16_to_Fp8E4M3Nv_func(Location loc, ConversionPatternRewriter &rewriter,
@@ -1172,38 +909,6 @@ static SmallVector<Value> Bf16_to_Fp16_func(Location loc,
           extract_element(f16_ty, fp16x2Vec, i32_val(1))};
 }
 
-// Bf16 (x2) -> Fp8E4M3 (x2) (packed)
-static const Fp8ConversionDesc Bf16_to_Fp8E4M3Nv = {
-    "{                                       \n"
-    ".reg .b16 a<2>;                         \n"
-    ".reg .f32 b<2>;                         \n"
-    "mov.b32 {a0, a1}, $1;                   \n"
-    "cvt.f32.bf16 b0, a0;                    \n"
-    "cvt.f32.bf16 b1, a1;                    \n"
-    "cvt.rn.satfinite.e4m3x2.f32 $0, b1, b0; \n"
-    "}",
-    32, 16, 2};
-
-// Fp32 (x2) -> Fp8 (x2) (packed)
-static const Fp8ConversionDesc Fp32_to_Fp8E4M3Nv = {
-    "cvt.rn.satfinite.e4m3x2.f32  $0, $2, $1; \n", 32, 16, 2};
-static const Fp8ConversionDesc Fp32_to_Fp8E5M2 = {
-    "cvt.rn.satfinite.e5m2x2.f32 $0, $2, $1; \n", 32, 16, 2};
-
-/* ----- Packed integer to BF16 ------ */
-static const std::string S8_to_Bf16 =
-    "{                                           \n"
-    ".reg .s8 s<4>;                              \n"
-    ".reg .f32 f<4>;                             \n"
-    "mov.b32 {s0, s1, s2, s3}, $2;               \n" // unpack
-    "cvt.rn.f32.s8 f0, s0;                       \n" // no s8->bf16 pre-Hopper
-    "cvt.rn.f32.s8 f1, s1;                       \n" // fi[0:15] is always 0
-    "cvt.rn.f32.s8 f2, s2;                       \n" //
-    "cvt.rn.f32.s8 f3, s3;                       \n" //
-    "prmt.b32 $0, f0, f1, 0x7632;                \n" // f32->bf16 + pack
-    "prmt.b32 $1, f2, f3, 0x7632;                \n" //
-    "}";
-
 // MMA encoding has a different order depending on the element's bit width;
 // reorder if we're in this case.
 static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
@@ -1369,68 +1074,6 @@ inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
     ConverterT;
-
-static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
-                                       Type outType,
-                                       const int inVecWidthBits = 32,
-                                       const int outVecWidthBits = 32) {
-
-  ConverterT converter =
-      [ptxAsm, inType, outType, inVecWidthBits,
-       outVecWidthBits](Location loc, ConversionPatternRewriter &rewriter,
-                        const SmallVector<Value> &v) -> SmallVector<Value> {
-    int numElements = v.size();
-    assert(numElements == 4 || numElements == 2 && "invalid vector size");
-
-    auto ctx = rewriter.getContext();
-    int inBitwidth = inType.getIntOrFloatBitWidth();
-    int outBitwidth = outType.getIntOrFloatBitWidth();
-    // first, we pack `v` into 32-bit ints
-    int inVecWidth = inVecWidthBits / inBitwidth;
-    auto inVecTy = vec_ty(inType, inVecWidth);
-    SmallVector<Value> inPacked(numElements / inVecWidth, undef(inVecTy));
-    for (size_t i = 0; i < numElements; i++)
-      inPacked[i / inVecWidth] = insert_element(
-          inVecTy, inPacked[i / inVecWidth], v[i], i32_val(i % inVecWidth));
-    for (size_t i = 0; i < inPacked.size(); i++)
-      inPacked[i] = bitcast(inPacked[i], int_ty(inVecWidthBits));
-
-    // then, we run the provided inline PTX
-    int outVecWidth = outVecWidthBits / outBitwidth;
-    int outNums = numElements / outVecWidth;
-    PTXBuilder builder;
-    SmallVector<PTXBuilder::Operand *> operands;
-    auto outConstriant = outVecWidthBits == 16 ? "=h" : "=r";
-    auto inConstraint = inVecWidthBits == 16 ? "h" : "r";
-    for (int i = 0; i < outNums; i++) {
-      operands.push_back(builder.newOperand(outConstriant));
-    }
-
-    for (Value inVal : inPacked) {
-      operands.push_back(builder.newOperand(inVal, inConstraint));
-    }
-
-    auto &ptxOp = *builder.create(ptxAsm);
-    ptxOp(operands, /*onlyAttachMLIRArgs=*/true);
-    auto outVecTy = vec_ty(outType, outVecWidth);
-    SmallVector<Value> outPacked;
-    if (outNums == 1)
-      outPacked.push_back(builder.launch(rewriter, loc, outVecTy, false));
-    else {
-      auto outStructTy = struct_ty(SmallVector<Type>(outNums, outVecTy));
-      auto outStruct = builder.launch(rewriter, loc, outStructTy, false);
-      for (int i = 0; i < outNums; i++)
-        outPacked.push_back(extract_val(outVecTy, outStruct, i));
-    }
-    // unpack the output
-    SmallVector<Value> ret;
-    for (size_t i = 0; i < numElements; i++)
-      ret.push_back(extract_element(outType, outPacked[i / outVecWidth],
-                                    i32_val(i % outVecWidth)));
-    return ret;
-  };
-  return converter;
-}
 
 class MultipleOperandsRange
     : public iterator_range<SmallVector<SmallVector<Value>>::iterator> {
@@ -2591,32 +2234,8 @@ struct ClampFOpConversion
 
     assert(elemTy.isF32() || elemTy.isF16());
 
-    if (clipPatternFound) {
-      // min.xorsign.abs
-      PTXBuilder ptxBuilder;
-      bool propNan = (op.getPropagateNan() == PropagateNan::ALL);
-      auto &minXorsign = ptxBuilder.create<PTXInstr>("min")
-                             ->o("NaN", propNan)
-                             .o("xorsign")
-                             .o("abs");
-      const char *outType = nullptr;
-      const char *inType = nullptr;
-      if (elemTy.isF32()) {
-        minXorsign.o("f32");
-        outType = "=f";
-        inType = "f";
-      } else if (elemTy.isF16()) {
-        minXorsign.o("f16");
-        outType = "=h";
-        inType = "h";
-      }
-      auto output = ptxBuilder.newOperand(outType);
-      auto inputA = ptxBuilder.newOperand(operands[0][0], inType);
-      auto inputB = ptxBuilder.newOperand(operands[0][2], inType);
-      minXorsign(output, inputA, inputB);
-
-      return {ptxBuilder.launch(rewriter, loc, elemTy, false)};
-    }
+    if (clipPatternFound)
+      llvm_unreachable("TODO");
 
     // Clip pattern not found, use min/max.
     if (op.getPropagateNan() == PropagateNan::ALL) {

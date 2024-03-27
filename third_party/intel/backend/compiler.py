@@ -69,6 +69,7 @@ class XPUBackend(BaseBackend):
         super().__init__(target)
         self.capability = target[1]
         assert isinstance(self.capability, int)
+        self.binary_ext = "spv"
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
@@ -151,7 +152,6 @@ class XPUBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, capability)
-        intel.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
