@@ -250,9 +250,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   SmallVector<Value> args{ptr,     baseWidth,    baseHeight,    x,
                           y,       elemSize,     tileWidth,     tileHeight,
                           vBlocks, useTranspose, vnniTransform, cache};
-  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-
-  return callOp;
+  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
 static LLVM::CallOp
@@ -321,9 +319,67 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                           y,       elemSize,     tileWidth,     tileHeight,
                           vBlocks, useTranspose, vnniTransform, cache,
                           storeVal};
-  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+}
 
-  return callOp;
+static LLVM::CallOp
+createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
+                            ConversionPatternRewriter &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  MLIRContext *context = rewriter.getContext();
+  Location loc = op->getLoc();
+
+  Value ptr = op.getPtr();
+  Value baseWidth = op.getBaseWidth();
+  Value baseHeight = op.getBaseHeight();
+  Value basePitch = op.getBasePitch();
+  Value x = op.getX();
+  Value y = op.getY();
+
+  const StringLiteral funcName = "llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid";
+  IntegerType int1Ty = rewriter.getIntegerType(1);
+  IntegerType int32Ty = rewriter.getIntegerType(32);
+  IntegerType int64Ty = rewriter.getIntegerType(64);
+
+  // The IGC intrinsic requires the first argument be int64
+  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
+
+  SmallVector<Type> argTypes{int64Ty,
+                             baseWidth.getType(),
+                             baseHeight.getType(),
+                             x.getType(),
+                             y.getType(),
+                             int32Ty,
+                             int32Ty,
+                             int32Ty,
+                             int32Ty,
+                             int1Ty,
+                             int1Ty,
+                             int32Ty};
+
+  LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
+      moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(context));
+  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+  auto elemSize =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getElemSizeInBits());
+  auto tileWidth =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileWidth());
+  auto tileHeight =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileHeight());
+  auto vBlocks =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getVBlocks());
+  auto useTranspose =
+      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getTranspose());
+  auto vnniTransform =
+      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getVnniTransform());
+  auto cache = rewriter.create<LLVM::ConstantOp>(
+      loc, int32Ty, static_cast<int>(op.getCacheControl()));
+
+  SmallVector<Value> args{ptr,     baseWidth,    baseHeight,    x,
+                          y,       elemSize,     tileWidth,     tileHeight,
+                          vBlocks, useTranspose, vnniTransform, cache};
+  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
 namespace {
@@ -595,6 +651,20 @@ struct TritonMatrix2DBlockStoreLowering
   }
 };
 
+struct TritonMatrix2DBlockPrefetchLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::Matrix2DBlockPrefetchOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::Matrix2DBlockPrefetchOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM::CallOp callOp = createGenISA2DBlockPrefetch(op, rewriter);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -661,8 +731,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
            TritonGENGridDimYLowering, TritonGENGridDimZLowering,
            TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
            TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
-           TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering>(
-          converter);
+           TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+           TritonMatrix2DBlockPrefetchLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
