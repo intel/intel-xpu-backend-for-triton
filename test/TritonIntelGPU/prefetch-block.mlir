@@ -6,10 +6,10 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL: @matmul_kernel_with_block_pointers
     // CHECK-DAG:  [[CST_ZERO:%.*]] = arith.constant 0 : i32
-    // CHECK-DAG:  [[CST_32:%.*]] = arith.constant 32 : i32       
+    // CHECK-DAG:  [[CST_32:%.*]] = arith.constant 32 : i32
     // CHECK-DAG:  [[CST_4096:%.*]] = arith.constant 4096 : i32
 
-    // COM: Prefetch the 1st operand of the `tl.dot` operation 3 iterations in advance 
+    // COM: Prefetch the 1st operand of the `tl.dot` operation 3 iterations in advance
     // CHECK:      [[A0:%.*]] = tt.make_tensor_ptr %arg0, {{.*}} : <tensor<256x32xf16, #blocked1>, 1>
     // CHECK-NEXT: triton_intel_gpu.prefetch [[A0]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>, 1>
     // CHECK:      [[A1:%.*]] = tt.advance [[A0]], {{.*}} : <tensor<256x32xf16, #blocked1>, 1>
@@ -29,7 +29,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     // CHECK-NEXT: [[B3:%.*]] = tt.advance [[B2]], {{.*}} : <tensor<32x256xf16, #blocked2>, 1>
     // CHECK-NEXT: [[B4:%.*]] = tt.make_tensor_ptr %arg1, {{.*}} : <tensor<32x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>, 1>
 
-    // CHECK:      scf.for [[IV:%.*]] = [[CST_ZERO]] to [[CST_4096]] step [[CST_32]] 
+    // CHECK:      scf.for [[IV:%.*]] = [[CST_ZERO]] to [[CST_4096]] step [[CST_32]]
     // CHECK-SAME:      iter_args([[CST:%.*]] = {{.*}}, [[A6:%.*]] = [[A4]], [[B6:%.*]] = [[B4]], [[A5:%.*]] = [[A3]], [[B5:%.*]] = [[B3]])
     // CHECK-NEXT:   [[LD_A:%.*]] = tt.load [[A6]]
     // CHECK-NEXT:   [[LD_B:%.*]] = tt.load [[B6]]
@@ -40,7 +40,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     // CHECK:        triton_intel_gpu.prefetch [[B5]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>, 1>
     // CHECK-NEXT:   tt.advance [[B5]], {{.*}} : <tensor<32x256xf16, #blocked2>, 1>
     // CHECK-DAG:    tt.advance [[B6]], {{.*}} : <tensor<32x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>, 1>
-    // CHECK:        scf.yield 
+    // CHECK:        scf.yield
     // CHECK:      }
 
     %c64_i32 = arith.constant 64 : i32

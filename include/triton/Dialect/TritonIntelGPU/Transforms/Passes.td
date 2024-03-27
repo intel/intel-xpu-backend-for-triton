@@ -51,6 +51,7 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::gpu::GPUDialect"];
+  //TODO: add an option to configure prefetch stages in advance
 }
 
 #endif // TRITON_INTEL_GPU_PASSES

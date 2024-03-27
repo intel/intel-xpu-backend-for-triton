@@ -11,8 +11,8 @@
 /// This pass match certain pattern of scf.loop with tt.load and then add
 /// prefetch both in the loop preheader(3 stages in advance) and loop body.
 /// This pass only support cases with block pointer.
-/// This pass should be run after triton-to-tritongpu-warp.
-/// This pass also add layout Attr to newly created ops.
+/// This pass should be run after convert-triton-to-tritongpu-warp.
+/// This pass also add layout attribute to newly created ops.
 ///
 /// before this pass:
 ///  scf.for
@@ -52,7 +52,7 @@ namespace mlir {
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-namespace ttig = mlir::triton::gpu::intel;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 struct LoadInfo {
@@ -198,17 +198,17 @@ public:
           loc = ptr.getLoc();
           // prefetch 3 stages in advance
           auto load = loadInfo.load;
-          auto prefetch0 = b.create<ttig::PrefetchOp>(
+          auto prefetch0 = b.create<ttgi::PrefetchOp>(
               loc, ptr, load.getCache(), load.getEvict(), load.getIsVolatile());
           auto prePtr0 = b.create<tt::AdvanceOp>(loc, ptr.getType(), ptr,
                                                  loadInfo.offsets);
           auto prefetch1 =
-              b.create<ttig::PrefetchOp>(loc, prePtr0, load.getCache(),
+              b.create<ttgi::PrefetchOp>(loc, prePtr0, load.getCache(),
                                          load.getEvict(), load.getIsVolatile());
           auto prePtr1 = b.create<tt::AdvanceOp>(loc, ptr.getType(), prePtr0,
                                                  loadInfo.offsets);
           auto prefetch2 =
-              b.create<ttig::PrefetchOp>(loc, prePtr1, load.getCache(),
+              b.create<ttgi::PrefetchOp>(loc, prePtr1, load.getCache(),
                                          load.getEvict(), load.getIsVolatile());
           auto prePtr2 = b.create<tt::AdvanceOp>(loc, ptr.getType(), prePtr1,
                                                  loadInfo.offsets);
@@ -247,7 +247,7 @@ public:
           //   b.create<gpu::BarrierOp>(loc);
           b.setInsertionPoint(info.advance);
           loc = info.advance.getLoc();
-          auto prefetchInLoop = b.create<ttig::PrefetchOp>(
+          auto prefetchInLoop = b.create<ttgi::PrefetchOp>(
               loc, args[num + 1 + i], load.getCache(), load.getEvict(),
               load.getIsVolatile());
           auto advance =
