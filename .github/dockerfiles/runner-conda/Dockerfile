@@ -8,11 +8,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN set -ex; \
     apt-get update -y; \
     apt-get install -y --no-install-recommends --fix-missing \
-      build-essential \
-      zlib1g-dev \
+      gpg
       curl \
-      jq; \
-    rm -rf /var/lib/apt/lists/*
+      jq
 
 RUN set -ex; \
     echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy unified' > /etc/apt/sources.list.d/intel-gpu-jammy.list; \
