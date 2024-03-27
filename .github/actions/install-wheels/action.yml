@@ -33,8 +33,8 @@ runs:
         WORKFLOW_ID=$(gh run list -w "${{ inputs.workflow }}" -R ${{ inputs.repository }} --json databaseId | jq '.[0].databaseId')
         TEMP_DIR=`mktemp -d`
         pushd ${TEMP_DIR}
-        gh run download ${WORKFLOW_ID} -R ${{ inputs.repository }} --pattern "wheels-py${{ python_version }}*"
-        cd wheels-py${{ python_version }}*
+        gh run download ${WORKFLOW_ID} -R ${{ inputs.repository }} --pattern "wheels-py${{ inputs.python_version }}*"
+        cd wheels-py${{ inputs.python_version }}*
         ${{ inputs.install_cmd }} ${{ inputs.wheels_pattern }}
         popd
         rm -rf ${TEMP_DIR}
