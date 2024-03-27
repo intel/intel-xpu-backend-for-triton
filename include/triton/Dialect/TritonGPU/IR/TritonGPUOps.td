@@ -188,6 +188,20 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
   let assemblyFormat = [{$ptr attr-dict `:` qualified(type($ptr))}];
 }
 
+def TTG_AllocOp : TTG_Op<"alloc", [MemoryEffects<[MemAlloc]>  // Allocate shared memory
+                                                ]> {
+  let summary = "allocate tensor in memory, return the pointer";
+
+  let description = [{
+    This operation defines a tensor of a particular shape.
+    The contents of the tensor are supposed to be in shared memory.
+  }];
+
+  let assemblyFormat = [{attr-dict `:` type($result)}];
+
+  let results = (outs TT_Ptr:$result);
+}
+
 def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let summary = "take a subview of the descriptor.";
 
