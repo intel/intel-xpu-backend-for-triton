@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN set -ex; \
     apt-get update -y; \
     apt-get install -y --no-install-recommends --fix-missing \
-      gpg \
+      gpg ca-certificates \
       curl \
       jq
 
