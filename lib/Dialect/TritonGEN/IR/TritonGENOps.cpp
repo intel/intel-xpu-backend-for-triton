@@ -6,9 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/OpDefinition.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "llvm/ADT/STLExtras.h"
+#include <cstdint>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -17,28 +19,10 @@ using namespace mlir::triton;
 // Utility functions
 //===----------------------------------------------------------------------===//
 
-static std::optional<int> getConstantInt(Value v) {
-  Operation *op = v.getDefiningOp();
-  if (!op)
-    return std::nullopt;
-
-  if (!op->hasTrait<OpTrait::ConstantLike>())
-    return std::nullopt;
-
-  llvm::SmallVector<OpFoldResult> folded;
-  if (failed(op->fold({}, folded)) || folded.size() != 1)
-    return std::nullopt;
-
-  if (!folded.front().is<Attribute>() ||
-      !isa<IntegerAttr>(folded.front().get<Attribute>()))
-    return std::nullopt;
-
-  return cast<IntegerAttr>(folded.front().get<Attribute>()).getInt();
-}
-
 template <typename Op> static LogicalResult verifyInput(Op op) {
   static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
-                                TritonGEN::Matrix2DBlockStoreOp>::value,
+                                TritonGEN::Matrix2DBlockStoreOp,
+                                TritonGEN::Matrix2DBlockPrefetchOp>::value,
                 "Unexpected template parameter");
 
   if (op.getElemSizeInBits() != 8 && op.getElemSizeInBits() != 16 &&
@@ -49,8 +33,8 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
     return op->emitOpError(
         "transpose and vnni transform are mutually exclusive");
 
-  std::optional<int> width = getConstantInt(op.getBaseWidth());
-  std::optional<int> pitch = getConstantInt(op.getBasePitch());
+  std::optional<int64_t> width = getConstantIntValue(op.getBaseWidth());
+  std::optional<int64_t> pitch = getConstantIntValue(op.getBasePitch());
   if (pitch && width && *pitch < *width)
     return op->emitOpError(
         "4th operand (base pitch) should be >= 2nd operand (base width)");
@@ -193,11 +177,5 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
-  std::optional<int> width = getConstantInt(getBaseWidth());
-  std::optional<int> pitch = getConstantInt(getBasePitch());
-  if (pitch && width && *pitch < *width)
-    return emitOpError(
-        "4th operand (base pitch) should be >= 2nd operand (base width)");
-
-  return success();
+  return verifyInput(*this);
 }

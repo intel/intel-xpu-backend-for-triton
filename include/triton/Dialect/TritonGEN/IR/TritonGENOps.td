@@ -315,7 +315,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
     $ptr - the base address of the memory array
     $base_width, $base_height, $base_pitch - the shape of the memory array
     $x, $y, $tile_width, $tile_height - the starting offsets and shape of the submatrix to load
-    $elem_size_in_bits - 32 for f32, bf32; 16 for f16, int16, bf16; 8 for int8 etc...
+    $elem_size_in_bits - 32 for f32, bf32; 16 for f16, int16, bf16; 8 for int8, etc...
     $v_blocks - number of blocks to store
     $transpose - transpose the submatrix in vector register (useful for 32 bit element types)
     $vnni_transform - transpose and pack the submatrix in register (useful for < 32 bit element types)

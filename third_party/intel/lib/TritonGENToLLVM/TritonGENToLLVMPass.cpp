@@ -336,7 +336,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   Value x = op.getX();
   Value y = op.getY();
 
-  std::string funcName = "llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid";
+  const StringLiteral funcName = "llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid";
   IntegerType int1Ty = rewriter.getIntegerType(1);
   IntegerType int32Ty = rewriter.getIntegerType(32);
   IntegerType int64Ty = rewriter.getIntegerType(64);
