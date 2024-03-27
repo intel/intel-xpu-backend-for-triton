@@ -7,6 +7,7 @@
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <set>
 
@@ -914,6 +915,40 @@ emitOffsetForWmmaLayout(const AMDWmmaEncodingAttr &wmmaLayout,
   return offsets;
 }
 
+static void emitOffsetForDpasLayoutPerCTA(
+    const triton::gpu::intel::DpasEncodingAttr &dpasLayout,
+    SmallVector<SmallVector<unsigned>> &offsets, unsigned ctaOffsetX,
+    unsigned ctaOffsetY) {
+  SmallVector<unsigned> sizePerThreads = getSizePerThread(dpasLayout);
+  uint32_t elemsPerThreadPerGroup = product<unsigned>(sizePerThreads);
+  uint32_t rowsPerWarp =
+      dpasLayout.getSubGroupSize() / dpasLayout.getExecutionSize();
+  SmallVector<unsigned> shapePerCTA =
+      triton::gpu::getShapePerCTATile(dpasLayout);
+
+  for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
+    uint32_t elemRowIndex = (elem / sizePerThreads[1]) * rowsPerWarp;
+    uint32_t elemColIndex = elem % sizePerThreads[1];
+    offsets.push_back({ctaOffsetX + elemRowIndex, ctaOffsetY + elemColIndex});
+  }
+}
+
+static SmallVector<SmallVector<unsigned>>
+emitOffsetForDpasLayout(const triton::gpu::intel::DpasEncodingAttr &dpasLayout,
+                        RankedTensorType type) {
+  ArrayRef<int64_t> shape = type.getShape();
+  SmallVector<SmallVector<unsigned>> offsets;
+  SmallVector<unsigned> shapePerCTA = getShapePerCTATile(dpasLayout);
+
+  for (unsigned i = 0; i < shape[0]; i += shapePerCTA[0]) {
+    for (unsigned j = 0; j < shape[1]; j += shapePerCTA[1]) {
+      emitOffsetForDpasLayoutPerCTA(dpasLayout, offsets, i, j);
+    }
+  }
+
+  return offsets;
+}
+
 static SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type);
 
@@ -1033,6 +1068,10 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
       return emitOffsetForMmaLayoutV2(mmaLayout, type);
     if (mmaLayout.isHopper())
       return emitOffsetForMmaLayoutV3(mmaLayout, type);
+  }
+  if (auto dpasLayout =
+          layout.dyn_cast<triton::gpu::intel::DpasEncodingAttr>()) {
+    return emitOffsetForDpasLayout(dpasLayout, type);
   }
   if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
     return emitOffsetForMfmaLayout(mfmaLayout, type);
