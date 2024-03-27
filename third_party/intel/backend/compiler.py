@@ -45,20 +45,6 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
 
-    # device properties
-    # TODO: include triton required fields here, refer to https://registry.khronos.org/SYCL/specs/sycl-2020/html/sycl-2020.html#_device_information_descriptors
-    name: str = None
-    platform_name: str = None
-    vendor: str = None
-    driver_version: str = None
-    version: str = None
-    gpu_eu_count: int = None
-    gpu_subslice_count: int = None
-    max_work_group_size: int = None
-    max_num_sub_groups: int = None
-    sub_group_sizes: list = None
-    has_fp64: bool = None
-
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
@@ -89,12 +75,22 @@ class XPUBackend(BaseBackend):
         self.binary_ext = "spv"
 
     def _parse_target(self, tgt_prop) -> dict:
-        dev_prop = {k: tgt_prop[k] for k in XPUOptions.__dataclass_fields__.keys() if k in tgt_prop}
+        dev_prop = {}
+        dev_prop['name'] = tgt_prop.get('name', 'xpu')
+        dev_prop['platform_name'] = tgt_prop.get('platform_name', None)
+        dev_prop['vendor'] = tgt_prop.get('vendor', None)
+        dev_prop['driver_version'] = tgt_prop.get('driver_version', None)
+        dev_prop['version'] = tgt_prop.get('version', None)
+        dev_prop['gpu_eu_count'] = tgt_prop.get('gpu_eu_count', None)
+        dev_prop['gpu_subslice_count'] = tgt_prop.get('gpu_subslice_count', None)
+        dev_prop['max_work_group_size'] = tgt_prop.get('max_work_group_size', None)
+        dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
+        dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
+        dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
         return dev_prop
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
-        args.update(self.properties)
         args["allow_fp8e4nv"] = True
         return XPUOptions(**args)
 
