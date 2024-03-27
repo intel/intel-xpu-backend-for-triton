@@ -15,6 +15,9 @@ inputs:
   gh_token:
     description: GitHub token
     required: true
+  install_cmd:
+    description: The command used to install wheels
+    default: 'pip install'
 
 runs:
   using: "composite"
@@ -31,6 +34,6 @@ runs:
         pushd ${TEMP_DIR}
         gh run download ${WORKFLOW_ID} -R ${{ inputs.repository }} --pattern "wheels-py${PYTHON_VERSION}*"
         cd wheels-py${PYTHON_VERSION}*
-        pip install ${{ inputs.wheels_pattern }}
+        ${{ inputs.install_cmd }} ${{ inputs.wheels_pattern }}
         popd
         rm -rf ${TEMP_DIR}

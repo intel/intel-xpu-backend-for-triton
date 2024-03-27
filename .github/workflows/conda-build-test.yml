@@ -64,6 +64,12 @@ jobs:
           cd python
           conda run --no-capture-output -n triton pip install -e .
 
+      - name: Install latest nightly wheels
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          install_cmd: conda run --no-capture-output -n triton pip install
+
       - name: Run core tests
         run: |
           conda run --no-capture-output -n triton scripts/test-triton.sh
