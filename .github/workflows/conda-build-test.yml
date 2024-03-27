@@ -35,9 +35,6 @@ jobs:
       - name: Calculate env
         run: |
           echo $HOME/miniconda3/bin >>$GITHUB_PATH
-          which gh
-          gh --version
-          gh run download 8444044770 -R intel/intel-xpu-backend-for-triton --pattern 'wheels-py3.9*' #REMOVEME
 
       - name: Load conda cache
         id: conda-cache

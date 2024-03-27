@@ -93,8 +93,6 @@ jobs:
 
       - name: Get LLVM commit id
         run: |
-          which gh #REMOVEME
-          gh --version
           LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
           echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 

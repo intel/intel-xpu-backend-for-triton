@@ -11,7 +11,7 @@ on:
         options:
           - base
           - conda
-  push:
+#  push:
 
 permissions: read-all
 
