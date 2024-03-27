@@ -83,7 +83,8 @@ class XPUBackend(BaseBackend):
         super().__init__(target)
         assert isinstance(target[1], dict)
         # TODO: Deprecate capability in XPU compilation
-        self.capability = 80  # compute capability for A100
+        # capability should be < 80, because some features in passes with capability >= 80 are not supported on PVC
+        self.capability = intel.passes.ttgpuir.DEVICE_ARCH.PVC
         self.properties = self._parse_target(target[1])
         self.binary_ext = "spv"
 
@@ -138,18 +139,12 @@ class XPUBackend(BaseBackend):
             passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.common.add_cse(pm)
-        if capability // 10 >= 8:
-            passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, capability)
-        if capability // 10 <= 8:
-            passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if capability // 10 >= 9:
-            intel.passes.ttnvgpuir.add_fence_insertion(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
