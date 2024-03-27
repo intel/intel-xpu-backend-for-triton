@@ -29,15 +29,15 @@ RUN set -ex; \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m runner
+ENV HOME=/home/runner
 
 USER runner
 SHELL ["/bin/bash", "-xec"]
+WORKDIR $HOME
 
 COPY --from=installer /l_BaseKit*.sh $HOME/
 
 # TODO: install only necessary components
-
-WORKDIR $HOME
 
 RUN \
   /bin/sh l_BaseKit*.sh -a --silent --eula accept; \
