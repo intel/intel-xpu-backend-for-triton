@@ -42,8 +42,6 @@ jobs:
 
       - name: Run pre-commit checks
         run: |
-          which gh #REMOVEME
-          gh --version
           pip install --upgrade pre-commit
 
           # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
@@ -95,6 +93,8 @@ jobs:
 
       - name: Get LLVM commit id
         run: |
+          which gh #REMOVEME
+          gh --version
           LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
           echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
