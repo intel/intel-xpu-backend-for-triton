@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "5 2 * * *"
-#  push:
 
 permissions: read-all
 
@@ -24,7 +23,7 @@ jobs:
       matrix:
         python:
           - "3.9"
-#          - "3.10"
+          - "3.10"
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
