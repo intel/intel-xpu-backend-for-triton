@@ -25,7 +25,6 @@ RUN set -ex; \
       cmake \
       ninja-build \
       ncurses-term \
-      wget \
       pkg-config \
       \
       libpng-dev libjpeg-dev libsndfile1-dev libxml2-dev libxslt1-dev \
@@ -39,13 +38,18 @@ RUN set -ex; \
     rm -rf /var/lib/apt/lists/*
 
 USER runner
+WORKDIR $HOME
+
 SHELL ["/bin/bash", "-xec"]
 
 COPY --from=installer /l_BaseKit*.sh $HOME/
 
 # TODO: install only necessary components
-
 RUN \
-  cd $HOME; \
   /bin/sh l_BaseKit*.sh -a --silent --eula accept; \
   rm l_BaseKit*.sh
+
+RUN \
+  curl -sSLO https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh; \
+  sh Miniconda3-latest-Linux-x86_64.sh -b
+
