@@ -44,6 +44,7 @@ inline const std::set<std::string> ENV_VARS = {
     "TRITON_ENABLE_LLVM_DEBUG",
     "TRITON_INTEL_EMULATE_FP16_ATOMICS",
     "INTEL_ENABLE_BLOCK_PTR",
+    "FROM_LLVM",
 };
 
 namespace tools {

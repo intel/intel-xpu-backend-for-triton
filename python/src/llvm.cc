@@ -230,6 +230,11 @@ void init_triton_llvm(py::module &&m) {
   m.attr("OPTIMIZE_Os") = (llvm::OptimizationLevel::Os);
   m.attr("OPTIMIZE_Oz") = (llvm::OptimizationLevel::Oz);
 
+  m.def("parse_ir_file", [](std::string path, llvm::LLVMContext &ctx) {
+    llvm::SMDiagnostic err;
+    return llvm::parseIRFile(path, err, ctx);
+  });
+
   m.def(
       "to_module",
       [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {

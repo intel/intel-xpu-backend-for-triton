@@ -164,7 +164,9 @@ build_llvm() {
     -DLLVM_ENABLE_ASSERTIONS=true \
     -DLLVM_ENABLE_PROJECTS="mlir" \
     -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU" \
+    -DLLVM_INSTALL_UTILS=true \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DCMAKE_INSTALL_PREFIX=$PACKAGES_DIR/llvm \
     -DCMAKE_C_COMPILER=$C_COMPILER \
     -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
     $ADDITIONAL_FLAGS
@@ -200,7 +202,8 @@ build_triton() {
   echo "**** Configuring $TRITON_PROJ ****"
   cd $TRITON_PROJ
 
-  export LLVM_SYSPATH=$BASE/llvm-project/build
+  #export LLVM_SYSPATH=$BASE/llvm-project/build
+  export LLVM_SYSPATH=$PACKAGES_DIR/llvm
   export DEBUG=1
   if [ "$CCACHE" = true ]
   then

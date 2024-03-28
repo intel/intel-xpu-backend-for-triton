@@ -102,7 +102,8 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        passes.ttir.add_rewrite_tensor_pointer(pm)
+        if not os.environ.get("INTEL_ENABLE_BLOCK_PTR", ""):
+            passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_reorder_broadcast(pm)
@@ -122,6 +123,23 @@ class XPUBackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        if os.environ.get("INTEL_ENABLE_BLOCK_PTR", ""):
+            print("num_warps", opt.num_warps)
+            passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
+            passes.ttgpuir.add_prefetch_block(pm, opt.num_warps)
+            passes.ttgpuir.add_distribute_to_warps(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
+            passes.ttgpuir.add_match_target_size(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
+            passes.ttgpuir.add_prepare_genxlsc(pm)
+            passes.common.add_cse(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_symbol_dce(pm)
+            pm.run(mod)
+            metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
+            return mod
         passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.threads_per_warp, opt.num_ctas, capability)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
@@ -175,11 +193,18 @@ class XPUBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
+        print("first llvm module")
+        print(llvm_mod)
         llvm.set_spv_target_triple(llvm_mod)
         if options.extern_libs:
             for name, path in options.extern_libs:
                 llvm.link_extern_lib(llvm_mod, path)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        if os.environ.get("FROM_LLVM", ""):
+            llvm_mod = llvm.parse_ir_file(
+                "/home/gta/deweiwang/xpu2/intel-xpu-backend-for-triton/python/tutorials/input.ll", context)
+        print("second llvm module")
+        print(llvm_mod)
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
         ret = str(llvm_mod)

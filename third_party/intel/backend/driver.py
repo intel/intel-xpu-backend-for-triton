@@ -248,12 +248,19 @@ def make_launcher(constants, signature, ids):
     void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
     uint32_t num_params = sizeof(params)/sizeof(params[0]);
     uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
+    threads_per_warp = 16;
     size_t global_range_x = gridX*threads_per_warp*num_warps;
     size_t global_range_y = gridY;
     size_t global_range_z = gridZ;
     size_t local_range_x = num_warps*threads_per_warp;
     size_t local_range_y = 1;
     size_t local_range_z = 1;
+    std::cout<< "threads_per_warp"<< threads_per_warp << std::endl;
+    std::cout<< "num_warps"<< num_warps << std::endl;
+    std::cout<< "global_range_x"<< global_range_x << std::endl;
+    std::cout<< "global_range_y"<< global_range_y << std::endl;
+    std::cout<< "global_range_z"<< global_range_z << std::endl;
+    std::cout<< "local_range_x"<< local_range_x << std::endl;
     sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
     sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
     sycl::nd_range<3> parallel_work_size(global_range, local_range);
@@ -316,7 +323,7 @@ def make_launcher(constants, signature, ids):
 
       sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
       sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
-      int threads_per_warp = 32;
+      int threads_per_warp = 16;
       if (PyObject_HasAttrString(compiled_kernel, "threads_per_warp")) {{
         PyObject* _threads_per_warp = PyObject_GetAttrString(compiled_kernel, "threads_per_warp");
         if (PyLong_Check(_threads_per_warp))
