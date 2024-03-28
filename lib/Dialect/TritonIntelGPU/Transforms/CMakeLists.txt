@@ -1,5 +1,6 @@
 add_triton_library(TritonIntelGPUTransforms
   AccelerateMatmul.cpp
+  PrefetchBlock.cpp
   Utility.cpp
 
   DEPENDS
