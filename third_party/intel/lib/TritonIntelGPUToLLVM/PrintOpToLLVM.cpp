@@ -56,7 +56,7 @@ struct PrintOpConversion
         SmallVector<SmallVector<Value>> indices;
         if (auto rankedTy =
                 op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
-          indices = emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy,
+          indices = emitIndicesIntel(loc, rewriter, rankedTy.getEncoding(), rankedTy,
                                 true);
           for (int64_t dim : rankedTy.getShape()) {
             if (dim > 0) {

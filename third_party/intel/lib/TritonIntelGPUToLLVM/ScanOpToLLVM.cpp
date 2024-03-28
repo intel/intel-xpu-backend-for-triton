@@ -62,7 +62,7 @@ scanThreadContiguousElements(SmallVector<SmallVector<Value>> &srcValues,
   unsigned stride = helper.getAxisElementStride();
   SmallVector<SmallVector<Value>> accs(numChunks);
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
-    // Change this into emitOffsetForLayout?
+    // Change this into emitOffsetForLayoutIntel?
     unsigned accIndex = (srcIndex % stride) +
                         ((srcIndex / stride) / scanElementsPerThreads) * stride;
 

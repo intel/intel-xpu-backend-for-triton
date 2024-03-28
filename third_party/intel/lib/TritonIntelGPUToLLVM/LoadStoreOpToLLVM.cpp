@@ -32,7 +32,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
   Value mask = int_val(1, 1);
   auto tid = tid_val();
-  auto clusterCTAId = getClusterCTAId(rewriter, loc);
+  auto clusterCTAId = getClusterCTAIdIntel(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
     auto shape = tensorTy.getShape();

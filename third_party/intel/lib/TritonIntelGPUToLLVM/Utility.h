@@ -9,17 +9,8 @@
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 
-#undef sub
-#define sub(...) rewriter.create<LLVM::SubOp>(loc, __VA_ARGS__)
 #undef store
 #define store(...) rewriter.create<LLVM::StoreOp>(loc, __VA_ARGS__)
-#undef load_dsmem
-#define load_dsmem(...) LLVM::utils::createLoadDSmem(loc, rewriter, __VA_ARGS__)
-#undef store_dsmem
-#define store_dsmem(...) LLVM::utils::createStoreDSmem(loc, rewriter, __VA_ARGS__)
-
-#undef call
-#define call(...) rewriter.create<LLVM::CallOp>(loc, __VA_ARGS__)
 #undef addrspacecast
 #define addrspacecast(...)                                                     \
   rewriter.create<LLVM::AddrSpaceCastOp>(loc, __VA_ARGS__)
@@ -30,9 +21,9 @@
 
 namespace mlir {
 namespace triton {
-// namespace intel {
+namespace intel {
 
-// } // namespace intel
+} // namespace intel
 } // namespace triton
 
 namespace LLVM {
@@ -223,6 +214,10 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
+static Value getClusterCTAIdIntel(RewriterBase &rewriter, Location loc) {
+  // Clusters of thread blocks aren't supported.
+  return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+}
 // -----------------------------------------------------------------------
 // Shared memory utilities
 // -----------------------------------------------------------------------
@@ -334,6 +329,36 @@ emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
   return multiDimBase;
 }
 
+static SmallVector<Value> emitCTAOffsetForLayoutIntel(Location loc,
+                                                 RewriterBase &rewriter,
+                                                 Attribute layout,
+                                                 ArrayRef<int64_t> shape) {
+  unsigned rank = shape.size();
+  SmallVector<unsigned> CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
+  SmallVector<unsigned> CTASplitNum = triton::gpu::getCTASplitNum(layout);
+  SmallVector<unsigned> CTAOrder = triton::gpu::getCTAOrder(layout);
+  SmallVector<int64_t> shapePerCTA =
+      triton::gpu::getShapePerCTA(CTASplitNum, shape);
+
+  // Delinearize clusterCTAId
+  Value clusterCTAId = getClusterCTAIdIntel(rewriter, loc);
+  SmallVector<Value> multiDimClusterCTAId =
+      delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
+
+  // CTA Wrapping
+  for (unsigned i = 0; i < rank; ++i) {
+    // This wrapping rule must be consistent with getShapePerCTA
+    unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
+    multiDimClusterCTAId[i] = urem(multiDimClusterCTAId[i], i32_val(splitNum));
+  }
+
+  SmallVector<Value> CTAOffset(rank);
+  for (unsigned i = 0; i < rank; ++i)
+    CTAOffset[i] = mul(multiDimClusterCTAId[i], i32_val(shapePerCTA[i]));
+
+  return CTAOffset;
+}
+
 static SmallVector<Value>
 emitBaseIndexForLayoutIntel(Location loc, RewriterBase &rewriter, Attribute layout,
                        RankedTensorType type, bool withCTAOffset) {
@@ -368,7 +393,7 @@ emitBaseIndexForLayoutIntel(Location loc, RewriterBase &rewriter, Attribute layo
     llvm_unreachable("unsupported emitBaseIndexForLayoutIntel");
   }
   if (withCTAOffset) {
-    auto CTAOffset = emitCTAOffsetForLayout(loc, rewriter, layout, shape);
+    auto CTAOffset = emitCTAOffsetForLayoutIntel(loc, rewriter, layout, shape);
     assert(CTAOffset.size() == result.size() && "Rank mismatch");
     for (unsigned k = 0; k < result.size(); ++k)
       result[k] = add(result[k], CTAOffset[k]);

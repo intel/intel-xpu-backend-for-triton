@@ -147,10 +147,10 @@ private:
     RankedTensorType operandType = op.getInputTypes()[0];
     // Assumes offsets don't actually depend on type
     SmallVector<SmallVector<unsigned>> offset =
-        emitOffsetForLayout(helper.getSrcLayout(), operandType);
+        emitOffsetForLayoutIntel(helper.getSrcLayout(), operandType);
     unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
-    auto srcIndices = emitIndices(op.getLoc(), rewriter, helper.getSrcLayout(),
+    auto srcIndices = emitIndicesIntel(op.getLoc(), rewriter, helper.getSrcLayout(),
                                   operandType, true);
     // reduce within threads
     for (unsigned i = 0; i < srcElems; ++i) {
@@ -208,7 +208,7 @@ private:
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getTotalElemsPerThread(resultTy);
         SmallVector<SmallVector<unsigned>> resultOffset =
-            emitOffsetForLayout(resultLayout, resultTy);
+            emitOffsetForLayoutIntel(resultLayout, resultTy);
         SmallVector<Value> resultVals;
         for (int j = 0; j < resultElems; j++) {
           auto key = resultOffset[j];
@@ -405,7 +405,7 @@ private:
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getTotalElemsPerThread(resultTy);
         auto resultIndices =
-            emitIndices(loc, rewriter, resultLayout, resultTy, true);
+            emitIndicesIntel(loc, rewriter, resultLayout, resultTy, true);
         auto resultShape = resultTy.getShape();
         auto resultCTATile = getShapePerCTATile(resultLayout, resultShape);
         assert(resultIndices.size() == resultElems);
