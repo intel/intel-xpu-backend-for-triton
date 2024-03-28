@@ -500,6 +500,8 @@ bool isExpensiveLoadOrStore(Operation *op) {
   auto operandType = op->getOperand(0).getType();
   if (triton::isTensorPointerType(operandType))
     return true;
+  //  if (triton::isTensorPointerType(operandType))
+  //    return true;
   // Case 2a: A size 1 tensor is not expensive since all threads will load the
   // same
   if (isSingleValue(op->getOperand(0)))

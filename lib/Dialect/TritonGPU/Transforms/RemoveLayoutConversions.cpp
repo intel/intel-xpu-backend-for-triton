@@ -906,6 +906,8 @@ void backwardRematerialization(ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
   if (targetType.getEncoding().isa<DotOperandEncodingAttr>())
     return;
+  //  if (targetType.getEncoding().isa<DotOperandEncodingAttr>())
+  //    return;
 
   // 1. Take a backward slice of all the tensor dependencies that can be
   // rematerialized.

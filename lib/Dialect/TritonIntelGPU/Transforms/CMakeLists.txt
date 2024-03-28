@@ -1,5 +1,7 @@
 add_triton_library(TritonIntelGPUTransforms
   AccelerateMatmul.cpp
+  Pipeliner/MatmulLoopPipeline.cpp
+  Pipeliner/SoftwarePipeliner.cpp
   Utility.cpp
 
   DEPENDS
@@ -8,6 +10,7 @@ add_triton_library(TritonIntelGPUTransforms
   LINK_LIBS PUBLIC
   MLIRTransforms
   MLIRTransformUtils
+  MLIRSCFTransforms
   TritonAnalysis
   TritonIR
   TritonGPUIR

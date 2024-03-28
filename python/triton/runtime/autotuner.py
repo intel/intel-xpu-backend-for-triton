@@ -207,7 +207,7 @@ class Config:
                     function are args.
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, pre_hook=None):
+    def __init__(self, kwargs, num_warps=None, num_stages=2, num_ctas=1, pre_hook=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ctas = num_ctas

@@ -26,17 +26,17 @@ bool supportDPAS(DotOp op, DeviceArch arch) {
     return false;
   }
 
-  if (arch == DeviceArch::ATS && threadsPerWarp != 8) {
-    // Only support threadsPerWarp 8 for ATS now.
-    return false;
-  }
+  //  if (arch == DeviceArch::ATS && threadsPerWarp != 8) {
+  //    // Only support threadsPerWarp 8 for ATS now.
+  //    return false;
+  //  }
 
   DPASEngineType dpasType = getDPASType(op);
 
-  if (dpasType == DPASEngineType::FP32_FP32_TF32_TF32) {
-    // Only PVC support TF32.
-    return op.getAllowTF32() && arch == DeviceArch::PVC;
-  }
+  //  if (dpasType == DPASEngineType::FP32_FP32_TF32_TF32) {
+  //    // Only PVC support TF32.
+  //    return op.getAllowTF32() && arch == DeviceArch::PVC;
+  //  }
 
   return dpasType != DPASEngineType::NOT_APPLICABLE;
 }
