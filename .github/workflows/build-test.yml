@@ -61,9 +61,7 @@ jobs:
   integration-tests:
     name: Integration tests
     runs-on:
-      - glados
-      - spr
-      - runner-0.0.7
+      - max1550
     strategy:
       matrix:
         python:
