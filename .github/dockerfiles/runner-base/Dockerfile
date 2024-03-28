@@ -6,6 +6,9 @@ FROM summerwind/actions-runner:ubuntu-22.04
 
 USER root
 
+RUN \
+    curl https://repositories.intel.com/graphics/ubuntu/dists/jammy/unified/binary-amd64/Packages
+
 RUN set -ex; \
     export DEBIAN_FRONTEND=noninteractive; \
     echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy unified' > /etc/apt/sources.list.d/intel-gpu-jammy.list; \
