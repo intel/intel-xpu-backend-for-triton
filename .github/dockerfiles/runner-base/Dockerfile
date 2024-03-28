@@ -6,15 +6,13 @@ FROM summerwind/actions-runner:ubuntu-22.04
 
 USER root
 
-RUN \
-    curl https://repositories.intel.com/graphics/ubuntu/dists/jammy/unified/binary-amd64/Packages
-
 RUN set -ex; \
     export DEBIAN_FRONTEND=noninteractive; \
     echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu jammy unified' > /etc/apt/sources.list.d/intel-gpu-jammy.list; \
     curl -sSL https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor --output /usr/share/keyrings/intel-graphics.gpg; \
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list;\
     curl -sSL https://cli.github.com/packages/githubcli-archive-keyring.gpg > /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    apt-get clean; \
     apt-get update -y; \
     apt-get install -y --no-install-recommends --fix-missing \
       intel-opencl-icd \
