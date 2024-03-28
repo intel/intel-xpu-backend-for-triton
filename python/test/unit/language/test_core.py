@@ -2379,7 +2379,7 @@ def test_locality(op, BLOCK_N, N, num_pid_n, device):
     BLOCK_M = 32
     x = torch.randn((BLOCK_M, N), dtype=torch.float32, device=device)
     y = torch.randn((BLOCK_M, num_pid_n), dtype=torch.float32, device=device)
-    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N)
+    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N, num_warps=4)
     if not is_interpreter():
         assert h.asm['ttgir'].count(
             '"tt.reduce"') == 2, "tt.reduce should be called twice, otherwise the optimization didn't work"
