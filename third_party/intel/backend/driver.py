@@ -398,9 +398,10 @@ class XPUDriver(DriverBase):
         return torch.xpu.current_stream().sycl_queue
 
     def get_current_target(self):
+        import torch
         device = self.get_current_device()
-        device_arch = self.utils.get_device_properties(device)['device_arch']
-        return ("xpu", device_arch)
+        dev_property = torch.xpu.get_device_capability(device)
+        return ("xpu", dev_property)
 
     @staticmethod
     def is_active():

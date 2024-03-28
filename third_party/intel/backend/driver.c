@@ -118,12 +118,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   delete[] pMemoryProperties;
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}",
-                       "max_shared_mem", max_shared_mem, "multiprocessor_count",
-                       multiprocessor_count, "sm_clock_rate", sm_clock_rate,
-                       "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width, "device_arch", gpu_arch, "max_group_size",
-                       max_group_size, "subgroup_sizes", subgroup_sizes);
+  return Py_BuildValue(
+      "{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}", "max_shared_mem",
+      max_shared_mem, "multiprocessor_count", multiprocessor_count,
+      "sm_clock_rate", sm_clock_rate, "mem_clock_rate", mem_clock_rate,
+      "mem_bus_width", mem_bus_width, "device_arch", gpu_arch,
+      "max_work_group_size", max_group_size, "sub_group_sizes", subgroup_sizes);
 }
 
 /*Sycl code Start*/

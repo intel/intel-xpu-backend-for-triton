@@ -54,4 +54,23 @@ def TritonGEN_PrecisionTypeAttr : I32EnumAttr<"PrecisionType",
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
 
+/// Enum attribute of the different cache control settings for a prefetch operation.
+def TritonGEN_PrefetchCacheControl : I32EnumAttr<"PrefetchCacheControl",
+  "TritonGEN prefetch cache control",
+  [
+    I32EnumAttrCase<"DEFAULT",     0,  "Default">,
+    I32EnumAttrCase<"L1UC_L3UC",   1,  "L1UC_L3UC">,
+    I32EnumAttrCase<"L1UC_L3C",    2,  "L1UC_L3C">,
+    I32EnumAttrCase<"L1C_L3UC",    3,  "L1C_L3UC">,
+    I32EnumAttrCase<"L1C_L3C",     4,  "L1C_L3C">,
+    I32EnumAttrCase<"L1S_L3UC",    5,  "L1S_L3UC">,
+    I32EnumAttrCase<"L1S_L3C",     6,  "L1S_L3C">,
+    I32EnumAttrCase<"L1IAR_L3C",   7,  "L1IAR_L3C">,
+    I32EnumAttrCase<"L1UC_L3CC",   8,  "L1UC_L3CC">,
+    I32EnumAttrCase<"L1C_L3CC",    9,  "L1C_L3CC">,
+    I32EnumAttrCase<"L1IAR_L3IAR", 10, "L1IAR_L3IAR">
+  ]> {
+  let cppNamespace = "::mlir::triton::TritonGEN";
+}
+
 #endif // TRITONGEN_ATTRDEFS

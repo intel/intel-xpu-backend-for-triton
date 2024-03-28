@@ -150,6 +150,7 @@ jobs:
         uses: ./.github/actions/install-wheels
         with:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
+          python_version: ${{ env.PYTHON_VERSION }}
 
       - name: Identify pinned versions
         run: |
