@@ -122,11 +122,6 @@ if [ ! -v CXX_COMPILER ]; then
   echo "**** CXX_COMPILER is set to $CXX_COMPILER ****"
 fi
 
-if [ ! -d "$LLVM_PROJ_BUILD" ]
-then
-  mkdir $LLVM_PROJ_BUILD
-fi
-
 build_llvm() {
 
   # Clone the Intel LLVM repository (genx branch).
@@ -143,6 +138,11 @@ build_llvm() {
   then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DCMAKE_C_COMPILER_LAUNCHER=ccache"
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+  fi
+
+  if [ ! -d "$LLVM_PROJ_BUILD" ]
+  then
+    mkdir $LLVM_PROJ_BUILD
   fi
 
   cd $LLVM_PROJ_BUILD
