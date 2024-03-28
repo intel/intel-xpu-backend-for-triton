@@ -316,7 +316,7 @@ def make_launcher(constants, signature, ids):
 
       sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
       sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
-      int threads_per_warp = 32;
+      int threads_per_warp = 16;
       if (PyObject_HasAttrString(compiled_kernel, "threads_per_warp")) {{
         PyObject* _threads_per_warp = PyObject_GetAttrString(compiled_kernel, "threads_per_warp");
         if (PyLong_Check(_threads_per_warp))
