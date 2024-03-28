@@ -129,7 +129,7 @@ fi
 
 build_llvm() {
 
-  # Clone the LLVM repository (with GENX dialect).
+  # Clone the Intel LLVM repository (genx branch).
   if [ ! -d "$LLVM_PROJ" ]; then
     echo "**** Cloning $LLVM_PROJ ****"
     cd $BASE
