@@ -86,15 +86,13 @@ jobs:
     name: Test
     needs: matrix
     runs-on:
-      - glados
-      - spr
-      - runner-0.0.7
+      - max1550
     strategy:
       matrix:
         suite: ${{ fromJson(needs.matrix.outputs.suite) }}
         mode: ${{ fromJson(needs.matrix.outputs.mode) }}
         dtype: ${{ fromJson(needs.matrix.outputs.dtype) }}
-      max-parallel: 2
+      max-parallel: 4
       fail-fast: false
     timeout-minutes: 720
     defaults:
