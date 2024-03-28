@@ -18,7 +18,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - conda-0.0.1
+      - runner-0.0.8
     strategy:
       matrix:
         python:
