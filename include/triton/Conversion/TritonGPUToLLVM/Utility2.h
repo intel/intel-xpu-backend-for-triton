@@ -127,7 +127,6 @@ using namespace mlir::triton;
 // Attributes
 #define i32_arr_attr(...) rewriter.getI32ArrayAttr({__VA_ARGS__})
 #define i64_arr_attr(...) rewriter.getI64ArrayAttr({__VA_ARGS__})
-#endif
 
 namespace mlir {
 namespace triton {
@@ -222,6 +221,20 @@ Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
 SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
                                    Value addr, Value ctaId, unsigned vec,
                                    Type elemTy);
+
+/// Usage of macro store_dsmem
+/// (1) store_dsmem(addr, ctaId, value, pred)
+/// (2) store_dsmem(addr, ctaId, value)
+/// (3) store_dsmem(addr, ctaId, values, pred)
+/// (4) store_dsmem(addr, ctaId, values)
+void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
+                      Value ctaId, Value value, Value pred);
+void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
+                      Value ctaId, Value value);
+void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
+                      Value ctaId, ArrayRef<Value> values, Value pred);
+void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
+                      Value ctaId, ArrayRef<Value> values);
 
 /// Helper function to get strides from a given shape and its order
 SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
@@ -365,23 +378,21 @@ static Value getStackPointer(PatternRewriter &rewriter,
     return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
 
-//TODO: missing sub macro 
-
-// static Value getSharedMemoryBase(Location loc,
-//                                  ConversionPatternRewriter &rewriter,
-//                                  Operation *op) {
-//   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
-//   FunctionOpInterface func =
-//       op->template getParentOfType<FunctionOpInterface>();
-//   assert(op->hasAttr("allocation.offset"));
-//   size_t offset = op->getAttr("allocation.offset")
-//                       .cast<IntegerAttr>()
-//                       .getValue()
-//                       .getZExtValue();
-//   Value offVal = i32_val(offset);
-//   Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
-//   return base;
-// }
+static Value getSharedMemoryBase(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 Operation *op) {
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+  FunctionOpInterface func =
+      op->template getParentOfType<FunctionOpInterface>();
+  assert(op->hasAttr("allocation.offset"));
+  size_t offset = op->getAttr("allocation.offset")
+                      .cast<IntegerAttr>()
+                      .getValue()
+                      .getZExtValue();
+  Value offVal = i32_val(offset);
+  Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
+  return base;
+}
 } // namespace LLVM 
 
 /* ------------------------------------ */
@@ -407,8 +418,8 @@ static Value getClusterCTAId(RewriterBase &rewriter, Location loc) {
 // -----------------------------------------------------------------------
 // Shared memory utilities
 // -----------------------------------------------------------------------
-// using LLVM::getMultiDimIndex;
-// using LLVM::SharedMemoryObject;
+using LLVM::getMultiDimIndex;
+using LLVM::SharedMemoryObject;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
@@ -936,6 +947,12 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
   return resultOffsets;
 }
 
+//
+
+// -----------------------------------------------------------------------
+// Get offsets / indices for any layout
+// -----------------------------------------------------------------------
+
 static SmallVector<Value> emitCTAOffsetForLayout(Location loc,
                                                  RewriterBase &rewriter,
                                                  Attribute layout,
@@ -1238,13 +1255,21 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
       srcTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
   auto srcElemTy = srcTy.getElementType();
   auto dstElemTy = dstTy.getElementType();
+  LDBG("loadSharedToDistributed elemTy " << elemTy << " srcElemTy " << srcElemTy
+                                         << " dstElemTy " << dstElemTy);
   auto inOrd = triton::gpu::getOrder(srcSharedLayout);
   auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
   unsigned outVec = inOrd == outOrd
                         ? triton::gpu::getUniqueContigPerThread(
                               dstDistributedLayout, dstShape)[outOrd[0]]
                         : 1;
-  unsigned inVec = srcSharedLayout.getVec();
+
+  // If the shmem layout is not swizzled, we can trivially vectorize loads
+  // across the whole width of the most-minor dimension of the shape, because
+  // Triton requires all the dims are powers of 2.
+  unsigned inVec = srcSharedLayout.getMaxPhase() == 1
+                       ? srcTy.getShape()[inOrd[0]]
+                       : srcSharedLayout.getVec();
   unsigned minVec = std::min(outVec, inVec);
   unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
   SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
@@ -1257,14 +1282,13 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   unsigned numVecs = outElems / minVec;
   auto wordTy = vec_ty(elemTy, minVec);
   SmallVector<Value> outVals(outElems);
-  LDBG("loadSharedToDistributed: numVecs = " << numVecs << " minVec = "
-                                             << minVec << " " << wordTy);
   for (unsigned i = 0; i < numVecs; ++i) {
     Value smemAddr = sharedPtrs[i * minVec];
     smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
-    Value valVec = load(wordTy, smemAddr);
+    auto valVec = load(wordTy, smemAddr);
+    valVec.setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
     for (unsigned v = 0; v < minVec; ++v) {
-      Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
+      Value currVal = extract_element(elemTy, valVec, i32_val(v));
       outVals[i * minVec + v] = currVal;
     }
   }
@@ -1297,7 +1321,12 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                        ? triton::gpu::getUniqueContigPerThread(
                              srcDistributedLayout, srcShape)[inOrd[0]]
                        : 1;
-  unsigned outVec = dstSharedLayout.getVec();
+  // If the shmem layout is not swizzled, we can trivially vectorize stores
+  // across the whole width of the most-minor dimension of the shape, because
+  // Triton requires all the dims are powers of 2.
+  unsigned outVec = dstSharedLayout.getMaxPhase() == 1
+                        ? dstTy.getShape()[inOrd[0]]
+                        : dstSharedLayout.getVec();
   unsigned minVec = std::min(outVec, inVec);
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
   assert(numElems == srcIndices.size());
@@ -1320,7 +1349,8 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
     if (i % minVec == minVec - 1) {
       Value smemAddr = sharedPtrs[i / minVec * minVec];
       smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
-      store(word, smemAddr);
+      store(word, smemAddr)
+          .setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
     }
   }
 }
@@ -1384,6 +1414,8 @@ static Value packLLElements(Location loc,
           << v.value();
     }
     if (v.value().getType() != elementTypes[v.index()]) {
+      LDBG("type " << type << " structType " << structType);
+      LDBG("value " << v.value());
       emitError(loc) << "invalid element type in packLLEElements. Expected "
                      << elementTypes[v.index()] << " but got "
                      << v.value().getType();
@@ -1405,4 +1437,6 @@ static bool isLayoutMmaV1(Attribute layout) {
   return isMmaV1;
 }
 
-} //namespace mlir
+} // namespace mlir
+
+#endif
