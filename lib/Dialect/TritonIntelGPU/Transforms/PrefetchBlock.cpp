@@ -7,10 +7,9 @@
 //===----------------------------------------------------------------------===//
 /// \file
 /// This file implements a pass to add prefetch operations for targets that
-/// supports them. This pass looks for SCF loops containing a tt.dot operation
-/// and injects prefetch operations (for the operands of the dot operation)
-/// before the loop and in each loop iteration. Currently 3 stages are
-/// prefetched before the first loop iteration.
+/// supports them. This pass looks for SCF loops containing a tt.load operation
+/// and injects prefetch operations before the loop and in each loop iteration.
+/// Currently 3 stages are prefetched before the first loop iteration.
 ///
 /// Note: this pass add a layout attribute to the newly created prefetch
 /// operations.
@@ -23,7 +22,6 @@
 /// Example:
 ///   scf.for
 ///     tt.load
-///     tt.dot
 ///     tt.advance
 ///
 /// becomes:
@@ -32,7 +30,6 @@
 ///   tt.advance
 ///   scf.for
 ///     tt.load
-///     tt.dot
 ///     tt.advance
 ///     tt.prefetch
 ///     tt.advance
@@ -71,14 +68,15 @@ struct LoadInfo {
   tt::MakeTensorPtrOp blockPtr;
 };
 
-// TODO: add documentation of what this utility function does
-void expandDefChain(scf::ForOp loop, Value val, tt::MakeTensorPtrOp &blockPtr) {
+// find the defining makeTensorPtrOp of val
+void findDefiningPtr(scf::ForOp loop, Value val,
+                     tt::MakeTensorPtrOp &blockPtr) {
   Dialect *arithDialect = val.getContext()->getLoadedDialect("arith");
   Dialect *mathDialect = val.getContext()->getLoadedDialect("math");
 
   if (auto arg = dyn_cast<BlockArgument>(val)) {
     auto loopArg = loop.getInitArgs()[arg.getArgNumber() - 1];
-    expandDefChain(loop, loopArg, blockPtr);
+    findDefiningPtr(loop, loopArg, blockPtr);
     return;
   }
 
@@ -94,7 +92,7 @@ void expandDefChain(scf::ForOp loop, Value val, tt::MakeTensorPtrOp &blockPtr) {
   }
 }
 
-// TODO: add documentation of what this utility function does
+// annotate prefeth type with layout encoding
 Type annotatePrefetchType(Type type, unsigned numWarps) {
   auto ptrType = dyn_cast<tt::PointerType>(type);
 
@@ -114,7 +112,7 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
 
   // typical numWarps 4, 8, 16, 32, 64
   // naive way to get warp distribute
-  int64_t sizeX = n < 32ll ? n : 32ll; // elementtype
+  int64_t sizeX = n < 32 ? n : 32; // elementtype
   int64_t numWarpsX = n / sizeX;
   // auto root = std::sqrt(numWarps);
   // assert(n >= 16);
@@ -199,7 +197,7 @@ public:
 
           llvm::transform(rawOffsets, std::back_inserter(loadInfo.offsets),
                           [&](OpFoldResult ofr) { return cast<Value>(ofr); });
-          expandDefChain(loop, load.getPtr(), loadInfo.blockPtr);
+          findDefiningPtr(loop, load.getPtr(), loadInfo.blockPtr);
           if (!loadInfo.blockPtr)
             continue;
 
