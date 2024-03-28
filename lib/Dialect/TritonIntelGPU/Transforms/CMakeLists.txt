@@ -2,6 +2,7 @@ add_triton_library(TritonIntelGPUTransforms
   AccelerateMatmul.cpp
   MatchTargetSize.cpp
   PrefetchBlock.cpp
+  PrepareGenxLsc.cpp
   Utility.cpp
 
   DEPENDS
