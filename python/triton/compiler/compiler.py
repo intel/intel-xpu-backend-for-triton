@@ -258,9 +258,8 @@ def compile(src, target=None, options=None):
     backend.add_stages(stages, options)
     first_stage = list(stages.keys()).index(src.ext)
     # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
-    # FIXME: reapply the two lines below:
-    # if ir_source:
-    #     first_stage += 1
+    if ir_source:
+        first_stage += 1
     context = ir.context()
     ir.load_dialects(context)
     backend.load_dialects(context)

@@ -4733,9 +4733,12 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
         # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
         if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
             pytest.skip("Scratch buffer is too large")
-    if is_xpu() and M == 128 and N == 128 and interm_layout and (dst_layout.sz_per_thread == [1, 8]
-                                                                 or dst_layout.sz_per_thread == [4, 4]):
-        pytest.skip("FIXME: out of resource: shared memory")
+
+    # https://github.com/intel/intel-xpu-backend-for-triton/issues/729
+    if (is_xpu() and M == 128 and N == 128 and interm_layout and interm_layout.vec == 4 and interm_layout.per_phase == 2
+            and interm_layout.max_phase == 4 and dst_layout.sz_per_thread == [4, 1]
+            and src_layout.sz_per_thread == [4, 4]):
+        pytest.skip("FIXME: incorrect result on XPU")
 
     layouts = f"""
     #src = {src_layout}
