@@ -16,6 +16,9 @@ namespace triton {
 bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
                                   mlir::triton::PipeliningOption &options);
 
+bool preProcessLoopAndGetScheduleIntel(scf::ForOp &forOp, int numStages,
+                                       mlir::triton::PipeliningOption &options);
+
 /// Fills out pipelining options for an outer loop pipelining case. This
 /// schedules async copies to overlap with the epilogue of a loop.
 bool getOuterLoopSchedule(scf::ForOp &forOp, int numStages,

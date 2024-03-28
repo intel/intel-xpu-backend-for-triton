@@ -36,6 +36,10 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       },
       py::arg("pm"),
       py::arg("arch") = mlir::triton::gpu::intel::DeviceArch::UNKNOWN);
+  m.def("add_tritonintelgpu_pipe_line_pass",
+        [](mlir::PassManager &self, int numStages) {
+          self.addPass(mlir::createTritonIntelGPUPipelinePass(numStages));
+        });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
     pm.addPass(createIntelDecomposeUnsupportedConversionsPass());
   });

@@ -135,7 +135,7 @@ class XPUBackend(BaseBackend):
             passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.common.add_cse(pm)
-        passes.ttgpuir.add_prefetch(pm)
+        intel.passes.ttgpuir.add_tritonintelgpu_pipe_line_pass(pm, opt.num_stages, intel.passes.ttgpuir.DEVICE_ARCH.PVC)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)

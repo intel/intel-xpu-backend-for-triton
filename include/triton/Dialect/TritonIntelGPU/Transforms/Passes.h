@@ -30,6 +30,11 @@ std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass(
     triton::gpu::intel::DeviceArch arch =
         triton::gpu::intel::DeviceArch::UNKNOWN);
 
+std::unique_ptr<Pass>
+createTritonIntelGPUPipelinePass(int numStages = 2,
+                                 triton::gpu::intel::DeviceArch arch =
+                                     triton::gpu::intel::DeviceArch::UNKNOWN);
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
