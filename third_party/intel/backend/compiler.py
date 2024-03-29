@@ -203,3 +203,9 @@ class XPUBackend(BaseBackend):
     def hash(self):
         version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"])
         return f'{version}-{self.properties}'
+
+    def get_codegen_implementation(self):
+        from triton.language.extra.intel import convert_custom_float8
+        codegen_fns = dict()
+        codegen_fns["convert_custom_types"] = convert_custom_float8
+        return codegen_fns
