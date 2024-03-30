@@ -6,6 +6,11 @@
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 
+#define DEBUG_TYPE "ttgpu_to_llvm"
+
+using namespace mlir;
+using namespace mlir::triton;
+
 #undef store
 #define store(...) rewriter.create<LLVM::StoreOp>(loc, __VA_ARGS__)
 #undef addrspacecast
@@ -13,13 +18,13 @@
   rewriter.create<LLVM::AddrSpaceCastOp>(loc, __VA_ARGS__)
 
 // Constants
-#define f16_val(...) LLVM::utils::createConstantF16(loc, rewriter, __VA_ARGS__)
-#define i64_val(...) LLVM::utils::createConstantI64(loc, rewriter, __VA_ARGS__)
+#define f16_val(...) LLVM::Intel::createConstantF16(loc, rewriter, __VA_ARGS__)
+#define i64_val(...) LLVM::Intel::createConstantI64(loc, rewriter, __VA_ARGS__)
 
 namespace mlir {
 namespace LLVM {
-namespace utils {
-using namespace mlir::triton;
+
+namespace Intel {
 
 /// Create a predicated block, using \p cond as the condition and \p ops for the
 /// values supplied by the conditional branch to the exit block. The \p
@@ -127,7 +132,7 @@ static Value getSharedMemoryBase(Location loc,
                       .getZExtValue();
   Value offVal = i32_val(offset);
   Value base =
-      gep(ptrTy, i8_ty, LLVM::utils::getStackPointer(rewriter, func), offVal);
+      gep(ptrTy, i8_ty, LLVM::Intel::getStackPointer(rewriter, func), offVal);
   return base;
 }
 
@@ -137,18 +142,18 @@ Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
 
 void llPrintf(ConversionPatternRewriter &rewriter, Value msg, ValueRange args);
 
-} // namespace utils
-} // namespace LLVM
-
 static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
-static Value getClusterCTAIdIntel(RewriterBase &rewriter, Location loc) {
+static Value getClusterCTAId(RewriterBase &rewriter, Location loc) {
   // Clusters of thread blocks aren't supported.
   return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
 }
+} // namespace Intel
+} // namespace LLVM
+
 // -----------------------------------------------------------------------
 // Shared memory utilities
 // -----------------------------------------------------------------------
@@ -240,6 +245,7 @@ emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
 
 namespace triton {
 namespace intel {
+
 static SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
@@ -272,7 +278,7 @@ static SmallVector<Value> emitCTAOffsetForLayout(Location loc,
       triton::gpu::getShapePerCTA(CTASplitNum, shape);
 
   // Delinearize clusterCTAId
-  Value clusterCTAId = getClusterCTAIdIntel(rewriter, loc);
+  Value clusterCTAId = LLVM::Intel::getClusterCTAId(rewriter, loc);
   SmallVector<Value> multiDimClusterCTAId =
       delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
 
@@ -296,7 +302,7 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
   auto shape = type.getShape();
 
   SmallVector<Value> baseIndex;
-  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  RewriterBase::InsertionGuard guard(rewriter);
   SmallVector<Value> result;
   if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
     result = emitBaseIndexWithinCTAForBlockedLayout(loc, rewriter,
@@ -439,20 +445,23 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
   // cache for non-immediate offsets
   DenseMap<unsigned, Value> cacheCol, cacheRow;
   unsigned minVec = std::min(outVec, inVec);
+  Value strideRow = outOrder.size() >= 2 ? srcStrides[outOrder[1]] : i32_val(0);
+  Value strideCol = srcStrides[outOrder[0]];
+  LDBG("getSwizzledSharedPtrs: perPhase = "
+       << perPhase << " maxPhase = " << maxPhase << " minVec = " << minVec
+       << " inVec = " << inVec << " outVec = " << outVec << " strideRow "
+       << strideRow << " strideCol " << strideCol);
   for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
     Value offset = i32_val(0);
     // Extract multi dimensional index for current element
     auto idx = srcIndices[elemIdx];
     Value idxCol = idx[outOrder[0]]; // contiguous dimension
-    Value idxRow, strideRow;
+    Value idxRow;
     if (outOrder.size() >= 2) {
       idxRow = idx[outOrder[1]]; // discontiguous dimension
-      strideRow = srcStrides[outOrder[1]];
     } else {
       idxRow = i32_val(0);
-      strideRow = i32_val(0);
     }
-    Value strideCol = srcStrides[outOrder[0]];
     // compute phase = (row // perPhase) % maxPhase
     Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
     // extract dynamic/static offset for immediate offsetting
@@ -519,15 +528,13 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
   return ret;
 }
 
-// good
 static SmallVector<Value>
 loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
                         Value src, SharedMemoryObject smemObj, Type elemTy,
                         Location loc, ConversionPatternRewriter &rewriter) {
   auto dstTy = dst.getType().cast<RankedTensorType>();
   auto dstShape = dstTy.getShape();
-  assert(dstShape.size() <= 2 &&
-         "Unexpected rank of loadSharedToDistributedIntel");
+  assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
   auto srcTy = src.getType().cast<MemDescType>();
   auto dstDistributedLayout = dstTy.getEncoding();
   if (auto mmaLayout = dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
@@ -538,13 +545,21 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
       srcTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
   auto srcElemTy = srcTy.getElementType();
   auto dstElemTy = dstTy.getElementType();
+  LDBG("loadSharedToDistributed elemTy " << elemTy << " srcElemTy " << srcElemTy
+                                         << " dstElemTy " << dstElemTy);
   auto inOrd = triton::gpu::getOrder(srcSharedLayout);
   auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
   unsigned outVec = inOrd == outOrd
                         ? triton::gpu::getUniqueContigPerThread(
                               dstDistributedLayout, dstShape)[outOrd[0]]
                         : 1;
-  unsigned inVec = srcSharedLayout.getVec();
+
+  // If the shmem layout is not swizzled, we can trivially vectorize loads
+  // across the whole width of the most-minor dimension of the shape, because
+  // Triton requires all the dims are powers of 2.
+  unsigned inVec = srcSharedLayout.getMaxPhase() == 1
+                       ? srcTy.getShape()[inOrd[0]]
+                       : srcSharedLayout.getVec();
   unsigned minVec = std::min(outVec, inVec);
   unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
   SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
@@ -557,14 +572,13 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   unsigned numVecs = outElems / minVec;
   auto wordTy = vec_ty(elemTy, minVec);
   SmallVector<Value> outVals(outElems);
-  LDBG("loadSharedToDistributedIntel: numVecs = " << numVecs << " minVec = "
-                                                  << minVec << " " << wordTy);
   for (unsigned i = 0; i < numVecs; ++i) {
     Value smemAddr = sharedPtrs[i * minVec];
     smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
-    Value valVec = load(wordTy, smemAddr);
+    auto valVec = load(wordTy, smemAddr);
+    valVec.setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
     for (unsigned v = 0; v < minVec; ++v) {
-      Value currVal = extract_element(dstElemTy, valVec, i32_val(v));
+      Value currVal = extract_element(elemTy, valVec, i32_val(v));
       outVals[i * minVec + v] = currVal;
     }
   }

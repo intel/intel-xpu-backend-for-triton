@@ -9,9 +9,6 @@ using namespace mlir::triton;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
-using ::mlir::LLVM::utils::loadShared;
-using ::mlir::LLVM::utils::shflSync;
-using ::mlir::LLVM::utils::storeShared;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
@@ -258,7 +255,7 @@ private:
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = getModuleWarpSize(rewriter, loc);
+    Value warpSize = LLVM::Intel::getModuleWarpSize(rewriter, loc);
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
     auto srcLayout = helper.getSrcLayout();

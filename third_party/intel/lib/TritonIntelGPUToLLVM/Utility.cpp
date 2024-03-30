@@ -5,7 +5,7 @@
 using namespace mlir::triton;
 namespace mlir {
 namespace LLVM {
-namespace utils {
+namespace Intel {
 
 Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v) {
   auto i64ty = rewriter.getIntegerType(64);
@@ -17,75 +17,6 @@ Value createConstantF16(Location loc, OpBuilder &rewriter, float v) {
   auto type = type::f16Ty(rewriter.getContext());
   return rewriter.create<LLVM::ConstantOp>(loc, type,
                                            rewriter.getF16FloatAttr(v));
-}
-
-SharedMemoryObject
-getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
-                                ConversionPatternRewriter &rewriter) {
-  ArrayRef<Type> types =
-      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
-  SmallVector<Value> elems(types.size());
-  for (unsigned i = 0; i < types.size(); ++i) {
-    Type type = types[i];
-    elems[i] = extract_val(type, llvmStruct, i);
-  }
-
-  auto rank = (elems.size() - 1) / 2;
-  return {/*base=*/elems[0],
-          /*baseElemType=*/elemTy,
-          /*strides=*/{elems.begin() + 1, elems.begin() + 1 + rank},
-          /*offsets=*/{elems.begin() + 1 + rank, elems.end()}};
-}
-
-// Convert an \param linear to a multi-dim coordinate given \param shape and
-// \param order.
-SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
-                               Value linear, ArrayRef<unsigned> shape,
-                               ArrayRef<unsigned> order) {
-  unsigned rank = shape.size();
-  assert(rank == order.size());
-  auto reordered = applyPermutation(shape, order);
-  SmallVector<Value> reorderedMultiDim(rank);
-  if (auto constantOp = linear.getDefiningOp<arith::ConstantOp>()) {
-    unsigned intVal =
-        constantOp.getValue().cast<IntegerAttr>().getValue().getSExtValue();
-    reorderedMultiDim = delinearize(rewriter, loc, intVal, reordered);
-  } else {
-    reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
-  }
-  SmallVector<Value> multiDim(rank);
-  for (unsigned i = 0; i < rank; ++i) {
-    multiDim[order[i]] = reorderedMultiDim[i];
-  }
-  return multiDim;
-}
-
-SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
-                               unsigned linear, ArrayRef<unsigned> shape) {
-  unsigned rank = shape.size();
-  assert(rank > 0);
-  SmallVector<Value> multiDim(rank);
-  unsigned remained = linear;
-  for (auto &&en : llvm::enumerate(shape)) {
-    unsigned dimSize = en.value();
-    multiDim[en.index()] = i32_val(remained % dimSize);
-    remained = remained / dimSize;
-  }
-  return multiDim;
-}
-
-SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
-                               Value linear, ArrayRef<unsigned> shape) {
-  unsigned rank = shape.size();
-  assert(rank > 0);
-  SmallVector<Value> multiDim(rank);
-  Value remained = linear;
-  for (auto &&en : llvm::enumerate(shape)) {
-    Value dimSize = i32_val(en.value());
-    multiDim[en.index()] = urem(remained, dimSize);
-    remained = udiv(remained, dimSize);
-  }
-  return multiDim;
 }
 
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
@@ -268,13 +199,13 @@ Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
   assert(!msg.empty() && "printf with empty string not supported");
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');
-  Value msgValue = LLVM::utils::addStringToModule(
+  Value msgValue = addStringToModule(
       UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
       msgNewline, TritonGEN::TritonGENMemorySpace::kUniformConstant);
   llPrintf(rewriter, msgValue, args);
   return msgValue;
 }
 
-} // namespace utils
+} // namespace Intel
 } // namespace LLVM
 } // namespace mlir
