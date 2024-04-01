@@ -10,6 +10,7 @@ permissions: read-all
 env:
   BACKEND: XPU
   TRITON_DISABLE_LINE_INFO: 1
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
 
