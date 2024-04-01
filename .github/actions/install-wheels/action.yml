@@ -15,6 +15,11 @@ inputs:
   gh_token:
     description: GitHub token
     required: true
+  install_cmd:
+    description: The command used to install wheels
+    default: 'pip install'
+  python_version:
+    required: true
 
 runs:
   using: "composite"
@@ -26,11 +31,10 @@ runs:
       run: |
         set -x
         WORKFLOW_ID=$(gh run list -w "${{ inputs.workflow }}" -R ${{ inputs.repository }} --json databaseId | jq '.[0].databaseId')
-        PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
         TEMP_DIR=`mktemp -d`
         pushd ${TEMP_DIR}
-        gh run download ${WORKFLOW_ID} -R ${{ inputs.repository }} --pattern "wheels-py${PYTHON_VERSION}*"
-        cd wheels-py${PYTHON_VERSION}*
-        pip install ${{ inputs.wheels_pattern }}
+        gh run download ${WORKFLOW_ID} -R ${{ inputs.repository }} --pattern "wheels-py${{ inputs.python_version }}*"
+        cd wheels-py${{ inputs.python_version }}*
+        ${{ inputs.install_cmd }} ${{ inputs.wheels_pattern }}
         popd
         rm -rf ${TEMP_DIR}

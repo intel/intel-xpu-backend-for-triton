@@ -2,10 +2,9 @@
   <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
 </div>
 
-| **`Documentation`** | **`Nightly Wheels`** |
-|-------------------- | -------------------- |
-| [![Documentation](https://github.com/openai/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/openai/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/openai/triton/actions/workflows/wheels.yml) |
-
+[![Build and test](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/build-test.yml/badge.svg?branch=llvm-target)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/build-test.yml)
+[![Triton wheels](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml/badge.svg)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml)
+[![Conda test](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/conda-build-test.yml/badge.svg)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/conda-build-test.yml)
 
 # Triton
 
@@ -51,13 +50,17 @@ downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
-Find the version of LLVM that Triton builds against. Check cmake/llvm-hash.txt to
-see the current version. For example, if it says: 49af6502c6dcb4a7f7520178bd14df396f78240c
-checkout that version:
+1. Find the version of LLVM that Triton builds against.  Check
+`cmake/llvm-hash.txt` to see the current version. For example, if it says:
+       49af6502c6dcb4a7f7520178bd14df396f78240c
 
-1. `git checkout 49af6502c6dcb4a7f7520178bd14df396f78240c ` LLVM at https://github.com/llvm/llvm-project
+   This means that the version of Triton you have builds against
+   [LLVM](https://github.com/llvm/llvm-project) 49af6502.
 
-2. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
+2. `git checkout` LLVM at this revision.  Optionally, make additional
+   modifications to LLVM.
+
+3. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
 
        $ cd $HOME/llvm-project  # your clone of LLVM.
        $ mkdir build
@@ -65,9 +68,9 @@ checkout that version:
        $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON  ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm"
        $ ninja
 
-3. Grab a snack, this will take a while.
+4. Grab a snack, this will take a while.
 
-4. Build Triton as above, but set the following environment variables.
+5. Build Triton as above, but set the following environment variables.
 
        # Modify as appropriate to point to your LLVM build.
        $ export LLVM_BUILD_DIR=$HOME/llvm-project/build

@@ -83,6 +83,10 @@ class HIPBackend(BaseBackend):
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 
+    def get_codegen_implementation(self):
+        codegen_fns = dict()
+        return codegen_fns
+
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
 
@@ -221,5 +225,5 @@ class HIPBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([HIPBackend.path_to_rocm_lld(), "--version"])
+        version = subprocess.check_output([HIPBackend.path_to_rocm_lld(), "--version"], encoding='utf-8')
         return f'{version}-{self.target}'

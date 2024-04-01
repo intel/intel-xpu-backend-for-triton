@@ -41,7 +41,7 @@ class XPUOptions:
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     allow_fp8e4nv: bool = False
-    max_num_imprecise_acc_default: bool = None
+    max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
 
@@ -52,7 +52,7 @@ class XPUOptions:
             extern_libs['libdevice'] = str(default_libdir / 'libsycl-spir64-unknown-unknown.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
-               "num_warps must be a power of 2"
+            "num_warps must be a power of 2"
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -67,14 +67,31 @@ class XPUBackend(BaseBackend):
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        self.capability = target[1]
-        assert isinstance(self.capability, int)
+        assert isinstance(target[1], dict)
+        # TODO: Deprecate capability in XPU compilation
+        # capability should be < 80, because some features in passes with capability >= 80 are not supported on PVC
+        self.capability = intel.passes.ttgpuir.DEVICE_ARCH.PVC
+        self.properties = self._parse_target(target[1])
         self.binary_ext = "spv"
+
+    def _parse_target(self, tgt_prop) -> dict:
+        dev_prop = {}
+        dev_prop['name'] = tgt_prop.get('name', 'xpu')
+        dev_prop['platform_name'] = tgt_prop.get('platform_name', None)
+        dev_prop['vendor'] = tgt_prop.get('vendor', None)
+        dev_prop['driver_version'] = tgt_prop.get('driver_version', None)
+        dev_prop['version'] = tgt_prop.get('version', None)
+        dev_prop['gpu_eu_count'] = tgt_prop.get('gpu_eu_count', None)
+        dev_prop['gpu_subslice_count'] = tgt_prop.get('gpu_subslice_count', None)
+        dev_prop['max_work_group_size'] = tgt_prop.get('max_work_group_size', None)
+        dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
+        dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
+        dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
+        return dev_prop
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = True
-        args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return XPUOptions(**args)
 
     def load_dialects(self, ctx):
@@ -118,18 +135,13 @@ class XPUBackend(BaseBackend):
             passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.common.add_cse(pm)
-        if capability // 10 >= 8:
-            passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, capability)
-        if capability // 10 <= 8:
-            passes.ttgpuir.add_prefetch(pm)
+        passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if capability // 10 >= 9:
-            intel.passes.ttnvgpuir.add_fence_insertion(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
@@ -152,7 +164,6 @@ class XPUBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, capability)
-        intel.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -191,4 +202,10 @@ class XPUBackend(BaseBackend):
     @functools.lru_cache()
     def hash(self):
         version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"])
-        return f'{version}-{self.capability}'
+        return f'{version}-{self.properties}'
+
+    def get_codegen_implementation(self):
+        from triton.language.extra.intel import convert_custom_float8
+        codegen_fns = dict()
+        codegen_fns["convert_custom_types"] = convert_custom_float8
+        return codegen_fns

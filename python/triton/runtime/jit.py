@@ -36,6 +36,9 @@ class DependenciesFinder(ast.NodeVisitor):
         return self.hasher.hexdigest()
 
     def visit_Name(self, node):
+        if node.id in self.local_names:
+            # The global name is hidden by the local name.
+            return None
         return self.globals.get(node.id, None)
 
     def visit_Attribute(self, node):
@@ -76,6 +79,21 @@ class DependenciesFinder(ast.NodeVisitor):
 
             key = func_cache_key + noinline
             self.hasher.update(key.encode("utf-8"))
+
+    def visit_FunctionDef(self, node):
+        # Save the local name which may hide the global name.
+        self.local_names = [arg.arg for arg in node.args.args]
+        self.generic_visit(node)
+
+    def visit_Assign(self, node):
+        _names = []
+        for target in node.targets:
+            _names += [self.visit(target)]
+        if len(_names) == 1:
+            self.local_names += _names
+        else:
+            raise TypeError("Simultaneous multiple assignment is not supported.")
+        self.generic_visit(node)
 
 
 # -----------------------------------------------------------------------------
@@ -274,7 +292,6 @@ class JITFunction(KernelInterface[T]):
             "float8e4nv": "fp8e4nv",
             "float8e5": "fp8e5",
             "float8e4b15": "fp8e4b15",
-            "float8e4b15x4": "fp8e4b15x4",
             "float8_e4m3fn": "fp8e4nv",
             "float8e4b8": "fp8e4b8",
             "float8_e4m3fnuz": "fp8e4b8",
