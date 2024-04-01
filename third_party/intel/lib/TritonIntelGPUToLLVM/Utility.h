@@ -147,7 +147,7 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
-static Value getClusterCTAIdIntel(RewriterBase &rewriter, Location loc) {
+static Value getClusterCTAId(RewriterBase &rewriter, Location loc) {
   // Clusters of thread blocks aren't supported.
   return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
 }
@@ -528,15 +528,13 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
   return ret;
 }
 
-// good
 static SmallVector<Value>
 loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
                         Value src, SharedMemoryObject smemObj, Type elemTy,
                         Location loc, ConversionPatternRewriter &rewriter) {
   auto dstTy = dst.getType().cast<RankedTensorType>();
   auto dstShape = dstTy.getShape();
-  assert(dstShape.size() <= 2 &&
-         "Unexpected rank of loadSharedToDistributedIntel");
+  assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
   auto srcTy = src.getType().cast<MemDescType>();
   auto dstDistributedLayout = dstTy.getEncoding();
   if (auto mmaLayout = dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
@@ -574,8 +572,6 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   unsigned numVecs = outElems / minVec;
   auto wordTy = vec_ty(elemTy, minVec);
   SmallVector<Value> outVals(outElems);
-  LDBG("loadSharedToDistributedIntel: numVecs = " << numVecs << " minVec = "
-                                                  << minVec << " " << wordTy);
   for (unsigned i = 0; i < numVecs; ++i) {
     Value smemAddr = sharedPtrs[i * minVec];
     smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
