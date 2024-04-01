@@ -731,15 +731,12 @@ void init_triton_ir(py::module &&m) {
            })
       .def("get_fp8e4b15_ty",
            [](TritonOpBuilder &self) -> Type {
-             // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
-             // have a float-like type compatible with float only native ops
-             return self.getBuilder().getType<Float8E4M3B11FNUZType>();
+             return self.getBuilder().getI8Type();
            })
-      .def("get_fp8e4b15x4_ty",
+      .def("get_fp8e4m3b11fnuz_ty",
            [](TritonOpBuilder &self) -> Type {
-             // TODO: upstream FP8E4B15 into MLIR, or find a way to externally
-             // have a float-like type compatible with float only native ops
-             return self.getBuilder().getType<Float8E4M3FNType>();
+             // TODO: align with upstream code to use i8
+             return self.getBuilder().getType<Float8E4M3B11FNUZType>();
            })
       .def("get_fp8e5_ty",
            [](TritonOpBuilder &self) -> Type {

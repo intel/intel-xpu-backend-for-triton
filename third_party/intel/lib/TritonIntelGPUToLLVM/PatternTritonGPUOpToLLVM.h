@@ -45,6 +45,7 @@ void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     PatternBenefit benefit);
 void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
+                                  const TargetInfoBase &targetInfo,
                                   PatternBenefit benefit);
 
 void populateTensorPtrOpsToLLVMPatterns(
