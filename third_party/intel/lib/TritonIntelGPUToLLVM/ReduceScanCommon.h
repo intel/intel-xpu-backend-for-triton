@@ -22,8 +22,8 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::utils::delinearize;
-using ::mlir::LLVM::utils::SharedMemoryObject;
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -70,7 +70,7 @@ public:
     // Assign base index to each operand in their order in indices
     std::map<unsigned, Value> indexToBase;
     indexToBase[indices[0]] =
-        LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::Intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
       indexToBase[indices[i]] = gep(
           ptr_ty(rewriter.getContext(), 3), getElementType(op, indices[i - 1]),

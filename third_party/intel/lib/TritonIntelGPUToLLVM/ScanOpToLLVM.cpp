@@ -6,12 +6,12 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::utils::delinearize;
-using ::mlir::LLVM::utils::linearize;
-using ::mlir::LLVM::utils::shflIdxSync;
-using ::mlir::LLVM::utils::shflSync;
-using ::mlir::LLVM::utils::shflUpSync;
-using ::mlir::LLVM::utils::storeShared;
+using ::LLVM::Intel::shflIdxSync;
+using ::LLVM::Intel::shflSync;
+using ::LLVM::Intel::shflUpSync;
+using ::LLVM::Intel::storeShared;
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {

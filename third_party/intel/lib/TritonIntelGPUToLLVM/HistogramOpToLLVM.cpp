@@ -19,7 +19,7 @@ static Value generateVoteBallot(Location loc, Value bit, int threadMask,
   Value laneId = and_(threadId, i32_val(numThreadPerWarp - 1));
   Value reduced_val = shl(select(bit, i32_val(1), i32_val(0)), laneId);
   for (int offs = 1; offs < numThreadPerWarp; offs = offs << 1) {
-    Value other_val = LLVM::utils::shflSync(loc, rewriter, reduced_val, offs);
+    Value other_val = LLVM::Intel::shflSync(loc, rewriter, reduced_val, offs);
     reduced_val = or_(reduced_val, other_val);
   }
   return reduced_val;
@@ -186,13 +186,13 @@ public:
     // generate the right layout. Currently the warp level histogram generates
     // data in the default blocked layout.
     Value baseSharedMemPtr =
-        LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::Intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto dstType = op.getType();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     Attribute dstEncoding = dstType.getEncoding();
     auto indices =
-        emitIndices(op.getLoc(), rewriter, dstEncoding, dstType, true);
+        ::intel::emitIndices(op.getLoc(), rewriter, dstEncoding, dstType, true);
     SmallVector<Value> innerDimIndices;
     for (int i = 0; i < indices.size(); ++i)
       innerDimIndices.push_back(indices[i][0]);

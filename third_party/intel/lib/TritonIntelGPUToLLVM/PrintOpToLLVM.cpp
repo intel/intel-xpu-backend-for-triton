@@ -23,13 +23,13 @@ struct PrintOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto typeConverter = getTypeConverter();
     auto loc = op->getLoc();
-    Value prefixStr = LLVM::utils::addStringToModule(
+    Value prefixStr = LLVM::Intel::addStringToModule(
         loc, rewriter, "printfPrefix_", op.getPrefix(),
         TritonGEN::TritonGENMemorySpace::kUniformConstant);
 
     auto getPid = [&](int axis) {
-      return mlir::LLVM::utils::llGetPid(loc, rewriter,
-                                         op->getParentOfType<ModuleOp>(), axis);
+      return LLVM::Intel::llGetPid(loc, rewriter,
+                                   op->getParentOfType<ModuleOp>(), axis);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 
@@ -39,8 +39,8 @@ struct PrintOpConversion
       llvm::raw_string_ostream os(formatStr);
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
-      mlir::LLVM::utils::llPrintf(rewriter, formatStr,
-                                  {pid[0], pid[1], pid[2], prefixStr});
+      LLVM::Intel::llPrintf(rewriter, formatStr,
+                            {pid[0], pid[1], pid[2], prefixStr});
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         // Elements of the tensor that are resident in this GPU thread.
@@ -56,8 +56,8 @@ struct PrintOpConversion
         SmallVector<SmallVector<Value>> indices;
         if (auto rankedTy =
                 op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
-          indices = emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy,
-                                true);
+          indices = ::intel::emitIndices(loc, rewriter, rankedTy.getEncoding(),
+                                         rankedTy, true);
           for (int64_t dim : rankedTy.getShape()) {
             if (dim > 0) {
               dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
@@ -161,9 +161,9 @@ struct PrintOpConversion
       // strings, so we cache the Value.
       if (i == 0) {
         formatStrValue =
-            mlir::LLVM::utils::llPrintf(rewriter, formatStr, printfOperands);
+            LLVM::Intel::llPrintf(rewriter, formatStr, printfOperands);
       } else {
-        mlir::LLVM::utils::llPrintf(rewriter, formatStrValue, printfOperands);
+        LLVM::Intel::llPrintf(rewriter, formatStrValue, printfOperands);
       }
     }
   }
