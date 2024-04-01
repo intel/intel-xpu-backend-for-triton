@@ -587,7 +587,7 @@ struct TritonGENSubgroupIdLowering
                   ConversionPatternRewriter &rewriter) const override {
     auto retType = rewriter.getIntegerType(32);
     LLVM::CallOp callOp = createDeviceFunctionCall(
-        rewriter, "_Z25__spirv_BuiltInSubgroupIdv", retType, {}, {});
+        rewriter, "_Z16get_sub_group_idv", retType, {}, {});
     rewriter.replaceOp(op, callOp);
     return success();
   }
