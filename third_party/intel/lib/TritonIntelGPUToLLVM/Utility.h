@@ -247,24 +247,38 @@ namespace triton {
 namespace intel {
 
 static SmallVector<SmallVector<unsigned>>
-emitOffsetForLayout(Attribute layout, RankedTensorType type) {
-  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
-    return emitOffsetForBlockedLayout(blockedLayout, type);
-  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-    if (mmaLayout.isVolta())
-      return emitOffsetForMmaLayoutV1(mmaLayout, type);
-    if (mmaLayout.isAmpere())
-      return emitOffsetForMmaLayoutV2(mmaLayout, type);
-    if (mmaLayout.isHopper())
-      return emitOffsetForMmaLayoutV3(mmaLayout, type);
+emitOffsetForLayout(Attribute layout, RankedTensorType type);
+
+static SmallVector<SmallVector<unsigned>>
+emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
+                         RankedTensorType type) {
+  auto parentEncoding = sliceLayout.getParent();
+  unsigned dim = sliceLayout.getDim();
+  auto parentShape = sliceLayout.paddedShape(type.getShape());
+  RankedTensorType parentTy =
+      RankedTensorType::get(parentShape, type.getElementType(), parentEncoding);
+  auto parentOffsets = ::intel::emitOffsetForLayout(parentEncoding, parentTy);
+
+  unsigned numOffsets = parentOffsets.size();
+  SmallVector<SmallVector<unsigned>> resultOffsets;
+  std::set<SmallVector<unsigned>> uniqueOffsets;
+
+  for (unsigned i = 0; i < numOffsets; ++i) {
+    SmallVector<unsigned> offsets = parentOffsets[i];
+    offsets.erase(offsets.begin() + dim);
+    if (uniqueOffsets.find(offsets) == uniqueOffsets.end()) {
+      resultOffsets.push_back(offsets);
+      uniqueOffsets.insert(offsets);
+    }
   }
-  if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
-    return emitOffsetForDpasLayout(dpasLayout, type);
-  }
-  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
-    return emitOffsetForSliceLayout(sliceLayout, type);
-  llvm_unreachable("unsupported emitOffsetForLayout");
+  return resultOffsets;
 }
+
+//
+
+// -----------------------------------------------------------------------
+// Get offsets / indices for any layout
+// -----------------------------------------------------------------------
 
 static SmallVector<Value> emitCTAOffsetForLayout(Location loc,
                                                  RewriterBase &rewriter,
@@ -337,6 +351,32 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
       result[k] = add(result[k], CTAOffset[k]);
   }
   return result;
+}
+
+static SmallVector<SmallVector<unsigned>>
+emitOffsetForLayout(Attribute layout, RankedTensorType type) {
+  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
+    return emitOffsetForBlockedLayout(blockedLayout, type);
+  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+    if (mmaLayout.isVolta())
+      return emitOffsetForMmaLayoutV1(mmaLayout, type);
+    if (mmaLayout.isAmpere())
+      return emitOffsetForMmaLayoutV2(mmaLayout, type);
+    if (mmaLayout.isHopper())
+      return emitOffsetForMmaLayoutV3(mmaLayout, type);
+  }
+  if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+    return emitOffsetForMfmaLayout(mfmaLayout, type);
+  }
+  if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
+    return emitOffsetForWmmaLayout(wmmaLayout, type);
+  }
+  if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+    return emitOffsetForDpasLayout(dpasLayout, type);
+  }
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
+    return ::intel::emitOffsetForSliceLayout(sliceLayout, type);
+  llvm_unreachable("unsupported emitOffsetForLayout");
 }
 
 // Emit indices calculation within each ConversionPattern, and returns a
@@ -583,6 +623,66 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
     }
   }
   return outVals;
+}
+
+static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
+                                     ArrayRef<Value> dstStrides,
+                                     ArrayRef<SmallVector<Value>> srcIndices,
+                                     Value dst, Value smemBase, Type elemTy,
+                                     Location loc,
+                                     ConversionPatternRewriter &rewriter) {
+  auto srcTy = src.getType().cast<RankedTensorType>();
+  auto srcShape = srcTy.getShape();
+  auto rank = srcShape.size();
+  assert(rank == 2 ||
+         rank == 3 && "Unexpected rank of storeDistributedToShared");
+  auto dstTy = dst.getType().cast<MemDescType>();
+  auto srcDistributedLayout = srcTy.getEncoding();
+  if (auto mmaLayout = srcDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+    assert((!mmaLayout.isVolta()) &&
+           "ConvertLayout MMAv1->Shared is not supported yet");
+  }
+  auto dstSharedLayout =
+      dstTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+  auto dstElemTy = dstTy.getElementType();
+  auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
+  auto outOrd = dstSharedLayout.getOrder();
+  unsigned inVec = inOrd == outOrd
+                       ? triton::gpu::getUniqueContigPerThread(
+                             srcDistributedLayout, srcShape)[inOrd[0]]
+                       : 1;
+  // If the shmem layout is not swizzled, we can trivially vectorize stores
+  // across the whole width of the most-minor dimension of the shape, because
+  // Triton requires all the dims are powers of 2.
+  unsigned outVec = dstSharedLayout.getMaxPhase() == 1
+                        ? dstTy.getShape()[inOrd[0]]
+                        : dstSharedLayout.getVec();
+  unsigned minVec = std::min(outVec, inVec);
+  unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
+  assert(numElems == srcIndices.size());
+  auto wordTy = vec_ty(elemTy, minVec);
+  Value word;
+
+  SmallVector<Value, 3> srcStrides(dstStrides);
+  SmallVector<Value, 3> offsetVals(rank, i32_val(0));
+  SharedMemoryObject smemObj(smemBase, elemTy, srcStrides, offsetVals);
+
+  DenseMap<unsigned, Value> sharedPtrs =
+      ::intel::getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, elemTy,
+                                     smemObj, rewriter, offsetVals, srcStrides);
+  LDBG("storeDistributedToShared: numElems = " << numElems << " minVec = "
+                                               << minVec << " " << wordTy);
+  for (unsigned i = 0; i < numElems; ++i) {
+    if (i % minVec == 0)
+      word = undef(wordTy);
+    word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
+    if (i % minVec == minVec - 1) {
+      Value smemAddr = sharedPtrs[i / minVec * minVec];
+      smemAddr = bitcast(smemAddr, ptr_ty(rewriter.getContext(), 3));
+      store(word, smemAddr)
+          .setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
+    }
+  }
 }
 
 } // namespace intel
