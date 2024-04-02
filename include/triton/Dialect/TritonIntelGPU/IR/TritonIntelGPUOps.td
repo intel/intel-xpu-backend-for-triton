@@ -17,16 +17,17 @@ class TTIG_Op<string mnemonic, list<Trait> traits = []> :
 def TTIG_PrefetchOp : TTIG_Op<"prefetch",
                       [MemoryEffects<[MemWrite, MemRead]>
                                       ]> {
-    let summary = "prefetch from a tensor pointer";
+  let summary = "Prefetch from a tensor pointer";
 
-    let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
-                         TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
+  let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
+                       TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
 
-    let results = (outs);
+  let results = (outs);
 
-    let assemblyFormat = [{
-      $ptr attr-dict `:` type($ptr)
-    }];
+  let assemblyFormat = [{
+    $ptr attr-dict `:` type($ptr)
+  }];
+    
 }
 
 #endif

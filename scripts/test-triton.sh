@@ -60,11 +60,11 @@ export SCRIPTS_DIR=$(dirname "$0")
 python3 -m pip install lit
 python3 -m pip install pytest pytest-xdist pytest-rerunfailures
 
-#$SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
-#if [ $? -ne 0 ]; then
-#  echo "FAILED: return code $?"
-#  exit $?
-#fi
+$SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
+if [ $? -ne 0 ]; then
+  echo "FAILED: return code $?"
+  exit $?
+fi
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then

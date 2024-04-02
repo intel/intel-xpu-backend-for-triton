@@ -62,16 +62,12 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
-/// Number of iterations to prefetch in advance for each candidate load
-/// operation.
-constexpr unsigned numAdvancePrefetches = 3;
-
 #define DEBUG_TYPE "tritonintelgpu-prefetch-block"
 
 namespace {
 
-/// Returns true if \p val has a single user of the given \p tparam T and false
-/// otherwise.
+/// Returns true if \p val has a single user of the given type \p tparam T and
+/// false otherwise.
 template <typename T>
 bool hasSingleUserOfKindInLoop(Value val, LoopLikeOpInterface loopLike) {
   return llvm::count_if(val.getUsers(), [&](auto user) {
@@ -221,6 +217,8 @@ private:
 
 void PrefetchBlockPass::collectCandidatesLoadsInLoop(
     scf::ForOp loop, SmallVectorImpl<tt::LoadOp> &loopLoads) {
+  assert(loopLoads.empty() && "Expecting an emty vector");
+
   LLVM_DEBUG(llvm::dbgs() << "Attempting to collect candidate loads in loop:\n"
                           << loop << "\n\n");
 
@@ -234,27 +232,38 @@ void PrefetchBlockPass::collectCandidatesLoadsInLoop(
     }
     return WalkResult::advance();
   });
+
+  LLVM_DEBUG(llvm::dbgs() << "Collected " << loopLoads.size() << " loads\n");
 }
 
-/// Determines whether a load (in a loop) is a candidate. A candidate load
-/// must:
-///   - use a blocked pointer
-///   - have 2 users in the loop, a 'tt.advance' and a 'tt.dot' operation
+/// Determines whether a load (in a loop) is a candidate. A candidate load:
+///   - must use a block pointer
+///   - the block pointer must have 2 users in the loop, a 'tt.advance' and a
+///     the 'tt.load' operation
+///   - the result of the load must be used by a 'tt.dot' operation
 ///   - satisfy all conditions required in order to create a 'LoadInfo' object
 ///     for the load
 ///
-/// FIXME: we assume the loop is an immediate parent of load for now.
+/// FIXME: we assume the loop is an immediate parent of the load for now.
 bool PrefetchBlockPass::isCandidateLoad(tt::LoadOp load, scf::ForOp loop) {
   Value ptr = load.getPtr();
   if (!isa<tt::PointerType>(ptr.getType()) || !loop->isProperAncestor(load))
     return false;
 
-  unsigned numUsers = range_size(ptr.getUsers());
-  if (numUsers != 2)
+  unsigned numPtrUsers = range_size(ptr.getUsers());
+  if (numPtrUsers != 2)
     return false;
 
   if (!hasSingleUserOfKindInLoop<tt::AdvanceOp>(ptr, loop) ||
       !hasSingleUserOfKindInLoop<tt::LoadOp>(ptr, loop))
+    return false;
+
+  Value loadRes = load.getResult();
+  unsigned numLoadUsers = range_size(loadRes.getUsers());
+  if (numLoadUsers != 1)
+    return false;
+
+  if (!hasSingleUserOfKindInLoop<tt::DotOp>(loadRes, loop))
     return false;
 
   std::optional<LoadInfo> loadInfo = createLoadInfo(load, loop);
