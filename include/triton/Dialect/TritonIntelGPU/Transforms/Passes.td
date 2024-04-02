@@ -41,12 +41,12 @@ def TritonIntelGPUAccelerateMatmul
 def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::ModuleOp"> {
   let summary = "Prefetch a tensor block around loop";
   let description = [{
-    This pass injects prefetch operations for loads that 'feed' a tt.dot operation in a loop.
-    Prefetch operations are inserted in the loop preheader (n stages in advance) and in the 
-    loop body. 
+    This pass injects prefetch operations for loads that 'feed' a `tt.dot` operation in a loop.
+    Prefetch operations are inserted in the loop preheader (the number of iterations to prefetch
+    in advance is controlable by a pass option) and in the loop body.
     Notes:
       - only loads that use a block pointer are considered
-      - only targets that have a dedicated prefetch instruction are supported.
+      - only targets that have a dedicated prefetch instruction are supported
   }];
   let constructor = "mlir::triton::gpu::intel::createPrefetchBlockPass()";
   let dependentDialects = ["mlir::triton::TritonDialect",
