@@ -23,7 +23,7 @@ Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
 }
 Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
                               Value ptr, Value val, Value pred) const {
-  mlir::LLVM::utils::createPredicatedBlock(rewriter, loc, pred, [&] {
+  LLVM::Intel::createPredicatedBlock(rewriter, loc, pred, [&] {
     store(val, ptr);
     return ArrayRef<Value>();
   });
@@ -36,7 +36,7 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
              3 &&
          "Invalid addr space for loadShared");
   Value undef = undef(elemTy);
-  Block &endBlock = mlir::LLVM::utils::createPredicatedBlock(
+  Block &endBlock = LLVM::Intel::createPredicatedBlock(
       rewriter, loc, pred, SmallVector<Value, 1>{undef}, [&] {
         Value ret = load(elemTy, ptr);
         return SmallVector<Value, 1>{ret};
@@ -95,7 +95,7 @@ Value TargetInfo::shuffleUp(Location loc, ConversionPatternRewriter &rewriter,
 
 Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
                              Value val, int i) const {
-  return mlir::LLVM::utils::shflIdxSync(loc, rewriter, val, i32_val(i));
+  return LLVM::Intel::shflIdxSync(loc, rewriter, val, i32_val(i));
 }
 
 Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
@@ -106,7 +106,7 @@ Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
 
 Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
                             ModuleOp moduleOp, int axis) const {
-  return LLVM::utils::llGetPid(loc, rewriter, moduleOp, axis);
+  return LLVM::Intel::llGetPid(loc, rewriter, moduleOp, axis);
 }
 
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,

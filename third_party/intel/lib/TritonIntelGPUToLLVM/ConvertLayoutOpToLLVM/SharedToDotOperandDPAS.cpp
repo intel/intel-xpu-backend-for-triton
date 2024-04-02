@@ -309,7 +309,7 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   Value laneId = urem(threadId, warpSize);
 
   SmallVector<Value> multiDimWarpId =
-      mlir::LLVM::utils::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+      mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
   double ceilRes =
       ceil(static_cast<double>(shapePerCTA[opIdx]) / elemsPerInstr[opIdx]);

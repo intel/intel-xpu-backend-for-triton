@@ -172,7 +172,7 @@ public:
     a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
     DotOp newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                          newAcc, dotOp.getAllowTF32(),
+                                          newAcc, dotOp.getInputPrecision(),
                                           dotOp.getMaxNumImpreciseAcc());
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType,

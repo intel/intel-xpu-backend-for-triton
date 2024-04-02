@@ -35,7 +35,8 @@ bool supportDPAS(DotOp op, DeviceArch arch) {
 
   if (dpasType == DPASEngineType::FP32_FP32_TF32_TF32) {
     // Only PVC support TF32.
-    return op.getAllowTF32() && arch == DeviceArch::PVC;
+    return op.getInputPrecision() == InputPrecision::TF32 &&
+           arch == DeviceArch::PVC;
   }
 
   return dpasType != DPASEngineType::NOT_APPLICABLE;
@@ -70,7 +71,7 @@ DPASEngineType getDPASType(DotOp op) {
       if (aTy.getElementType().isBF16() && bTy.getElementType().isBF16())
         return DPASEngineType::FP32_FP32_BF16_BF16;
       if (aTy.getElementType().isF32() && bTy.getElementType().isF32() &&
-          op.getAllowTF32())
+          op.getInputPrecision() == InputPrecision::TF32)
         return DPASEngineType::FP32_FP32_TF32_TF32;
     } else if (dTy.getElementType().isF16()) {
       if (aTy.getElementType().isF16() && bTy.getElementType().isF16())

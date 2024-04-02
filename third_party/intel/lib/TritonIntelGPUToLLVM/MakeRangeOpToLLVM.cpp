@@ -25,7 +25,7 @@ struct MakeRangeOpConversion
     auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs = emitIndices(loc, rewriter, layout, ty, true);
+    auto idxs = ::intel::emitIndices(loc, rewriter, layout, ty, true);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.
