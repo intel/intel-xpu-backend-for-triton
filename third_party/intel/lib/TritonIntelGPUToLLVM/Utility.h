@@ -355,28 +355,12 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
 
 static SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
-  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>())
-    return emitOffsetForBlockedLayout(blockedLayout, type);
-  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-    if (mmaLayout.isVolta())
-      return emitOffsetForMmaLayoutV1(mmaLayout, type);
-    if (mmaLayout.isAmpere())
-      return emitOffsetForMmaLayoutV2(mmaLayout, type);
-    if (mmaLayout.isHopper())
-      return emitOffsetForMmaLayoutV3(mmaLayout, type);
-  }
-  if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
-    return emitOffsetForMfmaLayout(mfmaLayout, type);
-  }
-  if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
-    return emitOffsetForWmmaLayout(wmmaLayout, type);
-  }
   if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
     return emitOffsetForDpasLayout(dpasLayout, type);
   }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
     return ::intel::emitOffsetForSliceLayout(sliceLayout, type);
-  llvm_unreachable("unsupported emitOffsetForLayout");
+  return ::emitOffsetForLayout(layout, type);
 }
 
 // Emit indices calculation within each ConversionPattern, and returns a
