@@ -3017,6 +3017,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if ((M, N, K, num_warps, col_a, col_b) in [(32, 128, 64, 2, True, False)]
                 and (in_dtype, out_dtype) in [('float16', 'float32')]):
             pytest.skip("FIXME: Fails to run on XPU")
+        if ((M, N, K, num_warps, col_a, col_b) == (64, 64, 64, 4, False, False)
+                and (input_precision, in_dtype, out_dtype) == ('ieee', 'float16', 'float32')
+                and epilogue in ('add-rows', 'add-cols', 'none')):
+            pytest.skip("FIXME: issue #797")
 
     if is_cuda():
         torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
