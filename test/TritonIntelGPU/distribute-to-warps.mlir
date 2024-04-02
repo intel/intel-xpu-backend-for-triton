@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-distribute-to-warps -canonicalize -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-distribute-to-warps -canonicalize -cse | FileCheck %s
 
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
@@ -6,7 +6,7 @@
 #blockedA = #triton_gpu.dot_op<{opIdx = 0, parent = #blockedC}>
 #blockedB = #triton_gpu.dot_op<{opIdx = 1, parent = #blockedC}>
 
-//       CHECK: gpu.subgroup_id : index
+// CHECK: gpu.subgroup_id : index
 // in the loop body:
 // thread block works on 128x128xf32 = 128x32xf16 * 32x128xf16
 //    each warp works on   64x64xf32 =  64x32xf16 *  32x64xf16

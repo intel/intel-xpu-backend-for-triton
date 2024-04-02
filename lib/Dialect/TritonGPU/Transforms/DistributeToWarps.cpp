@@ -1,15 +1,26 @@
+//===- DistributeToWarps.cpp - Distribute block workload to warp -*-C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+// #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 #include <memory>
@@ -17,28 +28,33 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttgi = mlir::triton::gpu::intel;
+
 namespace {
-// pass named attrs (e.g., tt.contiguity) from Triton to Triton
-static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
+
+/// Add named attrs contained in \p dictAttrs to the given operation \p op.
+void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
   for (const NamedAttribute attr : dictAttrs.getValue())
     if (!op->hasAttr(attr.getName()))
       op->setAttr(attr.getName(), attr.getValue());
 }
 
-// fixme: maybe set sizePerWarp in the attr directly
-SmallVector<long> getSizePerWarp(RankedTensorType type, Attribute layout) {
+/// FIXME: maybe set sizePerWarp in the attr directly.
+SmallVector<int64_t> getSizePerWarp(RankedTensorType type, Attribute layout) {
   llvm::SmallVector<long> sizePerWarp;
   if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
-    auto sizePerThread = blockedLayout.getSizePerThread();
-    auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
+    const SmallVector<unsigned> &sizePerThread =
+        blockedLayout.getSizePerThread();
+    const SmallVector<unsigned> &threadsPerWarp =
+        blockedLayout.getThreadsPerWarp();
     for (auto [lhs, rhs] : llvm::zip(sizePerThread, threadsPerWarp)) {
       sizePerWarp.push_back(lhs * rhs);
     }
   } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    auto idx = dotLayout.getOpIdx();
+    int idx = dotLayout.getOpIdx();
     assert(isa<ttg::BlockedEncodingAttr>(dotLayout.getParent()) &&
            "at this stage, parent layout should be blocked layout.");
-    auto parentSizePerWarp = getSizePerWarp(
+    const SmallVector<int64_t> &parentSizePerWarp = getSizePerWarp(
         type, cast<ttg::BlockedEncodingAttr>(dotLayout.getParent()));
     if (idx == 0) { // dot operand A
       sizePerWarp.assign({parentSizePerWarp[0], type.getShape()[1]});
@@ -53,14 +69,14 @@ SmallVector<long> getSizePerWarp(RankedTensorType type, Attribute layout) {
 }
 
 Attribute getWarpLayout(Attribute layout) {
-  auto *ctx = layout.getContext();
+  MLIRContext *ctx = layout.getContext();
   if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     auto warpLayout = ttg::WarpEncodingAttr::get(
         ctx, blockedLayout.getSizePerThread(),
         blockedLayout.getThreadsPerWarp(), blockedLayout.getOrder());
     return warpLayout;
   } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    auto parentLayout = getWarpLayout(dotLayout.getParent());
+    Attribute parentLayout = getWarpLayout(dotLayout.getParent());
     auto newDotLayout = ttg::DotOperandEncodingAttr::get(
         ctx, dotLayout.getOpIdx(), parentLayout, dotLayout.getKWidth());
     return newDotLayout;
@@ -102,15 +118,15 @@ template <> tt::PointerType convertType<tt::PointerType>(tt::PointerType type) {
 SmallVector<Value> distributeOffset(SmallVector<Value> oldOffsets,
                                     RankedTensorType tensorType, Value warpId,
                                     OpBuilder b, Location loc) {
-  auto layout = tensorType.getEncoding();
-  auto warpsPerCTA = ttg::getWarpsPerCTA(layout);
-  auto dims = warpsPerCTA.size();
+  Attribute layout = tensorType.getEncoding();
+  const SmallVector<unsigned> &warpsPerCTA = ttg::getWarpsPerCTA(layout);
+  size_t dims = warpsPerCTA.size();
   assert(dims <= 2 && "no more than 2D shape");
   // same to the module attribute num-warps
-  auto numWarps = product<unsigned>(warpsPerCTA);
-  auto newTensorType = convertType(tensorType);
-  auto blockShape = tensorType.getShape();
-  auto warpShape = newTensorType.getShape();
+  unsigned numWarps = product<unsigned>(warpsPerCTA);
+  RankedTensorType newTensorType = convertType(tensorType);
+  ArrayRef<int64_t> blockShape = tensorType.getShape();
+  ArrayRef<int64_t> warpShape = newTensorType.getShape();
   SmallVector<unsigned> warpsPerDim;
   for (auto [lhs, rhs] : llvm::zip(blockShape, warpShape)) {
     if (lhs % rhs != 0)
@@ -119,7 +135,7 @@ SmallVector<Value> distributeOffset(SmallVector<Value> oldOffsets,
   }
   SmallVector<Value> newOffsets;
   for (auto i = 0; i < dims; i++) {
-    auto oldOffset = oldOffsets[i];
+    Value oldOffset = oldOffsets[i];
     Value warpIdPerDim;
     if (i == 1) { // warpId.x
       if (warpsPerCTA[dims - 1] == 1) {
@@ -144,6 +160,7 @@ SmallVector<Value> distributeOffset(SmallVector<Value> oldOffsets,
             b.create<arith::ConstantIntOp>(loc, warpsPerCTA[dims - 1], 32));
       }
     }
+
     Value step;
     if (warpsPerDim[i] == 1) {
       newOffsets.push_back(oldOffset);
@@ -155,18 +172,20 @@ SmallVector<Value> distributeOffset(SmallVector<Value> oldOffsets,
           loc, warpIdPerDim,
           b.create<arith::ConstantIntOp>(loc, warpsPerDim[i], 32));
     }
+
     auto inc = b.create<arith::MulIOp>(
         loc, step, b.create<arith::ConstantIntOp>(loc, warpShape[i], 32));
     auto newOffset = b.create<arith::AddIOp>(loc, inc, oldOffset);
     newOffsets.push_back(newOffset);
   }
+
   return newOffsets;
 }
 
 void distributeGenericOp(Operation *op) {
   OpBuilder b(op);
-  auto newOp = b.clone(*op);
-  for (auto result : newOp->getResults()) {
+  Operation *newOp = b.clone(*op);
+  for (OpResult result : newOp->getResults()) {
     if (auto castType = dyn_cast<RankedTensorType>(result.getType()))
       result.setType(convertType(castType));
     else if (auto castType = dyn_cast<tt::PointerType>(result.getType()))
@@ -181,42 +200,41 @@ void distributeArithConstantOp(arith::ConstantOp op) {
   auto type = dyn_cast<RankedTensorType>(op.getType());
   if (!type)
     return;
-  auto newType = convertType(type);
-  auto value = cast<DenseElementsAttr>(op.getValue());
-  value = value.resizeSplat(newType);
+
+  RankedTensorType newType = convertType(type);
+  auto value = cast<DenseElementsAttr>(op.getValue()).resizeSplat(newType);
   OpBuilder b(op);
   auto newOp = b.create<arith::ConstantOp>(op.getLoc(), newType, value);
   addNamedAttrs(newOp, op->getAttrDictionary());
   op->replaceAllUsesWith(newOp->getResults());
   op->erase();
-  return;
 }
 
 void distributeMakeTensorPtrOp(tt::MakeTensorPtrOp op, Value warpId) {
-  auto loc = op.getLoc();
+  Location loc = op.getLoc();
   tt::PointerType type = op.getType();
   OpBuilder b(op);
   auto tensorType = dyn_cast<RankedTensorType>(type.getPointeeType());
   if (!tensorType)
     return;
-  auto newOffsets =
+
+  SmallVector<Value> newOffsets =
       distributeOffset(op.getOffsets(), tensorType, warpId, b, loc);
-  auto newOp = b.clone(*op.getOperation());
-  auto newType = convertType(type);
+  Operation *newOp = b.clone(*op.getOperation());
+  tt::PointerType newType = convertType(type);
   auto newPtrOp = cast<tt::MakeTensorPtrOp>(newOp);
   newPtrOp.getOffsetsMutable().assign(newOffsets);
   newPtrOp.getResult().setType(newType);
   op->replaceAllUsesWith(newPtrOp->getResults());
   op->erase();
-  return;
 }
 
 void distributeConvertLayoutOp(ttg::ConvertLayoutOp op, Value warpId,
                                RankedTensorType oldSrcType) {
-  auto loc = op.getLoc();
+  Location loc = op.getLoc();
   OpBuilder b(op);
   auto dstType = cast<RankedTensorType>(op.getResult().getType());
-  auto convertedDstType = convertType(dstType);
+  RankedTensorType convertedDstType = convertType(dstType);
   auto dstPtrType = tt::PointerType::get(convertedDstType, 3 /* shared mem*/);
   auto srcPtrType =
       tt::PointerType::get(op.getSrc().getType(), 3 /* shared mem*/);
@@ -225,27 +243,33 @@ void distributeConvertLayoutOp(ttg::ConvertLayoutOp op, Value warpId,
   // fixme: set addrspace 1 instead of 3 to avoid makeTensorOp type match
   // error
   auto baseType = tt::PointerType::get(oldSrcType.getElementType(), 1);
-  auto base = b.create<ttg::AllocOp>(loc, baseType);
+  auto base = b.create<ttgi::AllocOp>(loc, baseType);
   SmallVector<Value> shape;
   shape.push_back(
       b.create<arith::ConstantIntOp>(loc, oldSrcType.getShape()[0], 64));
   shape.push_back(
       b.create<arith::ConstantIntOp>(loc, oldSrcType.getShape()[1], 64));
+
   SmallVector<Value> strides;
   strides.push_back(
       b.create<arith::ConstantIntOp>(loc, oldSrcType.getShape()[1], 64));
   strides.push_back(b.create<arith::ConstantIntOp>(loc, 1, 64));
+
   SmallVector<Value> offsets;
   offsets.push_back(b.create<arith::ConstantIntOp>(loc, 0, 32));
   offsets.push_back(b.create<arith::ConstantIntOp>(loc, 0, 32));
-  auto srcOffsets = distributeOffset(offsets, oldSrcType, warpId, b, loc);
+
+  SmallVector<Value> srcOffsets =
+      distributeOffset(offsets, oldSrcType, warpId, b, loc);
   Value storePtr =
       b.create<tt::MakeTensorPtrOp>(loc, srcPtrType, base, shape, strides,
                                     srcOffsets, b.getDenseI32ArrayAttr({1, 0}));
   b.create<tt::StoreOp>(loc, storePtr, op.getSrc(), tt::CacheModifier::NONE,
                         tt::EvictionPolicy::NORMAL);
   b.create<gpu::BarrierOp>(loc);
-  auto dstOffsets = distributeOffset(offsets, dstType, warpId, b, loc);
+
+  SmallVector<Value> dstOffsets =
+      distributeOffset(offsets, dstType, warpId, b, loc);
   Value loadPtr =
       b.create<tt::MakeTensorPtrOp>(loc, dstPtrType, base, shape, strides,
                                     dstOffsets, b.getDenseI32ArrayAttr({1, 0}));
@@ -253,45 +277,47 @@ void distributeConvertLayoutOp(ttg::ConvertLayoutOp op, Value warpId,
                                    tt::EvictionPolicy::NORMAL, false);
   op->replaceAllUsesWith(load->getResults());
   op->erase();
-  return;
 }
 
 void distributeScfForOp(scf::ForOp op) {
-  auto body = op.getBody();
+  Block *body = op.getBody();
   for (auto [lhs, rhs] :
        llvm::zip(body->getArguments().drop_front(1), op.getInitArgs()))
     lhs.setType(rhs.getType());
-  for (auto result : op->getResults()) {
+  for (OpResult result : op->getResults()) {
     if (auto castType = dyn_cast<RankedTensorType>(result.getType()))
       result.setType(convertType(castType));
     else if (auto castType = dyn_cast<tt::PointerType>(result.getType()))
       result.setType(convertType(castType));
   }
-  return;
 }
 
 } // namespace
 
 #define GEN_PASS_CLASSES
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
-class TritonGPUDistributeToWarpsPass
-    : public TritonGPUDistributeToWarpsBase<TritonGPUDistributeToWarpsPass> {
+class TritonIntelGPUDistributeToWarpsPass
+    : public TritonIntelGPUDistributeToWarpsBase<
+          TritonIntelGPUDistributeToWarpsPass> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
+
     for (auto func : m.getOps<tt::FuncOp>()) {
       auto b = OpBuilder::atBlockBegin(&func.getBody().front());
-      auto loc = func.getLoc();
+      Location loc = func.getLoc();
       auto subgroupId = b.create<gpu::SubgroupIdOp>(loc);
       auto warpId =
           b.create<arith::IndexCastOp>(loc, b.getI32Type(), subgroupId);
+
       // record old type before transform
       DenseMap<Operation *, RankedTensorType> typeMap;
       func.walk([&](ttg::ConvertLayoutOp op) {
         typeMap[op] = op.getSrc().getType().cast<RankedTensorType>();
       });
+
       func.walk<WalkOrder::PreOrder>([&](Operation *op) {
         if (llvm::all_of(op->getResultTypes(), [&](Type type) {
               return !isa<RankedTensorType>(type) &&
@@ -317,6 +343,6 @@ public:
 };
 
 std::unique_ptr<Pass>
-mlir::triton::gpu::createTritonGPUDistributeToWarpsPass() {
-  return std::make_unique<TritonGPUDistributeToWarpsPass>();
+mlir::triton::gpu::intel::createTritonIntelGPUDistributeToWarpsPass() {
+  return std::make_unique<TritonIntelGPUDistributeToWarpsPass>();
 }

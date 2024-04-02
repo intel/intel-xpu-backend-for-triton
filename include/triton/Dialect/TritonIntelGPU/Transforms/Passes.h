@@ -22,13 +22,15 @@ enum class DeviceArch {
   PVC,
 };
 
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-
 std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass(
     triton::gpu::intel::DeviceArch arch =
         triton::gpu::intel::DeviceArch::UNKNOWN);
+
+std::unique_ptr<Pass> createTritonIntelGPUDistributeToWarpsPass();
+
+} // namespace intel
+} // namespace gpu
+} // namespace triton
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION

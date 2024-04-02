@@ -2,7 +2,8 @@
 
 #warp = #triton_gpu.warp<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 #warp1 = #triton_gpu.warp<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
-//       CHECK: gpu.subgroup_id : index
+
+// CHECK: gpu.subgroup_id : index
 module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
   tt.func public @matmul_kernel_with_block_pointers_with_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
     %c64_i32 = arith.constant 64 : i32
@@ -47,7 +48,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %28:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %22, %arg12 = %27) -> (tensor<64x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #warp1>, 1>, !tt.ptr<tensor<32x32xf16, #warp1>, 1>)  : i32 {
       %40 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16, #warp1>, 1> -> tensor<32x32xf16, #warp1>
       %41 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16, #warp1>, 1> -> tensor<32x32xf16, #warp1>
-      %42 = triton_gpu.alloc : <f16, 1>
+      %42 = triton_intel_gpu.alloc : <f16, 1>
       %43 = tt.make_tensor_ptr %42, [%c128_i64, %c32_i64], [%c32_i64, %c1_i64], [%20, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #warp1>, 3>
       tt.store %43, %40 {cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<32x32xf16, #warp1>, 3>, tensor<32x32xf16, #warp1>
       gpu.barrier
@@ -56,7 +57,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %46 = arith.muli %45, %c64_i32 : i32
       %47 = tt.make_tensor_ptr %42, [%c128_i64, %c32_i64], [%c32_i64, %c1_i64], [%46, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 3>
       %48 = tt.load %47 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 3> -> tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>
-      %49 = triton_gpu.alloc : <f16, 1>
+      %49 = triton_intel_gpu.alloc : <f16, 1>
       %50 = tt.make_tensor_ptr %49, [%c32_i64, %c128_i64], [%c128_i64, %c1_i64], [%c0_i32, %20] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #warp1>, 3>
       tt.store %50, %41 {cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<32x32xf16, #warp1>, 3>, tensor<32x32xf16, #warp1>
       gpu.barrier
@@ -84,6 +85,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     tt.store %39, %29 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<64x64xf16, #warp>, 1>, tensor<64x64xf16, #warp>
     tt.return
   }
+  
   tt.func public @matmul_kernel_with_block_pointers_without_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
     %c64_i32 = arith.constant 64 : i32
     %c2_i32 = arith.constant 2 : i32

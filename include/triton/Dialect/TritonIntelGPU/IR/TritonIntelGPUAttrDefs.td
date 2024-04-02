@@ -90,5 +90,4 @@ along the row (resp. col) dimension.
   let genVerifyDecl = 1;
 }
 
-
 #endif
