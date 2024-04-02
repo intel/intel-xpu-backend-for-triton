@@ -202,4 +202,5 @@ class XPUBackend(BaseBackend):
     @functools.lru_cache()
     def hash(self):
         version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"])
-        return f'{version}-{self.properties}'
+        property_str = str(self.properties)
+        return f'{version}-{property_str}'
