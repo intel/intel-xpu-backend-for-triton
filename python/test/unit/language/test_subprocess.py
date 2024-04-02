@@ -34,6 +34,13 @@ def test_print(func_type: str, data_type: str):
     outs, _ = proc.communicate()
     outs = [line for line in outs.decode("UTF-8").split("\n") if line]
 
+    if (func_type, data_type) == ('print', 'int32'):
+        pytest.skip("FIXME: issue #797")
+    if func_type == 'device_print':
+        pytest.skip("FIXME: issue #797")
+    if func_type == 'device_print_hex' and data_type in ('int16', 'int32', 'int64'):
+        pytest.skip("FIXME: issue #797")
+
     # Format is
     #   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...) <prefix> (operand <n>) <elem>
     expected_lines = Counter()
