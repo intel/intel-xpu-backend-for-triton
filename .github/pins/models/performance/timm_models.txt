@@ -1,0 +1,6 @@
+beit_base_patch16_224
+fbnetv3_b
+gmixer_24_224
+mobilenetv3_large_100
+nfnet_l0
+tnt_s_patch16_224
