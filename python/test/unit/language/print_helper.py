@@ -80,15 +80,15 @@ def test_print(func: str, data_type: str):
     x = torch.arange(0, shape[0], dtype=torch.int32, device='xpu').to(getattr(torch, data_type))
     y = torch.zeros(shape, dtype=x.dtype, device="xpu")
     if func == "device_print":
-        kernel_device_print[(1, )](x, y, BLOCK=shape[0])
+        kernel_device_print[(1, )](x, y, BLOCK=shape[0], num_warps=4, threads_per_warp=32)
     elif func == "print":
-        kernel_print[(1, )](x, y, BLOCK=shape[0])
+        kernel_print[(1, )](x, y, BLOCK=shape[0], num_warps=4, threads_per_warp=32)
     elif func == "device_print_large":
-        kernel_device_print_large[(1, 2)](BLOCK_M=64, BLOCK_N=128)
+        kernel_device_print_large[(1, 2)](BLOCK_M=64, BLOCK_N=128, num_warps=4, threads_per_warp=32)
     elif func == "print_multiple_args":
-        kernel_print_multiple_args[(1, )](x, y, BLOCK=shape[0])
+        kernel_print_multiple_args[(1, )](x, y, BLOCK=shape[0], num_warps=4, threads_per_warp=32)
     elif func == "device_print_multiple_args":
-        kernel_device_print_multiple_args[(1, )](x, y, BLOCK=shape[0])
+        kernel_device_print_multiple_args[(1, )](x, y, BLOCK=shape[0], num_warps=4, threads_per_warp=32)
     elif func == "static_print":
         kernel_static_print[(1, )](x, y, BLOCK=shape[0], PLACEHOLDER=uuid.uuid4())
     elif func == "no_arg_print":
@@ -96,7 +96,7 @@ def test_print(func: str, data_type: str):
     elif func == "print_no_arg":
         kernel_print_no_arg[(1, )](num_warps=4, threads_per_warp=32)
     elif func == "device_print_hex":
-        kernel_device_print_hex[(1, )](x, y, BLOCK=shape[0], threads_per_warp=32)
+        kernel_device_print_hex[(1, )](x, y, BLOCK=shape[0], num_warps=4, threads_per_warp=32)
     else:
         assert f"Unknown kernel: {func}"
 
