@@ -2311,6 +2311,7 @@ scan_layouts = [
 # ---------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("M, N", [[2048, 2], [1024, 8], [1024, 128], [256, 512], [32, 512], [8, 512], [8, 2]])
 def test_histogram(M, N, device):
 
@@ -2329,7 +2330,10 @@ def test_histogram(M, N, device):
     if is_xpu():
         z_torch = torch.histc(x.to('cpu').to(torch.float32), bins=N, min=0, max=N - 1).to(torch.int32).to('xpu')
     else:
-        z_torch = torch.histc(x, bins=N, min=0, max=N - 1)
+        # torch.histc does not work when the input type is not float and the device is CPU
+        # https://github.com/pytorch/pytorch/issues/74236
+        # This is a workload by converting the input to float
+        z_torch = torch.histc(x.float(), bins=N, min=0, max=N - 1)
     histogram_kernel[(1, )](x, z, M=M, N=N)
     assert (z_torch == z).all()
 
@@ -2928,28 +2932,28 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
-    "M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype",
-    [(*shape, 4, False, False, epilogue, allow_tf32, in_dtype, out_dtype)
+    "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype",
+    [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype)
      for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
      for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
-     for allow_tf32 in [True, False]
+     for input_precision in ['tf32', 'tf32x3', 'ieee']
      for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
-     if not (allow_tf32 and (in_dtype in ['float16']))] +
-    [(*shape_nw, col_a, col_b, 'none', allow_tf32, in_dtype, out_dtype)
+     if not (input_precision != 'ieee' and (in_dtype in ['float16']))] +
+    [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype)
      for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
                       [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
-     for allow_tf32 in [True]
+     for input_precision in ["tf32"]
      for col_a in [True, False]
      for col_b in [True, False]
      for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
                                                                                                     'float32')]] +
-    [(64, 64, 64, 4, col_a, col_b, 'none', False, 'float32', 'float32')
+    [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32')
      for col_a in [True, False]
-     for col_b in [True, False]] + [(64, 64, 64, 4, False, False, 'chain-dot', False, 'bfloat16', 'float32')] +
-    [(128, 128, 64, 4, False, False, 'chain-dot', False, float8_type, 'float32')
+     for col_b in [True, False]] + [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32')] +
+    [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32')
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, out_dtype, num_ctas, device):
+def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, num_ctas, device):
     if is_hip():
         pytest.skip("Skipping test until we fix bug in amd backend (to use layout order)")
 
@@ -2977,6 +2981,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         pytest.xfail(
             "numpy.dot with int8 inputs will overflow while tl.dot doesn't because MMA instruction's accumulator is 32-bit"
         )
+    if is_hip() and (input_precision != "ieee"):
+        pytest.skip(f"{input_precision} not supported on HIP")
 
     if is_interpreter() and in_dtype in ['bfloat16', 'float8e5', 'float8e4nv']:
         pytest.skip("FIXME: triton.runtime.errors.InterpreterError")
@@ -3003,7 +3009,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             pytest.skip("FIXME: Fails to run on XPU")
 
     if is_cuda():
-        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
 
     if num_ctas > 1 and in_dtype == 'int8':
         # FIXME: mma v2 with num_ctas > 1 does not work
@@ -3013,7 +3019,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     @triton.jit
     def kernel(X, stride_xm, stride_xk, Y, stride_yk, stride_yn, W, stride_wn, stride_wl, Z, stride_zm, stride_zn,
                BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, ADD_MATRIX: tl.constexpr,
-               ADD_ROWS: tl.constexpr, ADD_COLS: tl.constexpr, ALLOW_TF32: tl.constexpr, DO_SOFTMAX: tl.constexpr,
+               ADD_ROWS: tl.constexpr, ADD_COLS: tl.constexpr, INPUT_PRECISION: tl.constexpr, DO_SOFTMAX: tl.constexpr,
                CHAIN_DOT: tl.constexpr, COL_A: tl.constexpr, COL_B: tl.constexpr, out_dtype: tl.constexpr = tl.float32):
         off_m = tl.arange(0, BLOCK_M)
         off_n = tl.arange(0, BLOCK_N)
@@ -3025,7 +3031,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
         Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
         x = tl.load(Xs)
         y = tl.load(Ys)
-        z = tl.dot(x, y, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
+        z = tl.dot(x, y, input_precision=INPUT_PRECISION, out_dtype=out_dtype)
         if ADD_MATRIX:
             z += tl.load(Zs)
         if ADD_ROWS:
@@ -3042,7 +3048,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             z = num / den[:, None]
         if CHAIN_DOT:
             w = tl.load(Ws)
-            z = tl.dot(z.to(w.dtype), w, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
+            z = tl.dot(z.to(w.dtype), w, input_precision=INPUT_PRECISION, out_dtype=out_dtype)
         tl.store(Zs, z)
 
     # input
@@ -3059,7 +3065,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
     if 'int' not in in_dtype and 'float8' not in in_dtype:
         x *= .1
         y *= .1
-    if in_dtype == 'float32' and allow_tf32:
+    if in_dtype == 'float32' and input_precision == "tf32":
         x = (x.view('uint32') & np.uint32(0xffffe000)).view('float32')
         y = (y.view('uint32') & np.uint32(0xffffe000)).view('float32')
         w = (w.view('uint32') & np.uint32(0xffffe000)).view('float32')
@@ -3090,10 +3096,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
                          w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), COL_A=col_a,
                          COL_B=col_b, BLOCK_M=M, BLOCK_K=K, BLOCK_N=N, ADD_MATRIX=epilogue == 'add-matrix',
                          ADD_ROWS=epilogue == 'add-rows', ADD_COLS=epilogue == 'add-cols',
-                         DO_SOFTMAX=epilogue == 'softmax', CHAIN_DOT=epilogue == 'chain-dot', ALLOW_TF32=allow_tf32,
-                         num_warps=num_warps, num_ctas=num_ctas, out_dtype=out_dtype)
+                         DO_SOFTMAX=epilogue == 'softmax', CHAIN_DOT=epilogue == 'chain-dot',
+                         INPUT_PRECISION=input_precision, num_warps=num_warps, num_ctas=num_ctas, out_dtype=out_dtype)
 
-    if epilogue == 'softmax' and (in_dtype != 'float32' or allow_tf32):
+    if epilogue == 'softmax' and (in_dtype != 'float32' or input_precision == "tf32"):
         if not is_cuda():
             pass
         else:
@@ -3152,7 +3158,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, allow_tf32, in_dtype, o
             assert 'st.global.v2' in ptx
         else:
             assert 'st.global.v4' in ptx
-    if in_dtype == 'float32' and allow_tf32:
+    if in_dtype == 'float32' and input_precision != "ieee":
         assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.tf32.tf32', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float32:
         if capability[0] == 7 and capability[1] == 5:  # Turing
@@ -3210,7 +3216,7 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
         BLOCK_K: tl.constexpr,
-        ALLOW_TF32: tl.constexpr,
+        INPUT_PRECISION: tl.constexpr,
         out_dtype: tl.constexpr = tl.float32,
     ):
         startm = tl.program_id(0) * BLOCK_M
@@ -3225,7 +3231,7 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
             None, None, :] * stride_kn
         q = tl.load(q_ptrs)
         k = tl.load(k_ptrs)
-        qk = tl.dot(q, k, allow_tf32=ALLOW_TF32, out_dtype=out_dtype)
+        qk = tl.dot(q, k, input_precision=INPUT_PRECISION, out_dtype=out_dtype)
         o_ptrs = o_ptr + offs_b[:, None, None] * stride_ob + offs_m[None, :, None] * stride_om + offs_n[
             None, None, :] * stride_on
         tl.store(o_ptrs, qk)
@@ -3274,7 +3280,7 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
-        ALLOW_TF32=bool(in_dtype_str == 'float32'),
+        INPUT_PRECISION="tf32" if in_dtype_str == 'float32' else "ieee",
         out_dtype=out_dtype,
         num_warps=num_warps,
     )
@@ -3497,20 +3503,15 @@ def test_const(device, choose_const, constexpr, mode):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 def test_dot_without_load(dtype_str, device):
-    if is_cuda():
-        capability = torch.cuda.get_device_capability()
-        allow_tf32 = capability[0] > 7
-    else:
-        allow_tf32 = True
 
     if is_interpreter() and dtype_str == "float16":
         pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
 
     @triton.jit
-    def _kernel(out, ALLOW_TF32: tl.constexpr):
+    def _kernel(out):
         a = GENERATE_TEST_HERE
         b = GENERATE_TEST_HERE
-        c = tl.dot(a, b, allow_tf32=ALLOW_TF32)
+        c = tl.dot(a, b)
         out_ptr = out + tl.arange(0, 32)[:, None] * 32 + tl.arange(0, 32)[None, :]
         tl.store(out_ptr, c)
 
@@ -3519,7 +3520,7 @@ def test_dot_without_load(dtype_str, device):
     b = torch.ones((32, 32), dtype=getattr(torch, dtype_str), device=device)
     out_ref = torch.matmul(a, b)
     out = torch.zeros((32, 32), dtype=getattr(torch, dtype_str), device=device)
-    kernel[(1, )](out, ALLOW_TF32=allow_tf32)
+    kernel[(1, )](out)
     assert torch.all(out == out_ref)
 
 
@@ -5006,13 +5007,18 @@ def matmul_kernel(  #
     tl.store(c_ptrs, accumulator)
 
 
-@pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv'])
+@pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_hip():
         pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
-
+    if device in ['cuda']:
+        cc = torch.cuda.get_device_capability()
+        if cc[0] >= 9 and in_type_str == "float8e4b15":
+            pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     check_type_supported(in_type_str, device)
+    if is_xpu() and in_type_str == "float8e4b15":
+        pytest.skip("FIXME: Fails to compile on XPU")
 
     if is_xpu():
         # FIXME: revisit problem size once tl.dot is lowered to DPAS.
