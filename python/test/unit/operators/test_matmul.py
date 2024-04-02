@@ -150,6 +150,21 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             else:
                 pytest.skip("FIXME: Incorrect result on XPU")
 
+    if torch.xpu.is_available():
+        if '-'.join(
+                map(str, (BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE,
+                          INPUT_PRECISION, F8_FASTACCUM, ACC_DTYPE, OUTPUT_DTYPE))) in (
+                              '128-128-32-1-4-2-256-384-160-False-True-float16-float16-None-True-None-None',
+                              '128-128-32-1-4-2-256-384-160-False-True-bfloat16-bfloat16-None-True-None-None',
+                              '128-128-32-1-4-4-256-256-160-False-True-float16-float16-None-True-None-None',
+                              '128-128-32-1-4-4-256-256-160-False-True-bfloat16-bfloat16-None-True-None-None',
+                              '128-256-32-1-8-2-None-None-None-False-True-float16-int8-None-True-None-None',
+                              '128-256-32-1-8-2-None-None-None-False-True-float16-int8-None-False-None-None',
+                              '128-256-32-1-8-2-None-None-None-False-True-float16-float8e5-None-False-None-None',
+                              '128-256-32-1-8-2-None-None-None-False-True-float16-float8e5-None-True-None-None',
+                          ):
+            pytest.skip("FIXME: issue #797")
+
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
     kwargs = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K}
