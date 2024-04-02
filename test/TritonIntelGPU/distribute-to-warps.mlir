@@ -47,7 +47,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       %29 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x128xf16, #blocked2>, 1> -> tensor<32x128xf16, #blocked2>
       %30 = triton_gpu.convert_layout %28 : tensor<128x32xf16, #blocked1> -> tensor<128x32xf16, #blockedA>
       %31 = triton_gpu.convert_layout %29 : tensor<32x128xf16, #blocked2> -> tensor<32x128xf16, #blockedB>
-      %32 = tt.dot %30, %31, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #blockedA> * tensor<32x128xf16, #blockedB> -> tensor<128x128xf32, #blockedC>
+      %32 = tt.dot %30, %31, %arg10 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #blockedA> * tensor<32x128xf16, #blockedB> -> tensor<128x128xf32, #blockedC>
       %33 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<128x32xf16, #blocked1>, 1>
       %34 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x128xf16, #blocked2>, 1>
       scf.yield %32, %33, %34 : tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blocked1>, 1>, !tt.ptr<tensor<32x128xf16, #blocked2>, 1>
@@ -93,7 +93,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %23:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %18, %arg12 = %22) -> (tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blockedA>, 1>, !tt.ptr<tensor<32x128xf16, #blockedB>, 1>)  : i32 {
       %28 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<128x32xf16, #blockedA>, 1> -> tensor<128x32xf16, #blockedA>
       %29 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x128xf16, #blockedB>, 1> -> tensor<32x128xf16, #blockedB>
-      %32 = tt.dot %28, %29, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #blockedA> * tensor<32x128xf16, #blockedB> -> tensor<128x128xf32, #blockedC>
+      %32 = tt.dot %28, %29, %arg10 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #blockedA> * tensor<32x128xf16, #blockedB> -> tensor<128x128xf32, #blockedC>
       %33 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<128x32xf16, #blockedA>, 1>
       %34 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x128xf16, #blockedB>, 1>
       scf.yield %32, %33, %34 : tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blockedA>, 1>, !tt.ptr<tensor<32x128xf16, #blockedB>, 1>

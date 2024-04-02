@@ -28,6 +28,8 @@ std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass(
 
 std::unique_ptr<Pass> createTritonIntelGPUDistributeToWarpsPass();
 
+std::unique_ptr<Pass> createPrefetchBlockPass();
+
 } // namespace intel
 } // namespace gpu
 } // namespace triton

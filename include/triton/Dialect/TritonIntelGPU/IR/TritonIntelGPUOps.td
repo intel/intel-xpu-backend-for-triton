@@ -22,13 +22,28 @@ def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
     Example:
 
     ```mlir
-    %0 = triton_intel_gpu.alloc() : tt.tensor<8x64xf32, 3>
+    %0 = triton_intel_gpu.alloc() : <8x64xf32, 3>
     ```
   }];
 
-  let assemblyFormat = [{attr-dict `:` type($result)}];
+  let assemblyFormat = [{
+    attr-dict `:` type($result)
+  }];
 
   let results = (outs TT_Ptr:$result);
+}
+
+def TTIG_PrefetchOp : TTIG_Op<"prefetch", []> {
+  let summary = "Prefetch from a tensor pointer";
+
+  let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
+                       TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
+
+  let results = (outs);
+
+  let assemblyFormat = [{
+    $ptr attr-dict `:` type($ptr)
+  }];
 }
 
 #endif
