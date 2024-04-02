@@ -40,7 +40,6 @@ RUN set -ex; \
       \
       gh \
     ; \
-    apt install -y --no-install-recommends --allow-downgrades --fix-missing libigc1=1.0.15136.24-775~22.04; \
     rm -rf /var/lib/apt/lists/*
 
 USER runner
