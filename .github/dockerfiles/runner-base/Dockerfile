@@ -22,6 +22,7 @@ RUN set -ex; \
       level-zero-dev=1.14.0-744~22.04 \
       intel-igc-cm=1.0.206-775~22.04 \
       libigfxcmrt-dev=23.4.0-775~22.04 \
+      libigfxcmrt7=23.4.0-775~22.04 \
       libigc1=1.0.15136.24-775~22.04 \
       libigc-dev=1.0.15136.24-775~22.04 \
       libigdfcl1=1.0.15136.24-775~22.04 \
