@@ -20,6 +20,7 @@ RUN set -ex; \
       intel-level-zero-gpu \
       level-zero \
       level-zero-dev libigc-dev intel-igc-cm libigdfcl-dev libigfxcmrt-dev \
+      libigc1=1.0.15136.24-775~22.04 \
       \
       build-essential \
       zlib1g-dev \
