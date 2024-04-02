@@ -22,6 +22,7 @@ add_triton_library(TritonIntelGPUToLLVM
     ClusterOpsToLLVM.cpp
     AllocateSharedMemory.cpp
     TargetInfo.cpp
+    ViewOpToLLVM.cpp
 
     DEPENDS
     TritonIntelGPUConversionPassIncGen
