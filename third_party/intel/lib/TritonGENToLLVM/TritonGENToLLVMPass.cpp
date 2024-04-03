@@ -67,6 +67,31 @@ static LLVM::CallOp createDeviceFunctionCall(
   return callOp;
 }
 
+static std::string getTypeMangling(Type ty) {
+  return TypeSwitch<Type, std::string>(ty)
+      .Case<VectorType>([&](auto ty) {
+        return "Dv" + std::to_string(ty.getNumElements()) + "_" +
+               getTypeMangling(ty.getElementType());
+      })
+      .Case<Float16Type>([&](auto) { return "Dh"; })
+      .Case<Float32Type>([&](auto) { return "f"; })
+      .Case<Float64Type>([&](auto) { return "d"; })
+      .Case<IntegerType>([&](auto ty) {
+        switch (ty.getWidth()) {
+        case 8:
+          return "c";
+        case 16:
+          return "s";
+        case 32:
+          return "i";
+        case 64:
+          return "l";
+        default:
+          llvm_unreachable("unhandled integer type");
+        }
+      });
+}
+
 static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
                                           Value value, Value mask,
                                           TritonGEN::ShflKind kind) {
@@ -89,31 +114,7 @@ static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
     fnName = "_Z17sub_group_shuffle";
     break;
   }
-
-  TypeSwitch<Type>(value.getType())
-      .Case<Float16Type>([&](auto) { fnName += "Dh"; })
-      .Case<Float32Type>([&](auto) { fnName += "f"; })
-      .Case<Float64Type>([&](auto) { fnName += "d"; })
-      .Case<IntegerType>([&](auto ty) {
-        switch (ty.getWidth()) {
-        case 8:
-          fnName += "c";
-          break;
-        case 16:
-          fnName += "s";
-          break;
-        case 32:
-          fnName += "i";
-          break;
-        case 64:
-          fnName += "l";
-          break;
-        default:
-          llvm_unreachable("unhandled integer type");
-        }
-      });
-
-  fnName += "j";
+  fnName += getTypeMangling(value.getType()) + "j";
 
   return createDeviceFunctionCall(rewriter, fnName, value.getType(),
                                   {value.getType(), mask.getType()},
@@ -179,6 +180,9 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
         stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
         std::to_string(8 /*systolic depth*/ *
                        getNumOperandsPerDword(precisionA));
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName +
+             getTypeMangling(aTy) + getTypeMangling(bTy) +
+             getTypeMangling(opTypes[0]);
     SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
     SmallVector<Value> args{a, b, op.getC()};
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
