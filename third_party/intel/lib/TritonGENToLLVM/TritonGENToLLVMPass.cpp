@@ -172,6 +172,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   if (bOrigTy != bTy)
     b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
 
+  // FIXME: Use the OpenCL API also for TF32.
   if (precisionA != TritonGEN::PrecisionType::TF32) {
     std::string fnName =
         "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
