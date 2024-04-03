@@ -120,6 +120,20 @@ static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
                                   {value, mask}, true /*convergent*/);
 }
 
+static unsigned getNumOperandsPerDword(TritonGEN::PrecisionType pTy) {
+  switch (pTy) {
+  case TritonGEN::PrecisionType::TF32:
+    return 1;
+  case TritonGEN::PrecisionType::BF16:
+  case TritonGEN::PrecisionType::FP16:
+    return 2;
+  case TritonGEN::PrecisionType::U8:
+  case TritonGEN::PrecisionType::S8:
+    return 4;
+  }
+  llvm_unreachable("unsupported TritonGEN::PrecisionType");
+}
+
 static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
                                      ConversionPatternRewriter &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -157,6 +171,18 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   VectorType bTy = VectorType::get(bitWidth / 32, int32Ty);
   if (bOrigTy != bTy)
     b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
+
+  if (precisionA != TritonGEN::PrecisionType::TF32) {
+    std::string fnName =
+        "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
+        stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
+        std::to_string(8 /*systolic depth*/ *
+                       getNumOperandsPerDword(precisionA));
+    SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
+    SmallVector<Value> args{a, b, op.getC()};
+    return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
+                                    true /*convergent*/);
+  }
 
   llvm::LLVMContext llvmContext;
   LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
