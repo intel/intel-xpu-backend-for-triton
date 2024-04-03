@@ -61,10 +61,6 @@ python3 -m pip install lit
 python3 -m pip install pytest pytest-xdist pytest-rerunfailures
 
 $SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
-if [ $? -ne 0 ]; then
-  echo "FAILED: return code $?"
-  exit $?
-fi
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then
@@ -82,9 +78,6 @@ run_unit_tests() {
   fi
   cd $UNIT_TEST_DIR
   ctest .
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 
   echo "***************************************************"
   echo "******       Running Triton LIT tests        ******"
@@ -94,9 +87,6 @@ run_unit_tests() {
     echo "Not found '${LIT_TEST_DIR}'. Build Triton please" ; exit 4
   fi
   lit -v "${LIT_TEST_DIR}"
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 }
 
 run_core_tests() {
@@ -110,36 +100,18 @@ run_core_tests() {
   cd ${CORE_TEST_DIR}
 
   TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu language/ --ignore=language/test_line_info.py
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu runtime/
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 
   TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 -m interpreter language/test_core.py language/test_standard.py --device cpu
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 
   TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 
   TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu operators/
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 }
 
 run_regression_tests() {
@@ -153,20 +125,13 @@ run_regression_tests() {
   cd ${REGRESSION_TEST_DIR}
 
   python3 -m pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 }
 
 run_tutorial_test() {
   echo
   echo "****** Running $1 test ******"
   echo
-  python $2
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
-
+  python $1.py
 }
 
 run_tutorial_tests() {
@@ -174,9 +139,6 @@ run_tutorial_tests() {
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
   python3 -m pip install matplotlib pandas tabulate -q
-  if [ $? -ne 0 ]; then
-    echo "FAILED: return code $?" ; exit $?
-  fi
 
   TUTORIAL_TEST_DIR=$TRITON_PROJ/python/tutorials
   if [ ! -d "${TUTORIAL_TEST_DIR}" ]; then
@@ -184,15 +146,15 @@ run_tutorial_tests() {
   fi
   cd $TUTORIAL_TEST_DIR
 
-  run_tutorial_test "01-vector-add" 01-vector-add.py
-  run_tutorial_test "02-fused-softmax" 02-fused-softmax.py
-  run_tutorial_test "03-matrix-multiplication" 03-matrix-multiplication.py
-  run_tutorial_test "04-low-memory-dropout" 04-low-memory-dropout.py
-  run_tutorial_test "05-layer-norm" 05-layer-norm.py
-  run_tutorial_test "06-fused-attention.py" 06-fused-attention.py
-  run_tutorial_test "07-extern-functions" 07-extern-functions.py
-  run_tutorial_test "08-grouped-gemm" 08-grouped-gemm.py
-  run_tutorial_test "09-experimental-block-pointer" 09-experimental-block-pointer.py
+  run_tutorial_test "01-vector-add"
+  run_tutorial_test "02-fused-softmax"
+  run_tutorial_test "03-matrix-multiplication"
+  run_tutorial_test "04-low-memory-dropout"
+  run_tutorial_test "05-layer-norm"
+  run_tutorial_test "06-fused-attention.py"
+  run_tutorial_test "07-extern-functions"
+  run_tutorial_test "08-grouped-gemm"
+  run_tutorial_test "09-experimental-block-pointer"
 }
 
 test_triton() {
