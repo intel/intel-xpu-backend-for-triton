@@ -6,23 +6,22 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Debug.h"
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
-#include "mlir/Support/LogicalResult.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
+
 #include "triton/Dialect/Triton/IR/Utility.h"
-// #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/Support/Debug.h"
+
 #include <memory>
 
 using namespace mlir;
@@ -30,6 +29,7 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
+#define DEBUG_TYPE "tritonintelgpu-distribute-to-warps"
 namespace {
 
 /// Add named attrs contained in \p dictAttrs to the given operation \p op.
@@ -308,9 +308,8 @@ public:
     for (auto func : m.getOps<tt::FuncOp>()) {
       auto b = OpBuilder::atBlockBegin(&func.getBody().front());
       Location loc = func.getLoc();
-      auto subgroupId = b.create<gpu::SubgroupIdOp>(loc);
-      auto warpId =
-          b.create<arith::IndexCastOp>(loc, b.getI32Type(), subgroupId);
+      auto warpId = b.create<arith::IndexCastOp>(
+          loc, b.getI32Type(), b.create<gpu::SubgroupIdOp>(loc));
 
       // record old type before transform
       DenseMap<Operation *, RankedTensorType> typeMap;
@@ -319,23 +318,31 @@ public:
       });
 
       func.walk<WalkOrder::PreOrder>([&](Operation *op) {
-        if (llvm::all_of(op->getResultTypes(), [&](Type type) {
+        if (llvm::all_of(op->getResultTypes(), [](Type type) {
               return !isa<RankedTensorType>(type) &&
                      !isa<tt::PointerType>(type);
             }))
-          ;
-        else if (auto forOp = dyn_cast<scf::ForOp>(op))
-          distributeScfForOp(forOp);
-        else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
-          distributeMakeTensorPtrOp(ptrOp, warpId);
-        else if (auto cstOp = dyn_cast<arith::ConstantOp>(op))
-          distributeArithConstantOp(cstOp);
-        else if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op))
-          distributeConvertLayoutOp(convertOp, warpId, typeMap[convertOp]);
-        else if (isa<tt::LoadOp, tt::DotOp, tt::AdvanceOp, arith::TruncFOp>(op))
-          distributeGenericOp(op);
-        else
-          assert(0 && "op not considered");
+          return WalkResult::advance();
+
+        TypeSwitch<Operation *>(op)
+            .Case([&](scf::ForOp forOp) { distributeScfForOp(forOp); })
+            .Case([&](tt::MakeTensorPtrOp ptrOp) {
+              distributeMakeTensorPtrOp(ptrOp, warpId);
+            })
+            .Case([&](ttg::ConvertLayoutOp convertOp) {
+              distributeConvertLayoutOp(convertOp, warpId, typeMap[convertOp]);
+            })
+            .Case([&](arith::ConstantOp cstOp) {
+              distributeArithConstantOp(cstOp);
+            })
+            .Default([](auto op) {
+              if (isa<tt::LoadOp, tt::DotOp, tt::AdvanceOp, arith::TruncFOp>(
+                      op))
+                distributeGenericOp(op);
+              else
+                assert(false && "Unexpected operation type");
+            });
+
         return WalkResult::advance();
       });
     }

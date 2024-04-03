@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-distribute-to-warps -canonicalize -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-distribute-to-warps --cse | FileCheck %s
 
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
@@ -6,21 +6,48 @@
 #blockedA = #triton_gpu.dot_op<{opIdx = 0, parent = #blockedC}>
 #blockedB = #triton_gpu.dot_op<{opIdx = 1, parent = #blockedC}>
 
-// CHECK-DAG: [[WARP0:#.*]] = #triton_gpu.warp<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
-// CHECK-DAG: [[WARP1:#.*]] = #triton_gpu.warp<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
-// in the loop body:
-// thread block works on 128x128xf32 = 128x32xf16 * 32x128xf16
-//    each warp works on   64x64xf32 =  64x32xf16 *  32x64xf16
-module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
+// CHECK-DAG: #warp = #triton_gpu.warp<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+// CHECK-DAG: #warp1 = #triton_gpu.warp<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
+// COM: in the loop body:
+// COM:   - thread block works on: 128x128xf32 = 128x32xf16 * 32x128xf16
+// COM:   - each warp works on:    64x64xf32   =  64x32xf16 * 32x64xf16
+module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
   tt.func public @matmul_kernel_with_block_pointers_with_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
-    // CHECK-LABEL: matmul_kernel_with_block_pointers_with_convertlayout
-    // CHECK-DAG: arith.constant dense<0.000000e+00> : tensor<64x64xf32, [[WARP0]]>
-    // CHECK-DAG: [[ID:%.*]] = gpu.subgroup_id : index
-    // CHECK: [[SGID:%.*]] = arith.index_cast [[ID]] : index to i32
-    // CHECK: [[MUL:%.*]] = arith.muli [[SGID]], %c32_i32 : i32
-    // CHECK: [[ADD:%.*]] = arith.addi [[MUL]]
-    // CHECK: tt.make_tensor_ptr %arg0
-    // CHECK-SAME: [[[ADD]], %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, [[WARP1]]>, 1>
+    // CHECK-LABEL: @matmul_kernel_with_block_pointers_with_convertlayout
+    // CHECK:      [[SUB_GROUP_ID:%.*]] = gpu.subgroup_id : index
+    // CHECK:      [[WARP_ID:%.*]] = arith.index_cast [[SUB_GROUP_ID]] : index to i32
+    // CHECK:      [[CST:%.*]] = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #warp>
+    // CHECK:      [[CST32:%.*]] = arith.constant 32 : i32
+    // CHECK-DAG:  [[ARG3_EXT:%.*]] = arith.extsi %arg3 : i32 to i64
+    // CHECK-DAG:  [[ARG5_EXT:%.*]] = arith.extsi %arg5 : i32 to i64
+    // CHECK-DAG:  [[ARG6_EXT:%.*]] = arith.extsi %arg6 : i32 to i64
+    // CHECK:      [[MUL:%.*]] = arith.muli [[WARP_ID]], [[CST32]] : i32
+    // CHECK-NEXT: [[ADD:%.*]] = arith.addi [[MUL]], {{.*}} : i32
+    // CHECK:      [[TPTR1:%.*]] = tt.make_tensor_ptr %arg0, [[[ARG3_EXT]], [[ARG5_EXT]]], [[[ARG6_EXT]], {{.*}}], [[[ADD]], {{.*}}]
+    // CHECK-SAME:      {order = array<i32: 1, 0>} : <tensor<32x32xf16, #warp1>, 1>
+    // CHECK-DAG:  [[ARG4_EXT:%.*]] = arith.extsi %arg4 : i32 to i64
+    // CHECK-DAG:  [[ARG7_EXT:%.*]] = arith.extsi %arg7 : i32 to i64
+    // CHECK:      [[TPTR2:%.*]] = tt.make_tensor_ptr %arg1, [[[ARG5_EXT]], [[ARG4_EXT]]], [[[ARG7_EXT]], {{.*}}], [{{.*}}, {{.*}}]
+    // CHECK-SAME:      {order = array<i32: 1, 0>} : <tensor<32x32xf16, #warp1>, 1>
+    // CHECK:      scf.for {{.*}} iter_args([[ARG10:%.*]] = [[CST]], [[ARG11:%.*]] = [[TPTR1]], [[ARG12:%.*]] = [[TPTR2]])
+    // CHECK-DAG:    [[LOAD1:%.*]] = tt.load [[ARG11]] {{.*}} : !tt.ptr<tensor<32x32xf16, #warp1>, 1> -> tensor<32x32xf16, #warp1>
+    // CHECK-DAG:    [[LOAD2:%.*]] = tt.load [[ARG12]] {{.*}} : !tt.ptr<tensor<32x32xf16, #warp1>, 1> -> tensor<32x32xf16, #warp1>
+    // CHECK:        [[ALLOC1:%.*]] = triton_intel_gpu.alloc : <f16, 1>
+    // CHECK:        [[PTR1:%.*]] = tt.make_tensor_ptr [[ALLOC1]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x32xf16, #warp1>, 3>
+    // CHECK:        tt.store [[PTR1]], [[LOAD1]] {cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<32x32xf16, #warp1>, 3>, tensor<32x32xf16, #warp1>
+    // CHECK:        gpu.barrier
+    // CHECK:        [[PTR2:%.*]] = tt.make_tensor_ptr [[ALLOC1]], {{.*}} {order = array<i32: 1, 0>} : <tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 3>
+    // CHECK:        [[LOAD3:%.*]] = tt.load [[PTR2]] {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 3> -> tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>
+    // CHECK:        [[ALLOC2:%.*]] = triton_intel_gpu.alloc : <f16, 1>
+    // CHECK:        [[PTR3:%.*]] = tt.make_tensor_ptr [[ALLOC2]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x32xf16, #warp1>, 3>
+    // CHECK:        tt.store [[PTR3]], [[LOAD2]] {cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<32x32xf16, #warp1>, 3>, tensor<32x32xf16, #warp1>
+    // CHECK:        gpu.barrier
+    // CHECK:        [[PTR3:%.*]] = tt.make_tensor_ptr [[ALLOC2]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 3>
+    // CHECK:        [[LOAD4:%.*]] = tt.load [[PTR3]] {{.*}} : !tt.ptr<tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 3> -> tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>
+    // CHECK:        tt.dot [[LOAD3]], [[LOAD4]], [[ARG10]] {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>> * tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<64x64xf32, #warp>
+    // CHECK:        tt.advance [[ARG11]], [{{.*}}] : <tensor<32x32xf16, #warp1>, 1>
+    // CHECK:        tt.advance [[ARG12]], [{{.*}}] : <tensor<32x32xf16, #warp1>, 1>
+    // CHECK:      }
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blockedC>
     %c8_i32 = arith.constant 8 : i32
     %c128_i32 = arith.constant 128 : i32
@@ -69,6 +96,33 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
   }
 
   tt.func public @matmul_kernel_with_block_pointers_without_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
+    // CHECK-LABEL: @matmul_kernel_with_block_pointers_without_convertlayout
+    // CHECK:      [[SUB_GROUP_ID:%.*]] = gpu.subgroup_id : index
+    // CHECK:      [[WARP_ID:%.*]] = arith.index_cast [[SUB_GROUP_ID]] : index to i32
+    // CHECK:      [[CST:%.*]] = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #warp>
+    // CHECK:      [[CST32:%.*]] = arith.constant 32 : i32
+    // CHECK-DAG:  [[ARG3_EXT:%.*]] = arith.extsi %arg3 : i32 to i64
+    // CHECK-DAG:  [[ARG5_EXT:%.*]] = arith.extsi %arg5 : i32 to i64
+    // CHECK-DAG:  [[ARG6_EXT:%.*]] = arith.extsi %arg6 : i32 to i64
+    // CHECK:      [[CST2:%.*]] = arith.constant 2 : i32
+    // CHECK:      [[DIV:%.*]] = arith.divsi [[WARP_ID]], [[CST2]] : i32
+    // CHECK:      [[REM:%.*]] = arith.remsi [[DIV]], [[CST2]] : i32
+    // CHECK:      [[CST64:%.*]] = arith.constant 64 : i32
+    // CHECK:      [[MUL:%.*]] = arith.muli [[REM]], [[CST64]] : i32
+    // CHECK-NEXT: [[ADD:%.*]] = arith.addi [[MUL]], {{.*}} : i32
+    // CHECK:      [[TPTR1:%.*]] = tt.make_tensor_ptr %arg0, [[[ARG3_EXT]], [[ARG5_EXT]]], [[[ARG6_EXT]], {{.*}}], [[[ADD]], {{.*}}]
+    // CHECK-SAME:      {order = array<i32: 1, 0>} : <tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 1>
+    // CHECK-DAG:  [[ARG4_EXT:%.*]] = arith.extsi %arg4 : i32 to i64
+    // CHECK-DAG:  [[ARG7_EXT:%.*]] = arith.extsi %arg7 : i32 to i64
+    // CHECK:      [[TPTR2:%.*]] = tt.make_tensor_ptr %arg1, [[[ARG5_EXT]], [[ARG4_EXT]]], [[[ARG7_EXT]], {{.*}}], [{{.*}}, {{.*}}]
+    // CHECK-SAME:    {order = array<i32: 1, 0>} : <tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 1>
+    // CHECK:      scf.for {{.*}} iter_args([[ARG10:%.*]] = [[CST]], [[ARG11:%.*]] = [[TPTR1]], [[ARG12:%.*]] = [[TPTR2]])
+    // CHECK-DAG:    [[LOAD1:%.*]] = tt.load [[ARG11]] {{.*}} : !tt.ptr<tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 1> -> tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>
+    // CHECK-DAG:    [[LOAD2:%.*]] = tt.load [[ARG12]] {{.*}} : !tt.ptr<tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 1> -> tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>
+    // CHECK:        tt.dot [[LOAD1]], [[LOAD2]], [[ARG10]] {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>> * tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<64x64xf32, #warp>
+    // CHECK:        tt.advance [[ARG11]], [{{.*}}] : <tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>, 1>
+    // CHECK:        tt.advance [[ARG12]], [{{.*}}] : <tensor<32x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>, 1>
+    // CHECK:      }
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blockedC>
     %c8_i32 = arith.constant 8 : i32
     %c128_i32 = arith.constant 128 : i32

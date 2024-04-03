@@ -669,6 +669,7 @@ WarpEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   }
   return elemsPerThread;
 }
+
 unsigned WarpEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                   Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
