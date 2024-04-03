@@ -139,13 +139,6 @@ if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ]; then
   fi
 fi
 
-check_rc() {
-  if [ $? != 0 ]; then
-    echo "Command failed with rc: $rc"
-    exit 1
-  fi
-}
-
 ############################################################################
 # Configure and build the pytorch project.
 
@@ -172,7 +165,6 @@ build_pytorch() {
   pip install dist/*.whl
   cd $BASE
   python -c "import torch;print(torch.__version__)"
-  check_rc
 }
 
 ############################################################################
@@ -199,7 +191,6 @@ build_ipex() {
   pip install dist/*.whl
   cd $BASE
   python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
-  check_rc
 }
 
 build() {
