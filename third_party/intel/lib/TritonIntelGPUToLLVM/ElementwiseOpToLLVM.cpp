@@ -1103,9 +1103,9 @@ class ElementwiseOpConversionBase
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit ElementwiseOpConversionBase(
-      TritonGPUToLLVMTypeConverter &typeConverter,
-      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit = 1)
+  explicit ElementwiseOpConversionBase(LLVMTypeConverter &typeConverter,
+                                       ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                       PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         axisAnalysisPass(axisAnalysisPass) {}
 
@@ -1295,7 +1295,7 @@ struct FpToFpOpConversion
   using ElementwiseOpConversionBase<
       FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
 
-  explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -2133,7 +2133,7 @@ struct MinMaxFOpConversion
       typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
                                 LLVM::MinNumOp, LLVM::MaxNumOp>::type;
 
-  explicit MinMaxFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit MinMaxFOpConversion(LLVMTypeConverter &typeConverter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
                                int computeCapability,
                                PatternBenefit benefit = 1)
@@ -2176,7 +2176,7 @@ struct ClampFOpConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  explicit ClampFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit ClampFOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -2333,7 +2333,7 @@ struct OpToExternCallConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  explicit OpToExternCallConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit OpToExternCallConversion(LLVMTypeConverter &typeConverter,
                                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                                     StringRef externFuncName,
                                     PatternBenefit benefit)
@@ -2424,7 +2424,7 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
 
 namespace intel {
 void populateElementwiseOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
     PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
