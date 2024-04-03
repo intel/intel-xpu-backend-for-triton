@@ -121,6 +121,50 @@ llvm.func @triton_gen.sub_group_shuffle() {
 
 // -----
 
+llvm.func @triton_gen.dpas.i8(%c : vector<8xi32>, %a : vector<16xi8>, %b : vector<32xi8>) {
+  // CHECK:     llvm.func @triton_gen.dpas.i8(%arg0: vector<8xi32>, %arg1: vector<16xi8>, %arg2: vector<32xi8>) {
+  // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<16xi8> to vector<8xi16>
+  // CHECK-DAG:  [[B:%.*]] = llvm.bitcast %arg2 : vector<32xi8> to vector<8xi32>
+  // CHECK-NEXT: llvm.call @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iDv8_i([[A]], [[B]], %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32>
+  %0 = triton_gen.dpas %c, %a, %b {pa = i8, pb = i8, rc = 8} : (vector<8xi32>, vector<16xi8>, vector<32xi8>) -> vector<8xi32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas.u8(%c : vector<8xi32>, %a : vector<16xi8>, %b : vector<32xi8>) {
+  // CHECK:     llvm.func @triton_gen.dpas.u8(%arg0: vector<8xi32>, %arg1: vector<16xi8>, %arg2: vector<32xi8>) {
+  // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<16xi8> to vector<8xi16>
+  // CHECK-DAG:  [[B:%.*]] = llvm.bitcast %arg2 : vector<32xi8> to vector<8xi32>
+  // CHECK-NEXT: llvm.call @_Z36intel_sub_group_u8_u8_matrix_mad_k32Dv8_sDv8_iDv8_i([[A]], [[B]], %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32>
+  %0 = triton_gen.dpas %c, %a, %b {pa = u8, pb = u8, rc = 8} : (vector<8xi32>, vector<16xi8>, vector<32xi8>) -> vector<8xi32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas.bf16(%c : vector<8xf32>, %a : vector<8xbf16>, %b : vector<16xbf16>) {
+  // CHECK:     llvm.func @triton_gen.dpas.bf16(%arg0: vector<8xf32>, %arg1: vector<8xbf16>, %arg2: vector<16xbf16>) {
+  // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<8xbf16> to vector<8xi16>
+  // CHECK-DAG:  [[B:%.*]] = llvm.bitcast %arg2 : vector<16xbf16> to vector<8xi32>
+  // CHECK-NEXT: llvm.call @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iDv8_f([[A]], [[B]], %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+  %0 = triton_gen.dpas %c, %a, %b {pa = bf16, pb = bf16, rc = 8} : (vector<8xf32>, vector<8xbf16>, vector<16xbf16>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas.f16(%c : vector<8xf32>, %a : vector<8xf16>, %b : vector<16xf16>) {
+  // CHECK:     llvm.func @triton_gen.dpas.f16(%arg0: vector<8xf32>, %arg1: vector<8xf16>, %arg2: vector<16xf16>) {
+  // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<8xf16> to vector<8xi16>
+  // CHECK-DAG:  [[B:%.*]] = llvm.bitcast %arg2 : vector<16xf16> to vector<8xi32>
+  // CHECK-NEXT: llvm.call @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f([[A]], [[B]], %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+  %0 = triton_gen.dpas %c, %a, %b {pa = f16, pb = f16, rc = 8} : (vector<8xf32>, vector<8xf16>, vector<16xf16>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
 llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vector<8xf32>) {
   // CHECK:     llvm.func @triton_gen.dpas.f32(%arg0: vector<8xf32>, %arg1: vector<4xf32>, %arg2: vector<8xf32>) {
   // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<4xf32> to vector<4xi32>
