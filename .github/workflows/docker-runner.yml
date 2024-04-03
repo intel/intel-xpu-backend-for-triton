@@ -20,14 +20,12 @@ jobs:
       - name: Set base runner env
         run: |
           echo TAG=triton-runner-base:0.0.11 >>$GITHUB_ENV
-          echo INSTALLER_IMAGE=$REGISTRY/oneapi-basekit:2024.0.1 >>$GITHUB_ENV
           echo RUNNER_PATH=.github/dockerfiles/runner-base/ >>$GITHUB_ENV
 
       - name: Build image
         run: |
           docker build $RUNNER_PATH \
-            --tag $REGISTRY/$TAG \
-            --build-arg INSTALLER_IMAGE=$INSTALLER_IMAGE
+            --tag $REGISTRY/$TAG
 
       - name: Push image
         run: |
