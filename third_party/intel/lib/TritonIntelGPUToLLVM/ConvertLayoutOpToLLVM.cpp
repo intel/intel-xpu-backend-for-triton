@@ -590,7 +590,7 @@ private:
 } // namespace
 
 void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);

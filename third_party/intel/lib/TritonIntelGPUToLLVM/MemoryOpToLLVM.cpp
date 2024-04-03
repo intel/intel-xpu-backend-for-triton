@@ -98,7 +98,7 @@ struct LocalDeallocOpConversion
 } // namespace
 
 void mlir::triton::intel::populateMemoryOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<LocalAllocOpConversion>(typeConverter, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
