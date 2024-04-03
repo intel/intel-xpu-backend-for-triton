@@ -581,7 +581,10 @@ struct AtomicRMWOpConversion
     // tensor
     if (tensorTy) {
       auto valTy = val.getType().cast<RankedTensorType>();
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
+      auto maxVecSize =
+          valueElemNBits / valTy.getElementType().getIntOrFloatBitWidth();
+      vec = std::min<unsigned>(vec,
+                               valTy.getElementType().isF16() ? maxVecSize : 1);
       // mask
       numElems = tensorTy.getNumElements();
     }

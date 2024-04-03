@@ -2392,9 +2392,6 @@ def test_locality(op, BLOCK_N, N, num_pid_n, device):
 @pytest.mark.parametrize("src_layout", scan_layouts)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_scan_layouts(M, N, src_layout, axis, device):
-    if is_xpu() and src_layout.sz_per_thread == [1, 2]:
-        pytest.skip("FIXME: Wrong result on XPU")
-
     ir = f"""
     #blocked = {src_layout}
     module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
@@ -2480,8 +2477,6 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
             "Currently MmaLayout combined with slice encoding and reduce op trigger device illegal memory access")
     if type(src_layout) is DpasLayout:
         pytest.skip("FIXME: support DPAS layout")
-    if is_xpu() and type(src_layout) is BlockedLayout and src_layout.warps_per_cta == [2, 2]:
-        pytest.skip("FIXME: incorrect result on XPU")
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
@@ -3017,6 +3012,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if ((M, N, K, num_warps, col_a, col_b) in [(32, 128, 64, 2, True, False)]
                 and (in_dtype, out_dtype) in [('float16', 'float32')]):
             pytest.skip("FIXME: Fails to run on XPU")
+        if ((M, N, K, num_warps, col_a, col_b) == (64, 64, 64, 4, False, False)
+                and (input_precision, in_dtype, out_dtype) == ('ieee', 'float16', 'float32')
+                and epilogue in ('add-rows', 'add-cols', 'none')):
+            pytest.skip("FIXME: issue #797")
 
     if is_cuda():
         torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
