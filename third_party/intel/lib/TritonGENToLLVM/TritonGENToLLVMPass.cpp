@@ -69,14 +69,14 @@ static LLVM::CallOp createDeviceFunctionCall(
 
 static std::string getTypeMangling(Type ty) {
   return TypeSwitch<Type, std::string>(ty)
-      .Case<VectorType>([&](auto ty) {
+      .Case<VectorType>([](auto ty) {
         return "Dv" + std::to_string(ty.getNumElements()) + "_" +
                getTypeMangling(ty.getElementType());
       })
-      .Case<Float16Type>([&](auto) { return "Dh"; })
-      .Case<Float32Type>([&](auto) { return "f"; })
-      .Case<Float64Type>([&](auto) { return "d"; })
-      .Case<IntegerType>([&](auto ty) {
+      .Case<Float16Type>([](auto) { return "Dh"; })
+      .Case<Float32Type>([](auto) { return "f"; })
+      .Case<Float64Type>([](auto) { return "d"; })
+      .Case<IntegerType>([](auto ty) {
         switch (ty.getWidth()) {
         case 8:
           return "c";
