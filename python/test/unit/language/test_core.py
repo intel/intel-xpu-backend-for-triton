@@ -2477,8 +2477,6 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
             "Currently MmaLayout combined with slice encoding and reduce op trigger device illegal memory access")
     if type(src_layout) is DpasLayout:
         pytest.skip("FIXME: support DPAS layout")
-    if is_xpu() and type(src_layout) is BlockedLayout and src_layout.warps_per_cta == [2, 2]:
-        pytest.skip("FIXME: incorrect result on XPU")
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
