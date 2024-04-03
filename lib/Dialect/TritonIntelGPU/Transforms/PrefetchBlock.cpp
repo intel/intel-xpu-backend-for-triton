@@ -28,6 +28,7 @@
 /// becomes:
 ///   %prefetch_ptr = tt.make_tensor_ptr
 ///   tt.prefetch %prefetch_ptr
+///   tt.advance %prefetch_ptr
 ///   scf.for
 ///     %load = tt.load %block_ptr
 ///     tt.dot %load
@@ -203,8 +204,8 @@ private:
   void injectPrefetchOpsInPreheader(scf::ForOp loop,
                                     SmallVectorImpl<Value> &prefetchPtrs) const;
 
-  /// Insert prefetch operations in the preheader of the given \p loop and
-  /// return them in \p prefetchPtrs.
+  /// Insert prefetch operations in the body of the given \p loop and return
+  /// them in \p prefetchPtrs.
   void injectPrefetchOpsInBody(scf::ForOp loop,
                                SmallVectorImpl<Value> &prefetchPtrs) const;
 
@@ -217,7 +218,7 @@ private:
 
 void PrefetchBlockPass::collectCandidatesLoadsInLoop(
     scf::ForOp loop, SmallVectorImpl<tt::LoadOp> &loopLoads) {
-  assert(loopLoads.empty() && "Expecting an emty vector");
+  assert(loopLoads.empty() && "Expecting an empty vector");
 
   LLVM_DEBUG(llvm::dbgs() << "Attempting to collect candidate loads in loop:\n"
                           << loop << "\n\n");
@@ -238,8 +239,8 @@ void PrefetchBlockPass::collectCandidatesLoadsInLoop(
 
 /// Determines whether a load (in a loop) is a candidate. A candidate load:
 ///   - must use a block pointer
-///   - the block pointer must have 2 users in the loop, a 'tt.advance' and a
-///     the 'tt.load' operation
+///   - the block pointer must have 2 users in the loop, a 'tt.advance' and the
+///     'tt.load' operation
 ///   - the result of the load must be used by a 'tt.dot' operation
 ///   - satisfy all conditions required in order to create a 'LoadInfo' object
 ///     for the load
@@ -278,7 +279,7 @@ bool PrefetchBlockPass::isCandidateLoad(tt::LoadOp load, scf::ForOp loop) {
 
 /// Create a LoadInfo for the given \p load if possible.
 /// Notes:
-///   - a 'tt.AdvanceOp' operation must advance the load pointer using constant
+///   - a 'tt.advance' operation must advance the load pointer using constant
 ///     offsets.
 ///   - the 'tt.MakeTensorPtrOp' operation must define the load pointer
 std::optional<PrefetchBlockPass::LoadInfo>
