@@ -39,16 +39,19 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
-def TritonIntelGPUDistributeToWarps 
+def TritonIntelGPUDistributeToWarps
     : Pass<"tritonintelgpu-distribute-to-warps", "mlir::ModuleOp"> {
   let summary = "distribute the thread block workload to the warps";
 
   let description = [{
-    Changes the layout 
+    Changes the tensor type and layout
 
     For example, given:
 
     ```mlir
+    #blockedC = #triton_gpu.blocked<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+    #blockedA = #triton_gpu.dot_op<{opIdx = 0, parent = #blockedC}>
+    #blockedB = #triton_gpu.dot_op<{opIdx = 1, parent = #blockedC}>
     tt.func @gemm(%arg0, %arg1, %arg2) {
       %0 = tt.get_program_id x: i32
       ...
@@ -64,10 +67,12 @@ def TritonIntelGPUDistributeToWarps
     }
     ```
 
-    after this pass, the workload is distributed so that each op works on warp/subgroup level 
+    after this pass, the workload is distributed so that each op works on warp/subgroup level
     with smaller size:
 
     ```mlir
+    #warpA = #triton_gpu.warp<{sizePerThread = [64, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
+    #warpB = #triton_gpu.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
     tt.func @gemm(%arg0, %arg1, %arg2) {
       %0 = tt.get_program_id x: i32
       %1 = gpu.subgroup_id : i32

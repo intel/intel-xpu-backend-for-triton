@@ -8,13 +8,13 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.td"
 include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
 include "mlir/IR/OpBase.td"
-include "mlir/Interfaces/SideEffectInterfaces.td" 
+include "mlir/Interfaces/SideEffectInterfaces.td"
 
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonIntelGPU_Dialect, mnemonic, traits>;
 
 def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
-  let summary = "Memory allocation operation"; 
+  let summary = "Memory allocation operation";
 
   let description = [{
     The `alloc` operation allocates a region of memory, as specified by its type.

@@ -6,12 +6,21 @@
 #blockedA = #triton_gpu.dot_op<{opIdx = 0, parent = #blockedC}>
 #blockedB = #triton_gpu.dot_op<{opIdx = 1, parent = #blockedC}>
 
-// CHECK: gpu.subgroup_id : index
+// CHECK-DAG: [[WARP0:#.*]] = #triton_gpu.warp<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+// CHECK-DAG: [[WARP1:#.*]] = #triton_gpu.warp<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
 // in the loop body:
 // thread block works on 128x128xf32 = 128x32xf16 * 32x128xf16
 //    each warp works on   64x64xf32 =  64x32xf16 *  32x64xf16
 module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
   tt.func public @matmul_kernel_with_block_pointers_with_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
+    // CHECK-LABEL: matmul_kernel_with_block_pointers_with_convertlayout
+    // CHECK-DAG: arith.constant dense<0.000000e+00> : tensor<64x64xf32, [[WARP0]]>
+    // CHECK-DAG: [[ID:%.*]] = gpu.subgroup_id : index
+    // CHECK: [[SGID:%.*]] = arith.index_cast [[ID]] : index to i32
+    // CHECK: [[MUL:%.*]] = arith.muli [[SGID]], %c32_i32 : i32
+    // CHECK: [[ADD:%.*]] = arith.addi [[MUL]]
+    // CHECK: tt.make_tensor_ptr %arg0
+    // CHECK-SAME: [[[ADD]], %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, [[WARP1]]>, 1>
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blockedC>
     %c8_i32 = arith.constant 8 : i32
     %c128_i32 = arith.constant 128 : i32

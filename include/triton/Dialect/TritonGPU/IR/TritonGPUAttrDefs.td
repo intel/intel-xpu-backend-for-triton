@@ -68,9 +68,10 @@ Right now, Triton implements two classes of layouts: shared, and distributed.
 def WarpEncodingAttr : TritonGPU_Attr<"WarpEncoding", "warp_encoding"> {
   let mnemonic = "warp";
 
-  let description = [{ 
-   An encoding characterized by two tuples -- thread tile size and warp tile size 
+  let description = [{
+   An encoding characterized by two tuples -- thread tile size and warp tile size
    which specify the amount of elements owned by each thread and warp respectively.
+   currently all their meaning remain the same as above blocked encoding.
   }];
 
   let parameters = (
