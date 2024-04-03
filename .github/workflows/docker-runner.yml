@@ -2,15 +2,6 @@ name: Build self-hosted runner image
 
 on:
   workflow_dispatch:
-    inputs:
-      runner:
-        description: 'Runner to build'
-        required: true
-        default: 'base'
-        type: choice
-        options:
-          - base
-          - conda
 
 permissions: read-all
 
@@ -27,18 +18,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set base runner env
-        if: inputs.runner == 'base'
         run: |
-          echo TAG=triton-runner-base:0.0.9 >>$GITHUB_ENV
+          echo TAG=triton-runner-base:0.0.10 >>$GITHUB_ENV
           echo INSTALLER_IMAGE=$REGISTRY/oneapi-basekit:2024.0.1 >>$GITHUB_ENV
           echo RUNNER_PATH=.github/dockerfiles/runner-base/ >>$GITHUB_ENV
-
-      - name: Set conda runner env
-        if: inputs.runner == 'conda' || !inputs.runner
-        run: |
-          echo TAG=triton-runner-conda:0.0.1 >>$GITHUB_ENV
-          echo INSTALLER_IMAGE=$REGISTRY/oneapi-basekit:2024.0.1 >>$GITHUB_ENV
-          echo RUNNER_PATH=.github/dockerfiles/runner-conda/ >>$GITHUB_ENV
 
       - name: Build image
         run: |
