@@ -4,7 +4,7 @@ from triton.backends.intel.driver import XPUUtils
 
 from dataclasses import dataclass
 import functools
-from typing import Any
+from typing import Any, Tuple
 import hashlib
 import re
 import tempfile
@@ -40,6 +40,8 @@ class XPUOptions:
     threads_per_warp: int = 32
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
+    default_dot_input_precision: str = "tf32"
+    allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     allow_fp8e4nv: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -177,8 +179,8 @@ class XPUBackend(BaseBackend):
         llvm_mod = llvm.to_module(mod, context)
         llvm.set_spv_target_triple(llvm_mod)
         if options.extern_libs:
-            for name, path in options.extern_libs:
-                llvm.link_extern_lib(llvm_mod, path)
+            paths = [path for (name, path) in options.extern_libs]
+            llvm.link_extern_libs(llvm_mod, paths)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
@@ -202,8 +204,6 @@ class XPUBackend(BaseBackend):
     @functools.lru_cache()
     def hash(self):
         version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"])
-        if type(version) is bytes:
-            version = version.decode("utf-8")
         return f'{version}-{self.properties}'
 
     def get_codegen_implementation(self):
