@@ -151,7 +151,7 @@ run_tutorial_tests() {
   run_tutorial_test "03-matrix-multiplication"
   run_tutorial_test "04-low-memory-dropout"
   run_tutorial_test "05-layer-norm"
-  run_tutorial_test "06-fused-attention.py"
+  run_tutorial_test "06-fused-attention"
   run_tutorial_test "07-extern-functions"
   run_tutorial_test "08-grouped-gemm"
   run_tutorial_test "09-experimental-block-pointer"
