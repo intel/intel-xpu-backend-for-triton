@@ -6,9 +6,9 @@
 #blockedA = #triton_gpu.dot_op<{opIdx = 0, parent = #blockedC}>
 #blockedB = #triton_gpu.dot_op<{opIdx = 1, parent = #blockedC}>
 
-// CHECK-DAG: #warp = #triton_gpu.warp<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
-// CHECK-DAG: #warp1 = #triton_gpu.warp<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
-// COM: in the loop body:
+// CHECK-DAG: #warp = #triton_intel_gpu.warp<{sizePerThread = [64, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+// CHECK-DAG: #warp1 = #triton_intel_gpu.warp<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
+// COM: In the loop body:
 // COM:   - thread block works on: 128x128xf32 = 128x32xf16 * 32x128xf16
 // COM:   - each warp works on:    64x64xf32   =  64x32xf16 * 32x64xf16
 module attributes {"triton_gpu.compute-capability" = 80 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {

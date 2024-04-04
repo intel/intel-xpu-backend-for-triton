@@ -65,7 +65,7 @@ SmallVector<int64_t> getSizePerWarp(RankedTensorType type, Attribute layout) {
 Attribute getWarpLayout(Attribute layout) {
   return TypeSwitch<Attribute, Attribute>(layout)
       .Case<ttg::BlockedEncodingAttr>([&](auto blockedLayout) {
-        return ttg::WarpEncodingAttr::get(
+        return ttgi::WarpEncodingAttr::get(
             layout.getContext(), blockedLayout.getSizePerThread(),
             blockedLayout.getThreadsPerWarp(), blockedLayout.getOrder());
       })
@@ -198,7 +198,7 @@ void distributeArithConstantOp(arith::ConstantOp op) {
   OpBuilder b(op);
   auto newOp = b.create<arith::ConstantOp>(op.getLoc(), newType, value);
 
-  for (const NamedAttribute &attr : newOp->getAttrDictionary().getValue())
+  for (const NamedAttribute &attr : op->getAttrDictionary().getValue())
     if (!newOp->hasAttr(attr.getName()))
       newOp->setAttr(attr.getName(), attr.getValue());
 
