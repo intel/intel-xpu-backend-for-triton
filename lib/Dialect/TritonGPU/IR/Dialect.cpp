@@ -119,9 +119,6 @@ getThreadsPerWarpWithUniqueData(Attribute layout,
 }
 
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
-  if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
-    return getWarpsPerCTA(dotLayout.getParent());
-  }
   if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
     return distributedLayout.getWarpsPerCTA();
   }
@@ -979,8 +976,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   return res;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
-  llvm::report_fatal_error(
-      "getWarpsPerCTA not implemented for DotOperandEncodingAttr");
+  return getParent().cast<DistributedEncodingTrait>().getWarpsPerCTA();
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return ::getOrder(*this);
