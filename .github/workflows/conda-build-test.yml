@@ -40,7 +40,7 @@ jobs:
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 1
+          CACHE_NUMBER: 2
         with:
           path: $HOME/miniconda3/envs/triton
           key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
