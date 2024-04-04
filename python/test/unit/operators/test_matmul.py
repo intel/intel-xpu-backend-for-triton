@@ -127,7 +127,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             if NSTAGE == 2 and M == 107 and N == 233:
                 if K == 128 and not AT:
                     pytest.skip("FIXME: Incorrect result on XPU")
-                if K == 83 and not (AT and not BT):
+                if K == 83 and AT == BT:
                     pytest.skip("FIXME: Incorrect result on XPU")
             if M == 256 and AT == BT:
                 if NSTAGE == 2 and N == 384:
@@ -136,18 +136,17 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
                     pytest.skip("FIXME: Incorrect result on XPU")
         if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 64 and NWARP == 8 and NSTAGE == 3:
             pytest.skip("FIXME: Incorrect result on XPU")
-        if BLOCK_M == 256 and BLOCK_N == 128 and BLOCK_K == 32 and NWARP == 8 and (NSTAGE == 2 or NSTAGE == 4) and BT:
+        if BLOCK_M == 256 and BLOCK_N == 128 and BLOCK_K == 32 and NWARP == 8 and (NSTAGE == 2
+                                                                                   or NSTAGE == 4) and AT and BT:
             pytest.skip("FIXME: Incorrect result on XPU")
         if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and NWARP == 8 and NSTAGE == 2 and (
                 ACC_DTYPE is None or ACC_DTYPE == "float32") and (OUTPUT_DTYPE is None or OUTPUT_DTYPE == "float16"):
-            if (ADTYPE == "float16" and BDTYPE == "float8e5") or (ADTYPE == "float16" and BDTYPE == "int8"):
-                if not AT and not BT:
-                    pytest.skip("FIXME: Incorrect result on XPU")
-            elif (ADTYPE == "float8e4b15" and BDTYPE == "float8e4b15") or (ADTYPE == "float8e5"
-                                                                           and BDTYPE == "float8e5"):
+            if (ADTYPE == "float8e4b15" and BDTYPE == "float8e4b15") or (ADTYPE == "float8e5" and BDTYPE == "float8e5"):
                 if not (not AT and BT):
                     pytest.skip("FIXME: Incorrect result on XPU")
-            else:
+            elif not ((ADTYPE == "float16" and BDTYPE == "float8e5") or (ADTYPE == "float16" and BDTYPE == "int8") or
+                      (ADTYPE == "float8e4nv" and BDTYPE == "float16" and not AT and BT) or
+                      (ADTYPE == "int8" and BDTYPE == "bfloat16" and not AT and BT)):
                 pytest.skip("FIXME: Incorrect result on XPU")
 
     if torch.xpu.is_available():
