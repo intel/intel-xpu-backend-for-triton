@@ -40,7 +40,7 @@ jobs:
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 1
+          CACHE_NUMBER: 2
         with:
           path: $HOME/miniconda3/envs/triton
           key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
@@ -83,7 +83,7 @@ jobs:
           rm python/test/unit/language/test_random.py
 
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/797
-          sed -ie 's/\(.* 08-grouped-gemm.py\)/#\1/' scripts/test-triton.sh
+          sed -ie 's/\(.*08-grouped-gemm\)/#\1/' scripts/test-triton.sh
           conda run --no-capture-output -n triton bash -v -x scripts/test-triton.sh
 
       - name: Run E2E test
