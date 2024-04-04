@@ -2379,7 +2379,7 @@ def test_locality(op, BLOCK_N, N, num_pid_n, device):
     BLOCK_M = 32
     x = torch.randn((BLOCK_M, N), dtype=torch.float32, device=device)
     y = torch.randn((BLOCK_M, num_pid_n), dtype=torch.float32, device=device)
-    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N)
+    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N, num_warps=4)
     if not is_interpreter():
         assert h.asm['ttgir'].count(
             '"tt.reduce"') == 2, "tt.reduce should be called twice, otherwise the optimization didn't work"
@@ -2991,9 +2991,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     if is_interpreter() and in_dtype in ['bfloat16', 'float8e5', 'float8e4nv']:
         pytest.skip("FIXME: triton.runtime.errors.InterpreterError")
-
-    if is_interpreter() and epilogue == 'softmax':
-        pytest.skip("FIXME: TypeError: 'function' object is not subscriptable")
 
     if is_xpu():
         capability = 0
@@ -4742,12 +4739,6 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
         # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
         if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
             pytest.skip("Scratch buffer is too large")
-
-    # https://github.com/intel/intel-xpu-backend-for-triton/issues/729
-    if (is_xpu() and M == 128 and N == 128 and interm_layout and interm_layout.vec == 4 and interm_layout.per_phase == 2
-            and interm_layout.max_phase == 4 and dst_layout.sz_per_thread == [4, 1]
-            and src_layout.sz_per_thread == [4, 4]):
-        pytest.skip("FIXME: incorrect result on XPU")
 
     layouts = f"""
     #src = {src_layout}
