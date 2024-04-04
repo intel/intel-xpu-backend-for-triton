@@ -125,7 +125,11 @@ def make_launcher(constants, signature, ids):
             "uint64_t": "K",
         }[ty]
 
-    format = "iiiiiiiiiOKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    #format = "iiiiiiiiiOKOOO" + ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+
+    args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    format = "iiiOKOOOO" + args_format
+    args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
     # generate glue code
     src = f"""
@@ -280,61 +284,107 @@ def make_launcher(constants, signature, ids):
 
       int gridX, gridY, gridZ;
       uint64_t _queue;
-      uint64_t _stream;
+      //uint64_t _stream;
       uint64_t _function;
       uint64_t _event_pool;
       uint64_t _dev;
       uint64_t _ctxt;
-      int num_warps;
-      int num_ctas;
-      int clusterDimX;
-      int clusterDimY;
-      int clusterDimZ;
+      //int num_warps;
+      //int num_ctas;
+      //int clusterDimX;
+      //int clusterDimY;
+      //int clusterDimZ;
       int _is_icl;
-      int shared_memory;
+      //int shared_memory;
       PyObject *launch_enter_hook = NULL;
       PyObject *launch_exit_hook = NULL;
-      PyObject *compiled_kernel = NULL;
+      //PyObject *compiled_kernel = NULL;
+      PyObject *kernel_metadata = NULL;
+      PyObject *launch_metadata = NULL;
       PyObject *py_obj_stream;
       void* pKrnl;
 
       {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if (!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &num_ctas,
+      /*if (!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &num_warps, &num_ctas,
                             &clusterDimX, &clusterDimY, &clusterDimZ, &shared_memory, &py_obj_stream,
                             &pKrnl, &launch_enter_hook, &launch_exit_hook, &compiled_kernel
                             {', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''})) {{
         return NULL;
+      }}*/
+      
+      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &_function,
+                               &kernel_metadata, &launch_metadata,
+                               &launch_enter_hook, &launch_exit_hook {args_list})) {{
+        return NULL;
+      }}      
+
+      // extract kernel metadata
+      int num_warps     = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_warps"));
+      int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_ctas"));
+      int shared_memory = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "shared"));
+      // extract cluster dims
+      PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
+      if (!PyTuple_Check(kernel_metadata)) {{
+        PyErr_SetString(PyExc_TypeError, "kernel_metadata.cluster_dims must be a tuple");
+        return NULL;
+      }}
+      int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
+      int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
+      int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
+      // extract launch metadata
+      if (launch_enter_hook != Py_None){{
+        PyObject* args = Py_BuildValue("(O)", launch_metadata);
+        PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
+        Py_DECREF(args);
+        if (!ret)
+          return NULL;
       }}
 
-      if (launch_enter_hook != Py_None) {{
-        PyObject_CallObject(launch_enter_hook, args);
-      }}
-
-      void * pStream = PyLong_AsVoidPtr(py_obj_stream);
+      std::cout<<"Sarbojit 1"<<std::endl;
+      void *pStream = PyLong_AsVoidPtr(py_obj_stream);
+      std::cout<<"Stream and kernel objs : "<<pStream<<"|"<<pKrnl<<std::endl;
+      
       //error;
-      if(pStream == nullptr || pKrnl == nullptr) return NULL;
+      if(pStream == nullptr ){{
+      std::cout<<"2 Stream objs in null: "<<pStream<<std::endl;
+          return NULL;
+      }}
+
+      if(pKrnl == nullptr){{
+      std::cout<<"2 Kernel objs in null: "<<pKrnl<<std::endl;
+          return NULL;
+      }}
+      
+      std::cout<<"Sarbojit 1.5"<<pStream<<"|"<<pKrnl<<std::endl;
 
       sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
-      sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
-      int threads_per_warp = 32;
+      //sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
+      
+      /*int threads_per_warp = 32;
       if (PyObject_HasAttrString(compiled_kernel, "threads_per_warp")) {{
         PyObject* _threads_per_warp = PyObject_GetAttrString(compiled_kernel, "threads_per_warp");
         if (PyLong_Check(_threads_per_warp))
            threads_per_warp = PyLong_AsLong(_threads_per_warp);
       }}
+      std::cout<<"Sarbojit 2"<<std::endl;
+        
+      //{"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+      //sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
 
-      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
-
-      if (launch_exit_hook != Py_None) {{
-        PyObject_CallObject(launch_exit_hook, args);
-      }}
+        std::cout<<"Sarbojit 3"<<std::endl;
+      
       if (PyErr_Occurred()) {{
         return NULL;
       }}
-
+      if(launch_exit_hook != Py_None){{
+        PyObject* args = Py_BuildValue("(O)", launch_metadata);
+        PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
+        Py_DECREF(args);
+        if (!ret)
+          return NULL;
+       }}
       // return None
-      Py_INCREF(Py_None);
+      Py_INCREF(Py_None);*/
       return Py_None;
     }}
 
@@ -368,7 +418,12 @@ class XPULauncher(object):
     def __init__(self, src, metadata):
         ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
-        src = make_launcher(constants, src.signature, ids)
+        #src = make_launcher(constants, src.signature, ids)
+        cst_key = lambda i: src.fn.arg_names.index(i) if isinstance(i, str) else i
+        constants = {cst_key(key): value for key, value in constants.items()}
+        signature = {cst_key(key): value for key, value in src.signature.items()}
+        src = make_launcher(constants, signature, ids)
+        print(src)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
 

@@ -210,7 +210,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   int shared;
   PyObject *py_bytes;
   int devId;
-
+    std::cout<<"Sarbojit in load_binary"<<std::endl;
   if (!PyArg_ParseTuple(args, "sSii", &name, &py_bytes, &shared, &devId)) {
     std::cerr << "loadBinary arg parse failed" << std::endl;
     return NULL;
