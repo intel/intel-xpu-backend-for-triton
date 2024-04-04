@@ -73,13 +73,6 @@ elif [ -v VIRTUAL_ENV ]; then
   deactivate
 fi
 
-check_rc() {
-  if [ $? != 0 ]; then
-    echo "Command failed with rc: $rc"
-    exit 1
-  fi
-}
-
 if [ ! -d "$PACKAGES_DIR" ]; then
   mkdir $PACKAGES_DIR
 fi
@@ -161,11 +154,8 @@ build_llvm() {
 
   echo "****** Building $LLVM_PROJ ******"
   ninja
-  check_rc
   ninja install
-  check_rc
   ninja check-mlir
-  check_rc
 }
 
 ############################################################################
@@ -201,11 +191,9 @@ build_triton() {
 
   cd python
   pip install -e .
-  check_rc
 
   # Install triton tests.
   pip install -vvv -e '.[tests]'
-  check_rc
 
   # Copy compile_commands.json in the build directory (so that cland vscode plugin can find it).
   cp $TRITON_PROJ_BUILD/"$(ls $TRITON_PROJ_BUILD)"/compile_commands.json $TRITON_PROJ/

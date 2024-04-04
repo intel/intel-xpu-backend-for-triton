@@ -252,13 +252,19 @@ struct ConvertTritonGPUToLLVM
 
     populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
-    populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
+    mlir::triton::intel::populateHistogramOpToLLVMPatterns(typeConverter,
+                                                           patterns, benefit);
     populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
+    mlir::triton::intel::populateAssertOpToLLVMPattern(typeConverter, patterns,
+                                                       benefit);
+    mlir::triton::intel::populateMemoryOpToLLVMPattern(typeConverter, patterns,
+                                                       benefit);
+    mlir::triton::intel::populateControlFlowOpToLLVMPattern(typeConverter,
+                                                            patterns, benefit);
+    mlir::triton::intel::populateMakeRangeOpToLLVMPattern(typeConverter,
+                                                          patterns, benefit);
+    mlir::triton::intel::populateSPMDOpToLLVMPattern(typeConverter, patterns,
+                                                     benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.

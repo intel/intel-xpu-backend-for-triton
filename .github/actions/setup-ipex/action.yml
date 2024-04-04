@@ -33,9 +33,12 @@ runs:
     - name: Load IPEX wheels from a cache
       id: ipex-cache
       uses: ./.github/actions/load
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: "1"
       with:
         path: intel-extension-for-pytorch/dist
-        key: ipex-$PYTHON_VERSION-$IPEX_COMMIT_ID
+        key: ipex-$PYTHON_VERSION-$IPEX_COMMIT_ID-$CACHE_NUMBER
 
     - name: Clone IPEX repository
       if: ${{ steps.ipex-cache.outputs.status == 'miss' }}

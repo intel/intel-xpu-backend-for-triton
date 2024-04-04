@@ -49,7 +49,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: "3"
+        CACHE_NUMBER: "4"
       with:
         path: pytorch
         key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID-$CACHE_NUMBER

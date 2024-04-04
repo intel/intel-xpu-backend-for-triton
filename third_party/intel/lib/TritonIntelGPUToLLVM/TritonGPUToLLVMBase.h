@@ -38,14 +38,13 @@ typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
 
 class ConvertTritonGPUOpToLLVMPatternBase {
 public:
-  explicit ConvertTritonGPUOpToLLVMPatternBase(
-      TritonGPUToLLVMTypeConverter &typeConverter)
+  explicit ConvertTritonGPUOpToLLVMPatternBase(LLVMTypeConverter &typeConverter)
       : converter(&typeConverter) {}
 
-  TritonGPUToLLVMTypeConverter *getTypeConverter() const { return converter; }
+  LLVMTypeConverter *getTypeConverter() const { return converter; }
 
 protected:
-  TritonGPUToLLVMTypeConverter *converter;
+  LLVMTypeConverter *converter;
 };
 
 template <typename SourceOp>
@@ -55,8 +54,8 @@ class ConvertTritonGPUOpToLLVMPattern
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit ConvertTritonGPUOpToLLVMPattern(
-      TritonGPUToLLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
+  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                           PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
 
