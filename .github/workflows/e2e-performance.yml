@@ -31,8 +31,19 @@ on:
           - float16
           - float32
         default: all
+      models:
+        description: Run all models or a subset
+        type: choice
+        options:
+          - all
+          - subset
+        default: subset
       only_one_model:
         description: Run only this one model
+        type: string
+        default: ""
+      runner_label:
+        description: Runner label, keep empty for default
         type: string
         default: ""
       TORCH_COMPILE_DEBUG:
@@ -68,6 +79,7 @@ jobs:
       suite: ${{ steps.set-matrix.outputs.suite }}
       mode: ${{ steps.set-matrix.outputs.mode }}
       dtype: ${{ steps.set-matrix.outputs.dtype }}
+      models: ${{ steps.set-matrix.outputs.models }}
     timeout-minutes: 10
     steps:
       - name: Set matrix
@@ -88,17 +100,21 @@ jobs:
           else
             dtype='["${{ inputs.dtype }}"]'
           fi
+          if [[ -z "${{ inputs.models }}" ]]; then
+            models="subset"
+          else
+            models="${{ inputs.models }}"
+          fi
           echo "suite=$suite" >> $GITHUB_OUTPUT
           echo "mode=$mode" >> $GITHUB_OUTPUT
           echo "dtype=$dtype" >> $GITHUB_OUTPUT
+          echo "models=$models" >> $GITHUB_OUTPUT
 
   build:
     name: Test
     needs: matrix
     runs-on:
-      - glados
-      - spr
-      - runner-0.0.11
+      - ${{ inputs.runner_label || 'runner-0.0.11' }}
     strategy:
       matrix:
         suite: ${{ fromJson(needs.matrix.outputs.suite) }}
@@ -225,16 +241,28 @@ jobs:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
           export WORKSPACE=$GITHUB_WORKSPACE
+
           if [[ "${{ inputs.TORCH_COMPILE_DEBUG }}" == "1" ]] ; then
             export TORCH_COMPILE_DEBUG="1"
             # torch will save debug logs to $TORCH_COMPILE_DEBUG_DIR/torch_compile_debug
             export TORCH_COMPILE_DEBUG_DIR=$GITHUB_WORKSPACE
           fi
-          if [[ -n "${{ inputs.only_one_model }}" ]]; then
-            MODEL_ARGS="static 1 0 ${{ inputs.only_one_model }}"
-          fi
+
           cd pytorch
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0 ${MODEL_ARGS}
+
+          # if "only_one_model" is set, then test this model
+          # if "models" == "subset", then test the models from .github/models/performance/{suite}.txt
+          # otherwise test all models
+
+          if [[ "${{ inputs.only_one_model }}" ]]; then
+            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0 static 1 0 ${{ inputs.only_one_model }}
+          elif [[ "${{ needs.matrix.outputs.models }}" == "subset" ]]; then
+            while read model; do
+              $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0 static 1 0 $model
+            done < $GITHUB_WORKSPACE/.github/models/performance/${{ matrix.suite }}.txt
+          else
+            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0 static 1 0
+          fi
 
       - name: Report environment details
         run: |
