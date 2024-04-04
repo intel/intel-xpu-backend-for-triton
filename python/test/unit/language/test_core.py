@@ -2992,9 +2992,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if is_interpreter() and in_dtype in ['bfloat16', 'float8e5', 'float8e4nv']:
         pytest.skip("FIXME: triton.runtime.errors.InterpreterError")
 
-    if is_interpreter() and epilogue == 'softmax':
-        pytest.skip("FIXME: TypeError: 'function' object is not subscriptable")
-
     if is_xpu():
         capability = 0
 
