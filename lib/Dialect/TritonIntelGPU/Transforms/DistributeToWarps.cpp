@@ -77,17 +77,14 @@ Attribute getWarpLayout(Attribute layout) {
       .Default([&](auto) { return layout; });
 }
 
-template <typename T> static T convertType(T type) { return type; }
-
-template <>
-RankedTensorType convertType<RankedTensorType>(RankedTensorType type) {
+RankedTensorType convertType(RankedTensorType type) {
   Attribute layout = type.getEncoding();
   SmallVector<int64_t> sizePerWarp = getSizePerWarp(type, layout);
   Attribute warpLayout = getWarpLayout(layout);
   return RankedTensorType::get(sizePerWarp, type.getElementType(), warpLayout);
 }
 
-template <> tt::PointerType convertType<tt::PointerType>(tt::PointerType type) {
+tt::PointerType convertType(tt::PointerType type) {
   if (auto tensorType = dyn_cast<RankedTensorType>(type.getPointeeType()))
     return tt::PointerType::get(convertType(tensorType),
                                 type.getAddressSpace());
@@ -229,7 +226,7 @@ void distributeConvertLayoutOp(ttg::ConvertLayoutOp op, Value warpId,
   Location loc = op.getLoc();
   auto dstType = cast<RankedTensorType>(op.getResult().getType());
   RankedTensorType convertedDstType = convertType(dstType);
-  auto dstPtrType = tt::PointerType::get(convertedDstType, 3 /* shared mem*/);
+  auto dstPtrType = tt::PointerType::get(convertedDstType, 3 /*shared mem*/);
   auto srcPtrType =
       tt::PointerType::get(op.getSrc().getType(),
                            triton::TritonGEN::TritonGENMemorySpace::kWorkgroup);
