@@ -455,9 +455,6 @@ class JITFunction(KernelInterface[T]):
                 f"  Call signature:   {signature}"
             )
 
-        print("Sarbojit is here")
-        assert false 
-        
         if not warmup:
             args = [arg.value for arg in args if not arg.param.is_constexpr]
             launch_metadata = kernel.launch_metadata(grid, stream, *args)

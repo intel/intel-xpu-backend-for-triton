@@ -312,7 +312,7 @@ def make_launcher(constants, signature, ids):
         return NULL;
       }}*/
       
-      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &_function,
+      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &pKrnl,
                                &kernel_metadata, &launch_metadata,
                                &launch_enter_hook, &launch_exit_hook {args_list})) {{
         return NULL;
@@ -322,6 +322,8 @@ def make_launcher(constants, signature, ids):
       int num_warps     = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_warps"));
       int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_ctas"));
       int shared_memory = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "shared"));
+      int threads_per_warp = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "threads_per_warp"));
+      std::cout<<"threads_per_warp ="<<threads_per_warp<<std::endl;
       // extract cluster dims
       PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
       if (!PyTuple_Check(kernel_metadata)) {{
@@ -358,14 +360,14 @@ def make_launcher(constants, signature, ids):
       std::cout<<"Sarbojit 1.5"<<pStream<<"|"<<pKrnl<<std::endl;
 
       sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
-      //sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
+      sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
       
-      /*int threads_per_warp = 32;
-      if (PyObject_HasAttrString(compiled_kernel, "threads_per_warp")) {{
+      //int threads_per_warp = 32;
+      /*if (PyObject_HasAttrString(compiled_kernel, "threads_per_warp")) {{
         PyObject* _threads_per_warp = PyObject_GetAttrString(compiled_kernel, "threads_per_warp");
         if (PyLong_Check(_threads_per_warp))
            threads_per_warp = PyLong_AsLong(_threads_per_warp);
-      }}
+      }}*/
       std::cout<<"Sarbojit 2"<<std::endl;
         
       //{"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
@@ -384,7 +386,7 @@ def make_launcher(constants, signature, ids):
           return NULL;
        }}
       // return None
-      Py_INCREF(Py_None);*/
+      Py_INCREF(Py_None);
       return Py_None;
     }}
 
@@ -423,7 +425,7 @@ class XPULauncher(object):
         constants = {cst_key(key): value for key, value in constants.items()}
         signature = {cst_key(key): value for key, value in src.signature.items()}
         src = make_launcher(constants, signature, ids)
-        print(src)
+        ##print(src)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
 
