@@ -25,8 +25,7 @@ def TritonIntelGPUAccelerateMatmul
   let dependentDialects = [
     "mlir::triton::TritonDialect",
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-    "mlir::arith::ArithDialect",
-    "mlir::scf::SCFDialect"
+    "mlir::arith::ArithDialect"
   ];
 
   let options = [
@@ -99,7 +98,6 @@ def TritonIntelGPUDistributeToWarps
   let dependentDialects = ["mlir::triton::TritonDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::arith::ArithDialect",
-                           "mlir::scf::SCFDialect",
                            "mlir::gpu::GPUDialect"];
 }
 
@@ -116,7 +114,6 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
   let constructor = "mlir::triton::gpu::intel::createPrefetchBlockPass()";
   let dependentDialects = ["mlir::triton::TritonDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-                           "mlir::arith::ArithDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::gpu::GPUDialect"];
   let options = [
