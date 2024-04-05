@@ -966,8 +966,6 @@ def test_math_erf_op(dtype, device):
 @pytest.mark.parametrize("dtype", [dtype for dtype in ["float32", "float64"]])
 def test_math_fma_op(dtype, device):
     check_type_supported(dtype, device)
-    if is_xpu():
-        pytest.skip("FIXME: Fails to run on XPU")
     SIZE = 128
 
     @triton.jit
