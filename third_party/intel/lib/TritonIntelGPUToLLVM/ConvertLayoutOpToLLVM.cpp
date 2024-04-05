@@ -550,42 +550,6 @@ private:
 
     return success();
   }
-
-  Value computeStMatrixAddr(Value laneId, int matStride, Location loc,
-                            ConversionPatternRewriter &rewriter) const {
-    Value rowInMat = urem(laneId, i32_val(8)); // row in the 8x8 matrix
-    // linear index of the matrix in the 2x2 matrices
-    // Decompose matIndex => s_0, s_1, that is the coordinate in 2x2 matrices in
-    // a warp.
-    Value matIndex = udiv(laneId, i32_val(8));
-    Value s0 = urem(matIndex, i32_val(2));
-    Value s1 = udiv(matIndex, i32_val(2));
-    Value mIndex = add(rowInMat, mul(s0, i32_val(8)));
-    int m8n8Stride = 8;
-    Value offset =
-        add(mul(mIndex, i32_val(matStride)), mul(s1, i32_val(m8n8Stride)));
-    return offset;
-  }
-
-  void stMatrixm8n8x4(Value offset, ArrayRef<Value> vals, int indexOffset,
-                      Value smemBase, Type elemTy, Location loc,
-                      ConversionPatternRewriter &rewriter) const {
-    SmallVector<Value> inputs;
-    auto prTy = ptr_ty(rewriter.getContext(), 3);
-    // Pack the input into 2xf16
-    Type packedTy = vec_ty(vals[0].getType(), 2);
-    for (int i = 0; i < 4; i++) {
-      Value input = undef(packedTy);
-      for (int j = 0; j < 2; j++) {
-        input = insert_element(packedTy, input, vals[indexOffset + i * 2 + j],
-                               i32_val(j));
-      }
-      inputs.push_back(bitcast(input, i32_ty));
-    }
-    Value addr = gep(smemBase.getType(),
-                     getTypeConverter()->convertType(elemTy), smemBase, offset);
-    rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, addr, inputs);
-  }
 };
 } // namespace
 
