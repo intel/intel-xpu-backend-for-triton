@@ -245,8 +245,7 @@ struct ConvertTritonGPUToLLVM
                                       benefit);
     mlir::triton::intel::populateReduceOpToLLVMPatterns(typeConverter, patterns,
                                                         targetInfo, benefit);
-    mlir::triton::intel::populateScanOpToLLVMPatterns(typeConverter, patterns,
-                                                      targetInfo, benefit);
+    populateScanOpToLLVMPatterns(typeConverter, patterns, targetInfo, benefit);
     mlir::triton::intel::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                       benefit);
 

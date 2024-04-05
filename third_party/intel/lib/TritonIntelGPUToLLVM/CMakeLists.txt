@@ -16,7 +16,6 @@ add_triton_library(TritonIntelGPUToLLVM
     MakeRangeOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     ReduceOpToLLVM.cpp
-    ScanOpToLLVM.cpp
     Utility.cpp
     TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
