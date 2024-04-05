@@ -1375,7 +1375,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
 
     if is_xpu():
         capability = 0
-        if dtype_x_str == 'float16':
+        if dtype_x_str == 'float16' and (mode != "min_neg" or sem != "acquire"):
             pytest.skip("FIXME: Atomic RMW for float16 not yet supported by IGC")
 
     n_programs = 5
@@ -2644,7 +2644,7 @@ layouts = [
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
-    if type(src_layout) is DpasLayout or type(dst_layout) is DpasLayout:
+    if (src_dim == 1 and type(src_layout) is DpasLayout) or (dst_dim == 1 and type(dst_layout) is DpasLayout):
         pytest.skip("FIXME: support DPAS layout")
 
     ir = f"""
