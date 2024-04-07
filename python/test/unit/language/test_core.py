@@ -2591,8 +2591,6 @@ layouts = [
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
 @pytest.mark.parametrize("src_layout", layouts)
 def test_store_op(M, src_layout, device):
-    if type(src_layout) is DpasLayout:
-        pytest.skip("FIXME: support DPAS layout")
 
     ir = f"""
     #src = {src_layout}
@@ -2645,8 +2643,6 @@ layouts = [
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
-    if (src_dim == 1 and type(src_layout) is DpasLayout) or (dst_dim == 1 and type(dst_layout) is DpasLayout):
-        pytest.skip("FIXME: support DPAS layout")
 
     ir = f"""
     #dst = {dst_layout}

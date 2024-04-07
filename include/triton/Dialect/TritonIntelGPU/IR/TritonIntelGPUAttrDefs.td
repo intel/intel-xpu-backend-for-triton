@@ -85,6 +85,8 @@ along the row (resp. col) dimension.
     bool supportReduction() const {
       return true;
     }
+
+    SmallVector<unsigned> getContigPerThread();
   }];
 
   let hasCustomAssemblyFormat = 1;
