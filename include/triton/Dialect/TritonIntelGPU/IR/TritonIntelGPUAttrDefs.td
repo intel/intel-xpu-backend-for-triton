@@ -9,7 +9,8 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 // Intel DPAS Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def DpasEncodingAttr : DistributedEncoding<"DpasEncoding", "intel_mma_encoding", [MmaEncodingTrait], TritonIntelGPU_Dialect> {
+def DpasEncodingAttr : DistributedEncoding<"DpasEncoding", "intel_dpas_encoding",
+                                          [MmaEncodingTrait], TritonIntelGPU_Dialect> {
   let mnemonic = "dpas";
 
   let description = [{
@@ -90,5 +91,33 @@ along the row (resp. col) dimension.
   let genVerifyDecl = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Intel Warp Encoding
+//===----------------------------------------------------------------------===//
+
+def WarpEncodingAttr : TritonGPU_Attr<"WarpEncoding", "intel_warp_encoding",
+                                     [], TritonIntelGPU_Dialect> {
+  let mnemonic = "warp";
+
+  let description = [{
+   An encoding characterized by two tuples -- thread tile size and warp tile size
+   which specify the amount of elements owned by each thread and warp respectively.
+   currently all their meaning remain the same as above blocked encoding.
+  }];
+
+  let parameters = (
+    ins
+    ArrayRefParameter<"unsigned">:$sizePerThread,
+    ArrayRefParameter<"unsigned">:$threadsPerWarp,
+    ArrayRefParameter<"unsigned">:$order // the fastest-changing axis first
+  );
+
+  let extraClassDeclaration = [{
+    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
+    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+}
 
 #endif

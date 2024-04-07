@@ -976,8 +976,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   return res;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
-  llvm::report_fatal_error(
-      "getWarpsPerCTA not implemented for DotOperandEncodingAttr");
+  return getParent().cast<DistributedEncodingTrait>().getWarpsPerCTA();
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return ::getOrder(*this);
@@ -2011,6 +2010,9 @@ public:
       return AliasResult::FinalAlias;
     } else if (auto blockedAttr = attr.dyn_cast<BlockedEncodingAttr>()) {
       os << "blocked";
+      return AliasResult::FinalAlias;
+    } else if (auto warpAttr = attr.dyn_cast<WarpEncodingAttr>()) {
+      os << "warp";
       return AliasResult::FinalAlias;
     } /* else if (auto sliceAttr = attr.dyn_cast<SliceEncodingAttr>()) {
       os << "slice";

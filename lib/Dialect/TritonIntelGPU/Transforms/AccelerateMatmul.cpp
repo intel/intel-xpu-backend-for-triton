@@ -262,6 +262,7 @@ public:
 };
 
 std::unique_ptr<Pass>
-mlir::createTritonIntelGPUAccelerateMatmulPass(ttgi::DeviceArch arch) {
+mlir::triton::gpu::intel::createTritonIntelGPUAccelerateMatmulPass(
+    ttgi::DeviceArch arch) {
   return std::make_unique<TritonIntelGPUAccelerateMatmulPass>(arch);
 }
