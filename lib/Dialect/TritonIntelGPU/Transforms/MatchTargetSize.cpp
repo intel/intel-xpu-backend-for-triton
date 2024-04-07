@@ -4,13 +4,13 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-/// This file implements a transform pass to spilt operation so that each
+/// This file implements a transform pass to spilt operations so that each
 /// operation would match the target IR size.
-/// This pass should be run after tritongpu-distribute-to-warps
+/// This pass should be run after tritonintelgpu-distribute-to-warps
 /// This pass only support block pointer.
 /// e.g.
 /// 32x64xf32 = tt.dot 32x32xf16, 32x64xf16
-/// will be split into 32 dots according to the configured DotSize
+/// will be split into 32 dots which match the configured DotSize
 /// 8x16xf32 = tt.dot 8x16xf16, 16x16xf16
 //===----------------------------------------------------------------------===//
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -40,11 +40,11 @@ class MatchTargetSizePass
     : public TritonIntelGPUMatchTargetSizeBase<MatchTargetSizePass> {
 public:
   void runOnOperation() override {
-    auto *ctx = &getContext();
+    MLIRContext *ctx = &getContext();
     ModuleOp m = getOperation();
     dotAttrs.clear();
     sizePerAttrMap.clear();
-    // set default supported dot size
+    // set default supported dot size(m, n, k)
     if (!dotSize.hasValue()) {
       dotSize.addValue(8);
       dotSize.addValue(16);
@@ -58,7 +58,6 @@ public:
           return true;
       return false;
     };
-    // for (auto dot : m.getOps<tt::DotOp>()) {
     m.walk([&](tt::DotOp dot) {
       auto type = cast<RankedTensorType>(dot.getResult().getType());
       dotAttrs.insert(type.getEncoding());
@@ -94,6 +93,7 @@ public:
     RewritePatternSet patterns(ctx);
     patterns.add<ScfPattern>(ctx);
     patterns.add<ExtractPattern>(ctx);
+    // FIXME: upstream to arith dialect
     patterns.add<ArithRemPattern>(ctx);
     if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
       signalPassFailure();
@@ -104,7 +104,7 @@ private:
   DenseSet<Attribute> dotAttrs;
   void recordRootSubSize(Type type) {
     if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
-      auto layout = tensorType.getEncoding();
+      Attribute layout = tensorType.getEncoding();
       if (sizePerAttrMap.count(layout) == 0)
         sizePerAttrMap[layout] = getSubOpSize(tensorType);
     } else if (auto ptrType = dyn_cast<tt::PointerType>(type)) {
@@ -112,26 +112,26 @@ private:
     }
   }
   SmallVector<int64_t> getSubOpSize(RankedTensorType type) {
-    auto mStep = dotSize[0];
-    auto nStep = dotSize[1];
-    auto kStep = dotSize[2];
-    auto layout = type.getEncoding();
+    int64_t mStep = dotSize[0];
+    int64_t nStep = dotSize[1];
+    int64_t kStep = dotSize[2];
+    Attribute layout = type.getEncoding();
     int64_t colLimit = 0;
     if (dotAttrs.count(layout)) {
       SmallVector<int64_t> subSize{mStep, nStep};
       return subSize;
-      // FIXME: 2 * subgroupSize??
-    } else if (auto warpAttr = dyn_cast<ttg::WarpEncodingAttr>(layout)) {
+      // FIXME: 2 * subgroupSize
+    } else if (auto warpAttr = dyn_cast<ttgi::WarpEncodingAttr>(layout)) {
       colLimit = 32;
     } else if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
       colLimit = 32;
     }
-    auto shape = type.getShape();
+    ArrayRef<int64_t> shape = type.getShape();
     SmallVector<int64_t> subSize(shape.size());
-    auto sizeInByte = type.getElementTypeBitWidth() / 8;
+    unsigned sizeInByte = type.getElementTypeBitWidth() / 8;
     if (shape.size() == 2) {
       subSize[1] = (shape[1] > colLimit) ? colLimit : shape[1];
-      // all load/store size max is 512 Byte
+      // all load/store size max is 512 DW
       auto max = 512 * 4 / sizeInByte / subSize[1];
       subSize[0] = std::min(max, shape[0]);
     } else if (shape.size() == 1) {
@@ -145,14 +145,14 @@ private:
   std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
   getSubTypeAndShape(Type type) {
     if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
-      auto shape = llvm::to_vector(tensorType.getShape());
-      auto attr = tensorType.getEncoding();
-      auto subSize = sizePerAttrMap[attr];
+      SmallVector<int64_t> shape = llvm::to_vector(tensorType.getShape());
+      Attribute attr = tensorType.getEncoding();
+      SmallVector<int64_t> subSize = sizePerAttrMap[attr];
       auto subType = RankedTensorType::get(
           subSize, tensorType.getElementType() /*no encoding*/);
       return std::make_tuple(shape, subType, subSize);
     } else if (auto ptrType = dyn_cast<tt::PointerType>(type)) {
-      auto pointeeType = ptrType.getPointeeType();
+      Type pointeeType = ptrType.getPointeeType();
       auto [shape, subType, subSize] = getSubTypeAndShape(pointeeType);
       auto newType = tt::PointerType::get(subType, ptrType.getAddressSpace());
       return std::make_tuple(shape, newType, subSize);
@@ -161,19 +161,19 @@ private:
   }
 
   void transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
-    auto type = op.getType();
+    Type type = op.getType();
     auto [shape, subType, subSize] = getSubTypeAndShape(type);
     // // early return
     // if (shape == subSize)
     //   return;
-    auto dim = shape.size();
+    unsigned dim = shape.size();
     OpBuilder b(op);
-    auto loc = op.getLoc();
-    auto idx = 0;
+    Location loc = op.getLoc();
+    unsigned idx = 0;
     SmallVector<Value> subOps;
-    for (auto i = 0; i < shape[dim - 1]; i += subSize[dim - 1]) {
+    for (unsigned i = 0; i < shape[dim - 1]; i += subSize[dim - 1]) {
       if (dim == 2) {
-        for (auto j = 0; j < shape[0]; j += subSize[0]) {
+        for (unsigned j = 0; j < shape[0]; j += subSize[0]) {
           auto offsets = op.getOffsets();
           // newOffsets = offsets += [j, i]
           SmallVector<Value> newOffsets(2);
@@ -211,16 +211,16 @@ private:
     // // early return
     // if (shape == subSize)
     //   return;
-    auto dim = shape.size();
+    unsigned dim = shape.size();
     OpBuilder b(op);
-    auto loc = op.getLoc();
-    auto idx = 0;
+    Location loc = op.getLoc();
+    unsigned idx = 0;
     auto value = cast<DenseElementsAttr>(op.getValue());
     value = value.resizeSplat(subType.cast<ShapedType>());
     SmallVector<Value> subOps;
-    for (auto i = 0; i < shape[dim - 1]; i += subSize[dim - 1]) {
+    for (unsigned i = 0; i < shape[dim - 1]; i += subSize[dim - 1]) {
       if (dim == 2) {
-        for (auto j = 0; j < shape[0]; j += subSize[0]) {
+        for (unsigned j = 0; j < shape[0]; j += subSize[0]) {
           auto subOp = b.create<arith::ConstantOp>(loc, subType, value);
           subOps.push_back(subOp);
         }
@@ -233,7 +233,7 @@ private:
   }
 
   void transformGenericOp(Operation *op) {
-    auto numResults = op->getResults().size();
+    unsigned numResults = op->getResults().size();
     unsigned dotIdx = 2;
     Type type;
     // prefetch/store
@@ -241,32 +241,32 @@ private:
       type = op->getOperand(0).getType();
     // arith/math/advanceOp/loadOp
     else {
-      assert(numResults == 1);
+      assert(numResults == 1 && "op should have 1 result");
       type = op->getResultTypes()[0];
       // mark tt.load for dot A/B
       auto tensorType = dyn_cast<RankedTensorType>(type);
       if (dyn_cast<tt::LoadOp>(op) && tensorType) {
-        auto layout = tensorType.getEncoding();
+        Attribute layout = tensorType.getEncoding();
         if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
           dotIdx = dotAttr.getOpIdx();
         }
       }
     }
     auto [shape, subType, subSize] = getSubTypeAndShape(type);
-    auto dim = shape.size();
+    unsigned dim = shape.size();
     OpBuilder b(op);
-    auto loc = op->getLoc();
-    auto idx = 0;
+    Location loc = op->getLoc();
+    unsigned idx = 0;
     SmallVector<Value> subOps;
-    for (auto i = 0; i < shape[dim - 1]; i += subSize[dim - 1]) {
+    for (unsigned i = 0; i < shape[dim - 1]; i += subSize[dim - 1]) {
       if (dim == 2) {
-        for (auto j = 0; j < shape[0]; j += subSize[0]) {
+        for (unsigned j = 0; j < shape[0]; j += subSize[0]) {
           SmallVector<Value> newOperands;
           llvm::transform(op->getOperands(), std::back_inserter(newOperands),
                           [&](Value operand) {
-                            auto type = operand.getType();
+                            Type type = operand.getType();
                             if (isa<tt::PointerType, RankedTensorType>(type)) {
-                              auto subOpndType =
+                              Type subOpndType =
                                   std::get<1>(getSubTypeAndShape(type));
                               Value newOp = b.create<ttgi::ExtractOp>(
                                   loc, subOpndType, operand, idx);
@@ -298,47 +298,47 @@ private:
   }
 
   void transformDotOp(tt::DotOp dot) {
-    assert(dotSize.size() == 3 && "target-size should have m, n ,k");
+    assert(dotSize.size() == 3 && "dot-size should have m, n ,k");
     auto aType = dot.getA().getType().cast<RankedTensorType>();
     auto bType = dot.getB().getType().cast<RankedTensorType>();
     auto cType = dot.getC().getType().cast<RankedTensorType>();
-    auto aShape = aType.getShape();
-    auto bShape = bType.getShape();
-    auto cShape = cType.getShape();
-    auto m = aShape[0];
-    auto n = bShape[1];
-    auto k = aShape[1];
-    auto mStep = dotSize[0];
-    auto nStep = dotSize[1];
-    auto kStep = dotSize[2];
+    ArrayRef<int64_t> aShape = aType.getShape();
+    ArrayRef<int64_t> bShape = bType.getShape();
+    ArrayRef<int64_t> cShape = cType.getShape();
+    int64_t m = aShape[0];
+    int64_t n = bShape[1];
+    int64_t k = aShape[1];
+    int64_t mStep = dotSize[0];
+    int64_t nStep = dotSize[1];
+    int64_t kStep = dotSize[2];
     OpBuilder b(dot);
-    auto loc = dot.getLoc();
+    Location loc = dot.getLoc();
     auto getSubDotVal = [&](Value val, int64_t mm, int64_t kk, int64_t mStep,
                             int64_t kStep) {
       auto [shape, subType, subSize] = getSubTypeAndShape(val.getType());
-      auto subIdx =
+      unsigned subIdx =
           (kk / subSize[1]) * (shape[0] / subSize[0]) + mm / subSize[0];
-      auto subVal = b.create<ttgi::ExtractOp>(loc, subType, val, subIdx);
+      Value subVal = b.create<ttgi::ExtractOp>(loc, subType, val, subIdx);
       auto subDotType = RankedTensorType::get(
           {mStep, kStep},
           val.getType().cast<RankedTensorType>().getElementType());
-      auto subDotIdx = ((kk % subSize[1]) / kStep) * (subSize[0] / mStep) +
-                       (mm % subSize[0]) / mStep;
-      auto subDotVal =
+      unsigned subDotIdx = ((kk % subSize[1]) / kStep) * (subSize[0] / mStep) +
+                           (mm % subSize[0]) / mStep;
+      Value subDotVal =
           b.create<ttgi::ExtractOp>(loc, subDotType, subVal, subDotIdx);
       return subDotVal;
     };
 
     auto [shape, subType, subSize] = getSubTypeAndShape(cType);
     SmallVector<Value> subCs;
-    for (auto nn = 0; nn < n; nn += nStep) {
-      for (auto mm = 0; mm < m; mm += mStep) {
+    for (unsigned nn = 0; nn < n; nn += nStep) {
+      for (unsigned mm = 0; mm < m; mm += mStep) {
         Value subDotC = getSubDotVal(dot.getC(), mm, nn, mStep, nStep);
-        for (auto kk = 0; kk < k; kk += kStep) {
+        for (unsigned kk = 0; kk < k; kk += kStep) {
           auto subDotA = getSubDotVal(dot.getA(), mm, kk, mStep, kStep);
           auto subDotB = getSubDotVal(dot.getB(), kk, nn, kStep, nStep);
           subDotC = b.create<tt::DotOp>(loc, subDotA, subDotB, subDotC,
-                                        dot.getAllowTF32Attr(),
+                                        dot.getInputPrecisionAttr(),
                                         dot.getMaxNumImpreciseAccAttr());
         }
         subCs.push_back(subDotC);
@@ -354,19 +354,20 @@ private:
     using OpRewritePattern<arith::RemSIOp>::OpRewritePattern;
     LogicalResult matchAndRewrite(arith::RemSIOp op,
                                   PatternRewriter &rewriter) const final {
-      auto loc = op.getLoc();
-      auto type = op.getType();
-      auto rhs = op.getRhs();
+      Location loc = op.getLoc();
+      Type type = op.getType();
+      Value rhs = op.getRhs();
       APInt value;
       if (!matchPattern(rhs, m_ConstantInt(&value)))
         return failure();
       if (value.isOne()) {
-        auto attr = rewriter.getIntegerAttr(type, 0);
+        IntegerAttr attr = rewriter.getIntegerAttr(type, 0);
         auto zero = rewriter.create<arith::ConstantOp>(loc, attr);
         rewriter.replaceOp(op, zero);
         return success();
       } else if (value.popcount() == 1) {
-        auto attr = rewriter.getIntegerAttr(type, value.getSExtValue() - 1);
+        IntegerAttr attr =
+            rewriter.getIntegerAttr(type, value.getSExtValue() - 1);
         auto mask = rewriter.create<arith::ConstantOp>(loc, attr);
         auto result = rewriter.create<arith::AndIOp>(loc, op.getLhs(), mask);
         rewriter.replaceOp(op, result);
@@ -382,10 +383,10 @@ private:
     using OpRewritePattern<ttgi::ExtractOp>::OpRewritePattern;
     LogicalResult matchAndRewrite(ttgi::ExtractOp op,
                                   PatternRewriter &rewriter) const final {
-      auto base = op.getBase();
-      if (auto def = base.getDefiningOp()) {
+      Value base = op.getBase();
+      if (Operation *def = base.getDefiningOp()) {
         if (auto glue = dyn_cast<ttgi::GlueOp>(def)) {
-          auto sub = glue->getOperand(op.getIdx());
+          Value sub = glue->getOperand(op.getIdx());
           rewriter.replaceOp(op, sub);
           return success();
         }
@@ -405,7 +406,7 @@ private:
       SmallVector<Operation *> deleteList;
       SmallVector<Value> newInits;
       DenseMap<Value, int> userIndexMap;
-      auto idx = 0;
+      unsigned idx = 0;
       for (auto [arg, init] :
            llvm::zip(op.getRegionIterArgs(), op.getInits())) {
         auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
@@ -415,11 +416,11 @@ private:
           idx++;
           continue;
         }
-        auto numSplit = glue->getOperands().size();
-        for (auto i = 0; i < numSplit; i++) {
+        unsigned numSplit = glue->getOperands().size();
+        for (unsigned i = 0; i < numSplit; i++) {
           newInits.push_back(glue->getOperand(i));
         }
-        for (auto user : arg.getUsers()) {
+        for (auto *user : arg.getUsers()) {
           auto extract = dyn_cast<ttgi::ExtractOp>(user);
           if (extract) {
             userIndexMap[extract] = idx + extract.getIdx();
@@ -438,14 +439,14 @@ private:
         user.replaceAllUsesWith(newOp.getRegionIterArgs()[idx]);
       op.getInductionVar().replaceAllUsesWith(newOp.getInductionVar());
       // splice operations
-      auto *body = newOp.getBody();
+      Block *body = newOp.getBody();
       body->getOperations().splice(body->begin(),
                                    op.getBody()->getOperations());
       // yield op
       auto yield = cast<scf::YieldOp>(body->getTerminator());
       SmallVector<Value> newValues;
       for (auto result : yield.getResults()) {
-        auto def = result.getDefiningOp();
+        Operation *def = result.getDefiningOp();
         if (def) {
           if (auto glue = dyn_cast<ttgi::GlueOp>(def)) {
             newValues.append(glue->getOperands().begin(),

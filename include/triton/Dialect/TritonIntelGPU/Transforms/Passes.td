@@ -127,14 +127,42 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
   let summary = "match the target size of specific op (dot, load, store)";
 
   let description = [{
-    this pass should be run after tritongpu-distribute-to-warps
+    This pass spilt operations so that each operation would match the target IR size.
+    This pass should be run after tritonintelgpu-distribute-to-warps
+    This pass only support block pointer.
+
+    For example, given:
+    ```mlir
+    %37 = tt.load %arg11 : !tt.ptr<tensor<32x32xf16, #dot0_>, 1> -> tensor<32x32xf16, #dot0_>
+    %38 = tt.load %arg12 : !tt.ptr<tensor<32x64xf16, #dot1_>, 1> -> tensor<32x64xf16, #dot1_>
+    %39 = tt.dot %37, %38, %arg10 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32}
+    : tensor<32x32xf16, #dot0_> * tensor<32x64xf16, #dot1_> -> tensor<32x64xf32, #warp>
+    ```
+
+    after this pass:
+    the load of 32x64xf16 is split to 2 loads of 32x32xf16;
+    the dot is split to 32 dots so that each dot match the configured size(m, n, k).
+    ```mlir
+    %73 = tt.load %arg26 : !tt.ptr<tensor<32x32xf16>, 1> -> tensor<32x32xf16>
+    %74 = tt.load %arg27 : !tt.ptr<tensor<32x32xf16>, 1> -> tensor<32x32xf16>
+    %75 = tt.load %arg28 : !tt.ptr<tensor<32x32xf16>, 1> -> tensor<32x32xf16>
+    %76 = triton_intel_gpu.extract %73, 0 : tensor<32x32xf16> -> tensor<8x16xf16>
+    %77 = triton_intel_gpu.extract %74, 0 : tensor<32x32xf16> -> tensor<16x16xf16>
+    %78 = tt.dot %76, %77, %arg10  : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+    %79 = triton_intel_gpu.extract %73, 4 : tensor<32x32xf16> -> tensor<8x16xf16>
+    %80 = triton_intel_gpu.extract %74, 1 : tensor<32x32xf16> -> tensor<16x16xf16>
+    %81 = tt.dot %79, %80, %78  : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+    ...
+    // other 30 dot operations
+    ...
+    ```
   }];
 
   let constructor = "mlir::triton::gpu::intel::createMatchTargetSizePass()";
 
   let dependentDialects = ["mlir::triton::TritonDialect",
-                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-                           "mlir::triton::gpu::TritonGPUDialect"];
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 
   let options = [
     ListOption<"dotSize", "dot-size",
