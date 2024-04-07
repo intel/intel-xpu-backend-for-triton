@@ -44,6 +44,7 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", []> {
   let assemblyFormat = [{
     $ptr attr-dict `:` type($ptr)
   }];
+}
 
 def TT_TensorRelated : AnyTypeOf<[TT_Tensor, TT_TensorPtr]>;
 
