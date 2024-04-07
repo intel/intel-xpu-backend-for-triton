@@ -1919,7 +1919,8 @@ def get_reduced_dtype(dtype_str, op):
     'sum',
 ] for dtype in dtypes_with_bfloat16 for shape in [32, 64, 128, 512]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_reduce1d(op, dtype_str, shape, num_ctas, device):
+@pytest.mark.parametrize("multi_threads", [(64, 16), (4, 32)] if is_xpu() else [(4, 32)])
+def test_reduce1d(op, dtype_str, shape, num_ctas, multi_threads, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
     # triton kernel
@@ -1968,7 +1969,8 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
         z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
     # triton result
     z_tri = to_triton(numpy_random((1, ), dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
-    kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas)
+    kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas, num_warps=multi_threads[0],
+                  threads_per_warp=multi_threads[1])
     z_tri = to_numpy(z_tri)
     # compare
     if op == 'sum':
@@ -2022,7 +2024,8 @@ keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
     "op, dtype_str, shape, axis, keep_dims", reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config +
     negative_config + keep_dims_2d_configs + keep_dims_3d_configs)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
+@pytest.mark.parametrize("multi_threads", [(64, 16), (4, 32)] if is_xpu() else [(4, 32)])
+def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, multi_threads, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
     @triton.jit
@@ -2090,11 +2093,13 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     if axis is not None and axis >= len(shape):
         with pytest.raises(triton.TritonError):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
-                          KEEP_DIMS=keep_dims, num_ctas=num_ctas)
+                          KEEP_DIMS=keep_dims, num_ctas=num_ctas, num_warps=multi_threads[0],
+                          threads_per_warp=multi_threads[1])
         return
     else:
         kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
-                      KEEP_DIMS=keep_dims, num_ctas=num_ctas)
+                      KEEP_DIMS=keep_dims, num_ctas=num_ctas, num_warps=multi_threads[0],
+                      threads_per_warp=multi_threads[1])
 
     z_tri = to_numpy(z_tri)
 
