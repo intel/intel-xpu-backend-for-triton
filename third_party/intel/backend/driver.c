@@ -74,9 +74,9 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   device_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
   zeDeviceGetProperties(phDevice, &device_properties);
 
-  int multiprocessor_count =
+  int xe_core_count =
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
-  int sm_clock_rate = device_properties.coreClockRate;
+  int xec_clock_rate = device_properties.coreClockRate;
 
   // Extract triton::gpu::intel::DeviceArch from pci_device_id
   // https://dgpu-docs.intel.com/devices/hardware-table.html
@@ -120,8 +120,8 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   return Py_BuildValue(
       "{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}", "max_shared_mem",
-      max_shared_mem, "multiprocessor_count", multiprocessor_count,
-      "sm_clock_rate", sm_clock_rate, "mem_clock_rate", mem_clock_rate,
+      max_shared_mem, "xe_core_count", xe_core_count,
+      "xec_clock_rate", xec_clock_rate, "mem_clock_rate", mem_clock_rate,
       "mem_bus_width", mem_bus_width, "device_arch", gpu_arch,
       "max_work_group_size", max_group_size, "sub_group_sizes", subgroup_sizes);
 }
