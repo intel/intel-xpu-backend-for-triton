@@ -61,11 +61,11 @@ struct AssertOpConversion
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     unsigned addrSpace = TritonGEN::TritonGENMemorySpace::kCrossWorkgroup;
-    Value messageString = LLVM::utils::addStringToModule(
+    Value messageString = LLVM::Intel::addStringToModule(
         loc, rewriter, "assertMessage_", message, addrSpace);
-    Value fileString = LLVM::utils::addStringToModule(
+    Value fileString = LLVM::Intel::addStringToModule(
         loc, rewriter, "assertFile_", file, addrSpace);
-    Value funcString = LLVM::utils::addStringToModule(
+    Value funcString = LLVM::Intel::addStringToModule(
         loc, rewriter, "assertFunc_", func, addrSpace);
     Value lineNumber = i32_val(line);
 
@@ -119,7 +119,7 @@ struct AssertOpConversion
 } // namespace
 
 void mlir::triton::intel::populateAssertOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<AssertOpConversion>(typeConverter, benefit);
 }

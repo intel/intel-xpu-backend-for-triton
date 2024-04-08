@@ -77,16 +77,22 @@ if [ "$BUILD_PINNED" = true ]; then
     PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
     if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
       INSTALL_PYTORCH=false
+    else
+      echo "**** Current PyTorch commit $PYTORCH_CURRENT_COMMIT ****"
+      echo "**** Pinned PyTorch commit $PYTORCH_PINNED_COMMIT ****"
     fi
   fi
   # Determine if the installed IPEX version is the same as the pinned version.
   INSTALL_IPEX=true
-  if pip show intel_extension_for_pytorch &>/dev/null; then
+  if pip show intel-extension-for-pytorch &>/dev/null; then
     IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
     IPEX_CURRENT_COMMIT=`python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"`
     IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
     if [[ "$IPEX_PINNED_COMMIT" = "$IPEX_CURRENT_COMMIT"* ]]; then
       INSTALL_IPEX=false
+    else
+      echo "**** Current IPEX commit $IPEX_CURRENT_COMMIT ****"
+      echo "**** Pinned IPEX commit $IPEX_PINNED_COMMIT ****"
     fi
   fi
 
@@ -133,13 +139,6 @@ if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ]; then
   fi
 fi
 
-check_rc() {
-  if [ $? != 0 ]; then
-    echo "Command failed with rc: $rc"
-    exit 1
-  fi
-}
-
 ############################################################################
 # Configure and build the pytorch project.
 
@@ -166,7 +165,6 @@ build_pytorch() {
   pip install dist/*.whl
   cd $BASE
   python -c "import torch;print(torch.__version__)"
-  check_rc
 }
 
 ############################################################################
@@ -193,7 +191,6 @@ build_ipex() {
   pip install dist/*.whl
   cd $BASE
   python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
-  check_rc
 }
 
 build() {

@@ -10,6 +10,7 @@ permissions: read-all
 env:
   BACKEND: XPU
   TRITON_DISABLE_LINE_INFO: 1
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
 
@@ -18,7 +19,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - conda-0.0.1
+      - runner-0.0.11
     strategy:
       matrix:
         python:
@@ -31,32 +32,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get LLVM commit id
-        run: |
-          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
-          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
-
       - name: Calculate env
         run: |
-          PACKAGES_CACHE_KEY=$(echo $LLVM_COMMIT_ID ${{ hashFiles('scripts/compile-triton.sh') }} | sha256sum - | cut -d\  -f1)
-          echo "PACKAGES_CACHE_KEY=$PACKAGES_CACHE_KEY" >>$GITHUB_ENV
           echo $HOME/miniconda3/bin >>$GITHUB_PATH
-
-      - name: Load packages cache
-        id: packages-cache
-        uses: ./.github/actions/load
-        env:
-          # Increase this value to reset cache
-          CACHE_NUMBER: 4
-        with:
-          path: ${{ github.workspace }}/../packages
-          key: conda-packages-${{ env.PACKAGES_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
 
       - name: Load conda cache
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 6
+          CACHE_NUMBER: 2
         with:
           path: $HOME/miniconda3/envs/triton
           key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
@@ -75,25 +59,29 @@ jobs:
           conda info
           conda list -n triton
 
-      - name: Build packages
-        if: ${{ steps.packages-cache.outputs.status == 'miss' }}
-        run: |
-          conda run --no-capture-output -n triton ./scripts/compile-triton.sh --llvm
-
-      - name: Save packages cache
-        if: ${{ steps.packages-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.packages-cache.outputs.path }}
-          dest: ${{ steps.packages-cache.outputs.dest }}
-
       - name: Build Triton
         run: |
-          conda run -n triton scripts/compile-triton.sh --triton
+          export DEBUG=1
+          cd python
+          conda run --no-capture-output -n triton pip install -e .
+
+      - name: Install latest nightly wheels
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          install_cmd: conda run --no-capture-output -n triton pip install
+          python_version: ${{ matrix.python }}
 
       - name: Run core tests
         run: |
-          conda run -n triton scripts/test-triton.sh
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/806
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/841
+          mv scripts/core-conda.exclude-list scripts/core.exclude-list
+          mv scripts/interpreter-conda.exclude-list scripts/interpreter.exclude-list
+
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/797
+          sed -ie 's/\(.*08-grouped-gemm\)/#\1/' scripts/test-triton.sh
+          conda run --no-capture-output -n triton bash -v -x scripts/test-triton.sh
 
       - name: Run E2E test
         run: |
@@ -112,7 +100,7 @@ jobs:
           # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
           export WORKSPACE=$GITHUB_WORKSPACE
           # TODO: Find the fastest Hugging Face model
-          conda run -n triton $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          conda run --no-capture-output -n triton $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
           # The script above always returns 0, so we need an additional check to see if the accuracy test passed
           cat $WORKSPACE/inductor_log/*/*/*.csv
           grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,

@@ -130,7 +130,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                   ConversionPatternRewriter &rewriter) const override {
     // Prevent LLVM's inliner to inline this function
     auto amendedFuncOp = funcOp;
-    if (!LLVM::utils::isKernel(funcOp))
+    if (!LLVM::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
     LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
@@ -141,7 +141,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     MLIRContext *ctx = funcOp->getContext();
     auto mod = funcOp->getParentOfType<ModuleOp>();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    if (LLVM::utils::isKernel(funcOp))
+    if (LLVM::isKernel(funcOp))
       newFuncOp.setCConv(LLVM::CConv::SPIR_KERNEL);
 
     auto maxWorkGroupSizeAttr = rewriter.getArrayAttr(
@@ -156,7 +156,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     newFuncOp.setPassthroughAttr(
         ArrayAttr::get(ctx, {reqSubGroupSizeAttr, maxWorkGroupSizeAttr}));
 
-    if (!LLVM::utils::isKernel(funcOp)) {
+    if (!LLVM::isKernel(funcOp)) {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       rewriter.eraseOp(amendedFuncOp);
@@ -245,19 +245,26 @@ struct ConvertTritonGPUToLLVM
                                       benefit);
     mlir::triton::intel::populateReduceOpToLLVMPatterns(typeConverter, patterns,
                                                         targetInfo, benefit);
-    populateScanOpToLLVMPatterns(typeConverter, patterns, benefit);
-    mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
-                                               benefit);
+    mlir::triton::intel::populateScanOpToLLVMPatterns(typeConverter, patterns,
+                                                      targetInfo, benefit);
+    mlir::triton::intel::populateViewOpToLLVMPatterns(typeConverter, patterns,
+                                                      benefit);
 
     populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
-    populateHistogramOpToLLVMPatterns(typeConverter, patterns, benefit);
+    mlir::triton::intel::populateHistogramOpToLLVMPatterns(typeConverter,
+                                                           patterns, benefit);
     populatePrintOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateAssertOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateControlFlowOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
-    populateSPMDOpToLLVMPattern(typeConverter, patterns, benefit);
+    mlir::triton::intel::populateAssertOpToLLVMPattern(typeConverter, patterns,
+                                                       benefit);
+    mlir::triton::intel::populateMemoryOpToLLVMPattern(typeConverter, patterns,
+                                                       benefit);
+    mlir::triton::intel::populateControlFlowOpToLLVMPattern(typeConverter,
+                                                            patterns, benefit);
+    mlir::triton::intel::populateMakeRangeOpToLLVMPattern(typeConverter,
+                                                          patterns, benefit);
+    mlir::triton::intel::populateSPMDOpToLLVMPattern(typeConverter, patterns,
+                                                     benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
@@ -276,7 +283,7 @@ struct ConvertTritonGPUToLLVM
     if (numCTAs == 1) {
       mod.walk([](triton::nvgpu::ClusterCTAIdOp id) {
         OpBuilder b(id);
-        Value zero = LLVM::utils::createConstantI32(id->getLoc(), b, 0);
+        Value zero = LLVM::createConstantI32(id->getLoc(), b, 0);
         id.replaceAllUsesWith(zero);
       });
     }

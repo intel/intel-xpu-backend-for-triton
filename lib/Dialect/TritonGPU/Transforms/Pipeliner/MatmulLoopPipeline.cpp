@@ -93,18 +93,20 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       return cvt.getResult();
     };
     src = convertBlockLayout(src);
-    mask = convertBlockLayout(src);
+    if (mask)
+      mask = convertBlockLayout(mask);
   }
 
-  SmallVector<Value> copyOffsets = {insertIdx, zero, zero};
   tt::MemDescType allocTy = alloc.getType().cast<tt::MemDescType>();
+  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
+  copyOffsets[0] = insertIdx;
   tt::MemDescType subviewTy = tt::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), /*mutableMemory=*/true);
   auto view =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
   Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
-      loc, src, view, loadOp.getMask(), loadOp.getOther(), loadOp.getCache(),
+      loc, src, view, mask, loadOp.getOther(), loadOp.getCache(),
       loadOp.getEvict(), loadOp.getIsVolatile());
   Operation *commmit =
       builder.create<ttg::AsyncCommitGroupOp>(loc, copy->getResult(0));
@@ -117,7 +119,8 @@ createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   opToInfo.erase(loadOp);
 
   // Extract part.
-  SmallVector<Value> loadOffsets = {extractIdx, zero, zero};
+  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
+  loadOffsets[0] = extractIdx;
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
   if (isMMV3Load) {
@@ -395,6 +398,11 @@ collectOpsToPipeline(scf::ForOp forOp,
             getSharedEncIfAllUsersAreDotEnc(loadOp.getResult())
                 .value_or(nullptr);
       }
+      // TODO(jlebar): Remove this if statement, which effectively rolls back
+      // back https://github.com/openai/triton/pull/3415, once internal bugs are
+      // fixed.
+      if (!loadInfo.sharedEncoding)
+        continue;
     }
 
     // If we still don't have a shared encoding, try a "generic" shared
@@ -1167,8 +1175,8 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
     if (isMMAv3Dot(dotOp)) {
       builder.setInsertionPoint(dotOp);
       builder.replaceOpWithNewOp<ttng::DotAsyncOp>(
-          dotOp, dotOp.getA(), dotOp.getB(), dotOp.getC(), dotOp.getAllowTF32(),
-          dotOp.getMaxNumImpreciseAcc());
+          dotOp, dotOp.getA(), dotOp.getB(), dotOp.getC(),
+          dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
     }
   }
 

@@ -18,22 +18,22 @@ import triton.ops
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('seq_par', [True, False])
 def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
-    if torch.xpu.is_available():
-        if D_HEAD != 16:
-            pytest.skip("FIXME: Enable larger problem sizes when tl.dot uses DPAS")
-
     if torch.cuda.is_available():
         capability = torch.cuda.get_device_capability()
         if capability[0] < 8:
             pytest.skip("Flash attention only supported for compute capability >= 80")
 
+    if dtype == torch.bfloat16 and os.environ.get("TRITON_INTERPRET", "0") == "1":
+        pytest.xfail("Flash attention bfloat16 not supported in interpreter mode")
+
+    if device == "xpu":
+        if D_HEAD != 16:
+            pytest.skip("FIXME: Enable larger problem sizes when tl.dot uses DPAS")
+
     # Pytorch does not support Half data type for matmul operation hence the skip
     if device == 'cpu':
         if dtype == torch.float16 and os.environ.get("TRITON_INTERPRET", "0") == "1":
             pytest.skip("FIXME: Half is not implemented in Pytorch")
-
-    if dtype == torch.bfloat16 and os.environ.get("TRITON_INTERPRET", "0") == "1":
-        pytest.xfail("Flash attention bfloat16 not supported in interpreter mode")
 
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=device).normal_(mean=0., std=0.5).requires_grad_()

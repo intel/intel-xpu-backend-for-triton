@@ -15,22 +15,59 @@ inputs:
   gh_token:
     description: GitHub token
     required: true
+  install_cmd:
+    description: The command used to install wheels
+    default: 'pip install'
+  python_version:
+    required: true
 
 runs:
   using: "composite"
   steps:
-    - name: Install wheels from specified workflow artifacts
+    - name: Get the latest run id
+      id: run_id
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.gh_token }}
+      run: |
+        set -e
+        run_id=$(gh run list -w "${{ inputs.workflow }}" --repo ${{ inputs.repository }} --json databaseId --jq '.[0].databaseId')
+        if [[ ! $run_id ]]; then
+          exit 1
+        fi
+        echo "${{ inputs.workflow }}: $run_id"
+        echo "run_id=$run_id" >> $GITHUB_OUTPUT
+
+    - name: Load wheels from cache
+      id: wheels-cache
+      uses: ./.github/actions/load
+      with:
+        path: ~/wheels
+        key: wheels-py${{ inputs.python_version }}-${{ steps.run_id.outputs.run_id }}
+
+    - name: Download wheels from specified workflow run artifacts
+      if: ${{ steps.wheels-cache.outputs.status == 'miss' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.gh_token }}
       run: |
         set -x
-        WORKFLOW_ID=$(gh run list -w "${{ inputs.workflow }}" -R ${{ inputs.repository }} --json databaseId | jq '.[0].databaseId')
-        PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        TEMP_DIR=`mktemp -d`
-        pushd ${TEMP_DIR}
-        gh run download ${WORKFLOW_ID} -R ${{ inputs.repository }} --pattern "wheels-py${PYTHON_VERSION}*"
-        cd wheels-py${PYTHON_VERSION}*
-        pip install ${{ inputs.wheels_pattern }}
-        popd
-        rm -rf ${TEMP_DIR}
+        mkdir -p ~/wheels
+        gh run download ${{ steps.run_id.outputs.run_id }} \
+          --repo ${{ inputs.repository }} \
+          --pattern "wheels-py${{ inputs.python_version }}*" \
+          --dir ~/wheels
+
+    - name: Install wheels
+      shell: bash
+      run: |
+        set -x
+        cd ~/wheels/wheels-py${{ inputs.python_version }}*
+        ${{ inputs.install_cmd }} ${{ inputs.wheels_pattern }}
+
+    - name: Save wheels to cache
+      if: ${{ steps.wheels-cache.outputs.status == 'miss' }}
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.wheels-cache.outputs.path }}
+        dest: ${{ steps.wheels-cache.outputs.dest }}

@@ -228,9 +228,7 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "bool":$needTrans), [{
 
         // ---- begin GFX908/GFX90A ----
-        auto mfmaEnc = dotOpEnc.getParent().dyn_cast<AMDMfmaEncodingAttr>();
-
-        if (mfmaEnc) {
+        if (auto mfmaEnc = dotOpEnc.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
           bool isKDimInner = (order[0] == kDimNum);
           if (isKDimInner) {
@@ -251,7 +249,7 @@ compared to 1*64 when the hasLeadingOffset is false.
             // For now, the k_base rules are as follows
             // 1. All selected mfma instructions produce a single block
             // 2. For f16 data type, 2 VGPRs are used for operand A --> k_base = 4
-            // 3. For non-f16 data types, 1 VGPR are used for operand A
+            // 3. For non-f16 data types, 1 VGPR is used for operand A
             //    k_base = 32 / elemTypeInBits
             // 4. TODO: what about f64?
             //
@@ -260,8 +258,30 @@ compared to 1*64 when the hasLeadingOffset is false.
             int maxPhase = SIMDWidth / perPhase;
 
             // TODO (zhanglx): figure out better parameters for mfma4
-            if (mfmaEnc.getMDim() == 4 )
+            if (mfmaEnc.getMDim() == 4)
               maxPhase = 4;
+
+            return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
+          } else {
+            // Do not swizzle in case k dimension is not innermost.
+            // In this case accesses will go in different banks even without swizzling.
+            return get(context, 1, 1, 1, order, CTALayout);
+          }
+        }
+
+        // ---- begin GFX11 ----
+        if (dotOpEnc.getParent().isa<AMDWmmaEncodingAttr>()) {
+          if (dotOpEnc.getOpIdx() == 0) {
+            const int numBanks = 32;
+            const int bankBitWidth = 32;
+
+            // number of inner dimension rows per one pattern repeat
+            int innerDimLength = shape[order[0]];
+            int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeWidthInBit;
+
+            int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
+            int vecSize = ((typeWidthInBit == 16) ? 64 : 32 ) / typeWidthInBit;
+            int maxPhase = 16 / perPhase;
 
             return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
           } else {
@@ -460,6 +480,10 @@ For the Threads Per Warp and Values Per Thread level, the linear id distribution
                     "SmallVector<unsigned>",
                     "getShapePerCTATile",
                      (ins "ArrayRef<int64_t>":$tensorShape)>,
+
+    InterfaceMethod<"Gets the number of contiguous elements per thread.",
+                    "SmallVector<unsigned>",
+                    "getContigPerThread">,
   ];
 }
 
@@ -674,6 +698,11 @@ for
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SliceEncodingAttr squeeze(int axis);
+
+    SmallVector<unsigned> getContigPerThread() {
+      // Block encoding is dense stride layout. The elements per thread are contiguous.
+      return getSizePerThread();
+    };
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -823,6 +852,15 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     SmallVector<int64_t> getMFMAInstrShapeForOperands(int kWidth, int opIdx) const;
     SmallVector<int64_t> getMFMARepForOperands(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
 
+    SmallVector<unsigned> getContigPerThread() {
+      auto rank = getWarpsPerCTA().size();
+      SmallVector<unsigned> contigPerThread(rank, 1);
+      contigPerThread[0] = 4;
+      if (getIsTransposed()) {
+        std::reverse(contigPerThread.begin(), contigPerThread.end());
+      }
+      return contigPerThread;
+    };
 
   }];
 
@@ -882,6 +920,12 @@ Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
     SmallVector<int64_t> getWMMARepForOperands(ArrayRef<int64_t> operandShape,
                                       Type elemType, int kWidth, int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerWMMAInstr();
+
+    SmallVector<unsigned> getContigPerThread() {
+      auto rank = getWarpsPerCTA().size();
+      SmallVector<unsigned> contigPerThread(rank, 1);
+      return contigPerThread;
+    };
   }];
 }
 
@@ -1074,6 +1118,15 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+
+    SmallVector<unsigned> getContigPerThread() {
+      assert(isVolta() || isAmpere() || isHopper());
+      auto rank = getWarpsPerCTA().size();
+      SmallVector<unsigned> contigPerThread(rank, 1);
+      contigPerThread[rank - 1] = 2;
+      return contigPerThread;
+    };
+
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1110,6 +1163,11 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let extraClassDeclaration = extraDistributedDeclaration # [{
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
+
+    SmallVector<unsigned> getContigPerThread() {
+      auto parentLayout = getParent().cast<DistributedEncodingTrait>();
+      return parentLayout.getContigPerThread();
+    };
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1156,6 +1214,9 @@ section 9.7.13.4.1 for more details.
 
   let hasCustomAssemblyFormat = 1;
   let extraClassDeclaration = extraDistributedDeclaration # [{
+    SmallVector<unsigned> getContigPerThread() {
+      return getSizePerThread();
+    };
   }];
 }
 

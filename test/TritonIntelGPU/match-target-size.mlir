@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-match-target-size -canonicalize -cse | FileCheck %s
 
-#warp = #triton_gpu.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+#warp = #triton_intel_gpu.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 #dot0_ = #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>
 #dot1_ = #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>
 module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
@@ -50,7 +50,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %33:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %24, %arg12 = %32) -> (tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #dot0_>, 1>, !tt.ptr<tensor<32x64xf16, #dot1_>, 1>)  : i32 {
       %37 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16, #dot0_>, 1> -> tensor<32x32xf16, #dot0_>
       %38 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x64xf16, #dot1_>, 1> -> tensor<32x64xf16, #dot1_>
-      %39 = tt.dot %37, %38, %arg10 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<32x32xf16, #dot0_> * tensor<32x64xf16, #dot1_> -> tensor<32x64xf32, #warp>
+      %39 = tt.dot %37, %38, %arg10 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<32x32xf16, #dot0_> * tensor<32x64xf16, #dot1_> -> tensor<32x64xf32, #warp>
       // CHECK-LABEL: @matmul_kernel_with_block_pointers_without_convertlayout
       // CHECK: [[A:%.*]] = tt.load {{.*}} tensor<32x32xf16>
       // CHECK: [[B0:%.*]] = tt.load {{.*}} tensor<32x32xf16>

@@ -32,7 +32,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   m.def(
       "add_accelerate_matmul",
       [](mlir::PassManager &pm, mlir::triton::gpu::intel::DeviceArch arch) {
-        pm.addPass(mlir::createTritonIntelGPUAccelerateMatmulPass(arch));
+        pm.addPass(
+            mlir::triton::gpu::intel::createTritonIntelGPUAccelerateMatmulPass(
+                arch));
       },
       py::arg("pm"),
       py::arg("arch") = mlir::triton::gpu::intel::DeviceArch::UNKNOWN);
@@ -47,8 +49,6 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
 void init_triton_intel_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_1("add_plan_cta", mlir::createTritonNvidiaGPUPlanCTAPass,
                      mlir::triton::nvidia_gpu::ClusterInfo *);
-  ADD_PASS_WRAPPER_0("add_fence_insertion",
-                     mlir::createTritonNvidiaGPUFenceInsertionPass);
 }
 
 void init_triton_intel(py::module &&m) {

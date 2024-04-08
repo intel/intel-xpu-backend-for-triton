@@ -2,6 +2,7 @@
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
@@ -14,9 +15,9 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::utils::delinearize;
-using ::mlir::LLVM::utils::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::utils::linearize;
+using ::mlir::LLVM::delinearize;
+using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
+using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -31,7 +32,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
   Value mask = int_val(1, 1);
   auto tid = tid_val();
-  auto clusterCTAId = getClusterCTAId(rewriter, loc);
+  auto clusterCTAId = LLVM::Intel::getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
     auto shape = tensorTy.getShape();
@@ -41,7 +42,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
     auto order = triton::gpu::getOrder(layout);
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
-    Value warpSize = getModuleWarpSize(rewriter, loc);
+    Value warpSize = LLVM::Intel::getModuleWarpSize(rewriter, loc);
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);
     SmallVector<Value> multiDimWarpId =
@@ -253,7 +254,7 @@ struct LoadOpConversion
       }
 
       // Create a predicated load operation.
-      Block &endBlock = LLVM::utils::createPredicatedBlock(
+      Block &endBlock = LLVM::Intel::createPredicatedBlock(
           rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
             Value addrElem =
                 bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
@@ -394,7 +395,7 @@ struct StoreOpConversion
       }
 
       // Create a predicated store operation.
-      mlir::LLVM::utils::createPredicatedBlock(rewriter, loc, maskVal, [&] {
+      LLVM::Intel::createPredicatedBlock(rewriter, loc, maskVal, [&] {
         Value addrElem = bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
         uint32_t alignment = nWords * width / 8;
         store(vecWord, addrElem, alignment);
@@ -481,8 +482,8 @@ struct AtomicCASOpConversion
              "Unexpected width");
 
       Value zero = (valueElemNBits == 32) ? i32_val(0) : i64_val(0);
-      Block &endBlock = mlir::LLVM::utils::createPredicatedBlock(
-          rewriter, loc, mask, {zero}, [&] {
+      Block &endBlock =
+          LLVM::Intel::createPredicatedBlock(rewriter, loc, mask, {zero}, [&] {
             // casPtr = bitcast(casPtr, ptr_ty(ctx, 1));
             casCmp = bitcast(casCmp, zero.getType());
             casVal = bitcast(casVal, zero.getType());
@@ -507,9 +508,9 @@ struct AtomicCASOpConversion
       } else {
         createBarrier(rewriter, loc, numCTAs);
         Value atomPtr =
-            LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
+            LLVM::Intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
-        mlir::LLVM::utils::storeShared(rewriter, loc, atomPtr, ret, mask);
+        LLVM::Intel::storeShared(rewriter, loc, atomPtr, ret, mask);
         createBarrier(rewriter, loc, numCTAs);
         Value ret = load(valueElemTy, atomPtr);
         createBarrier(rewriter, loc, numCTAs);
@@ -538,7 +539,9 @@ struct AtomicRMWOpConversion
                         PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter,
                                                              benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(axisAnalysisPass),
+        emulateFp16Atomics(
+            ::triton::tools::getBoolEnv("TRITON_INTEL_EMULATE_FP16_ATOMICS")) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
@@ -578,7 +581,10 @@ struct AtomicRMWOpConversion
     // tensor
     if (tensorTy) {
       auto valTy = val.getType().cast<RankedTensorType>();
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
+      auto maxVecSize =
+          valueElemNBits / valTy.getElementType().getIntOrFloatBitWidth();
+      vec = std::min<unsigned>(vec,
+                               valTy.getElementType().isF16() ? maxVecSize : 1);
       // mask
       numElems = tensorTy.getNumElements();
     }
@@ -609,49 +615,58 @@ struct AtomicRMWOpConversion
           .Case<mlir::Float32Type>([&](auto ty) { zero = f32_val(0); })
           .Case<mlir::Float64Type>([&](auto ty) { zero = f64_val(0); });
 
-      Block &endBlock = mlir::LLVM::utils::createPredicatedBlock(
-          rewriter, loc, rmwMask, {zero}, [&] {
-            mlir::LLVM::AtomicBinOp rmwKind;
-            switch (atomicRmwAttr) {
-            case RMWOp::AND:
-              rmwKind = LLVM::AtomicBinOp::_and;
-              break;
-            case RMWOp::OR:
-              rmwKind = LLVM::AtomicBinOp::_or;
-              break;
-            case RMWOp::XOR:
-              rmwKind = LLVM::AtomicBinOp::_xor;
-              break;
-            case RMWOp::ADD:
-              rmwKind = LLVM::AtomicBinOp::add;
-              break;
-            case RMWOp::FADD:
-              rmwKind = LLVM::AtomicBinOp::fadd;
-              break;
-            case RMWOp::MAX:
-              rmwKind = LLVM::AtomicBinOp::max;
-              break;
-            case RMWOp::UMAX:
-              rmwKind = LLVM::AtomicBinOp::umax;
-              break;
-            case RMWOp::MIN:
-              rmwKind = LLVM::AtomicBinOp::min;
-              break;
-            case RMWOp::UMIN:
-              rmwKind = LLVM::AtomicBinOp::umin;
-              break;
-            case RMWOp::XCHG:
-              rmwKind = LLVM::AtomicBinOp::xchg;
-              break;
-            }
+      Block *endBlock = nullptr;
+      // TODO: check device capabilities to avoid unnecessary emulation or
+      // emit unsupported feature error.
+      if (valueElemNBits == 16 && emulateFp16Atomics) {
+        endBlock =
+            emulateFp16AtomicRmw(rewriter, loc, atomicRmwAttr, valueElemTy,
+                                 rmwPtr, rmwVal, rmwMask, {zero});
+      } else {
+        endBlock = &LLVM::Intel::createPredicatedBlock(
+            rewriter, loc, rmwMask, {zero}, [&] {
+              mlir::LLVM::AtomicBinOp rmwKind;
+              switch (atomicRmwAttr) {
+              case RMWOp::AND:
+                rmwKind = LLVM::AtomicBinOp::_and;
+                break;
+              case RMWOp::OR:
+                rmwKind = LLVM::AtomicBinOp::_or;
+                break;
+              case RMWOp::XOR:
+                rmwKind = LLVM::AtomicBinOp::_xor;
+                break;
+              case RMWOp::ADD:
+                rmwKind = LLVM::AtomicBinOp::add;
+                break;
+              case RMWOp::FADD:
+                rmwKind = LLVM::AtomicBinOp::fadd;
+                break;
+              case RMWOp::MAX:
+                rmwKind = LLVM::AtomicBinOp::max;
+                break;
+              case RMWOp::UMAX:
+                rmwKind = LLVM::AtomicBinOp::umax;
+                break;
+              case RMWOp::MIN:
+                rmwKind = LLVM::AtomicBinOp::min;
+                break;
+              case RMWOp::UMIN:
+                rmwKind = LLVM::AtomicBinOp::umin;
+                break;
+              case RMWOp::XCHG:
+                rmwKind = LLVM::AtomicBinOp::xchg;
+                break;
+              }
 
-            rmwVal = bitcast(rmwVal, valueElemTy);
-            auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
-                loc, rmwKind, rmwPtr, rmwVal, LLVM::AtomicOrdering::acq_rel);
-            return SmallVector<Value, 1>{atomRMW.getRes()};
-          });
+              rmwVal = bitcast(rmwVal, valueElemTy);
+              auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
+                  loc, rmwKind, rmwPtr, rmwVal, LLVM::AtomicOrdering::acq_rel);
+              return SmallVector<Value, 1>{atomRMW.getRes()};
+            });
+      }
 
-      Value ret = endBlock.getArgument(0);
+      Value ret = endBlock->getArgument(0);
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = bitcast(ret, retType);
 
@@ -662,10 +677,10 @@ struct AtomicRMWOpConversion
         }
       } else {
         Value atomPtr =
-            LLVM::utils::getSharedMemoryBase(loc, rewriter, op.getOperation());
+            LLVM::Intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
-        mlir::LLVM::utils::storeShared(rewriter, loc, atomPtr, ret, rmwMask);
+        LLVM::Intel::storeShared(rewriter, loc, atomPtr, ret, rmwMask);
         createBarrier(rewriter, loc, numCTAs);
         Value loadVal = load(valueElemTy, atomPtr);
         createBarrier(rewriter, loc, numCTAs);
@@ -681,6 +696,94 @@ struct AtomicRMWOpConversion
     }
     return success();
   }
+
+  // Emulate 16-bit atomicrmw through a loop with 32-bit cmpxchg.
+  Block *emulateFp16AtomicRmw(ConversionPatternRewriter &rewriter, Location loc,
+                              mlir::triton::RMWOp atomicOp, Type valueElemTy,
+                              Value rmwPtr, Value rmwVal, Value rmwMask,
+                              ArrayRef<Value> ops) const {
+    Block *insertionBlock = rewriter.getInsertionBlock();
+    Block *headerBlock =
+        rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
+    Block *endBlock = rewriter.splitBlock(headerBlock, headerBlock->begin());
+    rewriter.setInsertionPointToEnd(insertionBlock);
+    rewriter.create<cf::CondBranchOp>(loc, rmwMask, headerBlock, endBlock, ops);
+    rewriter.setInsertionPointToStart(headerBlock);
+
+    rmwVal = bitcast(rmwVal, valueElemTy);
+
+    // Align pointer by 4 bytes by zeroing lower address bits. Atomically read
+    // a vector of two fp16 values as a single i32. The second lowest bit is
+    // extracted to later be used as an index to extract the required vector
+    // element.
+    assert(rmwPtr.getType().isa<LLVM::LLVMPointerType>());
+    auto intPtr = ptrtoint(i64_ty, rmwPtr);
+    auto lowPtrBits = and_(intPtr, i64_val(3));
+    auto elemIndex = trunc(i32_ty, lshr(lowPtrBits, i64_val(1)));
+    auto alignPtr = inttoptr(rmwPtr.getType(), sub(intPtr, lowPtrBits));
+    auto firstValInt = load(i32_ty, alignPtr, 4, false, false, false,
+                            LLVM::AtomicOrdering::acquire);
+
+    // Create a loop body block. It has a single parameter which holds the
+    // latest loaded i32 value.
+    Block *bodyBlock =
+        rewriter.splitBlock(headerBlock, rewriter.getInsertionPoint());
+    auto origValInt =
+        bodyBlock->addArgument(firstValInt.getType(), firstValInt.getLoc());
+    rewriter.setInsertionPointToEnd(headerBlock);
+    rewriter.create<cf::BranchOp>(loc, bodyBlock,
+                                  SmallVector<Value, 1>{firstValInt});
+    rewriter.setInsertionPointToEnd(bodyBlock);
+
+    // Extract value for modification.
+    auto origValVec = bitcast(origValInt, vec_ty(valueElemTy, 2));
+    Value origVal = extract_element(origValVec, elemIndex);
+
+    // Apply operation.
+    Value newVal = nullptr;
+    switch (atomicOp) {
+    case RMWOp::FADD:
+      newVal = rewriter.create<LLVM::FAddOp>(loc, origVal, rmwVal);
+      break;
+    case RMWOp::MAX:
+      newVal = rewriter.create<LLVM::MaximumOp>(loc, origVal, rmwVal);
+      break;
+    case RMWOp::MIN:
+      newVal = rewriter.create<LLVM::MinimumOp>(loc, origVal, rmwVal);
+      break;
+    case RMWOp::XCHG:
+      newVal = rmwVal;
+      break;
+    default:
+      llvm_unreachable("Unsupported FP16 atomic op");
+    }
+
+    // Use modified value to form a new i32 value to write to memory.
+    assert(newVal);
+    Value newValVec = insert_element(origValVec, newVal, elemIndex);
+    Value newValInt = bitcast(newValVec, i32_ty);
+
+    // Execute cmpxchg and loop back if it fails.
+    auto successOrdering = LLVM::AtomicOrdering::acq_rel;
+    auto failureOrdering = LLVM::AtomicOrdering::monotonic;
+    auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+        loc, alignPtr, origValInt, newValInt, successOrdering, failureOrdering);
+    auto newLoaded = extract_val(cmpxchg, 0);
+    auto done = extract_val(cmpxchg, 1);
+    assert(ops.size() == (size_t)1);
+    SmallVector<Value, 1> endOps = {origVal};
+    rewriter.create<cf::CondBranchOp>(loc, done, endBlock, endOps, bodyBlock,
+                                      SmallVector<Value, 1>{newLoaded});
+
+    for (Value op : ops)
+      endBlock->addArgument(op.getType(), op.getLoc());
+
+    rewriter.setInsertionPointToStart(endBlock);
+    return endBlock;
+  }
+
+private:
+  bool emulateFp16Atomics = false;
 };
 
 } // namespace

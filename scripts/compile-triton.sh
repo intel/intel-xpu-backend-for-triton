@@ -42,7 +42,6 @@ for arg in "$@"; do
 done
 
 if [ "$BUILD_LLVM" = false ] && [ "$BUILD_TRITON" = false ]; then
-  BUILD_LLVM=true
   BUILD_TRITON=true
 fi
 
@@ -54,7 +53,7 @@ fi
 
 export PACKAGES_DIR=$BASE/packages
 export SPIRV_TOOLS=$PACKAGES_DIR/spirv-tools
-export LLVM_PROJ=$BASE/llvm-project
+export LLVM_PROJ=$BASE/llvm
 export LLVM_PROJ_BUILD=$LLVM_PROJ/build
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
@@ -73,13 +72,6 @@ elif [ -v VIRTUAL_ENV ]; then
   echo "**** Cleaning up Python virtualenv ****"
   deactivate
 fi
-
-check_rc() {
-  if [ $? != 0 ]; then
-    echo "Command failed with rc: $rc"
-    exit 1
-  fi
-}
 
 if [ ! -d "$PACKAGES_DIR" ]; then
   mkdir $PACKAGES_DIR
@@ -112,25 +104,6 @@ if [ ! -d "$TRITON_PROJ" ]; then
 fi
 
 ############################################################################
-# Clone the LLVM repository if it does not exists, and checkout the commit used by Triton.
-
-if [ ! -d "$LLVM_PROJ" ]; then
-  echo "**** Cloning $LLVM_PROJ ****"
-  cd $BASE
-  git clone --recursive https://github.com/llvm/llvm-project.git
-
-  TRITON_LLVM_COMMIT_FILE="$TRITON_PROJ/cmake/llvm-hash.txt"
-  if [ ! -f "$TRITON_LLVM_COMMIT_FILE" ]; then
-    echo "ERROR: TRITON LLVM commit file $TRITON_LLVM_COMMIT_FILE not found."
-    abort
-  fi
-
-  TRITON_LLVM_COMMIT="$(<$TRITON_LLVM_COMMIT_FILE)"
-  cd $LLVM_PROJ
-  git checkout $TRITON_LLVM_COMMIT
-fi
-
-############################################################################
 ## Configure and build the llvm project.
 
 if [ ! -v C_COMPILER ]; then
@@ -142,12 +115,15 @@ if [ ! -v CXX_COMPILER ]; then
   echo "**** CXX_COMPILER is set to $CXX_COMPILER ****"
 fi
 
-if [ ! -d "$LLVM_PROJ_BUILD" ]
-then
-  mkdir $LLVM_PROJ_BUILD
-fi
-
 build_llvm() {
+
+  # Clone the Intel LLVM repository (genx branch).
+  if [ ! -d "$LLVM_PROJ" ]; then
+    echo "**** Cloning $LLVM_PROJ ****"
+    cd $BASE
+    git clone --recursive https://github.com/intel/llvm.git -b genx
+  fi
+
   echo "****** Configuring $LLVM_PROJ ******"
 
   ADDITIONAL_FLAGS=""
@@ -155,6 +131,11 @@ build_llvm() {
   then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DCMAKE_C_COMPILER_LAUNCHER=ccache"
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+  fi
+
+  if [ ! -d "$LLVM_PROJ_BUILD" ]
+  then
+    mkdir $LLVM_PROJ_BUILD
   fi
 
   cd $LLVM_PROJ_BUILD
@@ -173,11 +154,8 @@ build_llvm() {
 
   echo "****** Building $LLVM_PROJ ******"
   ninja
-  check_rc
   ninja install
-  check_rc
   ninja check-mlir
-  check_rc
 }
 
 ############################################################################
@@ -202,7 +180,9 @@ build_triton() {
   echo "**** Configuring $TRITON_PROJ ****"
   cd $TRITON_PROJ
 
-  export LLVM_SYSPATH=$PACKAGES_DIR/llvm
+  if [ "$BUILD_LLVM" = true ]; then
+    export LLVM_SYSPATH=$PACKAGES_DIR/llvm
+  fi
   export DEBUG=1
   if [ "$CCACHE" = true ]
   then
@@ -211,11 +191,9 @@ build_triton() {
 
   cd python
   pip install -e .
-  check_rc
 
   # Install triton tests.
   pip install -vvv -e '.[tests]'
-  check_rc
 
   # Copy compile_commands.json in the build directory (so that cland vscode plugin can find it).
   cp $TRITON_PROJ_BUILD/"$(ls $TRITON_PROJ_BUILD)"/compile_commands.json $TRITON_PROJ/

@@ -161,19 +161,11 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
 }
 
 SmallVector<unsigned> getContigPerThread(Attribute layout) {
-  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-    assert(mmaLayout.isVolta() || mmaLayout.isAmpere() || mmaLayout.isHopper());
-    auto rank = triton::gpu::getOrder(mmaLayout).size();
-    SmallVector<unsigned> contigPerThread(rank, 1);
-    contigPerThread[rank - 1] = 2;
-    return contigPerThread;
-  } else if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
-    return {1, 1};
-  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    auto parentLayout = sliceLayout.getParent();
-    return getContigPerThread(parentLayout);
+  if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
+    return distributedLayout.getContigPerThread();
   } else {
-    return getSizePerThread(layout);
+    llvm::report_fatal_error("getContigPerThread not implemented");
+    return {};
   }
 }
 
@@ -243,6 +235,11 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     SmallVector<unsigned> order(rank);
     for (auto i = 0; i < rank; ++i)
       order[i] = rank - 1 - i;
+    if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+      if (mfmaLayout.getIsTransposed()) {
+        std::reverse(order.begin(), order.end());
+      }
+    }
     return order;
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
@@ -961,8 +958,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   return res;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
-  llvm::report_fatal_error(
-      "getWarpsPerCTA not implemented for DotOperandEncodingAttr");
+  return getParent().cast<DistributedEncodingTrait>().getWarpsPerCTA();
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return ::getOrder(*this);
@@ -1997,6 +1993,9 @@ public:
     } else if (auto blockedAttr = attr.dyn_cast<BlockedEncodingAttr>()) {
       os << "blocked";
       return AliasResult::FinalAlias;
+    } else if (auto warpAttr = attr.dyn_cast<WarpEncodingAttr>()) {
+      os << "warp";
+      return AliasResult::FinalAlias;
     } /* else if (auto sliceAttr = attr.dyn_cast<SliceEncodingAttr>()) {
       os << "slice";
       return AliasResult::FinalAlias;
@@ -2732,7 +2731,50 @@ void LocalAllocOp::getEffects(
                        mlir::triton::gpu::SharedMemory::get());
 }
 
-//===----------------------------------------------------------------------===//
+LogicalResult MemDescSubviewOp::verify() {
+  auto srcTy = getDesc().getType();
+  auto dstTy = getType();
+
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitError("result element type must match desc element type");
+  }
+  if (getOffsets().size() != srcTy.getRank()) {
+    return emitError("offsets must have the same rank as input");
+  }
+  if (srcTy.getRank() < dstTy.getRank()) {
+    return emitError("result rank must be less than or equal to input rank");
+  }
+  auto rankDiff = srcTy.getRank() - dstTy.getRank();
+  for (int i = 0; i < dstTy.getRank(); i++) {
+    if (dstTy.getDimSize(i) > srcTy.getDimSize(i + rankDiff)) {
+      return emitError(
+                 "result shape cannot be larger than input shape at dimension ")
+             << i;
+    }
+  }
+
+  auto srcEnc = srcTy.getEncoding();
+  auto dstEnc = dstTy.getEncoding();
+  if (!!srcEnc != !!dstEnc) {
+    return emitError("src and result must both have or not have an encoding");
+  }
+
+  if (!isa<SharedEncodingAttr>(srcEnc)) {
+    return emitError("src encoding must be SharedEncodingAttr");
+  }
+  if (!isa<SharedEncodingAttr>(dstEnc)) {
+    return emitError("result encoding must be SharedEncodingAttr");
+  }
+
+  // TODO(jlebar): Currently we generate illegal encodings, so we can't add a
+  // verifier for them.  In particular, we use the same encoding for the src and
+  // dst of a subview op, when the subview removes a dimension.  That generates
+  // an illegal shared encoding (because the size of `order` doesn't match the
+  // rank of the tensor), but it's not checked anywhere, and we believe the
+  // resulting code ultimately works.
+
+  return success();
+}
 
 void TritonGPUDialect::initialize() {
   registerTypes();
