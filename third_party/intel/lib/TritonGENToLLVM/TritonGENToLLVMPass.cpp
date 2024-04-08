@@ -148,12 +148,8 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   IntegerType int32Ty = rewriter.getIntegerType(32);
 
   TritonGEN::PrecisionType precisionA = op.getPa();
-  Type packedAType;
-  if (precisionA == TritonGEN::PrecisionType::TF32) {
-    packedAType = int32Ty;
-  } else {
-    packedAType = int16Ty;
-  }
+  Type packedAType =
+      (precisionA == TritonGEN::PrecisionType::TF32) ? int32Ty : int16Ty;
 
   Value a = op.getA();
   VectorType aOrigTy = cast<VectorType>(a.getType());
@@ -165,7 +161,6 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
     a = rewriter.create<LLVM::BitcastOp>(loc, aTy, a);
 
   Value b = op.getB();
-
   VectorType bOrigTy = cast<VectorType>(b.getType());
   bitWidth = bOrigTy.getNumElements() *
              bOrigTy.getElementType().getIntOrFloatBitWidth();
@@ -185,6 +180,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
              getTypeMangling(opTypes[0]);
     SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
     SmallVector<Value> args{a, b, op.getC()};
+
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
                                     true /*convergent*/);
   }
@@ -214,6 +210,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   auto RC = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getRc());
   auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   SmallVector<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
+
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
@@ -283,6 +280,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                           x,          y,         elemSize,     tileWidth,
                           tileHeight, vBlocks,   useTranspose, vnniTransform,
                           cache};
+
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
@@ -353,6 +351,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                           x,          y,         elemSize,     tileWidth,
                           tileHeight, vBlocks,   useTranspose, vnniTransform,
                           cache,      storeVal};
+
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
@@ -415,6 +414,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                           x,          y,         elemSize,     tileWidth,
                           tileHeight, vBlocks,   useTranspose, vnniTransform,
                           cache};
+
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
