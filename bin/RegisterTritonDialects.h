@@ -50,10 +50,10 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestMembarPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerConvertTritonToTritonGPUWarpPass();
-  mlir::triton::registerDecomposeUnsupportedConversionsPass();
   mlir::triton::registerAllocateSharedMemoryPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
   mlir::triton::registerConvertNVGPUToLLVMPass();
+  mlir::triton::registerDecomposeUnsupportedNVIDIAConversions();
   mlir::registerLLVMDIScope();
   // Intel passes
   mlir::triton::registerIntelDecomposeUnsupportedConversionsPass();
@@ -64,7 +64,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
 #ifdef USE_ROCM
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
-  mlir::triton::registerDecomposeUnsupportedAMDConversionsPass();
+  mlir::triton::registerDecomposeUnsupportedAMDConversions();
 
   // TODO: Uncomment when fixed undefined symbols and
   // remove section below
