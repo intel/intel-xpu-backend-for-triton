@@ -94,6 +94,11 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
     // Unlike the operand B, to pack the value to i16 for scalar bit width <=16.
     unsigned packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
     unsigned packedColNum = shapeA[1] / packedOpsPerLane;
+    if (threadsPerWarp < packedColNum) {
+      llvm::report_fatal_error(
+          "DpasEncodingAttr sub-group size could not "
+          "be smaller than the threads required per row for A operand.");
+    }
     rowsPerWarp = threadsPerWarp / packedColNum;
     repRowsPerInst = repeatCount / rowsPerWarp;
     laneRowIndex = udiv(laneId, i32_val(packedColNum));
@@ -102,6 +107,11 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
     repOpsPerRow = packedOpsPerLane;
   } break;
   case 1: {
+    if (threadsPerWarp < executionSize) {
+      llvm::report_fatal_error(
+          "DpasEncodingAttr sub-group size could not "
+          "be smaller than the execution size for B operand.");
+    }
     rowsPerWarp = threadsPerWarp / executionSize;
     repRowsPerInst = systolicDepth / rowsPerWarp;
     rowsPerWarp = rowsPerWarp * opsPerChannel;
