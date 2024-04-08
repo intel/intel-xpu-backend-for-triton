@@ -76,7 +76,7 @@ jobs:
         run: |
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/806
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/807
-          mv scripts/core-exclude-conda.list scripts/core-exclude.list
+          mv scripts/core-conda.exclude-list scripts/core.exclude-list
 
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/797
           sed -ie 's/\(.*08-grouped-gemm\)/#\1/' scripts/test-triton.sh

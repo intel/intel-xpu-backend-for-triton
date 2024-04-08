@@ -99,7 +99,7 @@ run_core_tests() {
   fi
   cd ${CORE_TEST_DIR}
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu language/ --deselect-from-file ../../../scripts/core-exclude.list --ignore=language/test_line_info.py
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose -n 8 --device xpu language/ --deselect-from-file ../../../scripts/core.exclude-list --ignore=language/test_line_info.py
 
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu runtime/
