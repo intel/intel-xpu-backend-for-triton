@@ -25,12 +25,12 @@ def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
   let summary = "Memory allocation operation";
 
   let description = [{
-    The `alloc` operation allocates a region of memory as specified by its type.
-    Example:
-
-    ```mlir
-    %0 = triton_intel_gpu.alloc() : <8x64xf32, 3>
-    ```
+    The `alloc` operation allocates a region of memory, as specified by its type.
+    For example:
+      ```mlir
+      %0 = triton_intel_gpu.alloc() : <8x64xf32, 3>
+      ```
+    allocates a 8x64xf3 memory block in local memory.
   }];
   let results = (outs TT_Ptr:$result);
   let assemblyFormat = [{
@@ -102,11 +102,10 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
 def TTIG_PrefetchOp : TTIG_Op<"prefetch", []> {
   let summary = "Tensor prefetch operation";
   let description = [{
-    The `prefetch` operation prefetches an input tensor.
-    Example:
+    The `prefetch` operation prefetches a two dimensional tile of a input tensor.
+    For example:
       ```mlir
-      triton_intel_gpu.prefetch %ptr {cache=none, evict=normal, isVolatile=false}
-          : !tt.ptr<tensor<256x32xf16>
+      %val = triton_intel_gpu.prefetch %tensor1 .... TODO
       ```
   }];
   let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
@@ -121,33 +120,63 @@ def TT_TensorRelated : AnyTypeOf<[TT_Tensor, TT_TensorPtr]>;
 
 def TTIG_GlueOp : TTIG_Op<"glue", [// operands have same type: SameOperandsType,
                                Pure]> {
-    let summary = "glue/concat opearands to a larger size";
-
-    let arguments = (ins Variadic<TT_TensorRelated>:$operands);
-
-    let results = (outs TT_TensorRelated:$result);
-
-    let assemblyFormat = "$operands attr-dict `:` type($operands) `->` type($result)";
+  let summary = "glue/concat opearands to a larger size";
+  let description = [{
+    The `glue` operation concatenates its operands tensors to form a larger tensor.
+    For example:
+      ```mlir
+      %val = triton_intel_gpu.glue %tensor1, %tensor2 .... TODO
+      ```
+    TODO: any constrainsts? Add verification ? Do operands need to have the same shape ?
+  }];
+  let arguments = (ins Variadic<TT_TensorRelated>:$operands);
+  let results = (outs TT_TensorRelated:$result);
+  let assemblyFormat = [{
+    operands attr-dict `:` type($operands) `->` type($result)
+  }];
 }
 
 def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
-    let summary = "extract a sub value from base at idx";
+  let summary = "Extract a value from a tensor";
+  let description = [{
+    The `extract` operation extracts a subtensor from a $base input tensor. The value extracted has 
+    shape as specified by the result type. The $idx attribute indicates which portion of the imput 
+    tensor to extract.
+    For example, given:
+     ```mlir
+      %val = triton_intel_gpu.extract %tensor {idx = 4 : i32} : tensor<32x32xf16> -> tensor<8x16xf16>
+      ```
+    the result tensor corrsponds to to the fourth 8x16 tile obtain by partitioning the input tensor 
+    in row major order.
 
-    let arguments = (ins TT_TensorRelated:$base, I32Attr:$idx);
-
-    let results = (outs TT_TensorRelated:$result);
-
-    let assemblyFormat = "$base `,` $idx attr-dict `:` type($base) `->` type($result)";
+    TODO: is there a better way to describe the smeantics?    
+  }];
+  let arguments = (ins TT_TensorRelated:$base, I32Attr:$idx);
+  let results = (outs TT_TensorRelated:$result);
+  let assemblyFormat = [{
+    operands attr-dict `:` type($base) `->` type($result)
+  }];
 }
 
 def TTIG_CastOp : TTIG_Op<"cast", [Pure]> {
-    let summary = "bitcast a tensor to another type with the same overall bits";
-
-    let arguments = (ins TT_Tensor:$src);
-
-    let results = (outs TT_Tensor:$dst);
-
-    let assemblyFormat = "$src attr-dict `:` type($src) `to` type($dst)";
+  let summary = "Bitcast a tensor";
+  let description = [{
+    The `cast` operation performs a bitcast of a $src input tensor to another $dst tensor.
+    The destination tensor must have the same overall bits and the input tensor.
+    Example:
+      ```mlir
+      %val = triton_intel_gpu.cast : tensor<32x16xf16> -> tensor<32x16xbf16>
+      ```
+    TODO: document the semantic of the operation. 
+      can we cast from a element type to another with the same bit width?
+      can we use the operation to transpose? 
+      can we reduce/increase  the element size and change the shape?
+  }];
+  let arguments = (ins TT_Tensor:$src);
+  let results = (outs TT_Tensor:$dst);
+  let assemblyFormat = [{
+    operands attr-dict `:` type($src) `to` type($dst)
+  }];
 }
 
 #endif
