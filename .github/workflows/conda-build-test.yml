@@ -75,12 +75,9 @@ jobs:
       - name: Run core tests
         run: |
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/806
-          rm python/test/unit/language/test_core.py
-          rm python/test/unit/language/test_standard.py
-          sed -ie 's/\(.*test_standard\)/#\1/' scripts/test-triton.sh
-
-          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/807
-          rm python/test/unit/language/test_random.py
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/841
+          mv scripts/core-conda.exclude-list scripts/core.exclude-list
+          mv scripts/interpreter-conda.exclude-list scripts/interpreter.exclude-list
 
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/797
           sed -ie 's/\(.*08-grouped-gemm\)/#\1/' scripts/test-triton.sh

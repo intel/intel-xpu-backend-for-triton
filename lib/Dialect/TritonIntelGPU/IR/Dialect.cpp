@@ -266,6 +266,22 @@ DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   }
 }
 
+SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() {
+  unsigned threadsPerWarp = getSubGroupSize();
+  auto shapeC = getShapeC();
+  // The software vectorization vetorize the value as C array: int a[N] -> int
+  // a[N][threadsPerWarp]
+  if (threadsPerWarp > shapeC[1]) {
+    return {1, 1};
+  } else if (threadsPerWarp == shapeC[1]) {
+    return {shapeC[0], 1};
+  } else {
+    // threadsPerWarp < shapeC[1]
+    llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
+                             "be smaller than the threads required per row.");
+  }
+}
+
 LogicalResult DpasEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned repeatCount, unsigned systolicDepth, unsigned executionSize,
