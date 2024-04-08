@@ -1,0 +1,4 @@
+# FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/806
+test_reduce_layouts
+# FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/807
+language/test_random.py
