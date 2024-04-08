@@ -53,9 +53,8 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
   return shuffleCommon(loc, rewriter, val, i, TritonGEN::ShflKind::IDX);
 }
 
-Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
-                        StringRef key, StringRef content,
-                        unsigned addressSpace) {
+Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
+                        StringRef content, unsigned addressSpace) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto ctx = moduleOp.getContext();
   unsigned stringNumber = 0;
@@ -91,8 +90,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 // declare __spirv_ocl_printf(i8*, ...) as external function
-LLVM::LLVMFuncOp
-getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter) {
+LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName("_Z18__spirv_ocl_printf");
   Operation *funcOp = moduleOp.lookupSymbol(funcName);
@@ -118,7 +116,7 @@ getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter) {
   return printFunc;
 }
 
-void llPrintf(ConversionPatternRewriter &rewriter, Value msg, ValueRange args) {
+void llPrintf(RewriterBase &rewriter, Value msg, ValueRange args) {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -133,8 +131,7 @@ void llPrintf(ConversionPatternRewriter &rewriter, Value msg, ValueRange args) {
   call(funcOp, operands);
 }
 
-Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
-               ValueRange args) {
+Value llPrintf(RewriterBase &rewriter, StringRef msg, ValueRange args) {
   assert(!msg.empty() && "printf with empty string not supported");
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');

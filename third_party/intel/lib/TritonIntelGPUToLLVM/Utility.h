@@ -88,11 +88,10 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
 Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  Value i);
 
-Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
-                        StringRef key, StringRef content,
-                        unsigned addressSpace);
+Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
+                        StringRef content, unsigned addressSpace);
 
-LLVM::LLVMFuncOp getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter);
+LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter);
 
 static Value getStackPointer(PatternRewriter &rewriter,
                              FunctionOpInterface funcOp) {
@@ -121,10 +120,9 @@ static Value getSharedMemoryBase(Location loc,
 }
 
 // Returns a Value for the format string, which you can reuse.
-Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
-               ValueRange args);
+Value llPrintf(RewriterBase &rewriter, StringRef msg, ValueRange args);
 
-void llPrintf(ConversionPatternRewriter &rewriter, Value msg, ValueRange args);
+void llPrintf(RewriterBase &rewriter, Value msg, ValueRange args);
 
 static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
