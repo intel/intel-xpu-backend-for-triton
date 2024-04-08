@@ -75,7 +75,7 @@ jobs:
       - name: Run core tests
         run: |
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/806
-          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/807
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/841
           mv scripts/core-conda.exclude-list scripts/core.exclude-list
 
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/797
