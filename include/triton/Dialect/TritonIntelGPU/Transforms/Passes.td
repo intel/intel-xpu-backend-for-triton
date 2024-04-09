@@ -130,8 +130,7 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
 
   let description = [{
     This pass splits certain Triton tensor operations (e.g dot, load, store) so that each
-    operation matches the native 'MxNxK' dot operation shape supported by the target
-    architecture.
+    operation matches the native operation shape supported by the target architecture.
 
     Notes:
       - only block pointers are supported
@@ -145,10 +144,11 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
       %D = tt.dot %A, %B, %C : tensor<32x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<32x64xf32, #warp>
       ```
 
-    after this pass (assuming that the target dot shape is 8x16x16):
+    Assuming that the target dot shape is <8x16x16> and that the max supported load size is
+    512DW (<32x32xf16>), after this pass:
       - the load of 32x64xf16 is split to 2 loads of 32x32xf16
       - the dot operation is split so that each resulting operation matches the native target
-        shape supported by the HW
+        shape supported by the architecture
 
       ```mlir
       %A = tt.load %arg1 : !tt.ptr<tensor<32x32xf16>, 1> -> tensor<32x32xf16>

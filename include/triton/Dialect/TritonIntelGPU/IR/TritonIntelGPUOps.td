@@ -24,12 +24,12 @@ def TT_TensorOrTensorPtr : AnyTypeOf<[TT_Tensor, TT_TensorPtr]>;
 def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
   let summary = "Memory allocation operation";
   let description = [{
-    The `alloc` operation allocates a region of memory, as specified by its type.
-    For example:
+    The `alloc` operation allocates a region of memory as specified by its type.
+    Example:
+
       ```mlir
       %0 = triton_intel_gpu.alloc() : <8x64xf32, 3>
       ```
-    allocates a `8x64xf32` memory region in local memory.
   }];
   let results = (outs TT_Ptr:$result);
   let assemblyFormat = [{
@@ -98,13 +98,13 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
   let hasVerifier = 1;
 }
 
-def TTIG_PrefetchOp : TTIG_Op<"prefetch", []> {
+def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
   let summary = "Tensor prefetch operation";
   let description = [{
     The `prefetch` operation prefetches a two dimensional input tensor.
     For example:
       ```mlir
-      triton_intel_gpu.prefetch %ptr {cache=none, evict=normal, isVolatile=false} 
+      triton_intel_gpu.prefetch %ptr {cache=none, evict=normal, isVolatile=false}
           : !tt.ptr<tensor<256x32xf16>
       ```
   }];
