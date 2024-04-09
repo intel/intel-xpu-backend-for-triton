@@ -1007,6 +1007,7 @@ def test_math_divide_op(expr, num_ctas, device):
 def test_precise_math(expr_prec, expr_ref, num_ctas, device):
     if expr_prec == 'tl.math.sqrt_rn(x)':
         pytest.skip("FIXME: Fail accuracy")
+
     @triton.jit
     def kernel(X, Y, OUT, OUT_REF, BLOCK: tl.constexpr):
         x = tl.load(X + tl.arange(0, BLOCK))
