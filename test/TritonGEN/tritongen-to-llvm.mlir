@@ -69,6 +69,20 @@ llvm.func @triton_gen.barrier() {
 
 // -----
 
+// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.signal.i32.i32(i32, i32) attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.wait.i32(i32) attributes {passthrough = ["convergent"]}
+
+llvm.func @triton_gen.named_barrier(%barrier_id : i32, %thread_group_count : i32) {
+  // CHECK-LABEL: triton_gen.named_barrier(%arg0: i32, %arg1: i32) {
+  // CHECK:       llvm.call @llvm.genx.GenISA.threadgroupnamedbarriers.signal.i32.i32(%arg0, %arg1) {passthrough = ["convergent"]} : (i32, i32) -> ()
+  // CHECK-NEXT:  llvm.call @llvm.genx.GenISA.threadgroupnamedbarriers.wait.i32(%arg0) {passthrough = ["convergent"]} : (i32) -> ()
+  triton_gen.named_barrier_signal %barrier_id, %thread_group_count : (i32, i32)
+  triton_gen.named_barrier_wait %barrier_id : i32
+  llvm.return
+}
+
+// -----
+
 // CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xordj(f64, i32) -> f64 attributes {passthrough = ["convergent"]}
 // CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorfj(f32, i32) -> f32 attributes {passthrough = ["convergent"]}
 // CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorDhj(f16, i32) -> f16 attributes {passthrough = ["convergent"]}

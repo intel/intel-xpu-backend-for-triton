@@ -159,6 +159,41 @@ def TritonGEN_BarrierOp : TritonGEN_Op<"barrier"> {
   let assemblyFormat = "attr-dict";
 }
 
+def TritonGEN_NamedBarrierSignalOp : TritonGEN_Op<"named_barrier_signal">,
+  Arguments<(ins I32:$barrier_id, I32:$thread_group_count)> {
+  let summary = "Named barrier signal";
+
+  string baseDescription = [{
+    The `gen.named_barrier_signal` operation signals the arrival of a thread at
+    the current program point. The '$barrier_id' parameter is an integer value
+    which identifies the named barrier. The '$thread_group_count' parameter
+    specifies the number of threads participating in the barrier. Once all
+    participating threads have signaled their arrival, any other participating
+    thread waiting at the `gen.named_barrier_wait` operation associated with the
+    same '$barrier_id' can exit the wait operation.
+  }];
+
+  let assemblyFormat = [{
+    operands attr-dict `:` `(` type(operands) `)`
+  }];
+}
+
+def TritonGEN_NamedBarrierWaitOp : TritonGEN_Op<"named_barrier_wait">,
+  Arguments<(ins I32:$barrier_id)> {
+  let summary = "Named barrier wait";
+
+  string baseDescription = [{
+    The `gen.named_barrier_wait` operation blocks threads participating in the
+    named barrier operation identified by '$barrier_id' until all participating
+    threads have reached the `gen.named_barrier_signal` operation associated with
+    the same '$barrier_id'.
+  }];
+
+  let assemblyFormat = [{
+    operands attr-dict `:` type(operands)
+  }];
+}
+
 def IntegerOrFloatType : AnyTypeOf<[AnyInteger, AnyFloat]>;
 
 def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
@@ -169,6 +204,7 @@ def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
                  I32:$mask,
                  TritonGEN_ShflKindAttr:$kind)> {
   let summary = "Subgroup shuffle";
+
   string baseDescription = [{
     The `gen.sub_group_shuffle` operation is invoked by different work items
     with different values, given by $value. Different work items have different
