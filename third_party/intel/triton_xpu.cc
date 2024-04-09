@@ -32,7 +32,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   m.def(
       "add_accelerate_matmul",
       [](mlir::PassManager &pm, mlir::triton::gpu::intel::DeviceArch arch) {
-        pm.addPass(mlir::createTritonIntelGPUAccelerateMatmulPass(arch));
+        pm.addPass(
+            mlir::triton::gpu::intel::createTritonIntelGPUAccelerateMatmulPass(
+                arch));
       },
       py::arg("pm"),
       py::arg("arch") = mlir::triton::gpu::intel::DeviceArch::UNKNOWN);

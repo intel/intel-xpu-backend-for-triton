@@ -161,29 +161,11 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
 }
 
 SmallVector<unsigned> getContigPerThread(Attribute layout) {
-  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
-    assert(mmaLayout.isVolta() || mmaLayout.isAmpere() || mmaLayout.isHopper());
-    auto rank = triton::gpu::getOrder(mmaLayout).size();
-    SmallVector<unsigned> contigPerThread(rank, 1);
-    contigPerThread[rank - 1] = 2;
-    return contigPerThread;
-  } else if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
-    auto rank = triton::gpu::getOrder(wmmaLayout).size();
-    SmallVector<unsigned> contigPerThread(rank, 1);
-    return contigPerThread;
-  } else if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
-    auto rank = triton::gpu::getOrder(mfmaLayout).size();
-    SmallVector<unsigned> contigPerThread(rank, 1);
-    contigPerThread[0] = 4;
-    if (mfmaLayout.getIsTransposed()) {
-      std::reverse(contigPerThread.begin(), contigPerThread.end());
-    }
-    return contigPerThread;
-  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
-    auto parentLayout = sliceLayout.getParent();
-    return getContigPerThread(parentLayout);
+  if (auto distributedLayout = layout.dyn_cast<DistributedEncodingTrait>()) {
+    return distributedLayout.getContigPerThread();
   } else {
-    return getSizePerThread(layout);
+    llvm::report_fatal_error("getContigPerThread not implemented");
+    return {};
   }
 }
 
@@ -976,8 +958,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   return res;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
-  llvm::report_fatal_error(
-      "getWarpsPerCTA not implemented for DotOperandEncodingAttr");
+  return getParent().cast<DistributedEncodingTrait>().getWarpsPerCTA();
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return ::getOrder(*this);
@@ -2011,6 +1992,9 @@ public:
       return AliasResult::FinalAlias;
     } else if (auto blockedAttr = attr.dyn_cast<BlockedEncodingAttr>()) {
       os << "blocked";
+      return AliasResult::FinalAlias;
+    } else if (auto warpAttr = attr.dyn_cast<WarpEncodingAttr>()) {
+      os << "warp";
       return AliasResult::FinalAlias;
     } /* else if (auto sliceAttr = attr.dyn_cast<SliceEncodingAttr>()) {
       os << "slice";

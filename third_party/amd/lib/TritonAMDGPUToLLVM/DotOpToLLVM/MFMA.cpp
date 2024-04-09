@@ -142,7 +142,7 @@ struct DotOpMFMAConversionHelper {
     return reducedAcc;
   }
 
-  /// @brief MFMA 4x4 is computes 16 matrix mupliplications, this functions adds
+  /// @brief MFMA 4x4 is computes 16 matrix multiplications, this functions adds
   /// these 16 matrices to get final 4x4 matrix
   /// @param numSubBlocks
   /// @param acc
@@ -269,7 +269,8 @@ struct DotOpMFMAConversionHelper {
         Type ty = vec_ty(elemTy, kWidth);
         Value rawElems = undef(ty);
         for (int k = 0; k < kWidth; ++k) {
-          rawElems = insert_element(ty, rawElems, elems[kWidth * (n1 * i + j) + k], i32_val(k));
+          rawElems = insert_element(
+              ty, rawElems, elems[kWidth * (n1 * i + j) + k], i32_val(k));
         }
 
         Value convertedElems;

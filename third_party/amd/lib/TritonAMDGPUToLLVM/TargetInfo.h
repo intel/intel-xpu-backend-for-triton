@@ -22,7 +22,7 @@ public:
   Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                    Value i) const override;
   Value programId(Location loc, ConversionPatternRewriter &rewriter,
-                 ModuleOp moduleOp, int axis) const override;
+                  ModuleOp moduleOp, int axis) const override;
   bool warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                   SmallVector<Value> &acc, triton::ReduceOp op,
                   unsigned numLaneToReduce) const override;
@@ -31,6 +31,8 @@ public:
       SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
       ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
       ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const override;
+  void printf(Value formatStrStart, int formatStrByteCount, ValueRange args,
+              ConversionPatternRewriter &rewriter) const override;
 
 private:
   std::string arch;

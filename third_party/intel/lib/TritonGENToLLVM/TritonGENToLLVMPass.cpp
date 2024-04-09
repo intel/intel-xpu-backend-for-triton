@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+#include "TritonGENToLLVM/GenIntrinsicEnum.h"
 #include "intel/include/TritonGENToLLVM/GenIntrinsics.h"
 
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
@@ -148,12 +149,8 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   IntegerType int32Ty = rewriter.getIntegerType(32);
 
   TritonGEN::PrecisionType precisionA = op.getPa();
-  Type packedAType;
-  if (precisionA == TritonGEN::PrecisionType::TF32) {
-    packedAType = int32Ty;
-  } else {
-    packedAType = int16Ty;
-  }
+  Type packedAType =
+      (precisionA == TritonGEN::PrecisionType::TF32) ? int32Ty : int16Ty;
 
   Value a = op.getA();
   VectorType aOrigTy = cast<VectorType>(a.getType());
@@ -165,7 +162,6 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
     a = rewriter.create<LLVM::BitcastOp>(loc, aTy, a);
 
   Value b = op.getB();
-
   VectorType bOrigTy = cast<VectorType>(b.getType());
   bitWidth = bOrigTy.getNumElements() *
              bOrigTy.getElementType().getIntOrFloatBitWidth();
@@ -185,6 +181,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
              getTypeMangling(opTypes[0]);
     SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
     SmallVector<Value> args{a, b, op.getC()};
+
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
                                     true /*convergent*/);
   }
@@ -214,6 +211,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   auto RC = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getRc());
   auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   SmallVector<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
+
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
@@ -249,6 +247,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
                              baseHeight.getType(),
+                             basePitch.getType(),
                              x.getType(),
                              y.getType(),
                              int32Ty,
@@ -278,9 +277,11 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   // FIXME: Add argument to control cache.
   auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
 
-  SmallVector<Value> args{ptr,     baseWidth,    baseHeight,    x,
-                          y,       elemSize,     tileWidth,     tileHeight,
-                          vBlocks, useTranspose, vnniTransform, cache};
+  SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
+                          x,          y,         elemSize,     tileWidth,
+                          tileHeight, vBlocks,   useTranspose, vnniTransform,
+                          cache};
+
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
@@ -316,6 +317,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
                              baseHeight.getType(),
+                             basePitch.getType(),
                              x.getType(),
                              y.getType(),
                              int32Ty,
@@ -346,10 +348,11 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   // FIXME: Add argument to control cache.
   auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
 
-  SmallVector<Value> args{ptr,     baseWidth,    baseHeight,    x,
-                          y,       elemSize,     tileWidth,     tileHeight,
-                          vBlocks, useTranspose, vnniTransform, cache,
-                          storeVal};
+  SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
+                          x,          y,         elemSize,     tileWidth,
+                          tileHeight, vBlocks,   useTranspose, vnniTransform,
+                          cache,      storeVal};
+
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
@@ -378,6 +381,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
                              baseHeight.getType(),
+                             basePitch.getType(),
                              x.getType(),
                              y.getType(),
                              int32Ty,
@@ -407,9 +411,11 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   auto cache = rewriter.create<LLVM::ConstantOp>(
       loc, int32Ty, static_cast<int>(op.getCacheControl()));
 
-  SmallVector<Value> args{ptr,     baseWidth,    baseHeight,    x,
-                          y,       elemSize,     tileWidth,     tileHeight,
-                          vBlocks, useTranspose, vnniTransform, cache};
+  SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
+                          x,          y,         elemSize,     tileWidth,
+                          tileHeight, vBlocks,   useTranspose, vnniTransform,
+                          cache};
+
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
@@ -620,6 +626,87 @@ struct TritonGENBarrierLowering
   }
 };
 
+struct TritonGENNamedBarrierSignalLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::NamedBarrierSignalOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::NamedBarrierSignalOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::NamedBarrierSignalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    MLIRContext *context = rewriter.getContext();
+    Location loc = op->getLoc();
+
+    Value barrierId = op.getBarrierId();
+    Value threadGroupCount = op.getThreadGroupCount();
+
+    llvm::LLVMContext llvmContext;
+    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+    llvm::Type *barrierTy = typeTranslator.translateType(barrierId.getType());
+    llvm::Type *threadGroupCountTy =
+        typeTranslator.translateType(threadGroupCount.getType());
+    std::string funcName = llvm::GenISAIntrinsic::getName(
+        llvm::GenISAIntrinsic::GenISA_threadgroupnamedbarriers_signal,
+        {barrierTy, threadGroupCountTy});
+
+    LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
+        moduleOp, funcName, {barrierId.getType(), threadGroupCount.getType()},
+        LLVM::LLVMVoidType::get(context));
+    auto convergentAttr =
+        rewriter.getArrayAttr(StringAttr::get(context, "convergent"));
+    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    funcOp.setPassthroughAttr(convergentAttr);
+
+    SmallVector<Value> args{barrierId, threadGroupCount};
+    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    callOp->setAttr("passthrough", convergentAttr);
+    rewriter.replaceOp(op, callOp);
+
+    return success();
+  }
+};
+
+struct TritonGENNamedBarrierWaitLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::NamedBarrierWaitOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::NamedBarrierWaitOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::NamedBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    MLIRContext *context = rewriter.getContext();
+    Location loc = op->getLoc();
+
+    Value barrierId = op.getBarrierId();
+
+    llvm::LLVMContext llvmContext;
+    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+    llvm::Type *barrierTy = typeTranslator.translateType(barrierId.getType());
+    std::string funcName = llvm::GenISAIntrinsic::getName(
+        llvm::GenISAIntrinsic::GenISA_threadgroupnamedbarriers_wait,
+        {barrierTy});
+
+    LLVM::LLVMFuncOp funcOp =
+        LLVM::lookupOrCreateFn(moduleOp, funcName, {barrierId.getType()},
+                               LLVM::LLVMVoidType::get(context));
+    auto convergentAttr =
+        rewriter.getArrayAttr(StringAttr::get(context, "convergent"));
+    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    funcOp.setPassthroughAttr(convergentAttr);
+
+    SmallVector<Value> args{barrierId};
+    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    callOp->setAttr("passthrough", convergentAttr);
+    rewriter.replaceOp(op, callOp);
+
+    return success();
+  }
+};
+
 struct TritonSubGroupShuffleLowering
     : public ConvertOpToLLVMPattern<TritonGEN::SubGroupShuffleOp> {
   using ConvertOpToLLVMPattern<
@@ -753,17 +840,18 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  patterns
-      .add<TritonGENThreadIdXLowering, TritonGENThreadIdYLowering,
-           TritonGENThreadIdZLowering, TritonGENBlockIdXLowering,
-           TritonGENBlockIdYLowering, TritonGENBlockIdZLowering,
-           TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
-           TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
-           TritonGENGridDimYLowering, TritonGENGridDimZLowering,
-           TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
-           TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
-           TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
-           TritonMatrix2DBlockPrefetchLowering>(converter);
+  patterns.add<TritonGENThreadIdXLowering, TritonGENThreadIdYLowering,
+               TritonGENThreadIdZLowering, TritonGENBlockIdXLowering,
+               TritonGENBlockIdYLowering, TritonGENBlockIdZLowering,
+               TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
+               TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
+               TritonGENGridDimYLowering, TritonGENGridDimZLowering,
+               TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
+               TritonGENNamedBarrierSignalLowering,
+               TritonGENNamedBarrierWaitLowering, TritonSubGroupShuffleLowering,
+               TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+               TritonMatrix2DBlockStoreLowering,
+               TritonMatrix2DBlockPrefetchLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {

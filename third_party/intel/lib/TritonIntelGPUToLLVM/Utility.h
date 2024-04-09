@@ -3,6 +3,7 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 
@@ -10,16 +11,6 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-
-#undef store
-#define store(...) rewriter.create<LLVM::StoreOp>(loc, __VA_ARGS__)
-#undef addrspacecast
-#define addrspacecast(...)                                                     \
-  rewriter.create<LLVM::AddrSpaceCastOp>(loc, __VA_ARGS__)
-
-// Constants
-#define f16_val(...) LLVM::Intel::createConstantF16(loc, rewriter, __VA_ARGS__)
-#define i64_val(...) LLVM::Intel::createConstantI64(loc, rewriter, __VA_ARGS__)
 
 namespace mlir {
 namespace LLVM {
@@ -80,12 +71,6 @@ Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
                              Value cond, ThenOpsFn &&thenOpsFn) {
   return createPredicatedBlock(rewriter, loc, cond, {}, thenOpsFn);
 }
-
-/// Create a 64-bit integer constant.
-Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v);
-
-/// Create a 16-bit float constant.
-Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
 
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                   Value val, Value pred);
@@ -227,10 +212,10 @@ emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
   // Compute the 2-dim coordinates of the warp containing the tensor element
   // operated on by this thread.
   SmallVector<unsigned> warpShape = dpasLayout.getShapeC();
-  Value rowWarpId =
-      urem(multiDimWarpId[0], i32_val(std::ceil(shape[0] / warpShape[0])));
-  Value colWarpId =
-      urem(multiDimWarpId[1], i32_val(std::ceil(shape[1] / warpShape[1])));
+  Value rowWarpId = urem(multiDimWarpId[0],
+                         i32_val(mlir::ceil<unsigned>(shape[0], warpShape[0])));
+  Value colWarpId = urem(multiDimWarpId[1],
+                         i32_val(mlir::ceil<unsigned>(shape[1], warpShape[1])));
   Value rowWarpOffset = mul(rowWarpId, i32_val(warpShape[0]));
   Value colWarpOffset = mul(colWarpId, i32_val(warpShape[1]));
 

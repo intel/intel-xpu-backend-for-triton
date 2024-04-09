@@ -124,4 +124,49 @@ bool TargetInfo::processReplicaUsingStMatrix(
   return false;
 }
 
+// declare __spirv_ocl_printf(i8*, ...) as external function
+LLVM::LLVMFuncOp
+getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  StringRef funcName("_Z18__spirv_ocl_printf");
+  Operation *funcOp = moduleOp.lookupSymbol(funcName);
+  if (funcOp)
+    return cast<LLVM::LLVMFuncOp>(*funcOp);
+
+  MLIRContext *context = rewriter.getContext();
+  auto ptrTy = LLVM::LLVMPointerType::get(
+      context, TritonGEN::TritonGENMemorySpace::kUniformConstant);
+  SmallVector<Type> argsType{ptrTy};
+  auto retType = i32_ty;
+  auto funcType =
+      LLVM::LLVMFunctionType::get(retType, argsType, /*isVarArg*/ true);
+
+  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+
+  auto printFunc = rewriter.create<LLVM::LLVMFuncOp>(
+      UnknownLoc::get(context), funcName, funcType, LLVM::Linkage::External,
+      /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC, /*comdat=*/SymbolRefAttr{});
+  printFunc->setAttr("nounwind", rewriter.getUnitAttr());
+
+  return printFunc;
+}
+
+void TargetInfo::printf(Value formatStrStart, int /*formatStrByteCount*/,
+                        ValueRange args,
+                        ConversionPatternRewriter &rewriter) const {
+  auto *ctx = rewriter.getContext();
+  Type ptr = ptr_ty(ctx);
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto funcOp = getSpirvPrintfDeclaration(rewriter);
+  auto loc = UnknownLoc::get(ctx);
+
+  SmallVector<Value> operands;
+  operands.push_back(formatStrStart);
+  for (auto arg : args) {
+    operands.push_back(arg);
+  }
+  call(funcOp, operands);
+}
+
 } // namespace mlir::triton::intel

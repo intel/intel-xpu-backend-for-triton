@@ -16,7 +16,7 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.runtime.jit import JITFunction, TensorWrapper, reinterpret
+from triton.runtime.jit import TensorWrapper, reinterpret
 
 
 def is_interpreter():
@@ -1339,6 +1339,7 @@ def test_noinline(mode, device):
 # ---------------
 # test atomics
 # ---------------
+@pytest.mark.interpreter
 @pytest.mark.parametrize(
     "op, dtype_x_str, mode, sem",
     itertools.chain.from_iterable([[
@@ -1365,14 +1366,10 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
-    if is_cuda():
-        capability = torch.cuda.get_device_capability()
-        if capability[0] < 7:
-            if dtype_x_str == 'float16':
-                pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
-
+    if is_interpreter():
+        if dtype_x_str == 'float16':
+            pytest.skip("Only test atomic float16 ops on GPU")
     if is_xpu():
-        capability = 0
         if dtype_x_str == 'float16' and (mode != "min_neg" or sem != "acquire"):
             pytest.skip("FIXME: Atomic RMW for float16 not yet supported by IGC")
 
@@ -1425,6 +1422,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_atomic_rmw_predicate(num_ctas, device):
 
@@ -1439,6 +1437,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
     assert x.item() == 63
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("shape, axis, num_ctas", [(shape, axis, num_ctas)
                                                    for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
                                                    for axis in [0, 1]
@@ -1470,6 +1469,7 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_rmw_block(num_ctas, device):
     shape = (8, 8)
@@ -1488,6 +1488,7 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
     assert torch.min(x).item() == 0.0
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_atomic_cas(sem, num_ctas, device):
@@ -1524,23 +1525,24 @@ def test_atomic_cas(sem, num_ctas, device):
     assert f"atom.global.{sem_str}" in h.asm["ptx"]
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_cas(sem, num_ctas, device):
 
     @triton.jit
-    def change_value(X, BLOCK_SIZE: tl.constexpr):
+    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         t1 = tl.full((BLOCK_SIZE, ), 0, dtype=tl.int64)
         t2 = tl.full((BLOCK_SIZE, ), 2, dtype=tl.int64)
-        tl.atomic_cas(X + offsets, t1, t2)
+        tl.atomic_cas(X + offsets, t1, t2, sem=sem)
 
     X = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1], device=device, dtype=torch.int64)
     Y = torch.tensor([2, 1, 2, 1, 2, 1, 2, 1], device=device, dtype=torch.int64)
 
-    change_value[(2, )](X, 4)
+    change_value[(2, )](X, 4, sem)
     assert (torch.equal(X, Y))
 
 
@@ -2339,21 +2341,24 @@ def test_histogram(M, N, device):
 @pytest.mark.parametrize("BLOCK_N", [32, 64, 128])
 @pytest.mark.parametrize("N", [512, 1024, 2048])
 @pytest.mark.parametrize("num_pid_n", [2, 4])
-def test_locality(op, BLOCK_N, N, num_pid_n, device):
+def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
 
     @triton.jit
-    def kernel(X, Y, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    def kernel(X, Y, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, NUM_PID_N: tl.constexpr):
         start_m = tl.program_id(0)
         pid_n = tl.program_id(1)
-        num_pid_n = tl.num_programs(1)
         local = INITIALIZE_PATCH
         off_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
-        for start_n in range(pid_n, tl.cdiv(N, BLOCK_N), num_pid_n):
+        for start_n in range(pid_n, tl.cdiv(N, BLOCK_N), NUM_PID_N):
             off_n = start_n * BLOCK_N + tl.arange(0, BLOCK_N)
             Xs = X + off_m[:, None] * N + off_n[None, :]
             x = tl.load(Xs)
             local = ACCUMULATE_PATCH
-        tl.store(Y + off_m * num_pid_n + pid_n, local)
+        tl.store(Y + off_m * NUM_PID_N + pid_n, local)
+        # the following segfaults AMD backend following #3492
+        # really unclear why; the llvm-ir and kernel arguments are
+        # identical !
+        # tl.store(Y + off_m * tl.num_programs(1) + pid_n, local)
 
     initialize_patch = {
         'sum': 'tl.zeros([BLOCK_M], dtype=tl.float32)',
@@ -2375,7 +2380,7 @@ def test_locality(op, BLOCK_N, N, num_pid_n, device):
     BLOCK_M = 32
     x = torch.randn((BLOCK_M, N), dtype=torch.float32, device=device)
     y = torch.randn((BLOCK_M, num_pid_n), dtype=torch.float32, device=device)
-    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N, num_warps=4)
+    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N, NUM_PID_N=num_pid_n, num_warps=4)
     if not is_interpreter():
         assert h.asm['ttgir'].count(
             '"tt.reduce"') == 2, "tt.reduce should be called twice, otherwise the optimization didn't work"
@@ -2471,8 +2476,6 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     if epilogue_kind == 'expand_reduce2d' and isinstance(src_layout, MmaLayout):
         pytest.skip(
             "Currently MmaLayout combined with slice encoding and reduce op trigger device illegal memory access")
-    if type(src_layout) is DpasLayout:
-        pytest.skip("FIXME: support DPAS layout")
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
@@ -2588,8 +2591,6 @@ layouts = [
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
 @pytest.mark.parametrize("src_layout", layouts)
 def test_store_op(M, src_layout, device):
-    if type(src_layout) is DpasLayout:
-        pytest.skip("FIXME: support DPAS layout")
 
     ir = f"""
     #src = {src_layout}
@@ -2642,8 +2643,6 @@ layouts = [
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
-    if (src_dim == 1 and type(src_layout) is DpasLayout) or (dst_dim == 1 and type(dst_layout) is DpasLayout):
-        pytest.skip("FIXME: support DPAS layout")
 
     ir = f"""
     #dst = {dst_layout}
@@ -2955,9 +2954,6 @@ def convert_fp8_to_fp32(x, device, dtype_str):
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, num_ctas, device):
-    if is_hip():
-        pytest.skip("Skipping test until we fix bug in amd backend (to use layout order)")
-
     if is_cuda():
         capability = torch.cuda.get_device_capability()
 
@@ -3840,23 +3836,18 @@ def test_pointer_arguments(device):
                                                (2**31, 'i64'), (2**32 - 1, 'i64'), (2**32, 'i64'), (2**63 - 1, 'i64'),
                                                (-2**63, 'i64'), (2**63, 'u64'), (2**64 - 1, 'u64')])
 def test_value_specialization(value: int, value_type: str, device) -> None:
-    spec_type = None
 
-    def cache_hook(*args, **kwargs):
-        nonlocal spec_type
-        spec_type = kwargs["compile"]["signature"][0]
+    def repr(specialization):
+        spec_type = specialization.signature["VALUE"]
+        return f"kernel_{spec_type}"
 
-    JITFunction.cache_hook = cache_hook
-
-    @triton.jit
+    @triton.jit(repr=repr)
     def kernel(VALUE, X):
         pass
 
     x = torch.tensor([3.14159], device=device)
-    pgm = kernel[(1, )](value, x)
-
-    JITFunction.cache_hook = None
-    assert spec_type == value_type
+    h = kernel[(1, )](value, x)
+    assert value_type in h.name
 
 
 # --------------------
@@ -4142,6 +4133,30 @@ def test_num_warps_pow2(device):
     _kernel[(1, )](dst=dst, num_warps=1)
     _kernel[(1, )](dst=dst, num_warps=2)
     _kernel[(1, )](dst=dst, num_warps=4)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("func_str", ['sqrt', 'rsqrt', 'exp', 'exp2', 'log', 'log2', 'sin', 'cos'])
+def test_unary_math(func_str, device):
+
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        y = tl.FUNC_STR(x)
+        tl.store(Y + tl.arange(0, BLOCK), y)
+
+    kernel = patch_kernel(kernel, {'FUNC_STR': func_str})
+
+    shape = (128, )
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    if func_str in ['sqrt', 'rsqrt']:
+        x = torch.abs(x)
+    if func_str in ['log', 'log2']:
+        x = torch.max(x, torch.tensor(1e-6, dtype=torch.float32, device=device))
+    y = torch.zeros(shape, dtype=torch.float32, device=device)
+
+    kernel[(1, )](x, y, BLOCK=shape[0])
+    torch.allclose(getattr(torch, func_str)(x), y, rtol=1e-3)
 
 
 # -----------------------

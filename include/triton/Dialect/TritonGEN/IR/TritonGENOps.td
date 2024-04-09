@@ -150,15 +150,48 @@ def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
 
 def TritonGEN_BarrierOp : TritonGEN_Op<"barrier"> {
   let summary = "Workgroup barrier";
-
   string baseDescription = [{
     The `gen.barrier` operation performs a workgroup barrier and ensures all
     outstanding memory transaction using local or global memory are complete.
   }];
-
   let arguments = (ins);
   let results = (outs);
   let assemblyFormat = "attr-dict";
+}
+
+def TritonGEN_NamedBarrierSignalOp : TritonGEN_Op<"named_barrier_signal">,
+  Arguments<(ins I32:$barrier_id, I32:$thread_group_count)> {
+  let summary = "Named barrier signal";
+
+  string baseDescription = [{
+    The `gen.named_barrier_signal` operation signals the arrival of a thread at
+    the current program point. The '$barrier_id' parameter is an integer value
+    which identifies the named barrier. The '$thread_group_count' parameter
+    specifies the number of threads participating in the barrier. Once all
+    participating threads have signaled their arrival, any other participating
+    thread waiting at the `gen.named_barrier_wait` operation associated with the
+    same '$barrier_id' can exit the wait operation.
+  }];
+
+  let assemblyFormat = [{
+    operands attr-dict `:` `(` type(operands) `)`
+  }];
+}
+
+def TritonGEN_NamedBarrierWaitOp : TritonGEN_Op<"named_barrier_wait">,
+  Arguments<(ins I32:$barrier_id)> {
+  let summary = "Named barrier wait";
+
+  string baseDescription = [{
+    The `gen.named_barrier_wait` operation blocks threads participating in the
+    named barrier operation identified by '$barrier_id' until all participating
+    threads have reached the `gen.named_barrier_signal` operation associated with
+    the same '$barrier_id'.
+  }];
+
+  let assemblyFormat = [{
+    operands attr-dict `:` type(operands)
+  }];
 }
 
 def IntegerOrFloatType : AnyTypeOf<[AnyInteger, AnyFloat]>;
@@ -171,6 +204,7 @@ def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
                  I32:$mask,
                  TritonGEN_ShflKindAttr:$kind)> {
   let summary = "Subgroup shuffle";
+
   string baseDescription = [{
     The `gen.sub_group_shuffle` operation is invoked by different work items
     with different values, given by $value. Different work items have different
@@ -212,14 +246,14 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
     I32Attr:$rc
   )> {
 
-  let summary = "GEN matrix multiply-add (for PVC)";
+  let summary = "Matrix multiply-add";
 
   string baseDescription = [{
-    The 'gen.dpas' operation is a matrix multiply-add operation as follows:
+    The `gen.dpas` operation is a matrix multiplication plus accumulation:
 
       D = C + A x B
 
-      where
+      where the A, B, C input matrices and the result D have shapes:
         D : MxN
         C : MxN
         A : MxK
@@ -265,27 +299,33 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
     I1Attr:$vnni_transform
   )> {
 
-  let summary = "GEN 2D block load";
+  let summary = "2D block load";
 
   string baseDescription = [{
-    The 'gen.2Dblockload' operation loads a submatrix from an array in memory.
-    $ptr - the base address of the memory array
-    $base_width, $base_height, $base_pitch - the shape of the memory array
-    $x, $y, $tile_width, $tile_height - the starting offsets and shape of the submatrix to load
-    $elem_size_in_bits - 32 for f32, bf32; 16 for f16, int16, bf16; 8 for int8, int4, int2 and etc
-    $v_blocks - number of blocks to load
-    $transpose - transpose the submatrix in vector register (useful for 32 bit element types)
-    $vnni_transform - transpose and pack the submatrix in register (useful for < 32 bit element types)
+    The `gen.2Dblockload` operation loads a two dimensional matrix tile from a larger matrix residing
+    in memory. The parameters are:
+      $ptr - the base address of the matrix containing the tile to load
+      $base_width, $base_height, $base_pitch - the shape of matrix
+      $x, $y, $tile_width, $tile_height - the starting offsets and shape of the tile to load
+      $elem_size_in_bits - the size in bits of the matrix element
+        - 32 for f32, bf32
+        - 16 for f16, int16, bf16
+        - 8 for int8, int4, int2
+      $v_blocks - number of tiles to load
+      $transpose - transpose the tile in registers (useful for 32 bit element type)
+      $vnni_transform - transpose and pack the submatrix in registers (useful for < 32 bit element types)
 
-    The $transpose and $vnni_transform are mutual exclusive. These transformations are used for
-    the B matrix in MMA (DPAS) operations D = C + A * B, where A should have row-major layout in register
-    and B should have column-major layout.
-
-    If the submatrix contains out of bound elements of the memory array, they are filled with 0.
+    Notes:
+      - the $transpose and $vnni_transform parameters are mutual exclusive
+      - transposing the tile loaded is typically used for the B matrix operand of a `gen.tile` operations
+        (D = C + A * B), where A has row-major layout in registers and B should have column-major layout.
+      - if the tile loaded contains out of bound elements of the matrix, they are filled with 0.
   }];
 
   let assemblyFormat = [{
-    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,` `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,` `vnni_transform` `=` $vnni_transform `}` attr-dict `:` functional-type(operands, results)
+    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,`
+    `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,`
+    `vnni_transform` `=` $vnni_transform `}` attr-dict `:` functional-type(operands, results)
   }];
 
   let hasVerifier = 1;
@@ -308,28 +348,33 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
     FixedVectorOf<[TritonGEN_MatrixElemType]>:$stored_val
   )> {
 
-  let summary = "GEN 2D block store";
+  let summary = "2D block store";
 
   string baseDescription = [{
-    The 'gen.2Dblockstore' operation stores to a submatrix from an array in memory.
-    $ptr - the base address of the memory array
-    $base_width, $base_height, $base_pitch - the shape of the memory array
-    $x, $y, $tile_width, $tile_height - the starting offsets and shape of the submatrix to load
-    $elem_size_in_bits - 32 for f32, bf32; 16 for f16, int16, bf16; 8 for int8, etc...
-    $v_blocks - number of blocks to store
-    $transpose - transpose the submatrix in vector register (useful for 32 bit element types)
-    $vnni_transform - transpose and pack the submatrix in register (useful for < 32 bit element types)
-    $stored_val - block to store
+    The `gen.2Dblockstore` operation stores a two dimensional tile into a larger matrix residing
+    in memory. The parameters are:
+      $ptr - the base address of the matrix where to store the tile
+      $base_width, $base_height, $base_pitch - the shape of the matrix
+      $x, $y, $tile_width, $tile_height - the starting offsets and shape of the tile to store
+      $elem_size_in_bits - the size in bits of the matrix element
+        - 32 for f32, bf32
+        - 16 for f16, int16, bf16
+        - 8 for int8, int4, int2
+      $v_blocks - number of tiles to store
+      $transpose - transpose the tile in registers (useful for 32 bit element types)
+      $vnni_transform - transpose and pack the tile in registers (useful for < 32 bit element types)
+      $stored_val - the tile to store
 
-    The $transpose and $vnni_transform are mutual exclusive. These transformations are used for
-    the B matrix in MMA (DPAS) operations D = C + A * B, where A should have row-major layout in register
-    and B should have column-major layout.
-
-    If the submatrix contains out of bound elements of the memory array, they are filled with 0.
+    Notes:
+      - the $transpose and $vnni_transform parameters are mutual exclusive
+      - transposing the tile loaded is typically used for the B matrix operand of a `gen.tile` operations
+        (D = C + A * B), where A has row-major layout in registers and B should have column-major layout.
   }];
 
   let assemblyFormat = [{
-    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,` `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,` `vnni_transform` `=` $vnni_transform `}` attr-dict `:` `(` type(operands) `)`
+    operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,`
+      `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,`
+      `vnni_transform` `=` $vnni_transform `}` attr-dict `:` `(` type(operands) `)`
   }];
 
   let hasVerifier = 1;
@@ -352,20 +397,27 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
     TritonGEN_PrefetchCacheControl:$cache_control
   )> {
 
-  let summary = "GEN 2D block prefetch";
+  let summary = "2D block prefetch";
 
   string baseDescription = [{
-    The 'gen.2Dblockprefetch' operation prefetches a 2D block of a larger 2D matrix.
-    $ptr - the base address of the matrix
-    $base_width, $base_height, $base_pitch - the shape of the matrix
-    $x, $y, $tile_width, $tile_height - the starting offsets and shape of 2D block to prefetch
-    $elem_size_in_bits - 32 for f32, bf32; 16 for f16, int16, bf16; 8 for int8, etc...
-    $v_blocks - number of blocks to prefetch
-    $transpose - transpose the submatrix (useful for 32 bit element types)
-    $vnni_transform - transpose and pack the submatrix (useful for < 32 bit element types)
+    The `gen.2Dblockprefetch` operation prefetches a two dimensional tile from a larger matrix residing
+    in memory. The parameters are:
+      $ptr - the base address of the matrix containing the tile to prefetch
+      $base_width, $base_height, $base_pitch - the shape of the matrix
+    $x, $y, $tile_width, $tile_height - the starting offsets and shape of tile to prefetch
+    $elem_size_in_bits - the size in bits of the matrix element
+      - 32 for f32, bf32
+      - 16 for f16, int16, bf16
+      - 8 for int8, int4, int2
+    $v_blocks - number of tiles to prefetch
+    $transpose - transpose the tile in registers (useful for 32 bit element types)
+    $vnni_transform - transpose and pack the tile in registers (useful for < 32 bit element types)
     $cache_control - an enumerator that sets the L1 and L3 cache behaviour
 
-    The $transpose and $vnni_transform are mutual exclusive.
+    Notes:
+      - the $transpose and $vnni_transform parameters are mutual exclusive
+      - transposing the tile loaded is typically used for the B matrix operand of a `gen.tile` operations
+        (D = C + A * B), where A has row-major layout in registers and B should have column-major layout.
   }];
 
   let assemblyFormat = [{
