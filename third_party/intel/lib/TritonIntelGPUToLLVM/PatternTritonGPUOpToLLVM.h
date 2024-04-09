@@ -33,7 +33,7 @@ void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
-    PatternBenefit benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit);
 
 void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
@@ -62,11 +62,8 @@ void populateTritonGPUToLLVMPatterns(
 
 void populatePrintOpToLLVMPattern(TritonGPUToLLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
+                                  const TargetInfoBase &targetInfo,
                                   PatternBenefit benefit);
-
-void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                   RewritePatternSet &patterns,
-                                   PatternBenefit benefit);
 
 void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
@@ -82,6 +79,7 @@ void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
+                                 const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit);
 
 } // namespace intel
