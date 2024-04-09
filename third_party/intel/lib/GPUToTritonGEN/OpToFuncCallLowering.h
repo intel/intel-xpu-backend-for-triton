@@ -63,6 +63,7 @@ public:
     LLVMFuncOp funcOp = appendOrGetFuncOp(funcName, funcType, op);
     auto callOp =
         rewriter.create<LLVM::CallOp>(op->getLoc(), funcOp, castedOperands);
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
     if (resultType == adaptor.getOperands().front().getType()) {
       rewriter.replaceOp(op, {callOp.getResult()});

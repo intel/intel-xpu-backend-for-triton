@@ -83,12 +83,12 @@ private:
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
     if (!caller->hasAttr("allocation.offset")) {
-      auto base = LLVM::utils::getStackPointer(rewriter, caller);
+      auto base = LLVM::Intel::getStackPointer(rewriter, caller);
       promotedOperands.push_back(base);
       return promotedOperands;
     }
     promotedOperands.push_back(
-        LLVM::utils::getSharedMemoryBase(callOp->getLoc(), rewriter, callOp));
+        LLVM::Intel::getSharedMemoryBase(callOp->getLoc(), rewriter, callOp));
     return promotedOperands;
   }
 
@@ -136,7 +136,7 @@ private:
 } // namespace
 
 void mlir::triton::intel::populateControlFlowOpToLLVMPattern(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ReturnOpConversion>(typeConverter, benefit);
   patterns.add<CallOpConversion>(typeConverter, benefit);

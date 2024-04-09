@@ -10,6 +10,7 @@ permissions: read-all
 env:
   BACKEND: XPU
   TRITON_DISABLE_LINE_INFO: 1
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
 
@@ -18,7 +19,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - conda-0.0.1
+      - runner-0.0.11
     strategy:
       matrix:
         python:
@@ -39,7 +40,7 @@ jobs:
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 1
+          CACHE_NUMBER: 2
         with:
           path: $HOME/miniconda3/envs/triton
           key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
@@ -73,7 +74,14 @@ jobs:
 
       - name: Run core tests
         run: |
-          conda run --no-capture-output -n triton scripts/test-triton.sh
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/806
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/841
+          mv scripts/core-conda.exclude-list scripts/core.exclude-list
+          mv scripts/interpreter-conda.exclude-list scripts/interpreter.exclude-list
+
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/797
+          sed -ie 's/\(.*08-grouped-gemm\)/#\1/' scripts/test-triton.sh
+          conda run --no-capture-output -n triton bash -v -x scripts/test-triton.sh
 
       - name: Run E2E test
         run: |

@@ -172,7 +172,7 @@ public:
     a = rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), newAType, a);
     b = rewriter.create<ttg::ConvertLayoutOp>(b.getLoc(), newBType, b);
     DotOp newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b,
-                                          newAcc, dotOp.getAllowTF32(),
+                                          newAcc, dotOp.getInputPrecision(),
                                           dotOp.getMaxNumImpreciseAcc());
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, oldRetType,
@@ -262,6 +262,7 @@ public:
 };
 
 std::unique_ptr<Pass>
-mlir::createTritonIntelGPUAccelerateMatmulPass(ttgi::DeviceArch arch) {
+mlir::triton::gpu::intel::createTritonIntelGPUAccelerateMatmulPass(
+    ttgi::DeviceArch arch) {
   return std::make_unique<TritonIntelGPUAccelerateMatmulPass>(arch);
 }

@@ -1,7 +1,3 @@
-ARG INSTALLER_IMAGE=docker-registry.docker-registry.svc.cluster.local:5000/oneapi-basekit:2024.0.1
-
-FROM $INSTALLER_IMAGE as installer
-
 FROM summerwind/actions-runner:ubuntu-22.04
 
 USER root
@@ -25,7 +21,6 @@ RUN set -ex; \
       cmake \
       ninja-build \
       ncurses-term \
-      wget \
       pkg-config \
       \
       libpng-dev libjpeg-dev libsndfile1-dev libxml2-dev libxslt1-dev \
@@ -39,13 +34,17 @@ RUN set -ex; \
     rm -rf /var/lib/apt/lists/*
 
 USER runner
+WORKDIR $HOME
+
 SHELL ["/bin/bash", "-xec"]
 
-COPY --from=installer /l_BaseKit*.sh $HOME/
-
 # TODO: install only necessary components
+RUN \
+  curl -sSLO https://registrationcenter-download.intel.com/akdlm/IRC_NAS/fdc7a2bc-b7a8-47eb-8876-de6201297144/l_BaseKit_p_2024.1.0.596_offline.sh; \
+  sh l_BaseKit*.sh -a --silent --eula accept; \
+  rm l_BaseKit*.sh
 
 RUN \
-  cd $HOME; \
-  /bin/sh l_BaseKit*.sh -a --silent --eula accept; \
-  rm l_BaseKit*.sh
+  curl -sSLO https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh; \
+  sh Miniconda3-latest-Linux-x86_64.sh -b; \
+  rm Miniconda3-latest-Linux-x86_64.sh

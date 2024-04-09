@@ -1,5 +1,11 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
+// CHECK-DAG: llvm.func spir_funccc @_Z16get_sub_group_idv() -> i32
+// CHECK-DAG: llvm.func spir_funccc @_Z14get_num_groupsj(i32) -> i64
+// CHECK-DAG: llvm.func spir_funccc @_Z14get_local_sizej(i32) -> i64
+// CHECK-DAG: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64
+// CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64
+
 llvm.func @gen_special_regs() -> i32 {
   // CHECK-LABEL: gen_special_regs
   // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -43,7 +49,7 @@ llvm.func @gen_special_regs() -> i32 {
   // CHECK: llvm.call @_Z14get_num_groupsj([[TWO3]]) : (i32) -> i64
   %12 = triton_gen.grid.dim.z : i32
 
-  // CHECK: llvm.call @_Z25__spirv_BuiltInSubgroupIdv() : () -> i32
+  // CHECK: llvm.call @_Z16get_sub_group_idv() : () -> i32
   %13 = triton_gen.subgroup.id : i32
 
   llvm.return %1 : i32
@@ -121,6 +127,60 @@ llvm.func @triton_gen.sub_group_shuffle() {
 
 // -----
 
+// CHECK: llvm.func spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iDv8_i(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {passthrough = ["convergent"]}
+
+llvm.func @triton_gen.dpas.i8(%c : vector<8xi32>, %a : vector<16xi8>, %b : vector<32xi8>) {
+  // CHECK:     llvm.func @triton_gen.dpas.i8(%arg0: vector<8xi32>, %arg1: vector<16xi8>, %arg2: vector<32xi8>) {
+  // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<16xi8> to vector<8xi16>
+  // CHECK-DAG:  [[B:%.*]] = llvm.bitcast %arg2 : vector<32xi8> to vector<8xi32>
+  // CHECK-NEXT: llvm.call @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iDv8_i([[A]], [[B]], %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32>
+  %0 = triton_gen.dpas %c, %a, %b {pa = i8, pb = i8, rc = 8} : (vector<8xi32>, vector<16xi8>, vector<32xi8>) -> vector<8xi32>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @_Z36intel_sub_group_u8_u8_matrix_mad_k32Dv8_sDv8_iDv8_i(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {passthrough = ["convergent"]}
+
+llvm.func @triton_gen.dpas.u8(%c : vector<8xi32>, %a : vector<16xi8>, %b : vector<32xi8>) {
+  // CHECK:     llvm.func @triton_gen.dpas.u8(%arg0: vector<8xi32>, %arg1: vector<16xi8>, %arg2: vector<32xi8>) {
+  // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<16xi8> to vector<8xi16>
+  // CHECK-DAG:  [[B:%.*]] = llvm.bitcast %arg2 : vector<32xi8> to vector<8xi32>
+  // CHECK-NEXT: llvm.call @_Z36intel_sub_group_u8_u8_matrix_mad_k32Dv8_sDv8_iDv8_i([[A]], [[B]], %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32>
+  %0 = triton_gen.dpas %c, %a, %b {pa = u8, pb = u8, rc = 8} : (vector<8xi32>, vector<16xi8>, vector<32xi8>) -> vector<8xi32>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent"]}
+
+llvm.func @triton_gen.dpas.bf16(%c : vector<8xf32>, %a : vector<8xbf16>, %b : vector<16xbf16>) {
+  // CHECK:     llvm.func @triton_gen.dpas.bf16(%arg0: vector<8xf32>, %arg1: vector<8xbf16>, %arg2: vector<16xbf16>) {
+  // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<8xbf16> to vector<8xi16>
+  // CHECK-DAG:  [[B:%.*]] = llvm.bitcast %arg2 : vector<16xbf16> to vector<8xi32>
+  // CHECK-NEXT: llvm.call @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iDv8_f([[A]], [[B]], %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+  %0 = triton_gen.dpas %c, %a, %b {pa = bf16, pb = bf16, rc = 8} : (vector<8xf32>, vector<8xbf16>, vector<16xbf16>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent"]}
+
+llvm.func @triton_gen.dpas.f16(%c : vector<8xf32>, %a : vector<8xf16>, %b : vector<16xf16>) {
+  // CHECK:     llvm.func @triton_gen.dpas.f16(%arg0: vector<8xf32>, %arg1: vector<8xf16>, %arg2: vector<16xf16>) {
+  // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<8xf16> to vector<8xi16>
+  // CHECK-DAG:  [[B:%.*]] = llvm.bitcast %arg2 : vector<16xf16> to vector<8xi32>
+  // CHECK-NEXT: llvm.call @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f([[A]], [[B]], %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+  %0 = triton_gen.dpas %c, %a, %b {pa = f16, pb = f16, rc = 8} : (vector<8xf32>, vector<8xf16>, vector<16xf16>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v4i32.v8i32(vector<8xf32>, vector<4xi32>, vector<8xi32>, i32, i32, i32, i32, i1) -> vector<8xf32>
+
 llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vector<8xf32>) {
   // CHECK:     llvm.func @triton_gen.dpas.f32(%arg0: vector<8xf32>, %arg1: vector<4xf32>, %arg2: vector<8xf32>) {
   // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<4xf32> to vector<4xi32>
@@ -138,7 +198,7 @@ llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vect
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v8f32(i64, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v8f32(i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
@@ -150,14 +210,14 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_hei
   // CHECK-DAG:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
   // CHECK-DAG:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v8f32([[PTR]], %arg1, %arg2, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
+  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v8f32([[PTR]], %arg1, %arg2, %arg3, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xf32>
   llvm.return
 }
 
 // -----
 
-// CHECK:  llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8f32(i64, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>)
+// CHECK:  llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8f32(i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>)
 
 llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xf32>) {
   // CHECK:     llvm.func @triton_gen.2Dblockstore(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: vector<8xf32>) {
@@ -169,14 +229,14 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_he
   // CHECK-DAG:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
   // CHECK-DAG:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockWrite.v8f32([[PTR]], %arg1, %arg2, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]], %arg6) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>) -> ()
+  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockWrite.v8f32([[PTR]], %arg1, %arg2, %arg3, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]], %arg6) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>) -> ()
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xf32>)
   llvm.return
 }
 
 // -----
 
-// CHECK:  llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid(i64, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32)
+// CHECK:  llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid(i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32)
 
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockprefetch(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
@@ -188,7 +248,7 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base
   // CHECK-DAG:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
   // CHECK-DAG:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
   // CHECK-DAG:  [[FOUR:%.*]] = llvm.mlir.constant(4 : i32) : i32
-  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid([[PTR]], %arg1, %arg2, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[FOUR]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
+  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid([[PTR]], %arg1, %arg2, %arg3, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[FOUR]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=L1C_L3C} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
 }

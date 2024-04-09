@@ -1103,9 +1103,9 @@ class ElementwiseOpConversionBase
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit ElementwiseOpConversionBase(
-      TritonGPUToLLVMTypeConverter &typeConverter,
-      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit = 1)
+  explicit ElementwiseOpConversionBase(LLVMTypeConverter &typeConverter,
+                                       ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                       PatternBenefit benefit = 1)
       : ConvertTritonGPUOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         axisAnalysisPass(axisAnalysisPass) {}
 
@@ -1295,7 +1295,7 @@ struct FpToFpOpConversion
   using ElementwiseOpConversionBase<
       FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
 
-  explicit FpToFpOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -2133,7 +2133,7 @@ struct MinMaxFOpConversion
       typename std::conditional<std::is_same<OpTy, arith::MinimumFOp>::value,
                                 LLVM::MinNumOp, LLVM::MaxNumOp>::type;
 
-  explicit MinMaxFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit MinMaxFOpConversion(LLVMTypeConverter &typeConverter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
                                int computeCapability,
                                PatternBenefit benefit = 1)
@@ -2160,7 +2160,7 @@ struct MinMaxFOpConversion
     auto isNan = rewriter.create<LLVM::OrOp>(loc, lhsIsNan, rhsIsNan);
     auto nonNanRes = rewriter.create<DestOpNoNanProp>(loc, elemTy, lhs, rhs);
 
-    auto nan = LLVM::utils::createNaNConstant(loc, rewriter, elemTy);
+    auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
 
     // Select the result based on the isNan flag.
     return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
@@ -2176,7 +2176,7 @@ struct ClampFOpConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  explicit ClampFOpConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit ClampFOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               int computeCapability, PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
@@ -2252,7 +2252,7 @@ struct ClampFOpConversion
       auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
                                                operands[0][1]);
       auto nonNanRes = rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2]);
-      auto nan = LLVM::utils::createNaNConstant(loc, rewriter, elemTy);
+      auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
       // Select the result based on the isNan flag.
       return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
     }
@@ -2333,7 +2333,7 @@ struct OpToExternCallConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  explicit OpToExternCallConversion(TritonGPUToLLVMTypeConverter &typeConverter,
+  explicit OpToExternCallConversion(LLVMTypeConverter &typeConverter,
                                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                                     StringRef externFuncName,
                                     PatternBenefit benefit)
@@ -2424,7 +2424,7 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
 
 namespace intel {
 void populateElementwiseOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
     PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
@@ -2472,6 +2472,7 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
   POPULATE_UNARY_OP(math::SinOp, math::SinOp)
   POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
+  POPULATE_UNARY_OP(math::RsqrtOp, math::RsqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
   POPULATE_UNARY_OP(math::Exp2Op, math::Exp2Op)
   POPULATE_UNARY_OP(math::ErfOp, math::ErfOp)
@@ -2479,6 +2480,9 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
   POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
 #undef POPULATE_UNARY_OP
+
+  patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
       typeConverter, axisInfoAnalysis, "__imf_sqrtf", benefit);
