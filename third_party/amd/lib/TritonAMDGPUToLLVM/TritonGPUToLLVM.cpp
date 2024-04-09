@@ -211,7 +211,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, patterns,
                                                    benefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
-                                                benefit);
+                                                targetInfo, benefit);
     mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                      benefit);
     mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
@@ -229,6 +229,8 @@ struct ConvertTritonAMDGPUToLLVM
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
+    mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
+                                               targetInfo, benefit);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }

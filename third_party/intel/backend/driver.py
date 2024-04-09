@@ -411,7 +411,8 @@ class XPUDriver(DriverBase):
         import torch
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
-        return ("xpu", dev_property)
+        warp_size = 32
+        return ("xpu", dev_property, warp_size)
 
     @staticmethod
     def is_active():

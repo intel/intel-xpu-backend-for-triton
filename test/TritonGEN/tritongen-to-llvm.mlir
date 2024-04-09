@@ -1,5 +1,11 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
+// CHECK-DAG: llvm.func spir_funccc @_Z16get_sub_group_idv() -> i32
+// CHECK-DAG: llvm.func spir_funccc @_Z14get_num_groupsj(i32) -> i64
+// CHECK-DAG: llvm.func spir_funccc @_Z14get_local_sizej(i32) -> i64
+// CHECK-DAG: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64
+// CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64
+
 llvm.func @gen_special_regs() -> i32 {
   // CHECK-LABEL: gen_special_regs
   // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -63,6 +69,20 @@ llvm.func @triton_gen.barrier() {
 
 // -----
 
+// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.signal.i32.i32(i32, i32) attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.wait.i32(i32) attributes {passthrough = ["convergent"]}
+
+llvm.func @triton_gen.named_barrier(%barrier_id : i32, %thread_group_count : i32) {
+  // CHECK-LABEL: triton_gen.named_barrier(%arg0: i32, %arg1: i32) {
+  // CHECK:       llvm.call @llvm.genx.GenISA.threadgroupnamedbarriers.signal.i32.i32(%arg0, %arg1) {passthrough = ["convergent"]} : (i32, i32) -> ()
+  // CHECK-NEXT:  llvm.call @llvm.genx.GenISA.threadgroupnamedbarriers.wait.i32(%arg0) {passthrough = ["convergent"]} : (i32) -> ()
+  triton_gen.named_barrier_signal %barrier_id, %thread_group_count : (i32, i32)
+  triton_gen.named_barrier_wait %barrier_id : i32
+  llvm.return
+}
+
+// -----
+
 // CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xordj(f64, i32) -> f64 attributes {passthrough = ["convergent"]}
 // CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorfj(f32, i32) -> f32 attributes {passthrough = ["convergent"]}
 // CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorDhj(f16, i32) -> f16 attributes {passthrough = ["convergent"]}
@@ -121,6 +141,8 @@ llvm.func @triton_gen.sub_group_shuffle() {
 
 // -----
 
+// CHECK: llvm.func spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iDv8_i(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {passthrough = ["convergent"]}
+
 llvm.func @triton_gen.dpas.i8(%c : vector<8xi32>, %a : vector<16xi8>, %b : vector<32xi8>) {
   // CHECK:     llvm.func @triton_gen.dpas.i8(%arg0: vector<8xi32>, %arg1: vector<16xi8>, %arg2: vector<32xi8>) {
   // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<16xi8> to vector<8xi16>
@@ -131,6 +153,8 @@ llvm.func @triton_gen.dpas.i8(%c : vector<8xi32>, %a : vector<16xi8>, %b : vecto
 }
 
 // -----
+
+// CHECK: llvm.func spir_funccc @_Z36intel_sub_group_u8_u8_matrix_mad_k32Dv8_sDv8_iDv8_i(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {passthrough = ["convergent"]}
 
 llvm.func @triton_gen.dpas.u8(%c : vector<8xi32>, %a : vector<16xi8>, %b : vector<32xi8>) {
   // CHECK:     llvm.func @triton_gen.dpas.u8(%arg0: vector<8xi32>, %arg1: vector<16xi8>, %arg2: vector<32xi8>) {
@@ -143,6 +167,8 @@ llvm.func @triton_gen.dpas.u8(%c : vector<8xi32>, %a : vector<16xi8>, %b : vecto
 
 // -----
 
+// CHECK: llvm.func spir_funccc @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent"]}
+
 llvm.func @triton_gen.dpas.bf16(%c : vector<8xf32>, %a : vector<8xbf16>, %b : vector<16xbf16>) {
   // CHECK:     llvm.func @triton_gen.dpas.bf16(%arg0: vector<8xf32>, %arg1: vector<8xbf16>, %arg2: vector<16xbf16>) {
   // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<8xbf16> to vector<8xi16>
@@ -154,6 +180,8 @@ llvm.func @triton_gen.dpas.bf16(%c : vector<8xf32>, %a : vector<8xbf16>, %b : ve
 
 // -----
 
+// CHECK: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent"]}
+
 llvm.func @triton_gen.dpas.f16(%c : vector<8xf32>, %a : vector<8xf16>, %b : vector<16xf16>) {
   // CHECK:     llvm.func @triton_gen.dpas.f16(%arg0: vector<8xf32>, %arg1: vector<8xf16>, %arg2: vector<16xf16>) {
   // CHECK-DAG:  [[A:%.*]] = llvm.bitcast %arg1 : vector<8xf16> to vector<8xi16>
@@ -164,6 +192,8 @@ llvm.func @triton_gen.dpas.f16(%c : vector<8xf32>, %a : vector<8xf16>, %b : vect
 }
 
 // -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v4i32.v8i32(vector<8xf32>, vector<4xi32>, vector<8xi32>, i32, i32, i32, i32, i1) -> vector<8xf32>
 
 llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vector<8xf32>) {
   // CHECK:     llvm.func @triton_gen.dpas.f32(%arg0: vector<8xf32>, %arg1: vector<4xf32>, %arg2: vector<8xf32>) {

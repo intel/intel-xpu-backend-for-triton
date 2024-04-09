@@ -52,12 +52,7 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        oclc_wavefrontsize_lib = "oclc_wavefrontsize64_on" if self.warp_size == 64 else "oclc_wavefrontsize64_off"
-        libs = [
-            "cuda2gcn", "opencl", "ocml", "ockl", "oclc_finite_only_off", "oclc_daz_opt_off",
-            "oclc_correctly_rounded_sqrt_on", "oclc_unsafe_math_off", oclc_wavefrontsize_lib, "oclc_abi_version_500"
-        ]
-        libs += ['oclc_isa_version_' + self.arch.replace('gfx', '')]
+        libs = ["ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -157,11 +152,15 @@ class HIPBackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         pm.run(mod)
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttgpuir.add_allocate_shared_memory(pm)
         amd.passes.ttgpuir.add_to_llvmir(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
         pm.run(mod)
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
@@ -173,25 +172,41 @@ class HIPBackend(BaseBackend):
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
+
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
+
+        # Set various control constants on the LLVM module so that device
+        # libraries can resolve references to them.
+        amd.set_isa_version(llvm_mod, options.arch)
+        amd.set_abi_version(llvm_mod, 400)
+        amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
+        amd.set_bool_control_constant(llvm_mod, "__oclc_daz_opt", False)
+        amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
+        amd.set_bool_control_constant(llvm_mod, "__oclc_unsafe_math_opt", False)
+        amd.set_bool_control_constant(llvm_mod, "__oclc_wavefrontsize64", options.warp_size == 64)
+
+        # Set kernel attributes first given this may affect later optimizations.
+        kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
+        # The public kernel should be kernel 0.
+        kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
+        kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
+        kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
+        kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
+
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
+
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
-        # Set kernel attributes
-        kernels = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
-        # The public kernel should be kernel 0
-        kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
-        kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1, {options.num_warps*options.warp_size}")
-        kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
-        kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
+
         # Get some metadata
         metadata["shared"] = src.get_int_attr("triton_gpu.shared")
-        ret = str(llvm_mod)
-        return ret
+
+        amd.cleanup_bitcode_metadata(llvm_mod)
+        return str(llvm_mod)
 
     @staticmethod
     def make_hsaco(src, metadata, options):
