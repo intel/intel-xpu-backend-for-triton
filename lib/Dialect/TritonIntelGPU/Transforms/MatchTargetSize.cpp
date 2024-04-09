@@ -127,7 +127,7 @@ private:
   /// for the `tt.dot` operation.
   void initTargetDotShape();
 
-  /// Canonicalize operations (e.g. remove redundant tt.extract, tt.glue)
+  /// Canonicalize operations (e.g. remove redundant tt.extract, tt.concat)
   void canonicalize();
 
   void recordRootSubSize(Type type);
@@ -186,8 +186,8 @@ public:
                                 PatternRewriter &rewriter) const final {
     Value base = op.getBase();
     if (Operation *def = base.getDefiningOp()) {
-      if (auto glue = dyn_cast<ttgi::GlueOp>(def)) {
-        Value sub = glue->getOperand(op.getIdx());
+      if (auto concat = dyn_cast<ttgi::ConcatOp>(def)) {
+        Value sub = concat->getOperand(op.getIdx());
         rewriter.replaceOp(op, sub);
         return success();
       }
@@ -213,17 +213,17 @@ public:
     DenseMap<Value, int> userIndexMap;
     unsigned idx = 0;
     for (auto [arg, init] : llvm::zip(op.getRegionIterArgs(), op.getInits())) {
-      auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
-      if (!glue) {
+      auto concat = dyn_cast<ttgi::ConcatOp>(init.getDefiningOp());
+      if (!concat) {
         newInits.push_back(init);
         userIndexMap[arg] = idx;
         idx++;
         continue;
       }
 
-      unsigned numSplit = glue->getOperands().size();
+      unsigned numSplit = concat->getOperands().size();
       for (unsigned i = 0; i < numSplit; i++)
-        newInits.push_back(glue->getOperand(i));
+        newInits.push_back(concat->getOperand(i));
 
       for (auto *user : arg.getUsers()) {
         if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
@@ -254,9 +254,9 @@ public:
     SmallVector<Value> newValues;
     for (auto result : yield.getResults())
       if (Operation *def = result.getDefiningOp()) {
-        if (auto glue = dyn_cast<ttgi::GlueOp>(def))
-          newValues.append(glue->getOperands().begin(),
-                           glue->getOperands().end());
+        if (auto concat = dyn_cast<ttgi::ConcatOp>(def))
+          newValues.append(concat->getOperands().begin(),
+                           concat->getOperands().end());
         else
           newValues.push_back(result);
       }
@@ -270,8 +270,8 @@ public:
     userIndexMap.clear();
     idx = 0;
     for (auto [result, init] : llvm::zip(op.getResults(), op.getInits())) {
-      auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
-      if (!glue) {
+      auto concat = dyn_cast<ttgi::ConcatOp>(init.getDefiningOp());
+      if (!concat) {
         userIndexMap[result] = idx;
         idx++;
         continue;
@@ -283,7 +283,7 @@ public:
           deleteList.push_back(extract.getOperation());
         }
 
-      idx += glue->getOperands().size();
+      idx += concat->getOperands().size();
     }
 
     for (auto [user, idx] : userIndexMap)
@@ -436,8 +436,8 @@ void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
     }
   }
 
-  auto glue = b.create<ttgi::GlueOp>(loc, type, subOps);
-  op->replaceAllUsesWith(glue->getResults());
+  op->replaceAllUsesWith(
+      b.create<ttgi::ConcatOp>(loc, type, subOps)->getResults());
   op->erase();
 }
 
@@ -464,8 +464,8 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
     }
   }
 
-  auto glue = b.create<ttgi::GlueOp>(loc, type, subOps);
-  op->replaceAllUsesWith(glue->getResults());
+  op->replaceAllUsesWith(
+      b.create<ttgi::ConcatOp>(loc, type, subOps)->getResults());
   op->erase();
 }
 
@@ -519,8 +519,8 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
     }
   }
 
-  auto newC = b.create<ttgi::GlueOp>(loc, dot.getType(), subCs);
-  dot->replaceAllUsesWith(newC->getResults());
+  dot->replaceAllUsesWith(
+      b.create<ttgi::ConcatOp>(loc, dot.getType(), subCs)->getResults());
   dot->erase();
 }
 
@@ -592,10 +592,8 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
     }
   }
 
-  if (numResults == 1) {
-    auto glue = b.create<ttgi::GlueOp>(loc, type, subOps);
-    op->replaceAllUsesWith(glue);
-  }
+  if (numResults == 1)
+    op->replaceAllUsesWith(b.create<ttgi::ConcatOp>(loc, type, subOps));
 
   op->erase();
 }
