@@ -92,7 +92,7 @@ public:
       return false;
     };
 
-    // Split operations to match target dot shape.
+    // Split operations to match the target architecture native shapes.
     m.walk<WalkOrder::PreOrder>([&](Operation *op) {
       SmallVector<Type> types(op->getOperandTypes().begin(),
                               op->getOperandTypes().end());
@@ -184,16 +184,16 @@ public:
   using OpRewritePattern<ttgi::ExtractOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(ttgi::ExtractOp op,
                                 PatternRewriter &rewriter) const final {
-    Value base = op.getBase();
+    Value base = op.getOperand();
     if (Operation *def = base.getDefiningOp()) {
       if (auto concat = dyn_cast<ttgi::ConcatOp>(def)) {
-        Value sub = concat->getOperand(op.getIdx());
+        Value sub = concat->getOperand(op.getIndex());
         rewriter.replaceOp(op, sub);
         return success();
       }
     }
 
-    if (base.getType() == op.getType() && op.getIdx() == 0) {
+    if (base.getType() == op.getType() && op.getIndex() == 0) {
       rewriter.replaceOp(op, base);
       return success();
     }
@@ -227,7 +227,7 @@ public:
 
       for (auto *user : arg.getUsers()) {
         if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
-          userIndexMap[extract] = idx + extract.getIdx();
+          userIndexMap[extract] = idx + extract.getIndex();
           deleteList.push_back(extract.getOperation());
         }
       }
@@ -279,7 +279,7 @@ public:
 
       for (auto user : result.getUsers())
         if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
-          userIndexMap[extract] = idx + extract.getIdx();
+          userIndexMap[extract] = idx + extract.getIndex();
           deleteList.push_back(extract.getOperation());
         }
 

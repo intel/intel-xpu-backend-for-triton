@@ -55,11 +55,11 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
       // CHECK: [[A:%.*]] = tt.load {{.*}} tensor<32x32xf16>
       // CHECK: [[B0:%.*]] = tt.load {{.*}} tensor<32x32xf16>
       // CHECK: [[B1:%.*]] = tt.load {{.*}} tensor<32x32xf16>
-      // CHECK: [[subA0:%.*]] = triton_intel_gpu.extract [[A]] {idx = 0 : i32} : tensor<32x32xf16> -> tensor<8x16xf16>
-      // CHECK: [[subB0:%.*]] = triton_intel_gpu.extract [[B0]] {idx = 0 : i32} : tensor<32x32xf16> -> tensor<16x16xf16>
+      // CHECK: [[subA0:%.*]] = triton_intel_gpu.extract [[A]][0] : tensor<32x32xf16> -> tensor<8x16xf16>
+      // CHECK: [[subB0:%.*]] = triton_intel_gpu.extract [[B0]][0] : tensor<32x32xf16> -> tensor<16x16xf16>
       // CHECK: [[subC0:%.*]] = tt.dot [[subA0]], [[subB0]], {{.*}} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
-      // CHECK: [[subA1:%.*]] = triton_intel_gpu.extract [[A]] {idx = 4 : i32} : tensor<32x32xf16> -> tensor<8x16xf16>
-      // CHECK: [[subB1:%.*]] = triton_intel_gpu.extract [[B0]] {idx = 1 : i32} : tensor<32x32xf16> -> tensor<16x16xf16>
+      // CHECK: [[subA1:%.*]] = triton_intel_gpu.extract [[A]][4] : tensor<32x32xf16> -> tensor<8x16xf16>
+      // CHECK: [[subB1:%.*]] = triton_intel_gpu.extract [[B0]][1] : tensor<32x32xf16> -> tensor<16x16xf16>
       // CHECK: [[subC1:%.*]] = tt.dot [[subA1]], [[subB1]], [[subC0]] {{.*}} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       %40 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<32x32xf16, #dot0_>, 1>
       %41 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x64xf16, #dot1_>, 1>
