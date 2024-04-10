@@ -14,7 +14,7 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter) {
   auto loc = op.getLoc();
-  auto srcTy = op.getInit().getType();
+  auto srcTy = op.getSrc().getType();
   auto dstTy = op.getType();
   auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
   auto srcLayout = srcTy.getEncoding();
@@ -33,9 +33,9 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
       LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
   auto srcIndices = ::mlir::triton::intel::emitIndices(loc, rewriter, srcLayout,
                                                        srcTy, false);
-  auto inVals = unpackLLElements(loc, adaptor.getInit(), rewriter);
+  auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
   mlir::triton::intel::storeDistributedToShared(
-      op.getInit(), inVals, dstStrides, srcIndices, op.getResult(), smemBase,
+      op.getSrc(), inVals, dstStrides, srcIndices, op.getResult(), smemBase,
       elemTy, loc, rewriter);
 }
 
@@ -68,7 +68,7 @@ struct LocalAllocOpConversion
     }
 
     // If there is an initial tensor, store it into the shared memory.
-    if (op.getInit()) {
+    if (op.getSrc()) {
       lowerDistributedToShared(op, adaptor, typeConverter, rewriter);
     }
 

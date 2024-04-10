@@ -22,6 +22,7 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option:
     tl.store(b_block_ptr, a, boundary_check=(0, ))
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtypes_str, n, padding_option", [  #
     (dtypes_str, n, padding)
     for dtypes_str in (("bool", "bool"), ("int16", "int16"), ("float16", "float16"), ("int16", "float16"))
@@ -77,6 +78,7 @@ def matmul_no_scf_with_advance_kernel(  #
     tl.store(c_ptrs, c)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("shape, num_warps", [  #
     (shape, num_warps) for shape in [
         [64, 64, 16],

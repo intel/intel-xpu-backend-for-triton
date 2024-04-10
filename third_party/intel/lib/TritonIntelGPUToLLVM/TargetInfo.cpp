@@ -124,6 +124,12 @@ bool TargetInfo::processReplicaUsingStMatrix(
   return false;
 }
 
+std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
+  std::string funcName =
+      resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
+  return funcName;
+}
+
 // declare __spirv_ocl_printf(i8*, ...) as external function
 LLVM::LLVMFuncOp
 getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter) {
