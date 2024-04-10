@@ -69,15 +69,18 @@ class XPUBackend(BaseBackend):
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        assert isinstance(target[1], dict)
         # TODO: Deprecate capability in XPU compilation
         # capability should be < 80, because some features in passes with capability >= 80 are not supported on PVC
         self.capability = intel.passes.ttgpuir.DEVICE_ARCH.PVC
-        self.properties = self._parse_target(target[1])
+        if isinstance(target[1], dict):
+            self.properties = target[1]
+        else:
+            self.properties = XPUUtils().get_device_properties(target[1])
         self.binary_ext = "spv"
 
-    def _parse_target(self, tgt_prop) -> dict:
+    def parse_target(self, target) -> tuple:
         dev_prop = {}
+        tgt_prop = XPUUtils().get_device_properties(target[1])
         dev_prop['name'] = tgt_prop.get('name', 'xpu')
         dev_prop['platform_name'] = tgt_prop.get('platform_name', None)
         dev_prop['vendor'] = tgt_prop.get('vendor', None)
@@ -89,7 +92,8 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        return dev_prop
+        dev_prop['device_arch'] = tgt_prop.get('device_arch').value
+        return (target[0], dev_prop)
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
@@ -115,7 +119,7 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_ttgir(mod, metadata, opt, capability):
+    def make_ttgir(mod, metadata, opt, device_arch):
         cluster_info = intel.ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
@@ -124,14 +128,14 @@ class XPUBackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.threads_per_warp, opt.num_ctas, capability)
+        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.threads_per_warp, opt.num_ctas, 80)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
         intel.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        intel.passes.ttgpuir.add_accelerate_matmul(pm, intel.passes.ttgpuir.DEVICE_ARCH.PVC)
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, device_arch)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         if opt.optimize_epilogue:
             passes.ttgpuir.add_optimize_epilogue(pm)
@@ -197,7 +201,7 @@ class XPUBackend(BaseBackend):
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.capability)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties["device_arch"])
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.capability)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata)
 

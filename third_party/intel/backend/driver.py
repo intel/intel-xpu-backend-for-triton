@@ -53,15 +53,10 @@ class XPUUtils(object):
         mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
-        self.context = mod.init_context(self.get_sycl_queue())
-        self.device_count = mod.init_devices(self.get_sycl_queue())
-        self.current_device = 0 if self.device_count[0] > 0 else -1
 
     def get_current_device(self):
-        return self.current_device
-
-    def get_event_pool(self):
-        return self.event_pool
+        import torch
+        return torch.xpu.current_device()
 
     def get_sycl_queue(self):
         import torch

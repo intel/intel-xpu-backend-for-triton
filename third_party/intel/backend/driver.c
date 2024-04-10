@@ -56,18 +56,47 @@ static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   }
 
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
-  int device_id;
-  if (!PyArg_ParseTuple(args, "i", &device_id))
+  PyObject *cap;
+  void *ptr = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
     return NULL;
+  if (!(ptr = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
+    return NULL;
+  sycl::device *syclDevice = static_cast<sycl::device *>(ptr);
 
-  if (device_id > sycl_l0_device_list.size()) {
-    std::cerr << "Device is not found " << std::endl;
+  // Get properties from SYCL.
+  sycl::ext::oneapi::experimental::architecture arch = syclDevice->get_info<
+      sycl::ext::oneapi::experimental::info::device::architecture>();
+  PyObject *tritonIntelGPUPassesModule =
+      PyImport_ImportModule("triton._C.libtriton.intel.passes.ttgpuir");
+  if (!tritonIntelGPUPassesModule) {
+    PyErr_Print();
+    printf("Error importing triton._C.libtriton.intel.passes.ttgpuir\n");
     return NULL;
   }
-  auto device = sycl_l0_device_list[device_id];
+  PyObject *gpuArchs =
+      PyObject_GetAttrString(tritonIntelGPUPassesModule, (char *)"DEVICE_ARCH");
+  if (!gpuArchs) {
+    PyErr_Print();
+    printf("Error unknown 'DEVICE_ARCH' attribute\n");
+    return NULL;
+  }
+  PyObject *gpuArch = PyObject_GetAttrString(gpuArchs, (char *)"UNKNOWN");
+  switch (arch) {
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
+    gpuArch = PyObject_GetAttrString(gpuArchs, (char *)"PVC");
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_dg2_g10:
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_dg2_g11:
+    gpuArch = PyObject_GetAttrString(gpuArchs, (char *)"ATS");
+    break;
+  default:; // fall through
+  }
 
-  // Get device handle
-  ze_device_handle_t phDevice = device.second;
+  // Get properteis from L0.
+  // Get L0 device handle
+  ze_device_handle_t phDevice =
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(*syclDevice);
 
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
@@ -77,20 +106,6 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int multiprocessor_count =
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
   int sm_clock_rate = device_properties.coreClockRate;
-
-  // Extract triton::gpu::intel::DeviceArch from pci_device_id
-  // https://dgpu-docs.intel.com/devices/hardware-table.html
-  int pci_device_id = device_properties.deviceId;
-  int gpu_arch = 2; // triton::gpu::intel::DeviceArch::UNKNOWN
-  switch ((pci_device_id >> 8) & 0xFF) {
-  case 0x56:
-    gpu_arch = 0; // Arc GPUs 56xx
-    break;
-  case 0x0B:      // PVC GPUs 0Bxx
-    gpu_arch = 1; // PVC
-    break;
-  default:; // fall through
-  }
 
   ze_device_compute_properties_t compute_properties = {};
   compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
@@ -119,10 +134,10 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   delete[] pMemoryProperties;
 
   return Py_BuildValue(
-      "{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}", "max_shared_mem",
+      "{s:i, s:i, s:i, s:i, s:i, s:O, s:i, s:O}", "max_shared_mem",
       max_shared_mem, "multiprocessor_count", multiprocessor_count,
       "sm_clock_rate", sm_clock_rate, "mem_clock_rate", mem_clock_rate,
-      "mem_bus_width", mem_bus_width, "device_arch", gpu_arch,
+      "mem_bus_width", mem_bus_width, "device_arch", gpuArch,
       "max_work_group_size", max_group_size, "sub_group_sizes", subgroup_sizes);
 }
 
