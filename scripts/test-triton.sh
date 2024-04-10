@@ -7,6 +7,7 @@ TEST_CORE=false
 TEST_TUTORIAL=false
 TEST_UNIT=false
 VENV=false
+REPORTS=false
 ARGS=
 for arg in "$@"; do
   case $arg in
@@ -26,8 +27,12 @@ for arg in "$@"; do
       VENV=true
       shift
       ;;
+    --reports)
+      REPORTS=true
+      shift
+      ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports]"
       exit 1
       ;;
     *)
@@ -57,6 +62,9 @@ export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 export SCRIPTS_DIR=$(dirname "$0")
 
+TIMESTAMP="$(date '+%Y%m%d%H%M%S')"
+REPORTS_DIR="${REPORTS_DIR:-$BASE/reports/$TIMESTAMP}"
+
 python3 -m pip install lit
 python3 -m pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-select
 
@@ -67,6 +75,16 @@ then
   echo "****** ERROR: Build Triton first ******"
   exit 1
 fi
+
+pytest_extra_args() {
+  local test_suite=$1
+  if [ "$REPORTS" = false ]; then
+      echo ""
+      return
+  fi
+  mkdir -p "$REPORTS_DIR"
+  echo "--junitxml=$REPORTS_DIR/$test_suite.xml"
+}
 
 run_unit_tests() {
   echo "***************************************************"
@@ -99,20 +117,20 @@ run_core_tests() {
   fi
   cd ${CORE_TEST_DIR}
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 --device xpu language/ --deselect-from-file ../../../scripts/core.exclude-list --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 --device xpu language/ --deselect-from-file ../../../scripts/core.exclude-list --ignore=language/test_line_info.py --ignore=language/test_subprocess.py $(pytest_extra_args language)
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 language/test_subprocess.py
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 language/test_subprocess.py $(pytest_extra_args subprocess)
 
   # run runtime tests serially to avoid race condition with cache handling.
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu runtime/
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu runtime/ $(pytest_extra_args runtime)
 
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-  TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
+  TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py $(pytest_extra_args line_info)
 
   TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 16 -m interpreter --deselect-from-file ../../../scripts/interpreter.exclude-list language/test_core.py language/test_standard.py \
-  language/test_random.py operators/test_flash_attention.py::test_op --device cpu
+  language/test_random.py operators/test_flash_attention.py::test_op --device cpu $(pytest_extra_args interpreter)
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu operators/
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu operators/ $(pytest_extra_args operators)
 }
 
 run_regression_tests() {
@@ -125,7 +143,7 @@ run_regression_tests() {
   fi
   cd ${REGRESSION_TEST_DIR}
 
-  python3 -m pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
+  python3 -m pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py $(pytest_extra_args regression)
 }
 
 run_tutorial_test() {
