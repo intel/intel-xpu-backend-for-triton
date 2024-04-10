@@ -62,20 +62,6 @@ static TritonGEN::ShflKind toGenShuffleMode(NVVM::ShflKind mode) {
 static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                             Value val, Value i, NVVM::ShflKind mode,
                             Value clamp) {
-  unsigned bits = val.getType().getIntOrFloatBitWidth();
-
-  if (bits == 64) {
-    Type vecTy = vec_ty(f32_ty, 2);
-    Value vec = bitcast(val, vecTy);
-    Value val0 = extract_element(f32_ty, vec, i32_val(0));
-    Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = commonShflSync(loc, rewriter, val0, i, mode, clamp);
-    val1 = commonShflSync(loc, rewriter, val1, i, mode, clamp);
-    vec = undef(vecTy);
-    vec = insert_element(vecTy, vec, val0, i32_val(0));
-    vec = insert_element(vecTy, vec, val1, i32_val(1));
-    return bitcast(vec, val.getType());
-  }
   Type type = val.getType();
   return rewriter.create<TritonGEN::SubGroupShuffleOp>(loc, type, val, i,
                                                        toGenShuffleMode(mode));
