@@ -46,9 +46,9 @@ def TTIG_ConcatOp : TTIG_Op<"concat", [Pure]> {
 
     Examples:
       ```mlir
-      %val = triton_intel_gpu.glue %tensor1, %tensor2 {dim = 0: i32} :
+      %val = triton_intel_gpu.concat %tensor1, %tensor2 {dim = 0: i32} :
            (tensor<16x8xf16>, tensor<8x8xf16>) -> tensor<24x8xf16>
-      %ptr = triton_intel_gpu.glue %ptr1, %ptr2 {dim = 1: i32} :
+      %ptr = triton_intel_gpu.concat %ptr1, %ptr2 {dim = 1: i32} :
            (!tt.ptr<tensor<16x8xf16>>, !tt.ptr<tensor<16x16xf16>>)
            -> !tt.ptr<tensor<16x24xf16>>
 
