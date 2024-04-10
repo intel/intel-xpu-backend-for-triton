@@ -65,23 +65,23 @@ def TTIG_ConcatOp : TTIG_Op<"concat", [Pure]> {
 def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
   let summary = "Tensor extract operation";
   let description = [{
-    The `extract` operation extracts a subtensor (or ptr to tensor) from an
+    The `extract` operation extracts a subtensor (or ptr to subtensor) from an
     input tensor (or ptr to tensor) as specified by the given index.
     The value extracted has shape as specified by the result type and the same
     element type as the input tensor.
 
     Example:
      ```mlir
-      %val = triton_intel_gpu.extract %tensor1[4] : tensor<32x32xf16>
+      %val = triton_intel_gpu.extract %tensor1[2] : tensor<32x32xf16>
            -> tensor<16x16xf16>
-      %ptr = triton_intel_gpu.extract %ptr1[4] : !tt.ptr<tensor<32x32xf16>>
+      %ptr = triton_intel_gpu.extract %ptr1[2] : !tt.ptr<tensor<32x32xf16>>
            -> !tt.ptr<tensor<16x16xf16>>
       ```
 
     In the examples above the result tensor (ptr to tensor) is obtained by:
-      -  partitioning the input shape into subtensors (ptr to subtensors) having
-        shape equal to the result shape (i.e. <8x16xf16>)
-      - taking the forth subtensor (as indicated by the index) counting in
+      - partitioning the input shape into subtensors (ptr to subtensors) having
+        shape equal to the result shape (i.e. <16x16xf16>)
+      - taking the 3rd subtensor (as indicated by the index) counting in
         row-major order
   }];
   let arguments = (ins TT_TensorOrTensorPtr:$operand, I32Attr:$index);
