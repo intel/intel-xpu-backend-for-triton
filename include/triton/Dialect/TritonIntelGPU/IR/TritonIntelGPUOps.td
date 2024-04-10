@@ -95,11 +95,11 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
   let hasVerifier = 1;
 }
 
-def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
+def TTIG_PrefetchOp : TTIG_Op<"prefetch", []> {
   let summary = "Tensor prefetch operation";
   let description = [{
-    The `prefetch` operation prefetches a two dimensional input tensor.
-    For example:
+    The `prefetch` operation prefetches an input tensor.
+    Example:
       ```mlir
       triton_intel_gpu.prefetch %ptr {cache=none, evict=normal, isVolatile=false}
           : !tt.ptr<tensor<256x32xf16>
