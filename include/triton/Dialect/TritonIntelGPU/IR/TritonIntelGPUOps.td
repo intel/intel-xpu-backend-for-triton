@@ -44,13 +44,14 @@ def TTIG_ConcatOp : TTIG_Op<"concat", [Pure]> {
     The `concat` operation concatenates its input operands along a specified
     dimension. The concatenated result must have size along the concatenated
     dimension equal to the sum of the input sizes along that dimension. The
-    other dimensions in all inputs and in the results must be equal.
+    other dimensions in all inputs and in the results must be equal. All 
+    operands must have the same rank and element type.
 
     Examples:
       ```mlir
-      %val = triton_intel_gpu.glue %tensor1, %tensor2 {dim = 0: i32} :
+      %val = triton_intel_gpu.concat %tensor1, %tensor2 {dim = 0: i32} :
            (tensor<16x8xf16>, tensor<8x8xf16>) -> tensor<24x8xf16>
-      %ptr = triton_intel_gpu.glue %ptr1, %ptr2 {dim = 1: i32} :
+      %ptr = triton_intel_gpu.concat %ptr1, %ptr2 {dim = 1: i32} :
            (!tt.ptr<tensor<16x8xf16>>, !tt.ptr<tensor<16x16xf16>>)
            -> !tt.ptr<tensor<16x24xf16>>
 
