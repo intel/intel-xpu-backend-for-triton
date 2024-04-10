@@ -30,7 +30,7 @@ def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
     %0 = triton_intel_gpu.alloc() : <8x64xf32, 3>
     ```
   }];
-  let results = (outs TT_Ptr:$result);  
+  let results = (outs TT_Ptr:$result);
   let assemblyFormat = [{
     attr-dict `:` type($result)
   }];
@@ -45,13 +45,13 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", []> {
       triton_intel_gpu.prefetch %ptr {cache=none, evict=normal, isVolatile=false}
           : !tt.ptr<tensor<256x32xf16>
       ```
-  }];  
+  }];
   let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
                        TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
   let results = (outs);
   let assemblyFormat = [{
     operands attr-dict `:` type($ptr)
-  }];  
+  }];
 }
 
 #endif
