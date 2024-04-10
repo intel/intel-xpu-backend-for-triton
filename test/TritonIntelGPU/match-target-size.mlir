@@ -38,7 +38,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %21 = arith.remsi %20, %c8_i32 : i32
     %22 = arith.muli %21, %c32_i32 : i32
     %23 = arith.addi %22, %16 : i32
-    %24 = tt.make_tensor_ptr %arg0, [%17, %18], [%19, %c1_i64], [%23, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dot0_>, 1>
+    %24 = tt.make_tensor_ptr %arg0, [%17, %18], [%19, %c1_i64], [%23, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dot0_>>
     %25 = arith.muli %15, %c128_i32 : i32
     %26 = arith.extsi %arg4 : i32 to i64
     %27 = arith.extsi %arg7 : i32 to i64
@@ -46,29 +46,29 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %29 = arith.remsi %28, %c4_i32 : i32
     %30 = arith.muli %29, %c64_i32 : i32
     %31 = arith.addi %30, %25 : i32
-    %32 = tt.make_tensor_ptr %arg1, [%18, %26], [%27, %c1_i64], [%c0_i32, %31] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot1_>, 1>
-    %33:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %24, %arg12 = %32) -> (tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #dot0_>, 1>, !tt.ptr<tensor<32x64xf16, #dot1_>, 1>)  : i32 {
-      %37 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16, #dot0_>, 1> -> tensor<32x32xf16, #dot0_>
-      %38 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x64xf16, #dot1_>, 1> -> tensor<32x64xf16, #dot1_>
+    %32 = tt.make_tensor_ptr %arg1, [%18, %26], [%27, %c1_i64], [%c0_i32, %31] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot1_>>
+    %33:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst, %arg11 = %24, %arg12 = %32) -> (tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #dot0_>>, !tt.ptr<tensor<32x64xf16, #dot1_>>)  : i32 {
+      %37 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16, #dot0_>>
+      %38 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x64xf16, #dot1_>>
       %39 = tt.dot %37, %38, %arg10 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<32x32xf16, #dot0_> * tensor<32x64xf16, #dot1_> -> tensor<32x64xf32, #warp>
       // CHECK-LABEL: @matmul_kernel_with_block_pointers_without_convertlayout
-      // CHECK: [[A:%.*]] = tt.load {{.*}} tensor<32x32xf16>
-      // CHECK: [[B0:%.*]] = tt.load {{.*}} tensor<32x32xf16>
-      // CHECK: [[B1:%.*]] = tt.load {{.*}} tensor<32x32xf16>
+      // CHECK: [[A:%.*]] = tt.load {{.*}} : !tt.ptr<tensor<32x32xf16>>
+      // CHECK: [[B0:%.*]] = tt.load {{.*}} : !tt.ptr<tensor<32x32xf16>>
+      // CHECK: [[B1:%.*]] = tt.load {{.*}} : !tt.ptr<tensor<32x32xf16>>
       // CHECK: [[subA0:%.*]] = triton_intel_gpu.extract [[A]][0] : tensor<32x32xf16> -> tensor<8x16xf16>
       // CHECK: [[subB0:%.*]] = triton_intel_gpu.extract [[B0]][0] : tensor<32x32xf16> -> tensor<16x16xf16>
       // CHECK: [[subC0:%.*]] = tt.dot [[subA0]], [[subB0]], {{.*}} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       // CHECK: [[subA1:%.*]] = triton_intel_gpu.extract [[A]][4] : tensor<32x32xf16> -> tensor<8x16xf16>
       // CHECK: [[subB1:%.*]] = triton_intel_gpu.extract [[B0]][1] : tensor<32x32xf16> -> tensor<16x16xf16>
-      // CHECK: [[subC1:%.*]] = tt.dot [[subA1]], [[subB1]], [[subC0]] {{.*}} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
-      %40 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<32x32xf16, #dot0_>, 1>
-      %41 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x64xf16, #dot1_>, 1>
-      scf.yield %39, %40, %41 : tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #dot0_>, 1>, !tt.ptr<tensor<32x64xf16, #dot1_>, 1>
+      // CHECK: [[subC1:%.*]] = tt.dot [[subA1]], [[subB1]], [[subC0]], {{.*}} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+      %40 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<32x32xf16, #dot0_>>
+      %41 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x64xf16, #dot1_>>
+      scf.yield %39, %40, %41 : tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #dot0_>, 1>, !tt.ptr<tensor<32x64xf16, #dot1_>>
     }
     %34 = arith.truncf %33#0 : tensor<32x64xf32, #warp> to tensor<32x64xf16, #warp>
     %35 = arith.extsi %arg8 : i32 to i64
-    %36 = tt.make_tensor_ptr %arg2, [%17, %26], [%35, %c1_i64], [%23, %31] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #warp>, 1>
-    tt.store %36, %34 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<32x64xf16, #warp>, 1>, tensor<32x64xf16, #warp>
+    %36 = tt.make_tensor_ptr %arg2, [%17, %26], [%35, %c1_i64], [%23, %31] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #warp>>
+    tt.store %36, %34 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<32x64xf16, #warp>>
     tt.return
   }
 }
