@@ -249,7 +249,7 @@ def compile(src, target=None, options=None):
     # initialize metadata
     metadata = {
         "hash": hash,
-        "target": target,
+        "target": backend.parse_target(target),
         **options.__dict__,
         **get_env_vars(),
     }

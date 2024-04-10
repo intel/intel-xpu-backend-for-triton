@@ -71,7 +71,7 @@ def test_compile_in_forked_subproc() -> None:
         major, minor = torch.cuda.get_device_capability(0)
         capability = major * 10 + minor
     elif torch.xpu.is_available():
-        capability = torch.xpu.get_device_capability(0)
+        capability = torch.xpu.device(0).sycl_device
 
     config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
 
