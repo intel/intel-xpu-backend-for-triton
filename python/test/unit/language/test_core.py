@@ -2956,9 +2956,12 @@ def convert_fp8_to_fp32(x, device, dtype_str):
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, num_ctas, device):
+    if is_interpreter():
+        if in_dtype == 'bfloat16' or in_dtype == 'float8e4nv' or in_dtype == 'float8e5':
+            pytest.xfail("bfloat16, float8e4nv and float8e5 not supported because numpy doesn't understand them")
+
     if is_cuda():
         capability = torch.cuda.get_device_capability()
-
         if capability[0] < 7:
             pytest.skip("Only test tl.dot() on devices with sm >= 70")
         if capability[0] < 8:
@@ -2976,15 +2979,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             pytest.skip("float8e4nv not supported on sm <= 80")
     if is_hip() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
         pytest.skip("float8e4nv and float8e5 not supported on HIP")
-    if is_interpreter() and in_dtype == 'int8':
-        pytest.xfail(
-            "numpy.dot with int8 inputs will overflow while tl.dot doesn't because MMA instruction's accumulator is 32-bit"
-        )
     if is_hip() and (input_precision != "ieee"):
         pytest.skip(f"{input_precision} not supported on HIP")
-
-    if is_interpreter() and in_dtype in ['bfloat16', 'float8e5', 'float8e4nv']:
-        pytest.skip("FIXME: triton.runtime.errors.InterpreterError")
 
     if is_xpu():
         capability = 0
@@ -3195,8 +3191,6 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
         pytest.skip("FIXME: Incorrect result on XPU")
     if is_hip():
         pytest.skip('TODO test_dot3d not supported on HIP.')
-    if in_dtype_str == 'int8' and is_interpreter():
-        pytest.skip('numpy.dot with int8 inputs will overflow')
 
     @triton.jit
     def kernel(
@@ -3695,6 +3689,7 @@ def test_vectorization(N, num_ctas, device):
     # np.testing.assert_allclose(dst, src[:N])
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("has_hints", [False, True])
 def test_vectorization_hints(has_hints, device):
     src = torch.empty(1024, device=device)

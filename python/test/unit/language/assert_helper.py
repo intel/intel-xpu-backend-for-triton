@@ -8,6 +8,10 @@ import triton
 import triton.language as tl
 
 
+def get_current_target_warp_size():
+    return triton.runtime.driver.active.get_current_target()[2]
+
+
 @triton.jit
 def kernel_device_assert(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
@@ -45,21 +49,23 @@ def kernel_static_assert(X, Y, BLOCK: tl.constexpr):
 
 
 def test_assert(func: str):
-    shape = (128, )
-    x = torch.arange(0, shape[0], dtype=torch.int32, device='xpu')
-    y = torch.zeros(shape, dtype=x.dtype, device="xpu")
+    N = 128  # This value should match with test_print in test_subprocess.py.
+    num_warps = N // get_current_target_warp_size()
+
+    x = torch.arange(0, N, dtype=torch.int32, device='xpu')
+    y = torch.zeros((N, ), dtype=x.dtype, device="xpu")
     if func == "device_assert":
-        kernel_device_assert[(1, )](x, y, BLOCK=shape[0], num_warps=4, threads_per_warp=32)
+        kernel_device_assert[(1, )](x, y, num_warps=num_warps, BLOCK=N, threads_per_warp=32)
     if func == "device_assert_passes":
         # Assert passes; no error.
-        kernel_assert_passes[(1, )](x, y, BLOCK=shape[0])
+        kernel_assert_passes[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "no_debug":
         # TRITON_DEBUG=1 can override the debug flag
-        kernel_device_assert_no_debug[(1, )](x, y, BLOCK=shape[0], num_warps=4, threads_per_warp=32)
+        kernel_device_assert_no_debug[(1, )](x, y, num_warps=num_warps, BLOCK=N, threads_per_warp=32)
     elif func == "assert":
-        kernel_assert[(1, )](x, y, BLOCK=shape[0], num_warps=4, threads_per_warp=32)
+        kernel_assert[(1, )](x, y, num_warps=num_warps, BLOCK=N, threads_per_warp=32)
     elif func == "static_assert":
-        kernel_static_assert[(1, )](x, y, BLOCK=shape[0])
+        kernel_static_assert[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "double_assert":
         # Launching a different kernel after the first one asserted used to
         # segfault.  What seems to have happened is:
@@ -71,8 +77,8 @@ def test_assert(func: str):
         #  - Now the GPU is in an error state.  We need to detect this inside
         #    the kernel-launch/loading code and bail out properly.  If we don't,
         #    we segfault.
-        kernel_device_assert[(1, )](x, y, BLOCK=shape[0], num_warps=4, threads_per_warp=32)
-        kernel_assert_passes[(1, )](x, y, BLOCK=shape[0], num_warps=4, threads_per_warp=32)
+        kernel_device_assert[(1, )](x, y, num_warps=num_warps, BLOCK=N, threads_per_warp=32)
+        kernel_assert_passes[(1, )](x, y, num_warps=num_warps, BLOCK=N, threads_per_warp=32)
     assert_close(y, x)
 
 
@@ -128,16 +134,18 @@ def kernel_device_assert_nested_false(X, Y, BLOCK: tl.constexpr, jit_debug: tl.c
 
 
 def test_assert_nested(caller: str, callee: str):
-    shape = (128, )
-    x = torch.arange(0, shape[0], dtype=torch.int32, device='xpu')
-    y = torch.zeros(shape, dtype=x.dtype, device="xpu")
+    N = 128  # This value should match with test_print in test_subprocess.py.
+    num_warps = N // get_current_target_warp_size()
+
+    x = torch.arange(0, N, dtype=torch.int32, device='xpu')
+    y = torch.zeros((N, ), dtype=x.dtype, device="xpu")
     if caller == "none":
-        kernel_device_assert_nested[(1, )](x, y, BLOCK=shape[0], jit_debug=callee, num_warps=4, threads_per_warp=32)
+        kernel_device_assert_nested[(1, )](x, y, num_warps=num_warps, BLOCK=N, jit_debug=callee, threads_per_warp=32)
     elif caller == "true":
-        kernel_device_assert_nested_true[(1, )](x, y, BLOCK=shape[0], jit_debug=callee, num_warps=4,
+        kernel_device_assert_nested_true[(1, )](x, y, num_warps=num_warps, BLOCK=N, jit_debug=callee,
                                                 threads_per_warp=32)
     elif caller == "false":
-        kernel_device_assert_nested_false[(1, )](x, y, BLOCK=shape[0], jit_debug=callee, num_warps=4,
+        kernel_device_assert_nested_false[(1, )](x, y, num_warps=num_warps, BLOCK=N, jit_debug=callee,
                                                  threads_per_warp=32)
     assert_close(y, x)
 

@@ -81,30 +81,30 @@ static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
                                                        toGenShuffleMode(mode));
 }
 
-Value TargetInfo::shuffleXor(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
   return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
                         i32_val(0x1f));
 }
 
-Value TargetInfo::shuffleUp(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
                             Value val, int i) const {
   return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
                         i32_val(0x0));
 }
 
-Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
   return LLVM::Intel::shflIdxSync(loc, rewriter, val, i32_val(i));
 }
 
-Value TargetInfo::shuffleIdx(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, Value i) const {
   return commonShflSync(loc, rewriter, val, i, NVVM::ShflKind::idx,
                         i32_val(0x1f));
 }
 
-Value TargetInfo::programId(Location loc, ConversionPatternRewriter &rewriter,
+Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::Intel::llGetPid(loc, rewriter, moduleOp, axis);
 }
@@ -152,9 +152,9 @@ getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter) {
   return printFunc;
 }
 
-void TargetInfo::printf(Value formatStrStart, int /*formatStrByteCount*/,
-                        ValueRange args,
-                        ConversionPatternRewriter &rewriter) const {
+void TargetInfo::printf(ConversionPatternRewriter &rewriter,
+                        Value formatStrStart, int /*formatStrByteCount*/,
+                        ValueRange args) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -167,6 +167,59 @@ void TargetInfo::printf(Value formatStrStart, int /*formatStrByteCount*/,
     operands.push_back(arg);
   }
   call(funcOp, operands);
+}
+
+static LLVM::LLVMFuncOp
+getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  StringRef funcName = "__assert_fail";
+  Operation *funcOp = moduleOp.lookupSymbol(funcName);
+  if (funcOp)
+    return cast<LLVM::LLVMFuncOp>(*funcOp);
+
+  // void __assert_fail(const char * assertion, const char * file, unsigned
+  // int line, const char * function);
+  auto *ctx = rewriter.getContext();
+  SmallVector<Type> argsType;
+  argsType = {ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric),
+              ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), i32_ty,
+              ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric)};
+  auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
+
+  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+
+  auto func = rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
+                                                funcType);
+  func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return func;
+}
+
+void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
+                            StringRef message, StringRef file, StringRef func,
+                            int line) const {
+  auto funcOp = getAssertfailDeclaration(rewriter);
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  unsigned addrSpace = TritonGEN::TritonGENMemorySpace::kCrossWorkgroup;
+  Value messageString = LLVM::Intel::addStringToModule(
+      loc, rewriter, "assertMessage_", message, addrSpace);
+  Value fileString = LLVM::Intel::addStringToModule(
+      loc, rewriter, "assertFile_", file, addrSpace);
+  Value funcString = LLVM::Intel::addStringToModule(
+      loc, rewriter, "assertFunc_", func, addrSpace);
+  Value lineNumber = i32_val(line);
+
+  auto *ctx = rewriter.getContext();
+  SmallVector<Value> operands;
+  Value messageStringPtr = addrspacecast(
+      ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), messageString);
+  Value fileStringPtr = addrspacecast(
+      ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), fileString);
+  Value funcStringPtr = addrspacecast(
+      ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), funcString);
+  operands = {messageStringPtr, fileStringPtr, lineNumber, funcStringPtr};
+  auto ret = call(funcOp, operands);
+  ret.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 }
 
 } // namespace mlir::triton::intel

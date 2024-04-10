@@ -29,11 +29,6 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option:
     for padding in ("zero", "nan")  #
 ])
 def test_block_copy(dtypes_str, n, padding_option, device):
-    if is_cuda():
-        capability = torch.cuda.get_device_capability()
-        if capability[0] >= 9:
-            pytest.skip("Hopper support is working in progress")
-
     src_dtype_str = dtypes_str[0]
     dst_dtype_str = dtypes_str[0]
     src_dtype = getattr(torch, src_dtype_str)
@@ -90,11 +85,6 @@ def matmul_no_scf_with_advance_kernel(  #
     ] for num_warps in [4, 8]
 ])
 def test_block_ptr_matmul_no_scf(shape, num_warps, device):
-    if is_cuda():
-        capability = torch.cuda.get_device_capability()
-        if capability[0] >= 9:
-            pytest.skip("Hopper support is working in progress")
-
     m, n, k = shape
     a = torch.randn((m, k), device=device, dtype=torch.float16)
     b = torch.randn((k, n), device=device, dtype=torch.float16)

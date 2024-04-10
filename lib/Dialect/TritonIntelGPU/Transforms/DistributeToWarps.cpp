@@ -311,30 +311,28 @@ public:
         typeMap[op] = op.getSrc().getType().cast<RankedTensorType>();
       });
 
+      Dialect *arithDialect = getContext().getLoadedDialect("arith");
+      Dialect *mathDialect = getContext().getLoadedDialect("math");
       func.walk<WalkOrder::PreOrder>([&](Operation *op) {
         if (llvm::all_of(op->getResultTypes(), [](Type type) {
               return !isa<RankedTensorType>(type) &&
                      !isa<tt::PointerType>(type);
             }))
-          return WalkResult::advance();
-
-        TypeSwitch<Operation *>(op)
-            .Case<scf::ForOp>([](auto forOp) { distributeScfForOp(forOp); })
-            .Case<tt::MakeTensorPtrOp>(
-                [&](auto ptrOp) { distributeMakeTensorPtrOp(ptrOp, warpId); })
-            .Case<ttg::ConvertLayoutOp>([&](auto convertOp) {
-              distributeConvertLayoutOp(convertOp, warpId, typeMap[convertOp]);
-            })
-            .Case<arith::ConstantOp>(
-                [](auto cstOp) { distributeArithConstantOp(cstOp); })
-            .Default([](auto op) {
-              if (isa<tt::LoadOp, tt::DotOp, tt::AdvanceOp, arith::TruncFOp>(
-                      op))
-                distributeGenericOp(op);
-              else
-                assert(false && "Unexpected operation type");
-            });
-
+          ;
+        else if (auto forOp = dyn_cast<scf::ForOp>(op))
+          distributeScfForOp(forOp);
+        else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
+          distributeMakeTensorPtrOp(ptrOp, warpId);
+        else if (auto cstOp = dyn_cast<arith::ConstantOp>(op))
+          distributeArithConstantOp(cstOp);
+        else if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op))
+          distributeConvertLayoutOp(convertOp, warpId, typeMap[convertOp]);
+        else if (isa<tt::LoadOp, tt::DotOp, tt::AdvanceOp>(op) ||
+                 op->getDialect() == arithDialect ||
+                 op->getDialect() == mathDialect)
+          distributeGenericOp(op);
+        else
+          assert(false && "op not considered");
         return WalkResult::advance();
       });
     }

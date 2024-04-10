@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+#include "TritonGENToLLVM/GenIntrinsicEnum.h"
 #include "intel/include/TritonGENToLLVM/GenIntrinsics.h"
 
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
@@ -625,6 +626,87 @@ struct TritonGENBarrierLowering
   }
 };
 
+struct TritonGENNamedBarrierSignalLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::NamedBarrierSignalOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::NamedBarrierSignalOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::NamedBarrierSignalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    MLIRContext *context = rewriter.getContext();
+    Location loc = op->getLoc();
+
+    Value barrierId = op.getBarrierId();
+    Value threadGroupCount = op.getThreadGroupCount();
+
+    llvm::LLVMContext llvmContext;
+    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+    llvm::Type *barrierTy = typeTranslator.translateType(barrierId.getType());
+    llvm::Type *threadGroupCountTy =
+        typeTranslator.translateType(threadGroupCount.getType());
+    std::string funcName = llvm::GenISAIntrinsic::getName(
+        llvm::GenISAIntrinsic::GenISA_threadgroupnamedbarriers_signal,
+        {barrierTy, threadGroupCountTy});
+
+    LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
+        moduleOp, funcName, {barrierId.getType(), threadGroupCount.getType()},
+        LLVM::LLVMVoidType::get(context));
+    auto convergentAttr =
+        rewriter.getArrayAttr(StringAttr::get(context, "convergent"));
+    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    funcOp.setPassthroughAttr(convergentAttr);
+
+    SmallVector<Value> args{barrierId, threadGroupCount};
+    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    callOp->setAttr("passthrough", convergentAttr);
+    rewriter.replaceOp(op, callOp);
+
+    return success();
+  }
+};
+
+struct TritonGENNamedBarrierWaitLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::NamedBarrierWaitOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::NamedBarrierWaitOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::NamedBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    MLIRContext *context = rewriter.getContext();
+    Location loc = op->getLoc();
+
+    Value barrierId = op.getBarrierId();
+
+    llvm::LLVMContext llvmContext;
+    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+    llvm::Type *barrierTy = typeTranslator.translateType(barrierId.getType());
+    std::string funcName = llvm::GenISAIntrinsic::getName(
+        llvm::GenISAIntrinsic::GenISA_threadgroupnamedbarriers_wait,
+        {barrierTy});
+
+    LLVM::LLVMFuncOp funcOp =
+        LLVM::lookupOrCreateFn(moduleOp, funcName, {barrierId.getType()},
+                               LLVM::LLVMVoidType::get(context));
+    auto convergentAttr =
+        rewriter.getArrayAttr(StringAttr::get(context, "convergent"));
+    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    funcOp.setPassthroughAttr(convergentAttr);
+
+    SmallVector<Value> args{barrierId};
+    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    callOp->setAttr("passthrough", convergentAttr);
+    rewriter.replaceOp(op, callOp);
+
+    return success();
+  }
+};
+
 struct TritonSubGroupShuffleLowering
     : public ConvertOpToLLVMPattern<TritonGEN::SubGroupShuffleOp> {
   using ConvertOpToLLVMPattern<
@@ -758,17 +840,18 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  patterns
-      .add<TritonGENThreadIdXLowering, TritonGENThreadIdYLowering,
-           TritonGENThreadIdZLowering, TritonGENBlockIdXLowering,
-           TritonGENBlockIdYLowering, TritonGENBlockIdZLowering,
-           TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
-           TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
-           TritonGENGridDimYLowering, TritonGENGridDimZLowering,
-           TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
-           TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
-           TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
-           TritonMatrix2DBlockPrefetchLowering>(converter);
+  patterns.add<TritonGENThreadIdXLowering, TritonGENThreadIdYLowering,
+               TritonGENThreadIdZLowering, TritonGENBlockIdXLowering,
+               TritonGENBlockIdYLowering, TritonGENBlockIdZLowering,
+               TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
+               TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
+               TritonGENGridDimYLowering, TritonGENGridDimZLowering,
+               TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
+               TritonGENNamedBarrierSignalLowering,
+               TritonGENNamedBarrierWaitLowering, TritonSubGroupShuffleLowering,
+               TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+               TritonMatrix2DBlockStoreLowering,
+               TritonMatrix2DBlockPrefetchLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
