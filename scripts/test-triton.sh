@@ -99,7 +99,9 @@ run_core_tests() {
   fi
   cd ${CORE_TEST_DIR}
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose -n 8 --device xpu language/ --deselect-from-file ../../../scripts/core.exclude-list --ignore=language/test_line_info.py
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 --device xpu language/ --deselect-from-file ../../../scripts/core.exclude-list --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 language/test_subprocess.py
 
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 python3 -m pytest --verbose --device xpu runtime/
@@ -107,9 +109,8 @@ run_core_tests() {
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --verbose --device xpu language/test_line_info.py
 
-  TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 -m interpreter --deselect-from-file ../../../scripts/interpreter.exclude-list language/test_core.py language/test_standard.py --device cpu
-
-  TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 -m interpreter -vvv -s operators/test_flash_attention.py::test_op --device cpu
+  TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 16 -m interpreter --deselect-from-file ../../../scripts/interpreter.exclude-list language/test_core.py language/test_standard.py \
+  language/test_random.py operators/test_flash_attention.py::test_op --device cpu
 
   TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu operators/
 }

@@ -8,6 +8,7 @@
 #include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <set>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
@@ -677,6 +678,8 @@ emitOffsetForMmaLayoutV2(const NvidiaMmaEncodingAttr &mmaLayout,
   return ret;
 }
 
+// Note that this may return a null Value for one or more dimensions.  This is
+// valid only if you're going to slice off the relevant dimension.
 inline SmallVector<Value>
 emitBaseIndexWithinCTAForMmaLayoutV2V3(Location loc, RewriterBase &rewriter,
                                        const NvidiaMmaEncodingAttr &mmaLayout,
@@ -737,9 +740,18 @@ emitBaseIndexWithinCTAForMmaLayoutV2V3(Location loc, RewriterBase &rewriter,
   SmallVector<Value> multiDimBase(rank);
   if (rank == 3)
     multiDimBase[0] = multiDimWarpId[0];
-  multiDimBase[rank - 2] = add(udiv(laneId, i32_val(4)), offWarpM);
-  multiDimBase[rank - 1] =
-      add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarpN);
+
+  // warpsM/N may be 0, in which case warpIDM/N is poison (division by 0), which
+  // will cause LLVM to eliminate all ops that depend on the poison value.  This
+  // *can* be okay, if the bad dimension is filtered out by a slice layout.  So
+  // we rely on the caller to check.  Worst case we crash, which is better than
+  // silently producing bad code.
+  if (warpsM != 0)
+    multiDimBase[rank - 2] = add(udiv(laneId, i32_val(4)), offWarpM);
+  if (warpsN != 0)
+    multiDimBase[rank - 1] =
+        add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarpN);
+
   return multiDimBase;
 }
 
@@ -896,12 +908,20 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
   Value threadIdPerWarp = urem(threadId, warpSize);
 
   Value warpId = udiv(threadId, warpSize);
-  Value warpId0 = urem(warpId, warpsPerCTA[0]);
-  Value warpId1 = urem(udiv(warpId, warpsPerCTA[0]), warpsPerCTA[1]);
-
-  Value offWarp0 = mul(warpId0, i32_val(mnkDim[0]));
-  Value offWarp1 = mul(warpId1, i32_val(mnkDim[1]));
-
+  SmallVector<Value> multiDimWarpId = delinearize(
+      rewriter, loc, warpId, _warpsPerCTA, triton::gpu::getOrder(wmmaLayout));
+  if (shape[0] >= mnkDim[0]) {
+    assert(shape[0] % mnkDim[0] == 0);
+    multiDimWarpId[0] =
+        urem(multiDimWarpId[0], i32_val(ceil<unsigned>(shape[0], mnkDim[0])));
+  }
+  if (shape[1] >= mnkDim[1]) {
+    assert(shape[1] % mnkDim[1] == 0);
+    multiDimWarpId[1] =
+        urem(multiDimWarpId[1], i32_val(ceil<unsigned>(shape[1], mnkDim[1])));
+  }
+  Value offWarp0 = mul(multiDimWarpId[0], i32_val(mnkDim[0]));
+  Value offWarp1 = mul(multiDimWarpId[1], i32_val(mnkDim[1]));
   return {add(udiv(threadIdPerWarp, i32_val(mnkDim[2])), offWarp0),
           add(laneId, offWarp1)};
 }
@@ -994,9 +1014,11 @@ inline SmallVector<Value> emitCTAOffsetForLayout(Location loc,
   return CTAOffset;
 }
 
-inline SmallVector<Value>
-emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
-                       RankedTensorType type, bool withCTAOffset) {
+inline SmallVector<Value> emitBaseIndexForLayoutImpl(Location loc,
+                                                     RewriterBase &rewriter,
+                                                     Attribute layout,
+                                                     RankedTensorType type,
+                                                     bool withCTAOffset) {
   auto shape = type.getShape();
 
   SmallVector<Value> baseIndex;
@@ -1021,8 +1043,8 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
     auto parentShape = sliceLayout.paddedShape(type.getShape());
     RankedTensorType parentTy =
         RankedTensorType::get(parentShape, type.getElementType(), parentLayout);
-    result = emitBaseIndexForLayout(loc, rewriter, parentLayout, parentTy,
-                                    withCTAOffset);
+    result = emitBaseIndexForLayoutImpl(loc, rewriter, parentLayout, parentTy,
+                                        withCTAOffset);
     result.erase(result.begin() + sliceLayout.getDim());
     // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
     return result;
@@ -1032,10 +1054,38 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
   if (withCTAOffset) {
     auto CTAOffset = emitCTAOffsetForLayout(loc, rewriter, layout, shape);
     assert(CTAOffset.size() == result.size() && "Rank mismatch");
-    for (unsigned k = 0; k < result.size(); ++k)
+    for (unsigned k = 0; k < result.size(); ++k) {
+      // Individual elements of `result` may be null.  In the caller
+      // (emitBaseIndexForLayout), we assert that all such dimensions are sliced
+      // off.
+      if (!result[k])
+        continue;
       result[k] = add(result[k], CTAOffset[k]);
+    }
   }
   return result;
+}
+
+inline SmallVector<Value>
+emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
+                       RankedTensorType type, bool withCTAOffset) {
+  SmallVector<Value> idx =
+      emitBaseIndexForLayoutImpl(loc, rewriter, layout, type, withCTAOffset);
+
+  // Check that any null values were sliced out.
+  for (Value v : idx) {
+    if (!v) {
+      llvm::errs() << "Failed to generate indexing code, possibly due to bad "
+                      "#mma layout.  Please rerun your program with "
+                      "MLIR_ENABLE_DUMP=1 and file a bug."
+                   << "\nloc: " << loc << "\nlayout: " << layout
+                   << "\ntype: " << type << "\nwithCTAOffset: " << withCTAOffset
+                   << "\n";
+      llvm::report_fatal_error("Failed to generate indexing code");
+    }
+  }
+
+  return idx;
 }
 
 inline SmallVector<SmallVector<unsigned>>

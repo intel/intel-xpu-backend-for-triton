@@ -29,7 +29,8 @@ constexpr int patternBenefitConvertLayoutOptimizedPattern = 20;
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
+    PatternBenefit benefit);
 
 void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
@@ -37,6 +38,7 @@ void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 
 void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
+                                   const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
 
 void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
