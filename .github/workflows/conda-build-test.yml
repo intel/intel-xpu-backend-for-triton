@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "5 2 * * *"
+  push:
 
 permissions: read-all
 
@@ -24,7 +25,7 @@ jobs:
       matrix:
         python:
           - "3.9"
-          - "3.10"
+#          - "3.10"
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -40,7 +41,7 @@ jobs:
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 2
+          CACHE_NUMBER: 3
         with:
           path: $HOME/miniconda3/envs/triton
           key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
@@ -64,8 +65,7 @@ jobs:
           set -x
           export DEBUG=1
           cd python
-          conda run --no-capture-output -n triton pip install --no-build-isolation '.[build,tests,tutorials]'
-          conda run --no-capture-output -n triton pip install -e .
+          conda run --no-capture-output -n triton pip install -e --no-build-isolation '.[build,tests,tutorials]'
 
       - name: Install latest nightly wheels
         uses: ./.github/actions/install-wheels
