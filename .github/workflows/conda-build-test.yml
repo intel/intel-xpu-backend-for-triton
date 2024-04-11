@@ -65,7 +65,7 @@ jobs:
           set -x
           export DEBUG=1
           cd python
-          conda run --no-capture-output -n triton pip install -e --no-build-isolation '.[build,tests,tutorials]'
+          conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
 
       - name: Install latest nightly wheels
         uses: ./.github/actions/install-wheels
