@@ -138,29 +138,30 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
 
     For example, given:
       ```mlir
-      %A = tt.load %arg1 : !tt.ptr<tensor<32x32xf16, #dot0>, 1> -> tensor<32x32xf16, #dot0>
-      %B = tt.load %arg2 : !tt.ptr<tensor<32x64xf16, #dot1>, 1> -> tensor<32x64xf16, #dot1>
-      %C = tt.load %arg3 : !tt.ptr<tensor<32x64xf16, #warp>, 1> -> tensor<32x64xf32, #warp>
-      %D = tt.dot %A, %B, %C : tensor<32x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<32x64xf32, #warp>
+      %A = tt.load %arg1 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      %B = tt.load %arg2 : !tt.ptr<tensor<32x64xf16>> -> tensor<32x64xf16>
+      %C = tt.load %arg3 : !tt.ptr<tensor<32x64xf16>> -> tensor<32x64xf32>
+      %D = tt.dot %A, %B, %C : tensor<32x32xf16> * tensor<32x64xf16> -> tensor<32x64xf32>
       ```
 
-    Assuming that the target dot shape is <8x16x16> and that the max supported load size is
-    512DW (<32x32xf16>), after this pass:
-      - the load of 32x64xf16 is split to 2 loads of 32x32xf16
+    Assuming that the native 'dot' shape supported by the target architectureis <8x16x16> and 
+    that the max supported load size is 512DW (<32x32xf16>), after this pass:
+      - the load of <32x64xf16> is split to 2 loads of <32x32xf16>
       - the dot operation is split so that each resulting operation matches the native target
         shape supported by the architecture
 
       ```mlir
-      %A = tt.load %arg1 : !tt.ptr<tensor<32x32xf16>, 1> -> tensor<32x32xf16>
-      %B1 = tt.load %arg21 : !tt.ptr<tensor<32x32xf16>, 1> -> tensor<32x32xf16>
-      %C1 = tt.load %arg31 : !tt.ptr<tensor<32x32xf16>, 1> -> tensor<32x32xf16>
-      %tile_A0 = triton_intel_gpu.extract %A {idx = 0 : i32} : tensor<32x32xf16> -> tensor<8x16xf16>
-      %tile_B10 = triton_intel_gpu.extract %B1 {idx = 0 : i32} : tensor<32x32xf16> -> tensor<16x16xf16>
-      %tile_C10 = triton_intel_gpu.extract %C1 {idx = 0 : i32} : tensor<32x32xf16> -> tensor<16x16xf16>
-      %dot_0 = tt.dot %tile_A0, %tile_B10, %tile_C10 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
-      %tile_A4 = triton_intel_gpu.extract %A {idx = 4 : i32} : tensor<32x32xf16> -> tensor<8x16xf16>
-      %tile_B11 = triton_intel_gpu.extract %B1 {idx = 1 : i32} : tensor<32x32xf16> -> tensor<16x16xf16>
-      %dot_1 = tt.dot %tile_A4, %tile_B11, %dot_0 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+      %A = tt.load %arg1 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      %B1 = tt.load %arg21 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      %B2 = tt.load %arg22 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      %C1 = tt.load %arg31 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      %C2 = tt.load %arg32 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      ... <extract operations>
+      %dot_0 = tt.dot %tile_A, %tile_B, %tile_C : tensor<8x16xf16> * tensor<16x16xf16> 
+             -> tensor<8x16xf16>
+      ... <extract operations>
+      %dot_1 = tt.dot %tile_A', %tile_B', %dot_0 : tensor<8x16xf16> * tensor<16x16xf16> 
+             -> tensor<8x16xf16>
       ...
       ```
   }];
