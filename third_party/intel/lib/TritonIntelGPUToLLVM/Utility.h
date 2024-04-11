@@ -86,13 +86,11 @@ Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   int i);
 Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
                   Value i);
-
-Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
-               ModuleOp moduleOp, int axis);
-
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content,
                         unsigned addressSpace);
+
+LLVM::LLVMFuncOp getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter);
 
 static Value getStackPointer(PatternRewriter &rewriter,
                              FunctionOpInterface funcOp) {

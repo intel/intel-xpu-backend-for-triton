@@ -15,6 +15,12 @@ using namespace mlir::triton;
 // one per line, along with the index of the value in its tensor.
 struct PrintOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::PrintOp> {
+  explicit PrintOpConversion(LLVMTypeConverter &typeConverter,
+                             const TargetInfoBase &targetInfo,
+                             PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::PrintOp>(typeConverter,
+                                                         benefit),
+        targetInfo(targetInfo) {}
   using ConvertTritonGPUOpToLLVMPattern<
       triton::PrintOp>::ConvertTritonGPUOpToLLVMPattern;
 
@@ -28,8 +34,8 @@ struct PrintOpConversion
         TritonGEN::TritonGENMemorySpace::kUniformConstant);
 
     auto getPid = [&](int axis) {
-      return LLVM::Intel::llGetPid(loc, rewriter,
-                                   op->getParentOfType<ModuleOp>(), axis);
+      return targetInfo.programId(rewriter, loc,
+                                  op->getParentOfType<ModuleOp>(), axis);
     };
     std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
 
@@ -101,6 +107,7 @@ struct PrintOpConversion
     // with " " and ends with ": ").
 
     Value formatStrValue;
+    int formatStrByteCount = 0;
     for (int i = 0; i < elems.size(); i++) {
       std::string formatStr;
       llvm::raw_string_ostream os(formatStr);
@@ -163,7 +170,8 @@ struct PrintOpConversion
         formatStrValue =
             LLVM::Intel::llPrintf(rewriter, formatStr, printfOperands);
       } else {
-        LLVM::Intel::llPrintf(rewriter, formatStrValue, printfOperands);
+        targetInfo.printf(rewriter, formatStrValue, formatStrByteCount,
+                          printfOperands);
       }
     }
   }
@@ -171,7 +179,7 @@ struct PrintOpConversion
   std::string getFormatSubstr(Value value, bool hex = false,
                               std::optional<int> width = std::nullopt) const {
     Type type = value.getType();
-    if (type.isa<LLVM::LLVMPointerType>()) {
+    if (type.isa<LLVM::PointerType>()) {
       return "%p";
     }
 
@@ -215,12 +223,15 @@ struct PrintOpConversion
     assert(false && "not supported type");
     return "";
   }
+
+protected:
+  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
 
 void mlir::triton::intel::populatePrintOpToLLVMPattern(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<PrintOpConversion>(typeConverter, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<PrintOpConversion>(typeConverter, targetInfo, benefit);
 }

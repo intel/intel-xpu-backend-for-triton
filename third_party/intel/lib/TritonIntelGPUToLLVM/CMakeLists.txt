@@ -9,7 +9,6 @@ add_triton_library(TritonIntelGPUToLLVM
     LoadStoreOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
-    AssertOpToLLVM.cpp
     PrintOpToLLVM.cpp
     MemoryOpToLLVM.cpp
     ControlFlowOpToLLVM.cpp
