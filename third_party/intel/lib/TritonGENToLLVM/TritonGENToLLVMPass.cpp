@@ -715,11 +715,24 @@ struct TritonSubGroupShuffleLowering
   LogicalResult
   matchAndRewrite(TritonGEN::SubGroupShuffleOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
     Value val = op.getValue();
     Value mask = op.getMask();
     TritonGEN::ShflKind kind = op.getKind();
-    LLVM::CallOp callOp = createSubGroupShuffle(rewriter, val, mask, kind);
-    rewriter.replaceOp(op, callOp);
+    Type orig_type = val.getType();
+    unsigned bits = orig_type.getIntOrFloatBitWidth();
+    if (bits < 8) {
+      if (!orig_type.isInteger())
+        val = bitcast(val, int_ty(bits));
+      val = zext(i8_ty, val);
+    }
+    Value result = createSubGroupShuffle(rewriter, val, mask, kind).getResult();
+    if (bits < 8) {
+      result = trunc(int_ty(bits), result);
+      if (!orig_type.isInteger())
+        result = bitcast(result, orig_type);
+    }
+    rewriter.replaceOp(op, result);
     return success();
   }
 };

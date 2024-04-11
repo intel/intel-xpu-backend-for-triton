@@ -1,5 +1,7 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-prefetch-block | FileCheck %s
+
 #blocked = #triton_gpu.blocked<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], warpsPerCTA = [8, 4], order = [1, 0]}>
+
 // CHECK-DAG: #blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 32], threadsPerWarp = [1, 1], warpsPerCTA = [32, 1], order = [1, 0]}>
 // CHECK-DAG: #blocked2 = #triton_gpu.blocked<{sizePerThread = [8, 32], threadsPerWarp = [1, 1], warpsPerCTA = [4, 8], order = [1, 0]}>
 module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
