@@ -8,18 +8,27 @@ using namespace mlir::triton;
 
 struct GetProgramIdOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::GetProgramIdOp> {
+  explicit GetProgramIdOpConversion(LLVMTypeConverter &typeConverter,
+                                    const TargetInfoBase &targetInfo,
+                                    PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<triton::GetProgramIdOp>(typeConverter,
+                                                                benefit),
+        targetInfo(targetInfo) {}
   using ConvertTritonGPUOpToLLVMPattern<
       triton::GetProgramIdOp>::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::GetProgramIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value programId = LLVM::Intel::llGetPid(op->getLoc(), rewriter,
-                                            op->getParentOfType<ModuleOp>(),
-                                            op.getAxisAsInt());
+    Value programId = targetInfo.programId(rewriter, op->getLoc(),
+                                           op->getParentOfType<ModuleOp>(),
+                                           op.getAxisAsInt());
     rewriter.replaceOp(op, programId);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct GetNumProgramsOpConversion
@@ -64,8 +73,8 @@ struct GetClusterCTAIdOpConversion
 
 void mlir::triton::intel::populateSPMDOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<GetProgramIdOpConversion>(typeConverter, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<GetProgramIdOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
   patterns.add<GetClusterCTAIdOpConversion>(typeConverter, benefit);
 }

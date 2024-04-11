@@ -1,6 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 namespace {
 static SmallVector<Value> identity_func(Location loc,
@@ -2304,7 +2305,12 @@ struct MulhiUIOpConversion
   using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
-
+  explicit MulhiUIOpConversion(LLVMTypeConverter &typeConverter,
+                               ModuleAxisInfoAnalysis &axisAnalysisPass,
+                               const TargetInfoBase &targetInfo,
+                               PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+        targetInfo(targetInfo) {}
   SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
@@ -2313,8 +2319,7 @@ struct MulhiUIOpConversion
     Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
     assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
 
-    StringRef funcName =
-        resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
+    StringRef funcName = targetInfo.getMulhiFuncName(resultElementTy);
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
@@ -2322,6 +2327,9 @@ struct MulhiUIOpConversion
     callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
     return {callOp.getResult()};
   }
+
+protected:
+  const TargetInfoBase &targetInfo;
 };
 
 template <typename TritonOp>
@@ -2426,7 +2434,7 @@ namespace intel {
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
-    PatternBenefit benefit) {
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
@@ -2518,7 +2526,8 @@ void populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // __nv_expf for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
+                                    benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
   PatternBenefit benefitForPropNan = benefit;

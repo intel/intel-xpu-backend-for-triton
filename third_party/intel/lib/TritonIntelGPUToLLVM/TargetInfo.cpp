@@ -92,7 +92,16 @@ Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
 
 Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
-  return LLVM::Intel::llGetPid(loc, rewriter, moduleOp, axis);
+  assert(axis >= 0);
+  assert(axis < 3);
+  assert(moduleOp);
+
+  constexpr mlir::gpu::Dimension dims[] = {mlir::gpu::Dimension::x,
+                                           mlir::gpu::Dimension::y,
+                                           mlir::gpu::Dimension::z};
+
+  Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
@@ -116,41 +125,13 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   return funcName;
 }
 
-// declare __spirv_ocl_printf(i8*, ...) as external function
-LLVM::LLVMFuncOp
-getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter) {
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  StringRef funcName("_Z18__spirv_ocl_printf");
-  Operation *funcOp = moduleOp.lookupSymbol(funcName);
-  if (funcOp)
-    return cast<LLVM::LLVMFuncOp>(*funcOp);
-
-  MLIRContext *context = rewriter.getContext();
-  auto ptrTy = LLVM::LLVMPointerType::get(
-      context, TritonGEN::TritonGENMemorySpace::kUniformConstant);
-  SmallVector<Type> argsType{ptrTy};
-  auto retType = i32_ty;
-  auto funcType =
-      LLVM::LLVMFunctionType::get(retType, argsType, /*isVarArg*/ true);
-
-  ConversionPatternRewriter::InsertionGuard guard(rewriter);
-  rewriter.setInsertionPointToStart(moduleOp.getBody());
-
-  auto printFunc = rewriter.create<LLVM::LLVMFuncOp>(
-      UnknownLoc::get(context), funcName, funcType, LLVM::Linkage::External,
-      /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC, /*comdat=*/SymbolRefAttr{});
-  printFunc->setAttr("nounwind", rewriter.getUnitAttr());
-
-  return printFunc;
-}
-
 void TargetInfo::printf(ConversionPatternRewriter &rewriter,
                         Value formatStrStart, int /*formatStrByteCount*/,
                         ValueRange args) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  auto funcOp = getSpirvPrintfDeclaration(rewriter);
+  auto funcOp = LLVM::Intel::getSpirvPrintfDeclaration(rewriter);
   auto loc = UnknownLoc::get(ctx);
 
   SmallVector<Value> operands;
