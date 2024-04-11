@@ -6,10 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// This file implements a pass designed to split tensor operations so that each
-/// one matches tensor sizes supported by the target architecture.
+/// This file implements a pass designed to split various triton operations so
+/// that each one matches the native size supported by the target architecture.
 ///
-/// Limitations:
+/// Notes:
 ///   - only blocked pointers are supported
 ///   - it is expected that the 'tritonintelgpu-distribute-to-warps' pass is run
 ///     before this pass
@@ -19,19 +19,18 @@
 ///   %0 = tt.dot %a, %b : tensor<32x32xf16>, tensor<32x64xf16>
 ///      -> tensor<32x64xf32>
 ///
-/// this pass splits it into 32 `tt.dot` operations with tensor sizes matching
-/// the target architecture size of <8x16xf32> (the size supported by the DPAS
-/// instruction) as follows:
+/// is splits it into 32 `tt.dot` operations with tensor sizes matching the
+/// target architecture 'dot' size of <8x16xf32>:
 ///
-///   %tile_a0 = triton_intel_gpu.extract %a {idx = 0 : i32} : tensor<32x32xf16>
+///   %tile_a0 = triton_intel_gpu.extract %a[0] : tensor<32x32xf16>
 ///            -> tensor<8x16xf16>
-///   %tile_b0 = triton_intel_gpu.extract %b {idx = 0 : i32} : tensor<32x32xf16>
+///   %tile_b0 = triton_intel_gpu.extract %b[0] : tensor<32x32xf16>
 ///            -> tensor<16x16xf16>
 ///   %dot_0 = tt.dot %tile_a0, %tile_b0 : tensor<8x16xf16>, tensor<16x16xf16>
 ///          -> tensor<8x16xf32>
-///   %tile_a4 = triton_intel_gpu.extract %a {idx = 4 : i32} : tensor<32x32xf16>
+///   %tile_a4 = triton_intel_gpu.extract %a[4] : tensor<32x32xf16>
 ///            -> tensor<8x16xf16>
-///   %tile_b1 = triton_intel_gpu.extract %b {idx = 1 : i32} : tensor<32x32xf16>
+///   %tile_b1 = triton_intel_gpu.extract %b[1] : tensor<32x32xf16>
 ///            -> tensor<16x16xf16>
 ///   %dot_1 = tt.dot %tile_a4, %tile_b1 : tensor<8x16xf16>, tensor<16x16xf16>
 ///          -> tensor<8x16xf32>
@@ -126,6 +125,8 @@ private:
   /// Initialize the target shape supported native by the target architecture
   /// for the `tt.dot` operation.
   void initTargetDotShape();
+
+  // TODO: should initialize the target shape also for loads?
 
   /// Canonicalize operations (e.g. remove redundant tt.extract, tt.concat)
   void canonicalize();

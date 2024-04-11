@@ -7,6 +7,5 @@ add_triton_library(TritonIntelGPUIR
   TritonIntelGPUAttrDefsIncGen
 
   LINK_LIBS PUBLIC
-  MLIRCastInterfaces
   MLIRSideEffectInterfaces
 )
