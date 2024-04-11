@@ -35,25 +35,30 @@ def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
   let results = (outs TT_Ptr:$result);
 }
 
-def TTIG_ConcatOp : TTIG_Op<"concat", [Pure]> {
-  let summary = "Tensor concatenation operation";
+def TTIG_GlueOp : TTIG_Op<"glue", [Pure]> {
+  let summary = "Tensor glueing operation";
   let description = [{
-    The `concat` operation concatenates its input operands along a specified
-    dimension. The concatenated result must have size along the concatenated
-    dimension equal to the sum of the input sizes along that dimension. The
-    other dimensions in all inputs and in the results must be equal.
+    The `glue` operation glues its input operands to form the result tensor (ptr
+    to tensor) shape. Input operands are first concatenated along the first
+    (leftmost) dimension until the result shape along that dimension is reached,
+    then along the next dimension, and so on. The result tensor and all input
+    operands must have the same rank and element type. Furthermore all the input
+    tensors must have the same shape. Concatenation of the input operands must
+    yield the exact tensor shape of the result.
 
     Examples:
       ```mlir
-      %val = triton_intel_gpu.concat %tensor1, %tensor2 {dim = 0: i32} :
-           (tensor<16x8xf16>, tensor<8x8xf16>) -> tensor<24x8xf16>
-      %ptr = triton_intel_gpu.concat %ptr1, %ptr2 {dim = 1: i32} :
-           (!tt.ptr<tensor<16x8xf16>>, !tt.ptr<tensor<16x16xf16>>)
-           -> !tt.ptr<tensor<16x24xf16>>
-
+      %res1 = triton_intel_gpu.glue %t1, %t2 : (tensor<16x8xf16>, tensor<16x8xf16>)
+            -> tensor<32x8xf16>
+      %res2 = triton_intel_gpu.glue %t1, %t2, %t3, %t4
+            : (tensor<16x8xf16>, tensor<16x8xf16>, tensor<16x8xf16>, tensor<16x8xf16>)
+            -> tensor<32x16xf16>
+      %res3 = triton_intel_gpu.glue %p1, %p2, %p3
+            : (ptr<tensor<16x8xf16>>, ptr<tensor<16x8xf16>>, ptr<tensor<16x8xf16>>)
+            -> ptr<tensor<16x24xf16>>
       ```
   }];
-  let arguments = (ins Variadic<TT_TensorOrTensorPtr>:$operands, I32Attr:$dim);
+  let arguments = (ins Variadic<TT_TensorOrTensorPtr>:$operands);
   let results = (outs TT_TensorOrTensorPtr:$res);
   let assemblyFormat = [{
     operands attr-dict `:` functional-type(operands, results)
@@ -81,7 +86,7 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
       - partitioning the input shape into subtensors (ptr to subtensors) having
         shape equal to the result shape (i.e. <16x16xf16>)
       - taking the 3rd subtensor (as indicated by the index) counting in
-        row-major order
+        column-major order
   }];
   let arguments = (ins TT_TensorOrTensorPtr:$operand, I32Attr:$index);
   let results = (outs TT_TensorOrTensorPtr:$res);

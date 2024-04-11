@@ -4,6 +4,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #define GET_OP_CLASSES
@@ -81,7 +82,7 @@ namespace triton {
 namespace gpu {
 namespace intel {
 
-LogicalResult ConcatOp::verify() {
+LogicalResult GlueOp::verify() {
   if (getOperands().size() < 2)
     return emitOpError("requires at least 2 operands");
 
@@ -93,11 +94,7 @@ LogicalResult ConcatOp::verify() {
   unsigned resultRank = getRank(resultType);
   if (llvm::any_of(inputTypes,
                    [&](Type type) { return getRank(type) != resultRank; }))
-    return emitOpError("rank of concatenated operands must match result rank");
-
-  unsigned dim = getDim();
-  if (dim >= resultRank)
-    return emitOpError("concatenation dim must be less than the tensor rank");
+    return emitOpError("operands and result must have the same rank");
 
   Type resultElementType = getElementType(resultType);
   if (llvm::any_of(inputTypes, [&](Type type) {
@@ -105,21 +102,39 @@ LogicalResult ConcatOp::verify() {
       }))
     return emitOpError("operands and result element type must match");
 
-  SmallVector<int64_t> sizes(resultRank);
+  SmallVector<int64_t> inputShape = getShape(inputTypes[0]);
+  if (llvm::any_of(inputTypes,
+                   [&](Type type) { return getShape(type) != inputShape; }))
+    return emitOpError("operands must have the same shape");
+
+  if (llvm::any_of(inputTypes, [&](Type type) {
+        for (unsigned i = 0; i < resultRank; ++i) {
+          unsigned resultSize = getDimSize(resultType, i);
+          unsigned inputSize = getDimSize(type, i);
+          if (inputSize > resultSize)
+            return true;
+        }
+        return false;
+      }))
+    return emitOpError(
+        "operands cannot exceed result size along any dimension");
+
+  auto inputType = inputTypes[0];
   for (unsigned i = 0; i < resultRank; ++i) {
-    if (i == dim)
-      continue;
-    SaturatedInteger size;
-    for (auto inputType : inputTypes) {
-      FailureOr<SaturatedInteger> maybeSize =
-          size.desaturate(SaturatedInteger::wrap(getDimSize(inputType, i)));
-      if (failed(maybeSize))
-        return emitOpError("static concatenation size mismatch along ")
-               << "non-concatenated dimension " << i;
-      size = *maybeSize;
-    }
-    sizes[i] = size.asInteger();
+    unsigned resultSize = getDimSize(resultType, i);
+    unsigned inputSize = getDimSize(inputType, i);
+    if (resultSize % inputSize != 0)
+      return emitOpError("operands cannot be glued along axis ") << i;
   }
+
+  // Verify that the composition of the input operands covers the output tensor
+  // shape.
+  SmallVector<int64_t> resultShape = getShape(resultType);
+  unsigned numResultElems = product(resultShape);
+  unsigned numInputElems = product(inputShape);
+
+  if (inputTypes.size() * numInputElems != numResultElems)
+    return emitOpError("glued operands do not exactly cover the result shape");
 
   return success();
 }
