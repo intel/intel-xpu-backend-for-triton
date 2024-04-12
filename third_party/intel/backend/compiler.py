@@ -108,7 +108,7 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        passes.ttir.add_rewrite_tensor_pointer(pm)
+        # passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_reorder_broadcast(pm)
@@ -130,15 +130,16 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.threads_per_warp, opt.num_ctas, device_arch)
         # optimize TTGIR
-        passes.ttgpuir.add_coalesce(pm)
+        # passes.ttgpuir.add_coalesce(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
         intel.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
+        # passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         intel.passes.ttgpuir.add_accelerate_matmul(pm, device_arch)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         if opt.optimize_epilogue:
             passes.ttgpuir.add_optimize_epilogue(pm)
+        intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm, intel.passes.ttgpuir.DEVICE_ARCH.PVC)
         passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
