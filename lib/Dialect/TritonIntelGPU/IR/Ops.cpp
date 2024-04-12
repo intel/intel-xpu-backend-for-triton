@@ -149,47 +149,7 @@ LogicalResult GlueOp::verify() {
 
 LogicalResult ExtractOp::verify() {
   Type resultType = getRes().getType();
-  Type operandType = getOperand().getType();
-
-  unsigned resultRank = getRank(resultType);
-  unsigned operandRank = getRank(operandType);
-  if (operandRank != resultRank)
-    return emitOpError("operand and result must have the same rank");
-
-  Type resultElemType = getElementType(resultType);
-  Type operandElemType = getElementType(operandType);
-  if (operandElemType != resultElemType)
-    return emitOpError("operand and result element type must match");
-
-  // ensure the input can be partitioned by the requested result.
-  SmallVector<int64_t> resultShape = getShape(resultType);
-  SmallVector<int64_t> operandShape = getShape(operandType);
-
-  unsigned i = 0;
-  for (auto [resDim, operandDim] : zip(resultShape, operandShape)) {
-    if (operandDim < resDim)
-      return emitOpError("operand shape cannot be smaller than result shape ")
-             << "along dimension " << i;
-    if (operandDim % resDim != 0)
-      return emitOpError("operands shape is not divisible by result shape ")
-             << "along dimension " << i;
-    ++i;
-  }
-
-  unsigned numTiles = 1;
-  for (auto [resDim, operandDim] : zip(resultShape, operandShape))
-    numTiles *= (operandDim / resDim);
-
-  unsigned index = getIndex();
-  if (index >= numTiles)
-    return emitOpError("index must be less than ") << numTiles;
-
-  return success();
-}
-
-LogicalResult ExtractOp::verify() {
-  Type resultType = getRes().getType();
-  Type operandType = getOperand().getType();
+  Type operandType = getBase().getType();
 
   unsigned resultRank = getRank(resultType);
   unsigned operandRank = getRank(operandType);
