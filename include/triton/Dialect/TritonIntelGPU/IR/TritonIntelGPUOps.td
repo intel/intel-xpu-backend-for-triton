@@ -19,6 +19,8 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonIntelGPU_Dialect, mnemonic, traits>;
 
+def TT_TensorOrTensorPtr : AnyTypeOf<[TT_Tensor, TT_TensorPtr]>;
+
 def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
   let summary = "Memory allocation operation";
 
@@ -34,6 +36,67 @@ def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
   let assemblyFormat = [{
     attr-dict `:` type($result)
   }];
+}
+
+def TTIG_GlueOp : TTIG_Op<"glue", [Pure]> {
+  let summary = "Tensor glueing operation";
+  let description = [{
+    The `glue` operation glues its input operands to form the result tensor (ptr
+    to tensor) shape. Input operands are first concatenated along the first
+    (leftmost) dimension until the result shape along that dimension is reached,
+    then along the next dimension, and so on. The result tensor and all input
+    operands must have the same rank and element type. Furthermore all the input
+    tensors must have the same shape. Concatenation of the input operands must
+    yield the exact tensor shape of the result.
+
+    Examples:
+      ```mlir
+      %res1 = triton_intel_gpu.glue %t1, %t2 : (tensor<16x8xf16>, tensor<16x8xf16>)
+            -> tensor<32x8xf16>
+      %res2 = triton_intel_gpu.glue %t1, %t2, %t3, %t4
+            : (tensor<16x8xf16>, tensor<16x8xf16>, tensor<16x8xf16>, tensor<16x8xf16>)
+            -> tensor<32x16xf16>
+      %res3 = triton_intel_gpu.glue %p1, %p2, %p3
+            : (ptr<tensor<16x8xf16>>, ptr<tensor<16x8xf16>>, ptr<tensor<16x8xf16>>)
+            -> ptr<tensor<16x24xf16>>
+      ```
+  }];
+  let arguments = (ins Variadic<TT_TensorOrTensorPtr>:$operands);
+  let results = (outs TT_TensorOrTensorPtr:$res);
+  let assemblyFormat = [{
+    operands attr-dict `:` functional-type(operands, results)
+  }];
+  let hasVerifier = 1;
+}
+
+def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
+  let summary = "Tensor extract operation";
+  let description = [{
+    The `extract` operation extracts a subtensor (or ptr to subtensor) from an
+    input tensor (or ptr to tensor) as specified by the given index.
+    The value extracted has shape as specified by the result type and the same
+    element type as the input tensor.
+
+    Example:
+     ```mlir
+      %val = triton_intel_gpu.extract %tensor1[2] : tensor<32x32xf16>
+           -> tensor<16x16xf16>
+      %ptr = triton_intel_gpu.extract %ptr1[2] : !tt.ptr<tensor<32x32xf16>>
+           -> !tt.ptr<tensor<16x16xf16>>
+      ```
+
+    In the examples above the result tensor (ptr to tensor) is obtained by:
+      - partitioning the input shape into subtensors (ptr to subtensors) having
+        shape equal to the result shape (i.e. <16x16xf16>)
+      - taking the 3rd subtensor (as indicated by the index) counting in
+        column-major order
+  }];
+  let arguments = (ins TT_TensorOrTensorPtr:$operand, I32Attr:$index);
+  let results = (outs TT_TensorOrTensorPtr:$res);
+  let assemblyFormat = [{
+    $operand `[` $index `]` attr-dict `:` type($operand) `->` type($res)
+  }];
+  let hasVerifier = 1;
 }
 
 def TTIG_PrefetchOp : TTIG_Op<"prefetch", []> {
