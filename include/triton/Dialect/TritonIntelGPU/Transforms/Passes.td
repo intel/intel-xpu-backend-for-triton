@@ -185,4 +185,28 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 }
 
+def TritonIntelGPURewriteTensorPointer : Pass</*cli-arg*/"tritonintelgpu-rewrite-tensor-pointer", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Rewrite load/stores with tensor pointers into legacy load/stores";
+  let description = [{
+    This pass rewrites all load/store semantics initiated by a `tt.make_tensor_ptr` and `tt.advance` into legacy
+    semantics. After this pass, `tt.make_tensor_ptr` and `tt.advance` will disappear, and it generates logics to compute
+    the pointer/mask/other for each load/store.
+  }];
+
+  let constructor = "mlir::triton::gpu::intel::createTritonIntelGPURewriteTensorPointerPass()";
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
+
+  let options = [
+    Option<"deviceArch", "device-architecture",
+            "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
+            "device architecture",
+            "llvm::cl::values("
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::UNKNOWN, \"UNKNOWN\", \"Unknown arch\"), "
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::ATS, \"ATS\", \"ATS arch\"), "
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::PVC, \"PVC\", \"PVC arch\"))">
+  ];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
