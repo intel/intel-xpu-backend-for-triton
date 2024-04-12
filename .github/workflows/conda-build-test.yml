@@ -40,7 +40,7 @@ jobs:
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 2
+          CACHE_NUMBER: 3
         with:
           path: $HOME/miniconda3/envs/triton
           key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
@@ -61,9 +61,10 @@ jobs:
 
       - name: Build Triton
         run: |
+          set -x
           export DEBUG=1
           cd python
-          conda run --no-capture-output -n triton pip install -e .
+          conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
 
       - name: Install latest nightly wheels
         uses: ./.github/actions/install-wheels
@@ -74,6 +75,7 @@ jobs:
 
       - name: Run core tests
         run: |
+          set -x
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/806
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/841
           mv scripts/core-conda.exclude-list scripts/core.exclude-list
