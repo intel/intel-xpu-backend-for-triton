@@ -14,7 +14,6 @@ include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.td"
 include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
-include "mlir/Interfaces/CastInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
@@ -27,7 +26,6 @@ def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
   let description = [{
     The `alloc` operation allocates a region of memory as specified by its type.
     Example:
-
       ```mlir
       %0 = triton_intel_gpu.alloc() : <8x64xf32, 3>
       ```
@@ -102,8 +100,8 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
 def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
   let summary = "Tensor prefetch operation";
   let description = [{
-    The `prefetch` operation prefetches a two dimensional input tensor.
-    For example:
+    The `prefetch` operation prefetches an input tensor.
+    Example:
       ```mlir
       triton_intel_gpu.prefetch %ptr {cache=none, evict=normal, isVolatile=false}
           : !tt.ptr<tensor<256x32xf16>
