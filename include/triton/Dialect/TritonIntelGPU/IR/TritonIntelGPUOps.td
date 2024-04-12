@@ -89,10 +89,10 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
       - taking the 3rd subtensor (as indicated by the index) counting in
         column-major order
   }];
-  let arguments = (ins TT_TensorOrTensorPtr:$base, I32Attr:$index);
+  let arguments = (ins TT_TensorOrTensorPtr:$operand, I32Attr:$index);
   let results = (outs TT_TensorOrTensorPtr:$res);
   let assemblyFormat = [{
-    $base `[` $index `]` attr-dict `:` type($base) `->` type($res)
+    $operand `[` $index `]` attr-dict `:` type($operand) `->` type($res)
   }];
   let hasVerifier = 1;
 }

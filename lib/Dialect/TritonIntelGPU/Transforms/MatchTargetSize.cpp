@@ -99,25 +99,26 @@ public:
                                     op->getResultTypes().end());
       types.append(resultTypes);
 
-      if (!llvm::any_of(types, isTensorOrPtrToTensor))
+      if (llvm::none_of(types, isTensorOrPtrToTensor))
         return WalkResult::advance();
       if (isa<scf::ForOp, scf::YieldOp>(op))
         return WalkResult::advance();
 
       if (auto cstOp = dyn_cast<arith::ConstantOp>(op)) {
-        recordRootSubSize(op->getResultTypes()[0]);
+        recordRootSubSize(cstOp.getResult().getType());
         transformArithConstantOp(cstOp);
+      } else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
+        recordRootSubSize(ptrOp.getResult().getType());
+        transformMakeTensorPtrOp(ptrOp);
       } else if (auto dot = dyn_cast<tt::DotOp>(op))
         transformDotOp(dot);
-      else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
-        recordRootSubSize(op->getResultTypes()[0]);
-        transformMakeTensorPtrOp(ptrOp);
-      } else
+      else
         transformGenericOp(op);
 
       return WalkResult::advance();
     });
 
+    // Simplify the transformed code.
     canonicalize();
   }
 
@@ -141,7 +142,9 @@ private:
   void transformDotOp(tt::DotOp dot);
   void transformGenericOp(Operation *op);
 
+  ///
   DenseMap<Attribute, SmallVector<int64_t>> sizePerAttrMap;
+  /// Collects the result layout of the `tt.dot` operations in the module.
   DenseSet<Attribute> dotAttrs;
 };
 
@@ -178,15 +181,23 @@ public:
   }
 };
 
-/// Simplify extract operations.
-/// FIXME: this assume that there is not sideEffect op in between.
+/// Simplify extract operations:
+/// Case 1:
+///   %0 = triton_intel_gpu.glue %t1, %t2
+///      : (tensor<16x8xf16>, tensor<16x8xf16>) -> tensor<16x16xf16>
+///   %1 = triton_intel_gpu.extract %0[1] : tensor<16x8xf16>
+///      ==> this becomes %t2
+/// Case 2:
+///   %0 =  .... : tensor<16x8xf16>
+///   %1 = triton_intel_gpu.extract %0[0] : tensor<16x8xf16>
+///      ==> this becomes %0
 class ExtractPattern : public OpRewritePattern<ttgi::ExtractOp> {
 public:
   using OpRewritePattern<ttgi::ExtractOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(ttgi::ExtractOp op,
                                 PatternRewriter &rewriter) const final {
-    Value base = op.getBase();
-    if (Operation *def = base.getDefiningOp()) {
+    Value operand = op.getOperand();
+    if (Operation *def = operand.getDefiningOp()) {
       if (auto glue = dyn_cast<ttgi::GlueOp>(def)) {
         Value sub = glue->getOperand(op.getIndex());
         rewriter.replaceOp(op, sub);
@@ -194,8 +205,8 @@ public:
       }
     }
 
-    if (base.getType() == op.getType() && op.getIndex() == 0) {
-      rewriter.replaceOp(op, base);
+    if (operand.getType() == op.getType() && op.getIndex() == 0) {
+      rewriter.replaceOp(op, operand);
       return success();
     }
 
@@ -204,6 +215,8 @@ public:
 };
 
 /// Simplify SCF loops.
+/// TODO: add examples of the patterns being simplified.
+///
 class ScfPattern : public OpRewritePattern<scf::ForOp> {
 public:
   using OpRewritePattern<scf::ForOp>::OpRewritePattern;
@@ -319,12 +332,13 @@ void MatchTargetSizePass::canonicalize() {
   RewritePatternSet patterns(ctx);
   patterns.add<ScfPattern>(ctx);
   patterns.add<ExtractPattern>(ctx);
-  patterns.add<ArithRemPattern>(ctx); // FIXME: upstream to arith dialect.
+  // patterns.add<ArithRemPattern>(ctx); // FIXME: upstream to arith dialect.
 
   if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
     signalPassFailure();
 }
 
+///
 void MatchTargetSizePass::recordRootSubSize(Type type) {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Attribute layout = tensorType.getEncoding();
@@ -335,6 +349,7 @@ void MatchTargetSizePass::recordRootSubSize(Type type) {
   }
 }
 
+///
 SmallVector<int64_t>
 MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
   assert(targetDotShape.size() == 3 && "target-dot-shape should have m,n,k");
@@ -396,6 +411,7 @@ MatchTargetSizePass::getSubTypeAndShape(Type type) const {
   return {{0}, type, {0}};
 }
 
+///
 void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
   Type type = op.getType();
   auto [shape, subType, subSize] = getSubTypeAndShape(type);
@@ -442,6 +458,7 @@ void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
   op->erase();
 }
 
+///
 void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
   auto type = cast<RankedTensorType>(op.getResult().getType());
   auto [shape, subType, subSize] = getSubTypeAndShape(type);
@@ -470,6 +487,7 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
   op->erase();
 }
 
+///
 void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   assert(targetDotShape.size() == 3 && "target-dot-shape should have m,n,k");
 
@@ -525,6 +543,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   dot->erase();
 }
 
+///
 void MatchTargetSizePass::transformGenericOp(Operation *op) {
   unsigned numResults = op->getResults().size();
   unsigned dotIdx = 2;
