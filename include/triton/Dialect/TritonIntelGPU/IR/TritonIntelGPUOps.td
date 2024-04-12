@@ -95,6 +95,7 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
     $operand `[` $index `]` attr-dict `:` type($operand) `->` type($res)
   }];
   let hasVerifier = 1;
+  let hasFolder = 1;
 }
 
 def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {

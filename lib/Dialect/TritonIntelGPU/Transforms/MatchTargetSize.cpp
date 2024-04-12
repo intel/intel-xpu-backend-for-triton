@@ -161,52 +161,13 @@ public:
     Location loc = op.getLoc();
     Type type = op.getType();
 
-    if (value.isOne()) {
-      IntegerAttr attr = rewriter.getIntegerAttr(type, 0);
-      auto zero = rewriter.create<arith::ConstantOp>(loc, attr);
-      rewriter.replaceOp(op, zero);
-      return success();
-    }
-
+    // lhs % 0x00100000 -> lhs & (0x00100000-1)
     if (value.popcount() == 1) {
       IntegerAttr attr =
           rewriter.getIntegerAttr(type, value.getSExtValue() - 1);
       auto mask = rewriter.create<arith::ConstantOp>(loc, attr);
       auto result = rewriter.create<arith::AndIOp>(loc, op.getLhs(), mask);
       rewriter.replaceOp(op, result);
-      return success();
-    }
-
-    return failure();
-  }
-};
-
-/// Simplify extract operations:
-/// Case 1:
-///   %0 = triton_intel_gpu.glue %t1, %t2
-///      : (tensor<16x8xf16>, tensor<16x8xf16>) -> tensor<16x16xf16>
-///   %1 = triton_intel_gpu.extract %0[1] : tensor<16x8xf16>
-///      ==> this becomes %t2
-/// Case 2:
-///   %0 =  .... : tensor<16x8xf16>
-///   %1 = triton_intel_gpu.extract %0[0] : tensor<16x8xf16>
-///      ==> this becomes %0
-class ExtractPattern : public OpRewritePattern<ttgi::ExtractOp> {
-public:
-  using OpRewritePattern<ttgi::ExtractOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(ttgi::ExtractOp op,
-                                PatternRewriter &rewriter) const final {
-    Value operand = op.getOperand();
-    if (Operation *def = operand.getDefiningOp()) {
-      if (auto glue = dyn_cast<ttgi::GlueOp>(def)) {
-        Value sub = glue->getOperand(op.getIndex());
-        rewriter.replaceOp(op, sub);
-        return success();
-      }
-    }
-
-    if (operand.getType() == op.getType() && op.getIndex() == 0) {
-      rewriter.replaceOp(op, operand);
       return success();
     }
 
@@ -230,13 +191,12 @@ public:
       auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
       if (!glue) {
         newInits.push_back(init);
-        userIndexMap[arg] = idx;
-        idx++;
+        userIndexMap[arg] = idx++;
         continue;
       }
 
       unsigned numSplit = glue->getOperands().size();
-      for (unsigned i = 0; i < numSplit; i++)
+      for (unsigned i = 0; i < numSplit; ++i)
         newInits.push_back(glue->getOperand(i));
 
       for (auto *user : arg.getUsers()) {
@@ -286,8 +246,7 @@ public:
     for (auto [result, init] : llvm::zip(op.getResults(), op.getInits())) {
       auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
       if (!glue) {
-        userIndexMap[result] = idx;
-        idx++;
+        userIndexMap[result] = idx++;
         continue;
       }
 
@@ -331,8 +290,7 @@ void MatchTargetSizePass::canonicalize() {
 
   RewritePatternSet patterns(ctx);
   patterns.add<ScfPattern>(ctx);
-  patterns.add<ExtractPattern>(ctx);
-  // patterns.add<ArithRemPattern>(ctx); // FIXME: upstream to arith dialect.
+  patterns.add<ArithRemPattern>(ctx); // FIXME: upstream to arith dialect.
 
   if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
     signalPassFailure();
@@ -604,7 +562,7 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
             subOp->setAttr("DotIdx", b.getIntegerAttr(b.getI32Type(), dotIdx));
           subOps.push_back(subOp->getResults()[0]);
         }
-        idx++;
+        ++idx;
       }
     } break;
     default:
