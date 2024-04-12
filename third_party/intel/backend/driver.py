@@ -396,7 +396,7 @@ class XPUDriver(DriverBase):
             raise AttributeError
 
     def get_current_device(self):
-        return self.utils.get_current_device()
+        return self.utils.get_sycl_device(self.utils.get_current_device())
 
     def get_current_stream(self, device):
         import torch
@@ -404,10 +404,8 @@ class XPUDriver(DriverBase):
 
     def get_current_target(self):
         import torch
-        device = self.get_current_device()
-        dev_property = torch.xpu.get_device_capability(device)
-        warp_size = 32
-        return ("xpu", dev_property, warp_size)
+        device = self.utils.get_sycl_device(self.utils.get_current_device())
+        return ("xpu", device)
 
     @staticmethod
     def is_active():

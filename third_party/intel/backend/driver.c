@@ -224,22 +224,20 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name;
   int shared;
   PyObject *py_bytes;
-  int devId;
+  PyObject *cap;
+  void *dev_ptr = NULL;
 
-  if (!PyArg_ParseTuple(args, "sSii", &name, &py_bytes, &shared, &devId)) {
+  if (!PyArg_ParseTuple(args, "sSiO", &name, &py_bytes, &shared, &cap)) {
     std::cerr << "loadBinary arg parse failed" << std::endl;
     return NULL;
   }
+  if (!(dev_ptr = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
+    return NULL;
+
   int32_t n_regs = 0;
   int32_t n_spills = 0;
 
-  if (devId > sycl_l0_device_list.size()) {
-    std::cerr << "Device is not found " << std::endl;
-    return NULL;
-  }
-
-  auto sycl_l0_device_pair = sycl_l0_device_list[devId];
-  sycl::device sycl_device = sycl_l0_device_pair.first;
+  sycl::device *sycl_device = static_cast<sycl::device *>(dev_ptr);
 
   std::string kernel_name = name;
   size_t binary_size = PyBytes_Size(py_bytes);
@@ -247,9 +245,9 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
   uint32_t *binary_ptr = (uint32_t *)PyBytes_AsString(py_bytes);
   ;
-  auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
+  auto ctx = sycl_device->get_platform().ext_oneapi_get_default_context();
   auto l0_device =
-      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(*sycl_device);
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
   auto l0_module =
       create_module(l0_context, l0_device, binary_ptr, binary_size);
