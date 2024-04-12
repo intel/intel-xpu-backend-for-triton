@@ -1,0 +1,136 @@
+name: Conda build and test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "5 2 * * *"
+  push:
+
+permissions: read-all
+
+env:
+  BACKEND: XPU
+  TRITON_DISABLE_LINE_INFO: 1
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+
+  integration-tests:
+    name: Integration tests
+    runs-on:
+      - glados
+      - spr
+      - runner-0.0.12
+    strategy:
+      matrix:
+        python:
+#          - "3.9"
+          - "3.10"
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Calculate env
+        run: |
+          echo $HOME/miniconda3/bin >>$GITHUB_PATH
+          echo LD_LIBRARY_PATH=$HOME/miniconda3/envs/triton/lib:$LD_LIBRARY_PATH >>$GITHUB_ENV
+
+      - name: Load conda cache
+        id: conda-cache
+        uses: ./.github/actions/load
+        env:
+          CACHE_NUMBER: 5
+        with:
+          path: $HOME/miniconda3/envs/triton
+          key: conda-basekit-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Update conda env
+        if: ${{ steps.conda-cache.outputs.status == 'miss' }}
+        run: |
+          conda create -n triton --override-channels -c conda-forge python=${{ matrix.python }}.*
+          conda env update -f scripts/triton.yml
+          conda env update -f scripts/basekit.yml
+          ln -snf /usr/include/level_zero $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
+          find /usr -name libze_\* -exec cp -n {} $HOME/miniconda3/envs/triton/lib \;
+
+      - name: Add conda info to log
+        run: |
+          conda info
+          conda list -n triton
+
+      - name: Install latest nightly wheels
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          install_cmd: conda run --no-capture-output -n triton pip install
+          python_version: ${{ matrix.python }}
+          wheels_pattern: '{intel_extension_for_pytorch-*,torch-*}'
+
+      - name: Build Triton
+        run: |
+          set -x
+          export DEBUG=1
+          cd python
+          conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
+
+      - name: Run tests
+        run: |
+          set -x
+
+          sed -ie '
+            s/\(.*03-matrix-multiplication\)/#\1/
+            s/\(.*07-extern-functions\)/#\1/
+            s/\(.*08-grouped-gemm\)/#\1/
+            s/\(.*09-experimental-block-pointer\)/#\1/
+          ' scripts/test-triton.sh
+
+          conda create -y -n dpcpp -c intel -c conda-forge dpcpp_linux-64=2024.1.*
+          ln -snf $HOME/miniconda3/envs/dpcpp/lib/clang/18/include/CL $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
+          ln -snf $HOME/miniconda3/envs/envs/dpcpp/include/sycl $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/sycl
+          export PATH=$PATH:$HOME/miniconda3/envs/dpcpp/bin
+
+          export LD_LIBRARY_PATH=/home/runner/intel/oneapi/tbb/2021.12/env/../lib/intel64/gcc4.8:/home/runner/intel/oneapi/mpi/2021.12/opt/mpi/libfabric/lib:/home/runner/intel/oneapi/mpi/2021.12/lib:/home/runner/intel/oneapi/mkl/2024.1/lib:/home/runner/intel/oneapi/ippcp/2021.11/lib/:/home/runner/intel/oneapi/ipp/2021.11/lib:/home/runner/intel/oneapi/dpl/2022.5/lib:/home/runner/intel/oneapi/dnnl/2024.1/lib:/home/runner/intel/oneapi/debugger/2024.1/opt/debugger/lib:/home/runner/intel/oneapi/dal/2024.2/lib:/home/runner/intel/oneapi/compiler/2024.1/opt/oclfpga/host/linux64/lib:/home/runner/intel/oneapi/compiler/2024.1/opt/compiler/lib:/home/runner/intel/oneapi/compiler/2024.1/lib:/home/runner/intel/oneapi/ccl/2021.12/lib/:/home/runner/miniconda3/envs/triton/lib:
+          export MANPATH=/home/runner/intel/oneapi/mpi/2021.12/share/man:/home/runner/intel/oneapi/debugger/2024.1/share/man:/home/runner/intel/oneapi/compiler/2024.1/share/man:
+          export MKLROOT=/home/runner/intel/oneapi/mkl/2024.1
+          export NLSPATH=/home/runner/intel/oneapi/mkl/2024.1/share/locale/%l_%t/%N:/home/runner/intel/oneapi/compiler/2024.1/lib/compiler/locale/%l_%t/%N
+          export OCL_ICD_FILENAMES=libintelocl_emu.so:libalteracl.so:/home/runner/intel/oneapi/compiler/2024.1/lib/libintelocl.so
+          export ONEAPI_ROOT=/home/runner/intel/oneapi
+
+          export TRITON_TEST_REPORTS=true
+          export TRITON_TEST_REPORTS_DIR=$HOME/reports
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/866
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/866
+          export TRITON_TEST_SKIPLIST_DIR=scripts/skiplist/conda-basekit
+          conda run --no-capture-output -n triton bash -v -x scripts/test-triton.sh
+
+      - name: Run E2E test
+        run: |
+          cd ../pytorch || {
+            PYTORCH_COMMIT_ID=$(<.github/pins/pytorch.txt)
+            cd ..
+            git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules https://github.com/Stonepia/pytorch.git
+            cd pytorch
+            git branch pin-branch $PYTORCH_COMMIT_ID
+            git switch pin-branch
+          }
+
+          TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
+          conda run -n triton pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+
+          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
+          export WORKSPACE=$GITHUB_WORKSPACE
+          # TODO: Find the fastest Hugging Face model
+          conda run --no-capture-output -n triton $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
+          cat $WORKSPACE/inductor_log/*/*/*.csv
+          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
+
+      - name: Save conda cache
+        if: ${{ steps.conda-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.conda-cache.outputs.path }}
+          dest: ${{ steps.conda-cache.outputs.dest }}

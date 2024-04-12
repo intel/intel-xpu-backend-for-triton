@@ -8,12 +8,17 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
 
 dirname = os.getenv("ZE_PATH", default="/usr/local")
-oneapi_root = os.getenv("ONEAPI_ROOT", default="/opt/intel/oneapi")
-include_dir = [
-    os.path.join(dirname, "include"),
-    os.path.join(oneapi_root, "compiler/latest/include"),
-    os.path.join(oneapi_root, "compiler/latest/include/sycl")
-]
+include_dir = [os.path.join(dirname, "include")]
+
+oneapi_root = os.getenv("ONEAPI_ROOT")
+if oneapi_root:
+    include_dir += [
+        os.path.join(oneapi_root, "compiler/latest/include"),
+        os.path.join(oneapi_root, "compiler/latest/include/sycl")
+    ]
+
+conda_prefix = os.getenv("CONDA_PREFIX")
+
 library_dir = [os.path.join(dirname, "lib")]
 libraries = ['ze_loader', 'sycl']
 

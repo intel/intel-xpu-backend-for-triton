@@ -1,0 +1,22 @@
+# FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/866
+test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape0-4]
+test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape1-8]
+test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape2-4]
+test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape3-8]
+test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape4-4]
+test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape5-8]
+test/unit/language/test_core.py::test_join_with_mma
+test/unit/language/test_core.py::test_dot_without_load[float32]
+test/unit/language/test_core.py::test_dot_without_load[float16]
+test/unit/language/test_core.py::test_masked_load_shared_memory[dtype0]
+test/unit/language/test_core.py::test_masked_load_shared_memory[dtype1]
+test/unit/language/test_core.py::test_masked_load_shared_memory[dtype2]
+test/unit/language/test_core.py::test_tl_range
+test/unit/language/test_core.py::test_fp8_dot_acc[0-float8e5]
+test/unit/language/test_core.py::test_fp8_dot_acc[64-float8e5]
+test/unit/language/test_core.py::test_fp8_dot_acc[0-float8e4nv]
+test/unit/language/test_core.py::test_fp8_dot_acc[64-float8e4nv]
+test/unit/language/test_core.py::test_fp8_dot_acc[32-float8e5]
+test/unit/language/test_core.py::test_fp8_dot_acc[128-float8e5]
+test/unit/language/test_core.py::test_fp8_dot_acc[32-float8e4nv]
+test/unit/language/test_core.py::test_fp8_dot_acc[128-float8e4nv]
