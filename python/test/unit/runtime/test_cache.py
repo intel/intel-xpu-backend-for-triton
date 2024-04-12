@@ -184,7 +184,7 @@ def test_annotation():
 
     x = torch.empty(1, dtype=torch.int32, device='xpu')
 
-    device = torch.xpu.current_device()
+    device = triton.runtime.driver.active.get_current_device()
     kernel[(1, )](x, 1)
     kernel[(1, )](x, 8)
     kernel[(1, )](x, 16)
@@ -226,7 +226,7 @@ def test_jit_warmup_cache() -> None:
         torch.randn(32, dtype=torch.float32, device="xpu"),
         32,
     ]
-    device = torch.xpu.current_device()
+    device = triton.runtime.driver.active.get_current_device()
     assert len(kernel_add.cache[device]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
@@ -244,7 +244,7 @@ def test_jit_debug() -> None:
         tl.device_assert(idx < 32, "idx < 32")
         tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
-    device = torch.xpu.current_device()
+    device = triton.runtime.driver.active.get_current_device()
     assert len(kernel_add.cache[device]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
@@ -270,7 +270,7 @@ def test_jit_noinline() -> None:
     def kernel_add_device(a, b, o, N: tl.constexpr):
         add_fn(a, b, o, N)
 
-    device = torch.xpu.current_device()
+    device = triton.runtime.driver.active.get_current_device()
     assert len(kernel_add_device.cache[device]) == 0
     kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add_device.cache[device]) == 1
@@ -314,7 +314,7 @@ def test_preload() -> None:
         tl.device_assert(idx < 32, "idx < 32")
         tl.store(o + idx, tl.load(a + idx) - tl.load(b + idx))
 
-    device = torch.xpu.current_device()
+    device = triton.runtime.driver.active.get_current_device()
 
     # get the serialized specialization data
     specialization_data = None
