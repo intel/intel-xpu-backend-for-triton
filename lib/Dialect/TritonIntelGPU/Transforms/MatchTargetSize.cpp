@@ -128,7 +128,7 @@ private:
 
   // TODO: should initialize the target shape also for loads?
 
-  /// Canonicalize operations (e.g. remove redundant tt.extract, tt.concat)
+  /// Canonicalize operations (e.g. remove redundant tt.extract, tt.glue)
   void canonicalize();
 
   void recordRootSubSize(Type type);
@@ -185,10 +185,10 @@ public:
   using OpRewritePattern<ttgi::ExtractOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(ttgi::ExtractOp op,
                                 PatternRewriter &rewriter) const final {
-    Value base = op.getOperand();
+    Value base = op.getBase();
     if (Operation *def = base.getDefiningOp()) {
-      if (auto concat = dyn_cast<ttgi::ConcatOp>(def)) {
-        Value sub = concat->getOperand(op.getIndex());
+      if (auto glue = dyn_cast<ttgi::GlueOp>(def)) {
+        Value sub = glue->getOperand(op.getIndex());
         rewriter.replaceOp(op, sub);
         return success();
       }
@@ -214,17 +214,17 @@ public:
     DenseMap<Value, int> userIndexMap;
     unsigned idx = 0;
     for (auto [arg, init] : llvm::zip(op.getRegionIterArgs(), op.getInits())) {
-      auto concat = dyn_cast<ttgi::ConcatOp>(init.getDefiningOp());
-      if (!concat) {
+      auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
+      if (!glue) {
         newInits.push_back(init);
         userIndexMap[arg] = idx;
         idx++;
         continue;
       }
 
-      unsigned numSplit = concat->getOperands().size();
+      unsigned numSplit = glue->getOperands().size();
       for (unsigned i = 0; i < numSplit; i++)
-        newInits.push_back(concat->getOperand(i));
+        newInits.push_back(glue->getOperand(i));
 
       for (auto *user : arg.getUsers()) {
         if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
@@ -255,9 +255,9 @@ public:
     SmallVector<Value> newValues;
     for (auto result : yield.getResults())
       if (Operation *def = result.getDefiningOp()) {
-        if (auto concat = dyn_cast<ttgi::ConcatOp>(def))
-          newValues.append(concat->getOperands().begin(),
-                           concat->getOperands().end());
+        if (auto glue = dyn_cast<ttgi::GlueOp>(def))
+          newValues.append(glue->getOperands().begin(),
+                           glue->getOperands().end());
         else
           newValues.push_back(result);
       }
@@ -271,8 +271,8 @@ public:
     userIndexMap.clear();
     idx = 0;
     for (auto [result, init] : llvm::zip(op.getResults(), op.getInits())) {
-      auto concat = dyn_cast<ttgi::ConcatOp>(init.getDefiningOp());
-      if (!concat) {
+      auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
+      if (!glue) {
         userIndexMap[result] = idx;
         idx++;
         continue;
@@ -284,7 +284,7 @@ public:
           deleteList.push_back(extract.getOperation());
         }
 
-      idx += concat->getOperands().size();
+      idx += glue->getOperands().size();
     }
 
     for (auto [user, idx] : userIndexMap)
@@ -438,7 +438,7 @@ void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
   }
 
   op->replaceAllUsesWith(
-      b.create<ttgi::ConcatOp>(loc, type, subOps)->getResults());
+      b.create<ttgi::GlueOp>(loc, type, subOps)->getResults());
   op->erase();
 }
 
@@ -466,7 +466,7 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
   }
 
   op->replaceAllUsesWith(
-      b.create<ttgi::ConcatOp>(loc, type, subOps)->getResults());
+      b.create<ttgi::GlueOp>(loc, type, subOps)->getResults());
   op->erase();
 }
 
@@ -521,7 +521,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   }
 
   dot->replaceAllUsesWith(
-      b.create<ttgi::ConcatOp>(loc, dot.getType(), subCs)->getResults());
+      b.create<ttgi::GlueOp>(loc, dot.getType(), subCs)->getResults());
   dot->erase();
 }
 
@@ -594,7 +594,7 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
   }
 
   if (numResults == 1)
-    op->replaceAllUsesWith(b.create<ttgi::ConcatOp>(loc, type, subOps));
+    op->replaceAllUsesWith(b.create<ttgi::GlueOp>(loc, type, subOps));
 
   op->erase();
 }
