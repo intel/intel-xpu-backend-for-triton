@@ -170,11 +170,6 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
 
   let dependentDialects = ["mlir::triton::TritonDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
-
-  let options = [
-    ListOption<"targetDotShape", "target-dot-shape", "int64_t",
-               "MxNxK dot operation shape supported natively by the target architecture">
-  ];
 }
 
 #endif // TRITON_INTEL_GPU_PASSES

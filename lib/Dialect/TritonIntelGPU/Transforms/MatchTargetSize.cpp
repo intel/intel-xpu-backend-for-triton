@@ -1,4 +1,4 @@
-//===----- MatchTargetSize.cpp -------------------------------------- -----===//
+//===- MatchTargetSize.cpp ----------------------------------------------*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -67,11 +67,39 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
+// Encode the native operation sizes supported by the target architecture.
+class TargetArchNativeSizes {
+public:
+  struct DotShape {
+    DotShape() = default;
+    DotShape(unsigned m, unsigned n, unsigned k) : m(m), n(n), k(k) {
+      assert(m != 0 && n != 0 && k != 0 && "expecting valid shape");
+    }
+
+    unsigned m = 0;
+    unsigned n = 0;
+    unsigned k = 0;
+  };
+
+  TargetArchNativeSizes() = default;
+  TargetArchNativeSizes(DotShape dotShape, unsigned loadStoreSize)
+      : dotShape(dotShape), loadStoreSize(loadStoreSize) {}
+
+  void setDotShape(DotShape shape) { dotShape = shape; }
+  void setLoadStoreSize(unsigned size) { loadStoreSize = size; }
+  const DotShape &getDotShape() const { return dotShape; }
+  unsigned getLoadStoreSize() const { return loadStoreSize; }
+
+private:
+  DotShape dotShape;
+  unsigned loadStoreSize;
+};
+
 class MatchTargetSizePass
     : public TritonIntelGPUMatchTargetSizeBase<MatchTargetSizePass> {
 public:
   void runOnOperation() override {
-    initTargetDotShape();
+    initNativeOperationSizes();
 
     MLIRContext *ctx = &getContext();
     ModuleOp m = getOperation();
@@ -123,9 +151,9 @@ public:
   }
 
 private:
-  /// Initialize the target shape supported native by the target architecture
-  /// for the `tt.dot` operation.
-  void initTargetDotShape();
+  /// Initialize the native operation sizes supported by the target
+  /// architecture.
+  void initNativeOperationSizes();
 
   // TODO: should initialize the target shape also for loads?
 
@@ -146,6 +174,9 @@ private:
   DenseMap<Attribute, SmallVector<int64_t>> sizePerAttrMap;
   /// Collects the result layout of the `tt.dot` operations in the module.
   DenseSet<Attribute> dotAttrs;
+
+  /// The native operation sizes supported by the target architecture.
+  TargetArchNativeSizes nativeSizes;
 };
 
 /// Simplify arith operations with constant RHS.
@@ -270,18 +301,13 @@ public:
   }
 };
 
-void MatchTargetSizePass::initTargetDotShape() {
-  if (targetDotShape.hasValue()) {
-    assert(targetDotShape.size() == 3 && "target-dot-shape should have m,n,k");
-    return;
-  }
-
+void MatchTargetSizePass::initNativeOperationSizes() {
   // FIXME: sets the target dot shape natively supported by the target
   // architecture using the target architecture information when available.
   // These value works for PVC.
-  targetDotShape.addValue(8);
-  targetDotShape.addValue(16);
-  targetDotShape.addValue(16);
+  TargetArchNativeSizes::DotShape shape(8, 16, 16);
+  nativeSizes.setDotShape(shape);
+  nativeSizes.setLoadStoreSize(512); // max 512DW;
 }
 
 void MatchTargetSizePass::canonicalize() {
@@ -302,28 +328,30 @@ void MatchTargetSizePass::recordRootSubSize(Type type) {
     Attribute layout = tensorType.getEncoding();
     if (sizePerAttrMap.count(layout) == 0)
       sizePerAttrMap[layout] = getSubOpSize(tensorType);
-  } else if (auto ptrType = dyn_cast<tt::PointerType>(type)) {
-    recordRootSubSize(ptrType.getPointeeType());
+    return;
   }
+
+  if (auto ptrType = dyn_cast<tt::PointerType>(type))
+    recordRootSubSize(ptrType.getPointeeType());
 }
 
-///
+/// Return the native size supported by the target architecture.
 SmallVector<int64_t>
 MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
-  assert(targetDotShape.size() == 3 && "target-dot-shape should have m,n,k");
-
-  int64_t mStep = targetDotShape[0];
-  int64_t nStep = targetDotShape[1];
+  // If the type provided has dot layout, return the native dot size supported
+  // by the target architecture.
   Attribute layout = type.getEncoding();
   if (dotAttrs.count(layout)) {
-    SmallVector<int64_t> subSize{mStep, nStep};
-    return subSize;
+    const auto &dotShape = nativeSizes.getDotShape();
+    SmallVector<int64_t> nativeDotSize{dotShape.m, dotShape.n};
+    return nativeDotSize;
     // FIXME: 2 * subgroupSize
   }
 
+  //
   ArrayRef<int64_t> shape = type.getShape();
   const unsigned sizeInBytes = type.getElementTypeBitWidth() / 8;
-  constexpr unsigned maxLoadStoreSize = 512; // max is 512 DW.
+  unsigned maxLoadStoreSize = nativeSizes.getLoadStoreSize();
 
   SmallVector<int64_t> subSize(shape.size());
   switch (shape.size()) {
@@ -338,7 +366,6 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
     subSize[1] = (shape[1] > colLimit) ? colLimit : shape[1];
     int64_t max = maxLoadStoreSize * 4 / sizeInBytes / subSize[1];
     subSize[0] = std::min(max, shape[0]);
-
   } break;
   default:
     llvm_unreachable("Unsupported shape");
@@ -447,8 +474,6 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
 
 ///
 void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
-  assert(targetDotShape.size() == 3 && "target-dot-shape should have m,n,k");
-
   auto aType = dot.getA().getType().cast<RankedTensorType>();
   auto bType = dot.getB().getType().cast<RankedTensorType>();
   auto cType = dot.getC().getType().cast<RankedTensorType>();
@@ -458,9 +483,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   int64_t m = aShape[0];
   int64_t n = bShape[1];
   int64_t k = aShape[1];
-  int64_t mStep = targetDotShape[0];
-  int64_t nStep = targetDotShape[1];
-  int64_t kStep = targetDotShape[2];
+  const auto &dotShape = nativeSizes.getDotShape();
   OpBuilder b(dot);
   Location loc = dot.getLoc();
 
@@ -482,12 +505,14 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
 
   auto [shape, subType, subSize] = getSubTypeAndShape(cType);
   SmallVector<Value> subCs;
-  for (unsigned nn = 0; nn < n; nn += nStep) {
-    for (unsigned mm = 0; mm < m; mm += mStep) {
-      Value subDotC = getSubDotVal(dot.getC(), mm, nn, mStep, nStep);
-      for (unsigned kk = 0; kk < k; kk += kStep) {
-        Value subDotA = getSubDotVal(dot.getA(), mm, kk, mStep, kStep);
-        Value subDotB = getSubDotVal(dot.getB(), kk, nn, kStep, nStep);
+  for (unsigned nn = 0; nn < n; nn += dotShape.n) {
+    for (unsigned mm = 0; mm < m; mm += dotShape.m) {
+      Value subDotC = getSubDotVal(dot.getC(), mm, nn, dotShape.m, dotShape.n);
+      for (unsigned kk = 0; kk < k; kk += dotShape.k) {
+        Value subDotA =
+            getSubDotVal(dot.getA(), mm, kk, dotShape.m, dotShape.k);
+        Value subDotB =
+            getSubDotVal(dot.getB(), kk, nn, dotShape.k, dotShape.n);
         subDotC = b.create<tt::DotOp>(loc, subDotA, subDotB, subDotC,
                                       dot.getInputPrecisionAttr(),
                                       dot.getMaxNumImpreciseAccAttr());
