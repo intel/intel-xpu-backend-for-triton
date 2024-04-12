@@ -176,9 +176,12 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
         stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
         std::to_string(8 /*systolic depth*/ *
                        getNumOperandsPerDword(precisionA));
+    std::string bMangledTy = getTypeMangling(bTy);
+    std::string cMangledTy = getTypeMangling(opTypes[0]);
+    if (bMangledTy == cMangledTy)
+      cMangledTy = "S0_";
     fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             getTypeMangling(aTy) + getTypeMangling(bTy) +
-             getTypeMangling(opTypes[0]);
+             getTypeMangling(aTy) + bMangledTy + cMangledTy;
     SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
     SmallVector<Value> args{a, b, op.getC()};
 
