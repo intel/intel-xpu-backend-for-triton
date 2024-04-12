@@ -52,7 +52,15 @@ class XPUUtils(object):
         dirname = os.path.dirname(os.path.realpath(__file__))
         mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
         self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties
+        self.get_device_prop = mod.get_device_properties
+        self.is_capsule = mod.is_capsule
+        self.unpack_capsule = mod.unpack_capsule
+
+    def get_device_properties(self, device):
+        if self.is_capsule(device):
+            return self.get_device_prop(self.unpack_capsule(device))
+        else:
+            return self.get_device_prop(device)
 
     def get_current_device(self):
         import torch
@@ -64,7 +72,8 @@ class XPUUtils(object):
 
     def get_sycl_device(self, device_id):
         import torch
-        return torch.xpu.device(device_id).sycl_device
+        # Here must not be PyCapsule for cache key
+        return self.unpack_capsule(torch.xpu.device(device_id).sycl_device)
 
 
 # ------------------------

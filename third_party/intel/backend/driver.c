@@ -56,13 +56,12 @@ static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   }
 
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
-  PyObject *cap;
-  void *ptr = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
+  uint64_t cap = 0;
+  if (!PyArg_ParseTuple(args, "K", &cap))
     return NULL;
-  if (!(ptr = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
+  if (cap == 0)
     return NULL;
-  sycl::device *syclDevice = static_cast<sycl::device *>(ptr);
+  sycl::device *syclDevice = (sycl::device *)(cap);
 
   // Get properties from SYCL.
   sycl::ext::oneapi::experimental::architecture arch = syclDevice->get_info<
@@ -132,7 +131,6 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int mem_bus_width = pMemoryProperties[0].maxBusWidth;
 
   delete[] pMemoryProperties;
-
   return Py_BuildValue(
       "{s:i, s:i, s:i, s:i, s:i, s:O, s:i, s:O}", "max_shared_mem",
       max_shared_mem, "multiprocessor_count", multiprocessor_count,
@@ -224,20 +222,18 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name;
   int shared;
   PyObject *py_bytes;
-  PyObject *cap;
+  uint64_t *cap;
   void *dev_ptr = NULL;
 
-  if (!PyArg_ParseTuple(args, "sSiO", &name, &py_bytes, &shared, &cap)) {
+  if (!PyArg_ParseTuple(args, "sSiK", &name, &py_bytes, &shared, &cap)) {
     std::cerr << "loadBinary arg parse failed" << std::endl;
     return NULL;
   }
-  if (!(dev_ptr = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
-    return NULL;
 
   int32_t n_regs = 0;
   int32_t n_spills = 0;
 
-  sycl::device *sycl_device = static_cast<sycl::device *>(dev_ptr);
+  sycl::device *sycl_device = (sycl::device *)(cap);
 
   std::string kernel_name = name;
   size_t binary_size = PyBytes_Size(py_bytes);
@@ -366,6 +362,25 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
+static PyObject *unpackCapsule(PyObject *self, PyObject *args) {
+  PyObject *cap;
+  void *ptr = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (!(ptr = PyCapsule_GetPointer(cap, PyCapsule_GetName(cap))))
+    return NULL;
+  return Py_BuildValue("K", (uint64_t)(ptr));
+}
+
+static PyObject *isCapsule(PyObject *self, PyObject *args) {
+  PyObject *cap;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (PyCapsule_CheckExact(cap))
+    return Py_BuildValue("i", 1);
+  return Py_BuildValue("i", 0);
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
@@ -375,6 +390,10 @@ static PyMethodDef ModuleMethods[] = {
      "Initialize the ZE GPU context"},
     {"init_devices", initDevices, METH_VARARGS,
      "Initialize the ZE GPU devices and return device count"},
+    {"unpack_capsule", unpackCapsule, METH_VARARGS,
+     "extract object from Py_Capsule"},
+    {"is_capsule", isCapsule, METH_VARARGS,
+     "check whether if the object is a Py_Capsule"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 
