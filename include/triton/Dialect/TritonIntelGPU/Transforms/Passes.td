@@ -144,7 +144,7 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
       %D = tt.dot %A, %B, %C : tensor<32x32xf16> * tensor<32x64xf16> -> tensor<32x64xf32>
       ```
 
-    Assuming that the native 'dot' shape supported by the target architecture is <8x16x16> 
+    Assuming that the native 'dot' shape supported by the target architecture is <8x16x16>
     and that the max supported load size is 512DW (<32x32xf16>), after this pass:
       - the load of <32x64xf16> is split to 2 loads of <32x32xf16>
       - the dot operation is split so that each resulting operation matches the native target
