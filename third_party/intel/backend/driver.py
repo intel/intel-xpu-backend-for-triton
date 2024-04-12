@@ -405,7 +405,8 @@ class XPUDriver(DriverBase):
     def get_current_target(self):
         import torch
         device = self.utils.get_sycl_device(self.utils.get_current_device())
-        return ("xpu", device)
+        warp_size = 32
+        return ("xpu", device, warp_size)
 
     @staticmethod
     def is_active():
