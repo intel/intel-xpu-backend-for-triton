@@ -6,10 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/IR/Builders.h"
-#include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
+
+#include "mlir/IR/Builders.h"
+#include "mlir/Support/LLVM.h"
 
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -185,6 +186,19 @@ LogicalResult ExtractOp::verify() {
     return emitOpError("index must be less than ") << numTiles;
 
   return success();
+}
+
+OpFoldResult ExtractOp::fold(FoldAdaptor adaptor) {
+  // extract (glue %t1, %t2)[1] -> %t2
+  if (auto glueOp = getOperand().getDefiningOp<GlueOp>())
+    return glueOp->getOperand(getIndex());
+
+  // %0 =  .... : tensor<16x8xf16>
+  // extract %0[0] : tensor<16x8xf16> -> %0
+  if (getIndex() == 0 && getOperand().getType() == getType())
+    return getOperand();
+
+  return {};
 }
 
 } // namespace intel
