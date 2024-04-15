@@ -1958,7 +1958,8 @@ def get_reduced_dtype(dtype_str, op):
     'sum',
 ] for dtype in dtypes_with_bfloat16 for shape in [32, 64, 128, 512]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-@pytest.mark.parametrize("num_warps, threads_per_warp", [(64, 16), (4, 32)] if is_xpu() else [(4, 32)])
+@pytest.mark.parametrize("num_warps, threads_per_warp",
+                         [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
 def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
@@ -2066,7 +2067,8 @@ keep_dims_3d_configs = [(op, 'float32', (32, 2, 16), axis, True)
     "op, dtype_str, shape, axis, keep_dims", reduce_configs1 + reduce_configs2 + reduce_configs3 + invalid_config +
     negative_config + keep_dims_2d_configs + keep_dims_3d_configs)
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-@pytest.mark.parametrize("num_warps, threads_per_warp", [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, 32)])
+@pytest.mark.parametrize("num_warps, threads_per_warp",
+                         [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
