@@ -39,7 +39,6 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Debug.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -62,8 +61,6 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
-
-#define DEBUG_TYPE "tritonintelgpu-match-target-size"
 
 namespace {
 
@@ -155,8 +152,6 @@ private:
   /// architecture.
   void initNativeOperationSizes();
 
-  // TODO: should initialize the target shape also for loads?
-
   /// Canonicalize operations (e.g. remove redundant tt.extract, tt.glue)
   void canonicalize();
 
@@ -165,12 +160,13 @@ private:
   std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
   getSubTypeAndShape(Type type) const;
 
+  /// Split transformation for several operations.
   void transformMakeTensorPtrOp(tt::MakeTensorPtrOp op);
   void transformArithConstantOp(arith::ConstantOp op);
   void transformDotOp(tt::DotOp dot);
   void transformGenericOp(Operation *op);
 
-  ///
+  /// Record the native size supported by the target implementation.
   DenseMap<Attribute, SmallVector<int64_t>> sizePerAttrMap;
   /// Collects the result layout of the `tt.dot` operations in the module.
   DenseSet<Attribute> dotAttrs;
@@ -328,7 +324,6 @@ void MatchTargetSizePass::canonicalize() {
     signalPassFailure();
 }
 
-///
 void MatchTargetSizePass::recordRootSubSize(Type type) {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Attribute layout = tensorType.getEncoding();
@@ -344,8 +339,7 @@ void MatchTargetSizePass::recordRootSubSize(Type type) {
 /// Return the native size supported by the target architecture.
 SmallVector<int64_t>
 MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
-  // If the type provided has dot layout, return the native dot size supported
-  // by the target architecture.
+  // Dot operation.
   Attribute layout = type.getEncoding();
   if (dotAttrs.count(layout)) {
     const auto &dotShape = nativeSizes.getDotShape();
@@ -353,7 +347,7 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
     return nativeDotSize;
   }
 
-  //
+  // Load/Store operations
   ArrayRef<int64_t> shape = type.getShape();
   const unsigned sizeInBytes = type.getElementTypeBitWidth() / 8;
   unsigned maxLoadStoreSize = nativeSizes.getLoadStoreSize();
@@ -402,7 +396,6 @@ MatchTargetSizePass::getSubTypeAndShape(Type type) const {
   return {{0}, type, {0}};
 }
 
-///
 void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
   Type type = op.getType();
   auto [shape, subType, subSize] = getSubTypeAndShape(type);
@@ -449,7 +442,6 @@ void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
   op->erase();
 }
 
-///
 void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
   auto type = cast<RankedTensorType>(op.getResult().getType());
   auto [shape, subType, subSize] = getSubTypeAndShape(type);
@@ -478,7 +470,6 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
   op->erase();
 }
 
-///
 void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   auto aType = dot.getA().getType().cast<RankedTensorType>();
   auto bType = dot.getB().getType().cast<RankedTensorType>();
@@ -532,7 +523,6 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   dot->erase();
 }
 
-///
 void MatchTargetSizePass::transformGenericOp(Operation *op) {
   unsigned numResults = op->getResults().size();
   unsigned dotIdx = 2;
