@@ -29,7 +29,7 @@ struct PrintOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto typeConverter = getTypeConverter();
     auto loc = op->getLoc();
-    Value prefixStr = LLVM::Intel::addStringToModule(
+    Value prefixStr = LLVM::intel::addStringToModule(
         loc, rewriter, "printfPrefix_", op.getPrefix(),
         TritonGEN::TritonGENMemorySpace::kUniformConstant);
 
@@ -45,7 +45,7 @@ struct PrintOpConversion
       llvm::raw_string_ostream os(formatStr);
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
-      LLVM::Intel::llPrintf(rewriter, formatStr,
+      LLVM::intel::llPrintf(rewriter, formatStr,
                             {pid[0], pid[1], pid[2], prefixStr});
     } else {
       for (size_t i = 0; i < op.getNumOperands(); i++) {
@@ -168,7 +168,7 @@ struct PrintOpConversion
       // strings, so we cache the Value.
       if (i == 0) {
         formatStrValue =
-            LLVM::Intel::llPrintf(rewriter, formatStr, printfOperands);
+            LLVM::intel::llPrintf(rewriter, formatStr, printfOperands);
       } else {
         targetInfo.printf(rewriter, formatStrValue, formatStrByteCount,
                           printfOperands);

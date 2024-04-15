@@ -23,7 +23,7 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
          (srcTy.getShape().size() <= 3 && outOrd[2] == 0) &&
              "Unexpected rank of ConvertLayout(blocked->shared)");
   Value smemBase =
-      LLVM::Intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
+      LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   int32_t elemSize = elemTy.getIntOrFloatBitWidth();
@@ -49,7 +49,7 @@ struct LocalAllocOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     Value smemBase =
-        LLVM::Intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto resultTy = op.getType().cast<MemDescType>();
     auto typeConverter = getTypeConverter();
     auto sharedLayout =

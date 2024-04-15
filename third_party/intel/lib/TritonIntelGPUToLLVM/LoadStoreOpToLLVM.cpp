@@ -32,7 +32,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
   Value mask = int_val(1, 1);
   auto tid = tid_val();
-  auto clusterCTAId = LLVM::Intel::getClusterCTAId(rewriter, loc);
+  auto clusterCTAId = LLVM::intel::getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
     auto shape = tensorTy.getShape();
@@ -42,7 +42,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
     auto order = triton::gpu::getOrder(layout);
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
-    Value warpSize = LLVM::Intel::getModuleWarpSize(rewriter, loc);
+    Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);
     SmallVector<Value> multiDimWarpId =
@@ -254,7 +254,7 @@ struct LoadOpConversion
       }
 
       // Create a predicated load operation.
-      Block &endBlock = LLVM::Intel::createPredicatedBlock(
+      Block &endBlock = LLVM::intel::createPredicatedBlock(
           rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
             Value addrElem =
                 bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
@@ -395,7 +395,7 @@ struct StoreOpConversion
       }
 
       // Create a predicated store operation.
-      LLVM::Intel::createPredicatedBlock(rewriter, loc, maskVal, [&] {
+      LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, [&] {
         Value addrElem = bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
         uint32_t alignment = nWords * width / 8;
         store(vecWord, addrElem, alignment);
@@ -483,7 +483,7 @@ struct AtomicCASOpConversion
 
       Value zero = (valueElemNBits == 32) ? i32_val(0) : i64_val(0);
       Block &endBlock =
-          LLVM::Intel::createPredicatedBlock(rewriter, loc, mask, {zero}, [&] {
+          LLVM::intel::createPredicatedBlock(rewriter, loc, mask, {zero}, [&] {
             // casPtr = bitcast(casPtr, ptr_ty(ctx, 1));
             casCmp = bitcast(casCmp, zero.getType());
             casVal = bitcast(casVal, zero.getType());
@@ -508,9 +508,9 @@ struct AtomicCASOpConversion
       } else {
         createBarrier(rewriter, loc, numCTAs);
         Value atomPtr =
-            LLVM::Intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
+            LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
-        LLVM::Intel::storeShared(rewriter, loc, atomPtr, ret, mask);
+        LLVM::intel::storeShared(rewriter, loc, atomPtr, ret, mask);
         createBarrier(rewriter, loc, numCTAs);
         Value ret = load(valueElemTy, atomPtr);
         createBarrier(rewriter, loc, numCTAs);
@@ -623,7 +623,7 @@ struct AtomicRMWOpConversion
             emulateFp16AtomicRmw(rewriter, loc, atomicRmwAttr, valueElemTy,
                                  rmwPtr, rmwVal, rmwMask, {zero});
       } else {
-        endBlock = &LLVM::Intel::createPredicatedBlock(
+        endBlock = &LLVM::intel::createPredicatedBlock(
             rewriter, loc, rmwMask, {zero}, [&] {
               mlir::LLVM::AtomicBinOp rmwKind;
               switch (atomicRmwAttr) {
@@ -677,10 +677,10 @@ struct AtomicRMWOpConversion
         }
       } else {
         Value atomPtr =
-            LLVM::Intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
+            LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
-        LLVM::Intel::storeShared(rewriter, loc, atomPtr, ret, rmwMask);
+        LLVM::intel::storeShared(rewriter, loc, atomPtr, ret, rmwMask);
         createBarrier(rewriter, loc, numCTAs);
         Value loadVal = load(valueElemTy, atomPtr);
         createBarrier(rewriter, loc, numCTAs);

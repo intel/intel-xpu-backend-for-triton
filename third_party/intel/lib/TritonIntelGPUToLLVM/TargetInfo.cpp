@@ -8,11 +8,9 @@
 
 #include "TargetInfo.h"
 #include "Utility.h"
-#include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 
 using namespace mlir;
+
 namespace mlir::triton::intel {
 
 bool TargetInfo::supportMaximumMinimum() const { return true; }
@@ -23,7 +21,7 @@ Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
 }
 Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
                               Value ptr, Value val, Value pred) const {
-  LLVM::Intel::createPredicatedBlock(rewriter, loc, pred, [&] {
+  LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
     store(val, ptr);
     return ArrayRef<Value>();
   });
@@ -36,7 +34,7 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
              3 &&
          "Invalid addr space for loadShared");
   Value undef = undef(elemTy);
-  Block &endBlock = LLVM::Intel::createPredicatedBlock(
+  Block &endBlock = LLVM::intel::createPredicatedBlock(
       rewriter, loc, pred, SmallVector<Value, 1>{undef}, [&] {
         Value ret = load(elemTy, ptr);
         return SmallVector<Value, 1>{ret};
@@ -44,50 +42,24 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return *endBlock.args_begin();
 }
 
-// FIXME: Copy ShflKind from NVVM dialect to GEN dialect.
-static TritonGEN::ShflKind toGenShuffleMode(NVVM::ShflKind mode) {
-  switch (mode) {
-  case NVVM::ShflKind::bfly:
-    return TritonGEN::ShflKind::XOR;
-  case NVVM::ShflKind::up:
-    return TritonGEN::ShflKind::UP;
-  case NVVM::ShflKind::down:
-    return TritonGEN::ShflKind::DOWN;
-  case NVVM::ShflKind::idx:
-    return TritonGEN::ShflKind::IDX;
-  }
-  llvm_unreachable("unsupported NVVM::ShflKind");
-}
-
-static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, Value i, NVVM::ShflKind mode,
-                            Value clamp) {
-  Type type = val.getType();
-  return rewriter.create<TritonGEN::SubGroupShuffleOp>(loc, type, val, i,
-                                                       toGenShuffleMode(mode));
-}
-
 Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
-  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
-                        i32_val(0x1f));
+  return LLVM::intel::shuffleXor(loc, rewriter, val, i);
 }
 
 Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
                             Value val, int i) const {
-  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
-                        i32_val(0x0));
+  return LLVM::intel::shuffleUp(loc, rewriter, val, i);
 }
 
 Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, int i) const {
-  return LLVM::Intel::shflIdxSync(loc, rewriter, val, i32_val(i));
+  return LLVM::intel::shuffleIdx(loc, rewriter, val, i);
 }
 
 Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
                              Value val, Value i) const {
-  return commonShflSync(loc, rewriter, val, i, NVVM::ShflKind::idx,
-                        i32_val(0x1f));
+  return LLVM::intel::shuffleIdx(loc, rewriter, val, i);
 }
 
 Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
@@ -131,7 +103,7 @@ void TargetInfo::printf(ConversionPatternRewriter &rewriter,
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  auto funcOp = LLVM::Intel::getSpirvPrintfDeclaration(rewriter);
+  auto funcOp = LLVM::intel::getSpirvPrintfDeclaration(rewriter);
   auto loc = UnknownLoc::get(ctx);
 
   SmallVector<Value> operands;
@@ -174,11 +146,11 @@ void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
   auto funcOp = getAssertfailDeclaration(rewriter);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   unsigned addrSpace = TritonGEN::TritonGENMemorySpace::kCrossWorkgroup;
-  Value messageString = LLVM::Intel::addStringToModule(
+  Value messageString = LLVM::intel::addStringToModule(
       loc, rewriter, "assertMessage_", message, addrSpace);
-  Value fileString = LLVM::Intel::addStringToModule(
+  Value fileString = LLVM::intel::addStringToModule(
       loc, rewriter, "assertFile_", file, addrSpace);
-  Value funcString = LLVM::Intel::addStringToModule(
+  Value funcString = LLVM::intel::addStringToModule(
       loc, rewriter, "assertFunc_", func, addrSpace);
   Value lineNumber = i32_val(line);
 

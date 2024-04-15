@@ -64,7 +64,7 @@ struct GetClusterCTAIdOpConversion
   matchAndRewrite(triton::nvidia_gpu::GetClusterCTAIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOp(op,
-                       LLVM::Intel::getClusterCTAId(rewriter, op->getLoc()));
+                       LLVM::intel::getClusterCTAId(rewriter, op->getLoc()));
     return success();
   }
 };
