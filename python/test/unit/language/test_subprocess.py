@@ -36,13 +36,6 @@ def test_print(func_type: str, data_type: str):
     # The total number of elements in the 1-D tensor to print.
     N = 128
 
-    if (func_type, data_type) == ('print', 'int32'):
-        pytest.skip("FIXME: issue #800")
-    if func_type == 'device_print':
-        pytest.skip("FIXME: issue #800")
-    if func_type == 'device_print_hex' and data_type in ('int16', 'int32', 'int64'):
-        pytest.skip("FIXME: issue #800")
-
     # Format is
     #   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...) <prefix> (operand <n>) <elem>
     expected_lines = Counter()
