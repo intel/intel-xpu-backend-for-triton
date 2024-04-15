@@ -117,7 +117,7 @@ run_core_tests() {
   fi
   cd ${CORE_TEST_DIR}
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 16 --device xpu language/ --deselect-from-file ../../../scripts/core.exclude-list --ignore=language/test_line_info.py --ignore=language/test_subprocess.py $(pytest_extra_args language)
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 --device xpu language/ --deselect-from-file ../../../scripts/core.exclude-list --ignore=language/test_line_info.py --ignore=language/test_subprocess.py $(pytest_extra_args language)
 
   TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 8 language/test_subprocess.py $(pytest_extra_args subprocess)
 
@@ -130,7 +130,7 @@ run_core_tests() {
   TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -vvv -n 16 -m interpreter --deselect-from-file ../../../scripts/interpreter.exclude-list language/test_core.py language/test_standard.py \
   language/test_random.py operators/test_flash_attention.py::test_op --device cpu $(pytest_extra_args interpreter)
 
-  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 16 --verbose --device xpu operators/ $(pytest_extra_args operators)
+  TRITON_DISABLE_LINE_INFO=1 python3 -m pytest -n 8 --verbose --device xpu operators/ $(pytest_extra_args operators)
 }
 
 run_regression_tests() {
