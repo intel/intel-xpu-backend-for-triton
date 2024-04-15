@@ -3035,27 +3035,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if is_hip() and (input_precision != "ieee"):
         pytest.skip(f"{input_precision} not supported on HIP")
 
-    if is_xpu():
-        capability = 0
-
-        if (M, N, K, num_warps) in [(128, 256, 32, 8), (64, 128, 128, 4), (64, 128, 128, 2)]:
-            pytest.skip("FIXME: shared memory out of resource - reevaluate with DPAS")
-        if (M, N, K, num_warps) in [(32, 128, 64, 2)]:
-            if out_dtype == 'int8' and ((col_a, col_b) not in [False, True]):
-                pytest.skip("FIXME: Incorrect results on XPU")
-            if out_dtype == 'float32' and in_dtype == 'float16' and col_b is True:
-                pytest.skip("FIXME: Incorrect results on XPU")
-        if (M, N, K, num_warps) in [(128, 128, 64, 2)]:
-            pytest.skip("FIXME: Fails to run on XPU")
-        if (M, N, K, num_warps) in [(128, 128, 64, 4)] and (in_dtype, out_dtype) not in ['float32', 'float32']:
-            pytest.skip("FIXME: Fails to run on XPU")
-        if ((M, N, K, num_warps, col_a, col_b) in [(32, 128, 64, 2, True, False)]
-                and (in_dtype, out_dtype) in [('float16', 'float32')]):
-            pytest.skip("FIXME: Fails to run on XPU")
-        if ((M, N, K, num_warps, col_a, col_b) == (64, 64, 64, 4, False, False)
-                and (input_precision, in_dtype, out_dtype) == ('ieee', 'float16', 'float32')
-                and epilogue in ('add-rows', 'add-cols', 'none')):
-            pytest.skip("FIXME: issue #797")
+    if is_xpu() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
+        pytest.skip("FIXME: float8e4nv and float8e5 fails to run on XPU")
 
     if is_cuda():
         torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
@@ -3141,12 +3122,22 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     else:
         out_dtype = tl.float32
 
-    pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
-                         w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), COL_A=col_a,
-                         COL_B=col_b, BLOCK_M=M, BLOCK_K=K, BLOCK_N=N, ADD_MATRIX=epilogue == 'add-matrix',
-                         ADD_ROWS=epilogue == 'add-rows', ADD_COLS=epilogue == 'add-cols',
-                         DO_SOFTMAX=epilogue == 'softmax', CHAIN_DOT=epilogue == 'chain-dot',
-                         INPUT_PRECISION=input_precision, num_warps=num_warps, num_ctas=num_ctas, out_dtype=out_dtype)
+    if is_xpu():
+        pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
+                             w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), COL_A=col_a,
+                             COL_B=col_b, BLOCK_M=M, BLOCK_K=K, BLOCK_N=N, ADD_MATRIX=epilogue == 'add-matrix',
+                             ADD_ROWS=epilogue == 'add-rows', ADD_COLS=epilogue == 'add-cols',
+                             DO_SOFTMAX=epilogue == 'softmax', CHAIN_DOT=epilogue == 'chain-dot',
+                             INPUT_PRECISION=input_precision, num_warps=num_warps, num_ctas=num_ctas,
+                             out_dtype=out_dtype, threads_per_warp=16)
+    else:
+        pgm = kernel[(1,
+                      1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
+                          w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), COL_A=col_a,
+                          COL_B=col_b, BLOCK_M=M, BLOCK_K=K, BLOCK_N=N, ADD_MATRIX=epilogue == 'add-matrix',
+                          ADD_ROWS=epilogue == 'add-rows', ADD_COLS=epilogue == 'add-cols',
+                          DO_SOFTMAX=epilogue == 'softmax', CHAIN_DOT=epilogue == 'chain-dot',
+                          INPUT_PRECISION=input_precision, num_warps=num_warps, num_ctas=num_ctas, out_dtype=out_dtype)
 
     if epilogue == 'softmax' and (in_dtype != 'float32' or input_precision == "tf32"):
         if not is_cuda():
