@@ -15,6 +15,12 @@ namespace mlir {
 namespace LLVM {
 namespace intel {
 
+static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
+                           Value val, Value i, TritonGEN::ShflKind mode) {
+  Type type = val.getType();
+  return rewriter.create<TritonGEN::SubGroupShuffleOp>(loc, type, val, i, mode);
+}
+
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                   Value val, Value pred) {
   createPredicatedBlock(rewriter, loc, pred, [&] {
@@ -37,23 +43,15 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   return *endBlock.args_begin();
 }
 
-static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
-                           Value val, Value i, TritonGEN::ShflKind mode,
-                           Value clamp) {
-  Type type = val.getType();
-  return rewriter.create<TritonGEN::SubGroupShuffleOp>(loc, type, val, i, mode);
-}
-
 Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i), TritonGEN::ShflKind::XOR,
-                       i32_val(0x1f));
+  return shuffleCommon(loc, rewriter, val, i32_val(i),
+                       TritonGEN::ShflKind::XOR);
 }
 
 Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
                 int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i), TritonGEN::ShflKind::UP,
-                       i32_val(0x0));
+  return shuffleCommon(loc, rewriter, val, i32_val(i), TritonGEN::ShflKind::UP);
 }
 
 Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
@@ -63,8 +61,7 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
 
 Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  Value i) {
-  return shuffleCommon(loc, rewriter, val, i, TritonGEN::ShflKind::IDX,
-                       i32_val(0x1f));
+  return shuffleCommon(loc, rewriter, val, i, TritonGEN::ShflKind::IDX);
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
