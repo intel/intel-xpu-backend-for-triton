@@ -44,6 +44,10 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   m.def("add_allocate_shared_memory", [](mlir::PassManager &pm) {
     pm.addPass(createIntelAllocateSharedMemoryPass());
   });
+  m.def("add_remove_layout_conversions", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::gpu::intel::
+                   createTritonIntelGPURemoveLayoutConversionsPass());
+  });
 }
 
 void init_triton_intel_passes_ttnvgpuir(py::module &&m) {
