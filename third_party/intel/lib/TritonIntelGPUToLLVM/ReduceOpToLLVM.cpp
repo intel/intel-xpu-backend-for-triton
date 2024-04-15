@@ -262,7 +262,7 @@ private:
     Location loc = op.getLoc();
     Value threadId = getThreadId(rewriter, loc);
     auto srcLayout = helper.getSrcLayout();
-    Value warpSize = LLVM::Intel::getModuleWarpSize(rewriter, loc);
+    Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
     auto srcShape = helper.getSrcShape();
@@ -313,7 +313,7 @@ private:
     Location loc = op.getLoc();
 
     Value threadId = getThreadId(rewriter, loc);
-    Value warpSize = LLVM::Intel::getModuleWarpSize(rewriter, loc);
+    Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
     Value laneId = urem(threadId, warpSize);
     Value zero = i32_val(0);
 
