@@ -207,7 +207,7 @@ class _matmul(torch.autograd.Function):
             acc_dtype=acc_dtype,  #
             input_precision=input_precision,  #
             fp8_fast_accum=fp8_fast_accum,  #
-            GROUP_M=8, AB_DTYPE=ab_dtype)
+            GROUP_M=8, AB_DTYPE=ab_dtype, threads_per_warp=16)
         return c
 
     @staticmethod
