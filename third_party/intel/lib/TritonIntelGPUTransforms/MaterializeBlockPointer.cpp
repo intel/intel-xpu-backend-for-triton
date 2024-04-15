@@ -151,70 +151,65 @@ public:
     if (deviceArch != ttgi::DeviceArch::PVC)
       return;
 
-    SmallVector<mlir::triton::MakeTensorPtrOp> makeTensorPtrWorkList;
-    getOperation()->walk([&](mlir::triton::MakeTensorPtrOp op) {
-      auto ptrType = op.getType().cast<triton::PointerType>();
-      auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
+    ModuleOp mod = getOperation();
+    SmallVector<tt::LoadOp> loadOps;
+    mod.walk([&loadOps, this](tt::LoadOp _op) {
+      auto src = _op->getOperand(0);
+      // Only materialize the 2D load for dot operands.
+      if (tt::isTensorPointerType(src.getType())) {
+        if (auto resultTy = _op->getResult(0)
+                                .getType()
+                                .dyn_cast_or_null<RankedTensorType>())
+          if (auto dotLayout =
+                  resultTy.getEncoding()
+                      .dyn_cast<triton::gpu::DotOperandEncodingAttr>())
+            if (auto dpasLayout =
+                    dotLayout.getParent()
+                        .dyn_cast<triton::gpu::intel::DpasEncodingAttr>()) {
+              auto makeTensorPtrOp = getMakeTensorPtrOp(src);
+              auto ptrType =
+                  makeTensorPtrOp.getType().cast<triton::PointerType>();
+              auto tensorType =
+                  ptrType.getPointeeType().cast<RankedTensorType>();
 
-      auto base = op.getBase();
-      auto shape = op.getShape();
-      auto strides = op.getStrides();
-      auto offsets = op.getOffsets();
-      auto order = op.getOrder();
-      auto tensorShape = tensorType.getShape();
+              auto base = makeTensorPtrOp.getBase();
+              auto shape = makeTensorPtrOp.getShape();
+              auto strides = makeTensorPtrOp.getStrides();
+              auto offsets = makeTensorPtrOp.getOffsets();
+              auto order = makeTensorPtrOp.getOrder();
+              auto tensorShape = tensorType.getShape();
 
-      auto pitchDivisible = false;
-      if (strides.size() == 2) {
-        auto pitch = strides[order[1]];
-        // PVC requires pitch to be a multiple of QWord(64 bits).
-        if (deviceArch == ttgi::DeviceArch::PVC) {
-          pitchDivisible =
-              isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth());
-        }
-      }
+              auto pitchDivisible = false;
+              if (strides.size() == 2) {
+                auto pitch = strides[order[1]];
+                // PVC requires pitch to be a multiple of QWord(64 bits).
+                if (deviceArch == ttgi::DeviceArch::PVC) {
+                  pitchDivisible = isDivisible(
+                      pitch, 64 / tensorType.getElementTypeBitWidth());
+                }
+              }
 
-      // HW 2D block read instruction only supports stride[-1]=1.
-      auto fastChangeStride = strides.back();
-      auto isContiguous = false;
-      if (auto stride =
-              dyn_cast<arith::ConstantOp>(fastChangeStride.getDefiningOp())) {
-        if (auto strideInt = stride.getValue().dyn_cast<IntegerAttr>()) {
-          if (strideInt.getInt() == 1) {
-            isContiguous = true;
-          }
-        }
-      }
+              // HW 2D block read instruction only supports stride[-1]=1.
+              auto fastChangeStride = strides.back();
+              auto isContiguous = false;
+              if (auto stride = dyn_cast<arith::ConstantOp>(
+                      fastChangeStride.getDefiningOp())) {
+                if (auto strideInt =
+                        stride.getValue().dyn_cast<IntegerAttr>()) {
+                  if (strideInt.getInt() == 1) {
+                    isContiguous = true;
+                  }
+                }
+              }
 
-      if (pitchDivisible && isContiguous) {
-        makeTensorPtrWorkList.push_back(op);
+              if (pitchDivisible && isContiguous) {
+                loadOps.push_back(_op);
+              }
+            }
       }
     });
 
-    // map from loadOp to layout information.
-    DenseMap<tt::LoadOp, TensorPointerInfo> loadOpWorkSet;
-    for (auto &makeTensorOp : makeTensorPtrWorkList) {
-      SetVector<Operation *> forwardSlice;
-      auto filter = [](Operation *op) {
-        // stop on the load ops.
-        return !isa<tt::LoadOp>(op);
-      };
-      // The customized getForwardSlice from the mlir::getForwardSlice
-      ::getForwardSlice(makeTensorOp.getOperation(), &forwardSlice, true,
-                        {filter});
-
-      for (auto &op : forwardSlice) {
-        if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-          if (loadOpWorkSet.count(loadOp) == 0) {
-            // Save information
-            loadOpWorkSet[loadOp] = TensorPointerInfo();
-          }
-          // TODO: support multiple memory mapping defined for the same loadOp.
-        }
-      }
-    }
-
-    for (auto &iter : loadOpWorkSet) {
-      tt::LoadOp &loadOp = iter.getFirst();
+    for (auto &loadOp : loadOps) {
       OpBuilder builder(loadOp);
       auto newResult = builder.create<ttgi::Load2DOp>(
           loadOp.getLoc(), loadOp.getResult().getType(), loadOp.getPtr(),

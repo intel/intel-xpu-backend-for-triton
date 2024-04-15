@@ -354,6 +354,7 @@ struct Load2DOpConversion
               delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
           Type load2DGenXType;
+          Type unpackType;
           int64_t elemsPerLane;
           SmallVector<int64_t> elemsPerInstr;
           if (opIdx == 0) {
@@ -361,17 +362,24 @@ struct Load2DOpConversion
             elemsPerInstr = {shapeA[0], shapeA[1]};
             elemsPerLane = product<int64_t>(elemsPerInstr) /
                            product<unsigned>(getThreadsPerWarp(dpasLayout));
+            unpackType = LLVM::getFixedVectorType(
+                typeConverter->convertType(eltTy), elemsPerLane);
+
             // pack scalar to i16.
             auto opsPerChannel = dpasLayout.getOpsPerChannel();
             elemsPerLane = opsPerChannel == 4 ? elemsPerLane / 2 : elemsPerLane;
             load2DGenXType =
                 LLVM::getFixedVectorType(type::i16Ty(ctx), elemsPerLane);
+
           } else {
             auto shapeB = dpasLayout.getShapeB();
             elemsPerInstr = {shapeB[0], shapeB[1]};
             elemsPerLane = product<int64_t>(elemsPerInstr) /
                            product<unsigned>(getThreadsPerWarp(dpasLayout));
-            // pack scalar to i32.
+            unpackType = LLVM::getFixedVectorType(
+                typeConverter->convertType(eltTy), elemsPerLane);
+
+            // pack scalar to i32 for load.
             auto opsPerChannel = dpasLayout.getOpsPerChannel();
             elemsPerLane = elemsPerLane / opsPerChannel;
             load2DGenXType =
@@ -447,18 +455,15 @@ struct Load2DOpConversion
                   mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 1),
                                          opIdx == 0 ? /*A vnni=false*/ 0
                                                     : /*B vnni=true*/ 1));
-              Value loadVal =
-                  bitcast(load2dOp,
-                          LLVM::getFixedVectorType(
-                              typeConverter->convertType(eltTy), elemsPerLane));
-
+              Value loadVal = bitcast(load2dOp, unpackType);
               rets.push_back(loadVal);
             }
           }
 
           SmallVector<Value> loadedVals;
           for (auto &ret : rets) {
-            for (size_t i = 0; i < elemsPerLane; ++i) {
+            VectorType loadTy = unpackType.cast<VectorType>();
+            for (size_t i = 0; i < loadTy.getNumElements(); ++i) {
               Value loaded = extract_element(ret, i32_val(i));
               loadedVals.push_back(loaded);
             }
@@ -590,7 +595,6 @@ struct StoreOpConversion
     return success();
   }
 };
-
 void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
                    int numCTAs) {
   if (numCTAs == 1) {

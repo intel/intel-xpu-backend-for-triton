@@ -185,7 +185,6 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 }
 
-
 def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-block-pointer", "mlir::ModuleOp"> {
   let summary = "Intel GPU materialize block pointer";
 

@@ -179,24 +179,17 @@ unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperands(
   int warpsPerCTAM = getWarpsPerCTA()[0];
   int warpsPerCTAN = getWarpsPerCTA()[1];
   auto rep = getDPASRepetitions(shapePerCTA, opIdx);
-  auto threadsPerWarp = getSubGroupSize();
+  auto threadsPerWar = getSubGroupSize();
   if (opIdx == 0) {
     auto instrShapeA = getShapeA();
     auto totalElem = product<unsigned>(instrShapeA);
     // dpas operands scalar are evenly sharded to each work item.
-    auto elemsPerThreand = (totalElem / threadsPerWarp) * rep[0] * rep[1];
-    // For A operand, pack the bits size <=16 scalar to opaque i16 and bits size
-    // = 32 to opaque i32.
-    auto opsPerChannel = getOpsPerChannel();
-    return opsPerChannel == 4 ? elemsPerThreand / 2 : elemsPerThreand;
+    return (totalElem / threadsPerWar) * rep[0] * rep[1];
   } else { // if (opIdx == 1)
     auto instrShapeB = getShapeB();
     auto totalElem = product<unsigned>(instrShapeB);
     // dpas operands scalar are evenly sharded to each work item.
-    auto elemsPerThreand = (totalElem / threadsPerWarp) * rep[0] * rep[1];
-    // For B operand, pack the all scalar to opaque i32.
-    auto opsPerChannel = getOpsPerChannel();
-    return elemsPerThreand / opsPerChannel;
+    return (totalElem / threadsPerWar) * rep[0] * rep[1];
   }
 }
 
