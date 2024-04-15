@@ -207,8 +207,14 @@ public:
 };
 
 /// Simplify SCF loops.
-/// TODO: add examples of the patterns being simplified.
-///
+/// before:
+///   %glue = ttig.glue %a, %b : tensor<4x4xf32>, tensor<4x4xf32> ->
+///   tensor<8x4xf32> scf.for %i = %lb to %ub step %step (%arg10 = %glue) {
+///     %extract = ttig.extract %arg10[0] : tensor<8x4xf32> -> tensor<4x4xf32>
+///     use %extract
+/// after:
+///   scf.for %i = %lb to %ub step %step (%arg10 = %a) {
+///     use %arg10
 class ScfPattern : public OpRewritePattern<scf::ForOp> {
 public:
   using OpRewritePattern<scf::ForOp>::OpRewritePattern;
@@ -345,7 +351,6 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
     const auto &dotShape = nativeSizes.getDotShape();
     SmallVector<int64_t> nativeDotSize{dotShape.m, dotShape.n};
     return nativeDotSize;
-    // FIXME: 2 * subgroupSize
   }
 
   //
@@ -360,6 +365,7 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
     subSize[0] = std::min(max, shape[0]);
   } break;
   case 2: {
+    // 32 = 2 * 16(subgroupSize) which is for large load/store
     int64_t colLimit =
         (isa<ttgi::WarpEncodingAttr, ttg::DotOperandEncodingAttr>(layout)) ? 32
                                                                            : 0;
