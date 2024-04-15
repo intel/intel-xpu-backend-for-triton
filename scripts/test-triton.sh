@@ -106,7 +106,7 @@ run_core_tests() {
   cd ${CORE_TEST_DIR}
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-  pytest -vvv -n 8 --device xpu language/ --deselect-from-file ../../../scripts/core.exclude-list --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+  pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
   pytest -vvv -n 8 language/test_subprocess.py
@@ -120,7 +120,7 @@ run_core_tests() {
   pytest --verbose --device xpu language/test_line_info.py
 
   TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=interpreter \
-  pytest -vvv -n 16 -m interpreter --deselect-from-file ../../../scripts/interpreter.exclude-list language/test_core.py language/test_standard.py \
+  pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
   language/test_random.py operators/test_flash_attention.py::test_op --device cpu
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=operators \
