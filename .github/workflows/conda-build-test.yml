@@ -65,7 +65,7 @@ jobs:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           install_cmd: conda run --no-capture-output -n triton pip install
           python_version: ${{ matrix.python }}
-          wheels_pattern: {intel_extension_for_pytorch-*,torch-*}
+          wheels_pattern: '{intel_extension_for_pytorch-*,torch-*}'
 
       - name: Build Triton
         run: |
