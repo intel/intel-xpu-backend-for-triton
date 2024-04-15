@@ -335,6 +335,8 @@ struct LoadOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::LoadOp>::ConvertTritonGPUOpToLLVMPattern;
 
+  using ValueTable = std::map<std::pair<int, int>, Value>;
+
   LoadOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                    const triton::intel::TargetInfo &targetInfo,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
@@ -388,9 +390,9 @@ struct LoadOpConversion
     // pack scalars for operand A and B.
     Type elemType = (isOperandA && eltTy != f32_ty) ? i16_ty : i32_ty;
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
-    elemsPerLane = isOperandA ? elemsPerLane / (opsPerChannel == 4 ? 2 : 1)
+    int64_t packedElemsPerLane = isOperandA ? elemsPerLane / (opsPerChannel == 4 ? 2 : 1)
                               : elemsPerLane / opsPerChannel;
-    Type load2DGenXType = LLVM::getFixedVectorType(elemType, elemsPerLane);
+    Type packedType = LLVM::getFixedVectorType(elemType, packedElemsPerLane);
 
     // Outer dim for A is the M, for B is the N. Inner dim for both is the K.
     int outerDimWarpNum = std::min<int>(
@@ -405,20 +407,69 @@ struct LoadOpConversion
     // Load the operand.
     int64_t numRepOuter = numReps[opIdx];
     int64_t numRepK = numReps[!opIdx];
+    unsigned tileHeight;
+    unsigned vBlocks = 1;
+    unsigned composedOuterDimPerLoad = 1;
+    unsigned composedKDimPerLoad = 1;
+    unsigned numValuesPerLargeLoad;
+    if (isOperandA) {
+      // The 2D load maximum row number is 32.
+      unsigned maxPackedOuterDimPerLoad = 32 / elemsPerInstr[0];
+      composedOuterDimPerLoad =
+          std::min<unsigned>(maxPackedOuterDimPerLoad, numRepOuter);
+      // use the tileHeight to load multiple operand A in one time.
+      tileHeight = elemsPerInstr[0] * composedOuterDimPerLoad;
 
-    SmallVector<Value> rets;
-    for (int outer = 0; outer < numRepOuter; ++outer) {
-      for (int k = 0; k < numRepK; ++k) {
-        Value offsetX =
-            isOperandA
-                ? i32_val(k * elemsPerInstr[1])
-                : add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
-                      i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]));
-        Value offsetY =
-            isOperandA
-                ? add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
-                      i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]))
-                : i32_val(k * elemsPerInstr[0]);
+      if (numRepK >= 2) {
+        // Double the block array length 2 to load operand A.
+        vBlocks = 2;
+        composedKDimPerLoad *= 2;
+      } else {
+        vBlocks = 1;
+      }
+      numValuesPerLargeLoad =
+          packedElemsPerLane * composedOuterDimPerLoad * composedKDimPerLoad;
+    } else {
+      if (numRepOuter >= 2) {
+        // Double the block array length to 2 to load operand B.
+        vBlocks = 2;
+        composedOuterDimPerLoad *= 2;
+      } else {
+        vBlocks = 1;
+      }
+      if (numRepK >= 2) {
+        // Double tileHeight to load operand B.
+        tileHeight = elemsPerInstr[0] * 2;
+        composedKDimPerLoad *= 2;
+      } else {
+        tileHeight = elemsPerInstr[0];
+      }
+      numValuesPerLargeLoad =
+          packedElemsPerLane * composedOuterDimPerLoad * composedKDimPerLoad;
+    }
+
+    Type load2DGenXType = LLVM::getFixedVectorType(elemType, numValuesPerLargeLoad);
+
+    // A dense stride for the replicates.
+    unsigned repOuterStride = elemsPerInstr[opIdx];
+    unsigned warpOuterStride = elemsPerInstr[opIdx] * numRepOuter;
+    unsigned repKStride = elemsPerInstr[opIdx == 0 ? 1 : 0];
+
+    ValueTable loadVals;
+    for (int outer = 0; outer < numRepOuter; outer += composedOuterDimPerLoad) {
+      for (int k = 0; k < numRepK; k += composedKDimPerLoad) {
+        Value offsetX, offsetY;
+        if (opIdx == 0) {
+          // A
+          offsetY = add(mul(outerDimWarpId, i32_val(warpOuterStride)),
+                        i32_val(outer * repOuterStride));
+          offsetX = i32_val(k * repKStride);
+        } else {
+          // B
+          offsetX = add(mul(outerDimWarpId, i32_val(warpOuterStride)),
+                        i32_val(outer * repOuterStride));
+          offsetY = i32_val(k * repKStride);
+        }
 
         offsetX = add(offsetX, offsetBaseX);
         offsetY = add(offsetY, offsetBaseY);
@@ -439,27 +490,52 @@ struct LoadOpConversion
             /*y*/ trunc(i32_ty, offsetY),
             /*elem_size_in_bits*/ elemSizeInBits,
             /*tile_width*/ elemsPerInstr[1],
-            /*tile_height*/ elemsPerInstr[0],
-            /*v_blocks*/ 1,
+            /*tile_height*/ tileHeight,
+            /*v_blocks*/ vBlocks,
             /*transpose*/ false,
             /*vnni_transform*/
             (!isOperandA && eltTy.getIntOrFloatBitWidth() != 32));
 
-        rets.push_back(bitcast(load2dOp, unpackType));
+        unsigned packedRowNum =
+            opIdx == 0 ? composedOuterDimPerLoad : composedKDimPerLoad;
+        unsigned packedColNum =
+            opIdx == 0 ? composedKDimPerLoad : composedOuterDimPerLoad;
+        unsigned offset = 0;
+        // The register value returned by 2D load is contiguous on the row.
+        for (int col = 0; col < packedColNum; col++) {
+          for (int row = 0; row < packedRowNum; row++) {
+
+            Value loadVal = undef(packedType);
+            for (int elemIdx = 0; elemIdx < packedElemsPerLane; elemIdx++) {
+              Value loaded = extract_element(load2dOp, i32_val(offset++));
+              loadVal = insert_element(loadVal, loaded, i32_val(elemIdx));
+            }
+
+            // Save the unpacked vals to the map;
+            if (opIdx == 0) {
+              loadVals[{outer + row, k + col}] = bitcast(loadVal, unpackType);
+            } else {
+              loadVals[{outer + col, k + row}] = bitcast(loadVal, unpackType);
+            }
+          }
+        }
       }
     }
 
-    SmallVector<Value> loadedVals;
-    for (Value &ret : rets) {
-      auto loadTy = cast<VectorType>(unpackType);
-      for (size_t i = 0; i < loadTy.getNumElements(); ++i) {
-        Value loaded = extract_element(ret, i32_val(i));
-        loadedVals.push_back(loaded);
+    SmallVector<Value> unpackedLoadedVals;
+    for (int outer = 0; outer < numRepOuter; ++outer) {
+      for (int k = 0; k < numRepK; ++k) {
+        Value loadVal = loadVals.at({outer, k});
+        VectorType loadTy = cast<VectorType>(loadVal.getType());
+        for (int i = 0; i < loadTy.getNumElements(); ++i) {
+          auto val = extract_element(loadVal, i32_val(i));
+          unpackedLoadedVals.push_back(val);
+        }
       }
     }
 
     Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
+    Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
 
