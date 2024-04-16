@@ -30,6 +30,7 @@ std::unique_ptr<Pass> createTritonIntelGPUDistributeToWarpsPass();
 
 std::unique_ptr<Pass> createPrefetchBlockPass();
 
+std::unique_ptr<Pass> createMatchTargetSizePass();
 } // namespace intel
 } // namespace gpu
 } // namespace triton

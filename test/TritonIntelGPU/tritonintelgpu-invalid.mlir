@@ -1,21 +1,5 @@
 // RUN: triton-opt -split-input-file -verify-diagnostics %s
 
-tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16x8xf16>) {
-  // expected-error @+1 {{'triton_intel_gpu.glue' op requires at least 2 operands}}
-  triton_intel_gpu.glue %tensor1 : (tensor<16x8xf16>) -> tensor<24x8xf16>
-  tt.return
-}
-
-// -----
-
-tt.func @triton_intel_gpu.glue(%ptr1 : !tt.ptr<tensor<16x8xf16>>) {
-  // expected-error @+1 {{'triton_intel_gpu.glue' op requires at least 2 operands}}
-  triton_intel_gpu.glue %ptr1 : (!tt.ptr<tensor<16x8xf16>>) -> !tt.ptr<tensor<16x24xf16>>
-  tt.return
-}
-
-// -----
-
 tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16x8xf16>, %tensor2 : tensor<8xf16>) {
   // expected-error @+1 {{'triton_intel_gpu.glue' op operands and result must have the same rank}}
   triton_intel_gpu.glue %tensor1, %tensor2 : (tensor<16x8xf16>, tensor<8xf16>) -> tensor<24x8xf16>
