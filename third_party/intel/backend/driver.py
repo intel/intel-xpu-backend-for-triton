@@ -49,18 +49,23 @@ class XPUUtils(object):
         return cls.instance
 
     def __init__(self):
+        if hasattr(self, "cache"):
+            return
         dirname = os.path.dirname(os.path.realpath(__file__))
         mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
         self.load_binary = mod.load_binary
         self.get_device_prop = mod.get_device_properties
         self.is_capsule = mod.is_capsule
         self.unpack_capsule = mod.unpack_capsule
+        self.cache = dict()
 
     def get_device_properties(self, device):
+        unpacked_device = device
         if self.is_capsule(device):
-            return self.get_device_prop(self.unpack_capsule(device))
-        else:
-            return self.get_device_prop(device)
+            unpacked_device = self.unpack_capsule(device)
+        if unpacked_device not in self.cache.keys():
+            self.cache[unpacked_device] = self.get_device_prop(unpacked_device)
+        return self.cache[unpacked_device]
 
     def get_current_device(self):
         import torch
