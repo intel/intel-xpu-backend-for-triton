@@ -9,7 +9,7 @@ inputs:
     description: Repository name with owner
     default: intel/intel-xpu-backend-for-triton
   wheels_pattern:
-    # Example of specifying only some packages to install: {intel_extension_for_pytorch-*,torch-*}
+    # Example of specifying only some packages to install: '{intel_extension_for_pytorch-*,torch-*}'
     description: Pattern to match the wheel files to download
     default: '*'
   gh_token:

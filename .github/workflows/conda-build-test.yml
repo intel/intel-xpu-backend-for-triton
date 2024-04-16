@@ -59,19 +59,20 @@ jobs:
           conda info
           conda list -n triton
 
-      - name: Build Triton
-        run: |
-          set -x
-          export DEBUG=1
-          cd python
-          conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
-
       - name: Install latest nightly wheels
         uses: ./.github/actions/install-wheels
         with:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           install_cmd: conda run --no-capture-output -n triton pip install
           python_version: ${{ matrix.python }}
+          wheels_pattern: '{intel_extension_for_pytorch-*,torch-*}'
+
+      - name: Build Triton
+        run: |
+          set -x
+          export DEBUG=1
+          cd python
+          conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
 
       - name: Run core tests
         run: |
