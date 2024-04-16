@@ -6,13 +6,6 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 
-# def synchronize():
-#     import torch
-#     if torch.cuda.is_available():
-#         torch.cuda.synchronize()
-#     elif torch.xpu.is_available():
-#         torch.xpu.synchronize()
-
 
 def nvsmi(attrs):
     attrs = ','.join(attrs)
@@ -105,12 +98,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     :type fast_flush: bool
     """
 
-    fn()
-    # synchronize()
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    elif torch.xpu.is_available():
-        torch.xpu.synchronize()
+    #fn()
+    #if torch.cuda.is_available():
+        #torch.cuda.synchronize()
+    #elif torch.xpu.is_available():
+        #torch.xpu.synchronize()
 
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
@@ -121,28 +113,21 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         cache = torch.empty(int(256e6), dtype=torch.int8, device=device)
 
     # Estimate the runtime of the function
-    # start_time = datetime.now()
-    start_event = torch.xpu.Event(enable_timing=True)
-    end_event = torch.xpu.Event(enable_timing=True)
-    start_event.record()
-    for _ in range(5):
-        cache.zero_()
-        fn()
-    # synchronize()
-    # end_time = datetime.now()
-    # estimate_ms = ((end_time.timestamp() - start_time.timestamp()) * 1000) / 5
-    end_event.record()
-    torch.xpu.synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
+    # start_event = torch.xpu.Event(enable_timing=True)
+    # end_event = torch.xpu.Event(enable_timing=True)
+    # start_event.record()
+    # for _ in range(5):
+        # cache.zero_()
+        # fn()
+    # end_event.record()
+    # torch.xpu.synchronize()
+    # estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
-    n_warmup = max(1, int(warmup / estimate_ms))
-    n_repeat = max(1, int(rep / estimate_ms))
-    # start_times = [datetime for i in range(n_repeat)]
-    # end_times = [datetime for i in range(n_repeat)]
+    n_warmup = 3 #max(1, int(warmup / estimate_ms))
+    n_repeat = 100 #max(1, int(rep / estimate_ms))
     start_event = [torch.xpu.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [torch.xpu.Event(enable_timing=True) for i in range(n_repeat)]
-
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -157,18 +142,12 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         # we clear the L2 cache before each run
         cache.zero_()
         # record time of `fn`
-        # start_times[i] = datetime.now()
         start_event[i].record()
         fn()
         end_event[i].record()
-        # Record clocks
+    # Record clocks
     torch.xpu.synchronize()
     times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
-
-    #     synchronize()
-    #     end_times[i] = datetime.now()
-    # times = torch.tensor([(e.timestamp() - s.timestamp()) * 1000 for s, e in zip(start_times, end_times)],
-    #                      dtype=torch.float)
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
         if len(ret) == 1:
