@@ -1,11 +1,25 @@
-#include "Utility.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
+//===- Utility.cpp - Code generation utilities ----------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
 
+#include "Utility.h"
+
+using namespace mlir;
 using namespace mlir::triton;
+
 namespace mlir {
 namespace LLVM {
-namespace Intel {
+namespace intel {
+
+static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
+                           Value val, Value i, TritonGEN::ShflKind mode) {
+  Type type = val.getType();
+  return rewriter.create<TritonGEN::SubGroupShuffleOp>(loc, type, val, i, mode);
+}
 
 Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                   Value val, Value pred) {
@@ -29,63 +43,25 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   return *endBlock.args_begin();
 }
 
-static TritonGEN::ShflKind toGenShuffleMode(NVVM::ShflKind mode) {
-  switch (mode) {
-  case NVVM::ShflKind::bfly:
-    return TritonGEN::ShflKind::XOR;
-  case NVVM::ShflKind::up:
-    return TritonGEN::ShflKind::UP;
-  case NVVM::ShflKind::down:
-    return TritonGEN::ShflKind::DOWN;
-  case NVVM::ShflKind::idx:
-    return TritonGEN::ShflKind::IDX;
-  }
-  llvm_unreachable("unsupported NVVM::ShflKind");
-}
-
-static Value commonShflSync(Location loc, ConversionPatternRewriter &rewriter,
-                            Value val, Value i, NVVM::ShflKind mode,
-                            Value clamp) {
-  unsigned bits = val.getType().getIntOrFloatBitWidth();
-
-  if (bits == 64) {
-    Type vecTy = vec_ty(f32_ty, 2);
-    Value vec = bitcast(val, vecTy);
-    Value val0 = extract_element(f32_ty, vec, i32_val(0));
-    Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = commonShflSync(loc, rewriter, val0, i, mode, clamp);
-    val1 = commonShflSync(loc, rewriter, val1, i, mode, clamp);
-    vec = undef(vecTy);
-    vec = insert_element(vecTy, vec, val0, i32_val(0));
-    vec = insert_element(vecTy, vec, val1, i32_val(1));
-    return bitcast(vec, val.getType());
-  }
-  Type type = val.getType();
-  return rewriter.create<TritonGEN::SubGroupShuffleOp>(loc, type, val, i,
-                                                       toGenShuffleMode(mode));
-}
-
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
-                        i32_val(0x1f));
-}
-
-Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i) {
-  return commonShflSync(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
-                        i32_val(0x0));
+  return shuffleCommon(loc, rewriter, val, i32_val(i),
+                       TritonGEN::ShflKind::XOR);
 }
 
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i) {
-  return shflIdxSync(loc, rewriter, val, i32_val(i));
+Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                int i) {
+  return shuffleCommon(loc, rewriter, val, i32_val(i), TritonGEN::ShflKind::UP);
 }
 
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i) {
-  return commonShflSync(loc, rewriter, val, i, NVVM::ShflKind::idx,
-                        i32_val(0x1f));
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i) {
+  return shuffleIdx(loc, rewriter, val, i32_val(i));
+}
+
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 Value i) {
+  return shuffleCommon(loc, rewriter, val, i, TritonGEN::ShflKind::IDX);
 }
 
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
@@ -180,6 +156,6 @@ Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
   return msgValue;
 }
 
-} // namespace Intel
+} // namespace intel
 } // namespace LLVM
 } // namespace mlir
