@@ -38,8 +38,8 @@ def create_argument_parser() -> argparse.ArgumentParser:
     return argument_parser
 
 
-def deselected(report_path: pathlib.Path) -> int:
-    """Calculates deselected (deselected via skiplist) tests."""
+def get_deselected(report_path: pathlib.Path) -> int:
+    """Calculates deselected (via skiplist) tests."""
     skiplist_dir = os.getenv('TRITON_TEST_SKIPLIST_DIR', 'scripts/skiplist/default')
     skiplist_path = pathlib.Path(skiplist_dir) / f'{report_path.stem}.txt'
     if not skiplist_path.exists():
@@ -60,7 +60,9 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
                 stats.skipped += 1
             elif skipped.get('type') == 'pytest.xfail':
                 stats.xfailed += 1
-    stats.skipped += deselected(report_path)
+    deselected = get_deselected(report_path)
+    stats.skipped += deselected
+    stats.total += deselected
     stats.passed = stats.total - stats.skipped - stats.xfailed
     return stats
 
