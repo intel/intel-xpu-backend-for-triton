@@ -122,48 +122,6 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     if (ADTYPE == "bfloat16" or BDTYPE == "bfloat16") and SPLIT_K != 1:
         pytest.xfail("bfloat16 matmuls don't allow split_k for now")
 
-    if torch.xpu.is_available() and ADTYPE != "float32" and BDTYPE != "float32":
-        if BLOCK_M == 128 and BLOCK_N == 128 and BLOCK_K == 32 and NWARP == 4:
-            if NSTAGE == 2 and M == 107 and N == 233:
-                if K == 128 and not AT:
-                    pytest.skip("FIXME: Incorrect result on XPU")
-                if K == 83 and AT == BT:
-                    pytest.skip("FIXME: Incorrect result on XPU")
-            if M == 256 and AT == BT:
-                if NSTAGE == 2 and N == 384:
-                    pytest.skip("FIXME: Incorrect result on XPU")
-                if NSTAGE == 4 and N == 256:
-                    pytest.skip("FIXME: Incorrect result on XPU")
-        if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 64 and NWARP == 8 and NSTAGE == 3:
-            pytest.skip("FIXME: Incorrect result on XPU")
-        if BLOCK_M == 256 and BLOCK_N == 128 and BLOCK_K == 32 and NWARP == 8 and (NSTAGE == 2
-                                                                                   or NSTAGE == 4) and AT and BT:
-            pytest.skip("FIXME: Incorrect result on XPU")
-        if BLOCK_M == 128 and BLOCK_N == 256 and BLOCK_K == 32 and NWARP == 8 and NSTAGE == 2 and (
-                ACC_DTYPE is None or ACC_DTYPE == "float32") and (OUTPUT_DTYPE is None or OUTPUT_DTYPE == "float16"):
-            if (ADTYPE == "float8e4b15"
-                    and BDTYPE == "float8e4b15") or (ADTYPE == "float8e5" and BDTYPE == "float8e5") or (
-                        ADTYPE == "float8e4nv" and BDTYPE == "float16") or (ADTYPE == "int8" and BDTYPE == "bfloat16"):
-                if not (not AT and BT):
-                    pytest.skip("FIXME: Incorrect result on XPU")
-            elif not ((ADTYPE == "float16" and BDTYPE == "float8e5") or (ADTYPE == "float16" and BDTYPE == "int8")):
-                pytest.skip("FIXME: Incorrect result on XPU")
-
-    if torch.xpu.is_available():
-        if '-'.join(
-                map(str, (BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE,
-                          INPUT_PRECISION, F8_FASTACCUM, ACC_DTYPE, OUTPUT_DTYPE))) in (
-                              '128-128-32-1-4-2-256-384-160-False-True-float16-float16-None-True-None-None',
-                              '128-128-32-1-4-2-256-384-160-False-True-bfloat16-bfloat16-None-True-None-None',
-                              '128-128-32-1-4-4-256-256-160-False-True-float16-float16-None-True-None-None',
-                              '128-128-32-1-4-4-256-256-160-False-True-bfloat16-bfloat16-None-True-None-None',
-                              '128-256-32-1-8-2-None-None-None-False-True-float16-int8-None-True-None-None',
-                              '128-256-32-1-8-2-None-None-None-False-True-float16-int8-None-False-None-None',
-                              '128-256-32-1-8-2-None-None-None-False-True-float16-float8e5-None-False-None-None',
-                              '128-256-32-1-8-2-None-None-None-False-True-float16-float8e5-None-True-None-None',
-                          ):
-            pytest.skip("FIXME: issue #797")
-
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
     kwargs = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K}
@@ -194,7 +152,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         ret = torch.empty_strided(x.shape, x.stride(), dtype=torch.float16, device=x.device)
         grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']), )
         dtype = getattr(tl, dtype)
-        kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024, threads_per_warp=16)
+        kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
         return ret
 
     def upcast_if_fp8(x, dtype):
