@@ -35,6 +35,10 @@ def is_hip():
 def is_xpu():
     return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "xpu"
 
+def xpu_has_fp64():
+    assert is_xpu()
+    return triton.runtime.driver.active.get_current_target()[1]['has_fp64']
+
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
@@ -166,6 +170,9 @@ def check_type_supported(dtype, device):
     if is_interpreter():
         if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
             pytest.xfail("bfloat16 is not supported in the interpreter")
+    elif device in ['xpu']:
+        if dtype in [torch.float64, "float64"] and not xpu_has_fp64():
+            pytest.xfail("float64 not supported on current xpu hardware")
 
 
 class MfmaLayout:
