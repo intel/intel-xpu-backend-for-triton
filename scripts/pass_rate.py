@@ -97,7 +97,7 @@ def print_stats(stats: ReportStats):
 
 def print_text_stats(stats: List[ReportStats]):
     """Prints human readable stats."""
-    for item in stats:
+    for item in sorted(stats, key=lambda x: x.name):
         print_stats(item)
     print_stats(overall_stats(stats))
 
