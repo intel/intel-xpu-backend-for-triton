@@ -34,6 +34,11 @@ def is_hip():
 def is_xpu():
     return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "xpu"
 
+def xpu_has_fp64():
+    return is_xpu() and triton.runtime.driver.active.get_current_target()[1]['has_fp64']
+
+def threads_per_warp_dpas():
+    return 16 if xpu_has_fp64() else 32 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
@@ -55,6 +60,7 @@ elif is_hip():
 else:
     THREADS_PER_WARP = 32
 
+THREADS_PER_WARP_DPAS = threads_per_warp_dpas() if is_xpu() else THREADS_PER_WARP
 
 def _bitwidth(dtype: str) -> int:
     # ex.: "int64" -> 64
@@ -3131,7 +3137,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                              ADD_ROWS=epilogue == 'add-rows', ADD_COLS=epilogue == 'add-cols',
                              DO_SOFTMAX=epilogue == 'softmax', CHAIN_DOT=epilogue == 'chain-dot',
                              INPUT_PRECISION=input_precision, num_warps=num_warps, num_ctas=num_ctas,
-                             out_dtype=out_dtype, threads_per_warp=16)
+                             out_dtype=out_dtype, threads_per_warp=THREADS_PER_WARP_DPAS)
     else:
         pgm = kernel[(1,
                       1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
