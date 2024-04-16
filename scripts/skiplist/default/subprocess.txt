@@ -1,3 +1,4 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/800
 test/unit/language/test_subprocess.py::test_print[device_print-float16]
 test/unit/language/test_subprocess.py::test_print[device_print-float32]
 test/unit/language/test_subprocess.py::test_print[device_print-float64]
