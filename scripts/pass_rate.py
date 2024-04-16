@@ -45,8 +45,8 @@ def get_deselected(report_path: pathlib.Path) -> int:
     if not skiplist_path.exists():
         return 0
     with skiplist_path.open('r') as f:
-        # Return the number of lines except comments
-        return len([line for line in f.readlines() if not line.startswith('#')])
+        # skip empty lines and comments
+        return len([line for line in f.readlines() if line and not line.startswith('#')])
 
 
 def parse_report(report_path: pathlib.Path) -> ReportStats:
