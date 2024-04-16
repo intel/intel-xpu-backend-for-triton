@@ -1,10 +1,14 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-match-target-size -canonicalize -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-match-target-size | FileCheck %s
 
 #warp = #triton_intel_gpu.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 #dot0_ = #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>
 #dot1_ = #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>
-module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
-  tt.func public @matmul_kernel_with_block_pointers_without_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
+
+// COM: Test code generation for the 'tritonintelgpu-match-target-size' transformation.
+module {
+  tt.func public @matmul_kernel_with_block_pointers_without_convertlayout(
+    %arg0: !tt.ptr<f16, 1>, %arg1: !tt.ptr<f16, 1>, %arg2: !tt.ptr<f16, 1>, %arg3: i32, %arg4: i32,
+    %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32) {
     %c64_i32 = arith.constant 64 : i32
     %c4_i32 = arith.constant 4 : i32
     %c0_i32 = arith.constant 0 : i32

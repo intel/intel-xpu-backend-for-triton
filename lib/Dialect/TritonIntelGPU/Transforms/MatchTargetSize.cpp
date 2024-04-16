@@ -39,6 +39,7 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -61,6 +62,8 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
+
+#define DEBUG_TYPE "tritonintelgpu-match-target-size"
 
 namespace {
 
@@ -143,8 +146,11 @@ public:
       return WalkResult::advance();
     });
 
-    // Simplify the transformed code.
+    LLVM_DEBUG(llvm::dbgs() << "Module before canonicalization:\n"
+                            << m << "\n\n");
     canonicalize();
+    LLVM_DEBUG(llvm::dbgs() << "Module after canonicalization:\n"
+                            << m << "\n\n");
   }
 
 private:
@@ -168,6 +174,7 @@ private:
 
   /// Record the native size supported by the target implementation.
   DenseMap<Attribute, SmallVector<int64_t>> sizePerAttrMap;
+
   /// Collects the result layout of the `tt.dot` operations in the module.
   DenseSet<Attribute> dotAttrs;
 
@@ -204,9 +211,11 @@ public:
 
 /// Simplify SCF loops.
 /// before:
-///   %glue = ttig.glue %a, %b : tensor<4x4xf32>, tensor<4x4xf32> ->
-///   tensor<8x4xf32> scf.for %i = %lb to %ub step %step (%arg10 = %glue) {
-///     %extract = ttig.extract %arg10[0] : tensor<8x4xf32> -> tensor<4x4xf32>
+///   %glue = triton_intel_gpu.glue %a, %b : tensor<4x4xf32>, tensor<4x4xf32>
+///         -> tensor<8x4xf32>
+///   scf.for %i = %lb to %ub step %step (%arg10 = %glue) {
+///     %extract = triton_intel_gpu.extract %arg10[0] : tensor<8x4xf32>
+///              -> tensor<4x4xf32>
 ///     use %extract
 /// after:
 ///   scf.for %i = %lb to %ub step %step (%arg10 = %a) {
@@ -374,7 +383,7 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
   return subSize;
 }
 
-// return [shape, subType, subSize]
+/// return [shape, subType, subSize]
 std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
 MatchTargetSizePass::getSubTypeAndShape(Type type) const {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
@@ -423,7 +432,7 @@ void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
                                   b.create<arith::ConstantIntOp>(loc, i, 32));
 
         SmallVector<int32_t> subShape;
-        for (auto sub : subSize)
+        for (int64_t sub : subSize)
           subShape.push_back(sub);
 
         auto subOp = b.create<tt::MakeTensorPtrOp>(
@@ -476,7 +485,6 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   auto cType = dot.getC().getType().cast<RankedTensorType>();
   ArrayRef<int64_t> aShape = aType.getShape();
   ArrayRef<int64_t> bShape = bType.getShape();
-  ArrayRef<int64_t> cShape = cType.getShape();
   int64_t m = aShape[0];
   int64_t n = bShape[1];
   int64_t k = aShape[1];
@@ -495,9 +503,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
         val.getType().cast<RankedTensorType>().getElementType());
     unsigned subDotIdx = ((kk % subSize[1]) / kStep) * (subSize[0] / mStep) +
                          (mm % subSize[0]) / mStep;
-    Value subDotVal =
-        b.create<ttgi::ExtractOp>(loc, subDotType, subVal, subDotIdx);
-    return subDotVal;
+    return b.create<ttgi::ExtractOp>(loc, subDotType, subVal, subDotIdx);
   };
 
   auto [shape, subType, subSize] = getSubTypeAndShape(cType);

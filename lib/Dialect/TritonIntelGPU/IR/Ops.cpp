@@ -92,9 +92,6 @@ namespace gpu {
 namespace intel {
 
 LogicalResult GlueOp::verify() {
-  if (getOperands().size() < 2)
-    return emitOpError("requires at least 2 operands");
-
   SmallVector<Type> inputTypes;
   for (auto input : getOperands())
     inputTypes.push_back(input.getType());
