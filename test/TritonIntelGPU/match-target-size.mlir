@@ -79,7 +79,7 @@ module {
 
 // -----
 
-// COM: Test SCF canonicalization: ensure result of loop (containing simplification opportunities) can be 
+// COM: Test SCF canonicalization: ensure result of loop (containing simplification opportunities) can be
 //      consumed by a extract operations.
 tt.func public @simplify_scf_for(%arg0: tensor<16x8xf16>, %arg1: tensor<16x8xf16>, %arg2: !tt.ptr<f16, 1>,
                                  %arg3: i64, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32) {
@@ -96,7 +96,7 @@ tt.func public @simplify_scf_for(%arg0: tensor<16x8xf16>, %arg1: tensor<16x8xf16
   %lb = arith.constant 0 : i32
   %ub = arith.constant 32 : i32
   %st = arith.constant 1 : i32
-  %c1_i64 = arith.constant 1 : i64    
+  %c1_i64 = arith.constant 1 : i64
   %glue = triton_intel_gpu.glue %arg0, %arg1 : (tensor<16x8xf16>, tensor<16x8xf16>) -> tensor<16x16xf16>
   %res = scf.for %iv = %lb to %ub step %st iter_args(%arg = %glue) -> (tensor<16x16xf16>) : i32 {
     %e1 = triton_intel_gpu.extract %arg[1] : tensor<16x16xf16> -> tensor<16x8xf16>
@@ -105,7 +105,7 @@ tt.func public @simplify_scf_for(%arg0: tensor<16x8xf16>, %arg1: tensor<16x8xf16
     scf.yield %g1 : tensor<16x16xf16>
   }
   %e3 = triton_intel_gpu.extract %res[0] : tensor<16x16xf16> -> tensor<16x8xf16>
-  %e4 = triton_intel_gpu.extract %res[1] : tensor<16x16xf16> -> tensor<16x8xf16>    
+  %e4 = triton_intel_gpu.extract %res[1] : tensor<16x16xf16> -> tensor<16x8xf16>
   %g2 = triton_intel_gpu.glue %e4, %e3 : (tensor<16x8xf16>, tensor<16x8xf16>) -> tensor<16x16xf16>
   %ptr = tt.make_tensor_ptr %arg2, [%arg3, %arg4], [%arg5, %c1_i64], [%arg6, %arg7] {order = array<i32: 1, 0>} : <tensor<16x16xf16>>
   tt.store %ptr, %g2 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
@@ -127,7 +127,7 @@ tt.func public @simplify_scf_for(%arg0: tensor<16x8xf16>, %arg1: tensor<16x8xf16
   %lb = arith.constant 0 : i32
   %ub = arith.constant 32 : i32
   %st = arith.constant 1 : i32
-  %c1_i64 = arith.constant 1 : i64    
+  %c1_i64 = arith.constant 1 : i64
   %glue = triton_intel_gpu.glue %arg0, %arg1 : (tensor<16x8xf16>, tensor<16x8xf16>) -> tensor<16x16xf16>
   %res = scf.for %iv = %lb to %ub step %st iter_args(%arg = %glue) -> (tensor<16x16xf16>) : i32 {
     %e1 = triton_intel_gpu.extract %arg[0] : tensor<16x16xf16> -> tensor<16x8xf16>
@@ -153,21 +153,20 @@ tt.func public @simplify_scf_for(%arg0: tensor<16x8xf16>, %arg1: tensor<16x8xf16
   %lb = arith.constant 0 : i32
   %ub = arith.constant 32 : i32
   %st = arith.constant 1 : i32
-  %c1_i64 = arith.constant 1 : i64    
+  %c1_i64 = arith.constant 1 : i64
   %glue = triton_intel_gpu.glue %arg0, %arg1 : (tensor<16x8xf16>, tensor<16x8xf16>) -> tensor<16x16xf16>
   %res = scf.for %iv = %lb to %ub step %st iter_args(%arg = %glue) -> (tensor<16x16xf16>) : i32 {
     %e1 = triton_intel_gpu.extract %arg[0] : tensor<16x16xf16> -> tensor<16x8xf16>
     %e2 = triton_intel_gpu.extract %arg[1] : tensor<16x16xf16> -> tensor<16x8xf16>
     %g1 = triton_intel_gpu.glue %e1, %e2 : (tensor<16x8xf16>, tensor<16x8xf16>) -> tensor<16x16xf16>
-    %ptr = tt.make_tensor_ptr %arg2, [%arg3, %arg4], [%arg5, %c1_i64], [%arg6, %arg7] {order = array<i32: 1, 0>} : <tensor<16x16xf16>>    
-    tt.store %ptr, %arg {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>>    
+    %ptr = tt.make_tensor_ptr %arg2, [%arg3, %arg4], [%arg5, %c1_i64], [%arg6, %arg7] {order = array<i32: 1, 0>} : <tensor<16x16xf16>>
+    tt.store %ptr, %arg {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
     scf.yield %g1 : tensor<16x16xf16>
   }
   %e3 = triton_intel_gpu.extract %res[0] : tensor<16x16xf16> -> tensor<16x8xf16>
-  %e4 = triton_intel_gpu.extract %res[1] : tensor<16x16xf16> -> tensor<16x8xf16>    
+  %e4 = triton_intel_gpu.extract %res[1] : tensor<16x16xf16> -> tensor<16x8xf16>
   %g2 = triton_intel_gpu.glue %e4, %e3 : (tensor<16x8xf16>, tensor<16x8xf16>) -> tensor<16x16xf16>
   %ptr = tt.make_tensor_ptr %arg2, [%arg3, %arg4], [%arg5, %c1_i64], [%arg6, %arg7] {order = array<i32: 1, 0>} : <tensor<16x16xf16>>
   tt.store %ptr, %g2 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
   tt.return
 }
-
