@@ -5,6 +5,7 @@ import warnings
 from typing import Optional, Union
 import math
 import textwrap
+import tempfile
 
 import numpy as np
 import pytest
@@ -2481,7 +2482,6 @@ def test_scan_layouts(M, N, src_layout, axis, device):
     }}
     """
 
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2613,7 +2613,6 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
         }}) {{axis = {axis} : i32}} : (tensor<{M}x{N}x{ty}, #src>) -> tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>
     """ + epilogue
 
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2668,7 +2667,6 @@ def test_store_op(M, src_layout, device):
     }}
     """
 
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2719,7 +2717,6 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
         }}
     }}
     """
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2802,7 +2799,6 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     }}
     }}
     """
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -2989,28 +2985,29 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
-    "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype",
-    [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype)
+    "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack",
+    [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1)
      for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
      for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
      for input_precision in ['tf32', 'tf32x3', 'ieee']
      for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
      if not (input_precision != 'ieee' and (in_dtype in ['float16']))] +
-    [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype)
+    [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
      for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
                       [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
-     for input_precision in ["tf32"]
+     for input_precision in ["tf32", "ieee"]
      for col_a in [True, False]
      for col_b in [True, False]
      for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
-                                                                                                    'float32')]] +
-    [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32')
-     for col_a in [True, False]
-     for col_b in [True, False]] + [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32')] +
-    [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32')
+                                                                                                    'float32')]
+     for kpack in [1, 2]] + [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1)
+                             for col_a in [True, False]
+                             for col_b in [True, False]] +
+    [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1)] +
+    [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, num_ctas, device):
+def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, num_ctas, device):
     if is_interpreter():
         if in_dtype == 'bfloat16' or in_dtype == 'float8e4nv' or in_dtype == 'float8e5':
             pytest.xfail("bfloat16, float8e4nv and float8e5 not supported because numpy doesn't understand them")
@@ -3036,9 +3033,26 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         pytest.skip("float8e4nv and float8e5 not supported on HIP")
     if is_hip() and (input_precision != "ieee"):
         pytest.skip(f"{input_precision} not supported on HIP")
+    if is_hip() and (kpack == 2 and in_dtype == 'int8' and K < 64):
+        pytest.skip("kpack too large for K")
+    if not is_hip() and kpack == 2:
+        pytest.xfail("Skip duplicated tests on nv path")
 
     if is_xpu() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
         pytest.skip("FIXME: float8e4nv and float8e5 fails to run on XPU")
+
+    if is_xpu() and '-'.join(
+            map(str, (M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack))
+    ) in ('64-128-128-4-True-True-none-ieee-float32-float32-1', '64-128-128-4-False-True-none-ieee-float32-float32-1',
+          '128-128-64-4-True-True-none-ieee-float32-float32-1', '128-128-64-4-False-True-none-ieee-float32-float32-1',
+          '64-128-128-4-True-False-none-ieee-float32-float32-1', '64-128-128-4-False-False-none-ieee-float32-float32-1',
+          '128-128-64-4-True-False-none-ieee-float32-float32-1', '128-128-64-4-False-False-none-ieee-float32-float32-1',
+          '64-128-128-2-True-True-none-ieee-float32-float32-1', '128-128-64-2-True-True-none-ieee-float32-float32-1',
+          '64-128-128-2-False-True-none-ieee-float32-float32-1', '128-128-64-2-False-True-none-ieee-float32-float32-1',
+          '64-128-128-2-True-False-none-ieee-float32-float32-1', '128-128-64-2-True-False-none-ieee-float32-float32-1',
+          '64-128-128-2-False-False-none-ieee-float32-float32-1',
+          '128-128-64-2-False-False-none-ieee-float32-float32-1'):
+        pytest.skip("FIXME: RuntimeError: Triton Error [ZE]: 1879048196 on XPU")
 
     if is_cuda():
         torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
@@ -3124,22 +3138,20 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     else:
         out_dtype = tl.float32
 
+    kern_kwargs = {
+        'COL_A': col_a, 'COL_B': col_b, 'BLOCK_M': M, 'BLOCK_K': K, 'BLOCK_N': N, 'ADD_MATRIX':
+        epilogue == 'add-matrix', 'ADD_ROWS': epilogue == 'add-rows', 'ADD_COLS': epilogue == 'add-cols', 'DO_SOFTMAX':
+        epilogue == 'softmax', 'CHAIN_DOT': epilogue == 'chain-dot', 'INPUT_PRECISION': input_precision, 'num_warps':
+        num_warps, 'num_ctas': num_ctas, 'out_dtype': out_dtype
+    }
+
+    if is_hip():
+        kern_kwargs['kpack'] = kpack
     if is_xpu():
-        pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
-                             w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), COL_A=col_a,
-                             COL_B=col_b, BLOCK_M=M, BLOCK_K=K, BLOCK_N=N, ADD_MATRIX=epilogue == 'add-matrix',
-                             ADD_ROWS=epilogue == 'add-rows', ADD_COLS=epilogue == 'add-cols',
-                             DO_SOFTMAX=epilogue == 'softmax', CHAIN_DOT=epilogue == 'chain-dot',
-                             INPUT_PRECISION=input_precision, num_warps=num_warps, num_ctas=num_ctas,
-                             out_dtype=out_dtype, threads_per_warp=16)
-    else:
-        pgm = kernel[(1,
-                      1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
-                          w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), COL_A=col_a,
-                          COL_B=col_b, BLOCK_M=M, BLOCK_K=K, BLOCK_N=N, ADD_MATRIX=epilogue == 'add-matrix',
-                          ADD_ROWS=epilogue == 'add-rows', ADD_COLS=epilogue == 'add-cols',
-                          DO_SOFTMAX=epilogue == 'softmax', CHAIN_DOT=epilogue == 'chain-dot',
-                          INPUT_PRECISION=input_precision, num_warps=num_warps, num_ctas=num_ctas, out_dtype=out_dtype)
+        kern_kwargs['threads_per_warp'] = 16
+
+    pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
+                         w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), **kern_kwargs)
 
     if epilogue == 'softmax' and (in_dtype != 'float32' or input_precision == "tf32"):
         if not is_cuda():
@@ -4749,7 +4761,9 @@ layouts = [
     BlockedLayout([8, 1], [16, THREADS_PER_WARP // 16], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([4, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1])
+    BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[4, 1]),
 ]
 
 intermediate_layouts = [
@@ -4766,7 +4780,7 @@ def compute_rep_shape(layout):
         rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
         return rep_shape
     else:
-        assert "TODO: support compute_rep_shape for layout " + str(type(layout))
+        assert False, "TODO: support compute_rep_shape for layout " + str(type(layout))
 
 
 # This function gives a lower bound approximation of scratch buffer shape for convert_layout operation
@@ -4784,11 +4798,17 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     if (M == 1 or N == 1) and interm_layout:
+        # TODO(jlebar): These OOB accesses don't even hit an assert in the
+        # compiler, and some of them return the wrong result instead of
+        # crashing!
         pytest.xfail("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.xfail("Do not convert same layout")
     if is_hip():
-        scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        try:
+            scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        except AssertionError:
+            pytest.skip("Can't compute scratch buffer size")
         lds_size = 65536
         # consider int32 dtype in scratch buffer size,
         # because it is the largest dtype used in convert_layout in this test
@@ -4846,8 +4866,6 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
     z = torch.empty_like(x, device=device)
 
-    # write the IR to a temporary file using mkstemp
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
@@ -4942,8 +4960,6 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
         z = torch.empty_like(x)
 
-        # write the IR to a temporary file using mkstemp
-        import tempfile
         with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
             f.write(ir)
             f.flush()
