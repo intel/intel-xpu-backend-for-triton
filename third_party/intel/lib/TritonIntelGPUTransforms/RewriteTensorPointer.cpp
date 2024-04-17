@@ -306,6 +306,70 @@ private:
   // A cache to avoid generating the same offset with range
   DenseMap<unsigned, Value> cachedOffsetWithRange;
 };
+
+void getBackwardSliceImpl(Value val, SetVector<Value> *backwardSlice,
+                          bool excludeBlockArgs = false) {
+  Operation *op = val.getDefiningOp();
+  if (!op) {
+    op = cast<BlockArgument>(val).getOwner()->getParentOp();
+  }
+
+  if (!op || op->hasTrait<OpTrait::IsIsolatedFromAbove>())
+    return;
+
+  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+    unsigned iterArgIdx = forOp.getNumRegionIterArgs();
+    for (BlockArgument &iterArg : forOp.getRegionIterArgs()) {
+      if (iterArg == val) {
+        iterArgIdx = iterArg.getArgNumber() - 1;
+        break;
+      }
+    }
+    if (iterArgIdx < forOp.getNumRegionIterArgs()) {
+      // We cannot use forOp.walk(...) here because we only want to visit the
+      // Yield in the loop body block. Nested blocks are handled separately.
+      llvm::SmallVector<scf::YieldOp> yieldOps;
+      for (Operation &opInFor : forOp) {
+        if (auto yieldOp = dyn_cast<scf::YieldOp>(opInFor))
+          yieldOps.push_back(yieldOp);
+      }
+      for (auto &yieldOp : yieldOps) {
+        auto yeildArg = yieldOp->getOperand(iterArgIdx);
+        if (backwardSlice->count(yeildArg) == 0) {
+          getBackwardSliceImpl(yeildArg, backwardSlice, true);
+        }
+      }
+      auto initArg = forOp.getInitArgs()[iterArgIdx];
+      if (backwardSlice->count(initArg) == 0)
+        getBackwardSliceImpl(initArg, backwardSlice);
+    }
+  } else {
+    for (const auto &en : llvm::enumerate(op->getOperands())) {
+      auto operand = en.value();
+      if (auto *definingOp = operand.getDefiningOp()) {
+        if (backwardSlice->count(operand) == 0)
+          getBackwardSliceImpl(operand, backwardSlice);
+      } else if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+        if (excludeBlockArgs)
+          continue;
+
+        Block *block = blockArg.getOwner();
+        Operation *parentOp = block->getParentOp();
+
+        if (parentOp && backwardSlice->count(operand) == 0) {
+          assert(parentOp->getNumRegions() == 1 &&
+                 parentOp->getRegion(0).getBlocks().size() == 1);
+          getBackwardSliceImpl(operand, backwardSlice);
+        }
+      } else {
+        llvm_unreachable("No definingOp and not a block argument.");
+      }
+    }
+  }
+
+  backwardSlice->insert(val);
+}
+
 } // namespace
 
 // TODO: this pass relies on assumptions of how block pointers are created and
@@ -710,6 +774,38 @@ public:
   }
 
   void runOnOperation() override {
+#if 0
+
+    ModuleOp mod = getOperation();
+
+    DenseSet<Value> valueToRemove;
+    mod.walk([&valueToRemove, this](Operation *op) {
+      if (llvm::isa<triton::LoadOp, triton::StoreOp>(op)) {
+        auto src = op->getOperand(0);
+        if (triton::isTensorPointerType(src.getType())) {
+          SetVector<Value> slices;
+          getBackwardSliceImpl(src, &slices);
+          for (auto val : slices) {
+            if (Operation *op = val.getDefiningOp()) {
+              if (auto makeTensorPtrOp =
+                      dyn_cast<triton::MakeTensorPtrOp>(op)) {
+                valueToRemove.insert(val);
+              }
+              if (auto advanceOp = dyn_cast<triton::AdvanceOp>(op)) {
+                valueToRemove.insert(val);
+              }
+            } else {
+              Operation *parentOp =
+                  cast<BlockArgument>(val).getOwner()->getParentOp();
+              if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+                valueToRemove.insert(val);
+              }
+            }
+          }
+        }
+      }
+    });
+#endif
     ModuleOp mod = getOperation();
 
     auto markTensorPointerForRemoval = [this](Value val) {
