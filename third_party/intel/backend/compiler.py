@@ -96,6 +96,9 @@ class XPUBackend(BaseBackend):
         args["allow_fp8e4nv"] = True
         return XPUOptions(**args)
 
+    def pack_metadata(self, metadata):
+        return metadata
+
     def load_dialects(self, ctx):
         intel.load_dialects(ctx)
 

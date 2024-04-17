@@ -26,7 +26,8 @@ class HIPOptions:
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
     capability: int = None
-    matrix_inst_shape: int = 0
+    matrix_instr_nonkdim: int = 0
+    kpack: int = 1
     max_num_imprecise_acc_default: int = 0
 
     @staticmethod
@@ -52,7 +53,7 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        libs = ["ocml", "ockl"]
+        libs = ["cuda2gcn", "ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -80,6 +81,9 @@ class HIPBackend(BaseBackend):
         args = {'arch': self.target[1]}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
+
+    def pack_metadata(self, metadata):
+        return metadata
 
     def get_codegen_implementation(self):
         codegen_fns = dict()
@@ -125,7 +129,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_coalesce(pm)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.arch, opt.matrix_inst_shape)
+        amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.arch, opt.matrix_instr_nonkdim, opt.kpack)
         amd.passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm)
@@ -151,18 +155,12 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        pm.run(mod)
 
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
         passes.ttgpuir.add_allocate_shared_memory(pm)
         amd.passes.ttgpuir.add_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
-        pm.run(mod)
 
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
