@@ -1,3 +1,11 @@
+//===- Utility.h - Code generation utilities ------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 
@@ -15,7 +23,7 @@ using namespace mlir::triton;
 namespace mlir {
 namespace LLVM {
 
-namespace Intel {
+namespace intel {
 
 /// Create a predicated block, using \p cond as the condition and \p ops for the
 /// values supplied by the conditional branch to the exit block. The \p
@@ -78,14 +86,15 @@ Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                  Type elemTy, Value pred);
 
-Value shflSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-               int i);
-Value shflUpSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
+Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i);
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  int i);
-Value shflIdxSync(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                  Value i);
+Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                int i);
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 int i);
+Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
+                 Value i);
+
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content,
                         unsigned addressSpace);
@@ -115,7 +124,7 @@ static Value getSharedMemoryBase(Location loc,
                       .getZExtValue();
   Value offVal = i32_val(offset);
   Value base =
-      gep(ptrTy, i8_ty, LLVM::Intel::getStackPointer(rewriter, func), offVal);
+      gep(ptrTy, i8_ty, LLVM::intel::getStackPointer(rewriter, func), offVal);
   return base;
 }
 
@@ -134,7 +143,7 @@ static Value getClusterCTAId(RewriterBase &rewriter, Location loc) {
   // Clusters of thread blocks aren't supported.
   return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
 }
-} // namespace Intel
+} // namespace intel
 } // namespace LLVM
 
 // -----------------------------------------------------------------------
@@ -275,7 +284,7 @@ static SmallVector<Value> emitCTAOffsetForLayout(Location loc,
       triton::gpu::getShapePerCTA(CTASplitNum, shape);
 
   // Delinearize clusterCTAId
-  Value clusterCTAId = LLVM::Intel::getClusterCTAId(rewriter, loc);
+  Value clusterCTAId = LLVM::intel::getClusterCTAId(rewriter, loc);
   SmallVector<Value> multiDimClusterCTAId =
       delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
 

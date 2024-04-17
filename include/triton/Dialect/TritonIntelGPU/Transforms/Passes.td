@@ -103,6 +103,7 @@ def TritonIntelGPUDistributeToWarps
 
 def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::ModuleOp"> {
   let summary = "Prefetch a tensor block around loop";
+
   let description = [{
     This pass injects prefetch operations for loads that 'feed' a `tt.dot` operation in a loop.
     Prefetch operations are inserted in the loop preheader (the number of iterations to prefetch
@@ -111,6 +112,7 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
       - only loads that use a block pointer are considered
       - only targets that have a dedicated prefetch instruction are supported
   }];
+
   let constructor = "mlir::triton::gpu::intel::createPrefetchBlockPass()";
   let dependentDialects = ["mlir::triton::TritonDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
@@ -121,6 +123,53 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
            "int32_t", /*default*/"3",
            "Number of loop iteration to prefetch in advance of the loop">,
   ];
+}
+
+def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "mlir::ModuleOp"> {
+  let summary = "Split tensor operations to match target architecture";
+
+  let description = [{
+    This pass splits certain Triton tensor operations (e.g dot, load, store) so that each
+    operation matches the native operation shape supported by the target architecture.
+
+    Notes:
+      - only block pointers are supported
+      - this pass should be run after 'tritonintelgpu-distribute-to-warps'
+
+    For example, given:
+      ```mlir
+      %A = tt.load %arg1 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      %B = tt.load %arg2 : !tt.ptr<tensor<32x64xf16>> -> tensor<32x64xf16>
+      %C = tt.load %arg3 : !tt.ptr<tensor<32x64xf16>> -> tensor<32x64xf32>
+      %D = tt.dot %A, %B, %C : tensor<32x32xf16> * tensor<32x64xf16> -> tensor<32x64xf32>
+      ```
+
+    Assuming that the native 'dot' shape supported by the target architecture is <8x16x16>
+    and that the max supported load size is 512DW (<32x32xf16>), after this pass:
+      - the load of <32x64xf16> is split to 2 loads of <32x32xf16>
+      - the dot operation is split so that each resulting operation matches the native target
+        shape supported by the architecture
+
+      ```mlir
+      %A = tt.load %arg1 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      %B1 = tt.load %arg21 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      %B2 = tt.load %arg22 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      %C1 = tt.load %arg31 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      %C2 = tt.load %arg32 : !tt.ptr<tensor<32x32xf16>> -> tensor<32x32xf16>
+      ... <extract operations>
+      %dot_0 = tt.dot %tile_A, %tile_B, %tile_C : tensor<8x16xf16> * tensor<16x16xf16>
+             -> tensor<8x16xf16>
+      ... <extract operations>
+      %dot_1 = tt.dot %tile_A', %tile_B', %dot_0 : tensor<8x16xf16> * tensor<16x16xf16>
+             -> tensor<8x16xf16>
+      ...
+      ```
+  }];
+
+  let constructor = "mlir::triton::gpu::intel::createMatchTargetSizePass()";
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 }
 
 #endif // TRITON_INTEL_GPU_PASSES
