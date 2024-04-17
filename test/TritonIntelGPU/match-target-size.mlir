@@ -9,7 +9,7 @@ module {
   tt.func public @matmul_kernel_with_block_pointers_without_convertlayout(
     %arg0: !tt.ptr<f16, 1>, %arg1: !tt.ptr<f16, 1>, %arg2: !tt.ptr<f16, 1>, %arg3: i32, %arg4: i32,
     %arg5: i32, %arg6: i32, %arg7: i32, %arg8: i32) {
-    // CHECK-LABEL: @matmul_kernel_with_block_pointers_without_convertlayout          
+    // CHECK-LABEL: @matmul_kernel_with_block_pointers_without_convertlayout
     %c64_i32 = arith.constant 64 : i32
     %c4_i32 = arith.constant 4 : i32
     %c0_i32 = arith.constant 0 : i32
@@ -52,7 +52,7 @@ module {
     %30 = arith.muli %29, %c64_i32 : i32
     %31 = arith.addi %30, %25 : i32
     %32 = tt.make_tensor_ptr %arg1, [%18, %26], [%27, %c1_i64], [%c0_i32, %31] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot1_>>
-    %33:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10=%cst, %arg11=%24, %arg12=%32) 
+    %33:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10=%cst, %arg11=%24, %arg12=%32)
           -> (tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #dot0_>>, !tt.ptr<tensor<32x64xf16, #dot1_>>) : i32 {
       %37 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16, #dot0_>>
       %38 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x64xf16, #dot1_>>
