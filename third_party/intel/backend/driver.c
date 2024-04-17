@@ -190,6 +190,7 @@ ze_kernel_handle_t create_function(ze_module_handle_t module,
   kernel_description.pNext = nullptr;
   kernel_description.flags = flag;
   kernel_description.pKernelName = func_name.c_str();
+  assert(module);
   auto module_initial = module;
   if (getBoolEnv("MLIR_ENABLE_DUMP")) {
     std::cout << "create kernel:" << func_name << std::endl;
@@ -238,10 +239,16 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
   auto l0_module =
       create_module(l0_context, l0_device, binary_ptr, binary_size);
+
+  if (PyErr_Occurred()) {
+    // check for errors from module creation
+    return NULL;
+  }
+
   auto l0_kernel = create_function(l0_module, kernel_name);
 
   if (PyErr_Occurred()) {
-    // check for errors from module/kernel creation
+    // check for errors from kernel creation
     return NULL;
   }
 
