@@ -59,8 +59,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   uint64_t cap = 0;
   if (!PyArg_ParseTuple(args, "K", &cap))
     return NULL;
-  if (cap == 0)
-    return NULL;
+  assert(cap != 0 && "Invalid device pointer!");
   sycl::device *syclDevice = (sycl::device *)(cap);
 
   // Get properties from SYCL.
@@ -91,6 +90,22 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
     break;
   default:; // fall through
   }
+
+  std::string platform_name =
+      syclDevice->get_platform().get_info<sycl::info::platform::name>();
+  std::string vendor =
+      syclDevice->get_platform().get_info<sycl::info::platform::vendor>();
+  std::string driver_version =
+      syclDevice->get_info<sycl::info::device::driver_version>();
+  std::string version = syclDevice->get_info<sycl::info::device::version>();
+  uint32_t gpu_eu_count =
+      syclDevice->get_info<sycl::ext::intel::info::device::gpu_eu_count>();
+  uint32_t subslice_count =
+      syclDevice
+          ->get_info<sycl::info::device::ext_intel_gpu_subslices_per_slice>();
+  uint32_t max_num_sub_groups =
+      syclDevice->get_info<sycl::info::device::max_num_sub_groups>();
+  bool has_fp64 = syclDevice->has_extension("cl_khr_fp64");
 
   // Get properteis from L0.
   // Get L0 device handle
@@ -132,11 +147,16 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   delete[] pMemoryProperties;
   return Py_BuildValue(
-      "{s:i, s:i, s:i, s:i, s:i, s:O, s:i, s:O}", "max_shared_mem",
-      max_shared_mem, "multiprocessor_count", multiprocessor_count,
-      "sm_clock_rate", sm_clock_rate, "mem_clock_rate", mem_clock_rate,
-      "mem_bus_width", mem_bus_width, "device_arch", gpuArch,
-      "max_work_group_size", max_group_size, "sub_group_sizes", subgroup_sizes);
+      "{s:i, s:i, s:i, s:i, s:i, s:O, s:i, s:O, s:s, s:s, s:s, s:s, s:I, s:I, "
+      "s:I, s:I}",
+      "max_shared_mem", max_shared_mem, "multiprocessor_count",
+      multiprocessor_count, "sm_clock_rate", sm_clock_rate, "mem_clock_rate",
+      mem_clock_rate, "mem_bus_width", mem_bus_width, "device_arch", gpuArch,
+      "max_work_group_size", max_group_size, "sub_group_sizes", subgroup_sizes,
+      "platform_name", platform_name.c_str(), "vendor", vendor.c_str(),
+      "version", version.c_str(), "driver_version", driver_version.c_str(),
+      "gpu_eu_count", gpu_eu_count, "gpu_subslice_count", subslice_count,
+      "max_num_sub_groups", max_num_sub_groups, "has_fp64", (has_fp64 ? 1 : 0));
 }
 
 /*Sycl code Start*/
