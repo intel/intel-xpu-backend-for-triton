@@ -11,6 +11,8 @@ from triton.compiler import ASTSource
 
 tmpdir = ".tmp"
 
+target = triton.runtime.driver.active.get_current_target()
+
 
 def reset_tmp_dir():
     os.environ["TRITON_CACHE_DIR"] = tmpdir
@@ -31,7 +33,7 @@ def compile_fn(attrs, capability):
         signature={0: "*fp32", 1: "*fp32", 2: "*fp32"},
         attrs=attrs,
     )
-    triton.compile(src=src, target=("xpu", capability))
+    triton.compile(src=src, target=target)
 
 
 def test_compile_in_subproc() -> None:
@@ -61,7 +63,7 @@ def compile_fn_dot(attrs, capability):
         tl.store(Z + offs, z)
 
     src = ASTSource(fn=kernel_dot, signature={0: "*fp32"}, attrs=attrs, constants=dict())
-    triton.compile(src=src, target=("xpu", capability))
+    triton.compile(src=src, target=target)
 
 
 def test_compile_in_forked_subproc() -> None:

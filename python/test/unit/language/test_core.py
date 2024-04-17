@@ -1518,8 +1518,8 @@ def test_atomic_cas(sem, num_ctas, device):
 
     Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
-    ref = torch.full((128, ), 64.0)
-    h = serialized_add[(64, )](data, Lock, SEM=sem, num_ctas=num_ctas)
+    ref = torch.full((128, ), 2000.0)
+    h = serialized_add[(2000, )](data, Lock, SEM=sem, num_ctas=num_ctas)
     sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():
@@ -3236,7 +3236,10 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     if is_xpu():
         pytest.skip("FIXME: Incorrect result on XPU")
     if is_hip():
-        pytest.skip('TODO test_dot3d not supported on HIP.')
+        # hip does not support tf32 precision, so use ieee for all tests
+        input_precision = "ieee"
+    else:
+        input_precision = "tf32" if in_dtype_str == 'float32' else "ieee"
 
     @triton.jit
     def kernel(
@@ -3320,7 +3323,7 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
-        INPUT_PRECISION="tf32" if in_dtype_str == 'float32' else "ieee",
+        INPUT_PRECISION=input_precision,
         out_dtype=out_dtype,
         num_warps=num_warps,
     )
