@@ -1,14 +1,12 @@
 from triton.backends.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import XPUUtils
+from triton.backends.intel.driver import compile_module_from_src
 
 from dataclasses import dataclass
 import functools
 from typing import Any, Tuple
 import hashlib
 import re
-import tempfile
-import signal
 import os
 import subprocess
 from pathlib import Path
@@ -70,10 +68,16 @@ class XPUBackend(BaseBackend):
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
         assert isinstance(target[1], dict)
+        dirname = os.path.dirname(os.path.realpath(__file__))
+        mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
+        self.parse_device_arch = mod.parse_device_arch
         # TODO: Deprecate capability in XPU compilation
         # capability should be < 80, because some features in passes with capability >= 80 are not supported on PVC
         self.capability = intel.passes.ttgpuir.DEVICE_ARCH.PVC
         self.properties = self._parse_target(target[1])
+        device_arch = self.properties["device_arch"]
+        if device_arch != intel.passes.ttgpuir.DEVICE_ARCH.UNKNOWN:
+            self.capability = device_arch
         self.binary_ext = "spv"
 
     def _parse_target(self, tgt_prop) -> dict:
@@ -89,6 +93,7 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
+        dev_prop['device_arch'] = self.parse_device_arch(tgt_prop.get('device_arch', 0))
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -131,7 +136,7 @@ class XPUBackend(BaseBackend):
         intel.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        intel.passes.ttgpuir.add_accelerate_matmul(pm, intel.passes.ttgpuir.DEVICE_ARCH.PVC)
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, capability)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         if opt.optimize_epilogue:
             passes.ttgpuir.add_optimize_epilogue(pm)
