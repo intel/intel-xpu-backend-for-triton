@@ -6,11 +6,13 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "PatternTritonGPUOpToLLVM.h"
-#include "TypeConverter.h"
 #include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::gpu::intel;
 
 namespace {
 
@@ -93,8 +95,7 @@ public:
     assert(rank <= 2 && "only support 1d/2d load/store/prefetch for now");
     auto loc = op.getLoc();
     constexpr bool isLoad = std::is_same_v<OpType, LoadOp>;
-    constexpr bool isPrefetch =
-        std::is_same_v<OpType, triton::gpu::intel::PrefetchOp>;
+    constexpr bool isPrefetch = std::is_same_v<OpType, PrefetchOp>;
     auto createIntConstant = [&](Type type, unsigned value) {
       auto attr = rewriter.getIntegerAttr(type, value);
       return rewriter.create<LLVM::ConstantOp>(loc, type, attr);
@@ -111,6 +112,9 @@ public:
     }
     unsigned dataSize = tType.getElementType().getIntOrFloatBitWidth();
     auto blockWidth = tType.getShape()[1];
+    assert(blockWidth == 16 || blockWidth == 32 && "only support 16/32 block");
+    auto vBlks = blockWidth == 32 ? 2 : 1;
+    blockWidth = 16;
     auto blockHeight = tType.getShape()[0];
     auto idx0 = createIntConstant(i32Type, 0);
     auto idx1 = createIntConstant(i32Type, 1);
@@ -161,24 +165,24 @@ public:
       auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
       auto idx = idxAttr.getInt();
       auto intType = getIntType(op->getResult(0).getType(), idx == 0);
-      auto load = rewriter.create<TritonGen::Matrix2DBlockLoadOp>(
+      auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, intType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
-          dataSize, blockWidth / 2, blockHeight, 2 /*v_blocks*/, transpose,
-          vnni);
+          dataSize, blockWidth, blockHeight, vBlks, transpose, vnni);
       auto cast = rewriter.create<LLVM::BitcastOp>(loc, resType, load);
       rewriter.replaceOp(op, cast);
     } else if constexpr (isPrefetch) {
-      auto load = rewriter.create<TritonGen::Matrix2DBlockPrefetchOp>(
+      auto load = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
-          blockWidth, blockHeight, 1 /*v_blocks*/, transpose, vnni);
+          blockWidth, blockHeight, vBlks, transpose, vnni,
+          TritonGEN::PrefetchCacheControl::L1C_L3C);
       rewriter.eraseOp(op);
     } else {
       auto intType = getIntType(op.getValue().getType());
       auto cast =
           rewriter.create<LLVM::BitcastOp>(loc, intType, adaptor.getValue());
-      rewriter.create<TritonGen::Matrix2DBlockStoreOp>(
+      rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
-          blockWidth, blockHeight, 1 /*v_blocks*/, transpose, vnni, cast);
+          blockWidth, blockHeight, vBlks, transpose, vnni, cast);
       rewriter.eraseOp(op);
     }
     return success();
@@ -194,24 +198,24 @@ public:
     auto loc = op.getLoc();
     auto i16Type = rewriter.getI16Type();
     auto i32Type = rewriter.getI32Type();
-    auto encodePrecision = [&](Type type) -> TritonGen::PrecisionType {
+    auto encodePrecision = [&](Type type) -> TritonGEN::PrecisionType {
       if (type == rewriter.getBF16Type())
-        return TritonGen::PrecisionType::BF16; // 9;
+        return TritonGEN::PrecisionType::BF16;
       else if (type == rewriter.getF16Type())
-        return TritonGen::PrecisionType::FP16; // 10;
+        return TritonGEN::PrecisionType::FP16;
       else if (type == rewriter.getTF32Type())
-        return TritonGen::PrecisionType::TF32; // 12;
+        return TritonGEN::PrecisionType::TF32;
       else {
         assert(0 && "add more support");
-        return TritonGen::PrecisionType::PRECISION_UNUSED;
+        return TritonGEN::PrecisionType::UNUSED;
       }
     };
     auto preca = encodePrecision(op.getA().getType().getElementType());
     auto precb = encodePrecision(op.getB().getType().getElementType());
     auto precA =
-        TritonGen::PrecisionTypeAttr::get(rewriter.getContext(), preca);
+        TritonGEN::PrecisionTypeAttr::get(rewriter.getContext(), preca);
     auto precB =
-        TritonGen::PrecisionTypeAttr::get(rewriter.getContext(), precb);
+        TritonGEN::PrecisionTypeAttr::get(rewriter.getContext(), precb);
     auto rc = IntegerAttr::get(i32Type, 8);
     // sd dpasW fixed in genx.dpas lowering
     auto getIntType = [&](Type type, bool is16Bit = false) {
@@ -228,7 +232,7 @@ public:
     auto intTypeB = getIntType(op.getB().getType());
     auto castB =
         rewriter.create<LLVM::BitcastOp>(loc, intTypeB, adaptor.getB());
-    auto dpas = rewriter.create<TritonGen::MatrixDPASOp>(
+    auto dpas = rewriter.create<TritonGEN::MatrixDPASOp>(
         loc, adaptor.getC().getType(), adaptor.getC(), castA, castB, precA,
         precB, rc);
     rewriter.replaceOp(op, dpas);
@@ -270,24 +274,8 @@ public:
                                                          shfl23, attr);
       rewriter.replaceOp(op, shfl);
     } else {
-      assert(0 && "add more support for tt.glue to llvm");
+      assert(0 && "add more support for glue op to llvm");
     }
-    return success();
-  }
-};
-
-class CastOpConversion : public ConvertTritonGPUOpToLLVMPattern<CastOp> {
-public:
-  using ConvertTritonGPUOpToLLVMPattern<
-      CastOp>::ConvertTritonGPUOpToLLVMPattern;
-  LogicalResult
-  matchAndRewrite(CastOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto dstType = getTypeConverter()->convertType(op.getType());
-    auto cast =
-        rewriter.create<LLVM::BitcastOp>(loc, dstType, adaptor.getSrc());
-    rewriter.replaceOp(op, cast);
     return success();
   }
 };
@@ -301,7 +289,7 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto base = adaptor.getBase();
-    auto idx = op.getIdx();
+    auto idx = op.getIndex();
     auto dstType =
         cast<VectorType>(getTypeConverter()->convertType(op.getType()));
     auto numElts = dstType.getNumElements();
@@ -315,7 +303,7 @@ public:
   }
 };
 
-// fixme: support it in upstream constantOpLowering
+// FIXME: support it in upstream constantOpLowering
 class ArithConstantOpLowering
     : public ConvertTritonGPUOpToLLVMPattern<mlir::arith::ConstantOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -353,20 +341,17 @@ class ArithConstantOpLowering
 
 } // namespace
 
-void mlir::triton::populateTritonOpsToLLVMPatterns(
+void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
     TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    Target target, PatternBenefit benefit) {
-  patterns.add<MakeTensorPtrOpConversion>(typeConverter, target, benefit);
-  patterns.add<AdvanceOpConversion>(typeConverter, target, benefit);
-  patterns.add<DotOpConversion>(typeConverter, target, benefit);
-  patterns.add<LoadStorePrefetchOpConversion<triton::gpu::intel::PrefetchOp>>(
-      typeConverter, target, benefit);
-  patterns.add<LoadStorePrefetchOpConversion<LoadOp>>(typeConverter, target,
-                                                      benefit);
-  patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, target,
-                                                       benefit);
-  patterns.add<GlueOpConversion>(typeConverter, target, benefit);
-  patterns.add<ExtractOpConversion>(typeConverter, target, benefit);
-  patterns.add<CastOpConversion>(typeConverter, target, benefit);
-  patterns.add<ArithConstantOpLowering>(typeConverter, target, benefit);
+    PatternBenefit benefit) {
+  patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
+  patterns.add<AdvanceOpConversion>(typeConverter, benefit);
+  patterns.add<DotOpConversion>(typeConverter, benefit);
+  patterns.add<LoadStorePrefetchOpConversion<PrefetchOp>>(typeConverter,
+                                                          benefit);
+  patterns.add<LoadStorePrefetchOpConversion<LoadOp>>(typeConverter, benefit);
+  patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, benefit);
+  patterns.add<GlueOpConversion>(typeConverter, benefit);
+  patterns.add<ExtractOpConversion>(typeConverter, benefit);
+  patterns.add<ArithConstantOpLowering>(typeConverter, benefit);
 }
