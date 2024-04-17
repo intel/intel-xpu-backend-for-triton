@@ -1378,6 +1378,7 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
+    check_type_supported(dtype_x_str, device)
     if is_interpreter():
         if dtype_x_str == 'float16':
             pytest.skip("Only test atomic float16 ops on GPU")
