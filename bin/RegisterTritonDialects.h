@@ -77,7 +77,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   // mlir::registerTritonAMDGPUPasses();
 
   mlir::registerTritonAMDGPUAccelerateMatmul();
-  mlir::registerTritonAMDGPUDecomposeConversions();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
   mlir::registerTritonAMDGPURemoveLayoutConversions();
   mlir::registerTritonAMDGPUReorderInstructions();

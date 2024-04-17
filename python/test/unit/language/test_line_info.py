@@ -7,7 +7,6 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
-from triton.backends.intel.compiler import _path_to_binary
 
 
 @triton.jit
@@ -69,12 +68,11 @@ def kernel_dot_combine(x):
     tl.device_print("", d)
 
 
-def extract_file_lines(spv):
-    dis, _ = _path_to_binary("spirv-dis")
+def spv_extract_file_lines(spv, command):
     fd, path = tempfile.mkstemp()
     with open(fd, 'wb') as spvbin:
         spvbin.write(spv)
-    spv = subprocess.check_output([dis, path]).decode("utf-8")
+    spv = subprocess.check_output(command + [path]).decode("utf-8")
     lines = spv.splitlines()
 
     # Collect string variables (pairs of [varname, string]). One should contain the file name.
@@ -98,6 +96,50 @@ def extract_file_lines(spv):
                 break
 
     return file_and_lines
+
+def get_disassembler_command_and_debug_line_format():
+    """Gets backend specific disassembler information.
+
+    Returns a tuple: (object file kind, disassembler tool command,
+    debug line anchor, debug line file and line number separator).
+    """
+    backend = triton.runtime.driver.active.get_current_target()[0]
+
+    if backend == "cuda":
+        from triton.backends.nvidia.compiler import _path_to_binary
+        nvdisasm, _ = _path_to_binary("nvdisasm")
+        return ("cubin", [nvdisasm, "-g"], "## File", ",")
+
+    if backend == "hip":
+        import shutil
+        # Try to find llvm-objdump from the current PATH to disassmble hsaco.
+        tool = shutil.which("llvm-objdump")
+        if tool is not None:
+            return ("hsaco", [tool, "-D", "-l", "--arch=amdgcn"], ";", ":")
+        raise RuntimeError("llvm-objdump not found in PATH")
+
+    if backend == "xpu":
+        from triton.backends.intel.compiler import _path_to_binary
+        dis, _ = _path_to_binary("spirv-dis")
+        return ("spvbin", [dis], "", "")
+
+    raise RuntimeError(f"unknown backend {backend}")
+
+
+def extract_file_lines(command, anchor, separator, asm):
+    fd, path = tempfile.mkstemp()
+    with open(fd, 'wb') as cubin:
+        cubin.write(asm)
+    asm = subprocess.check_output(command + [path]).decode("utf-8")
+    file_lines = []
+    lines = asm.splitlines()
+    for line in lines:
+        # We are looking for an anchor string and a separator between the file name and line number.
+        if anchor in line and separator in line:
+            entries = line[line.index(anchor):].split(separator)
+            if len(entries) == 2 and all(len(e) != 0 for e in entries):
+                file_lines.append((entries[0].strip(), entries[1].strip()))
+    return file_lines
 
 
 def check_file_lines(file_lines, file_name, lineno, should_contain=True):
@@ -125,9 +167,9 @@ func_types = ["single", "call", "call_noinline", "autotune", "dot_combine"]
 @pytest.mark.parametrize("func", func_types)
 def test_line_info(func: str):
     try:
-        _, _ = _path_to_binary("spirv-dis")
+        obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
     except BaseException:
-        pytest.skip("spirv-dis is not available")
+        pytest.skip("disassembler is not available")
 
     shape = (128, )
     kernel_info = {}
@@ -142,24 +184,26 @@ def test_line_info(func: str):
     elif func == "dot_combine":
         kernel_info = kernel_dot_combine.warmup(20, grid=(1,))
 
-    file_lines = extract_file_lines(kernel_info.asm["spv"])
-
+    if obj_kind == "spvbin":
+        file_lines = spv_extract_file_lines(kernel_info.asm["spv"], command)
+    else:
+        file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if func == "single":
+        assert (check_file_lines(file_lines, "test_line_info.py", 16))
         assert (check_file_lines(file_lines, "test_line_info.py", 17))
-        assert (check_file_lines(file_lines, "test_line_info.py", 18))
     elif func == "call":
-        assert (check_file_lines(file_lines, "test_line_info.py", 30))
-        assert (check_file_lines(file_lines, "test_line_info.py", 23))
-        assert (check_file_lines(file_lines, "test_line_info.py", 32))
+        assert (check_file_lines(file_lines, "test_line_info.py", 29))
+        assert (check_file_lines(file_lines, "test_line_info.py", 22))
+        assert (check_file_lines(file_lines, "test_line_info.py", 31))
     elif func == "call_noinline":
-        assert (check_file_lines(file_lines, "test_line_info.py", 44))
+        assert (check_file_lines(file_lines, "test_line_info.py", 43))
+        assert (check_file_lines(file_lines, "test_line_info.py", 36))
         assert (check_file_lines(file_lines, "test_line_info.py", 37))
         assert (check_file_lines(file_lines, "test_line_info.py", 38))
-        assert (check_file_lines(file_lines, "test_line_info.py", 39))
     elif func == "autotune":
-        assert (check_file_lines(file_lines, "test_line_info.py", 56))
-        assert (check_file_lines(file_lines, "test_line_info.py", 57))
         assert (check_file_lines(file_lines, "test_line_info.py", 55))
+        assert (check_file_lines(file_lines, "test_line_info.py", 56))
+        assert (check_file_lines(file_lines, "test_line_info.py", 54))
     elif func == "dot_combine":
         assert (check_file_lines(file_lines, "test_line_info.py", 66))
-        assert (check_file_lines(file_lines, "test_line_info.py", 68, should_contain=False))
+        assert (check_file_lines(file_lines, "test_line_info.py", 67, should_contain=False))

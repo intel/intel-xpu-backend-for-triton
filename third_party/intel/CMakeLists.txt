@@ -8,5 +8,6 @@ add_triton_plugin(TritonXPU
 
   LINK_LIBS
   TritonIntelGPUToLLVM
+  TritonIntelGPUTransforms
   TritonGENToLLVM
 )
