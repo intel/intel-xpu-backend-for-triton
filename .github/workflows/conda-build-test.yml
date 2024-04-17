@@ -75,13 +75,12 @@ jobs:
           conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
 
       - name: Run core tests
-        run: |
-          set -x
+        env:
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/806
           # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/841
-          mv scripts/core-conda.exclude-list scripts/core.exclude-list
-          mv scripts/interpreter-conda.exclude-list scripts/interpreter.exclude-list
-
+          TRITON_TEST_SKIPLIST_DIR: scripts/skiplist/conda
+        run: |
+          set -x
           conda run --no-capture-output -n triton bash -v -x scripts/test-triton.sh
 
       - name: Run E2E test

@@ -106,7 +106,7 @@ jobs:
         run: |
           export DEBUG=1
           cd python
-          pip install wheel pytest pytest-xdist pytest-rerunfailures
+          pip install wheel pytest pytest-xdist pytest-rerunfailures pytest-select
           pip install --no-build-isolation '.[build,tests,tutorials]'
 
       - name: Run lit tests
@@ -117,38 +117,49 @@ jobs:
       - name: Create directory for tests reports
         run: |
           mkdir ~/reports
+          echo "TRITON_TEST_REPORTS=true" >> $GITHUB_ENV
+          echo "TRITON_TEST_REPORTS_DIR=$HOME/reports" >> $GITHUB_ENV
 
       - name: Run core tests
         run: |
+          source ./scripts/pytest-utils.sh
           cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/language.xml -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
-          python3 -m pytest --junitxml=~/reports/subprocess.xml -vvv -n 8 language/test_subprocess.py
+          TRITON_TEST_SUITE=language \
+            pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          TRITON_TEST_SUITE=subprocess \
+            pytest -vvv -n 8 language/test_subprocess.py
           # Run runtime tests serially to avoid race condition with cache handling
-          python3 -m pytest --junitxml=~/reports/runtime.xml -vvv --device xpu runtime/
+          TRITON_TEST_SUITE=runtime \
+            pytest -vvv --device xpu runtime/
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest --junitxml=~/reports/line_info.xml -vvv --device xpu language/test_line_info.py
+          TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
+            pytest -vvv --device xpu language/test_line_info.py
 
       - name: Clear cache
         run: |
           rm -rf ~/.triton
 
       - name: Run interpreter tests
-        env:
-          TRITON_INTERPRET: "1"
         run: |
+          source ./scripts/pytest-utils.sh
           cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/interpreter.xml -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
-           language/test_random.py operators/test_flash_attention.py::test_op --device cpu
+          TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
+            pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+            language/test_random.py operators/test_flash_attention.py::test_op --device cpu
 
       - name: Run partial operators tests
         run: |
+          source ./scripts/pytest-utils.sh
           cd python/test/unit
-          python3 -m pytest --junitxml=~/reports/operators.xml -vvv -n 8 --device xpu operators
+          TRITON_TEST_SUITE=operators \
+            pytest -vvv -n 8 --device xpu operators
 
       - name: Regression tests
         run: |
+          source ./scripts/pytest-utils.sh
           cd python/test/regression
-          python3 -m pytest --junitxml=~/reports/regression.xml -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
+          TRITON_TEST_SUITE=regression \
+            python3 -m pytest --junitxml=~/reports/regression.xml -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
 
       - name: Run XPU python tests
         run: |
