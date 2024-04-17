@@ -173,7 +173,7 @@ public:
     } else if constexpr (isPrefetch) {
       auto load = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
-          blockWidth, blockHeight, vBlks, transpose, vnni,
+          blockWidth, blockHeight, 1, transpose, vnni,
           TritonGEN::PrefetchCacheControl::L1C_L3C);
       rewriter.eraseOp(op);
     } else {
@@ -319,6 +319,39 @@ public:
   }
 };
 
+// fixme: support it in gputogenx
+class GPUSubgroupIdOpLowering
+    : public ConvertTritonGPUOpToLLVMPattern<mlir::gpu::SubgroupIdOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      mlir::gpu::SubgroupIdOp>::ConvertTritonGPUOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(mlir::gpu::SubgroupIdOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto i32Type = rewriter.getI32Type();
+    Value threadX =
+        rewriter.create<mlir::gpu::ThreadIdOp>(loc, mlir::gpu::Dimension::x);
+    Value threadY =
+        rewriter.create<mlir::gpu::ThreadIdOp>(loc, mlir::gpu::Dimension::y);
+    Value threadZ =
+        rewriter.create<mlir::gpu::ThreadIdOp>(loc, mlir::gpu::Dimension::z);
+    Value blockX =
+        rewriter.create<mlir::gpu::BlockDimOp>(loc, mlir::gpu::Dimension::x);
+    Value blockY =
+        rewriter.create<mlir::gpu::BlockDimOp>(loc, mlir::gpu::Dimension::y);
+    Value llid = rewriter.create<arith::MulIOp>(loc, threadZ, blockY);
+    llid = rewriter.create<arith::AddIOp>(loc, llid, threadY);
+    llid = rewriter.create<arith::MulIOp>(loc, llid, blockX);
+    llid = rewriter.create<arith::AddIOp>(loc, llid, threadX);
+    // fixme: replace cst16 with subgroupSize
+    Value cst16 = rewriter.create<arith::ConstantOp>(
+        loc, i32Type, rewriter.getIntegerAttr(i32Type, 16));
+    Value subgroupId = rewriter.create<arith::DivUIOp>(loc, llid, cst16);
+    rewriter.replaceOp(op, subgroupId);
+    return success();
+  }
+};
+
 // fixme: support it in upstream constantOpLowering
 class ArithConstantOpLowering
     : public ConvertTritonGPUOpToLLVMPattern<mlir::arith::ConstantOp> {
@@ -370,5 +403,6 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<GlueOpConversion>(typeConverter, benefit);
   patterns.add<ExtractOpConversion>(typeConverter, benefit);
   patterns.add<CastOpConversion>(typeConverter, benefit);
+  patterns.add<GPUSubgroupIdOpLowering>(typeConverter, benefit);
   patterns.add<ArithConstantOpLowering>(typeConverter, benefit);
 }

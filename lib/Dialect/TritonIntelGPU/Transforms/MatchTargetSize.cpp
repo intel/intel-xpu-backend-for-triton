@@ -123,6 +123,7 @@ private:
       // FIXME: 2 * subgroupSize??
     } else if (auto warpAttr = dyn_cast<ttg::WarpEncodingAttr>(layout)) {
       colLimit = 32;
+      colLimit = 16;
     } else if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
       colLimit = 32;
     }
