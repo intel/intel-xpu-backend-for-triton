@@ -104,20 +104,14 @@ public:
     MLIRContext *ctx = &getContext();
     ModuleOp m = getOperation();
 
-    // Collect `tt.dot` operations layouts.
+    // Collect the result layout of "interesting" `tt.dot` operations.
+    // A candidate 'tt.dot' operation yields a tensor(or pointer to tensor) with
+    // a warp layout.
     m.walk([&](tt::DotOp dot) {
-      auto type = cast<RankedTensorType>(dot.getResult().getType());
-      dotAttrs.insert(type.getEncoding());
+      auto resultType = cast<RankedTensorType>(dot.getResult().getType());
+      if (isCandidate(resultType))
+        dotAttrs.insert(resultType.getEncoding());
     });
-
-    auto isTensorOrPtrToTensor = [](Type type) {
-      if (isa<RankedTensorType>(type))
-        return true;
-      if (auto ptrType = dyn_cast<tt::PointerType>(type))
-        if (isa<RankedTensorType>(ptrType.getPointeeType()))
-          return true;
-      return false;
-    };
 
     // Split operations to match the target architecture native shapes.
     m.walk<WalkOrder::PreOrder>([&](Operation *op) {
@@ -127,27 +121,33 @@ public:
                                     op->getResultTypes().end());
       types.append(resultTypes);
 
-      if (llvm::none_of(types, isTensorOrPtrToTensor))
+      if (llvm::none_of(types, [this](Type type) { return isCandidate(type); }))
         return WalkResult::advance();
       if (isa<scf::ForOp, scf::YieldOp>(op))
         return WalkResult::advance();
 
-      if (auto cstOp = dyn_cast<arith::ConstantOp>(op)) {
-        recordRootSubSize(cstOp.getResult().getType());
+      LLVM_DEBUG({
+        llvm::dbgs() << "Processing operation: " << *op << "\n";
+        llvm::dbgs() << "Module before transformation:\n" << m << "\n\n";
+      });
+
+      if (auto cstOp = dyn_cast<arith::ConstantOp>(op))
         transformArithConstantOp(cstOp);
-      } else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
-        recordRootSubSize(ptrOp.getResult().getType());
+      else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
         transformMakeTensorPtrOp(ptrOp);
-      } else if (auto dot = dyn_cast<tt::DotOp>(op))
+      else if (auto dot = dyn_cast<tt::DotOp>(op))
         transformDotOp(dot);
       else
         transformGenericOp(op);
 
+      LLVM_DEBUG({
+        llvm::dbgs() << "Module after transformation:\n" << m << "\n\n";
+      });
+
       return WalkResult::advance();
     });
 
-    LLVM_DEBUG(llvm::dbgs() << "Module before canonicalization:\n"
-                            << m << "\n\n");
+    LLVM_DEBUG(llvm::dbgs() << "Canonicalizing...\n");
     canonicalize();
     LLVM_DEBUG(llvm::dbgs() << "Module after canonicalization:\n"
                             << m << "\n\n");
@@ -158,6 +158,10 @@ private:
   /// architecture.
   void initNativeOperationSizes();
 
+  /// Determine whether the given type is a tensor (or a pointer to a tensor)
+  /// that has a warp layout or a dot layout with a parent warp layout.
+  bool isCandidate(Type type) const;
+
   /// Canonicalize operations (e.g. remove redundant tt.extract, tt.glue)
   void canonicalize();
 
@@ -166,10 +170,12 @@ private:
   std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
   getSubTypeAndShape(Type type) const;
 
-  /// Split transformation for several operations.
+  /// Transformations for specific operations.
   void transformMakeTensorPtrOp(tt::MakeTensorPtrOp op);
   void transformArithConstantOp(arith::ConstantOp op);
   void transformDotOp(tt::DotOp dot);
+
+  /// Generic transformation.
   void transformGenericOp(Operation *op);
 
   /// Record the native size supported by the target implementation.
@@ -321,6 +327,32 @@ void MatchTargetSizePass::initNativeOperationSizes() {
   nativeSizes.setLoadStoreSize(512); // max 512DW;
 }
 
+bool MatchTargetSizePass::isCandidate(Type type) const {
+  auto isTensorWithWarpLayout = [](Type type) {
+    auto isCandidateLayout = [](Attribute layout) {
+      if (!layout)
+        return false;
+      if (isa<ttgi::WarpEncodingAttr>(layout))
+        return true;
+      if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout))
+        return isa<ttgi::WarpEncodingAttr>(dotLayout.getParent());
+      return false;
+    };
+
+    if (auto tensorType = dyn_cast<RankedTensorType>(type))
+      return isCandidateLayout(tensorType.getEncoding());
+    return false;
+  };
+
+  if (isTensorWithWarpLayout(type))
+    return true;
+
+  if (auto ptrType = dyn_cast<tt::PointerType>(type))
+    return isTensorWithWarpLayout(ptrType.getPointeeType());
+
+  return false;
+}
+
 void MatchTargetSizePass::canonicalize() {
   MLIRContext *ctx = &getContext();
   ModuleOp m = getOperation();
@@ -336,6 +368,7 @@ void MatchTargetSizePass::canonicalize() {
 void MatchTargetSizePass::recordRootSubSize(Type type) {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Attribute layout = tensorType.getEncoding();
+    assert(layout && "Expecting a valid layout");
     if (sizePerAttrMap.count(layout) == 0)
       sizePerAttrMap[layout] = getSubOpSize(tensorType);
     return;
@@ -348,15 +381,17 @@ void MatchTargetSizePass::recordRootSubSize(Type type) {
 /// Return the native size supported by the target architecture.
 SmallVector<int64_t>
 MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
-  // Dot operation.
   Attribute layout = type.getEncoding();
+  assert(layout && "Expecting a valid layout");
+
+  // Dot operation.
   if (dotAttrs.count(layout)) {
     const auto &dotShape = nativeSizes.getDotShape();
     SmallVector<int64_t> nativeDotSize{dotShape.m, dotShape.n};
     return nativeDotSize;
   }
 
-  // Load/Store operations
+  // Load/Store operations.
   ArrayRef<int64_t> shape = type.getShape();
   const unsigned sizeInBytes = type.getElementTypeBitWidth() / 8;
   unsigned maxLoadStoreSize = nativeSizes.getLoadStoreSize();
@@ -383,13 +418,14 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
   return subSize;
 }
 
-/// return [shape, subType, subSize]
+/// return [shape, subType, subSize] for a tensor (or pointer to tensor)
 std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
 MatchTargetSizePass::getSubTypeAndShape(Type type) const {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    Attribute layout = tensorType.getEncoding();
+    assert(layout && "Expecting a valid layout");
     SmallVector<int64_t> shape = to_vector(tensorType.getShape());
-    Attribute attr = tensorType.getEncoding();
-    SmallVector<int64_t> subSize = sizePerAttrMap.at(attr);
+    SmallVector<int64_t> subSize = sizePerAttrMap.at(layout);
     auto subType = RankedTensorType::get(
         subSize, tensorType.getElementType() /*no encoding*/);
     return {shape, subType, subSize};
@@ -406,8 +442,10 @@ MatchTargetSizePass::getSubTypeAndShape(Type type) const {
 }
 
 void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
-  Type type = op.getType();
-  auto [shape, subType, subSize] = getSubTypeAndShape(type);
+  Type resultType = op.getResult().getType();
+  recordRootSubSize(resultType);
+
+  auto [shape, subType, subSize] = getSubTypeAndShape(resultType);
   unsigned dim = shape.size();
   OpBuilder b(op);
   Location loc = op.getLoc();
@@ -447,13 +485,14 @@ void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
   }
 
   op->replaceAllUsesWith(
-      b.create<ttgi::GlueOp>(loc, type, subOps)->getResults());
-  op->erase();
+      b.create<ttgi::GlueOp>(loc, resultType, subOps)->getResults());
 }
 
 void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
-  auto type = cast<RankedTensorType>(op.getResult().getType());
-  auto [shape, subType, subSize] = getSubTypeAndShape(type);
+  Type resultType = cast<RankedTensorType>(op.getResult().getType());
+  recordRootSubSize(resultType);
+
+  auto [shape, subType, subSize] = getSubTypeAndShape(resultType);
   unsigned dim = shape.size();
   OpBuilder b(op);
   Location loc = op.getLoc();
@@ -475,8 +514,7 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
   }
 
   op->replaceAllUsesWith(
-      b.create<ttgi::GlueOp>(loc, type, subOps)->getResults());
-  op->erase();
+      b.create<ttgi::GlueOp>(loc, resultType, subOps)->getResults());
 }
 
 void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
@@ -526,7 +564,6 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
 
   dot->replaceAllUsesWith(
       b.create<ttgi::GlueOp>(loc, dot.getType(), subCs)->getResults());
-  dot->erase();
 }
 
 void MatchTargetSizePass::transformGenericOp(Operation *op) {
@@ -546,6 +583,7 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
     if (auto tensorType = dyn_cast<RankedTensorType>(type))
       if (isa<tt::LoadOp>(op)) {
         Attribute layout = tensorType.getEncoding();
+        assert(layout && "Expecting a valid layout");
         if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout))
           dotIdx = dotAttr.getOpIdx();
       }
@@ -599,8 +637,6 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
 
   if (numResults == 1)
     op->replaceAllUsesWith(b.create<ttgi::GlueOp>(loc, type, subOps));
-
-  op->erase();
 }
 
 } // namespace
