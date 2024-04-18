@@ -169,6 +169,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   if (bOrigTy != bTy)
     b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
 
+#if 0
   // FIXME: Use the OpenCL API also for TF32.
   if (precisionA != TritonGEN::PrecisionType::TF32) {
     std::string fnName =
@@ -188,7 +189,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
                                     true /*convergent*/);
   }
-
+#endif
   llvm::LLVMContext llvmContext;
   LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
   auto llvmResTy = typeTranslator.translateType(resType);
