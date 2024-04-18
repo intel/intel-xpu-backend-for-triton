@@ -205,7 +205,7 @@ struct ConvertTritonGPUToLLVM
     ModuleOp mod = getOperation();
     auto enableBlockPtr =
         mlir::triton::tools::getBoolEnv("INTEL_ENABLE_BLOCK_PTR");
-    // fixme: set subgroupSize 16 for now
+    // FIXME: set subgroupSize 16 for now
     if (enableBlockPtr)
       mod->setAttr("triton_gpu.threads-per-warp",
                    IntegerAttr::get(IntegerType::get(context, 32), 16));
@@ -218,6 +218,7 @@ struct ConvertTritonGPUToLLVM
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
+    // FIXME: handle shared memory with block ptr
     if (!enableBlockPtr) {
       // Allocate shared memory and set barrier
       ModuleAllocation allocation(mod);
@@ -248,6 +249,7 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::intel::TargetInfo targetInfo(computeCapability);
     int benefit = 10;
     using namespace mlir::triton::intel;
+    // ops with block ptr use different ways to convert to llvm
     if (enableBlockPtr) {
       mlir::triton::intel::populateTritonOpsToLLVMPatterns(typeConverter,
                                                            patterns, benefit);
