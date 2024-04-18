@@ -38,6 +38,17 @@ def create_argument_parser() -> argparse.ArgumentParser:
     return argument_parser
 
 
+def get_deselected(report_path: pathlib.Path) -> int:
+    """Calculates deselected (via skiplist) tests."""
+    skiplist_dir = os.getenv('TRITON_TEST_SKIPLIST_DIR', 'scripts/skiplist/default')
+    skiplist_path = pathlib.Path(skiplist_dir) / f'{report_path.stem}.txt'
+    if not skiplist_path.exists():
+        return 0
+    with skiplist_path.open('r') as f:
+        # skip empty lines and comments
+        return len([line for line in f.readlines() if line and not line.startswith('#')])
+
+
 def parse_report(report_path: pathlib.Path) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
@@ -49,6 +60,9 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
                 stats.skipped += 1
             elif skipped.get('type') == 'pytest.xfail':
                 stats.xfailed += 1
+    deselected = get_deselected(report_path)
+    stats.skipped += deselected
+    stats.total += deselected
     stats.passed = stats.total - stats.skipped - stats.xfailed
     return stats
 
@@ -83,7 +97,7 @@ def print_stats(stats: ReportStats):
 
 def print_text_stats(stats: List[ReportStats]):
     """Prints human readable stats."""
-    for item in stats:
+    for item in sorted(stats, key=lambda x: x.name):
         print_stats(item)
     print_stats(overall_stats(stats))
 
