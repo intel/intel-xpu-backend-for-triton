@@ -91,11 +91,7 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        device_arch = self.parse_device_arch(tgt_prop.get('device_arch', 0))
-        if device_arch is not None:
-            dev_prop['device_arch'] = device_arch
-        else:
-            dev_prop['device_arch'] = intel.passes.ttgpuir.DEVICE_ARCH.UNKNOWN
+        dev_prop['device_arch'] = self.parse_device_arch(tgt_prop.get('device_arch', 0))
         return dev_prop
 
     def parse_options(self, opts) -> Any:

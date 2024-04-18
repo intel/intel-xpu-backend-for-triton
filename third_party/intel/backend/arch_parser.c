@@ -13,12 +13,6 @@
 #include <numpy/arrayobject.h>
 
 static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
-  uint64_t dev_arch;
-  if (!PyArg_ParseTuple(args, "K", &dev_arch))
-    return NULL;
-
-  sycl::ext::oneapi::experimental::architecture sycl_arch =
-      static_cast<sycl::ext::oneapi::experimental::architecture>(dev_arch);
   PyObject *tritonIntelGPUPassesModule =
       PyImport_ImportModule("triton._C.libtriton.intel.passes.ttgpuir");
   if (!tritonIntelGPUPassesModule) {
@@ -37,6 +31,12 @@ static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
   PyObject *device_arch =
       PyObject_GetAttrString(device_archs, (char *)"UNKNOWN");
 
+  uint64_t dev_arch;
+  if (!PyArg_ParseTuple(args, "K", &dev_arch))
+    return Py_BuildValue("N", device_arch);
+
+  sycl::ext::oneapi::experimental::architecture sycl_arch =
+      static_cast<sycl::ext::oneapi::experimental::architecture>(dev_arch);
   switch (sycl_arch) {
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
     Py_DECREF(device_arch);
