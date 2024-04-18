@@ -167,10 +167,14 @@ class XPUBackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        device_arch = intel.passes.ttgpuir.DEVICE_ARCH.PVC
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
 
         # optimize TTGIR
         intel.passes.ttgpuir.add_accelerate_matmul(pm, device_arch)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        # Intel 2D load
+        intel.passes.ttgpuir.add_materialize_block_pointer(pm, intel.passes.ttgpuir.DEVICE_ARCH.PVC)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm, device_arch)
 
@@ -179,7 +183,7 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
-        passes.ttgpuir.add_prefetch(pm)
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, intel.passes.ttgpuir.DEVICE_ARCH.PVC)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
