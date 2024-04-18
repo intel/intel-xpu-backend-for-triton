@@ -101,6 +101,19 @@ def TritonIntelGPUDistributeToWarps
                            "mlir::gpu::GPUDialect"];
 }
 
+def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-conversions", "mlir::ModuleOp"> {
+  let summary = "remove superfluous layout conversions";
+
+  let description = [{
+  }];
+
+  let constructor = "mlir::triton::gpu::intel::createTritonIntelGPURemoveLayoutConversionsPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+
+}
+
 def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::ModuleOp"> {
   let summary = "Prefetch a tensor block around loop";
 
