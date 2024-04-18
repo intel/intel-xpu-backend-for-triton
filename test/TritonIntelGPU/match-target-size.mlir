@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-match-target-size --verify-each | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-match-target-size | FileCheck %s
 
 #warp = #triton_intel_gpu.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 #dot0_ = #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>

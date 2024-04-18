@@ -105,8 +105,7 @@ public:
     ModuleOp m = getOperation();
 
     // Collect the result layout of "interesting" `tt.dot` operations.
-    // A candidate 'tt.dot' operation yields a tensor(or pointer to tensor) with
-    // a warp layout.
+    // A candidate 'tt.dot' operation yields a tensor with a warp layout.
     m.walk([&](tt::DotOp dot) {
       auto resultType = cast<RankedTensorType>(dot.getResult().getType());
       if (isCandidate(resultType))
@@ -131,11 +130,13 @@ public:
         llvm::dbgs() << "Module before transformation:\n" << m << "\n\n";
       });
 
-      if (auto cstOp = dyn_cast<arith::ConstantOp>(op))
+      if (auto cstOp = dyn_cast<arith::ConstantOp>(op)) {
+        recordRootSubSize(cstOp.getResult().getType());
         transformArithConstantOp(cstOp);
-      else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
+      } else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
+        recordRootSubSize(ptrOp.getResult().getType());
         transformMakeTensorPtrOp(ptrOp);
-      else if (auto dot = dyn_cast<tt::DotOp>(op))
+      } else if (auto dot = dyn_cast<tt::DotOp>(op))
         transformDotOp(dot);
       else
         transformGenericOp(op);
@@ -443,8 +444,6 @@ MatchTargetSizePass::getSubTypeAndShape(Type type) const {
 
 void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
   Type resultType = op.getResult().getType();
-  recordRootSubSize(resultType);
-
   auto [shape, subType, subSize] = getSubTypeAndShape(resultType);
   unsigned dim = shape.size();
   OpBuilder b(op);
@@ -486,12 +485,11 @@ void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
 
   op->replaceAllUsesWith(
       b.create<ttgi::GlueOp>(loc, resultType, subOps)->getResults());
+  op->erase();
 }
 
 void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
   Type resultType = cast<RankedTensorType>(op.getResult().getType());
-  recordRootSubSize(resultType);
-
   auto [shape, subType, subSize] = getSubTypeAndShape(resultType);
   unsigned dim = shape.size();
   OpBuilder b(op);
@@ -515,6 +513,7 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
 
   op->replaceAllUsesWith(
       b.create<ttgi::GlueOp>(loc, resultType, subOps)->getResults());
+  op->erase();
 }
 
 void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
@@ -564,6 +563,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
 
   dot->replaceAllUsesWith(
       b.create<ttgi::GlueOp>(loc, dot.getType(), subCs)->getResults());
+  dot->erase();
 }
 
 void MatchTargetSizePass::transformGenericOp(Operation *op) {
@@ -635,8 +635,10 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
     }
   }
 
-  if (numResults == 1)
+  if (numResults == 1) {
     op->replaceAllUsesWith(b.create<ttgi::GlueOp>(loc, type, subOps));
+    op->erase();
+  }
 }
 
 } // namespace
