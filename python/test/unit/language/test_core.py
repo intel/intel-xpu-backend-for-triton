@@ -4780,8 +4780,7 @@ def compute_rep_shape(layout):
         rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
         return rep_shape
     elif type(layout) is DpasLayout:
-        size_per_thread = [layout.repeatCount * layout.execution_size / layout.threads_per_warp, 1]
-        warp_shape = np.multiply(size_per_thread, layout.threads_per_warp)
+        warp_shape = [layout.repeatCount, layout.execution_size]
         rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
         return rep_shape
     else:
