@@ -43,13 +43,14 @@ class XPUOptions:
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     allow_fp8e4nv: bool = False
+    allow_fp8e4b15: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
-        extern_libs = dict() if self.extern_libs is None else dict(self.extern_libs)
+        extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = str(default_libdir / 'libsycl-spir64-unknown-unknown.bc')
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -211,6 +212,6 @@ class XPUBackend(BaseBackend):
 
     def get_codegen_implementation(self):
         from triton.language.extra.intel import convert_custom_float8
-        codegen_fns = dict()
+        codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8
         return codegen_fns
