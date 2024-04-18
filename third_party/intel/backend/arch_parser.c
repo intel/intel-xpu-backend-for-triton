@@ -39,10 +39,12 @@ static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
 
   switch (sycl_arch) {
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
+    Py_DECREF(device_arch);
     device_arch = PyObject_GetAttrString(device_archs, (char *)"PVC");
     break;
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_dg2_g10:
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_dg2_g11:
+    Py_DECREF(device_arch);
     device_arch = PyObject_GetAttrString(device_archs, (char *)"ATS");
     break;
   default:; // fall through

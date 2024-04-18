@@ -74,11 +74,8 @@ class XPUBackend(BaseBackend):
         # TODO: Deprecate capability in XPU compilation
         # capability should be < 80, because some features in passes with capability >= 80 are not supported on PVC
         self.capability = intel.passes.ttgpuir.DEVICE_ARCH.PVC
-        self.device_arch = intel.passes.ttgpuir.DEVICE_ARCH.PVC
         self.properties = self._parse_target(target[1])
-        parsed_arch = self.properties["device_arch"]
-        if parsed_arch != intel.passes.ttgpuir.DEVICE_ARCH.UNKNOWN:
-            self.device_arch = parsed_arch
+        self.device_arch = self.properties["device_arch"]
         self.binary_ext = "spv"
 
     def _parse_target(self, tgt_prop) -> dict:
@@ -94,7 +91,11 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        dev_prop['device_arch'] = self.parse_device_arch(tgt_prop.get('device_arch', 0))
+        device_arch = self.parse_device_arch(tgt_prop.get('device_arch', 0))
+        if device_arch is not None:
+            dev_prop['device_arch'] = device_arch
+        else:
+            dev_prop['device_arch'] = intel.passes.ttgpuir.DEVICE_ARCH.UNKNOWN
         return dev_prop
 
     def parse_options(self, opts) -> Any:
