@@ -1,3 +1,11 @@
+//===- arch_parser.c ------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
 #include <sycl/sycl.hpp>
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -21,14 +29,13 @@ static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
   PyObject *device_archs =
       PyObject_GetAttrString(tritonIntelGPUPassesModule, (char *)"DEVICE_ARCH");
   if (!device_archs) {
+    Py_DECREF(tritonIntelGPUPassesModule);
     PyErr_Print();
     printf("Error unknown 'DEVICE_ARCH' attribute\n");
     return NULL;
   }
   PyObject *device_arch =
       PyObject_GetAttrString(device_archs, (char *)"UNKNOWN");
-  if (dev_arch == 0)
-    return Py_BuildValue("N", device_arch);
 
   switch (sycl_arch) {
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
@@ -40,8 +47,12 @@ static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
     break;
   default:; // fall through
   }
+  Py_DECREF(tritonIntelGPUPassesModule);
+  Py_DECREF(device_archs);
+
   return Py_BuildValue("N", device_arch);
 }
+
 static PyMethodDef ModuleMethods[] = {
     {"parse_device_arch", parseDeviceArch, METH_VARARGS,
      "parse device architecture"},
@@ -54,10 +65,9 @@ static struct PyModuleDef ModuleDef = {PyModuleDef_HEAD_INIT, "arch_utils",
                                        ModuleMethods};
 
 PyMODINIT_FUNC PyInit_arch_utils(void) {
-  PyObject *m = PyModule_Create(&ModuleDef);
-  if (m == NULL) {
-    return NULL;
+  if (PyObject *m = PyModule_Create(&ModuleDef)) {
+    PyModule_AddFunctions(m, ModuleMethods);
+    return m;
   }
-  PyModule_AddFunctions(m, ModuleMethods);
-  return m;
+  return NULL;
 }
