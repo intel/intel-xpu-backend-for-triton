@@ -229,7 +229,7 @@ public:
 ///   }
 /// After:
 ///   scf.for %i = %lb to %ub step %step (%arg = %a) {
-///     use %arg10
+///     use %arg
 ///     scf.yield
 ///   }
 class ScfPattern : public OpRewritePattern<scf::ForOp> {
@@ -251,13 +251,14 @@ public:
     // expanded.
     for (auto [arg, init] :
          llvm::zip(forOp.getRegionIterArgs(), forOp.getInits())) {
-      if (!init.getDefiningOp() || !isa<ttgi::GlueOp>(init.getDefiningOp())) {
+      Operation *definingOp = init.getDefiningOp();
+      if (!isa_and_nonnull<ttgi::GlueOp>(definingOp)) {
         newInits.push_back(init);
         userIndexMap[arg] = idx++;
         continue;
       }
 
-      auto glue = cast<ttgi::GlueOp>(init.getDefiningOp());
+      auto glue = cast<ttgi::GlueOp>(definingOp);
       unsigned numSplit = glue->getOperands().size();
       for (unsigned i = 0; i < numSplit; ++i)
         newInits.push_back(glue->getOperand(i));
@@ -310,12 +311,13 @@ public:
     idx = 0;
     for (auto [result, init] :
          llvm::zip(forOp.getResults(), forOp.getInits())) {
-      if (!init.getDefiningOp() || !isa<ttgi::GlueOp>(init.getDefiningOp())) {
+      Operation *definingOp = init.getDefiningOp();
+      if (!isa_and_nonnull<ttgi::GlueOp>(definingOp)) {
         userIndexMap[result] = idx++;
         continue;
       }
 
-      auto glue = cast<ttgi::GlueOp>(init.getDefiningOp());
+      auto glue = cast<ttgi::GlueOp>(definingOp);
       for (Operation *user : result.getUsers())
         if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
           userIndexMap[extract] = idx + extract.getIndex();
@@ -620,6 +622,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
 
   dot->replaceAllUsesWith(
       b.create<ttgi::GlueOp>(loc, dot.getType(), subCs)->getResults());
+  dot->erase();
 }
 
 void MatchTargetSizePass::transformGenericOp(Operation *op) {
