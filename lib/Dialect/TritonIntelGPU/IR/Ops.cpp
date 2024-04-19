@@ -147,7 +147,7 @@ LogicalResult GlueOp::verify() {
 
 LogicalResult ExtractOp::verify() {
   Type resultType = getRes().getType();
-  Type operandType = getOperand().getType();
+  Type operandType = getBase().getType();
 
   unsigned resultRank = getRank(resultType);
   unsigned operandRank = getRank(operandType);
@@ -187,12 +187,12 @@ LogicalResult ExtractOp::verify() {
 
 OpFoldResult ExtractOp::fold(FoldAdaptor adaptor) {
   // extract (glue %t1, %t2)[1] -> %t2
-  if (auto glueOp = getOperand().getDefiningOp<GlueOp>())
+  if (auto glueOp = getBase().getDefiningOp<GlueOp>())
     return glueOp->getOperand(getIndex());
 
   // %0 =  .... : tensor<16x8xf16>
   // extract %0[0] : tensor<16x8xf16> -> %0
-  if (getIndex() == 0 && getOperand().getType() == getType())
+  if (getIndex() == 0 && getBase().getType() == getType())
     return getOperand();
 
   return {};

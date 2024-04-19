@@ -1264,9 +1264,6 @@ public:
 
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
-
-private:
-  int computeCapability;
 };
 
 template <typename SourceOp, typename DestOp>

@@ -3,6 +3,7 @@ add_triton_library(TritonIntelGPUTransforms
   DistributeToWarps.cpp
   MatchTargetSize.cpp
   PrefetchBlock.cpp
+  RemoveLayoutConversions.cpp
   Utility.cpp
 
   DEPENDS

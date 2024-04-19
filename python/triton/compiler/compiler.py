@@ -151,11 +151,15 @@ def triton_key():
     with open(__file__, "rb") as f:
         contents += [hashlib.sha256(f.read()).hexdigest()]
     # compiler
-    compiler_path = os.path.join(TRITON_PATH, 'compiler')
-    backends_path = os.path.join(TRITON_PATH, 'compiler', 'backends')
-    for lib in pkgutil.iter_modules([compiler_path, backends_path]):
-        with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
-            contents += [hashlib.sha256(f.read()).hexdigest()]
+    path_prefixes = [
+        (os.path.join(TRITON_PATH, "compiler"), "triton.compiler."),
+        (os.path.join(TRITON_PATH, "backends"), "triton.backends."),
+    ]
+    for path, prefix in path_prefixes:
+        for lib in pkgutil.walk_packages([path], prefix=prefix):
+            with open(lib.module_finder.find_spec(lib.name).origin, "rb") as f:
+                contents += [hashlib.sha256(f.read()).hexdigest()]
+
     # backend
     libtriton_hash = hashlib.sha256()
     with open(os.path.join(TRITON_PATH, "_C/libtriton.so"), "rb") as f:
@@ -376,8 +380,15 @@ class CompiledKernel:
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
-        args = {k: v for k, v in zip(self.src.fn.arg_names, args)}
-        ret.add(self.src.fn.launch_metadata, (grid, self.metadata, args))
+        arg_dict = {}
+        arg_idx = 0
+        for arg_name in self.src.fn.arg_names:
+            if arg_name in self.src.constants:
+                arg_dict[arg_name] = self.src.constants[arg_name]
+            else:
+                arg_dict[arg_name] = args[arg_idx]
+                arg_idx += 1
+        ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 
     def __getitem__(self, grid):

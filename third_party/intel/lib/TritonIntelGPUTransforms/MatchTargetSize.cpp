@@ -93,7 +93,7 @@ public:
 
 private:
   DotShape dotShape;
-  unsigned loadStoreSize;
+  unsigned loadStoreSize = 0;
 };
 
 class MatchTargetSizePass
