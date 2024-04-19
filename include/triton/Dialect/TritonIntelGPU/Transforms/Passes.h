@@ -28,6 +28,8 @@ std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass(
 
 std::unique_ptr<Pass> createTritonIntelGPUDistributeToWarpsPass();
 
+std::unique_ptr<Pass> createTritonIntelGPURemoveLayoutConversionsPass();
+
 std::unique_ptr<Pass> createPrefetchBlockPass();
 
 std::unique_ptr<Pass> createMatchTargetSizePass();
