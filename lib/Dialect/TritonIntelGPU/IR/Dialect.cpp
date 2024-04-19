@@ -314,11 +314,11 @@ Attribute DpasEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   SmallVector<unsigned> warpsPerCTA;
-  unsigned repeatCount;
-  unsigned systolicDepth;
-  unsigned executionSize;
-  unsigned opsPerChan;
-  unsigned threadsPerWarp;
+  unsigned repeatCount = 0;
+  unsigned systolicDepth = 0;
+  unsigned executionSize = 0;
+  unsigned opsPerChan = 0;
+  unsigned threadsPerWarp = 0;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "repeatCount") {
