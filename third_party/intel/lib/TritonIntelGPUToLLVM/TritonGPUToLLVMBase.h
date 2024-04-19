@@ -12,10 +12,8 @@
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <set>
 #include <type_traits>
 
@@ -29,10 +27,8 @@ using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
-namespace ttng = ::mlir::triton::nvidia_gpu;
 
 typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
 
