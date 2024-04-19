@@ -114,7 +114,7 @@ jobs:
     name: Test
     needs: matrix
     runs-on:
-      - ${{ inputs.runner_label || 'runner-0.0.11' }}
+      - ${{ inputs.runner_label || 'runner-0.0.12' }}
     strategy:
       matrix:
         suite: ${{ fromJson(needs.matrix.outputs.suite) }}
