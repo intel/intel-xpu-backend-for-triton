@@ -198,11 +198,11 @@ class DpasLayout:
 
     def __init__(self, repeatCount, systolic_depth, execution_size, ops_per_chan, threads_per_warp, warps_per_cta):
         self.repeatCount = repeatCount
-        self.systolic_depth = str(systolic_depth)
-        self.execution_size = str(execution_size)
-        self.ops_per_chan = str(ops_per_chan)
-        self.threads_per_warp = str(threads_per_warp)
-        self.warps_per_cta = str(warps_per_cta)
+        self.systolic_depth = systolic_depth
+        self.execution_size = execution_size
+        self.ops_per_chan = ops_per_chan
+        self.threads_per_warp = threads_per_warp
+        self.warps_per_cta = warps_per_cta
 
     def __str__(self):
         return f"#triton_intel_gpu.dpas<{{repeatCount={self.repeatCount}, systolicDepth={self.systolic_depth}, executionSize = {self.execution_size}, opsPerChan = {self.ops_per_chan}, threadsPerWarp = {self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}}}>"
@@ -4783,6 +4783,10 @@ intermediate_layouts = [
 def compute_rep_shape(layout):
     if type(layout) is BlockedLayout:
         warp_shape = np.multiply(layout.sz_per_thread, layout.threads_per_warp)
+        rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
+        return rep_shape
+    elif type(layout) is DpasLayout:
+        warp_shape = [layout.repeatCount, layout.execution_size]
         rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
         return rep_shape
     else:
