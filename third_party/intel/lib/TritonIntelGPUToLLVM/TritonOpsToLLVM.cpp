@@ -16,7 +16,7 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
-/// offsetX, offsetY for 2D tensor desc
+/// v2i32 [offsetX, offsetY] for 2D tensor desc
 class MakeTensorPtrOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<MakeTensorPtrOp> {
 public:
@@ -48,6 +48,9 @@ public:
   }
 };
 
+/// %oldOffset =  llvm.extract %v2i32, 0/1
+/// %newOffset =  llvm.add %oldOffset, %advanceStep
+/// offset = llvm.insert %v2i32, 0/1
 class AdvanceOpConversion : public ConvertTritonGPUOpToLLVMPattern<AdvanceOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
@@ -80,25 +83,8 @@ public:
   }
 };
 
-// TritonGen 2DBlockLoadOp Desc: LSC 2d block prefetch
-// Output: nothing is returned
-// Arg 0: flat image base offset
-// Arg 1: flat image base width
-// Arg 2: flat image base height
-// Arg 3: flat image base pitch
-// Arg 4: offset x
-// Arg 5: offset y
-// Arg 6: elemSize
-// Arg 7: tile width
-// Arg 8: tile height
-// Arg 9: V - num blocks (2 for simple 2d block read)
-// Arg 10: transpose
-// Arg 11: vnni transform (for transpose+transform use transpose only and
-// elemSize 32)
-// Arg 12: cache controls options (LSC_CACHE_OPTS)
-
-// TritonGen 2DBlockLoadOp Desc: LSC 2d block read
-// Output:
+// TritonGen 2DBlock Prefetch/LoadOp Desc: LSC 2d block prefetch/load
+// Output: for prefetch, nothing is returned. for load a vector is returned
 // Arg 0: flat image base offset
 // Arg 1: flat image base width
 // Arg 2: flat image base height
@@ -142,33 +128,32 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto ptrType = cast<PointerType>(op.getPtr().getType());
     auto tType = cast<RankedTensorType>(ptrType.getPointeeType());
-    auto rank = tType.getRank();
+    unsigned rank = tType.getRank();
     assert(rank <= 2 && "only support 1d/2d load/store/prefetch for now");
-    auto loc = op.getLoc();
+    Location loc = op.getLoc();
     constexpr bool isLoad = std::is_same_v<OpType, LoadOp>;
     constexpr bool isPrefetch = std::is_same_v<OpType, PrefetchOp>;
     auto createIntConstant = [&](Type type, unsigned value) {
       auto attr = rewriter.getIntegerAttr(type, value);
       return rewriter.create<LLVM::ConstantOp>(loc, type, attr);
     };
-    auto i16Type = rewriter.getI16Type();
-    auto i32Type = rewriter.getI32Type();
-    auto i64Type = rewriter.getI64Type();
-    auto v4i64 = VectorType::get(4, i64Type);
-    auto vnni = false;
-    auto transpose = false;
+    Type i16Type = rewriter.getI16Type();
+    Type i32Type = rewriter.getI32Type();
+    Type i64Type = rewriter.getI64Type();
+    bool vnni = false;
+    bool transpose = false;
     if constexpr (isLoad) {
       auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
       vnni = idxAttr.getInt() == 1 ? true : false;
     }
     unsigned dataSize = tType.getElementType().getIntOrFloatBitWidth();
-    auto blockWidth = tType.getShape()[1];
+    unsigned blockWidth = tType.getShape()[1];
     assert(blockWidth == 16 || blockWidth == 32 && "only support 16/32 block");
-    auto vBlks = blockWidth == 32 ? 2 : 1;
+    unsigned vBlks = blockWidth == 32 ? 2 : 1;
     blockWidth = 16;
-    auto blockHeight = tType.getShape()[0];
-    auto idx0 = createIntConstant(i32Type, 0);
-    auto idx1 = createIntConstant(i32Type, 1);
+    unsigned blockHeight = tType.getShape()[0];
+    Value idx0 = createIntConstant(i32Type, 0);
+    Value idx1 = createIntConstant(i32Type, 1);
     Value ptr = op.getPtr();
     if (auto cast =
             dyn_cast<mlir::UnrealizedConversionCastOp>(ptr.getDefiningOp()))
@@ -179,11 +164,11 @@ public:
             dyn_cast<mlir::UnrealizedConversionCastOp>(base.getDefiningOp()))
       base = cast.getInputs()[0];
 
-    auto insertPoint = rewriter.saveInsertionPoint();
+    OpBuilder::InsertPoint insertPoint = rewriter.saveInsertionPoint();
     rewriter.setInsertionPointAfter(ptrOp);
-    auto bytes = createIntConstant(
+    Value bytes = createIntConstant(
         i32Type, tType.getElementType().getIntOrFloatBitWidth() / 8);
-    auto one = createIntConstant(i32Type, 1);
+    Value one = createIntConstant(i32Type, 1);
     Value surfaceW =
         rewriter.create<arith::TruncIOp>(loc, i32Type, ptrOp.getShape()[1]);
     surfaceW = rewriter.create<arith::MulIOp>(loc, surfaceW, bytes);
@@ -205,31 +190,31 @@ public:
       auto num = tType.getNumElements() / 16 / ratio;
       return VectorType::get(num, elemType);
     };
-    auto tensorPtr = adaptor.getPtr();
-    auto offsetX =
+    Value tensorPtr = adaptor.getPtr();
+    Value offsetX =
         rewriter.create<LLVM::ExtractElementOp>(loc, tensorPtr, idx0);
-    auto offsetY =
+    Value offsetY =
         rewriter.create<LLVM::ExtractElementOp>(loc, tensorPtr, idx1);
     if constexpr (isLoad) {
-      auto resType =
+      Type resType =
           this->getTypeConverter()->convertType(op->getResult(0).getType());
       auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
-      auto idx = idxAttr.getInt();
-      auto intType = getIntType(op->getResult(0).getType(), idx == 0);
+      unsigned idx = idxAttr.getInt();
+      Type intType = getIntType(op->getResult(0).getType(), idx == 0);
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, intType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
           dataSize, blockWidth, blockHeight, vBlks, transpose, vnni);
       auto cast = rewriter.create<LLVM::BitcastOp>(loc, resType, load);
       rewriter.replaceOp(op, cast);
     } else if constexpr (isPrefetch) {
-      auto load = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
+      rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, transpose, vnni,
           TritonGEN::PrefetchCacheControl::L1C_L3C);
       rewriter.eraseOp(op);
     } else {
-      auto intType = getIntType(op.getValue().getType());
-      auto cast =
+      Type intType = getIntType(op.getValue().getType());
+      Value cast =
           rewriter.create<LLVM::BitcastOp>(loc, intType, adaptor.getValue());
       rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
@@ -256,9 +241,9 @@ public:
   LogicalResult
   matchAndRewrite(DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto i16Type = rewriter.getI16Type();
-    auto i32Type = rewriter.getI32Type();
+    Location loc = op.getLoc();
+    Type i16Type = rewriter.getI16Type();
+    Type i32Type = rewriter.getI32Type();
     auto encodePrecision = [&](Type type) -> TritonGEN::PrecisionType {
       if (type == rewriter.getBF16Type())
         return TritonGEN::PrecisionType::BF16;
@@ -271,8 +256,10 @@ public:
         return TritonGEN::PrecisionType::UNUSED;
       }
     };
-    auto preca = encodePrecision(op.getA().getType().getElementType());
-    auto precb = encodePrecision(op.getB().getType().getElementType());
+    TritonGEN::PrecisionType preca =
+        encodePrecision(op.getA().getType().getElementType());
+    TritonGEN::PrecisionType precb =
+        encodePrecision(op.getB().getType().getElementType());
     auto precA =
         TritonGEN::PrecisionTypeAttr::get(rewriter.getContext(), preca);
     auto precB =
@@ -280,17 +267,17 @@ public:
     auto rc = IntegerAttr::get(i32Type, 8);
     auto getIntType = [&](Type type, bool is16Bit = false) {
       auto tType = cast<RankedTensorType>(type);
-      auto elemType = is16Bit ? i16Type : i32Type;
-      auto ratio =
+      Type elemType = is16Bit ? i16Type : i32Type;
+      unsigned ratio =
           elemType.getIntOrFloatBitWidth() / tType.getElementTypeBitWidth();
-      auto num = tType.getNumElements() / 16 / ratio;
+      unsigned num = tType.getNumElements() / 16 / ratio;
       return VectorType::get(num, elemType);
     };
-    auto intTypeA = getIntType(op.getA().getType(), true);
-    auto castA =
+    Type intTypeA = getIntType(op.getA().getType(), true);
+    Value castA =
         rewriter.create<LLVM::BitcastOp>(loc, intTypeA, adaptor.getA());
-    auto intTypeB = getIntType(op.getB().getType());
-    auto castB =
+    Type intTypeB = getIntType(op.getB().getType());
+    Value castB =
         rewriter.create<LLVM::BitcastOp>(loc, intTypeB, adaptor.getB());
     // sd dpasW fixed in genx.dpas lowering
     auto dpas = rewriter.create<TritonGEN::MatrixDPASOp>(
@@ -301,6 +288,9 @@ public:
   }
 };
 
+/// %glue = ttgi.glue %a, %b : tensor<4xf16>, tensor<4xf16> : tensor<8xf16>
+/// is converted to
+/// %glue = llvm.shufflevector %a, %b : [0, 1, 2, 3, 4, 5, 6, 7] : vector<8xf16>
 class GlueOpConversion : public ConvertTritonGPUOpToLLVMPattern<GlueOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
@@ -308,15 +298,15 @@ public:
   LogicalResult
   matchAndRewrite(GlueOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto operands = adaptor.getOperands();
+    Location loc = op.getLoc();
+    SmallVector<Value> operands = adaptor.getOperands();
     auto dstType =
         cast<VectorType>(getTypeConverter()->convertType(op.getType()));
-    auto numElts = dstType.getNumElements();
+    unsigned numElts = dstType.getNumElements();
     SmallVector<int32_t> indices(numElts);
     std::iota(indices.begin(), indices.end(), 0);
-    auto attr = rewriter.getDenseI32ArrayAttr(indices);
-    auto num = operands.size();
+    DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
+    unsigned num = operands.size();
     if (num == 1) {
       rewriter.replaceOp(op, operands[0]);
     } else if (num == 2) {
@@ -325,10 +315,10 @@ public:
     } else if (num == 4) {
       auto subType = VectorType::get(numElts / 2, dstType.getElementType());
       indices.pop_back_n(numElts / 2);
-      auto attr01 = rewriter.getDenseI32ArrayAttr(indices);
+      DenseI32ArrayAttr attr01 = rewriter.getDenseI32ArrayAttr(indices);
       auto shfl01 = rewriter.create<LLVM::ShuffleVectorOp>(
           loc, subType, operands[0], operands[1], attr01);
-      auto attr23 = rewriter.getDenseI32ArrayAttr(indices);
+      DenseI32ArrayAttr attr23 = rewriter.getDenseI32ArrayAttr(indices);
       auto shfl23 = rewriter.create<LLVM::ShuffleVectorOp>(
           loc, subType, operands[2], operands[3], attr23);
       auto shfl = rewriter.create<LLVM::ShuffleVectorOp>(loc, dstType, shfl01,
@@ -341,6 +331,9 @@ public:
   }
 };
 
+/// %extract = ttgi.extract %a[0] : tensor<8xf16> -> tensor<4xf16>
+/// is converted to
+/// %extract = llvm.shufflevector %a, %a : [0, 1, 2, 3] : vector<4xf16>
 class ExtractOpConversion : public ConvertTritonGPUOpToLLVMPattern<ExtractOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
@@ -348,16 +341,16 @@ public:
   LogicalResult
   matchAndRewrite(ExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto base = adaptor.getBase();
-    auto idx = op.getIndex();
+    Location loc = op.getLoc();
+    Value base = adaptor.getBase();
+    unsigned idx = op.getIndex();
     auto dstType =
         cast<VectorType>(getTypeConverter()->convertType(op.getType()));
-    auto numElts = dstType.getNumElements();
+    unsigned numElts = dstType.getNumElements();
     SmallVector<int32_t> indices(numElts);
-    auto start = idx * numElts;
+    unsigned start = idx * numElts;
     std::iota(indices.begin(), indices.end(), start);
-    auto attr = rewriter.getDenseI32ArrayAttr(indices);
+    DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
     rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(op, dstType, base, base,
                                                        attr);
     return success();
