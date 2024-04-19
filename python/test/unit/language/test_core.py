@@ -35,6 +35,7 @@ def is_hip():
 def is_xpu():
     return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "xpu"
 
+
 def xpu_has_fp64():
     assert is_xpu()
     return triton.runtime.driver.active.get_current_target()[1]['has_fp64']
