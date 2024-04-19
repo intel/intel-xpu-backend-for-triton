@@ -67,4 +67,4 @@ protected:
   }
 };
 
-#endif
+#endif // TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_BASE_H

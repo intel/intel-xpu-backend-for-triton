@@ -117,7 +117,7 @@ struct LoadStoreConversionBase {
       return 1;
     auto contiguity = getContiguity(ptr);
     auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
-    // The maximum vector size is 128 bits on NVIDIA GPUs.
+    // The maximum vector size is 128 bits.
     return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
   }
 
@@ -411,6 +411,7 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
   if (numCTAs == 1) {
     barrier();
   } else {
+    assert(false && "Cannot use NVIDIA_GPU operations");
     rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
     rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
   }

@@ -25,6 +25,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
@@ -179,6 +180,7 @@ public:
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+    addIllegalDialect<triton::gpu::intel::TritonIntelGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addIllegalDialect<triton::TritonGEN::TritonGENDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
