@@ -44,6 +44,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -92,7 +93,7 @@ public:
 
 private:
   DotShape dotShape;
-  unsigned loadStoreSize;
+  unsigned loadStoreSize = 0;
 };
 
 class MatchTargetSizePass
@@ -216,39 +217,53 @@ public:
   }
 };
 
-/// Simplify SCF loops.
-/// before:
+/// Simplify SCF for loops.
+/// Before:
 ///   %glue = triton_intel_gpu.glue %a, %b : tensor<4x4xf32>, tensor<4x4xf32>
 ///         -> tensor<8x4xf32>
-///   scf.for %i = %lb to %ub step %step (%arg10 = %glue) {
-///     %extract = triton_intel_gpu.extract %arg10[0] : tensor<8x4xf32>
+///   scf.for %i = %lb to %ub step %step (%arg = %glue) {
+///     %extract = triton_intel_gpu.extract %arg[0] : tensor<8x4xf32>
 ///              -> tensor<4x4xf32>
 ///     use %extract
-/// after:
-///   scf.for %i = %lb to %ub step %step (%arg10 = %a) {
-///     use %arg10
+///     scf.yield
+///   }
+/// After:
+///   scf.for %i = %lb to %ub step %step (%arg = %a) {
+///     use %arg
+///     scf.yield
+///   }
 class ScfPattern : public OpRewritePattern<scf::ForOp> {
 public:
   using OpRewritePattern<scf::ForOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(scf::ForOp op,
+  LogicalResult matchAndRewrite(scf::ForOp forOp,
                                 PatternRewriter &rewriter) const final {
+    if (!isCandidateLoop(forOp))
+      return failure();
+
     SmallVector<Operation *> deleteList;
     SmallVector<Value> newInits;
     DenseMap<Value, int> userIndexMap;
     unsigned idx = 0;
-    for (auto [arg, init] : llvm::zip(op.getRegionIterArgs(), op.getInits())) {
-      auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
-      if (!glue) {
+
+    // Create a new initialization list by replacing 'glue' operations with
+    // their operands. Record 'extract' operations that use original init
+    // argument so that they can be updated after the loop init list is
+    // expanded.
+    for (auto [arg, init] :
+         llvm::zip(forOp.getRegionIterArgs(), forOp.getInits())) {
+      Operation *definingOp = init.getDefiningOp();
+      if (!isa_and_nonnull<ttgi::GlueOp>(definingOp)) {
         newInits.push_back(init);
         userIndexMap[arg] = idx++;
         continue;
       }
 
+      auto glue = cast<ttgi::GlueOp>(definingOp);
       unsigned numSplit = glue->getOperands().size();
       for (unsigned i = 0; i < numSplit; ++i)
         newInits.push_back(glue->getOperand(i));
 
-      for (auto *user : arg.getUsers()) {
+      for (Operation *user : arg.getUsers()) {
         if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
           userIndexMap[extract] = idx + extract.getIndex();
           deleteList.push_back(extract.getOperation());
@@ -257,22 +272,24 @@ public:
       idx += numSplit;
     }
 
-    if (newInits.size() == op.getInits().size())
+    if (newInits.size() == forOp.getInits().size())
       return failure();
 
-    auto newOp =
-        rewriter.create<scf::ForOp>(op.getLoc(), op.getLowerBound(),
-                                    op.getUpperBound(), op.getStep(), newInits);
+    auto newForOp = rewriter.create<scf::ForOp>(
+        forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
+        forOp.getStep(), newInits);
 
     for (auto [user, idx] : userIndexMap)
-      user.replaceAllUsesWith(newOp.getRegionIterArgs()[idx]);
-    op.getInductionVar().replaceAllUsesWith(newOp.getInductionVar());
+      user.replaceAllUsesWith(newForOp.getRegionIterArgs()[idx]);
 
-    // splice operations.
-    Block *body = newOp.getBody();
-    body->getOperations().splice(body->begin(), op.getBody()->getOperations());
+    forOp.getInductionVar().replaceAllUsesWith(newForOp.getInductionVar());
 
-    // yield op.
+    // Copy the loop body over to the new loop.
+    Block *body = newForOp.getBody();
+    body->getOperations().splice(body->begin(),
+                                 forOp.getBody()->getOperations());
+
+    // Replace the yield op in the new loop.
     auto yield = cast<scf::YieldOp>(body->getTerminator());
     SmallVector<Value> newValues;
     for (auto result : yield.getResults())
@@ -289,17 +306,19 @@ public:
     rewriter.create<scf::YieldOp>(yield.getLoc(), newValues);
     rewriter.eraseOp(yield);
 
-    // replace results
+    // Replace uses of the original loop results with the new loop results.
     userIndexMap.clear();
     idx = 0;
-    for (auto [result, init] : llvm::zip(op.getResults(), op.getInits())) {
-      auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
-      if (!glue) {
+    for (auto [result, init] :
+         llvm::zip(forOp.getResults(), forOp.getInits())) {
+      Operation *definingOp = init.getDefiningOp();
+      if (!isa_and_nonnull<ttgi::GlueOp>(definingOp)) {
         userIndexMap[result] = idx++;
         continue;
       }
 
-      for (auto user : result.getUsers())
+      auto glue = cast<ttgi::GlueOp>(definingOp);
+      for (Operation *user : result.getUsers())
         if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
           userIndexMap[extract] = idx + extract.getIndex();
           deleteList.push_back(extract.getOperation());
@@ -309,13 +328,52 @@ public:
     }
 
     for (auto [user, idx] : userIndexMap)
-      user.replaceAllUsesWith(newOp.getResults()[idx]);
+      user.replaceAllUsesWith(newForOp.getResults()[idx]);
 
-    for (auto op : deleteList)
-      rewriter.eraseOp(op);
+    for (Operation *deleteOp : deleteList)
+      rewriter.eraseOp(deleteOp);
 
-    rewriter.eraseOp(op);
+    rewriter.eraseOp(forOp);
+
     return success();
+  }
+
+  bool isCandidateLoop(scf::ForOp forOp) const {
+    // If none of the loop init values is defined by a 'glue' operation there is
+    // nothing to do.
+    if (llvm::none_of(forOp.getInits(), [](Value init) {
+          return init.getDefiningOp() &&
+                 isa<ttgi::GlueOp>(init.getDefiningOp());
+        })) {
+      return false;
+    }
+
+    // Bail out if any user of a 'glue' init value is not an 'extract'
+    // operation.
+    for (auto [arg, init] :
+         llvm::zip(forOp.getRegionIterArgs(), forOp.getInits())) {
+      if (!init.getDefiningOp() || !isa<ttgi::GlueOp>(init.getDefiningOp()))
+        continue;
+
+      if (llvm::any_of(arg.getUsers(), [](Operation *user) {
+            return !isa<ttgi::ExtractOp>(user);
+          })) {
+        return false;
+      }
+    }
+
+    // Bail out if any user of a loop result is not an 'extract' operation
+    // (otherwise we would have to materialize a 'glue' operation after the loop
+    // is replaced, which complicates things).
+    for (OpResult result : forOp->getResults()) {
+      if (llvm::any_of(result.getUsers(), [](Operation *user) {
+            return !isa<ttgi::ExtractOp>(user);
+          })) {
+        return false;
+      }
+    }
+
+    return true;
   }
 };
 
@@ -498,6 +556,7 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
   auto value = cast<DenseElementsAttr>(op.getValue());
   value = value.resizeSplat(subType.cast<ShapedType>());
   SmallVector<Value> subOps;
+
   for (unsigned i = 0; i < shape[dim - 1]; i += subSize[dim - 1]) {
     switch (dim) {
     case 2: {

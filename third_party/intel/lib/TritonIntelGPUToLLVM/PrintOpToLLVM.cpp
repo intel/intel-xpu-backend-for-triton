@@ -200,9 +200,6 @@ struct PrintOpConversion
     std::string prefix = "%";
     if (width.has_value()) {
       prefix += std::to_string(*width);
-    } else if (hex) {
-      prefix += "0";
-      prefix += std::to_string(value.getType().getIntOrFloatBitWidth() / 4);
     }
 
     if (type.isa<LLVM::LLVMPointerType>()) {
