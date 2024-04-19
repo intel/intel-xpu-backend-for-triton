@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -77,6 +78,34 @@ static void getForwardSlice(Operation *op, SetVector<Operation *> *forwardSlice,
   forwardSlice->insert(v.rbegin(), v.rend());
 }
 
+static bool isDivisible(Value v, unsigned divisor) {
+  if (auto op = v.getDefiningOp<mlir::arith::ConstantOp>()) {
+    auto attr = op.getValue().dyn_cast<IntegerAttr>();
+    return attr.getValue().getZExtValue() % divisor == 0;
+  } else if (auto op = v.getDefiningOp<mlir::arith::ExtSIOp>()) {
+    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
+  } else if (v.getParentBlock()->isEntryBlock() && v.isa<BlockArgument>()) {
+    BlockArgument blockArg = v.cast<BlockArgument>();
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    if (auto func = dyn_cast<tt::FuncOp>(parentOp)) {
+      auto attr = func.getArgAttrOfType<IntegerAttr>(blockArg.getArgNumber(),
+                                                     "tt.divisibility");
+      return attr && attr.getValue().getZExtValue() % divisor == 0;
+    }
+    return false;
+  } else if (v.getParentBlock()->isEntryBlock() && (!v.isa<BlockArgument>())) {
+    // in entryblock but not BlockArgument
+    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
+  } else if (!v.getParentBlock()->isEntryBlock()) {
+    // in non-entryblock
+    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
+  } else {
+    llvm::report_fatal_error("Operand of `MakeTensorPtrOp` is not the "
+                             "function's argument or a constant value.");
+    return false;
+  }
+}
+
 namespace {
 
 /// An additional struct to record the meta information of tensor pointer
@@ -131,17 +160,33 @@ public:
       auto shape = op.getShape();
       auto strides = op.getStrides();
       auto offsets = op.getOffsets();
+      auto order = op.getOrder();
       auto tensorShape = tensorType.getShape();
+
+      auto pitchDivisible = false;
+      if (strides.size() == 2) {
+        auto pitch = strides[order[1]];
+        // PVC requires pitch to be a multiple of QWord(64 bits).
+        if (deviceArch == ttgi::DeviceArch::PVC) {
+          pitchDivisible =
+              isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth());
+        }
+      }
 
       // HW 2D block read instruction only supports stride[-1]=1.
       auto fastChangeStride = strides.back();
+      auto isContiguous = false;
       if (auto stride =
               dyn_cast<arith::ConstantOp>(fastChangeStride.getDefiningOp())) {
         if (auto strideInt = stride.getValue().dyn_cast<IntegerAttr>()) {
           if (strideInt.getInt() == 1) {
-            makeTensorPtrWorkList.push_back(op);
+            isContiguous = true;
           }
         }
+      }
+
+      if (pitchDivisible && isContiguous) {
+        makeTensorPtrWorkList.push_back(op);
       }
     });
 
@@ -180,8 +225,6 @@ public:
       loadOp.erase();
     }
   }
-
-private:
 };
 
 } // anonymous namespace
