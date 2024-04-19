@@ -7,6 +7,7 @@ permissions: read-all
 
 env:
   REGISTRY: docker-registry.docker-registry.svc.cluster.local:5000
+  TAG: triton-runner-base:0.0.12
 
 jobs:
   build:
@@ -17,15 +18,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set base runner env
-        run: |
-          echo TAG=triton-runner-base:0.0.11 >>$GITHUB_ENV
-          echo RUNNER_PATH=.github/dockerfiles/runner-base/ >>$GITHUB_ENV
-
       - name: Build image
         run: |
-          docker build $RUNNER_PATH \
-            --tag $REGISTRY/$TAG
+          docker build .github/dockerfiles/runner-base/ --tag $REGISTRY/$TAG
 
       - name: Push image
         run: |
