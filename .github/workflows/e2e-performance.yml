@@ -147,6 +147,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.dtype.triton_commit_id }}
 
       - name: Get LLVM commit id
         run: |
