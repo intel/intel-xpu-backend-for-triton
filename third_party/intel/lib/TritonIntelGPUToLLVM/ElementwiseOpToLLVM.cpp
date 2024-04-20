@@ -1295,9 +1295,8 @@ struct FpToFpOpConversion
 
   explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability, PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        computeCapability(computeCapability) {}
+                              PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit) {}
 
   static Value convertBf16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
@@ -1510,10 +1509,7 @@ struct FpToFpOpConversion
     }
 
     bool useFP16IntermediateSrc =
-        srcElementType.isF32() &&
-        (!(computeCapability >= 90 && (dstElementType.isFloat8E4M3FNUZ() ||
-                                       dstElementType.isFloat8E5M2())) ||
-         roundingMode.value() == RoundingMode::RTZ);
+        srcElementType.isF32() && roundingMode.value() == RoundingMode::RTZ;
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;
@@ -1536,9 +1532,6 @@ struct FpToFpOpConversion
     // Pack values
     return outVals;
   }
-
-private:
-  int computeCapability;
 };
 
 template <typename OP>
@@ -2133,21 +2126,14 @@ struct MinMaxFOpConversion
 
   explicit MinMaxFOpConversion(LLVMTypeConverter &typeConverter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               int computeCapability,
                                PatternBenefit benefit = 1)
       : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
-                                          benefit),
-        computeCapability(computeCapability) {}
+                                          benefit) {}
 
   SmallVector<Value> createDestOps(OpTy op, Adaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    if (computeCapability >= 80) {
-      return {rewriter.create<DestOpNanProp>(loc, elemTy, operands[0][0],
-                                             operands[0][1])};
-    }
-    // Handle pre-80 compute capability.
     // If any of the operands is NaN, return NaN.
     auto lhs = operands[0][0];
     auto rhs = operands[0][1];
@@ -2163,9 +2149,6 @@ struct MinMaxFOpConversion
     // Select the result based on the isNan flag.
     return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
   }
-
-private:
-  int computeCapability;
 };
 
 struct ClampFOpConversion
@@ -2176,15 +2159,13 @@ struct ClampFOpConversion
 
   explicit ClampFOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability, PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        computeCapability(computeCapability) {}
+                              PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit) {}
 
   SmallVector<Value> createDestOps(ClampFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    bool xorsignAbsAvailable = (computeCapability >= 90);
     // Pattern matching the sequence of clamp(x, -limit, limit) to generate more
     // efficient PTX code.
     // NOTE: This pattern matching is not general enough, but it is sufficient.
@@ -2198,7 +2179,6 @@ struct ClampFOpConversion
     //   %cst_6 = arith.constant dense<-6.0000e+00>
     //   %cst_7 = arith.constant dense<6.0000e+00>
     //   %160 = tt.clamp %158, %cst_6, %cst_7
-    bool clipPatternFound = false;
 
     auto getSplatInitializer = [](Value v) -> std::optional<double> {
       if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
@@ -2212,38 +2192,11 @@ struct ClampFOpConversion
       return std::nullopt;
     };
 
-    if (xorsignAbsAvailable) {
-      if (auto subOp = op.getOperand(1).getDefiningOp<arith::SubFOp>()) {
-        if (subOp.getOperand(1) == op.getOperand(2)) {
-          auto initializer = getSplatInitializer(subOp.getOperand(0));
-          if (initializer.has_value() && initializer.value() == 0.0) {
-            clipPatternFound = true;
-          }
-        }
-      } else {
-        auto initializer1 = getSplatInitializer(op.getOperand(1));
-        auto initializer2 = getSplatInitializer(op.getOperand(2));
-        if (initializer1.has_value() && initializer2.has_value() &&
-            initializer1.value() == -initializer2.value()) {
-          clipPatternFound = true;
-        }
-      }
-    }
-
     assert(elemTy.isF32() || elemTy.isF16());
 
-    if (clipPatternFound)
-      llvm_unreachable("TODO");
-
-    // Clip pattern not found, use min/max.
     if (op.getPropagateNan() == PropagateNan::ALL) {
-      if (computeCapability >= 80) {
-        auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
-                                                  operands[0][1]);
-        return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
-      }
-      // On pre-80 compute capability, we need to handle NaN propagation
-      // manually. We need to check only the first operand for clamp.
+      // handle NaN propagation manually. We need to check only the first
+      // operand for clamp.
       auto lhs = operands[0][0];
       auto isNan = rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une,
                                                  lhs, lhs);
@@ -2261,9 +2214,6 @@ struct ClampFOpConversion
                                              operands[0][1]);
     return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
   }
-
-private:
-  int computeCapability;
 };
 
 /// The lowering of index_cast becomes an integer conversion since index
@@ -2430,8 +2380,8 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
 namespace intel {
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
-    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
+    PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
@@ -2512,8 +2462,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<IndexCastOpLowering>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
-                                   computeCapability, benefit);
+  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
@@ -2525,8 +2474,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
                                     benefit);
-  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
-                                   computeCapability, benefit);
+  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   PatternBenefit benefitForPropNan = benefit;
   // TODO(FIXME): spirv's OpenCL extension (fmin/fmax) does not support
   // nan propagation. Set these conversion benefit to the max benefit:
@@ -2534,9 +2482,9 @@ void populateElementwiseOpToLLVMPatterns(
   // correctness
   benefitForPropNan = 65534;
   patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability, benefitForPropNan);
+      typeConverter, axisInfoAnalysis, benefitForPropNan);
   patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability, benefitForPropNan);
+      typeConverter, axisInfoAnalysis, benefitForPropNan);
 }
 } // namespace intel
 } // namespace mlir::triton
