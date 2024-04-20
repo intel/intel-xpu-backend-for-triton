@@ -74,7 +74,6 @@ jobs:
       mode: ${{ steps.set-matrix.outputs.mode }}
       dtype: ${{ steps.set-matrix.outputs.dtype }}
       models: ${{ steps.set-matrix.outputs.models }}
-      triton_commit_id: ${{ steps.setup.outputs.github_sha }}
     timeout-minutes: 30
     defaults:
       run:
@@ -108,14 +107,6 @@ jobs:
           echo "dtype=$dtype" >> $GITHUB_OUTPUT
           echo "models=$models" >> $GITHUB_OUTPUT
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up parameters
-        id: setup
-        run :
-          echo "github_sha=$GITHUB_SHA" >> $GITHUB_OUTPUT
-
   print_inputs:
     name: Print inputs
     needs: setup
@@ -147,8 +138,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.setup.outputs.dtype.triton_commit_id }}
 
       - name: Get LLVM commit id
         run: |
