@@ -308,10 +308,6 @@ jobs:
           if [[ -d torch_compile_debug ]]; then
             cp -rT torch_compile_debug inductor_log
           fi
-          mkdir -p /cache/reports/e2e-performance
-          TMPDIR=$(mktemp -d -p /cache/reports/e2e-performance XXXXXXXXX.tmp)
-          cp -rT $GITHUB_WORKSPACE/inductor_log $TMPDIR
-          mv -T $TMPDIR /cache/reports/e2e-performance/$TIMESTAMP-${{ join(matrix.*, '-') }} || rm -rf $TMPDIR
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4

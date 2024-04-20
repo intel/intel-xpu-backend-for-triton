@@ -31,12 +31,14 @@ on:
           - float16
           - float32
         default: all
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
       TORCH_COMPILE_DEBUG:
         description: TORCH_COMPILE_DEBUG
         type: string
         default: ""
-  schedule:
-    - cron: "5 1 * * *"
 
 permissions: read-all
 
@@ -86,15 +88,12 @@ jobs:
     name: Test
     needs: matrix
     runs-on:
-      - glados
-      - spr
-      - runner-0.0.12
+      - ${{ inputs.runner_label || 'max1550' }}
     strategy:
       matrix:
         suite: ${{ fromJson(needs.matrix.outputs.suite) }}
         mode: ${{ fromJson(needs.matrix.outputs.mode) }}
         dtype: ${{ fromJson(needs.matrix.outputs.dtype) }}
-      max-parallel: 2
       fail-fast: false
     timeout-minutes: 720
     defaults:
@@ -344,10 +343,6 @@ jobs:
           if [[ -d torch_compile_debug ]]; then
             cp -rT torch_compile_debug inductor_log
           fi
-          mkdir -p /cache/reports/e2e
-          TMPDIR=$(mktemp -d -p /cache/reports/e2e XXXXXXXXX.tmp)
-          cp -rT $GITHUB_WORKSPACE/inductor_log $TMPDIR
-          mv -T $TMPDIR /cache/reports/e2e/$TIMESTAMP-${{ join(matrix.*, '-') }} || rm -rf $TMPDIR
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4
