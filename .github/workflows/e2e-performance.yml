@@ -63,14 +63,8 @@ env:
   BENCHMARK_BRANCH: main
 
 jobs:
-  print_inputs:
-    runs-on: Linux
-    steps:
-        - name: Print Inputs
-          run: echo "${{ toJSON(github.event.inputs) }}"
-
-  matrix:
-    name: Matrix
+  setup:
+    name: Setup
     runs-on:
       - glados
       - spr
@@ -80,7 +74,11 @@ jobs:
       mode: ${{ steps.set-matrix.outputs.mode }}
       dtype: ${{ steps.set-matrix.outputs.dtype }}
       models: ${{ steps.set-matrix.outputs.models }}
-    timeout-minutes: 10
+      ref: ${{ env.GITHUB_SHA }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail {0}
     steps:
       - name: Set matrix
         id: set-matrix
@@ -110,17 +108,31 @@ jobs:
           echo "dtype=$dtype" >> $GITHUB_OUTPUT
           echo "models=$models" >> $GITHUB_OUTPUT
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+  print_inputs:
+    needs: setup
+    runs-on: Linux
+    steps:
+      - name: Print inputs
+        run: |
+          echo "${{ toJSON(github.event.inputs) }}"
+
+      - name: Print setup outputs
+        run: |
+          echo "${{ toJSON(needs.setup.outputs) }}"
+
   build:
     name: Test
-    needs: matrix
+    needs: setup
     runs-on:
-      - ${{ inputs.runner_label || 'runner-0.0.12' }}
+      - ${{ inputs.runner_label || 'max1550' }}
     strategy:
       matrix:
-        suite: ${{ fromJson(needs.matrix.outputs.suite) }}
-        mode: ${{ fromJson(needs.matrix.outputs.mode) }}
-        dtype: ${{ fromJson(needs.matrix.outputs.dtype) }}
-      max-parallel: 2
+        suite: ${{ fromJson(needs.setup.outputs.suite) }}
+        mode: ${{ fromJson(needs.setup.outputs.mode) }}
+        dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
       fail-fast: false
     timeout-minutes: 720
     defaults:
@@ -256,7 +268,7 @@ jobs:
 
           if [[ "${{ inputs.only_one_model }}" ]]; then
             $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0 static 1 0 ${{ inputs.only_one_model }}
-          elif [[ "${{ needs.matrix.outputs.models }}" == "subset" ]]; then
+          elif [[ "${{ needs.setup.outputs.models }}" == "subset" ]]; then
             while read model; do
               $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0 static 1 0 $model
             done < $GITHUB_WORKSPACE/.github/models/performance/${{ matrix.suite }}.txt
