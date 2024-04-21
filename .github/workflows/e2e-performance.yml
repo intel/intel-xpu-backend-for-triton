@@ -50,8 +50,6 @@ on:
         description: TORCH_COMPILE_DEBUG
         type: string
         default: ""
-#  schedule:
-#    - cron: "5 1 * * *"
 
 permissions: read-all
 

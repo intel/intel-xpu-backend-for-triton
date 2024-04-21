@@ -50,8 +50,8 @@ env:
   BENCHMARK_BRANCH: main
 
 jobs:
-  matrix:
-    name: Matrix
+  setup:
+    name: Setup
     runs-on:
       - glados
       - spr
@@ -84,16 +84,29 @@ jobs:
           echo "mode=$mode" >> $GITHUB_OUTPUT
           echo "dtype=$dtype" >> $GITHUB_OUTPUT
 
+  print_inputs:
+    name: Print inputs
+    needs: setup
+    runs-on: Linux
+    steps:
+      - name: Print inputs
+        run: |
+          echo "${{ toJSON(github.event.inputs) }}"
+
+      - name: Print setup outputs
+        run: |
+          echo "${{ toJSON(needs.setup.outputs) }}"
+
   build:
     name: Test
-    needs: matrix
+    needs: setup
     runs-on:
       - ${{ inputs.runner_label || 'max1550' }}
     strategy:
       matrix:
-        suite: ${{ fromJson(needs.matrix.outputs.suite) }}
-        mode: ${{ fromJson(needs.matrix.outputs.mode) }}
-        dtype: ${{ fromJson(needs.matrix.outputs.dtype) }}
+        suite: ${{ fromJson(needs.setup.outputs.suite) }}
+        mode: ${{ fromJson(needs.setup.outputs.mode) }}
+        dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
       fail-fast: false
     timeout-minutes: 720
     defaults:
