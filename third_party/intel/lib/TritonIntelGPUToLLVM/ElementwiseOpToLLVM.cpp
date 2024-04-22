@@ -1508,8 +1508,7 @@ struct FpToFpOpConversion
       return outVals;
     }
 
-    bool useFP16IntermediateSrc =
-        srcElementType.isF32() && roundingMode.value() == RoundingMode::RTZ;
+    bool useFP16IntermediateSrc = srcElementType.isF32();
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;
