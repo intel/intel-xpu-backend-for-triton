@@ -3,7 +3,6 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
-#include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
@@ -11,7 +10,6 @@
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -25,7 +23,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "PatternTritonGPUOpToLLVM.h"
@@ -49,7 +47,6 @@ convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
 
 using namespace mlir;
 using namespace mlir::triton;
-namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
@@ -65,7 +62,6 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
-    addLegalDialect<NVVM::NVVMDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -178,7 +174,7 @@ public:
     addLegalDialect<LLVM::LLVMDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
-    addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+    addIllegalDialect<triton::gpu::intel::TritonIntelGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addIllegalDialect<triton::TritonGEN::TritonGENDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -191,8 +187,7 @@ struct ConvertTritonGPUToLLVM
   using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
-                    NVVM::NVVMDialect, TritonGEN::TritonGENDialect>();
+    registry.insert<LLVM::LLVMDialect, TritonGEN::TritonGENDialect>();
   }
 
   void runOnOperation() override {
