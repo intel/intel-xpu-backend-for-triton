@@ -35,7 +35,6 @@ enum class DPASEngineType : uint8_t {
 bool supportDPAS(DotOp op, DeviceArch arch);
 DPASEngineType getDPASType(DotOp op);
 
-// Intel customized utils
 // Infers the encoding of the source of op given the result encoding.
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
 

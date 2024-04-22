@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -91,7 +90,6 @@ DPASEngineType getDPASType(DotOp op) {
 }
 
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
-
   if (auto makeTensorPtrOp = dyn_cast<triton::MakeTensorPtrOp>(op))
     return encoding;
   if (auto advanceOp = dyn_cast<triton::AdvanceOp>(op))
@@ -134,8 +132,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     queue.pop_back();
     if (!visited.insert(currentValue).second)
       continue;
-    auto currentType = currentValue.getType();
-    if (!isTensorOrTensorPointerType(currentType))
+    if (!isTensorOrTensorPointerType(currentValue.getType()))
       continue;
     slice.insert(currentValue);
     if (layout.find(currentValue) != layout.end()) {
@@ -159,8 +156,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     if (auto *definingOp = currentValue.getDefiningOp()) {
       // If the op has multiple results we need to update all results layout.
       for (Value result : definingOp->getResults()) {
-        auto resultType = result.getType();
-        if (result == currentValue || !isTensorOrTensorPointerType(resultType))
+        if (result == currentValue ||
+            !isTensorOrTensorPointerType(result.getType()))
           continue;
         if (layout.find(result) != layout.end()) {
           if (layout[result] != encoding)
@@ -170,7 +167,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         layout[result] = encoding;
       }
       if (!isFreeConvert(definingOp) &&
-          mlir::canFoldIntoConversion(definingOp, encoding))
+          canFoldIntoConversion(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;

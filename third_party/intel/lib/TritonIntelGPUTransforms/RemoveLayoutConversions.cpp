@@ -958,7 +958,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       auto it = layout.find(old);
       if (it == layout.end())
         continue;
-      auto oldType = old.getType();
+      Type oldType = old.getType();
       mlir::Type newType;
       if (isTensorPointerType(oldType)) {
         auto ptrType = oldType.cast<PointerType>();
