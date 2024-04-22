@@ -3,15 +3,15 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
-#include "mlir/Conversion/LLVMCommon/VectorPattern.h"
+// #include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
-#include "mlir/Dialect/Index/IR/IndexOps.h"
+// #include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+// #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
@@ -24,11 +24,11 @@
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Tools/Sys/GetPlatform.hpp"
+// #include "triton/Tools/Sys/GetPlatform.hpp"
 
-#include "PatternTritonGPUOpToLLVM.h"
+// #include "PatternTritonGPUOpToLLVM.h"
 #include "PipelineManager.h"
-#include "Utility.h"
+// #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
@@ -43,12 +43,6 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
-
-// pass ws related named attrs.
-static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
-  for (const NamedAttribute attr : attrs)
-    op->setAttr(attr.getName(), attr.getValue());
-}
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
@@ -65,11 +59,11 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
+    addIllegalDialect<triton::TritonGEN::TritonGENDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::gpu::intel::TritonIntelGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
-    addIllegalDialect<triton::TritonGEN::TritonGENDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -82,9 +76,6 @@ struct ConvertTritonGPUToLLVM
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<LLVM::LLVMDialect, TritonGEN::TritonGENDialect>();
   }
-
-  ConvertTritonGPUToLLVM(int32_t computeCapability)
-      : ConvertTritonIntelGPUToLLVMBase({computeCapability}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -112,7 +103,6 @@ struct ConvertTritonGPUToLLVM
       TritonGPUToLLVMTypeConverter typeConverter(context, option);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-
       pipelineManager.populateFunctionConversionPatterns(
           funcPatterns, typeConverter, numWarps);
 
@@ -125,12 +115,10 @@ struct ConvertTritonGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-    mlir::triton::intel::TargetInfo targetInfo(computeCapability);
-    int benefit = 10;
-
-    pipelineManager.populateConversionPatterns(patterns, axisInfoAnalysis,
-                                               typeConverter, targetInfo,
-                                               computeCapability, benefit);
+    mlir::triton::intel::TargetInfo targetInfo;
+    int benefit = patternBenefitPrioritizeOverLLVMConversions;
+    pipelineManager.populateConversionPatterns(
+        patterns, axisInfoAnalysis, typeConverter, targetInfo, benefit);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
@@ -144,16 +132,6 @@ struct ConvertTritonGPUToLLVM
       });
     }
   }
-
-private:
-  // pass ws related named attrs.
-  static void addWSNamedAttrs(Operation *op,
-                              ArrayRef<mlir::NamedAttribute> attrs) {
-    for (const NamedAttribute attr : attrs)
-      if (attr.getName() == "async_agent" ||
-          attr.getName() == "agent.mutex_role")
-        op->setAttr(attr.getName(), attr.getValue());
-  }
 };
 
 } // anonymous namespace
@@ -164,10 +142,6 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonIntelGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
-}
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonIntelGPUToLLVMPass(int32_t computeCapability) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
 }
 
 } // namespace triton

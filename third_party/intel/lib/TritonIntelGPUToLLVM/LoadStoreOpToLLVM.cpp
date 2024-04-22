@@ -408,13 +408,8 @@ struct StoreOpConversion
 };
 void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
                    int numCTAs) {
-  if (numCTAs == 1) {
-    barrier();
-  } else {
-    assert(false && "Cannot use NVIDIA_GPU operations");
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
-  }
+  assert(numCTAs == 1 && "Expecting numCTA to be 1");
+  barrier();
 }
 
 struct AtomicCASOpConversion

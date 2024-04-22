@@ -1,4 +1,4 @@
-//===- TritonGENDialect.h - MLIR TritonGEN dialect --------------*- C++ -*-===//
+//===- PipelineManager.h - TritonIntelGPU pipeline manager ------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,8 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file defines the TritonGEN dialect in MLIR, containing Intel GEN
-// operations.
+// This file defines a pipeline manager for the TritonIntelGPU -> LLVM pass.
 //
 //===----------------------------------------------------------------------===//
 
@@ -146,19 +145,19 @@ class TritonGPUToLLVMPipelineManager {
 public:
   TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx)
       : mod(mod), ctx(ctx),
-        blockPtrPathIdEnabled(
+        blockPtrPathIsEnabled(
             mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {
     // FIXME: force subgroupSize = 16 (this should be done via an analysis
     // designed to determine whether the kernel contains tt.dot operations that
     // use block pointers).
-    if (blockPtrPathIdEnabled)
+    if (blockPtrPathIsEnabled)
       mod->setAttr("triton_gpu.threads-per-warp",
                    IntegerAttr::get(IntegerType::get(ctx, 32), 16));
   }
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
-  bool skipSharedMemoryAllocation() const { return blockPtrPathIdEnabled; }
+  bool skipSharedMemoryAllocation() const { return blockPtrPathIsEnabled; }
 
   /// Populate the conversion pipeline for function operations.
   void populateFunctionConversionPatterns(
@@ -166,7 +165,7 @@ public:
       TritonGPUToLLVMTypeConverter &typeConverter, int numWarps) const {
     funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                        /*benefit=*/1);
-    if (!blockPtrPathIdEnabled)
+    if (!blockPtrPathIsEnabled)
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
   }
@@ -175,60 +174,49 @@ public:
   void populateConversionPatterns(RewritePatternSet &patterns,
                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                   TritonGPUToLLVMTypeConverter &typeConverter,
-                                  TargetInfo &targetInfo, int computeCapability,
-                                  int benefit) const {
-    if (blockPtrPathIdEnabled) {
-      assert(false && "Placeholder to add block ptr path conversion");
-      mlir::triton::intel::populateControlFlowOpToLLVMPattern(
-          typeConverter, patterns, benefit);
-    } else {
-      mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
-          typeConverter, patterns, benefit);
-      mlir::triton::intel::populateDotOpToLLVMPatterns(typeConverter, patterns,
-                                                       benefit);
-      mlir::triton::intel::populateElementwiseOpToLLVMPatterns(
-          typeConverter, patterns, axisInfoAnalysis, computeCapability,
-          targetInfo, benefit);
-      mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
-          typeConverter, patterns, axisInfoAnalysis, benefit);
-      mlir::triton::intel::populateReduceOpToLLVMPatterns(
-          typeConverter, patterns, targetInfo, benefit);
-      mlir::triton::intel::populateScanOpToLLVMPatterns(typeConverter, patterns,
-                                                        targetInfo, benefit);
-      mlir::triton::intel::populateViewOpToLLVMPatterns(typeConverter, patterns,
-                                                        benefit);
+                                  TargetInfo &targetInfo, int benefit) const {
+    using namespace mlir;
+    using namespace mlir::triton;
 
-      mlir::triton::intel::populateTensorPtrOpsToLLVMPatterns(
-          typeConverter, patterns, benefit);
-      mlir::triton::intel::populateClusterOpsToLLVMPatterns(typeConverter,
-                                                            patterns, benefit);
-      mlir::triton::intel::populateHistogramOpToLLVMPatterns(typeConverter,
-                                                             patterns, benefit);
-      mlir::triton::intel::populatePrintOpToLLVMPattern(typeConverter, patterns,
-                                                        targetInfo, benefit);
-      mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
-                                                  targetInfo, benefit);
-      mlir::triton::intel::populateMemoryOpToLLVMPattern(typeConverter,
-                                                         patterns, benefit);
-      mlir::triton::intel::populateControlFlowOpToLLVMPattern(
-          typeConverter, patterns, benefit);
-      mlir::triton::intel::populateMakeRangeOpToLLVMPattern(typeConverter,
-                                                            patterns, benefit);
+    if (blockPtrPathIsEnabled) {
+      assert(false && "Placeholder to add block ptr path conversion");
+      intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+                                                benefit);
+    } else {
+      intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns,
+                                                   benefit);
+      intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
+      intel::populateElementwiseOpToLLVMPatterns(
+          typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
+      intel::populateLoadStoreOpToLLVMPatterns(typeConverter, patterns,
+                                               axisInfoAnalysis, benefit);
+      intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                            benefit);
+      intel::populateScanOpToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                          benefit);
+      intel::populateViewOpToLLVMPatterns(typeConverter, patterns, benefit);
+
+      intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
+                                                benefit);
+      intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,
+                                          benefit);
+      triton::populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo,
+                                            benefit);
+      intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+                                                benefit);
+      intel::populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
     }
 
-    mlir::triton::intel::populateSPMDOpToLLVMPattern(typeConverter, patterns,
-                                                     targetInfo, benefit);
+    intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
+                                       benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
-    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    mlir::triton::populateTritonGENToLLVMConversionPatterns(typeConverter,
-                                                            patterns);
-    mlir::triton::populateGPUToTritonGENConversionPatterns(typeConverter,
-                                                           patterns);
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                          patterns);
+    arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
+    populateMathToLLVMConversionPatterns(typeConverter, patterns);
+    triton::populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
+    triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
+    cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
   }
 
 private:
@@ -238,7 +226,7 @@ private:
   /// Selects which conversion pipeline to use.
   /// FIXME: this is temporary and should be removed once we have an analysis to
   /// determine whether a kernel uses block pointers.
-  bool blockPtrPathIdEnabled = false;
+  bool blockPtrPathIsEnabled = false;
 };
 
 } // namespace intel

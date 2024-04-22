@@ -50,8 +50,6 @@ on:
         description: TORCH_COMPILE_DEBUG
         type: string
         default: ""
-#  schedule:
-#    - cron: "5 1 * * *"
 
 permissions: read-all
 
@@ -63,14 +61,8 @@ env:
   BENCHMARK_BRANCH: main
 
 jobs:
-  print_inputs:
-    runs-on: Linux
-    steps:
-        - name: Print Inputs
-          run: echo "${{ toJSON(github.event.inputs) }}"
-
-  matrix:
-    name: Matrix
+  setup:
+    name: Setup
     runs-on:
       - glados
       - spr
@@ -110,17 +102,29 @@ jobs:
           echo "dtype=$dtype" >> $GITHUB_OUTPUT
           echo "models=$models" >> $GITHUB_OUTPUT
 
+  print_inputs:
+    name: Print inputs
+    needs: setup
+    runs-on: Linux
+    steps:
+      - name: Print inputs
+        run: |
+          echo "${{ toJSON(github.event.inputs) }}"
+
+      - name: Print setup outputs
+        run: |
+          echo "${{ toJSON(needs.setup.outputs) }}"
+
   build:
     name: Test
-    needs: matrix
+    needs: setup
     runs-on:
-      - ${{ inputs.runner_label || 'runner-0.0.12' }}
+      - ${{ inputs.runner_label || 'max1550' }}
     strategy:
       matrix:
-        suite: ${{ fromJson(needs.matrix.outputs.suite) }}
-        mode: ${{ fromJson(needs.matrix.outputs.mode) }}
-        dtype: ${{ fromJson(needs.matrix.outputs.dtype) }}
-      max-parallel: 2
+        suite: ${{ fromJson(needs.setup.outputs.suite) }}
+        mode: ${{ fromJson(needs.setup.outputs.mode) }}
+        dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
       fail-fast: false
     timeout-minutes: 720
     defaults:
@@ -256,7 +260,7 @@ jobs:
 
           if [[ "${{ inputs.only_one_model }}" ]]; then
             $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0 static 1 0 ${{ inputs.only_one_model }}
-          elif [[ "${{ needs.matrix.outputs.models }}" == "subset" ]]; then
+          elif [[ "${{ needs.setup.outputs.models }}" == "subset" ]]; then
             while read model; do
               $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} performance xpu 0 static 1 0 $model
             done < $GITHUB_WORKSPACE/.github/models/performance/${{ matrix.suite }}.txt
@@ -299,10 +303,6 @@ jobs:
           if [[ -d torch_compile_debug ]]; then
             cp -rT torch_compile_debug inductor_log
           fi
-          mkdir -p /cache/reports/e2e-performance
-          TMPDIR=$(mktemp -d -p /cache/reports/e2e-performance XXXXXXXXX.tmp)
-          cp -rT $GITHUB_WORKSPACE/inductor_log $TMPDIR
-          mv -T $TMPDIR /cache/reports/e2e-performance/$TIMESTAMP-${{ join(matrix.*, '-') }} || rm -rf $TMPDIR
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4
