@@ -204,7 +204,8 @@ public:
 // very fragile and to solve we should expose convert Ptr of tensor to a
 // structure containins all values and not only offsets.
 class TritonIntelGPURewriteTensorPointerPass
-    : public TritonIntelGPURewriteTensorPointerBase<TritonIntelGPURewriteTensorPointerPass> {
+    : public TritonIntelGPURewriteTensorPointerBase<
+          TritonIntelGPURewriteTensorPointerPass> {
 private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
@@ -574,6 +575,7 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::triton::gpu::intel::createTritonIntelGPURewriteTensorPointerPass() {
+std::unique_ptr<Pass>
+mlir::triton::gpu::intel::createTritonIntelGPURewriteTensorPointerPass() {
   return std::make_unique<TritonIntelGPURewriteTensorPointerPass>();
 }
