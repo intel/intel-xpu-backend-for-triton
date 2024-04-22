@@ -198,10 +198,14 @@ public:
 
       intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
                                                 benefit);
+      intel::populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
+      intel::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
+                                               benefit);
       intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                           benefit);
-      triton::populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo,
-                                            benefit);
+      populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo,
+                                    benefit);
+      intel::populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
       intel::populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
