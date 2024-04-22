@@ -4,6 +4,7 @@ add_triton_library(TritonIntelGPUTransforms
   MatchTargetSize.cpp
   PrefetchBlock.cpp
   RemoveLayoutConversions.cpp
+  RewriteTensorPointer.cpp
   Utility.cpp
 
   DEPENDS
