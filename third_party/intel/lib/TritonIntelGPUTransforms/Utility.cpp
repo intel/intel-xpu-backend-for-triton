@@ -111,9 +111,7 @@ bool isExpensiveLoadOrStore(Operation *op) {
   auto mod = op->getParentOfType<ModuleOp>();
   int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-  if (ptrType.getNumElements() < numWarps * threadsPerWarp)
-    return false;
-  return true;
+  return ptrType.getNumElements() >= numWarps * threadsPerWarp;
 }
 
 // Check if the convert will be a no-op in codegen.
