@@ -773,6 +773,11 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
 
     InterfaceMethod<"Return size per thread for dot operands.", "SmallVector<unsigned>",
       "getSizePerThreadForOperands", (ins "unsigned":$opIdx)>,
+
+    InterfaceMethod<"Return element sizes per thread for dot operands.", "SmallVector<unsigned>",
+      "getElemsPerThreadForOperands", (ins "ArrayRef<int64_t>":$tensorShape,
+                                           "Type":$eltTy,
+                                           "unsigned":$opIdx)>,
   ];
 }
 
@@ -904,6 +909,10 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
       return contigPerThread;
     };
 
+    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
+      llvm_unreachable("getElemsPerThreadForOperands is not supported.");
+    };
+
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -967,6 +976,10 @@ Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
       auto rank = getWarpsPerCTA().size();
       SmallVector<unsigned> contigPerThread(rank, 1);
       return contigPerThread;
+    };
+
+    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
+      llvm_unreachable("getElemsPerThreadForOperands is not supported.");
     };
   }];
 }
@@ -1167,6 +1180,10 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       SmallVector<unsigned> contigPerThread(rank, 1);
       contigPerThread[rank - 1] = 2;
       return contigPerThread;
+    };
+
+    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
+      llvm_unreachable("getElemsPerThreadForOperands is not supported.");
     };
 
   }];

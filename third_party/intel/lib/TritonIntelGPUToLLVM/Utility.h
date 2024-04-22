@@ -187,43 +187,39 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
   unsigned warpSize = triton::gpu::getWarpSize(dpasLayout);
   unsigned numElemPerInstPerThread = product<unsigned>(warpShape) / warpSize;
 
-  unsigned systolicDepth = dpasLayout.getSystolicDepth();
-  unsigned repeatCount = dpasLayout.getRepeatCount();
   unsigned executionSize = dpasLayout.getExecutionSize();
   unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
 
-  unsigned rowsPerWarp, numElemPerInstPerRowPerThread;
+  unsigned numRowsPerValue, numColsPerValue;
   switch (opIdx) {
   case 0: {
-    assert((opsPerChannel == 1 || opsPerChannel == 2 || opsPerChannel == 4) &&
+    assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
            "invalid opsPerChannel number.");
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
     // Unlike the operand B, to pack the value to i16 for scalar bit width
     // <=16.
     unsigned packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
     unsigned packedColNum = shapeA[1] / packedOpsPerLane;
-    if (warpSize < packedColNum)
+    if (warpSize < packedColNum) {
       llvm::report_fatal_error(
           "DpasEncodingAttr sub-group size could not "
           "be smaller than the threads required per row for A operand.");
-
-    rowsPerWarp = warpSize / packedColNum;
-    numElemPerInstPerRowPerThread = packedOpsPerLane;
+    }
+    numRowsPerValue = warpSize / packedColNum;
+    numColsPerValue = packedOpsPerLane;
   } break;
   case 1: {
-    if (warpSize < executionSize)
+    if (warpSize < executionSize) {
       llvm::report_fatal_error(
           "DpasEncodingAttr sub-group size could not "
           "be smaller than the execution size for B operand.");
-
-    rowsPerWarp = warpSize / executionSize;
-    rowsPerWarp = rowsPerWarp * opsPerChannel;
-    numElemPerInstPerRowPerThread = 1;
+    }
+    numRowsPerValue = warpSize / executionSize;
+    numColsPerValue = 1;
   } break;
   }
 
-  SmallVector<unsigned> shapePerCTATile =
-      triton::gpu::getShapePerCTATile(dotLayout);
+  auto shapePerCTATile = triton::gpu::getShapePerCTATile(dotLayout);
   int64_t numRepOuter = numReps[opIdx];
   int64_t numRepK = numReps[(opIdx == 0) ? 1 : 0];
   for (int dimOuter = 0; dimOuter < numRepOuter; ++dimOuter)
@@ -231,14 +227,16 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
       for (unsigned elemId = 0; elemId < numElemPerInstPerThread; ++elemId) {
         uint32_t repRowIndex = shapePerCTATile[0] * (opIdx == 0 ? dimOuter : k);
         uint32_t repColIndex = shapePerCTATile[1] * (opIdx == 0 ? k : dimOuter);
-        uint32_t elemRowIndex =
-            (elemId / numElemPerInstPerRowPerThread) * rowsPerWarp;
-        uint32_t elemColIndex = elemId % numElemPerInstPerRowPerThread;
+        uint32_t elemRowIndex = (elemId / numColsPerValue) * numRowsPerValue;
+        uint32_t elemColIndex = elemId % numColsPerValue;
         offsets.push_back(
             {repRowIndex + elemRowIndex, repColIndex + elemColIndex});
       }
 
-  return offsets;
+    return offsets;
+  } else {
+    llvm_unreachable("unsupported parent layout in emitOffsetForDotOpLayout");
+  }
 }
 
 static SmallVector<SmallVector<unsigned>>
@@ -403,21 +401,7 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
       resultOffsets.push_back(offsets);
     }
   }
-
-  // It can happen that after deduplicating elements above, resultOffsets has
-  // fewer than getTotalElementsPerThread() elements.  In that case repeat the
-  // sequence.
-  int elemsPerThread = triton::gpu::getTotalElemsPerThread(type);
-  assert(resultOffsets.size() > 0);
-  assert(elemsPerThread % resultOffsets.size() == 0);
-  int numRepeats = elemsPerThread / resultOffsets.size();
-  SmallVector<SmallVector<unsigned>> ret;
-  for (int i = 0; i < numRepeats; ++i) {
-    for (unsigned j = 0; j < resultOffsets.size(); ++j) {
-      ret.push_back(SmallVector<unsigned>(resultOffsets[j]));
-    }
-  }
-  return ret;
+  return resultOffsets;
 }
 
 //

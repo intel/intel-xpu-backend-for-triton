@@ -916,6 +916,9 @@ unsigned SharedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
 SmallVector<unsigned>
 DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                           Type eltTy) const {
+  if (auto mmaParent = getParent().dyn_cast<MmaEncodingTrait>()) {
+    return mmaParent.getElemsPerThreadForOperands(shape, eltTy, getOpIdx());
+  }
   llvm_unreachable("getElemsPerThread is not supported for dot operand");
   return SmallVector<unsigned>();
 }

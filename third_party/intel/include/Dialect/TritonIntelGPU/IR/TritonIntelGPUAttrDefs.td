@@ -79,6 +79,7 @@ along the row (resp. col) dimension.
     SmallVector<unsigned> getShapeC() const;
     SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const;
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
+    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
 
