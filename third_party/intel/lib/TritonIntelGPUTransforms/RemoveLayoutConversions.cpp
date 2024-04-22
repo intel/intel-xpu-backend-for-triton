@@ -959,7 +959,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       if (it == layout.end())
         continue;
       Type oldType = old.getType();
-      mlir::Type newType;
+      Type newType;
       if (isTensorPointerType(oldType)) {
         auto ptrType = oldType.cast<PointerType>();
         auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();

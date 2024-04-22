@@ -99,17 +99,25 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
+  assert((isa<triton::LoadOp>(op) || isa<triton::StoreOp>(op)) &&
+         "Expecting Triton LoadOp or StoreOp");
+  Value base = op->getOperand(0);
+
   // Case 1: A size 1 tensor is not expensive since all threads will load the
   // same
-  if (isSingleValue(op->getOperand(0)))
+  if (isSingleValue(base))
     return false;
+
   // Case 2: Tensor of pointers has more threads than elements
   // we can presume a high hit-rate that makes it cheap to load
-  auto ptrType = op->getOperand(0).getType().cast<RankedTensorType>();
-  auto mod = op->getParentOfType<ModuleOp>();
-  int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-  int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-  return ptrType.getNumElements() >= numWarps * threadsPerWarp;
+  if (auto ptrType = base.getType().dyn_cast<RankedTensorType>()) {
+    auto mod = op->getParentOfType<ModuleOp>();
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    return ptrType.getNumElements() >= numWarps * threadsPerWarp;
+  }
+
+  return false;
 }
 
 // Check if the convert will be a no-op in codegen.
