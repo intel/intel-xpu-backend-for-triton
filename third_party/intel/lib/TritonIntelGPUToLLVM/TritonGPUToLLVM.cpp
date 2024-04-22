@@ -163,11 +163,10 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    addIllegalDialect<triton::gpu::TritonGPUDialect>();
-    addIllegalDialect<triton::TritonDialect>();
-    addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
-    addIllegalDialect<mlir::gpu::GPUDialect>();
     addIllegalDialect<triton::TritonGEN::TritonGENDialect>();
+    addIllegalDialect<triton::TritonDialect>();
+    addIllegalDialect<triton::gpu::TritonGPUDialect>();
+    addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -178,8 +177,7 @@ struct ConvertTritonGPUToLLVM
   using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
-                    NVVM::NVVMDialect, TritonGEN::TritonGENDialect>();
+    registry.insert<LLVM::LLVMDialect, TritonGEN::TritonGENDialect>();
   }
 
   ConvertTritonGPUToLLVM(int32_t computeCapability)
@@ -222,7 +220,7 @@ struct ConvertTritonGPUToLLVM
 
     RewritePatternSet patterns(context);
     mlir::triton::intel::TargetInfo targetInfo(computeCapability);
-    int benefit = 10;
+    int benefit = patternBenefitPrioritizeOverLLVMConversions;
     using namespace mlir::triton::intel;
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
