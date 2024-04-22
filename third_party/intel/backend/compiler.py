@@ -72,9 +72,6 @@ class XPUBackend(BaseBackend):
         dirname = os.path.dirname(os.path.realpath(__file__))
         mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
         self.parse_device_arch = mod.parse_device_arch
-        # TODO: Deprecate capability in XPU compilation
-        # capability should be < 80, because some features in passes with capability >= 80 are not supported on PVC
-        self.capability = intel.passes.ttgpuir.DEVICE_ARCH.PVC
         self.properties = self._parse_target(target[1])
         self.device_arch = self.properties["device_arch"]
         self.binary_ext = "spv"
@@ -157,7 +154,7 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_llir(src, metadata, options, capability):
+    def make_llir(src, metadata, options, device_arch):
         # warp-specialization mutates num_warps
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
@@ -172,7 +169,7 @@ class XPUBackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm, capability)
+        intel.passes.ttgpuir.add_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)

@@ -195,9 +195,6 @@ struct ConvertTritonGPUToLLVM
                     NVVM::NVVMDialect, TritonGEN::TritonGENDialect>();
   }
 
-  ConvertTritonGPUToLLVM(int32_t computeCapability)
-      : ConvertTritonIntelGPUToLLVMBase({computeCapability}) {}
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
@@ -234,14 +231,13 @@ struct ConvertTritonGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-    mlir::triton::intel::TargetInfo targetInfo(computeCapability);
+    mlir::triton::intel::TargetInfo targetInfo;
     int benefit = 10;
     using namespace mlir::triton::intel;
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     mlir::triton::intel::populateElementwiseOpToLLVMPatterns(
-        typeConverter, patterns, axisInfoAnalysis, computeCapability,
-        targetInfo, benefit);
+        typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
                                       benefit);
     mlir::triton::intel::populateReduceOpToLLVMPatterns(typeConverter, patterns,
@@ -310,10 +306,6 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonIntelGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
-}
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonIntelGPUToLLVMPass(int32_t computeCapability) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
 }
 
 } // namespace triton
