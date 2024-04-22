@@ -929,8 +929,6 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
   if (!parentEncoding)
     return values;
 
-  llvm_unreachable("Intel: we should never get an MMa encoding here");
-
   size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
   size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
   auto ouEltTy = ouTensorTy.getElementType();
