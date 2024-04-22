@@ -48,19 +48,19 @@ Let's begin with a basic implementation. All Triton kernels require the ``@trito
                    output_ptr,  # *Pointer* to output vector.
                    n_elements: tl.constexpr,  # Size of the vector.
                    ):
-        
-        # There are multiple 'programs' processing different data. Here, we 
+
+        # There are multiple 'programs' processing different data. Here, we
         # identify which program program we are in:
         pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0.
-        
+
         vec_offset = tl.arange(0, n_elements)
 
         # x_ptr + vec_offset result is a vector of pointers
         x = tl.load(x_ptr + vec_offset)
         y = tl.load(y_ptr + vec_offset)
-        
+
         output = x + y
-        
+
         # Write x + y back to DRAM.
         tl.store(output_ptr + vec_offset, output)
 
@@ -74,31 +74,31 @@ Both of these calls have several additional requirements for their arguments and
 
 To run this kernel, we will need some wrapper code:
 
-.. code-block :: python 
+.. code-block :: python
 
     def add(x: torch.Tensor, y: torch.Tensor):
         # We need to preallocate the output.
         output = torch.empty_like(x)
         assert x.is_xpu and y.is_xpu and output.is_xpu
         n_elements = output.numel()
-        
+
         # The SPMD launch grid denotes the number of kernel instances that run in parallel.
-        # It is analogous to CUDA launch grids. 
+        # It is analogous to CUDA launch grids.
         # It can be either Tuple[int], or Callable(metaparameters) -> Tuple[int].
         # In this case, we use a 1D grid where the size is the number of blocks:
         grid = (1, ) # same as (1, 1)
-        
+
         # NOTE:
         #  - Each torch.tensor object is implicitly converted into a pointer to its first element.
-        #  - `triton.jit`'ed functions can be indexed with a launch grid. 
+        #  - `triton.jit`'ed functions can be indexed with a launch grid.
         #  - Don't forget to pass meta-parameters as keywords arguments.
         add_kernel[grid](x, y, output, n_elements=n_elements)
-        
+
         return output
 
 
     # %%
-    # We can now use the above function to compute the element-wise sum of two `torch.tensor` objects 
+    # We can now use the above function to compute the element-wise sum of two `torch.tensor` objects
     # and test its correctness:
 
     torch.manual_seed(0)
@@ -117,12 +117,12 @@ We should pay attention to the grid in the wrapper code, which is a Tuple of 2 i
 
 .. image :: ../pics/execution_model.png
 
-In the current example, we are using a single kernel as we wrote it without any actual usage of pid. Grid can also be callable and return a tuple based on meta parameters. This approach will be covered later. 
+In the current example, we are using a single kernel as we wrote it without any actual usage of pid. Grid can also be callable and return a tuple based on meta parameters. This approach will be covered later.
 
 This code has several obvious problems:
 
-    1. It works **only with shapes that are** :math:`2^n` as used in the load operation. 
-    2. It does not fully utilize the possibility to use more logical threads. 
+    1. It works **only with shapes that are** :math:`2^n` as used in the load operation.
+    2. It does not fully utilize the possibility to use more logical threads.
 
 To address these issues, let's rewrite it to support any shape. We will use introduce an additional parameter ``BLOCK_SIZE`` to split (or tile) the custom shape according to the suitable granularity of the target GPU.
 
@@ -133,11 +133,11 @@ To address these issues, let's rewrite it to support any shape. We will use intr
                                 y_ptr,  # *Pointer* to second input vector.
                                 output_ptr,  # *Pointer* to output vector.
                                 n_elements: tl.constexpr,  # Size of the vector.
-                                BLOCK_SIZE: tl.constexpr,  
-                                # Number of elements suitable for load/store granularity. 
+                                BLOCK_SIZE: tl.constexpr,
+                                # Number of elements suitable for load/store granularity.
                             ):
-        
-        # There are multiple 'programs' processing different data. Here, we 
+
+        # There are multiple 'programs' processing different data. Here, we
         # identify which program we are in:
         pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0.
 
@@ -147,19 +147,19 @@ To address these issues, let's rewrite it to support any shape. We will use intr
             vec_block_offset = block_start + vec_offset
 
             # Mask will be vector of booleans
-            # Used to avoid loading rubbish into the last tile. 
+            # Used to avoid loading rubbish into the last tile.
             mask = vec_block_offset < n_elements
-            
+
             x_tile = tl.load(x_ptr + vec_block_offset, mask=mask)
             y_tile = tl.load(y_ptr + vec_block_offset, mask=mask)
 
             output_tile = x_tile + y_tile
-            
+
             tl.store(output_ptr + vec_block_offset, output_tile, mask=mask)
 
 Great! With the first problem resolved, we can now work with arbitrary shapes and sizes of vectors.
 
-Let's optimize the code to utilize more threads in our grid. Additionally, we can remove the loop from the kernel and convert it into a 1D grid. 
+Let's optimize the code to utilize more threads in our grid. Additionally, we can remove the loop from the kernel and convert it into a 1D grid.
 
 .. code-block :: python
 
@@ -176,28 +176,28 @@ Let's optimize the code to utilize more threads in our grid. Additionally, we ca
                    n_elements,  # Size of the vector.
                    BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
                    ):
-        
-        # There are multiple 'programs' processing different data. Here, we 
+
+        # There are multiple 'programs' processing different data. Here, we
         # identify which program we are in:
         pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0.
-        
+
         # This program will process inputs that are offset from the initial data.
         # For instance, if you had a vector of length 256 and block_size of 64, the programs
         # would each access the elements [0:64, 64:128, 128:192, 192:256].
         # Note that offsets is a list of pointers:
         block_start = pid * BLOCK_SIZE
-        
+
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         # Create a mask to guard memory operations against out-of-bounds accesses.
         mask = offsets < n_elements
-        
+
         # Load x and y from DRAM, masking out any extra elements in case the input is not a
         # multiple of the block size.
         x = tl.load(x_ptr + offsets, mask=mask)
         y = tl.load(y_ptr + offsets, mask=mask)
-        
+
         output = x + y
-        
+
         # Write x + y back to DRAM.
         tl.store(output_ptr + offsets, output, mask=mask)
 
@@ -210,14 +210,14 @@ Apply corresponding changes to the wrapper:
         output = torch.empty_like(x)
         assert x.is_xpu and y.is_xpu and output.is_xpu
         n_elements = output.numel()
-        
+
         # The SPMD launch grid denotes the number of kernel instances that run in parallel.
-        # It is analogous to CUDA launch grids. 
+        # It is analogous to CUDA launch grids.
         #
         # Grid can be either Tuple[int], or Callable(metaparameters) -> Tuple[int].
         # In this case, we use a 1D grid where the size is the number of blocks.
         grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
-        
+
         # NOTE:
         #  - Each torch.tensor object is implicitly converted into a pointer to its first element.
         #  - `triton.jit`'ed functions can be indexed with a launch grid.
@@ -236,7 +236,7 @@ Apply corresponding changes to the wrapper:
     print(output_triton)
     print(f'The maximum difference between torch and triton is '
         f'{torch.max(torch.abs(output_torch - output_triton))}')
-    
+
 Thread blocks (in the current case, it is a vector with ``BLOCK_SIZE``) are required to execute independently: It must be possible to execute them in any order, either in parallel or in series. This independence requirement allows thread blocks to be scheduled in any order across any number of cores, enabling programmers to write code that scales with the number of cores available.
 
 Threads within a block can cooperate by sharing data through some shared memory and by synchronizing their execution to coordinate memory accesses. Here is an example to illustrate memory organization and hierarchy:
@@ -245,10 +245,10 @@ Threads within a block can cooperate by sharing data through some shared memory 
 
 Let's summarize and point out what can be done in the kernel body:
 
-    1. Several python primitive ops are available: 
+    1. Several python primitive ops are available:
 
         * ``+``, ``-``, ``*``, ``/``, ``//``, ``%``, ``&``, ``>>``, ``<<``, ``<``, ``>``, ``|``, ``^``
-        * ``range``, ``min``, ``max``, ``print``, ``float``, ``int``, 
+        * ``range``, ``min``, ``max``, ``print``, ``float``, ``int``,
         * ``isinstance``, ``getattr``, ``len`` (need some examples for isinstance, getattr, len)
         * ``for``, ``while``, ``pass`` and literals/constants
 
@@ -264,7 +264,7 @@ In general, there are several possible storage locations for data in a system th
 
 .. image :: ../pics/load_store.png
 
-To manipulate the cache, there are several load/store parameters that specify cache policy and eviction algorithm: 
+To manipulate the cache, there are several load/store parameters that specify cache policy and eviction algorithm:
 
     1. ``cache_modifier`` (str, optional) - similar to CUDA load cache parameters
 
@@ -272,15 +272,15 @@ To manipulate the cache, there are several load/store parameters that specify ca
 
             1. ``.cg``
             2. ``.ca``
-                
+
         * store `parameters <https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#id83>`_
 
-            1. ``.wb`` 
-            2. ``.cg`` 
-            3. ``.cs`` 
+            1. ``.wb``
+            2. ``.cg``
+            3. ``.cs``
             4. ``.wt``
 
-    2. ``eviction_policy`` (str, optional) 
+    2. ``eviction_policy`` (str, optional)
 
         * ``evict_last``
         * ``evict_first``
@@ -288,7 +288,7 @@ To manipulate the cache, there are several load/store parameters that specify ca
 However, these parameters are highly dependent on the GPU being used for kernel execution.
 
 As mentioned earlier, ``tl.load(...)`` loads only a single scalar if a single pointer is passed as an argument. To load a vector or matrix, you need to create ``tl.tensor`` with one of the following `ops <../python-api/triton.language.html#creation-ops>`_:
-    
+
     1. ``arange``
     2. ``cat``
     3. ``full``
@@ -306,7 +306,7 @@ Let's explore how to load a matrix using these primitives:
             # Matrix dimensions
             M, N, K,
             # The stride variables indicate how much to increase the pointer when moving by one
-            # element in a specific dimension. For example, `stride_am` represents the increment 
+            # element in a specific dimension. For example, `stride_am` represents the increment
             # in `a_ptr` to access the element one row down (A has M rows).
             stride_am, stride_ak,  #
             stride_bk, stride_bn,  #
@@ -332,7 +332,7 @@ Let's explore how to load a matrix using these primitives:
         offs_k = tl.arange(0, BLOCK_SIZE_K)
         a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
         b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-        
+
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
             # Load the next block of A and B, generate a mask by checking the K dimension.
@@ -374,9 +374,9 @@ Let's explore how to load a matrix using these primitives:
         )
         return c
 
-Working with matrices often involves manipulating pointers and assuming a specific data order. This can be inconvenient in certain scenarios and forces additional data movement that could be done during compilation. To solve this problem, use ``block_ptr``. ``block_ptr`` simplifies iterating over multi-dimensional blocks within a larger matrix along various dimensions. 
+Working with matrices often involves manipulating pointers and assuming a specific data order. This can be inconvenient in certain scenarios and forces additional data movement that could be done during compilation. To solve this problem, use ``block_ptr``. ``block_ptr`` simplifies iterating over multi-dimensional blocks within a larger matrix along various dimensions.
 
-.. code-block :: python 
+.. code-block :: python
 
     @triton.jit
     def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
@@ -439,13 +439,13 @@ Working with matrices often involves manipulating pointers and assuming a specif
             stride_cm=c.stride(0), stride_cn=c.stride(1))
         return c
 
-If another kernel is called within the body of this kernel, the Triton compiler will attempt to optimize it by eliminating unnecessary stores to global DRAM memory. Typically, the function will be inlined. Therefor, in complex use cases where the location of the data is important and can be changed at runtime, avoid using other utility cores with load/store operations inside them. 
+If another kernel is called within the body of this kernel, the Triton compiler will attempt to optimize it by eliminating unnecessary stores to global DRAM memory. Typically, the function will be inlined. Therefor, in complex use cases where the location of the data is important and can be changed at runtime, avoid using other utility cores with load/store operations inside them.
 
 ********************
 Triton Kernel Tuning
 ********************
 
-Triton has a built-in feature that allows you to choose between several predefined configurations by executing them. This functionality is supported by using the ``@triton.autotune(configs=[...])`` decorator. 
+Triton has a built-in feature that allows you to choose between several predefined configurations by executing them. This functionality is supported by using the ``@triton.autotune(configs=[...])`` decorator.
 
 .. code-block :: python
 
@@ -460,7 +460,7 @@ Triton has a built-in feature that allows you to choose between several predefin
     def kernel(x_ptr, x_size, **META):
         BLOCK_SIZE = META['BLOCK_SIZE']
 
-``triton.Config`` describes several parameters for a kernel. The most important and commonly used parameter is ``meta``, which is a dictionary of meta-parameters passed to the kernel as keyword arguments. Additionally, all ``tl.constexpr`` arguments of the kernel can be passed through ``meta``. Here is an example demonstrating the usage of autotuning with multiple configurations: 
+``triton.Config`` describes several parameters for a kernel. The most important and commonly used parameter is ``meta``, which is a dictionary of meta-parameters passed to the kernel as keyword arguments. Additionally, all ``tl.constexpr`` arguments of the kernel can be passed through ``meta``. Here is an example demonstrating the usage of autotuning with multiple configurations:
 
 .. code-block :: python
 
@@ -575,7 +575,7 @@ To choose the proper block size, you should rely on the documentation of your ta
 
 GGrid is a logical structure that enables independent execution of all kernels. Therefore, if the data accessed by these kernels intersect, the resulting performance will heavily depend on the traversal order of the grid. Triton's code can be tailored to the specifics of the GPU runtime driver that determines this traversal order. An example illustrating such a case is provided in the `matrix multiplication tutorial. <./tutorials/03-matrix-multiplication.html#>`_
 
-Additionally, another useful utility is ``@triton.testing.perf_report``, which generates a plot for comparing Triton's implementation with a native implementation or with another Triton implementation. 
+Additionally, another useful utility is ``@triton.testing.perf_report``, which generates a plot for comparing Triton's implementation with a native implementation or with another Triton implementation.
 
 
 .. code-block :: python
@@ -609,5 +609,3 @@ Additionally, another useful utility is ``@triton.testing.perf_report``, which g
 Example of output:
 
 .. image :: ../pics/perf-benchmark.png
-
-

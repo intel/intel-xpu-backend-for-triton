@@ -321,7 +321,7 @@ For the Threads Per Subgroup (Warp) and Values Per Thread level, the linear id d
 The layout function :math:`L` of this layout is then defined, for an index :math:`i \in R^D` and :math:`d \in D` for dimension, as follows:
 
 .. math::
-  
+
   L(A)[i_d] =& L[i_d + k_d * A_{shape}[d]] \bmod L_{shape}[d]; \\
              & \forall k_d : i_d + k_d * A_{shape}[d] < L_{shape}[d]\\
 
