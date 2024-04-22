@@ -14,7 +14,7 @@
 namespace mlir::triton::intel {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  TargetInfo(int computeCapability) : computeCapability(computeCapability) {}
+  TargetInfo() = default;
 
   bool supportMaximumMinimum() const override;
 
@@ -57,8 +57,6 @@ public:
                   int line) const override;
 
 private:
-  // TODO: revisit the computeCapability field, as it should not be used on XPU.
-  int computeCapability;
 };
 } // namespace mlir::triton::intel
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H

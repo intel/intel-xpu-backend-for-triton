@@ -26,8 +26,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .value("PVC", mlir::triton::gpu::intel::DeviceArch::PVC)
       .export_values();
 
-  m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability) {
-    pm.addPass(mlir::triton::createConvertTritonIntelGPUToLLVMPass(capability));
+  m.def("add_to_llvmir", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::createConvertTritonIntelGPUToLLVMPass());
   });
   m.def(
       "add_accelerate_matmul",
