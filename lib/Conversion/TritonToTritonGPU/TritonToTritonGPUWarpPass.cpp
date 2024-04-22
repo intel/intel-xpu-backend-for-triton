@@ -208,6 +208,50 @@ public:
           break;
         }
         case Workload::Attention: {
+          LDBG("match workload attention \n");
+          DotInfo &info0 = loopDotInfo.dotInfo0;
+          DotInfo &info1 = loopDotInfo.dotInfo1;
+          auto dot0 = info0.dot;
+          auto aType = dot0.getA().getType().cast<RankedTensorType>();
+          auto bType = dot0.getB().getType().cast<RankedTensorType>();
+          unsigned Br = aType.getShape()[0];
+          unsigned d = bType.getShape()[0];
+          unsigned Bc = bType.getShape()[1];
+          assert(Br % numWarps == 0);
+          assert(Bc % numWarps == 0);
+          SmallVector<unsigned> warpsPerCTA{numWarps, 1};
+          SmallVector<unsigned> sizePerWarpQ{Br / numWarps, d};
+          SmallVector<unsigned> sizePerWarpK{d, Bc};
+          SmallVector<unsigned> sizePerWarpQK{Br / numWarps, Bc};
+          SmallVector<unsigned> sizePerWarpV{Bc, d};
+          SmallVector<unsigned> sizePerWarpO{Br / numWarps, d};
+          auto ctaLayout = ttg::CTALayoutAttr::get(ctx, {1, 1}, {1, 1}, {1, 0});
+          auto qLayout = ttg::BlockedEncodingAttr::get(
+              ctx, sizePerWarpQ, {1, 1}, warpsPerCTA, {1, 0}, ctaLayout);
+          auto kLayout = ttg::BlockedEncodingAttr::get(
+              ctx, sizePerWarpK, {1, 1}, warpsPerCTA, {1, 0}, ctaLayout);
+          auto qkLayout = ttg::BlockedEncodingAttr::get(
+              ctx, sizePerWarpK, {1, 1}, warpsPerCTA, {1, 0}, ctaLayout);
+          auto vLayout = ttg::BlockedEncodingAttr::get(
+              ctx, sizePerWarpV, {1, 1}, warpsPerCTA, {1, 0}, ctaLayout);
+          auto oLayout = ttg::BlockedEncodingAttr::get(
+              ctx, sizePerWarpO, {1, 1}, warpsPerCTA, {1, 0}, ctaLayout);
+
+          // record value's attr
+          // FIXME: the 2nd loop may overwrite, not check it for now
+          for (auto op : info0.chainOpsA)
+            valueAttrMap[op] = qLayout;
+          for (auto op : info0.chainOpsB)
+            valueAttrMap[op] = kLayout;
+          for (auto op : info0.chainOpsC)
+            valueAttrMap[op] = qkLayout;
+          if (info0.advanceA)
+            valueAttrMap[info0.advanceA] = qLayout;
+          if (info0.advanceB)
+            valueAttrMap[info0.advanceB] = kLayout;
+
+          assert(info1.chainOpsA.empty());
+
           break;
         }
         }
@@ -366,11 +410,38 @@ public:
         return Workload::None;
       SmallVector<OpFoldResult> rawOffsetsA = dotInfo.advanceA.getOffsets();
       SmallVector<OpFoldResult> rawOffsetsB = dotInfo.advanceB.getOffsets();
-      auto offsetsA = *getConstantIntValues(rawOffsetsA);
-      auto offsetsB = *getConstantIntValues(rawOffsetsB);
+      SmallVector<int64_t> offsetsA = *getConstantIntValues(rawOffsetsA);
+      SmallVector<int64_t> offsetsB = *getConstantIntValues(rawOffsetsB);
       if (offsetsA.size() == 2 && offsetsB.size() == 2 && offsetsA[0] == 0 &&
           offsetsB[1] == 0)
         return Workload::Gemm;
+    }
+    // match flash-attention pattern
+    // %q
+    //  scf.for idx
+    //    %k = tt.load %ptrK
+    //    %qk = tt.dot %q, %k
+    //    %qk_ = arit/math  %qk
+    //    %v = tt.load %ptrV
+    //    %o = tt.dot %qk_, %v
+    //    tt.advance %ptrK, [stepK, 0]
+    //    tt.advance %ptrV, [0, stepV]
+    else if (loopDotInfo.dotInfo0.dot && loopDotInfo.dotInfo1.dot) {
+      if (!loopDotInfo.connectDotA || loopDotInfo.connectDotB)
+        return Workload::None;
+      DotInfo &info0 = loopDotInfo.dotInfo0;
+      DotInfo &info1 = loopDotInfo.dotInfo1;
+      if (!info0.chainOpsA.empty() && // Q is loop invariant
+          info0.chainOpsA[0].getDefiningOp()->isBeforeInBlock(loop) &&
+          info0.advanceB && info1.advanceB) {
+        SmallVector<OpFoldResult> rawOffsetsK = info0.advanceB.getOffsets();
+        SmallVector<OpFoldResult> rawOffsetsV = info1.advanceB.getOffsets();
+        SmallVector<int64_t> offsetsK = *getConstantIntValues(rawOffsetsK);
+        SmallVector<int64_t> offsetsV = *getConstantIntValues(rawOffsetsV);
+        if (offsetsK.size() == 2 && offsetsV.size() == 2 && offsetsK[0] == 0 &&
+            offsetsV[1] == 0 && offsetsK[1] == offsetsV[0])
+          return Workload::Attention;
+      }
     }
     return Workload::None;
   }
@@ -447,6 +518,29 @@ public:
       else if (op->getDialect() == arithDialect ||
                op->getDialect() == mathDialect)
         ops.push_back(op->getResults()[0]);
+      else if (isa<tt::ReduceOp, tt::ExpandDimsOp, tt::BroadcastOp>(op))
+        ;
+      else if (auto dot1 = dyn_cast<tt::DotOp>(op)) {
+        DotInfo &info1 = loopDotInfo.dotInfo1;
+        info1.dot = dot1;
+        Value dotA = dot1.getA();
+        Value dotB = dot1.getB();
+        Value dotC = dot1.getC();
+        if (std::find(ops.begin(), ops.end(), dotA) == ops.end())
+          expandDefChain(loop, dotA, info1.chainOpsA, info1.loadA,
+                         info1.advanceA);
+        else
+          loopDotInfo.connectDotA = true;
+        if (std::find(ops.begin(), ops.end(), dotB) == ops.end())
+          expandDefChain(loop, dotB, info1.chainOpsB, info1.loadB,
+                         info1.advanceB);
+        else
+          loopDotInfo.connectDotB = true;
+        if (std::find(ops.begin(), ops.end(), dotC) == ops.end())
+          expandDotCChain(loop, dot1, info1.chainOpsC, loopDotInfo);
+        else
+          loopDotInfo.connectDotC = true;
+      }
     }
   }
 };
