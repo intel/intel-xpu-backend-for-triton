@@ -3059,19 +3059,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if is_xpu() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
         pytest.skip("FIXME: float8e4nv and float8e5 fails to run on XPU")
 
-    if is_xpu() and '-'.join(
-            map(str, (M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack))
-    ) in ('64-128-128-4-True-True-none-ieee-float32-float32-1', '64-128-128-4-False-True-none-ieee-float32-float32-1',
-          '128-128-64-4-True-True-none-ieee-float32-float32-1', '128-128-64-4-False-True-none-ieee-float32-float32-1',
-          '64-128-128-4-True-False-none-ieee-float32-float32-1', '64-128-128-4-False-False-none-ieee-float32-float32-1',
-          '128-128-64-4-True-False-none-ieee-float32-float32-1', '128-128-64-4-False-False-none-ieee-float32-float32-1',
-          '64-128-128-2-True-True-none-ieee-float32-float32-1', '128-128-64-2-True-True-none-ieee-float32-float32-1',
-          '64-128-128-2-False-True-none-ieee-float32-float32-1', '128-128-64-2-False-True-none-ieee-float32-float32-1',
-          '64-128-128-2-True-False-none-ieee-float32-float32-1', '128-128-64-2-True-False-none-ieee-float32-float32-1',
-          '64-128-128-2-False-False-none-ieee-float32-float32-1',
-          '128-128-64-2-False-False-none-ieee-float32-float32-1'):
-        pytest.skip("FIXME: RuntimeError: Triton Error [ZE]: 1879048196 on XPU")
-
     if is_cuda():
         torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
 
