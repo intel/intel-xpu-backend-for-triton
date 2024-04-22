@@ -235,11 +235,12 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
 }
 
 def TritonIntelGPURewriteTensorPointer : Pass</*cli-arg*/"tritonintelgpu-rewrite-tensor-pointer", /*Op*/"mlir::ModuleOp"> {
-  let summary = "Rewrite load/stores with tensor pointers into legacy load/stores";
+  let summary = "Rewrite load/stores with tensor pointers but cannot be lowered to 2DBlockLoad into legacy load/stores";
   let description = [{
-    This pass rewrites all load/store semantics initiated by a `tt.make_tensor_ptr` and `tt.advance` into legacy
-    semantics. After this pass, `tt.make_tensor_ptr` and `tt.advance` will disappear, and it generates logics to compute
-    the pointer/mask/other for each load/store.
+    This pass rewrites load/store semantics initiated by a `tt.make_tensor_ptr` and `tt.advance` into legacy
+    semantics. The load for `tt.dot` operands that can be lowered to 2d block load, will be kept as
+    is. After this pass, `tt.make_tensor_ptr` and `tt.advance` that do not meet the conditions will disappear,
+    and it generates logics to compute the pointer/mask/other for each load/store.
   }];
 
   let constructor = "mlir::triton::gpu::intel::createTritonIntelGPURewriteTensorPointerPass()";
