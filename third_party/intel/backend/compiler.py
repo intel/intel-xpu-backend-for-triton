@@ -210,9 +210,7 @@ class XPUBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"])
-        if type(version) is bytes:
-            version = version.decode("utf-8")
+        version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"], text=True)
         return f'{version}-{self.properties}'
 
     def get_codegen_implementation(self):
