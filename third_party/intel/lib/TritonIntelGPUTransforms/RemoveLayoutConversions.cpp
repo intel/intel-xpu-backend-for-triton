@@ -22,7 +22,7 @@
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
-#define DEBUG_TYPE "tritongpu-remove-layout-conversions"
+#define DEBUG_TYPE "tritonintelgpu-remove-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 

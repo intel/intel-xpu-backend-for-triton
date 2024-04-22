@@ -27,8 +27,6 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonIntelGPUConversionPassIncGen
 
     LINK_LIBS PUBLIC
-    TritonNvidiaGPUTransforms
-    NVGPUIR
     TritonGENIR
     TritonGENToLLVM
     TritonIntelGPUIR

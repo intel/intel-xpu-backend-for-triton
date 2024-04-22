@@ -2,12 +2,10 @@
 
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
-#include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
 
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
@@ -20,7 +18,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -42,7 +40,6 @@ convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
 
 using namespace mlir;
 using namespace mlir::triton;
-namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
@@ -52,7 +49,6 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
-    addLegalDialect<NVVM::NVVMDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
 };
@@ -166,6 +162,7 @@ public:
     addIllegalDialect<triton::TritonGEN::TritonGENDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
+    addIllegalDialect<triton::gpu::intel::TritonIntelGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
   }
@@ -179,9 +176,6 @@ struct ConvertTritonGPUToLLVM
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<LLVM::LLVMDialect, TritonGEN::TritonGENDialect>();
   }
-
-  ConvertTritonGPUToLLVM(int32_t computeCapability)
-      : ConvertTritonIntelGPUToLLVMBase({computeCapability}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -219,14 +213,13 @@ struct ConvertTritonGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-    mlir::triton::intel::TargetInfo targetInfo(computeCapability);
+    mlir::triton::intel::TargetInfo targetInfo;
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
     using namespace mlir::triton::intel;
     populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     mlir::triton::intel::populateElementwiseOpToLLVMPatterns(
-        typeConverter, patterns, axisInfoAnalysis, computeCapability,
-        targetInfo, benefit);
+        typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
     populateLoadStoreOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
                                       benefit);
     mlir::triton::intel::populateReduceOpToLLVMPatterns(typeConverter, patterns,
@@ -285,10 +278,6 @@ namespace triton {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonIntelGPUToLLVMPass() {
   return std::make_unique<ConvertTritonGPUToLLVM>();
-}
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonIntelGPUToLLVMPass(int32_t computeCapability) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
 }
 
 } // namespace triton
