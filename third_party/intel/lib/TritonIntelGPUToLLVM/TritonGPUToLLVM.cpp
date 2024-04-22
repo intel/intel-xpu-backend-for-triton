@@ -1,19 +1,14 @@
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
-#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
-#include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
-#include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
@@ -26,10 +21,8 @@
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Tools/Sys/GetPlatform.hpp"
 
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
@@ -52,12 +45,6 @@ using namespace mlir::triton;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
-
-// pass ws related named attrs.
-static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
-  for (const NamedAttribute attr : attrs)
-    op->setAttr(attr.getName(), attr.getValue());
-}
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
@@ -176,8 +163,8 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
+    addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addIllegalDialect<triton::TritonGEN::TritonGENDialect>();
@@ -289,16 +276,6 @@ struct ConvertTritonGPUToLLVM
         id.replaceAllUsesWith(zero);
       });
     }
-  }
-
-private:
-  // pass ws related named attrs.
-  static void addWSNamedAttrs(Operation *op,
-                              ArrayRef<mlir::NamedAttribute> attrs) {
-    for (const NamedAttribute attr : attrs)
-      if (attr.getName() == "async_agent" ||
-          attr.getName() == "agent.mutex_role")
-        op->setAttr(attr.getName(), attr.getValue());
   }
 };
 
