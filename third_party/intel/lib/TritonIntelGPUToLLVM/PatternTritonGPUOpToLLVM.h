@@ -32,8 +32,8 @@ void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
-    const TargetInfoBase &targetInfo, PatternBenefit benefit);
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
+    PatternBenefit benefit);
 
 void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
