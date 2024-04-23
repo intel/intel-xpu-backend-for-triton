@@ -613,7 +613,9 @@ struct AtomicRMWOpConversion
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
       if (valueElemNBits == 16) {
-        op.emitOpError("using fp16 atomic emulation");
+        op.emitOpError(
+            "fp16 datatype is not supported in the target HW, software "
+            "emulation is an experimental feature (use at own risk)");
         endBlock =
             emulateFp16AtomicRmw(rewriter, loc, atomicRmwAttr, valueElemTy,
                                  rmwPtr, rmwVal, rmwMask, {zero});
