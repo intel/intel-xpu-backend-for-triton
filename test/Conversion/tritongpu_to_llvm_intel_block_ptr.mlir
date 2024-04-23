@@ -2,7 +2,7 @@
 
 module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 0 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1>, %arg1: !tt.ptr<f16, 1>, %arg2: !tt.ptr<f32, 1>, %arg3: i32, %arg4: i32, %arg5: i32) {
-    // CHECK-LABEL: @matmul_kernel_with_block_pointers    
+    // CHECK-LABEL: @matmul_kernel_with_block_pointers
     %c3_i32 = arith.constant 3 : i32
     %c7_i32 = arith.constant 7 : i32
     %c63_i32 = arith.constant 63 : i32
@@ -33,7 +33,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %11 = arith.muli %8, %c256_i32 : i32
     %12 = arith.muli %1, %c8_i32 : i32
     %13 = arith.addi %12, %11 : i32
-    // CHECK:      [[undef:%.*]] = llvm.mlir.undef : vector<2xi32>        
+    // CHECK:      [[undef:%.*]] = llvm.mlir.undef : vector<2xi32>
     // CHECK-DAG:  [[zero:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-DAG:  [[one:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK-NEXT: [[insert0:%.*]] = llvm.insertelement {{.*}}, [[undef]][[[zero]] : i32] : vector<2xi32>

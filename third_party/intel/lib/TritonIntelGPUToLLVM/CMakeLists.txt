@@ -1,28 +1,28 @@
 add_triton_library(TritonIntelGPUToLLVM
     AllocateSharedMemory.cpp
-    ClusterOpsToLLVM.cpp    
-    ControlFlowOpToLLVM.cpp    
+    ClusterOpsToLLVM.cpp
+    ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandDPAS.cpp
     ConvertLayoutOpToLLVM.cpp
-    DecomposeUnsupportedConversions.cpp    
+    DecomposeUnsupportedConversions.cpp
     DotOpToLLVM/DPAS.cpp
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM.cpp
-    ElementwiseOpToLLVM.cpp    
+    ElementwiseOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     MakeRangeOpToLLVM.cpp
-    MemoryOpToLLVM.cpp    
-    PrintOpToLLVM.cpp    
-    ReduceOpToLLVM.cpp    
+    MemoryOpToLLVM.cpp
+    PrintOpToLLVM.cpp
+    ReduceOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     ScanOpToLLVM.cpp
     SPMDOpToLLVM.cpp
-    TargetInfo.cpp    
+    TargetInfo.cpp
     TensorPtrOpsToLLVM.cpp
     TritonOpsToLLVM.cpp
-    TypeConverter.cpp    
-    Utility.cpp    
+    TypeConverter.cpp
+    Utility.cpp
     ViewOpToLLVM.cpp
 
     DEPENDS
