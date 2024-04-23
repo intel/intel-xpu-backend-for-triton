@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "triton/Analysis/Utility.h"
+
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
@@ -388,8 +389,8 @@ class ArithConstantOpLowering
 } // namespace
 
 void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
   patterns.add<AdvanceOpConversion>(typeConverter, benefit);
   patterns.add<DotOpConversion>(typeConverter, benefit);

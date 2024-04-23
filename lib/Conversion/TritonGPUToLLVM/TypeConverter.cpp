@@ -2,7 +2,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -18,29 +17,12 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
     const DataLayoutAnalysis *analysis)
     : LLVMTypeConverter(ctx, option, analysis) {
-  if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {
-    // tt::pointer to v2i32
-    addConversion([&](PointerType type) -> std::optional<Type> {
-      if (isa<RankedTensorType>(type.getPointeeType())) {
-        auto i32Type = mlir::IntegerType::get(type.getContext(), 32);
-        return mlir::VectorType::get(2, i32Type);
-      }
-      return LLVM::LLVMPointerType::get(type.getContext(),
-                                        type.getAddressSpace());
-    });
-    // tensor type is flattened and divided by 16(subgroupSize)
-    addConversion([&](mlir::RankedTensorType type) -> mlir::Type {
-      return mlir::VectorType::get(type.getNumElements() / 16,
-                                   type.getElementType());
-    });
-  } else {
-    addConversion([&](triton::PointerType type) -> std::optional<Type> {
-      return convertTritonPointerType(type);
-    });
-    addConversion([&](RankedTensorType type) -> std::optional<Type> {
-      return convertTritonTensorType(type);
-    });
-  }
+  addConversion([&](triton::PointerType type) -> std::optional<Type> {
+    return convertTritonPointerType(type);
+  });
+  addConversion([&](RankedTensorType type) -> std::optional<Type> {
+    return convertTritonTensorType(type);
+  });
   addConversion([&](MemDescType type) -> std::optional<Type> {
     return convertMemDescType(type);
   });

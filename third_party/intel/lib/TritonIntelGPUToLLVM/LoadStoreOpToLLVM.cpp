@@ -135,7 +135,7 @@ struct LoadOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::LoadOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  LoadOpConversion(TritonGPUToLLVMTypeConverter &converter,
+  LoadOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
@@ -300,7 +300,7 @@ struct StoreOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::StoreOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  StoreOpConversion(TritonGPUToLLVMTypeConverter &converter,
+  StoreOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
@@ -418,7 +418,7 @@ struct AtomicCASOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::AtomicCASOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  AtomicCASOpConversion(TritonGPUToLLVMTypeConverter &converter,
+  AtomicCASOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(converter,
@@ -785,8 +785,9 @@ private:
 } // namespace
 
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
-    TritonGPUToLLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    PatternBenefit benefit) {
   patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);

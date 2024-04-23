@@ -6,7 +6,8 @@
 // and <atomic>
 #include "triton/Analysis/Allocation.h"
 
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
+
 //
 #include "TritonIntelGPUToLLVM/Passes.h"
 #include "Utility.h"
@@ -56,10 +57,10 @@ public:
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
 
 protected:
-  TritonGPUToLLVMTypeConverter *getTypeConverter() const {
+  TritonIntelGPUToLLVMTypeConverter *getTypeConverter() const {
     LLVMTypeConverter *ret =
         ((ConvertTritonGPUOpToLLVMPatternBase *)this)->getTypeConverter();
-    return (TritonGPUToLLVMTypeConverter *)ret;
+    return (TritonIntelGPUToLLVMTypeConverter *)ret;
   }
 };
 

@@ -23,7 +23,6 @@
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "PatternTritonGPUOpToLLVM.h"
@@ -162,7 +161,7 @@ public:
   /// Populate the conversion pipeline for function operations.
   void populateFunctionConversionPatterns(
       RewritePatternSet &funcPatterns,
-      TritonGPUToLLVMTypeConverter &typeConverter, int numWarps) const {
+      TritonIntelGPUToLLVMTypeConverter &typeConverter, int numWarps) const {
     funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                        /*benefit=*/1);
     if (!blockPtrPathIsEnabled)
@@ -171,10 +170,11 @@ public:
   }
 
   /// Populate the conversion pipeline for various operations.
-  void populateConversionPatterns(RewritePatternSet &patterns,
-                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                  TritonGPUToLLVMTypeConverter &typeConverter,
-                                  TargetInfo &targetInfo, int benefit) const {
+  void
+  populateConversionPatterns(RewritePatternSet &patterns,
+                             ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                             TritonIntelGPUToLLVMTypeConverter &typeConverter,
+                             TargetInfo &targetInfo, int benefit) const {
     using namespace mlir;
     using namespace mlir::triton;
 
