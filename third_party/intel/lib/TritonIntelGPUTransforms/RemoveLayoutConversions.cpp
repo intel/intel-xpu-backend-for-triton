@@ -13,10 +13,10 @@
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include <memory>
 
 #define GEN_PASS_CLASSES
@@ -25,6 +25,8 @@
 #define DEBUG_TYPE "tritonintelgpu-remove-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu {
 namespace {
@@ -238,7 +240,7 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
-    return isExpensiveLoadOrStore(op);
+    return ttgi::isExpensiveLoadOrStore(op);
   if (isa<DotOp, AtomicRMWOp, AtomicCASOp>(op))
     return true;
 
@@ -530,7 +532,7 @@ Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
 
   std::optional<Attribute> operandEnc;
   if (op->getNumOperands() > 0) {
-    operandEnc = inferSrcEncoding(op, encoding);
+    operandEnc = ttgi::inferSrcEncoding(op, encoding);
     assert(operandEnc.has_value());
   }
 
@@ -793,7 +795,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
 
 bool canBeRemat(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
-    return !isExpensiveLoadOrStore(op);
+    return !ttgi::isExpensiveLoadOrStore(op);
   if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
     return false;
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
@@ -956,9 +958,21 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       auto it = layout.find(old);
       if (it == layout.end())
         continue;
-      auto newType = RankedTensorType::get(
-          old.getType().cast<RankedTensorType>().getShape(),
-          old.getType().cast<RankedTensorType>().getElementType(), it->second);
+      Type oldType = old.getType();
+      Type newType;
+      if (isTensorPointerType(oldType)) {
+        auto ptrType = oldType.cast<PointerType>();
+        auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
+        newType = triton::PointerType::get(
+            RankedTensorType::get(tensorType.getShape(),
+                                  tensorType.getElementType(), it->second),
+            ptrType.getAddressSpace());
+      } else {
+        newType = RankedTensorType::get(
+            old.getType().cast<RankedTensorType>().getShape(),
+            old.getType().cast<RankedTensorType>().getElementType(),
+            it->second);
+      }
       newV.setType(newType);
       addRematValue(old, it->second, newV);
     }
@@ -987,8 +1001,8 @@ LogicalResult getRematerializableSlice(
     Value root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation = nullptr) {
-  LogicalResult result = getConvertBackwardSlice(root, slice, rootEncoding,
-                                                 layout, stopPropagation);
+  LogicalResult result = ttgi::getConvertBackwardSlice(
+      root, slice, rootEncoding, layout, stopPropagation);
   if (result.failed() || slice.empty())
     return failure();
 
@@ -1024,11 +1038,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
 
 void LayoutRematerialization::backwardRematerialization(
     ConvertLayoutOp convertOp) {
-  // we don't handle conversions to DotOperandEncodingAttr
-  // this is a heuristic to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-  if (targetType.getEncoding().isa<DotOperandEncodingAttr>())
-    return;
   Value oldV = convertOp->getOperand(0);
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
@@ -1096,7 +1106,8 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (isExtOrBroadcastOp(op)) {
       SetVector<Value> tempSlice;
       DenseMap<Value, Attribute> tempLayout;
-      std::optional<Attribute> srcEncoding = inferSrcEncoding(op, layout[v]);
+      std::optional<Attribute> srcEncoding =
+          ttgi::inferSrcEncoding(op, layout[v]);
       if (!srcEncoding)
         return;
       LogicalResult result = getRematerializableSlice(
@@ -1120,7 +1131,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return;
   Attribute dstEncoding = layout[extOrBroadcatOp->getResult(0)];
   std::optional<Attribute> srcEncoding =
-      inferSrcEncoding(extOrBroadcatOp, dstEncoding);
+      ttgi::inferSrcEncoding(extOrBroadcatOp, dstEncoding);
   if (!srcEncoding)
     return;
   // Move the convert before the ext op and rewrite the slice.

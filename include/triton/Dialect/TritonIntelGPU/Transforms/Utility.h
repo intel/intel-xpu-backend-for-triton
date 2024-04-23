@@ -35,6 +35,18 @@ enum class DPASEngineType : uint8_t {
 bool supportDPAS(DotOp op, DeviceArch arch);
 DPASEngineType getDPASType(DotOp op);
 
+// Infers the encoding of the source of op given the result encoding.
+std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
+
+bool isExpensiveLoadOrStore(Operation *op);
+
+// Get backward slice of tensor values starting from the root node along with
+// encoding propagation.
+LogicalResult getConvertBackwardSlice(
+    Value root, SetVector<Value> &slice, Attribute rootEncoding,
+    DenseMap<Value, Attribute> &layout,
+    std::function<bool(Operation *)> stopPropagation = nullptr);
+
 } // namespace intel
 } // namespace gpu
 } // namespace triton
