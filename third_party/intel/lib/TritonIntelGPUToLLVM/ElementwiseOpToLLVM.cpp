@@ -318,9 +318,8 @@ Bf16_to_Fp8E5M2_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
 
 /* ----- FP8E4M3B15 ------ */
 // This data-type is a variant of the standard FP8E4M3 format.
-// It was designed for fast software conversion to FP16 on
-// nvidia GPUs that do not support it natively.
-// Specifically, this data-type:
+// It was designed for fast software conversion to FP16 on GPUs that do not
+// support it natively. Specifically, this data-type:
 //    - has infinities
 //    - has multiple nans (when all exponent bits are 1)
 //    - has an exponent bias of 15 (vs. 7 for fp8e4m3)
@@ -2050,7 +2049,8 @@ struct ExpOpConversionApprox
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    // For non-FP32 input, call __nv_expf for higher-precision calculation
+    // For non-FP32 input, call math library expf for higher-precision
+    // calculation
     if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
@@ -2469,7 +2469,7 @@ void populateElementwiseOpToLLVMPatterns(
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
-  // __nv_expf for higher-precision calculation
+  // a vendor specific math library for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
                                     benefit);
