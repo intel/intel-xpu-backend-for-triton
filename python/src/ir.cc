@@ -690,10 +690,10 @@ void init_triton_ir(py::module &&m) {
            })
       .def("get_null_value",
            [](TritonOpBuilder &self, Type type) -> Value {
-             if (auto floatTy = type.dyn_cast<FloatType>())
+             if (auto floatTy = dyn_cast<FloatType>(type))
                return self.create<arith::ConstantFloatOp>(
                    APFloat(floatTy.getFloatSemantics(), 0), floatTy);
-             else if (auto intTy = type.dyn_cast<IntegerType>())
+             else if (auto intTy = dyn_cast<IntegerType>(type))
                return self.create<arith::ConstantIntOp>(0, intTy);
              else
                throw std::runtime_error("Not implemented");
@@ -701,7 +701,7 @@ void init_triton_ir(py::module &&m) {
       .def("get_all_ones_value",
            [](TritonOpBuilder &self, Type type) -> Value {
              uint64_t val = 0xFFFFFFFFFFFFFFFF;
-             if (auto intTy = type.dyn_cast<IntegerType>())
+             if (auto intTy = dyn_cast<IntegerType>(type))
                return self.create<arith::ConstantIntOp>(val, intTy);
              else
                throw std::runtime_error("Not implemented");
@@ -733,12 +733,14 @@ void init_triton_ir(py::module &&m) {
              return self.getBuilder().getI64Type();
            })
       .def("get_fp8e4nv_ty",
+           // TODO: fp8e4nv is using Float8E4M3FNUZType, which
+           // does not seem right. It should use FloatE4M3FNType
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getType<Float8E4M3FNUZType>();
            })
       .def("get_fp8e4b8_ty",
-           [](TritonOpBuilder &self) -> mlir::Type {
-             return self.getBuilder().getType<mlir::Float8E4M3FNUZType>();
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float8E4M3FNUZType>();
            })
       .def("get_fp8e4b15_ty",
            [](TritonOpBuilder &self) -> Type {
@@ -754,8 +756,8 @@ void init_triton_ir(py::module &&m) {
              return self.getBuilder().getType<Float8E5M2Type>();
            })
       .def("get_fp8e5b16_ty",
-           [](TritonOpBuilder &self) -> mlir::Type {
-             return self.getBuilder().getType<mlir::Float8E5M2FNUZType>();
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float8E5M2FNUZType>();
            })
       .def("get_half_ty",
            [](TritonOpBuilder &self) -> Type {
@@ -803,7 +805,7 @@ void init_triton_ir(py::module &&m) {
               bool noinline) -> FuncOp {
              if (Operation *funcOperation = module.lookupSymbol(funcName))
                return llvm::dyn_cast<FuncOp>(funcOperation);
-             if (auto funcTy = funcType.dyn_cast<FunctionType>()) {
+             if (auto funcTy = dyn_cast<FunctionType>(funcType)) {
                llvm::SmallVector<NamedAttribute> attrs = {
                    NamedAttribute(
                        self.getBuilder().getStringAttr("sym_visibility"),
@@ -934,8 +936,8 @@ void init_triton_ir(py::module &&m) {
               bool isSigned) -> Value {
              // get element type if necessary
              Type srcType = src.getType();
-             auto srcTensorType = srcType.dyn_cast<RankedTensorType>();
-             auto dstTensorType = dstType.dyn_cast<RankedTensorType>();
+             auto srcTensorType = dyn_cast<RankedTensorType>(srcType);
+             auto dstTensorType = dyn_cast<RankedTensorType>(dstType);
              Type srcEltType = srcType;
              Type dstEltType = dstType;
              if (dstTensorType && srcTensorType) {
@@ -1263,13 +1265,13 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
               bool allowReorder) -> Value {
              auto argType =
-                 arg.getType().cast<RankedTensorType>().getElementType();
+                 cast<RankedTensorType>(arg.getType()).getElementType();
              return self.create<ReshapeOp>(
                  RankedTensorType::get(shape, argType), arg, allowReorder);
            })
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
-             auto argType = arg.getType().dyn_cast<RankedTensorType>();
+             auto argType = dyn_cast<RankedTensorType>(arg.getType());
              auto argEltType = argType.getElementType();
              std::vector<int64_t> retShape = argType.getShape();
              retShape.insert(retShape.begin() + axis, 1);
@@ -1278,8 +1280,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_cat",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-             auto lhsType = lhs.getType().dyn_cast<RankedTensorType>();
-             auto rhsType = rhs.getType().dyn_cast<RankedTensorType>();
+             auto lhsType = dyn_cast<RankedTensorType>(lhs.getType());
+             auto rhsType = dyn_cast<RankedTensorType>(rhs.getType());
              if (!(lhsType.getShape().size() == 1 &&
                    rhsType.getShape().size() == 1))
                throw std::invalid_argument(
@@ -1303,7 +1305,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_trans",
            [](TritonOpBuilder &self, Value &arg,
               std::vector<int> &order) -> Value {
-             auto argType = arg.getType().dyn_cast<RankedTensorType>();
+             auto argType = dyn_cast<RankedTensorType>(arg.getType());
              auto argEltType = argType.getElementType();
              auto retShape = applyPermutation(argType.getShape(), order);
              return self.create<TransOp>(
@@ -1312,7 +1314,7 @@ void init_triton_ir(py::module &&m) {
       .def("create_broadcast",
            [](TritonOpBuilder &self, Value &arg,
               std::vector<int64_t> &shape) -> Value {
-             if (auto argType = arg.getType().dyn_cast<RankedTensorType>())
+             if (auto argType = dyn_cast<RankedTensorType>(arg.getType()))
                return self.createOrFold<BroadcastOp>(
                    RankedTensorType::get(shape, argType.getElementType()), arg);
              throw std::invalid_argument(
@@ -1332,14 +1334,14 @@ void init_triton_ir(py::module &&m) {
               MemSemantic sem, MemSyncScope scope) -> Value {
              Type dstType;
              if (auto srcTensorType =
-                     ptr.getType().dyn_cast<RankedTensorType>()) {
-               Type dstElemType = srcTensorType.getElementType()
-                                      .cast<PointerType>()
-                                      .getPointeeType();
+                     dyn_cast<RankedTensorType>(ptr.getType())) {
+               Type dstElemType =
+                   cast<PointerType>(srcTensorType.getElementType())
+                       .getPointeeType();
                dstType =
                    RankedTensorType::get(srcTensorType.getShape(), dstElemType);
              } else {
-               auto ptrType = getElementTypeOrSelf(ptr).cast<PointerType>();
+               auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
                dstType = ptrType.getPointeeType();
              }
              return self.create<AtomicCASOp>(dstType, ptr, cmp, val, sem,
@@ -1350,14 +1352,14 @@ void init_triton_ir(py::module &&m) {
               Value &mask, MemSemantic sem, MemSyncScope scope) -> Value {
              Type dstType;
              if (auto srcTensorType =
-                     ptr.getType().dyn_cast<RankedTensorType>()) {
-               Type dstElemType = srcTensorType.getElementType()
-                                      .cast<PointerType>()
-                                      .getPointeeType();
+                     dyn_cast<RankedTensorType>(ptr.getType())) {
+               Type dstElemType =
+                   cast<PointerType>(srcTensorType.getElementType())
+                       .getPointeeType();
                dstType =
                    RankedTensorType::get(srcTensorType.getShape(), dstElemType);
              } else {
-               auto ptrType = getElementTypeOrSelf(ptr).cast<PointerType>();
+               auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
                dstType = ptrType.getPointeeType();
              }
              return self.create<AtomicRMWOp>(dstType, rmwOp, ptr, val, mask,
@@ -1592,6 +1594,27 @@ void init_triton_ir(py::module &&m) {
         if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
           ::llvm::DebugFlag = true;
         }
+
+        if (auto debugOnly = triton::tools::getenv("TRITON_LLVM_DEBUG_ONLY");
+            !debugOnly.empty()) {
+          llvm::SmallVector<StringRef, 3> split;
+          llvm::SmallVector<std::string, 3> storage;
+          llvm::SmallVector<const char *, 3> debugTypes;
+
+          StringRef(debugOnly.c_str()).split(split, ',');
+          llvm::transform(split, std::back_inserter(debugTypes),
+                          [&storage](StringRef str) {
+                            // StringRefs are not always null-terminated.
+                            // The purpose for this storage pattern is to
+                            // produce a collection of C-strings that are.
+                            storage.push_back(str.str());
+                            return storage.back().c_str();
+                          });
+
+          ::llvm::DebugFlag = true;
+          ::llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+        }
+
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });
