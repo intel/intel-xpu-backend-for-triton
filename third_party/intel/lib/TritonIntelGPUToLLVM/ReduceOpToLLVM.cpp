@@ -353,8 +353,8 @@ private:
               gep(ptr_ty(rewriter.getContext(),
                          triton::TritonGEN::TritonGENMemorySpace::kWorkgroup),
                   elemTy, smemBases[i], readOffset);
-          acc[i] = targetInfo.loadShared(rewriter, loc, readPtr, elemTy,
-                                         threadIsNeeded);
+          acc[i] = targetInfo.loadShared(rewriter, loc, getTypeConverter(),
+                                         readPtr, elemTy, threadIsNeeded);
         }
         warpReduce(rewriter, loc, acc, op, reduceLaneNumber,
                    1 /* interleave */);
