@@ -33,10 +33,10 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %11 = arith.muli %8, %c256_i32 : i32
     %12 = arith.muli %1, %c8_i32 : i32
     %13 = arith.addi %12, %11 : i32
-    // CHECK: [[undef:%.*]] = llvm.mlir.undef : vector<2xi32>
-    // CHECK-DAG: [[zero:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK-DAG: [[one:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK: [[insert0:%.*]] = llvm.insertelement {{.*}}, [[undef]][[[zero]] : i32] : vector<2xi32>
+    // CHECK:      [[undef:%.*]] = llvm.mlir.undef : vector<2xi32>        
+    // CHECK-DAG:  [[zero:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-DAG:  [[one:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT: [[insert0:%.*]] = llvm.insertelement {{.*}}, [[undef]][[[zero]] : i32] : vector<2xi32>
     // CHECK-NEXT: [[insert1:%.*]] = llvm.insertelement {{.*}}, [[insert0]][[[one]] : i32] : vector<2xi32>
     %14 = tt.make_tensor_ptr %arg0, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%13, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x32xf16>, 1>
     // CHECK: llvm.call @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid
