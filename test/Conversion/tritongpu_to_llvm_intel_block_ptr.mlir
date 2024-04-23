@@ -1,6 +1,8 @@
-// RUN: INTEL_ENABLE_BLOCK_PTR=1 triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: TRITON_INTEL_ENABLE_BLOCK_PTR=1 triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
+
 module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 0 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
-  tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1>, %arg1: !tt.ptr<f16, 1>, %arg2: !tt.ptr<f32, 1>, %arg3: i32, %arg4: i32, %arg5: i32) attributes {noinline = false} {
+  tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1>, %arg1: !tt.ptr<f16, 1>, %arg2: !tt.ptr<f32, 1>, %arg3: i32, %arg4: i32, %arg5: i32) {
+    // CHECK-LABEL: @matmul_kernel_with_block_pointers    
     %c3_i32 = arith.constant 3 : i32
     %c7_i32 = arith.constant 7 : i32
     %c63_i32 = arith.constant 63 : i32
@@ -31,12 +33,11 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %11 = arith.muli %8, %c256_i32 : i32
     %12 = arith.muli %1, %c8_i32 : i32
     %13 = arith.addi %12, %11 : i32
-    // CHECK-LABEL: @matmul_kernel_with_block_pointers
     // CHECK: [[undef:%.*]] = llvm.mlir.undef : vector<2xi32>
-    // CHECK: [[zero:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: [[one:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-DAG: [[zero:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-DAG: [[one:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK: [[insert0:%.*]] = llvm.insertelement {{.*}}, [[undef]][[[zero]] : i32] : vector<2xi32>
-    // CHECK: [[insert1:%.*]] = llvm.insertelement {{.*}}, [[insert0]][[[one]] : i32] : vector<2xi32>
+    // CHECK-NEXT: [[insert1:%.*]] = llvm.insertelement {{.*}}, [[insert0]][[[one]] : i32] : vector<2xi32>
     %14 = tt.make_tensor_ptr %arg0, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%13, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x32xf16>, 1>
     // CHECK: llvm.call @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid
     triton_intel_gpu.prefetch %14 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<8x32xf16>, 1>
@@ -46,12 +47,6 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %21 = arith.addi %20, %11 : i32
     %22 = tt.make_tensor_ptr %arg0, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%21, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16>, 1>
     %23 = arith.muli %10, %c256_i32 : i32
-    %24 = arith.divsi %1, %c8_i32 : i32
-    %25 = arith.andi %24, %c3_i32 : i32
-    %26 = arith.muli %25, %c8_i32 : i32
-    %27 = arith.andi %1, %c7_i32 : i32
-    %28 = arith.muli %27, %c32_i32 : i32
-    %29 = arith.addi %28, %23 : i32
     %34 = arith.andi %1, %c3_i32 : i32
     %35 = arith.muli %34, %c64_i32 : i32
     %36 = arith.addi %35, %23 : i32
@@ -59,19 +54,19 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %38 = arith.addi %36, %c32_i32 : i32
     %39 = tt.make_tensor_ptr %arg1, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%c0_i32, %38] {order = array<i32: 1, 0>} : <tensor<32x32xf16>, 1>
     cf.br ^bb1(%c0_i32, %cst, %22, %37, %39 : i32, tensor<8x16xf32>, !tt.ptr<tensor<32x32xf16>, 1>, !tt.ptr<tensor<32x32xf16>, 1>, !tt.ptr<tensor<32x32xf16>, 1>)
-  ^bb1(%40: i32, %41: tensor<8x16xf32>, %57: !tt.ptr<tensor<32x32xf16>, 1>, %58: !tt.ptr<tensor<32x32xf16>, 1>, %59: !tt.ptr<tensor<32x32xf16>, 1>):  // 2 preds: ^bb0, ^bb2
+  ^bb1(%40: i32, %41: tensor<8x16xf32>, %57: !tt.ptr<tensor<32x32xf16>, 1>, %58: !tt.ptr<tensor<32x32xf16>, 1>, %59: !tt.ptr<tensor<32x32xf16>, 1>):
     %62 = arith.cmpi slt, %40, %c4096_i32 : i32
     cf.cond_br %62, ^bb2, ^bb3
-  ^bb2:  // pred: ^bb1
+  ^bb2:
     // CHECK: [[A:%.*]] = llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v64i16({{.*}} -> vector<64xi16>
-    // CHECK: [[castA:%.*]] = llvm.bitcast [[A]] : vector<64xi16> to vector<64xf16>
+    // CHECK-NEXT: [[castA:%.*]] = llvm.bitcast [[A]] : vector<64xi16> to vector<64xf16>
     // CHECK: [[B0:%.*]] = llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v32i32({{.*}} -> vector<32xi32>
-    // CHECK: [[castB:%.*]] = llvm.bitcast [[B0]] : vector<32xi32> to vector<64xf16>
+    // CHECK-NEXT: [[castB:%.*]] = llvm.bitcast [[B0]] : vector<32xi32> to vector<64xf16>
     // CHECK: [[B1:%.*]] = llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v32i32({{.*}} -> vector<32xi32>
     // CHECK: [[subA:%.*]] = llvm.shufflevector [[castA]], [[castA]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<64xf16>
     // CHECK: [[subB:%.*]] = llvm.shufflevector [[castB]], [[castB]] [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] : vector<64xf16>
-    // CHECK: [[castDotA:%.*]] = llvm.bitcast [[subA]] : vector<8xf16> to vector<8xi16>
-    // CHECK: [[castDotB:%.*]] = llvm.bitcast [[subB]] : vector<16xf16> to vector<8xi32>
+    // CHECK-NEXT: [[castDotA:%.*]] = llvm.bitcast [[subA]] : vector<8xf16> to vector<8xi16>
+    // CHECK-NEXT: [[castDotB:%.*]] = llvm.bitcast [[subB]] : vector<16xf16> to vector<8xi32>
     // CHECK: llvm.call @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f([[castDotA]], [[castDotB]], {{.*}} -> vector<8xf32>
     %63 = tt.load %57 {DotIdx = 0 : i32, boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16>, 1>
     %64 = tt.load %58 {DotIdx = 1 : i32, boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16>, 1>
@@ -83,14 +78,14 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     %70 = triton_intel_gpu.extract %64[1] : tensor<32x32xf16> -> tensor<16x16xf16>
     %71 = tt.dot %69, %70, %68 {allowTF32 = true, maxNumImpreciseAcc = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
     // CHECK: [[oldOffset:%.*]] = llvm.extractelement {{.*}} : vector<2xi32>
-    // CHECK: [[newOffset:%.*]] = llvm.add [[oldOffset]], {{.*}}  : i32
-    // CHECK: llvm.insertelement [[newOffset]], {{.*}} : vector<2xi32>
+    // CHECK-NEXT: [[newOffset:%.*]] = llvm.add [[oldOffset]], {{.*}}  : i32
+    // CHECK-NEXT: llvm.insertelement [[newOffset]], {{.*}} : vector<2xi32>
     %115 = tt.advance %57, [%c0_i32, %c32_i32] : <tensor<32x32xf16>, 1>
     %117 = tt.advance %58, [%c32_i32, %c0_i32] : <tensor<32x32xf16>, 1>
     %118 = tt.advance %59, [%c32_i32, %c0_i32] : <tensor<32x32xf16>, 1>
     %119 = arith.addi %40, %c32_i32 : i32
     cf.br ^bb1(%119, %71, %115, %117, %118 : i32, tensor<8x16xf32>, !tt.ptr<tensor<32x32xf16>, 1>, !tt.ptr<tensor<32x32xf16>, 1>, !tt.ptr<tensor<32x32xf16>, 1>)
-  ^bb3:  // pred: ^bb1
+  ^bb3:
     %120 = tt.make_tensor_ptr %arg2, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%21, %36] {order = array<i32: 1, 0>} : <tensor<8x16xf32>, 1>
     // CHECK: llvm.call @llvm.genx.GenISA.LSC2DBlockWrite.v8i32
     tt.store %120, %41 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<8x16xf32>, 1>

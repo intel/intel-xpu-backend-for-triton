@@ -29,7 +29,8 @@ Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Type elemTy, Value pred) const {
+                             const TypeConverter *converter, Value ptr,
+                             Type elemTy, Value pred) const {
   assert(ptr.getType().cast<mlir::LLVM::LLVMPointerType>().getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");

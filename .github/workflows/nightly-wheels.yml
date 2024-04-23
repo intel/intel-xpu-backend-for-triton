@@ -16,7 +16,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.11
+      - runner-0.0.12
     strategy:
       matrix:
         python:

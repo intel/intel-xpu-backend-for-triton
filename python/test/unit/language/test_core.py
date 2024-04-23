@@ -36,6 +36,11 @@ def is_xpu():
     return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "xpu"
 
 
+def xpu_has_fp64():
+    assert is_xpu()
+    return triton.runtime.driver.active.get_current_target()[1]['has_fp64']
+
+
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
 float_dtypes = ['float16', 'float32', 'float64']
@@ -166,6 +171,9 @@ def check_type_supported(dtype, device):
     if is_interpreter():
         if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
             pytest.xfail("bfloat16 is not supported in the interpreter")
+    elif device in ['xpu']:
+        if dtype in [torch.float64, "float64"] and not xpu_has_fp64():
+            pytest.xfail("float64 not supported on current xpu hardware")
 
 
 class MfmaLayout:
@@ -198,11 +206,11 @@ class DpasLayout:
 
     def __init__(self, repeatCount, systolic_depth, execution_size, ops_per_chan, threads_per_warp, warps_per_cta):
         self.repeatCount = repeatCount
-        self.systolic_depth = str(systolic_depth)
-        self.execution_size = str(execution_size)
-        self.ops_per_chan = str(ops_per_chan)
-        self.threads_per_warp = str(threads_per_warp)
-        self.warps_per_cta = str(warps_per_cta)
+        self.systolic_depth = systolic_depth
+        self.execution_size = execution_size
+        self.ops_per_chan = ops_per_chan
+        self.threads_per_warp = threads_per_warp
+        self.warps_per_cta = warps_per_cta
 
     def __str__(self):
         return f"#triton_intel_gpu.dpas<{{repeatCount={self.repeatCount}, systolicDepth={self.systolic_depth}, executionSize = {self.execution_size}, opsPerChan = {self.ops_per_chan}, threadsPerWarp = {self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}}}>"
@@ -374,7 +382,11 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         # triton result
         x_tri = to_triton(x, device=device, dst_type=dtype_x)
         y_tri = to_triton(y, device=device, dst_type=dtype_y)
+        if is_xpu() and not xpu_has_fp64() and z_ref.dtype in ["float64"]:
+            # Downcast the output type. Assumes similar overflow behavior to reference eval on the device.
+            z_ref = z_ref.astype("float32")
         z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
+
         kernel_fn[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
         err_msg = f"{expr}, {kernel_fn.__name__}"
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=1e-3, rtol=0.01)
@@ -1034,7 +1046,7 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
 
     if is_xpu():
         # use cpu result as reference, see https://github.com/llvm/llvm-project/issues/88222
-        out_ref = torch.div(x.to(torch.float64).cpu(), y.to(torch.float64).cpu()).to(torch.float32).to(device=device)
+        out_ref = torch.div(x.cpu().to(torch.float64), y.cpu().to(torch.float64)).to(torch.float32).to(device=device)
     assert torch.all(out == out_ref)  # bitwise exact
 
 
@@ -1367,6 +1379,7 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
+    check_type_supported(dtype_x_str, device)
     if is_interpreter():
         if dtype_x_str == 'float16':
             pytest.skip("Only test atomic float16 ops on GPU")
@@ -3045,19 +3058,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     if is_xpu() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
         pytest.skip("FIXME: float8e4nv and float8e5 fails to run on XPU")
-
-    if is_xpu() and '-'.join(
-            map(str, (M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack))
-    ) in ('64-128-128-4-True-True-none-ieee-float32-float32-1', '64-128-128-4-False-True-none-ieee-float32-float32-1',
-          '128-128-64-4-True-True-none-ieee-float32-float32-1', '128-128-64-4-False-True-none-ieee-float32-float32-1',
-          '64-128-128-4-True-False-none-ieee-float32-float32-1', '64-128-128-4-False-False-none-ieee-float32-float32-1',
-          '128-128-64-4-True-False-none-ieee-float32-float32-1', '128-128-64-4-False-False-none-ieee-float32-float32-1',
-          '64-128-128-2-True-True-none-ieee-float32-float32-1', '128-128-64-2-True-True-none-ieee-float32-float32-1',
-          '64-128-128-2-False-True-none-ieee-float32-float32-1', '128-128-64-2-False-True-none-ieee-float32-float32-1',
-          '64-128-128-2-True-False-none-ieee-float32-float32-1', '128-128-64-2-True-False-none-ieee-float32-float32-1',
-          '64-128-128-2-False-False-none-ieee-float32-float32-1',
-          '128-128-64-2-False-False-none-ieee-float32-float32-1'):
-        pytest.skip("FIXME: RuntimeError: Triton Error [ZE]: 1879048196 on XPU")
 
     if is_cuda():
         torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
@@ -4783,6 +4783,10 @@ intermediate_layouts = [
 def compute_rep_shape(layout):
     if type(layout) is BlockedLayout:
         warp_shape = np.multiply(layout.sz_per_thread, layout.threads_per_warp)
+        rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
+        return rep_shape
+    elif type(layout) is DpasLayout:
+        warp_shape = [layout.repeatCount, layout.execution_size]
         rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
         return rep_shape
     else:

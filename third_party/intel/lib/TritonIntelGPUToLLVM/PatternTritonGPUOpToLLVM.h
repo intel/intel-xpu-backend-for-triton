@@ -3,8 +3,8 @@
 
 #include "TargetInfo.h"
 #include "TritonGPUToLLVMBase.h"
-#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 namespace mlir {
 namespace triton {
@@ -36,8 +36,8 @@ void populateDotOpToLLVMPatterns(TritonGPUToLLVMTypeConverter &typeConverter,
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
-    const TargetInfoBase &targetInfo, PatternBenefit benefit);
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
+    PatternBenefit benefit);
 
 void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,

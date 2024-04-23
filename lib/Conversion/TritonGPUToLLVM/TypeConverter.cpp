@@ -18,7 +18,7 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
     const DataLayoutAnalysis *analysis)
     : LLVMTypeConverter(ctx, option, analysis) {
-  if (mlir::triton::tools::getBoolEnv("INTEL_ENABLE_BLOCK_PTR")) {
+  if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {
     // tt::pointer to v2i32
     addConversion([&](PointerType type) -> std::optional<Type> {
       if (isa<RankedTensorType>(type.getPointeeType())) {
@@ -66,8 +66,8 @@ Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
     triton::PointerType type) {
   auto ctx = type.getContext();
   auto pointeeType = type.getPointeeType();
-  if (pointeeType.isa<RankedTensorType>()) {
-    auto rankedTensorType = pointeeType.cast<RankedTensorType>();
+  if (isa<RankedTensorType>(pointeeType)) {
+    auto rankedTensorType = cast<RankedTensorType>(pointeeType);
     // struct { offset0, offset1, shape0, shape1, stride0,
     // stride1, base_ptr};
     auto eleType = rankedTensorType.getElementType();

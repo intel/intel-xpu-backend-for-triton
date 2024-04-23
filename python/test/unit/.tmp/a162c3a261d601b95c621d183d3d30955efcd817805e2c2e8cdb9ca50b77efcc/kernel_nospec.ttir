@@ -1,0 +1,9 @@
+#loc = loc(unknown)
+module {
+  tt.func public @kernel_nospec(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32} loc(unknown), %arg1: i32 loc(unknown)) attributes {noinline = false} {
+    %c3_i32 = arith.constant 3 : i32 loc(#loc)
+    %0 = arith.addi %arg1, %c3_i32 : i32 loc(#loc)
+    tt.store %arg0, %0 : !tt.ptr<i32> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
