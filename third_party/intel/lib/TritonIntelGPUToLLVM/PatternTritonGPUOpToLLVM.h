@@ -3,8 +3,8 @@
 
 #include "TargetInfo.h"
 #include "TritonGPUToLLVMBase.h"
-#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 namespace mlir {
 namespace triton {
