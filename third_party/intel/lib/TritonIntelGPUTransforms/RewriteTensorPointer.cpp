@@ -11,7 +11,8 @@
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/Transforms/Passes.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include <memory>
 #include <stack>
@@ -57,6 +58,18 @@ bool isDivisible(Value v, unsigned divisor) {
 bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   auto ptrType = op.getType().cast<tt::PointerType>();
   auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
+
+  // Only keep the tensor pointer with the layout of DpasEncodingAttr
+  if (tensorType.getEncoding() == nullptr)
+    return true;
+  auto dotLayout =
+      tensorType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+  if (dotLayout == nullptr)
+    return true;
+  auto dpasLayout =
+      dotLayout.getParent().dyn_cast<triton::gpu::intel::DpasEncodingAttr>();
+  if (dpasLayout == nullptr)
+    return true;
 
   auto base = op.getBase();
   auto shape = op.getShape();
@@ -175,15 +188,16 @@ public:
     // The loop below implements this algorithm.
     SmallVector<Attribute, 4> layouts;
     layouts.resize(rank);
-    layouts[rank - 1] = layout;
-    size_t axisToRemove = rank - 1;
-    for (int64_t k = rank - 2; k >= 0; k--) {
-      if (axisToRemove == i)
+    if (layout) {
+      layouts[rank - 1] = layout;
+      size_t axisToRemove = rank - 1;
+      for (int64_t k = rank - 2; k >= 0; k--) {
+        if (axisToRemove == i)
+          axisToRemove--;
+        layouts[k] = triton::gpu::SliceEncodingAttr::get(ctx, axisToRemove,
+                                                         layouts[k + 1]);
         axisToRemove--;
-
-      layouts[k] =
-          ttg::SliceEncodingAttr::get(ctx, axisToRemove, layouts[k + 1]);
-      axisToRemove--;
+      }
     }
 
     // Add range
