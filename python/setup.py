@@ -426,10 +426,12 @@ class CMakeBuild(build_ext):
 
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
-        ninja_dir = shutil.which('ninja')
+        # ninja_dir = shutil.which('ninja')
+        ninja_dir = "/home/chengjun/clion-2023.1.3/bin/ninja/linux/x64/ninja"
         # lit is used by the test suite
-        thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
-        thirdparty_cmake_args += self.get_pybind11_cmake_args()
+        # thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
+        # thirdparty_cmake_args += self.get_pybind11_cmake_args()
+        thirdparty_cmake_args = []
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
         if not os.path.exists(self.build_temp):
@@ -460,7 +462,7 @@ class CMakeBuild(build_ext):
             cmake_args += [f"-DTRITON_PYD_PATH={extdir}"]
         else:
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
-            build_args += ['-j' + max_jobs]
+            build_args += ['-j' + "2"]
 
         if check_env_flag("TRITON_BUILD_WITH_CLANG_LLD"):
             cmake_args += [
@@ -508,7 +510,10 @@ class CMakeBuild(build_ext):
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
-        subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
+        # subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
+        print(["cmake", self.base_dir] + cmake_args)
+        print(cmake_dir)
+        print(["cmake", "--build", "."] + build_args)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 

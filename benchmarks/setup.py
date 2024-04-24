@@ -1,5 +1,4 @@
 import os
-import shutil
 import subprocess
 import sys
 
@@ -43,7 +42,8 @@ class CMakeBuild():
             subprocess.check_call(*popenargs, **kwargs)
 
     def build_extension(self):
-        ninja_dir = shutil.which("ninja")
+        # ninja_dir = shutil.which("ninja")
+        ninja_dir = "/home/chengjun/clion-2023.1.3/bin/ninja/linux/x64/ninja"
         # create build directories
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
@@ -79,7 +79,7 @@ class CMakeBuild():
         ]
 
         env = os.environ.copy()
-        self.check_call(["cmake"] + cmake_args, env=env)
+        # self.check_call(["cmake"] + cmake_args, env=env)
         self.check_call(["cmake"] + build_args)
         self.check_call(["cmake"] + install_args)
 
