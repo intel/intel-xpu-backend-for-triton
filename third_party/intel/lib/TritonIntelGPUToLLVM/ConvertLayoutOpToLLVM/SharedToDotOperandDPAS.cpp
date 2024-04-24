@@ -234,8 +234,11 @@ Type getSharedMemTy(Type argType) {
     return type::f32Ty(ctx);
   else if (argType.getIntOrFloatBitWidth() == 8)
     return type::i8Ty(ctx);
+  else if (argType.isF64())
+    return type::f64Ty(ctx);
   else
-    llvm::report_fatal_error("mma16816 data type not supported");
+    llvm::report_fatal_error(
+        "unsupported data type for the dot layout of DPAS");
 }
 
 template <unsigned opIdx>
