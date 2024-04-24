@@ -922,11 +922,13 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
   assert(inEncoding == ouEncoding);
   if (!inEncoding)
     return values;
+
   // If the parent of the dot operand is in block encoding, we don't need to
   // reorder elements
   auto parentEncoding = dyn_cast<NvidiaMmaEncodingAttr>(ouEncoding.getParent());
   if (!parentEncoding)
     return values;
+
   size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
   size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
   auto ouEltTy = ouTensorTy.getElementType();
@@ -967,25 +969,6 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
       ret.push_back(values[i + 15]);
     }
     return ret;
-    // for (unsigned i = 0; i < values.size(); i += 16) {
-    //   ret.push_back(values[i]);
-    //   ret.push_back(values[i + 1]);
-    //   ret.push_back(values[i + 4]);
-    //   ret.push_back(values[i + 5]);
-    //   ret.push_back(values[i + 8]);
-    //   ret.push_back(values[i + 9]);
-    //   ret.push_back(values[i + 12]);
-    //   ret.push_back(values[i + 13]);
-
-    //   ret.push_back(values[i + 2]);
-    //   ret.push_back(values[i + 3]);
-    //   ret.push_back(values[i + 6]);
-    //   ret.push_back(values[i + 7]);
-    //   ret.push_back(values[i + 10]);
-    //   ret.push_back(values[i + 11]);
-    //   ret.push_back(values[i + 14]);
-    //   ret.push_back(values[i + 15]);
-    // }
   }
   llvm_unreachable("unimplemented code path");
 }

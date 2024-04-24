@@ -1,12 +1,9 @@
 import pytest
 import torch
 import intel_extension_for_pytorch  # type: ignore # noqa: F401
-import os
 
 import triton
 import triton.language as tl
-
-os.environ["TRITON_INTEL_EMULATE_FP16_ATOMICS"] = "1"
 
 BLOCK = 16
 NUMELEM = 15
