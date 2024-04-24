@@ -207,7 +207,10 @@ jobs:
       - name: Pass rate
         run: |
           python3 scripts/pass_rate.py --reports ~/reports
-          mkdir -p /cache/reports/pass-rate
-          TMPFILE=$(mktemp -p /cache/reports/pass-rate XXXXXXXXXX)
-          python3 scripts/pass_rate.py --reports ~/reports --json > $TMPFILE
-          mv $TMPFILE $TMPFILE.json
+          python3 scripts/pass_rate.py --reports ~/reports --json > pass_rate.json
+
+      - name: Upload pass rate report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pass_rate
+          path: pass_rate.json
