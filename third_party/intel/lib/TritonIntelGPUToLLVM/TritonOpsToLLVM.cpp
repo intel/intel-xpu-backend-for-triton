@@ -10,18 +10,11 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
-LLVM::ConstantOp createIntConstant(IntegerType type, unsigned value,
-                                   ConversionPatternRewriter &rewriter,
-                                   Location loc) {
-  auto attr = rewriter.getIntegerAttr(type, value);
-  return rewriter.create<LLVM::ConstantOp>(loc, type, attr);
-}
-
 VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
   unsigned ratio =
       elemType.getIntOrFloatBitWidth() / tensorType.getElementTypeBitWidth();
   unsigned num = tensorType.getNumElements() / 16 / ratio;
-  return VectorType::get(num, elemType);
+  return vec_ty(elemType, num);
 };
 
 /// v2i32 [offsetX, offsetY] for 2D tensor desc
@@ -36,16 +29,14 @@ public:
     Location loc = op.getLoc();
 
     IntegerType i32Type = rewriter.getI32Type();
-    VectorType v2i32 = VectorType::get(2, i32Type);
+    VectorType v2i32 = vec_ty(i32Type, 2);
     Value offsetX = op.getOffsets()[1];
     Value offsetY = op.getOffsets()[0];
-    Value payLoad = rewriter.create<LLVM::UndefOp>(loc, v2i32);
-    Value idx0 = createIntConstant(i32Type, 0, rewriter, loc);
-    Value idx1 = createIntConstant(i32Type, 1, rewriter, loc);
-    payLoad =
-        rewriter.create<LLVM::InsertElementOp>(loc, payLoad, offsetX, idx0);
-    payLoad =
-        rewriter.create<LLVM::InsertElementOp>(loc, payLoad, offsetY, idx1);
+    Value payLoad = undef(v2i32);
+    Value idx0 = i32_val(0);
+    Value idx1 = i32_val(1);
+    payLoad = insert_element(payLoad, offsetX, idx0);
+    payLoad = insert_element(payLoad, offsetY, idx1);
     rewriter.replaceOp(op, payLoad);
     return success();
   }
@@ -64,7 +55,7 @@ public:
     Location loc = op.getLoc();
     SmallVector<Value> offsets = adaptor.getOffsets();
     Value ptr = adaptor.getPtr();
-    for (size_t i = 0; i < offsets.size(); i++) {
+    for (size_t i = 0; i < offsets.size(); ++i) {
       Value offset = offsets[i];
       if (auto cst = dyn_cast<LLVM::ConstantOp>(offset.getDefiningOp()))
         if (auto attr = dyn_cast<mlir::IntegerAttr>(cst.getValue());
@@ -77,10 +68,9 @@ public:
                             loc, i32Type, rewriter.getIntegerAttr(i32Type, 1))
                       : rewriter.create<LLVM::ConstantOp>(
                             loc, i32Type, rewriter.getIntegerAttr(i32Type, 0));
-      Value oldOffset = rewriter.create<LLVM::ExtractElementOp>(loc, ptr, idx);
-      Value newOffset =
-          rewriter.create<LLVM::AddOp>(loc, i32Type, oldOffset, offset);
-      ptr = rewriter.create<LLVM::InsertElementOp>(loc, ptr, newOffset, idx);
+      Value oldOffset = extract_element(ptr, idx);
+      Value newOffset = add(i32Type, oldOffset, offset);
+      ptr = insert_element(ptr, newOffset, idx);
     }
     rewriter.replaceOp(op, ptr);
     return success();
@@ -154,8 +144,8 @@ public:
     unsigned vBlks = blockWidth == 32 ? 2 : 1;
     blockWidth = 16;
     unsigned blockHeight = tensorType.getShape()[0];
-    Value idx0 = createIntConstant(i32Type, 0, rewriter, loc);
-    Value idx1 = createIntConstant(i32Type, 1, rewriter, loc);
+    Value idx0 = i32_val(0);
+    Value idx1 = i32_val(1);
     Value ptr = op.getPtr();
     if (auto cast =
             dyn_cast<mlir::UnrealizedConversionCastOp>(ptr.getDefiningOp()))
@@ -169,10 +159,9 @@ public:
 
     OpBuilder::InsertPoint insertPoint = rewriter.saveInsertionPoint();
     rewriter.setInsertionPointAfter(ptrOp);
-    Value bytes = createIntConstant(
-        i32Type, tensorType.getElementType().getIntOrFloatBitWidth() / 8,
-        rewriter, loc);
-    Value one = createIntConstant(i32Type, 1, rewriter, loc);
+    Value bytes =
+        i32_val(tensorType.getElementType().getIntOrFloatBitWidth() / 8);
+    Value one = i32_val(1);
     Value surfaceW =
         rewriter.create<arith::TruncIOp>(loc, i32Type, ptrOp.getShape()[1]);
     surfaceW = rewriter.create<arith::MulIOp>(loc, surfaceW, bytes);
@@ -187,10 +176,8 @@ public:
     rewriter.restoreInsertionPoint(insertPoint);
 
     Value tensorPtr = adaptor.getPtr();
-    Value offsetX =
-        rewriter.create<LLVM::ExtractElementOp>(loc, tensorPtr, idx0);
-    Value offsetY =
-        rewriter.create<LLVM::ExtractElementOp>(loc, tensorPtr, idx1);
+    Value offsetX = extract_element(tensorPtr, idx0);
+    Value offsetY = extract_element(tensorPtr, idx1);
 
     if constexpr (isLoad) {
       Type resType =
@@ -308,7 +295,7 @@ public:
           op, dstType, operands[0], operands[1], attr);
       break;
     case 4: {
-      auto subType = VectorType::get(numElts / 2, dstType.getElementType());
+      auto subType = vec_ty(dstType.getElementType(), numElts / 2);
       indices.pop_back_n(numElts / 2);
       DenseI32ArrayAttr attr01 = rewriter.getDenseI32ArrayAttr(indices);
       auto shfl01 = rewriter.create<LLVM::ShuffleVectorOp>(
@@ -377,7 +364,7 @@ class ArithConstantOpLowering
 
     auto vecType = cast<VectorType>(dstType);
     ShapedType dstAttrType =
-        VectorType::get(vecType.getNumElements(), vecType.getElementType());
+        vec_ty(vecType.getElementType(), vecType.getNumElements());
     dstElementsAttr = dstElementsAttr.resizeSplat(dstAttrType);
     auto newOp =
         rewriter.create<LLVM::ConstantOp>(loc, dstType, dstElementsAttr);

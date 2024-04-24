@@ -7,7 +7,6 @@
 #include "triton/Analysis/Allocation.h"
 
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
-
 //
 #include "TritonIntelGPUToLLVM/Passes.h"
 #include "Utility.h"

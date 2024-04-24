@@ -20,6 +20,7 @@ add_triton_library(TritonIntelGPUToLLVM
     SPMDOpToLLVM.cpp
     TargetInfo.cpp
     TensorPtrOpsToLLVM.cpp
+    TritonGPUToLLVM.cpp    
     TritonOpsToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp
@@ -29,8 +30,8 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonIntelGPUConversionPassIncGen
 
     LINK_LIBS PUBLIC
+    GPUToTritonGEN
     TritonGENIR
     TritonGENToLLVM
     TritonIntelGPUIR
-    GPUToTritonGEN
 )
