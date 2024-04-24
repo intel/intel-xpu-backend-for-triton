@@ -85,6 +85,8 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
           isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth());
     }
   }
+  if (!isPitchDivisible)
+    return true;
 
   // HW 2D block read instruction only supports contiguous accessing.
   // TODO: support column-major tensor
@@ -99,15 +101,14 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
     }
   }
 
-  return !(isPitchDivisible && isRowMajor);
+  return !isRowMajor;
 }
 
 void getBackwardSliceImpl(Value val, SetVector<Value> *backwardSlice,
                           bool excludeBlockArgs = false) {
   Operation *op = val.getDefiningOp();
-  if (!op) {
+  if (!op)
     op = cast<BlockArgument>(val).getOwner()->getParentOp();
-  }
 
   if (!op || op->hasTrait<OpTrait::IsIsolatedFromAbove>())
     return;
@@ -125,9 +126,8 @@ void getBackwardSliceImpl(Value val, SetVector<Value> *backwardSlice,
       // Yield in the loop body block. Nested blocks are handled separately.
       for (auto yieldOp : forOp.getOps<scf::YieldOp>()) {
         auto yieldArg = yieldOp->getOperand(iterArgIdx);
-        if (backwardSlice->count(yieldArg) == 0) {
+        if (backwardSlice->count(yieldArg) == 0)
           getBackwardSliceImpl(yieldArg, backwardSlice, true);
-        }
       }
       auto initArg = forOp.getInitArgs()[iterArgIdx];
       if (backwardSlice->count(initArg) == 0)
@@ -139,7 +139,8 @@ void getBackwardSliceImpl(Value val, SetVector<Value> *backwardSlice,
       if (auto *definingOp = operand.getDefiningOp()) {
         if (backwardSlice->count(operand) == 0)
           getBackwardSliceImpl(operand, backwardSlice);
-      } else if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+      } else {
+        auto blockArg = cast<BlockArgument>(operand);
         if (excludeBlockArgs)
           continue;
 
@@ -151,8 +152,6 @@ void getBackwardSliceImpl(Value val, SetVector<Value> *backwardSlice,
                  parentOp->getRegion(0).getBlocks().size() == 1);
           getBackwardSliceImpl(operand, backwardSlice);
         }
-      } else {
-        llvm_unreachable("No definingOp and not a block argument.");
       }
     }
   }
@@ -798,28 +797,23 @@ public:
       SetVector<Value> slices;
       getBackwardSliceImpl(src, &slices);
       for (auto val : slices) {
+        std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp;
         if (Operation *defOp = val.getDefiningOp()) {
-          if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(defOp)) {
-            // TODO: Block store should not be removed when 2d store is enabled
-            if (llvm::isa<tt::StoreOp>(op) ||
-                shouldRemove(makeTensorPtrOp, this->deviceArch))
-              valueToRemove.insert(val);
-          }
-          if (auto advanceOp = dyn_cast<tt::AdvanceOp>(defOp)) {
-            auto makeTensorPtrOp = getMakeTensorPtrOp(defOp->getOperand(0));
-            if (llvm::isa<tt::StoreOp>(op) ||
-                shouldRemove(makeTensorPtrOp, this->deviceArch))
-              valueToRemove.insert(val);
-          }
+          if (auto makeTensorPtr = dyn_cast<tt::MakeTensorPtrOp>(defOp))
+            makeTensorPtrOp = makeTensorPtr;
+          if (auto advanceOp = dyn_cast<tt::AdvanceOp>(defOp))
+            makeTensorPtrOp = getMakeTensorPtrOp(defOp->getOperand(0));
         } else {
           Operation *parentOp =
               cast<BlockArgument>(val).getOwner()->getParentOp();
-          if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-            auto MakeTensorPtrOp = getMakeTensorPtrOp(val);
-            if (llvm::isa<tt::StoreOp>(op) ||
-                shouldRemove(MakeTensorPtrOp, this->deviceArch))
-              valueToRemove.insert(val);
-          }
+          if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
+            makeTensorPtrOp = getMakeTensorPtrOp(val);
+        }
+        if (makeTensorPtrOp.has_value()) {
+          // TODO: Block store should not be removed when 2d store is enabled
+          if (isa<tt::StoreOp>(op) ||
+              shouldRemove(makeTensorPtrOp.value(), this->deviceArch))
+            valueToRemove.insert(val);
         }
       }
     });
