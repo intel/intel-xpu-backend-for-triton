@@ -1,7 +1,4 @@
 // RUN: triton-opt %s -tritonintelgpu-rewrite-tensor-pointer | FileCheck %s
-// FIXME
-// XFAIL: *
-
 tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}) {
   %c31_i32 = arith.constant 31 : i32
   %c127_i32 = arith.constant 127 : i32

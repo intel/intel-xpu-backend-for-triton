@@ -169,8 +169,8 @@ struct LoadOpConversion
     Value ptr = op.getPtr();
     Value mask = op.getMask();
     Value other = op.getOther();
-    Type resultTy = op.getType();
-    RankedTensorType tensorType = resultTy.cast<RankedTensorType>();
+    Type resultType = op.getType();
+    auto tensorType = cast<RankedTensorType>(resultType);
 
     // Only lower loadOp with dpas layout encoding
     Attribute layoutEncoding = tensorType.getEncoding();
@@ -188,7 +188,7 @@ struct LoadOpConversion
     unsigned opIdx = dotLayout.getOpIdx();
     Type eltTy = tensorType.getElementType();
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
-    unsigned numElems = getTotalElemsPerThread(resultTy);
+    unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, dotLayout.getOpIdx());
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
@@ -200,8 +200,6 @@ struct LoadOpConversion
     Value laneId = urem(getThreadId(rewriter, loc), warpSize);
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-
-    Type load2DGenXType;
 
     SmallVector<unsigned> operandShape =
         opIdx == 0 ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
@@ -219,7 +217,7 @@ struct LoadOpConversion
     } else {
       elemsPerLane = elemsPerLane / opsPerChannel;
     }
-    load2DGenXType = LLVM::getFixedVectorType(elemType, elemsPerLane);
+    Type load2DGenXType = LLVM::getFixedVectorType(elemType, elemsPerLane);
 
     // Outer dim, A is the M, B is the N. Inner dim, the K
     int outerDimWarpNum = std::min<int>(
@@ -239,20 +237,16 @@ struct LoadOpConversion
     SmallVector<Value> rets;
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int k = 0; k < numRepK; ++k) {
-        Value offsetX, offsetY;
-        if (opIdx == 0) {
-          // A
-          offsetY =
-              add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
-                  i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]));
-          offsetX = i32_val(k * elemsPerInstr[1]);
-        } else {
-          // B
-          offsetX =
-              add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
-                  i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]));
-          offsetY = i32_val(k * elemsPerInstr[0]);
-        }
+        Value offsetX =
+            (opIdx == 0)
+                ? i32_val(k * elemsPerInstr[1])
+                : add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
+                      i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]));
+        Value offsetY =
+            (opIdx == 0)
+                ? add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
+                      i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]))
+                : i32_val(k * elemsPerInstr[0]);
         offsetX = add(offsetX, offsetBaseX);
         offsetY = add(offsetY, offsetBaseY);
         width = rewriter.create<arith::TruncIOp>(loc, i32_ty, width);
