@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/IR/ValueRange.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -63,11 +62,10 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   if (tensorType.getEncoding() == nullptr)
     return true;
   auto dotLayout =
-      tensorType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+      tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
   if (dotLayout == nullptr)
     return true;
-  auto dpasLayout =
-      dotLayout.getParent().dyn_cast<triton::gpu::intel::DpasEncodingAttr>();
+  auto dpasLayout = dotLayout.getParent().dyn_cast<ttgi::DpasEncodingAttr>();
   if (dpasLayout == nullptr)
     return true;
 
@@ -125,15 +123,10 @@ void getBackwardSliceImpl(Value val, SetVector<Value> *backwardSlice,
     if (iterArgIdx < forOp.getNumRegionIterArgs()) {
       // We cannot use forOp.walk(...) here because we only want to visit the
       // Yield in the loop body block. Nested blocks are handled separately.
-      llvm::SmallVector<scf::YieldOp> yieldOps;
-      for (Operation &opInFor : forOp) {
-        if (auto yieldOp = dyn_cast<scf::YieldOp>(opInFor))
-          yieldOps.push_back(yieldOp);
-      }
-      for (auto &yieldOp : yieldOps) {
-        auto yeildArg = yieldOp->getOperand(iterArgIdx);
-        if (backwardSlice->count(yeildArg) == 0) {
-          getBackwardSliceImpl(yeildArg, backwardSlice, true);
+      for (auto yieldOp : forOp.getOps<scf::YieldOp>()) {
+        auto yieldArg = yieldOp->getOperand(iterArgIdx);
+        if (backwardSlice->count(yieldArg) == 0) {
+          getBackwardSliceImpl(yieldArg, backwardSlice, true);
         }
       }
       auto initArg = forOp.getInitArgs()[iterArgIdx];
@@ -258,8 +251,8 @@ public:
       for (int64_t k = rank - 2; k >= 0; k--) {
         if (axisToRemove == i)
           axisToRemove--;
-        layouts[k] = triton::gpu::SliceEncodingAttr::get(ctx, axisToRemove,
-                                                         layouts[k + 1]);
+        layouts[k] =
+            ttg::SliceEncodingAttr::get(ctx, axisToRemove, layouts[k + 1]);
         axisToRemove--;
       }
     }
@@ -460,9 +453,9 @@ public:
   Operation *rewriteAdvanceOp(OpBuilder &builder, tt::AdvanceOp op,
                               std::stack<Operation *> &eraser,
                               const DenseSet<Value> &valueToRemove) {
-    if (!valueToRemove.count(op.getResult())) {
+    if (!valueToRemove.count(op.getResult()))
       return nullptr;
-    }
+
     // Get info from previous results
     assert(rewritedInfo.count(op.getPtr()));
     auto info = rewritedInfo[op.getPtr()];
@@ -490,7 +483,8 @@ public:
   Operation *rewriteLoadStoreOp(OpBuilder &builder, Operation *op,
                                 std::stack<Operation *> &eraser,
                                 const DenseSet<Value> &valueToRemove) {
-    assert(isa<tt::LoadOp>(op) || isa<tt::StoreOp>(op));
+    assert(isa<tt::LoadOp>(op) ||
+           isa<tt::StoreOp>(op) && "Expecting LoadOp or StoreOp");
     if (!valueToRemove.count(op->getOperand(0)))
       return nullptr;
 
