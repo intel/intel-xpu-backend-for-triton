@@ -20,7 +20,7 @@ add_triton_library(TritonIntelGPUToLLVM
     SPMDOpToLLVM.cpp
     TargetInfo.cpp
     TensorPtrOpsToLLVM.cpp
-    TritonGPUToLLVM.cpp    
+    TritonGPUToLLVM.cpp
     TritonOpsToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp

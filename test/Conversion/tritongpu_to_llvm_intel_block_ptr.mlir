@@ -36,7 +36,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     // CHECK:      [[undef:%.*]] = llvm.mlir.undef : vector<2xi32>
     // CHECK-DAG:  [[zero:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: [[insert0:%.*]] = llvm.insertelement {{.*}}, [[undef]][[[zero]] : i32] : vector<2xi32>
-    // CHECK-NEXT:  [[one:%.*]] = llvm.mlir.constant(1 : i32) : i32    
+    // CHECK-NEXT:  [[one:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK-NEXT: [[insert1:%.*]] = llvm.insertelement {{.*}}, [[insert0]][[[one]] : i32] : vector<2xi32>
     %14 = tt.make_tensor_ptr %arg0, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%13, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x32xf16>, 1>
     // CHECK: llvm.call @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid
