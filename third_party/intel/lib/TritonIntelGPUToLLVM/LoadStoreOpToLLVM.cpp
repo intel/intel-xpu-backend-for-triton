@@ -535,9 +535,7 @@ struct AtomicRMWOpConversion
                         PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter,
                                                              benefit),
-        LoadStoreConversionBase(axisAnalysisPass),
-        emulateFp16Atomics(
-            ::triton::tools::getBoolEnv("TRITON_INTEL_EMULATE_FP16_ATOMICS")) {}
+        LoadStoreConversionBase(axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
@@ -614,7 +612,10 @@ struct AtomicRMWOpConversion
       Block *endBlock = nullptr;
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
-      if (valueElemNBits == 16 && emulateFp16Atomics) {
+      if (valueElemNBits == 16) {
+        op.emitOpError(
+            "fp16 datatype is not supported in the target HW, software "
+            "emulation is an experimental feature (use at own risk)");
         endBlock =
             emulateFp16AtomicRmw(rewriter, loc, atomicRmwAttr, valueElemTy,
                                  rmwPtr, rmwVal, rmwMask, {zero});
@@ -777,9 +778,6 @@ struct AtomicRMWOpConversion
     rewriter.setInsertionPointToStart(endBlock);
     return endBlock;
   }
-
-private:
-  bool emulateFp16Atomics = false;
 };
 
 } // namespace

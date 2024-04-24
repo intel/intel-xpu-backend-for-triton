@@ -2879,6 +2879,11 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
     if is_hip() and shape == (128, 128) and dtype_str == 'float32':
         pytest.skip("TODO Out of LDS for float32 with shape 128x128")
+    if is_xpu() and shape == (128, 128) and dtype_str == 'float32':
+        # check maximum shared memory
+        if triton.runtime.driver.active.utils.get_device_properties(
+                triton.runtime.driver.active.get_current_device())["max_shared_mem"] <= 65536:
+            pytest.xfail("XPU: Not enough shared memory for float32 with shape 128x128")
 
     # triton kernel
     @triton.jit
