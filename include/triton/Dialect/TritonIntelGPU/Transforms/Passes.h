@@ -37,7 +37,6 @@ std::unique_ptr<Pass> createTritonIntelGPURewriteTensorPointerPass(
 std::unique_ptr<Pass> createPrefetchBlockPass();
 
 std::unique_ptr<Pass> createMatchTargetSizePass();
-
 } // namespace intel
 } // namespace gpu
 } // namespace triton
