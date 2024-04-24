@@ -10,7 +10,6 @@
 
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -79,6 +78,7 @@ struct ConvertTritonGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+
     intel::TritonGPUToLLVMPipelineManager pipelineManager(mod, context);
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);

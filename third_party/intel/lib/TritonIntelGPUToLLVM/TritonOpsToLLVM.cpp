@@ -119,16 +119,6 @@ public:
     assert(tensorType.getRank() <= 2 &&
            "only support 1d/2d load/store/prefetch for now");
 
-    Location loc = op.getLoc();
-    constexpr bool isLoad = std::is_same_v<OpType, LoadOp>;
-    constexpr bool isPrefetch = std::is_same_v<OpType, PrefetchOp>;
-
-    bool vnni = false, transpose = false;
-    if constexpr (isLoad) {
-      auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
-      vnni = idxAttr.getInt() == 1 ? true : false;
-    }
-
     unsigned dataSize = tensorType.getElementType().getIntOrFloatBitWidth();
     unsigned blockWidth = tensorType.getShape()[1];
     assert(blockWidth == 16 || blockWidth == 32 && "only support 16/32 block");
@@ -148,6 +138,7 @@ public:
 
     OpBuilder::InsertPoint insertPoint = rewriter.saveInsertionPoint();
     rewriter.setInsertionPointAfter(ptrOp);
+    Location loc = op.getLoc();
     Value bytes =
         i32_val(tensorType.getElementType().getIntOrFloatBitWidth() / 8);
     Value one = i32_val(1);
@@ -160,32 +151,32 @@ public:
     Value offsetX = extract_element(tensorPtr, i32_val(0));
     Value offsetY = extract_element(tensorPtr, i32_val(1));
 
-    if constexpr (isLoad) {
-      Type resType =
-          this->getTypeConverter()->convertType(op->getResult(0).getType());
+    if constexpr (std::is_same_v<OpType, LoadOp>) {
       auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
       unsigned idx = idxAttr.getInt();
+      Type resType =
+          this->getTypeConverter()->convertType(op->getResult(0).getType());
       Type vectorType =
           getVectorType(cast<RankedTensorType>(op.getResult().getType()),
                         idx == 0 ? i16_ty : i32_ty);
+      bool vnni = (idx == 1) && dataSize <= 32;
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
-          dataSize, blockWidth, blockHeight, vBlks, transpose, vnni);
-      auto cast = bitcast(load, resType);
-      rewriter.replaceOp(op, cast);
-    } else if constexpr (isPrefetch) {
+          dataSize, blockWidth, blockHeight, vBlks, false /* transpose*/, vnni);
+      rewriter.replaceOp(op, bitcast(load, resType));
+    } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
       rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
-          blockWidth, blockHeight, vBlks, transpose, vnni,
+          blockWidth, blockHeight, vBlks, false /*transpose*/, false /*vnni*/,
           TritonGEN::PrefetchCacheControl::L1C_L3C);
       rewriter.eraseOp(op);
     } else {
       VectorType vectorType = getVectorType(
           cast<RankedTensorType>(op.getValue().getType()), i32_ty);
-      Value cast = bitcast(adaptor.getValue(), vectorType);
       rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
-          blockWidth, blockHeight, vBlks, transpose, vnni, cast);
+          blockWidth, blockHeight, vBlks, false /*transpose*/, false /*vnni*/,
+          bitcast(adaptor.getValue(), vectorType));
       rewriter.eraseOp(op);
     }
 
