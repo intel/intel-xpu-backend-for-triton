@@ -307,38 +307,6 @@ public:
   }
 };
 
-// FIXME: support it in upstream constantOpLowering
-class ArithConstantOpLowering
-    : public ConvertTritonGPUOpToLLVMPattern<mlir::arith::ConstantOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      mlir::arith::ConstantOp>::ConvertTritonGPUOpToLLVMPattern;
-  LogicalResult
-  matchAndRewrite(mlir::arith::ConstantOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto srcType = dyn_cast<ShapedType>(op.getType());
-    if (!srcType || srcType.getNumElements() == 1)
-      return failure();
-
-    assert((isa<VectorType, RankedTensorType>(srcType)) &&
-           "arith.constant should only have vector or tensor type");
-
-    if (Type dstType = getTypeConverter()->convertType(srcType)) {
-      if (auto dstElementsAttr = dyn_cast<DenseElementsAttr>(op.getValue())) {
-        auto vecType = cast<VectorType>(dstType);
-        VectorType dstAttrType =
-            vec_ty(vecType.getElementType(), vecType.getNumElements());
-        dstElementsAttr = dstElementsAttr.resizeSplat(dstAttrType);
-        rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(op, vecType,
-                                                      dstElementsAttr);
-        return success();
-      }
-    }
-
-    return failure();
-  }
-};
-
 } // namespace
 
 void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
@@ -353,5 +321,4 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, benefit);
   patterns.add<GlueOpConversion>(typeConverter, benefit);
   patterns.add<ExtractOpConversion>(typeConverter, benefit);
-  patterns.add<ArithConstantOpLowering>(typeConverter, benefit);
 }
