@@ -212,5 +212,5 @@ jobs:
       - name: Upload pass rate report
         uses: actions/upload-artifact@v4
         with:
-          name: pass_rate
+          name: pass_rate-${{ join(matrix.*, '-') }}
           path: pass_rate.json
