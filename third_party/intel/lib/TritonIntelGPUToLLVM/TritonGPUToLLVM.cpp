@@ -80,7 +80,6 @@ struct ConvertTritonGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     intel::TritonGPUToLLVMPipelineManager pipelineManager(mod, context);
-
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option);

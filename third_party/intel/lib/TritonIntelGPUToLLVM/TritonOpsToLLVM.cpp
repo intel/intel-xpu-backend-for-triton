@@ -13,11 +13,11 @@ namespace {
 VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
   unsigned ratio =
       elemType.getIntOrFloatBitWidth() / tensorType.getElementTypeBitWidth();
-  unsigned num = tensorType.getNumElements() / 16 / ratio;
+  unsigned num = (tensorType.getNumElements() / 16) / ratio;
   return vec_ty(elemType, num);
 };
 
-/// v2i32 [offsetX, offsetY] for 2D tensor desc
+/// v2i32 [offsetX, offsetY] for 2D tensor desc.
 class MakeTensorPtrOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<MakeTensorPtrOp> {
 public:
@@ -27,16 +27,12 @@ public:
   matchAndRewrite(MakeTensorPtrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-
-    IntegerType i32Type = rewriter.getI32Type();
-    VectorType v2i32 = vec_ty(i32Type, 2);
+    VectorType v2i32 = vec_ty(i32_ty, 2);
     Value offsetX = op.getOffsets()[1];
     Value offsetY = op.getOffsets()[0];
     Value payLoad = undef(v2i32);
-    Value idx0 = i32_val(0);
-    Value idx1 = i32_val(1);
-    payLoad = insert_element(payLoad, offsetX, idx0);
-    payLoad = insert_element(payLoad, offsetY, idx1);
+    payLoad = insert_element(payLoad, offsetX, i32_val(0));
+    payLoad = insert_element(payLoad, offsetY, i32_val(1));
     rewriter.replaceOp(op, payLoad);
     return success();
   }
@@ -53,8 +49,9 @@ public:
   matchAndRewrite(AdvanceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    SmallVector<Value> offsets = adaptor.getOffsets();
+    ValueRange offsets = adaptor.getOffsets();
     Value ptr = adaptor.getPtr();
+
     for (size_t i = 0; i < offsets.size(); ++i) {
       Value offset = offsets[i];
       if (auto cst = dyn_cast<LLVM::ConstantOp>(offset.getDefiningOp()))
@@ -62,16 +59,12 @@ public:
             attr && attr.getInt() == 0)
           continue;
 
-      IntegerType i32Type = rewriter.getI32Type();
-      Value idx = (i == 0)
-                      ? rewriter.create<LLVM::ConstantOp>(
-                            loc, i32Type, rewriter.getIntegerAttr(i32Type, 1))
-                      : rewriter.create<LLVM::ConstantOp>(
-                            loc, i32Type, rewriter.getIntegerAttr(i32Type, 0));
+      Value idx = i32_val(!i);
       Value oldOffset = extract_element(ptr, idx);
-      Value newOffset = add(i32Type, oldOffset, offset);
+      Value newOffset = add(i32_ty, oldOffset, offset);
       ptr = insert_element(ptr, newOffset, idx);
     }
+
     rewriter.replaceOp(op, ptr);
     return success();
   }
@@ -111,7 +104,8 @@ public:
 ///         elemSize 32)
 /// Arg 12: cache controls options (LSC_CACHE_OPTS)
 /// Arg 13: stored value
-template <typename OpType>
+template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                               OpType, PrefetchOp, LoadOp, StoreOp>::value>>
 class LoadStorePrefetchOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<OpType> {
 public:
@@ -129,9 +123,6 @@ public:
     constexpr bool isLoad = std::is_same_v<OpType, LoadOp>;
     constexpr bool isPrefetch = std::is_same_v<OpType, PrefetchOp>;
 
-    IntegerType i16Type = rewriter.getI16Type();
-    IntegerType i32Type = rewriter.getI32Type();
-    IntegerType i64Type = rewriter.getI64Type();
     bool vnni = false, transpose = false;
     if constexpr (isLoad) {
       auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
@@ -144,8 +135,6 @@ public:
     unsigned vBlks = blockWidth == 32 ? 2 : 1;
     blockWidth = 16;
     unsigned blockHeight = tensorType.getShape()[0];
-    Value idx0 = i32_val(0);
-    Value idx1 = i32_val(1);
     Value ptr = op.getPtr();
     if (auto cast =
             dyn_cast<mlir::UnrealizedConversionCastOp>(ptr.getDefiningOp()))
@@ -162,22 +151,14 @@ public:
     Value bytes =
         i32_val(tensorType.getElementType().getIntOrFloatBitWidth() / 8);
     Value one = i32_val(1);
-    Value surfaceW =
-        rewriter.create<arith::TruncIOp>(loc, i32Type, ptrOp.getShape()[1]);
-    surfaceW = rewriter.create<arith::MulIOp>(loc, surfaceW, bytes);
-    surfaceW = rewriter.create<arith::SubIOp>(loc, surfaceW, one);
-    Value surfaceH =
-        rewriter.create<arith::TruncIOp>(loc, i32Type, ptrOp.getShape()[0]);
-    surfaceH = rewriter.create<arith::SubIOp>(loc, surfaceH, one);
-    Value surfaceP =
-        rewriter.create<arith::TruncIOp>(loc, i32Type, ptrOp.getStrides()[0]);
-    surfaceP = rewriter.create<arith::MulIOp>(loc, surfaceP, bytes);
-    surfaceP = rewriter.create<arith::SubIOp>(loc, surfaceP, one);
+    Value surfaceW = sub(mul(trunc(i32_ty, ptrOp.getShape()[1]), bytes), one);
+    Value surfaceH = sub(trunc(i32_ty, ptrOp.getShape()[0]), one);
+    Value surfaceP = sub(mul(trunc(i32_ty, ptrOp.getStrides()[0]), bytes), one);
     rewriter.restoreInsertionPoint(insertPoint);
 
     Value tensorPtr = adaptor.getPtr();
-    Value offsetX = extract_element(tensorPtr, idx0);
-    Value offsetY = extract_element(tensorPtr, idx1);
+    Value offsetX = extract_element(tensorPtr, i32_val(0));
+    Value offsetY = extract_element(tensorPtr, i32_val(1));
 
     if constexpr (isLoad) {
       Type resType =
@@ -185,12 +166,12 @@ public:
       auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
       unsigned idx = idxAttr.getInt();
       Type vectorType =
-          getVectorType(cast<RankedTensorType>(op->getResult(0).getType()),
-                        idx == 0 ? i16Type : i32Type);
+          getVectorType(cast<RankedTensorType>(op.getResult().getType()),
+                        idx == 0 ? i16_ty : i32_ty);
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
           dataSize, blockWidth, blockHeight, vBlks, transpose, vnni);
-      auto cast = rewriter.create<LLVM::BitcastOp>(loc, resType, load);
+      auto cast = bitcast(load, resType);
       rewriter.replaceOp(op, cast);
     } else if constexpr (isPrefetch) {
       rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
@@ -200,28 +181,28 @@ public:
       rewriter.eraseOp(op);
     } else {
       VectorType vectorType = getVectorType(
-          cast<RankedTensorType>(op.getValue().getType()), i32Type);
-      Value cast =
-          rewriter.create<LLVM::BitcastOp>(loc, vectorType, adaptor.getValue());
+          cast<RankedTensorType>(op.getValue().getType()), i32_ty);
+      Value cast = bitcast(adaptor.getValue(), vectorType);
       rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, transpose, vnni, cast);
       rewriter.eraseOp(op);
     }
+
     return success();
   }
 };
 
-// TritonGen DpasOp Desc: XeHP SDV: dot product accumulate systolic
-// Output: dst
-// Arg 0: src0(acc)
-// Arg 1: src1
-// Arg 2: src2
-// Arg 3: src1's precision
-// Arg 4: src2's precision
-// Arg 5: systolic depth
-// Arg 6: repeat count
-// Arg 7: isDpasw
+/// TritonGen DpasOp Desc: XeHP SDV: dot product accumulate systolic
+/// Output: dst
+/// Arg 0: src0(acc)
+/// Arg 1: src1
+/// Arg 2: src2
+/// Arg 3: src1's precision
+/// Arg 4: src2's precision
+/// Arg 5: systolic depth
+/// Arg 6: repeat count
+/// Arg 7: isDpasw
 class DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<DotOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<DotOp>::ConvertTritonGPUOpToLLVMPattern;
@@ -229,9 +210,9 @@ public:
   matchAndRewrite(DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto encodePrecision = [&](Type type) -> TritonGEN::PrecisionType {
-      if (type == rewriter.getBF16Type())
+      if (type == bf16_ty)
         return TritonGEN::PrecisionType::BF16;
-      else if (type == rewriter.getF16Type())
+      else if (type == f16_ty)
         return TritonGEN::PrecisionType::FP16;
       else if (type == rewriter.getTF32Type())
         return TritonGEN::PrecisionType::TF32;
@@ -249,26 +230,23 @@ public:
         TritonGEN::PrecisionTypeAttr::get(rewriter.getContext(), precBTy);
 
     Location loc = op.getLoc();
-    IntegerType i16Type = rewriter.getI16Type();
-    IntegerType i32Type = rewriter.getI32Type();
-    VectorType typeA =
-        getVectorType(cast<RankedTensorType>(op.getA().getType()), i16Type);
-    Value castA = rewriter.create<LLVM::BitcastOp>(loc, typeA, adaptor.getA());
+    Type typeA =
+        getVectorType(cast<RankedTensorType>(op.getA().getType()), i16_ty);
+    Value castA = bitcast(adaptor.getA(), typeA);
     VectorType typeB =
-        getVectorType(cast<RankedTensorType>(op.getB().getType()), i32Type);
-    Value castB = rewriter.create<LLVM::BitcastOp>(loc, typeB, adaptor.getB());
-    auto rc = IntegerAttr::get(i32Type, 8);
+        getVectorType(cast<RankedTensorType>(op.getB().getType()), i32_ty);
+    Value castB = bitcast(adaptor.getB(), typeB);
+    auto rc = IntegerAttr::get(i32_ty, 8);
     // sd dpasW fixed in genx.dpas lowering.
-    auto dpas = rewriter.create<TritonGEN::MatrixDPASOp>(
-        loc, adaptor.getC().getType(), adaptor.getC(), castA, castB, precA,
+    rewriter.replaceOpWithNewOp<TritonGEN::MatrixDPASOp>(
+        op, adaptor.getC().getType(), adaptor.getC(), castA, castB, precA,
         precB, rc);
-    rewriter.replaceOp(op, dpas);
     return success();
   }
 };
 
 /// %glue = ttgi.glue %a, %b : tensor<4xf16>, tensor<4xf16> : tensor<8xf16>
-/// is converted to
+/// is converted to:
 /// %glue = llvm.shufflevector %a, %b : [0, 1, 2, 3, 4, 5, 6, 7] : vector<8xf16>
 class GlueOpConversion : public ConvertTritonGPUOpToLLVMPattern<GlueOp> {
 public:
@@ -303,13 +281,13 @@ public:
       DenseI32ArrayAttr attr23 = rewriter.getDenseI32ArrayAttr(indices);
       auto shfl23 = rewriter.create<LLVM::ShuffleVectorOp>(
           loc, subType, operands[2], operands[3], attr23);
-      auto shfl = rewriter.create<LLVM::ShuffleVectorOp>(loc, dstType, shfl01,
+      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(op, dstType, shfl01,
                                                          shfl23, attr);
-      rewriter.replaceOp(op, shfl);
     } break;
     default:
       llvm_unreachable("add more support for glue op to llvm");
     }
+
     return success();
   }
 };
@@ -351,25 +329,22 @@ class ArithConstantOpLowering
     if (!srcType || srcType.getNumElements() == 1)
       return failure();
 
-    // arith.constant should only have vector or tenor types.
-    assert((isa<VectorType, RankedTensorType>(srcType)));
+    assert((isa<VectorType, RankedTensorType>(srcType)) &&
+           "arith.constant should only have vector or tensor type");
 
-    Type dstType = getTypeConverter()->convertType(srcType);
-    if (!dstType)
-      return failure();
+    if (Type dstType = getTypeConverter()->convertType(srcType)) {
+      if (auto dstElementsAttr = dyn_cast<DenseElementsAttr>(op.getValue())) {
+        auto vecType = cast<VectorType>(dstType);
+        VectorType dstAttrType =
+            vec_ty(vecType.getElementType(), vecType.getNumElements());
+        dstElementsAttr = dstElementsAttr.resizeSplat(dstAttrType);
+        rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(op, vecType,
+                                                      dstElementsAttr);
+        return success();
+      }
+    }
 
-    auto dstElementsAttr = dyn_cast<DenseElementsAttr>(op.getValue());
-    if (!dstElementsAttr)
-      return failure();
-
-    auto vecType = cast<VectorType>(dstType);
-    ShapedType dstAttrType =
-        vec_ty(vecType.getElementType(), vecType.getNumElements());
-    dstElementsAttr = dstElementsAttr.resizeSplat(dstAttrType);
-    auto newOp =
-        rewriter.create<LLVM::ConstantOp>(loc, dstType, dstElementsAttr);
-    rewriter.replaceOp(op, newOp);
-    return success();
+    return failure();
   }
 };
 
