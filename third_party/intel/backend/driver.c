@@ -37,7 +37,9 @@ static std::vector<std::pair<sycl::device, ze_device_handle_t>>
 static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   if (code != ZE_RESULT_SUCCESS) {
     const char *prefix = "Triton Error [ZE]: ";
-    std::string str = std::to_string(code);
+    std::stringstream ss;
+    ss << "0x" << std::hex << code;
+    std::string str = ss.str();
     char err[1024] = {0};
     strcat(err, prefix);
     strcat(err, str.c_str());
