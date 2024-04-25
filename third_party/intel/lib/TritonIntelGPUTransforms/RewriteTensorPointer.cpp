@@ -30,8 +30,6 @@ bool isDivisible(Value v, unsigned divisor) {
   if (auto op = v.getDefiningOp<mlir::arith::ConstantOp>()) {
     auto attr = op.getValue().dyn_cast<IntegerAttr>();
     return attr.getValue().getZExtValue() % divisor == 0;
-  } else if (auto op = v.getDefiningOp<mlir::arith::ExtSIOp>()) {
-    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
   } else if (v.getParentBlock()->isEntryBlock() && v.isa<BlockArgument>()) {
     BlockArgument blockArg = v.cast<BlockArgument>();
     Operation *parentOp = blockArg.getOwner()->getParentOp();
@@ -41,15 +39,9 @@ bool isDivisible(Value v, unsigned divisor) {
       return attr && attr.getValue().getZExtValue() % divisor == 0;
     }
     return false;
-  } else if (v.getParentBlock()->isEntryBlock() && (!v.isa<BlockArgument>())) {
-    // in entryblock but not BlockArgument
-    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
-  } else if (!v.getParentBlock()->isEntryBlock()) {
-    // in non-entryblock
+  } else if (auto op = v.getDefiningOp<mlir::arith::ExtSIOp>()) {
     return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
   } else {
-    llvm::report_fatal_error("Operand of `MakeTensorPtrOp` is not the "
-                             "function's argument or a constant value.");
     return false;
   }
 }
@@ -76,32 +68,24 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   auto order = op.getOrder();
   auto tensorShape = tensorType.getShape();
 
-  auto isPitchDivisible = false;
+  // TODO: support column-major tensor
+  // HW 2D block read instruction has restriction on pitch divisibility
   if (strides.size() == 2) {
     auto pitch = strides[order[1]];
     // PVC requires pitch to be a multiple of QWord(64 bits).
-    if (deviceArch == ttgi::DeviceArch::PVC) {
-      isPitchDivisible =
-          isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth());
-    }
+    if (deviceArch == ttgi::DeviceArch::PVC)
+      return !isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth());
   }
-  if (!isPitchDivisible)
-    return true;
-
   // HW 2D block read instruction only supports contiguous accessing.
-  // TODO: support column-major tensor
   auto fastChangeStride = strides[order[0]];
-  auto isRowMajor = false;
   if (auto stride =
           dyn_cast<arith::ConstantOp>(fastChangeStride.getDefiningOp())) {
-    if (auto strideInt = stride.getValue().dyn_cast<IntegerAttr>()) {
-      if (strideInt.getInt() == 1) {
-        isRowMajor = true;
-      }
-    }
+    if (auto strideInt = stride.getValue().dyn_cast<IntegerAttr>())
+      if (strideInt.getInt() == 1)
+        return false;
   }
 
-  return !isRowMajor;
+  return true;
 }
 
 void getBackwardSliceImpl(Value val, SetVector<Value> *backwardSlice,
@@ -223,23 +207,23 @@ public:
     //   %b1 = broadcast %b1       : tensor<M, N, K>
     //   ...
     //
-    // The final result has layout this->layout.  When we subtract a dim, that's
-    // equivalent to taking a sliced layout, so e.g. the layout of %a0/%a1 is a
-    // slice of %b0/%b1's layout.
+    // The final result has layout this->layout.  When we subtract a dim,
+    // that's equivalent to taking a sliced layout, so e.g. the layout of
+    // %a0/%a1 is a slice of %b0/%b1's layout.
     size_t rank = tensorShape.size();
     auto ctx = loc.getContext();
 
-    // layouts[i] is the layout at the i'th step of the algorithm.  In the last
-    // step of the algorithm, we have this->layout.  Every step before that
-    // slices away one dimension, until we get to the first step, which has all
-    // but `axis` sliced away.  For example:
+    // layouts[i] is the layout at the i'th step of the algorithm.  In the
+    // last step of the algorithm, we have this->layout.  Every step before
+    // that slices away one dimension, until we get to the first step, which
+    // has all but `axis` sliced away.  For example:
     //   - Suppose rank = 4 and axis = 2.
     //   - Then the layouts will be:
     //
     //     layouts[0] = slice(layouts[1], remove_dim=0), containing axes [2]
     //     layouts[1] = slice(layouts[2], remove_dim=1), containing axes [0,2]
-    //     layouts[2] = slice(layouts[3], remove_dim=3), containing axes [0,1,2]
-    //     layouts[3] = layout, containing axes [0,1,2,3]
+    //     layouts[2] = slice(layouts[3], remove_dim=3), containing axes
+    //     [0,1,2] layouts[3] = layout, containing axes [0,1,2,3]
     //
     // The loop below implements this algorithm.
     SmallVector<Attribute, 4> layouts;
@@ -398,6 +382,7 @@ public:
 
 private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
+  DenseSet<Value> valueToRemove;
 
 public:
   static bool needRewrite(Operation *op, const DenseSet<Value> &valueToRemove) {
@@ -423,8 +408,7 @@ public:
   }
 
   Operation *rewriteMakeTensorPtrOp(OpBuilder &builder, tt::MakeTensorPtrOp op,
-                                    std::stack<Operation *> &eraser,
-                                    const DenseSet<Value> &valueToRemove) {
+                                    std::stack<Operation *> &eraser) {
     if (!valueToRemove.count(op.getResult()))
       return nullptr;
     // Save info for later use
@@ -450,8 +434,7 @@ public:
   }
 
   Operation *rewriteAdvanceOp(OpBuilder &builder, tt::AdvanceOp op,
-                              std::stack<Operation *> &eraser,
-                              const DenseSet<Value> &valueToRemove) {
+                              std::stack<Operation *> &eraser) {
     if (!valueToRemove.count(op.getResult()))
       return nullptr;
 
@@ -480,19 +463,14 @@ public:
   }
 
   Operation *rewriteLoadStoreOp(OpBuilder &builder, Operation *op,
-                                std::stack<Operation *> &eraser,
-                                const DenseSet<Value> &valueToRemove) {
+                                std::stack<Operation *> &eraser) {
     assert(isa<tt::LoadOp>(op) ||
            isa<tt::StoreOp>(op) && "Expecting LoadOp or StoreOp");
     if (!valueToRemove.count(op->getOperand(0)))
       return nullptr;
 
-    // We only have to rewrite load/stores with tensor pointers
-    auto ptr = op->getOperand(0);
-    if (!tt::isTensorPointerType(ptr.getType()))
-      return nullptr;
-
     // Get info from previous results
+    auto ptr = op->getOperand(0);
     assert(rewritedInfo.count(ptr));
     auto info = rewritedInfo[ptr];
 
@@ -540,8 +518,7 @@ public:
   }
 
   Operation *rewriteIfOp(OpBuilder &builder, scf::IfOp op,
-                         std::stack<Operation *> &eraser,
-                         DenseSet<Value> &valueToRemove) {
+                         std::stack<Operation *> &eraser) {
     auto thenYieldOp = op.thenYield();
     assert(op.getNumResults() == thenYieldOp.getNumOperands());
     SmallVector<Value> results = thenYieldOp.getOperands();
@@ -614,8 +591,7 @@ public:
   }
 
   Operation *rewriteForOp(OpBuilder &builder, scf::ForOp op,
-                          std::stack<Operation *> &eraser,
-                          DenseSet<Value> &valueToRemove) {
+                          std::stack<Operation *> &eraser) {
     // Generate new iteration operands and set rewrited information
     SmallVector<Value> oldIterOperands = llvm::to_vector(op.getInitArgs());
     SmallVector<Value> newIterOperands = llvm::to_vector(op.getInitArgs());
@@ -703,8 +679,7 @@ public:
   }
 
   Operation *rewriteYieldOp(OpBuilder &builder, scf::YieldOp op,
-                            std::stack<Operation *> &eraser,
-                            const DenseSet<Value> &valueToRemove) {
+                            std::stack<Operation *> &eraser) {
     // Replace tensor pointers with offsets
     SmallVector<Value> newOperands = op->getOperands();
     for (unsigned i = 0, size = op.getNumOperands(); i < size; ++i) {
@@ -725,8 +700,7 @@ public:
     return nullptr;
   }
 
-  Operation *rewriteOp(Operation *op, std::stack<Operation *> &eraser,
-                       DenseSet<Value> &valueToRemove) {
+  Operation *rewriteOp(Operation *op, std::stack<Operation *> &eraser) {
     OpBuilder builder(op);
 
     // Rewrite `make_tensor_ptr` and `advance` and make a tensor of pointers
@@ -734,24 +708,23 @@ public:
     // next one, simply return `nullptr`
     std::pair<Value, RewritedInfo> rewrited;
     if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
-      return rewriteMakeTensorPtrOp(builder, makeTensorPtrOp, eraser,
-                                    valueToRemove);
+      return rewriteMakeTensorPtrOp(builder, makeTensorPtrOp, eraser);
     } else if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op)) {
-      return rewriteAdvanceOp(builder, advanceOp, eraser, valueToRemove);
+      return rewriteAdvanceOp(builder, advanceOp, eraser);
     } else if (isa<tt::LoadOp>(op) || isa<tt::StoreOp>(op)) {
-      return rewriteLoadStoreOp(builder, op, eraser, valueToRemove);
+      return rewriteLoadStoreOp(builder, op, eraser);
     } else if (op->getDialect()->getNamespace() == "scf" ||
                op->getDialect()->getNamespace() == "cf") {
       if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-        return rewriteIfOp(builder, ifOp, eraser, valueToRemove);
+        return rewriteIfOp(builder, ifOp, eraser);
       }
       if (!needRewrite(op, valueToRemove))
         return op;
 
       if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        return rewriteForOp(builder, forOp, eraser, valueToRemove);
+        return rewriteForOp(builder, forOp, eraser);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
-        return rewriteYieldOp(builder, yieldOp, eraser, valueToRemove);
+        return rewriteYieldOp(builder, yieldOp, eraser);
       } else {
         llvm_unreachable("Currently we only support tensor pointer usages "
                          "inside a `scf::ForOp` or `scf::IfOp`, others such as "
@@ -764,8 +737,7 @@ public:
     return op;
   }
 
-  void visitOperation(Operation *op, std::stack<Operation *> &eraser,
-                      DenseSet<Value> &valueToRemove) {
+  void visitOperation(Operation *op, std::stack<Operation *> &eraser) {
     for (auto &region : op->getRegions()) {
       for (auto &block : region) {
         // We need an extra copy because erasing operations may break the
@@ -776,8 +748,8 @@ public:
 
         // Rewrite and recursively visit
         for (auto &nestedOp : blockCopy) {
-          if (auto newOp = rewriteOp(nestedOp, eraser, valueToRemove))
-            visitOperation(newOp, eraser, valueToRemove);
+          if (auto newOp = rewriteOp(nestedOp, eraser))
+            visitOperation(newOp, eraser);
         }
       }
     }
@@ -786,8 +758,7 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    DenseSet<Value> valueToRemove;
-    mod.walk([&valueToRemove, this](Operation *op) {
+    mod.walk([this](Operation *op) {
       if (!llvm::isa<tt::LoadOp, tt::StoreOp>(op))
         return;
       auto src = op->getOperand(0);
@@ -830,7 +801,7 @@ public:
     // `tt.make_tensor_ptr`, `tt.advance`, `tt.load`, `tt.store`,
     // `scf.for` (tensor pointer usages may be in a loop fashion)
     std::stack<Operation *> eraser;
-    visitOperation(getOperation(), eraser, valueToRemove);
+    visitOperation(getOperation(), eraser);
 
     // The operation could not be erased during visit, because they may have
     // later usages, so we erase after visit
