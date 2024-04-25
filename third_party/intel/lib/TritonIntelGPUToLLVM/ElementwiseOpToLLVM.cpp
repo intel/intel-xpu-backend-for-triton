@@ -1346,16 +1346,11 @@ struct FpToFpOpConversion
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v, const RoundingMode rounding) {
     MLIRContext *ctx = rewriter.getContext();
-
-    NamedAttrList convertedAttr;
-    convertedAttr.set(LLVM::ConstrainedFPTruncIntr::getRoundingModeAttrName(),
-                      LLVM::RoundingModeAttr::get(
-                          ctx, convertTritonRoundingModeToLLVM(rounding)));
-    convertedAttr.set(
-        LLVM::ConstrainedFPTruncIntr::getFPExceptionBehaviorAttrName(),
+    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
+        loc, f16_ty, v,
+        LLVM::RoundingModeAttr::get(ctx,
+                                    convertTritonRoundingModeToLLVM(rounding)),
         arith::getLLVMDefaultFPExceptionBehavior(*ctx));
-    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(loc, f16_ty, v,
-                                                         convertedAttr);
   }
 
   std::pair<ConverterT, size_t>
