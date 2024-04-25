@@ -15,11 +15,13 @@ add_triton_library(TritonIntelGPUToLLVM
     MemoryOpToLLVM.cpp
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
+    TritonGPUToLLVM.cpp
     ScanOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     TargetInfo.cpp
     TensorPtrOpsToLLVM.cpp
     TritonGPUToLLVM.cpp
+    TritonOpsToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp
     ViewOpToLLVM.cpp
