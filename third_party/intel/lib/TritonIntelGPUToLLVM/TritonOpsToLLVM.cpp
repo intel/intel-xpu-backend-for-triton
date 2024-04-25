@@ -141,10 +141,17 @@ public:
     Location loc = op.getLoc();
     Value bytes =
         i32_val(tensorType.getElementType().getIntOrFloatBitWidth() / 8);
-    Value one = i32_val(1);
-    Value surfaceW = sub(mul(trunc(i32_ty, ptrOp.getShape()[1]), bytes), one);
-    Value surfaceH = sub(trunc(i32_ty, ptrOp.getShape()[0]), one);
-    Value surfaceP = sub(mul(trunc(i32_ty, ptrOp.getStrides()[0]), bytes), one);
+
+    auto calculateSurface = [&](Value shape, bool multiplyBytes) {
+      Value truncatedShape = trunc(i32_ty, shape);
+      if (multiplyBytes)
+        truncatedShape = mul(truncatedShape, bytes);
+      return sub(truncatedShape, i32_val(1));
+    };
+
+    Value surfaceW = calculateSurface(ptrOp.getShape()[1], true);
+    Value surfaceH = calculateSurface(ptrOp.getShape()[0], false);
+    Value surfaceP = calculateSurface(ptrOp.getStrides()[0], true);
     rewriter.restoreInsertionPoint(insertPoint);
 
     Value tensorPtr = adaptor.getPtr();
