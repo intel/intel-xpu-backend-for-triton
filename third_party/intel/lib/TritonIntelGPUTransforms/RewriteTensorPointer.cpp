@@ -88,63 +88,8 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   return true;
 }
 
-void getBackwardSliceImpl(Value val, SetVector<Value> *backwardSlice,
-                          bool excludeBlockArgs = false) {
-  Operation *op = val.getDefiningOp();
-  if (!op)
-    op = cast<BlockArgument>(val).getOwner()->getParentOp();
-
-  if (!op || op->hasTrait<OpTrait::IsIsolatedFromAbove>())
-    return;
-
-  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-    unsigned iterArgIdx = forOp.getNumRegionIterArgs();
-    for (BlockArgument &iterArg : forOp.getRegionIterArgs()) {
-      if (iterArg == val) {
-        iterArgIdx = iterArg.getArgNumber() - 1;
-        break;
-      }
-    }
-    if (iterArgIdx < forOp.getNumRegionIterArgs()) {
-      // We cannot use forOp.walk(...) here because we only want to visit the
-      // Yield in the loop body block. Nested blocks are handled separately.
-      for (auto yieldOp : forOp.getOps<scf::YieldOp>()) {
-        auto yieldArg = yieldOp->getOperand(iterArgIdx);
-        if (backwardSlice->count(yieldArg) == 0)
-          getBackwardSliceImpl(yieldArg, backwardSlice, true);
-      }
-      auto initArg = forOp.getInitArgs()[iterArgIdx];
-      if (backwardSlice->count(initArg) == 0)
-        getBackwardSliceImpl(initArg, backwardSlice);
-    }
-  } else {
-    for (const auto &en : llvm::enumerate(op->getOperands())) {
-      auto operand = en.value();
-      if (auto *definingOp = operand.getDefiningOp()) {
-        if (backwardSlice->count(operand) == 0)
-          getBackwardSliceImpl(operand, backwardSlice);
-      } else {
-        auto blockArg = cast<BlockArgument>(operand);
-        if (excludeBlockArgs)
-          continue;
-
-        Block *block = blockArg.getOwner();
-        Operation *parentOp = block->getParentOp();
-
-        if (parentOp && backwardSlice->count(operand) == 0) {
-          assert(parentOp->getNumRegions() == 1 &&
-                 parentOp->getRegion(0).getBlocks().size() == 1);
-          getBackwardSliceImpl(operand, backwardSlice);
-        }
-      }
-    }
-  }
-
-  backwardSlice->insert(val);
-}
-
-/// An additional struct to record the meta information of operations
-/// with tensor pointers
+// An additional struct to record the meta information of operations
+// with tensor pointers
 struct RewritedInfo {
 private:
   Value base;
@@ -758,33 +703,35 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    mod.walk([this](Operation *op) {
-      if (!llvm::isa<tt::LoadOp, tt::StoreOp>(op))
+    auto checkAndMarkToRemove = [this](Value val) {
+      if (!tt::isTensorPointerType(val.getType()))
         return;
-      auto src = op->getOperand(0);
-      if (!tt::isTensorPointerType(src.getType()))
-        return;
+      tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
+      if (shouldRemove(makeTensorPtrOp, this->deviceArch))
+        valueToRemove.insert(val);
+    };
 
-      SetVector<Value> slices;
-      getBackwardSliceImpl(src, &slices);
-      for (auto val : slices) {
-        std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp;
-        if (Operation *defOp = val.getDefiningOp()) {
-          if (auto makeTensorPtr = dyn_cast<tt::MakeTensorPtrOp>(defOp))
-            makeTensorPtrOp = makeTensorPtr;
-          if (auto advanceOp = dyn_cast<tt::AdvanceOp>(defOp))
-            makeTensorPtrOp = getMakeTensorPtrOp(defOp->getOperand(0));
-        } else {
-          Operation *parentOp =
-              cast<BlockArgument>(val).getOwner()->getParentOp();
-          if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
-            makeTensorPtrOp = getMakeTensorPtrOp(val);
+    mod.walk([&checkAndMarkToRemove, this](Operation *op) {
+      if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
+        checkAndMarkToRemove(op->getResult(0));
+      } else if (llvm::isa<tt::AdvanceOp>(op)) {
+        checkAndMarkToRemove(op->getOperand(0));
+      } else if (llvm::isa<tt::LoadOp>(op)) {
+        checkAndMarkToRemove(op->getOperand(0));
+      } else if (llvm::isa<tt::StoreOp>(op)) {
+        // TODO: Block store should not be removed when 2d store is enabled
+        auto src = op->getOperand(0);
+        if (tt::isTensorPointerType(src.getType()))
+          valueToRemove.insert(src);
+      } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+        SmallVector<Value> iterOperands = llvm::to_vector(forOp.getInitArgs());
+        for (unsigned i = 0, size = forOp.getInitArgs().size(); i < size; ++i) {
+          checkAndMarkToRemove(iterOperands[i]);
         }
-        if (makeTensorPtrOp.has_value()) {
-          // TODO: Block store should not be removed when 2d store is enabled
-          if (isa<tt::StoreOp>(op) ||
-              shouldRemove(makeTensorPtrOp.value(), this->deviceArch))
-            valueToRemove.insert(val);
+      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
+        SmallVector<Value> operands = yieldOp->getOperands();
+        for (unsigned i = 0, size = yieldOp.getNumOperands(); i < size; ++i) {
+          checkAndMarkToRemove(operands[i]);
         }
       }
     });
