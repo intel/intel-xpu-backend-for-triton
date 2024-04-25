@@ -179,7 +179,7 @@ public:
     using namespace mlir::triton;
 
     if (blockPtrPathIsEnabled) {
-      assert(false && "Placeholder to add block ptr path conversion");
+      intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
     } else {
