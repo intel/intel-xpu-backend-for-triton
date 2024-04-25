@@ -207,7 +207,7 @@ public:
         return TritonGEN::PrecisionType::FP16;
       else if (type == rewriter.getTF32Type())
         return TritonGEN::PrecisionType::TF32;
-      assert(false && "add more support");
+      llvm_unreachable("add more support for PrecisionType");
       return TritonGEN::PrecisionType::UNUSED;
     };
 
