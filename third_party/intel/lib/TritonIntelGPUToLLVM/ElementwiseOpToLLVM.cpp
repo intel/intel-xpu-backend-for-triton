@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -1329,19 +1330,14 @@ struct FpToFpOpConversion
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v, const RoundingMode rounding) {
     MLIRContext *ctx = rewriter.getContext();
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
 
-    // FIXME: Avoid using `llvm.genx.GenISA` calls (use arith dialect instead
-    // once it has been enhanced).
-    std::string funcName = "llvm.genx.GenISA.ftof.";
-
+    LLVM::RoundingMode roundingMode;
     switch (rounding) {
     case RoundingMode::RTNE:
-      funcName.append("rte.f32.f16");
+      roundingMode = LLVM::RoundingMode::NearestTiesToEven;
       break;
     case RoundingMode::RTZ:
-      funcName.append("rtz.f32.f16");
+      roundingMode = LLVM::RoundingMode::TowardZero;
       break;
     default:
       llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
@@ -1350,23 +1346,34 @@ struct FpToFpOpConversion
       llvm_unreachable("");
     }
 
-    Operation *funcOp = moduleOp.lookupSymbol(funcName);
-    if (!funcOp) {
-      auto funcType =
-          LLVM::LLVMFunctionType::get(f16_ty, {f32_ty}, /*isVarArg*/ false);
-      ConversionPatternRewriter::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(moduleOp.getBody());
-      funcOp = rewriter.create<LLVM::LLVMFuncOp>(
-          loc, funcName, funcType, LLVM::Linkage::External,
-          /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC,
-          /*comdat=*/SymbolRefAttr{});
+    NamedAttrList convertedAttr;
+    convertedAttr.set(LLVM::ConstrainedFPTruncIntr::getRoundingModeAttrName(),
+                      LLVM::RoundingModeAttr::get(ctx, roundingMode));
+    convertedAttr.set(
+        LLVM::ConstrainedFPTruncIntr::getFPExceptionBehaviorAttrName(),
+        arith::getLLVMDefaultFPExceptionBehavior(*ctx));
+    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(loc, f16_ty, v,
+                                                         convertedAttr);
+
+#if 0
+    // FIXME: test_typeconvert_downcast fails when lower to arith::TruncFOp.
+    arith::RoundingMode roundingMode;
+    switch (rounding) {
+    case RoundingMode::RTNE:
+      roundingMode = arith::RoundingMode::to_nearest_even;
+      break;
+    case RoundingMode::RTZ:
+      roundingMode = arith::RoundingMode::toward_zero;
+      break;
+    default:
+      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
+                      "conversion: "
+                   << stringifyRoundingMode(rounding) << "\n";
+      llvm_unreachable("");
     }
-
-    SmallVector<Value> operands{v};
-    auto callOp = call(cast<LLVM::LLVMFuncOp>(funcOp), operands);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-
-    return callOp.getResult();
+    return rewriter.create<arith::TruncFOp>(
+        loc, f16_ty, v, arith::RoundingModeAttr::get(ctx, roundingMode));
+#endif
   }
 
   std::pair<ConverterT, size_t>
