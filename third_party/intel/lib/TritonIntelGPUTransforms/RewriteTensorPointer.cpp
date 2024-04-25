@@ -75,9 +75,8 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   if (strides.size() == 2) {
     auto pitch = strides[order[1]];
     // PVC requires pitch to be a multiple of QWord(64 bits).
-    if (deviceArch == ttgi::DeviceArch::PVC)
-      if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
-        return true;
+    if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
+      return true;
   }
   // HW 2D block read instruction only supports contiguous accessing.
   auto fastChangeStride = strides[order[0]];
@@ -171,7 +170,8 @@ public:
     //     layouts[0] = slice(layouts[1], remove_dim=0), containing axes [2]
     //     layouts[1] = slice(layouts[2], remove_dim=1), containing axes [0,2]
     //     layouts[2] = slice(layouts[3], remove_dim=3), containing axes
-    //     [0,1,2] layouts[3] = layout, containing axes [0,1,2,3]
+    //                  [0,1,2]
+    //     layouts[3] = layout, containing axes [0,1,2,3]
     //
     // The loop below implements this algorithm.
     SmallVector<Attribute, 4> layouts;
@@ -179,12 +179,12 @@ public:
     if (layout) {
       layouts[rank - 1] = layout;
       size_t axisToRemove = rank - 1;
-      for (int64_t k = rank - 2; k >= 0; k--) {
+      for (int64_t k = rank - 2; k >= 0; --k) {
         if (axisToRemove == i)
-          axisToRemove--;
+          --axisToRemove;
         layouts[k] =
             ttg::SliceEncodingAttr::get(ctx, axisToRemove, layouts[k + 1]);
-        axisToRemove--;
+        --axisToRemove;
       }
     }
 
@@ -325,7 +325,6 @@ class TritonIntelGPURewriteTensorPointerPass
           TritonIntelGPURewriteTensorPointerPass> {
 
 public:
-  TritonIntelGPURewriteTensorPointerPass() = default;
   TritonIntelGPURewriteTensorPointerPass(ttgi::DeviceArch arch) {
     this->deviceArch = arch;
   }
