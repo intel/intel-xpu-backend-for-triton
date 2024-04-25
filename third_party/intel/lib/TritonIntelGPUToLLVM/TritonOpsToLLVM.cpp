@@ -152,7 +152,6 @@ public:
     Value surfaceW = calculateSurface(ptrOp.getShape()[1], true);
     Value surfaceH = calculateSurface(ptrOp.getShape()[0], false);
     Value surfaceP = calculateSurface(ptrOp.getStrides()[0], true);
-
     rewriter.restoreInsertionPoint(insertPoint);
 
     Value tensorPtr = adaptor.getPtr();
