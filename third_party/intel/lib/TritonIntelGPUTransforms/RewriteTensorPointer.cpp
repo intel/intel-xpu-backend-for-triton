@@ -47,6 +47,10 @@ bool isDivisible(Value v, unsigned divisor) {
 }
 
 bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
+  // Non-PVC device should always remove the tensor pointer
+  if (deviceArch != ttgi::DeviceArch::PVC)
+    return true;
+
   auto ptrType = op.getType().cast<tt::PointerType>();
   auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
 
@@ -74,7 +78,8 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
     auto pitch = strides[order[1]];
     // PVC requires pitch to be a multiple of QWord(64 bits).
     if (deviceArch == ttgi::DeviceArch::PVC)
-      return !isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth());
+      if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
+        return true;
   }
   // HW 2D block read instruction only supports contiguous accessing.
   auto fastChangeStride = strides[order[0]];
