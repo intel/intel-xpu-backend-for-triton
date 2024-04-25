@@ -29,7 +29,7 @@ namespace {
 bool isDivisible(Value v, unsigned divisor) {
   if (auto op = v.getDefiningOp<mlir::arith::ConstantOp>()) {
     auto attr = op.getValue().dyn_cast<IntegerAttr>();
-    return attr.getValue().getZExtValue() % divisor == 0;
+    return attr && attr.getValue().getZExtValue() % divisor == 0;
   } else if (v.getParentBlock()->isEntryBlock() && v.isa<BlockArgument>()) {
     BlockArgument blockArg = v.cast<BlockArgument>();
     Operation *parentOp = blockArg.getOwner()->getParentOp();
@@ -38,12 +38,10 @@ bool isDivisible(Value v, unsigned divisor) {
                                                      "tt.divisibility");
       return attr && attr.getValue().getZExtValue() % divisor == 0;
     }
-    return false;
   } else if (auto op = v.getDefiningOp<mlir::arith::ExtSIOp>()) {
-    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
-  } else {
-    return false;
+    return isDivisible(op->getOperand(0), divisor);
   }
+  return false;
 }
 
 bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
@@ -86,8 +84,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   if (auto stride =
           dyn_cast<arith::ConstantOp>(fastChangeStride.getDefiningOp())) {
     if (auto strideInt = stride.getValue().dyn_cast<IntegerAttr>())
-      if (strideInt.getInt() == 1)
-        return false;
+      return strideInt.getInt() != 1;
   }
 
   return true;
@@ -119,7 +116,8 @@ public:
       : base(base), shape(shape), strides(strides), offsets(offsets),
         tensorShape(tensorShape), layout(layout) {
     assert(shape.size() == strides.size() && shape.size() == offsets.size() &&
-           shape.size() == tensorShape.size());
+           shape.size() == tensorShape.size() &&
+           "Expecting tensor shape, offsets and strides have the same size");
   }
 
   unsigned int length() const { return shape.size(); }
@@ -215,7 +213,8 @@ public:
 
   Value generatePtr(OpBuilder &builder, const Location &loc) {
     assert(tensorShape.size() == offsets.size() &&
-           tensorShape.size() == strides.size());
+           tensorShape.size() == strides.size() &&
+           "Expecting tensor shape, offsets and strides have the same size");
     auto indexTensorType =
         RankedTensorType::get(tensorShape, builder.getI64Type(), layout);
     auto ptrType = base.getType().cast<tt::PointerType>();
@@ -302,7 +301,8 @@ public:
 
     // Float NaN padding case
     if (padding.value() == tt::PaddingOption::PAD_NAN) {
-      assert(!elementType.isIntOrIndex());
+      assert(!elementType.isIntOrIndex() &&
+             "Expect element type to be non-integer type");
       auto apNaN = llvm::APFloat::getNaN(
           attr.cast<FloatAttr>().getValue().getSemantics());
       attr = builder.getFloatAttr(elementType, apNaN);
@@ -346,7 +346,7 @@ public:
   static SmallVector<Value>
   generateNewOperands(const SmallVector<Value> &oldOperands, unsigned index,
                       const SmallVector<Value> &newValues) {
-    assert(index < oldOperands.size());
+    assert(index < oldOperands.size() && "Index out of range");
     SmallVector<Value> newOperands;
     for (int i = 0; i < index; ++i)
       newOperands.push_back(oldOperands[i]);
@@ -389,11 +389,13 @@ public:
       return nullptr;
 
     // Get info from previous results
-    assert(rewritedInfo.count(op.getPtr()));
+    assert(rewritedInfo.count(op.getPtr()) &&
+           "Expecting AdvanceOp ptr in rewritedInfo");
     auto info = rewritedInfo[op.getPtr()];
 
     // Calculate new offsets
-    assert(info.length() == op.getOffsets().size());
+    assert(info.length() == op.getOffsets().size() &&
+           "Expecting AdvanceOp ptr shape and offsets have the same size");
     SmallVector<Value> newOffsets;
     for (int i = 0; i < info.length(); ++i) {
       Value i64Offset = builder.create<arith::ExtSIOp>(
@@ -421,7 +423,8 @@ public:
 
     // Get info from previous results
     auto ptr = op->getOperand(0);
-    assert(rewritedInfo.count(ptr));
+    assert(rewritedInfo.count(ptr) &&
+           "Expecting LoadOp/StoreOp ptr in rewritedInfo");
     auto info = rewritedInfo[ptr];
 
     // Load/store with tensor pointers implicitly will check the bound while
@@ -430,13 +433,16 @@ public:
     // `other` while building IR from Python AST
     std::optional<ArrayRef<int>> boundaryCheck;
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      assert(!loadOp.getMask() && !loadOp.getOther());
+      assert(!loadOp.getMask() && !loadOp.getOther() &&
+             "LoadOp with tensor pointer should not have mask and other");
       boundaryCheck = loadOp.getBoundaryCheck();
       if (auto valueType =
               dyn_cast<RankedTensorType>(loadOp.getResult().getType()))
         info.setEncoding(valueType.getEncoding());
-    } else if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
-      assert(!storeOp.getMask());
+    } else {
+      auto storeOp = cast<tt::StoreOp>(op);
+      assert(!storeOp.getMask() &&
+             "StoreOp with tensor pointer should not have mask");
       boundaryCheck = storeOp.getBoundaryCheck();
       if (auto valueType =
               dyn_cast<RankedTensorType>(storeOp.getValue().getType()))
@@ -470,7 +476,9 @@ public:
   Operation *rewriteIfOp(OpBuilder &builder, scf::IfOp op,
                          std::stack<Operation *> &eraser) {
     auto thenYieldOp = op.thenYield();
-    assert(op.getNumResults() == thenYieldOp.getNumOperands());
+    assert(op.getNumResults() == thenYieldOp.getNumOperands() &&
+           "Expecting IfOp results and its thenYieldOp operands have the same "
+           "number");
     SmallVector<Value> results = thenYieldOp.getOperands();
 
     // get new result types
@@ -484,7 +492,8 @@ public:
       }
       needRewrite = true;
       auto makeTensorPtrOp = getMakeTensorPtrOp(results[i]);
-      assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
+      assert(rewritedInfo.count(makeTensorPtrOp.getResult()) &&
+             "Expecting MakeTensorPtrOp of IfOp result in rewritedInfo");
       auto info = rewritedInfo[makeTensorPtrOp.getResult()];
       for (unsigned j = 0; j < info.length(); ++j) {
         newRetTypes.push_back(builder.getI64Type());
@@ -526,7 +535,8 @@ public:
         newResIdx++;
       } else {
         auto makeTensorPtrOp = getMakeTensorPtrOp(results[oldResIdx]);
-        assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
+        assert(rewritedInfo.count(makeTensorPtrOp.getResult()) &&
+               "Expecting MakeTensorPtrOp of IfOp result in rewritedInfo");
         auto info = rewritedInfo[makeTensorPtrOp.getResult()];
         for (unsigned j = 0; j < info.length(); ++j) {
           info.setOffset(j, newOp->getResult(newResIdx++));
@@ -553,7 +563,8 @@ public:
         continue;
 
       // Expand the tensor pointer into offsets
-      assert(rewritedInfo.count(newIterOperands[i]));
+      assert(rewritedInfo.count(newIterOperands[i]) &&
+             "Expecting ForOp operands in rewritedInfo");
       auto info = rewritedInfo[newIterOperands[i]];
       newIterOperands =
           generateNewOperands(newIterOperands, i, info.getOffsets());
@@ -576,7 +587,8 @@ public:
       if (tt::isTensorPointerType(oldRegionIterArg.getType()) &&
           valueToRemove.count(oldIterOperands[oldI])) {
         // Pass rewrited info inside
-        assert(rewritedInfo.count(oldIterOperands[oldI]));
+        assert(rewritedInfo.count(oldIterOperands[oldI]) &&
+               "Expecting ForOp operands in rewritedInfo");
         auto info = rewritedInfo[oldIterOperands[oldI]];
         mapping.map(oldRegionIterArg, oldRegionIterArg);
         for (unsigned j = 0; j < info.length(); ++j)
@@ -606,13 +618,15 @@ public:
         valueToRemove.insert(v);
 
     // Replace later usages
-    assert(op.getNumResults() == op.getInitArgs().size());
+    assert(op.getNumResults() == op.getInitArgs().size() &&
+           "Expecting ForOp results and operands have the same number");
     for (unsigned i = 0, oldI = 0; oldI < op.getNumResults(); ++i, ++oldI) {
       auto oldResult = op.getResult(oldI);
       if (tt::isTensorPointerType(oldResult.getType()) &&
           valueToRemove.count(oldIterOperands[oldI])) {
         // Pack new offsets into rewrited info
-        assert(rewritedInfo.count(oldIterOperands[oldI]));
+        assert(rewritedInfo.count(oldIterOperands[oldI]) &&
+               "Expecting ForOp operands in rewritedInfo");
         auto info = rewritedInfo[oldIterOperands[oldI]];
         for (unsigned j = 0; j < info.length(); ++j)
           info.setOffset(j, newForOp.getResult(i + j));
@@ -638,7 +652,8 @@ public:
       if (!valueToRemove.count(newOperands[i]))
         continue;
 
-      assert(rewritedInfo.count(newOperands[i]));
+      assert(rewritedInfo.count(newOperands[i]) &&
+             "Expecting YieldOp operands in rewritedInfo");
       auto info = rewritedInfo[newOperands[i]];
       newOperands = generateNewOperands(newOperands, i, info.getOffsets());
       i += info.length() - 1;
@@ -717,11 +732,9 @@ public:
     };
 
     mod.walk([&checkAndMarkToRemove, this](Operation *op) {
-      if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
+      if (llvm::isa<tt::MakeTensorPtrOp>(op)) {
         checkAndMarkToRemove(op->getResult(0));
-      } else if (llvm::isa<tt::AdvanceOp>(op)) {
-        checkAndMarkToRemove(op->getOperand(0));
-      } else if (llvm::isa<tt::LoadOp>(op)) {
+      } else if (llvm::isa<tt::AdvanceOp, tt::LoadOp>(op)) {
         checkAndMarkToRemove(op->getOperand(0));
       } else if (llvm::isa<tt::StoreOp>(op)) {
         // TODO: Block store should not be removed when 2d store is enabled
