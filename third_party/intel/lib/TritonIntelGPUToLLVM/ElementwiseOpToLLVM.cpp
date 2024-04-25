@@ -1326,54 +1326,36 @@ struct FpToFpOpConversion
     return truncated;
   }
 
+  static LLVM::RoundingMode
+  convertTritonRoundingModeToLLVM(const RoundingMode rounding) {
+    LLVM::RoundingMode roundingMode;
+    switch (rounding) {
+    case RoundingMode::RTNE:
+      return LLVM::RoundingMode::NearestTiesToEven;
+    case RoundingMode::RTZ:
+      return LLVM::RoundingMode::TowardZero;
+    default:
+      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
+                      "conversion: "
+                   << stringifyRoundingMode(rounding) << "\n";
+      llvm_unreachable("");
+    }
+  }
+
   static Value convertFp32ToFp16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v, const RoundingMode rounding) {
     MLIRContext *ctx = rewriter.getContext();
 
-    LLVM::RoundingMode roundingMode;
-    switch (rounding) {
-    case RoundingMode::RTNE:
-      roundingMode = LLVM::RoundingMode::NearestTiesToEven;
-      break;
-    case RoundingMode::RTZ:
-      roundingMode = LLVM::RoundingMode::TowardZero;
-      break;
-    default:
-      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
-                      "conversion: "
-                   << stringifyRoundingMode(rounding) << "\n";
-      llvm_unreachable("");
-    }
-
     NamedAttrList convertedAttr;
     convertedAttr.set(LLVM::ConstrainedFPTruncIntr::getRoundingModeAttrName(),
-                      LLVM::RoundingModeAttr::get(ctx, roundingMode));
+                      LLVM::RoundingModeAttr::get(
+                          ctx, convertTritonRoundingModeToLLVM(rounding)));
     convertedAttr.set(
         LLVM::ConstrainedFPTruncIntr::getFPExceptionBehaviorAttrName(),
         arith::getLLVMDefaultFPExceptionBehavior(*ctx));
     return rewriter.create<LLVM::ConstrainedFPTruncIntr>(loc, f16_ty, v,
                                                          convertedAttr);
-
-#if 0
-    // FIXME: test_typeconvert_downcast fails when lower to arith::TruncFOp.
-    arith::RoundingMode roundingMode;
-    switch (rounding) {
-    case RoundingMode::RTNE:
-      roundingMode = arith::RoundingMode::to_nearest_even;
-      break;
-    case RoundingMode::RTZ:
-      roundingMode = arith::RoundingMode::toward_zero;
-      break;
-    default:
-      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
-                      "conversion: "
-                   << stringifyRoundingMode(rounding) << "\n";
-      llvm_unreachable("");
-    }
-    return rewriter.create<arith::TruncFOp>(
-        loc, f16_ty, v, arith::RoundingModeAttr::get(ctx, roundingMode));
-#endif
   }
 
   std::pair<ConverterT, size_t>
