@@ -232,7 +232,7 @@ struct LoadOpConversion
 
     // Load the operand.
     int64_t numRepOuter = numReps[opIdx];
-    int64_t numRepK = numReps[(opIdx == 0) ? 1 : 0];
+    int64_t numRepK = numReps[!opIdx];
 
     SmallVector<Value> rets;
     for (int outer = 0; outer < numRepOuter; ++outer) {
@@ -276,9 +276,11 @@ struct LoadOpConversion
             /*transpose*/
             mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 1), 0),
             /*vnni_transform*/
-            mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 1),
-                                   opIdx == 0 ? /*A vnni=false*/ 0
-                                              : /*B vnni=true*/ 1));
+            mlir::IntegerAttr::get(
+                mlir::IntegerType::get(ctx, 1),
+                (opIdx == 0 || eltTy.getIntOrFloatBitWidth() == 32)
+                    ? /*A vnni=false*/ 0
+                    : /*B vnni=true*/ 1));
         Value loadVal = bitcast(load2dOp, unpackType);
         rets.push_back(loadVal);
       }
@@ -314,9 +316,8 @@ struct LoadOpConversion
     Value other = op.getOther();
 
     // adaptor values
-    if (isTensorPointerType(ptr.getType())) {
+    if (isTensorPointerType(ptr.getType()))
       return rewriteTensorPointerLoad(op, adaptor, rewriter);
-    }
 
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
