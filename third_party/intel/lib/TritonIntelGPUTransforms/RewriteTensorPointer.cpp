@@ -28,10 +28,10 @@ namespace {
 
 bool isDivisible(Value v, unsigned divisor) {
   if (auto op = v.getDefiningOp<mlir::arith::ConstantOp>()) {
-    auto attr = op.getValue().dyn_cast<IntegerAttr>();
+    auto attr = dyn_cast<IntegerAttr>(op.getValue());
     return attr && attr.getValue().getZExtValue() % divisor == 0;
-  } else if (v.getParentBlock()->isEntryBlock() && v.isa<BlockArgument>()) {
-    BlockArgument blockArg = v.cast<BlockArgument>();
+  } else if (v.getParentBlock()->isEntryBlock() && isa<BlockArgument>(v)) {
+    BlockArgument blockArg = cast<BlockArgument>(v);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (auto func = dyn_cast<tt::FuncOp>(parentOp)) {
       auto attr = func.getArgAttrOfType<IntegerAttr>(blockArg.getArgNumber(),
@@ -49,18 +49,18 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   if (deviceArch != ttgi::DeviceArch::PVC)
     return true;
 
-  auto ptrType = op.getType().cast<tt::PointerType>();
-  auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
+  auto ptrType = cast<tt::PointerType>(op.getType());
+  auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
   // Only keep the tensor pointer with the layout of DpasEncodingAttr
-  if (tensorType.getEncoding() == nullptr)
+  if (!tensorType.getEncoding())
     return true;
   auto dotLayout =
-      tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
-  if (dotLayout == nullptr)
+      dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
+  if (!dotLayout)
     return true;
-  auto dpasLayout = dotLayout.getParent().dyn_cast<ttgi::DpasEncodingAttr>();
-  if (dpasLayout == nullptr)
+  auto dpasLayout = dyn_cast<ttgi::DpasEncodingAttr>(dotLayout.getParent());
+  if (!dpasLayout)
     return true;
 
   auto base = op.getBase();
@@ -82,7 +82,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   auto fastChangeStride = strides[order[0]];
   if (auto stride =
           dyn_cast<arith::ConstantOp>(fastChangeStride.getDefiningOp())) {
-    if (auto strideInt = stride.getValue().dyn_cast<IntegerAttr>())
+    if (auto strideInt = dyn_cast<IntegerAttr>(stride.getValue()))
       return strideInt.getInt() != 1;
   }
 
@@ -217,7 +217,7 @@ public:
            "Expecting tensor shape, offsets and strides have the same size");
     auto indexTensorType =
         RankedTensorType::get(tensorShape, builder.getI64Type(), layout);
-    auto ptrType = base.getType().cast<tt::PointerType>();
+    auto ptrType = cast<tt::PointerType>(base.getType());
     auto ptrTensorType = RankedTensorType::get(tensorShape, ptrType, layout);
 
     // Generate offsets per dimension
@@ -289,22 +289,22 @@ public:
       return Value();
 
     // Create element attribute
-    auto elementType = base.getType().cast<tt::PointerType>().getPointeeType();
+    auto elementType = cast<tt::PointerType>(base.getType()).getPointeeType();
     auto otherTensorType =
         RankedTensorType::get(tensorShape, elementType, layout);
 
     // Set zero padding value
     TypedAttr attr =
         elementType.isIntOrIndex()
-            ? builder.getIntegerAttr(elementType, 0).cast<TypedAttr>()
-            : builder.getFloatAttr(elementType, 0).cast<TypedAttr>();
+            ? cast<TypedAttr>(builder.getIntegerAttr(elementType, 0))
+            : cast<TypedAttr>(builder.getFloatAttr(elementType, 0));
 
     // Float NaN padding case
     if (padding.value() == tt::PaddingOption::PAD_NAN) {
       assert(!elementType.isIntOrIndex() &&
              "Expect element type to be non-integer type");
       auto apNaN = llvm::APFloat::getNaN(
-          attr.cast<FloatAttr>().getValue().getSemantics());
+          cast<FloatAttr>(attr).getValue().getSemantics());
       attr = builder.getFloatAttr(elementType, apNaN);
     }
 
@@ -361,8 +361,8 @@ public:
     if (!valueToRemove.count(op.getResult()))
       return nullptr;
     // Save info for later use
-    auto ptrType = op.getType().cast<tt::PointerType>();
-    auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
+    auto ptrType = cast<tt::PointerType>(op.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
     // Cast I32 offsets into I64
     SmallVector<Value> i64Offsets;
