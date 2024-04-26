@@ -174,15 +174,15 @@ struct LoadOpConversion
 
     // Only lower loadOp with dpas layout encoding
     Attribute layoutEncoding = tensorType.getEncoding();
-    if (layoutEncoding == nullptr)
+    if (!layoutEncoding)
       return failure();
     DotOperandEncodingAttr dotLayout =
-        layoutEncoding.dyn_cast<DotOperandEncodingAttr>();
-    if (dotLayout == nullptr)
+        dyn_cast<DotOperandEncodingAttr>(layoutEncoding);
+    if (!dotLayout)
       return failure();
     DpasEncodingAttr dpasLayout =
-        dotLayout.getParent().dyn_cast<DpasEncodingAttr>();
-    if (dpasLayout == nullptr)
+        dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
+    if (!dpasLayout)
       return failure();
 
     unsigned opIdx = dotLayout.getOpIdx();
@@ -287,8 +287,8 @@ struct LoadOpConversion
     }
 
     SmallVector<Value> loadedVals;
-    for (auto &ret : rets) {
-      VectorType loadTy = unpackType.cast<VectorType>();
+    for (Value &ret : rets) {
+      VectorType loadTy = cast<VectorType>(unpackType);
       for (size_t i = 0; i < loadTy.getNumElements(); ++i) {
         Value loaded = extract_element(ret, i32_val(i));
         loadedVals.push_back(loaded);
