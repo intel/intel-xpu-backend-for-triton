@@ -63,12 +63,12 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   if (!dpasLayout)
     return true;
 
-  auto base = op.getBase();
-  auto shape = op.getShape();
-  auto strides = op.getStrides();
-  auto offsets = op.getOffsets();
-  auto order = op.getOrder();
-  auto tensorShape = tensorType.getShape();
+  TypedValue<triton::PointerType> base = op.getBase();
+  Operation::operand_range shape = op.getShape();
+  Operation::operand_range strides = op.getStrides();
+  Operation::operand_range offsets = op.getOffsets();
+  ArrayRef<int32_t> order = op.getOrder();
+  ArrayRef<int64_t> tensorShape = tensorType.getShape();
 
   // TODO: support column-major tensor
   // HW 2D block read instruction has restriction on pitch divisibility
@@ -78,6 +78,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
     if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
       return true;
   }
+
   // HW 2D block read instruction only supports contiguous accessing.
   auto fastChangeStride = strides[order[0]];
   if (auto stride =
@@ -89,8 +90,8 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   return true;
 }
 
-// An additional struct to record the meta information of operations
-// with tensor pointers
+/// An additional struct to record the meta information of operations
+/// with tensor pointers.
 struct RewritedInfo {
 private:
   Value base;
@@ -106,8 +107,6 @@ private:
 public:
   RewritedInfo() = default;
 
-  RewritedInfo(const RewritedInfo &other) = default;
-
   RewritedInfo(Value base, const SmallVector<Value> &shape,
                const SmallVector<Value> &strides,
                const SmallVector<Value> &offsets,
@@ -121,9 +120,9 @@ public:
 
   unsigned int length() const { return shape.size(); }
 
-  Value getOffset(unsigned i) { return offsets[i]; }
+  Value getOffset(unsigned i) const { return offsets[i]; }
 
-  SmallVector<Value> getOffsets() { return offsets; }
+  SmallVector<Value> getOffsets() const { return offsets; }
 
   void setOffset(unsigned i, Value newOffset) {
     offsets[i] = newOffset;
@@ -140,10 +139,10 @@ public:
   // Creates a tensor with the values [0, tensorShape[axis]) + offsets[axis]
   // broadcasted to N dimensions along axis (i.e. so that
   // result[.., <axis'th dim> i, ...] = offsets[axis] + i).
-  Value getExpandedOffsetWithRange(OpBuilder &builder, const Location &loc,
+  Value getExpandedOffsetWithRange(OpBuilder &builder, Location loc,
                                    unsigned i) {
     if (cachedOffsetWithRange.count(i))
-      return cachedOffsetWithRange[i];
+      return cachedOffsetWithRange.at(i);
 
     // Ultimately this will look like:
     //
@@ -158,7 +157,7 @@ public:
     // that's equivalent to taking a sliced layout, so e.g. the layout of
     // %a0/%a1 is a slice of %b0/%b1's layout.
     size_t rank = tensorShape.size();
-    auto ctx = loc.getContext();
+    MLIRContext *ctx = loc.getContext();
 
     // layouts[i] is the layout at the i'th step of the algorithm.  In the
     // last step of the algorithm, we have this->layout.  Every step before
@@ -174,8 +173,7 @@ public:
     //     layouts[3] = layout, containing axes [0,1,2,3]
     //
     // The loop below implements this algorithm.
-    SmallVector<Attribute, 4> layouts;
-    layouts.resize(rank);
+    SmallVector<Attribute, 4> layouts(rank);
     if (layout) {
       layouts[rank - 1] = layout;
       size_t axisToRemove = rank - 1;
@@ -319,21 +317,19 @@ public:
 // TODO: this pass relies on assumptions of how block pointers are created and
 // on pattern matches that walks the SSA links to find the base/strides. This is
 // very fragile and to solve we should expose convert Ptr of tensor to a
-// structure containins all values and not only offsets.
+// structure contains all values and not only offsets.
 class TritonIntelGPURewriteTensorPointerPass
     : public TritonIntelGPURewriteTensorPointerBase<
           TritonIntelGPURewriteTensorPointerPass> {
-
-public:
-  TritonIntelGPURewriteTensorPointerPass(ttgi::DeviceArch arch) {
-    this->deviceArch = arch;
-  }
-
 private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
   DenseSet<Value> valueToRemove;
 
 public:
+  TritonIntelGPURewriteTensorPointerPass(ttgi::DeviceArch arch) {
+    deviceArch = arch;
+  }
+
   static bool needRewrite(Operation *op, const DenseSet<Value> &valueToRemove) {
     return std::any_of(op->getOperands().begin(), op->getOperands().end(),
                        [&valueToRemove](Value operand) {
