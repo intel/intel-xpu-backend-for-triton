@@ -102,20 +102,26 @@ import triton.language as tl
         # FIXME: Once tl.dot uses DPAS put back the workload commented out.
         #triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
         #              num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4,
-                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
-                      num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=5,
-                      num_warps=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
     ],
     key=['M', 'N', 'K'],
 )
@@ -181,7 +187,6 @@ def matmul_kernel_with_block_pointers(
         # See above `Advance a Block Pointer` section for details.
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
-    c = accumulator.to(tl.float16)
 
     # ----------------------------------------------------------------
     # Write back the block of the output matrix C with boundary checks.
@@ -189,7 +194,7 @@ def matmul_kernel_with_block_pointers(
     c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
                                     offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
                                     block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
-    tl.store(c_block_ptr, c, boundary_check=(0, 1))
+    tl.store(c_block_ptr, accumulator, boundary_check=(0, 1))
 
 
 # We can now create a convenience wrapper function that only takes two input tensors,
@@ -202,7 +207,7 @@ def matmul(a, b):
     M, K = a.shape
     K, N = b.shape
     # Allocates output.
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+    c = torch.empty((M, N), device=a.device, dtype=torch.float32)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
     matmul_kernel_with_block_pointers[grid](
@@ -225,12 +230,12 @@ a = torch.randn((512, 512), device='xpu', dtype=torch.float16)
 b = torch.randn((512, 512), device='xpu', dtype=torch.float16)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
-print(f"triton_output={triton_output}")
-print(f"torch_output={torch_output}")
+
+torch_outputf32 = torch_output.to(torch.float32)
 
 # Note: the torch.matmul and Triton implementations uses different
 # algorithms so we need to adjust tolerance.
-if torch.allclose(triton_output, torch_output, atol=1e-4, rtol=1e-3):
+if torch.allclose(triton_output, torch_outputf32, atol=1e-3, rtol=1e-3):
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")

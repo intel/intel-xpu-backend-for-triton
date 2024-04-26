@@ -108,7 +108,8 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        passes.ttir.add_rewrite_tensor_pointer(pm)
+        if not os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", ""):
+            passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_reorder_broadcast(pm)
@@ -128,6 +129,17 @@ class XPUBackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        if os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", ""):
+            passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
+            passes.ttgpuir.add_prefetch_block(pm)
+            passes.ttgpuir.add_distribute_to_warps(pm)
+            passes.ttgpuir.add_match_target_size(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
+            passes.common.add_symbol_dce(pm)
+            pm.run(mod)
+            metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
+            return mod
         passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.threads_per_warp, opt.num_ctas, device_arch)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
