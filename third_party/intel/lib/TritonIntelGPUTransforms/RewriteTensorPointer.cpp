@@ -26,22 +26,30 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
-// Check if given value is divisible by the divisor
-bool isDivisible(Value v, unsigned divisor) {
-  if (auto op = v.getDefiningOp<mlir::arith::ConstantOp>()) {
-    auto attr = dyn_cast<IntegerAttr>(op.getValue());
-    return attr && attr.getValue().getZExtValue() % divisor == 0;
-  } else if (v.getParentBlock()->isEntryBlock() && isa<BlockArgument>(v)) {
-    BlockArgument blockArg = cast<BlockArgument>(v);
-    Operation *parentOp = blockArg.getOwner()->getParentOp();
-    if (auto func = dyn_cast<tt::FuncOp>(parentOp)) {
-      auto attr = func.getArgAttrOfType<IntegerAttr>(blockArg.getArgNumber(),
-                                                     "tt.divisibility");
-      return attr && attr.getValue().getZExtValue() % divisor == 0;
-    }
-  } else if (auto op = v.getDefiningOp<mlir::arith::ExtSIOp>()) {
-    return isDivisible(op->getOperand(0), divisor);
+// Check if given value is divisible by the divisor.
+bool isDivisible(Value value, unsigned divisor) {
+  // Case 1: Value is defined by a constant operation
+  if (auto constantOp = value.getDefiningOp<mlir::arith::ConstantOp>()) {
+    auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
+    return integerAttr && integerAttr.getValue().getZExtValue() % divisor == 0;
   }
+
+  // Case 2: Value is a block argument of the entry block
+  if (value.getParentBlock()->isEntryBlock() && isa<BlockArgument>(value)) {
+    BlockArgument blockArg = cast<BlockArgument>(value);
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    if (auto funcOp = dyn_cast<tt::FuncOp>(parentOp)) {
+      auto divisibilityAttr = funcOp.getArgAttrOfType<IntegerAttr>(
+          blockArg.getArgNumber(), "tt.divisibility");
+      return divisibilityAttr &&
+             divisibilityAttr.getValue().getZExtValue() % divisor == 0;
+    }
+  }
+
+  // Case 3: Value is defined by a sign extension operation
+  if (auto extSIOp = value.getDefiningOp<mlir::arith::ExtSIOp>())
+    return isDivisible(extSIOp->getOperand(0), divisor);
+
   return false;
 }
 
@@ -154,20 +162,11 @@ public:
     size_t rank = tensorShape.size();
     MLIRContext *ctx = loc.getContext();
 
-    // layouts[i] is the layout at the i'th step of the algorithm.  In the
-    // last step of the algorithm, we have this->layout.  Every step before
-    // that slices away one dimension, until we get to the first step, which
-    // has all but `axis` sliced away.  For example:
-    //   - Suppose rank = 4 and axis = 2.
-    //   - Then the layouts will be:
-    //
-    //     layouts[0] = slice(layouts[1], remove_dim=0), containing axes [2]
-    //     layouts[1] = slice(layouts[2], remove_dim=1), containing axes [0,2]
-    //     layouts[2] = slice(layouts[3], remove_dim=3), containing axes
-    //                  [0,1,2]
-    //     layouts[3] = layout, containing axes [0,1,2,3]
-    //
-    // The loop below implements this algorithm.
+    // This code is creating a vector of layout attributes for a tensor. If a
+    // layout is provided, it sets the layout of each axis based on the layout
+    // of the previous axis, starting from the last axis and moving towards the
+    // first. If the current axis is the one to remove, it skips it and moves to
+    // the previous axis.
     SmallVector<Attribute, 4> layouts(rank);
     if (layout) {
       layouts[rank - 1] = layout;
