@@ -696,8 +696,8 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
 
   if (numResults == 1) {
     op->replaceAllUsesWith(b.create<ttgi::GlueOp>(loc, type, subOps));
-    op->erase();
   }
+  op->erase();
 }
 
 } // namespace

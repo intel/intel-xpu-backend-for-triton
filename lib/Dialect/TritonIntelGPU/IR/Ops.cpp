@@ -193,7 +193,7 @@ OpFoldResult ExtractOp::fold(FoldAdaptor adaptor) {
   // %0 =  .... : tensor<16x8xf16>
   // extract %0[0] : tensor<16x8xf16> -> %0
   if (getIndex() == 0 && getBase().getType() == getType())
-    return getOperand();
+    return getBase();
 
   return {};
 }
