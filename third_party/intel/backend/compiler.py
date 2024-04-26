@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend
+from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src
 
@@ -64,15 +64,15 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def supports_target(target: tuple):
-        return target[0] == 'xpu'
+        return target.backend == 'xpu'
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        assert isinstance(target[1], dict)
+        assert isinstance(target.arch, dict)
         dirname = os.path.dirname(os.path.realpath(__file__))
         mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
         self.parse_device_arch = mod.parse_device_arch
-        self.properties = self._parse_target(target[1])
+        self.properties = self._parse_target(target.arch)
         self.device_arch = self.properties["device_arch"]
         self.binary_ext = "spv"
 
