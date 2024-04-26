@@ -26,6 +26,7 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
+// Check if given value is divisible by the divisor
 bool isDivisible(Value v, unsigned divisor) {
   if (auto op = v.getDefiningOp<mlir::arith::ConstantOp>()) {
     auto attr = dyn_cast<IntegerAttr>(op.getValue());
@@ -44,6 +45,11 @@ bool isDivisible(Value v, unsigned divisor) {
   return false;
 }
 
+// Check if the tensor pointer should be removed, ops with three conditions
+// should be kept:
+// 1. MakeTensorPtrOp should have DpasEncodingAttr
+// 2. Pointed Tensor pitch should be divisible by Qword bitwidth(for PVC)
+// 3. Pointed Tensor should be contiguous on memory
 bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   // Non-PVC device should always remove the tensor pointer
   if (deviceArch != ttgi::DeviceArch::PVC)
@@ -92,17 +98,6 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
 // An additional struct to record the meta information of operations
 // with tensor pointers
 struct RewritedInfo {
-private:
-  Value base;
-  SmallVector<Value> shape;
-  SmallVector<Value> strides;
-  SmallVector<Value> offsets;
-  ArrayRef<int64_t> tensorShape;
-  Attribute layout;
-
-  // A cache to avoid generating the same offset with range
-  DenseMap<unsigned, Value> cachedOffsetWithRange;
-
 public:
   RewritedInfo() = default;
 
@@ -121,9 +116,9 @@ public:
 
   unsigned int length() const { return shape.size(); }
 
-  Value getOffset(unsigned i) { return offsets[i]; }
+  Value getOffset(unsigned i) const { return offsets[i]; }
 
-  SmallVector<Value> getOffsets() { return offsets; }
+  SmallVector<Value> getOffsets() const { return offsets; }
 
   void setOffset(unsigned i, Value newOffset) {
     offsets[i] = newOffset;
@@ -284,7 +279,7 @@ public:
   }
 
   Value generateOther(OpBuilder &builder, const Location &loc,
-                      const std::optional<tt::PaddingOption> &padding) {
+                      const std::optional<tt::PaddingOption> &padding) const {
     if (!padding.has_value())
       return Value();
 
@@ -312,8 +307,18 @@ public:
     Value constant = builder.create<arith::ConstantOp>(loc, attr);
     return builder.create<tt::SplatOp>(loc, otherTensorType, constant);
   }
-};
 
+private:
+  Value base;
+  SmallVector<Value> shape;
+  SmallVector<Value> strides;
+  SmallVector<Value> offsets;
+  ArrayRef<int64_t> tensorShape;
+  Attribute layout;
+
+  // A cache to avoid generating the same offset with range
+  DenseMap<unsigned, Value> cachedOffsetWithRange;
+};
 } // namespace
 
 // TODO: this pass relies on assumptions of how block pointers are created and
@@ -329,11 +334,6 @@ public:
     this->deviceArch = arch;
   }
 
-private:
-  DenseMap<Value, RewritedInfo> rewritedInfo;
-  DenseSet<Value> valueToRemove;
-
-public:
   static bool needRewrite(Operation *op, const DenseSet<Value> &valueToRemove) {
     return std::any_of(op->getOperands().begin(), op->getOperands().end(),
                        [&valueToRemove](Value operand) {
@@ -777,6 +777,10 @@ public:
       op->erase();
     }
   }
+
+private:
+  DenseMap<Value, RewritedInfo> rewritedInfo;
+  DenseSet<Value> valueToRemove;
 };
 
 std::unique_ptr<Pass>
