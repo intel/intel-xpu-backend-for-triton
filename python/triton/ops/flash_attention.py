@@ -16,7 +16,7 @@ from .. import language as tl
 
 
 def is_hip():
-    return triton.runtime.driver.active.get_current_target()[0] == "hip"
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
 @jit
@@ -397,8 +397,8 @@ class _attention(torch.autograd.Function):
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,  #
             IS_CAUSAL=causal,  #
             num_warps=num_warps,  #
-            num_stages=4  #
-        )
+            num_stages=4,  #
+            threads_per_warp=16)
 
         ctx.save_for_backward(q, k, v, o, L)
         ctx.grid = grid
@@ -458,8 +458,8 @@ class _attention(torch.autograd.Function):
             CAUSAL=ctx.causal,  #
             MMA_V3=MMA_V3,  #
             num_warps=8,  #
-            num_stages=1  #
-        )
+            num_stages=1,  #
+            threads_per_warp=16)
 
         if len(dq.shape) == 5:
             dq = dq.sum(dim=0)

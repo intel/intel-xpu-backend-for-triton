@@ -25,7 +25,7 @@ public:
 
   DotOpDPASConversionHelper(DpasEncodingAttr dpasLayout,
                             ConversionPatternRewriter &rewriter,
-                            TritonGPUToLLVMTypeConverter *typeConverter,
+                            TritonIntelGPUToLLVMTypeConverter *typeConverter,
                             Location loc)
       : dpasLayout(dpasLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
@@ -302,7 +302,7 @@ private:
 
   DpasEncodingAttr dpasLayout;
   ConversionPatternRewriter &rewriter;
-  TritonGPUToLLVMTypeConverter *typeConverter;
+  TritonIntelGPUToLLVMTypeConverter *typeConverter;
   Location loc;
   MLIRContext *ctx;
 };
@@ -311,7 +311,7 @@ private:
 
 namespace fma_details {
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                          TritonGPUToLLVMTypeConverter *typeConverter,
+                          TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   LLVM_DEBUG({
     auto module = op->getParentOfType<ModuleOp>();

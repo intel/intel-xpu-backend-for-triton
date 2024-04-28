@@ -21,7 +21,7 @@ from triton.language.extra.intel import libdevice
 )
 def test_bessel(dtype_str, libdevice_fn, torch_special_fn, device):
     if device in ['xpu']:
-        if dtype_str in ["float64"] and not triton.runtime.driver.active.get_current_target()[1]['has_fp64']:
+        if dtype_str in ["float64"] and not triton.runtime.driver.active.get_current_target().arch['has_fp64']:
             pytest.xfail("float64 not supported on current xpu hardware")
     SIZE = 128
     dtype = getattr(torch, dtype_str)
