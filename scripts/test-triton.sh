@@ -168,14 +168,6 @@ run_tutorial_tests() {
   run_tutorial_test "06-fused-attention"
   run_tutorial_test "07-extern-functions"
   run_tutorial_test "08-grouped-gemm"
-  # Run block-pointer geem tutorial
-  TRITON_INTEL_ENABLE_BLOCK_PTR=1 \
-  IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
-  IGC_ForcePrefetchToL1Cache=1 \
-  IGC_VATemp=1 \
-  UR_L0_IN_ORDER_BARRIER_BY_SIGNAL=0 \
-  IGC_DisableLoopUnroll=1 \
-  IGC_EnableVISANoSchedule=1 \
   run_tutorial_test "09-experimental-block-pointer"
 }
 
