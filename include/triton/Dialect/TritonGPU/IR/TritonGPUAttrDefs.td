@@ -897,10 +897,10 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     SmallVector<unsigned> getContigPerThread() {
       auto rank = getWarpsPerCTA().size();
       SmallVector<unsigned> contigPerThread(rank, 1);
-      contigPerThread[0] = 4;
-      if (getIsTransposed()) {
-        std::reverse(contigPerThread.begin(), contigPerThread.end());
-      }
+      if (getIsTransposed())
+        contigPerThread[rank - 1] = 4;
+      else
+        contigPerThread[rank - 2] = 4;
       return contigPerThread;
     };
 
