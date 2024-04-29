@@ -151,16 +151,28 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
 }
 
 def TritonIntelGPURewriteTensorPointer : Pass<"tritonintelgpu-rewrite-tensor-pointer", "mlir::ModuleOp"> {
-  let summary = "Rewrite load/stores with tensor pointers into legacy load/stores";
+  let summary = "Rewrite load/store operations using tensor pointers that cannot be lowered to 2D Block Load/Store intrinsics";
   let description = [{
-    This pass rewrites all load/store semantics initiated by a `tt.make_tensor_ptr` and `tt.advance` into legacy
-    semantics. After this pass, `tt.make_tensor_ptr` and `tt.advance` will disappear, and it generates logics to compute
-    the pointer/mask/other for each load/store.
+    This pass determines whether a load/store operation can be lowered to 2D
+    Block Load/Store intrinsic. If it cannot, it replaces the load/store
+    operation with a legacy pointer and removes the Triton operations that
+    create and advance the block pointer (that is `tt.make_tensor_tr` and
+    `tt.advance`).
   }];
 
   let constructor = "mlir::triton::gpu::intel::createTritonIntelGPURewriteTensorPointerPass()";
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
+
+  let options = [
+    Option<"deviceArch", "device-architecture",
+            "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
+            "device architecture",
+            "llvm::cl::values("
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::UNKNOWN, \"UNKNOWN\", \"Unknown arch\"), "
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::ATS, \"ATS\", \"ATS arch\"), "
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::PVC, \"PVC\", \"PVC arch\"))">
+  ];
 }
 
 def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::ModuleOp"> {
