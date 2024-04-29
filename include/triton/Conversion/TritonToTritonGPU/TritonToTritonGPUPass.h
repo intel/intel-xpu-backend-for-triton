@@ -13,20 +13,21 @@ namespace triton {
 
 constexpr static char AttrNumWarpsName[] = "triton_gpu.num-warps";
 constexpr static char AttrNumCTAsName[] = "triton_gpu.num-ctas";
-constexpr static char AttrComputeCapabilityName[] =
-    "triton_gpu.compute-capability";
+constexpr static char AttrTargetName[] = "triton_gpu.target";
 
 constexpr static char AttrNumThreadsPerWarp[] = "triton_gpu.threads-per-warp";
 
 // Create the pass with numWarps passed from cl::opt.
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUPass();
+
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonToTritonGPUWarpPass();
 
 // Create the pass with numWarps set explicitly.
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUPass(
-    int numWarps, int threadsPerWarp = 32, int numCTAs = 1,
-    std::optional<int> computeCapability = std::nullopt);
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonToTritonGPUPass(const std::string &target, int numWarps,
+                                   int threadsPerWarp = 32, int numCTAs = 1);
+
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonToTritonGPUWarpPass(unsigned numWarps);
 

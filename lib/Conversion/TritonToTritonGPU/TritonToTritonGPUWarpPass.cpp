@@ -252,8 +252,6 @@ public:
                  IntegerAttr::get(i32Ty, llvm::APInt(32, 1)));
     mod->setAttr(tt::AttrNumCTAsName,
                  IntegerAttr::get(i32Ty, llvm::APInt(32, 1)));
-    mod->setAttr(tt::AttrComputeCapabilityName,
-                 IntegerAttr::get(i32Ty, llvm::APInt(32, 90)));
   }
 
   void transformGenericOp(Operation *op, DenseMap<Value, Attribute> &map) {
