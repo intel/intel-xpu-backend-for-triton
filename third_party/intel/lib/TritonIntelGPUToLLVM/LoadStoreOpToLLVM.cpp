@@ -142,9 +142,9 @@ struct LoadOpConversion
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
-  /// Holds the values related to a block pointer
-  //  It includes the offset base for X and Y, base height and width, row and
-  //  column stride, and the base value.
+  /// Holds the values related to a block pointer.
+  /// It includes the base pointer, base width and height, row and column
+  /// stride, and offset base for X and Y.
   struct BlockPointerValues {
     Value base;
     Value baseWidth;
@@ -155,10 +155,9 @@ struct LoadOpConversion
     Value offsetBaseY;
   };
 
-  // Unpack values as the params to 2DBlockLoad Payload:
-  // offsetBaseY, offsetBaseX, baseHeight, baseWidth, rowStride, colStride,
-  // base
-  // FIXME: Only supports a 2D matrix for now.
+  // Unpack values as the params to 2DBlockLoad Payload: offsetBaseY,
+  // offsetBaseX, baseHeight, baseWidth, rowStride, colStride, base.
+  // FIXME: Only supports 2D matrices for now.
   BlockPointerValues
   getValuesFromBlockPointerStruct(Value blockPointerStruct,
                                   ConversionPatternRewriter &rewriter) const {
