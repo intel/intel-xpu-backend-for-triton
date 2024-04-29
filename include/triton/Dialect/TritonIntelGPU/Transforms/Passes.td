@@ -180,7 +180,7 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
 
   let description = [{
     Apply software pipelinining to loops containing expensive `tt.dot` operations.
-    The pass supports prefetching `tt.dot` operands. The `num-stages` argument controls 
+    The pass supports prefetching `tt.dot` operands. The `num-stages` argument controls
     the prefetching and distance (i.e. the number of iterations to prefetch in advance).
   }];
 
