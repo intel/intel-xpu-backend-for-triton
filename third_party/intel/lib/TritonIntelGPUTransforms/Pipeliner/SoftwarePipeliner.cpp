@@ -1,30 +1,17 @@
 #include "Schedule.h"
-#include "mlir/Dialect/SCF/Transforms/Transforms.h"
-#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
-//===----------------------------------------------------------------------===//
-// This file will create a schedule that will be handed over to the pipeline
-// expander.
-// Software pipeliners are usually separated into two pieces, one that create a
-// modulo schedule and an expander that rewrites the loop and emits a prologue
-// and epilogue. This pass first calls a helper that will pre-process the IR
-// to create async operations and create a modulo schedule. Then we call the
-// expander to generate the prologue and new loop.
-//===----------------------------------------------------------------------===//
-
 using namespace mlir;
-namespace ttgi = triton::gpu::intel;
+namespace ttgi = mlir::triton::gpu::intel;
 
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
-static void pipelineLoop(scf::ForOp forOp, int numStages) {
-  mlir::scf::PipeliningOption options;
+// Return true if the preconditions for pipelining the loop are met.
+static bool preCondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
   if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
@@ -32,12 +19,26 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
                      Operation *def = operand.getDefiningOp();
                      return !def;
                    }))
+    return false;
+  // Don't pipeline outer loops.
+  if (forOp
+          ->walk([&](Operation *op) {
+            if (isa<LoopLikeOpInterface>(op) && forOp.getOperation() != op)
+              return WalkResult::interrupt();
+            return WalkResult::advance();
+          })
+          .wasInterrupted())
+    return false;
+  return true;
+}
+
+static void pipelineLoop(scf::ForOp forOp, int numStages) {
+  mlir::scf::PipeliningOption options;
+  if (!preCondition(forOp))
     return;
 
-  bool foundSchedule = false;
-  foundSchedule = mlir::triton::gpu::intel::preProcessLoopAndGetScheduleIntel(
-      forOp, numStages, options);
-
+  bool foundSchedule =
+      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, options);
   if (!foundSchedule)
     return;
 
@@ -52,18 +53,19 @@ struct IntelGPUPipelinePass
     : public TritonIntelGPUPipelineBase<IntelGPUPipelinePass> {
   IntelGPUPipelinePass() = default;
   IntelGPUPipelinePass(int numStages, ttgi::DeviceArch arch) {
-    this->numStages = numStages;
-    this->deviceArch = arch;
+    numStages = numStages;
+    deviceArch = arch;
   }
 
   void runOnOperation() override {
-    if (this->numStages <= 1)
-      return;
-    //  Only the PVC support the prefetching ops.
     if (deviceArch != ttgi::DeviceArch::PVC)
       return;
+    if (numStages <= 1)
+      return;
+
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+
     for (scf::ForOp forOp : loops) {
       pipelineLoop(forOp, numStages);
     }

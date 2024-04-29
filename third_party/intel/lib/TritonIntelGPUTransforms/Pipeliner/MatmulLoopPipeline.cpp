@@ -1,17 +1,12 @@
 #include "Schedule.h"
+#include "include/triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "mlir/Dialect/SCF/Transforms/Transforms.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define int_attr(num) builder.getI64IntegerAttr(num)
 
@@ -23,19 +18,8 @@ namespace ttgi = mlir::triton::gpu::intel;
 // TODO: We can extra some helpers into common utilities once we add more
 // schedules.
 
-/// Replace the yield with a new one with the given operands appended.
-static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
-  // Fix up the yield op.
-  Operation *yieldOp = forOp.getBody()->getTerminator();
-  SmallVector<Value> operands(yieldOp->getOperands().begin(),
-                              yieldOp->getOperands().end());
-  operands.append(newOperands.begin(), newOperands.end());
-  OpBuilder builder(yieldOp);
-  builder.create<scf::YieldOp>(yieldOp->getLoc(), operands);
-  yieldOp->erase();
-}
-
 namespace {
+
 struct LoadDotOperand {
   LoadDotOperand(tt::LoadOp load,
                  ttg::DotOperandEncodingAttr dotOperandEncoding,
@@ -44,38 +28,61 @@ struct LoadDotOperand {
   tt::LoadOp load;
   ttg::DotOperandEncodingAttr dotOperandEncoding;
 };
+
 } // namespace
 
-// If all the transitive uses of the given value have are used by a convert to
-// the same dot operand encoding, return the encoding. Otherwise return nullptr.
+/// Replace the ForOp's yield with a new one with the given operands appended.
+static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
+  assert(!newOperands.empty() && "Expecting at least one operand");
+
+  Operation *yieldOp = forOp.getBody()->getTerminator();
+  SmallVector<Value> operands(yieldOp->getOperands().begin(),
+                              yieldOp->getOperands().end());
+  operands.append(newOperands.begin(), newOperands.end());
+
+  OpBuilder builder(yieldOp);
+  builder.create<scf::YieldOp>(yieldOp->getLoc(), operands);
+  yieldOp->erase();
+}
+
+static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val);
+
+static ttg::DotOperandEncodingAttr getEncodingFromUser(Operation *user,
+                                                       Value val) {
+  assert(user->getNumResults() == 1 && "Expecting a single result");
+
+  OpResult res = user->getResult(0);
+  auto tensorType = dyn_cast<RankedTensorType>(res.getType());
+  if (!tensorType)
+    return nullptr;
+
+  if (isa<ttg::SharedEncodingAttr>(tensorType.getEncoding())) {
+    return allTransitiveUsesHaveDotEncoding(res);
+  } else if (auto convertLayout = dyn_cast<ttg::ConvertLayoutOp>(user)) {
+    auto tensorType =
+        dyn_cast<RankedTensorType>(convertLayout.getResult().getType());
+    if (!tensorType)
+      return nullptr;
+    return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
+  } else if (auto dotOp = dyn_cast<tt::DotOp>(user)) {
+    auto tensorType = dyn_cast<RankedTensorType>(val.getType());
+    if (!tensorType)
+      return nullptr;
+    return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
+  }
+  return nullptr;
+}
+
+/// If all the transitive uses of the given value have are used by a convert to
+/// the same dot operand encoding, return the encoding. Otherwise return
+/// nullptr.
 static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
   ttg::DotOperandEncodingAttr attr{nullptr};
   for (Operation *user : val.getUsers()) {
     if (user->getNumResults() != 1)
       return nullptr;
-    auto tensorType = user->getResult(0).getType().dyn_cast<RankedTensorType>();
-    if (!tensorType)
-      return nullptr;
-    ttg::DotOperandEncodingAttr tempAttr;
-    if (tensorType.getEncoding().isa<ttg::SharedEncodingAttr>()) {
-      tempAttr = allTransitiveUsesHaveDotEncoding(user->getResult(0));
-    } else if (auto convertLayout =
-                   llvm::dyn_cast<ttg::ConvertLayoutOp>(user)) {
-      auto tensorType =
-          convertLayout.getResult().getType().dyn_cast<RankedTensorType>();
-      if (!tensorType)
-        return nullptr;
-      tempAttr =
-          tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
-    } else if (auto dotOp = llvm::dyn_cast<tt::DotOp>(user)) {
-      auto tensorType = val.getType().dyn_cast<RankedTensorType>();
-      if (!tensorType)
-        return nullptr;
-      tempAttr =
-          tensorType.getEncoding().dyn_cast<ttg::DotOperandEncodingAttr>();
-    } else {
-      return nullptr;
-    }
+
+    ttg::DotOperandEncodingAttr tempAttr = getEncodingFromUser(user, val);
     if (!tempAttr || (attr != nullptr && attr != tempAttr))
       return nullptr;
     attr = tempAttr;
@@ -83,27 +90,37 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
   return attr;
 }
 
+/// Create a prefetch operation for the given load operation.
 static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp, Value ptr) {
   OpBuilder builder(forOp);
-  // Replace the load with load/prefetch in different stage.
   builder.setInsertionPoint(loadOp);
-  Location loc = loadOp->getLoc();
-  auto prefetchOp = builder.create<triton::gpu::intel::PrefetchOp>(
-      loc, ptr, loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+  builder.create<ttgi::PrefetchOp>(loadOp->getLoc(), ptr, loadOp.getCache(),
+                                   loadOp.getEvict(), loadOp.getIsVolatile());
 }
 
-// Return the transitive use of the load which is a dot operand.
+/// Create prefetch operations for the given loads.
+static void createPrefetchOps(scf::ForOp &forOp,
+                              ArrayRef<LoadDotOperand> loads) {
+  assert(!loads.empty() && "Expecting at least one load operation");
+  for (const LoadDotOperand &loadOperand : loads) {
+    tt::LoadOp loadOp = loadOperand.load;
+    createPrefetchOp(forOp, loadOp, loadOp.getPtr());
+  }
+}
+
+/// Return the transitive use of the load which is a dot operand.
 static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp) {
-  ttg::DotOperandEncodingAttr attr =
-      allTransitiveUsesHaveDotEncoding(loadOp.getResult());
-  if (!attr)
-    return std::nullopt;
-  return LoadDotOperand(loadOp, attr);
+  if (ttg::DotOperandEncodingAttr attr =
+          allTransitiveUsesHaveDotEncoding(loadOp.getResult()))
+    return LoadDotOperand(loadOp, attr);
+  return std::nullopt;
 }
 
-/// Collect loads to pipeline. Return success if we can pipeline this loop
+/// Collect loads to pipeline. Return success if we can pipeline this loop.
 static void collectOpsToPipeline(scf::ForOp forOp,
-                                 SmallVectorImpl<LoadDotOperand> &ops) {
+                                 SmallVectorImpl<LoadDotOperand> &loadOps) {
+  assert(loadOps.empty() && "Expecting an empty list of load operations");
+
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
   mlir::triton::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
@@ -111,67 +128,34 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   // operations in the loop body block.
   for (Operation &op : forOp) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
-      bool candidate = false;
-      if (isLoadFromTensorPtr(loadOp)) {
-        // 2D load/store.
-        candidate = true;
-      } else {
-        // gather/scatter
-        candidate = true;
-      }
-      if (!candidate)
-        continue;
       std::optional<LoadDotOperand> loadWithDotOperand = loadDotOperand(loadOp);
-      if (!loadWithDotOperand.has_value())
-        continue;
-      ops.push_back(loadWithDotOperand.value());
+      if (loadWithDotOperand.has_value())
+        loadOps.push_back(loadWithDotOperand.value());
     }
   }
 }
 
-static void createPrefetchOps(scf::ForOp &forOp, ArrayRef<LoadDotOperand> loads,
-                              int numStages) {
-  struct prefetchLoad {
-    prefetchLoad(tt::LoadOp load, Value ptr) : load(load), ptr(ptr) {}
-    tt::LoadOp load;
-    Value ptr;
-  };
-  int numBuffers = numStages - 1;
-  SmallVector<prefetchLoad> prefetchLoads;
-
-  for (const LoadDotOperand &loadOperand : loads) {
-    tt::LoadOp loadOp = loadOperand.load;
-    prefetchLoads.emplace_back(loadOp, loadOp.getPtr());
-  }
-
-  for (prefetchLoad &prefetchLoad : prefetchLoads) {
-    createPrefetchOp(forOp, prefetchLoad.load, prefetchLoad.ptr);
-  }
-}
-
-// Combine the current mask with the given predicate.
+/// Combine the current mask with the given predicate.
 static Value getPredMask(RewriterBase &rewriter, Type typeLike,
                          Value currentMask, Value pred) {
-  Type maskType = tt::getI1SameShape(typeLike);
   Location loc = pred.getLoc();
   Value mask = pred;
-  if (maskType.isa<RankedTensorType>()) {
+  Type maskType = tt::getI1SameShape(typeLike);
+
+  if (isa<RankedTensorType>(maskType))
     mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
-  }
-  if (currentMask) {
-    mask = rewriter.create<arith::AndIOp>(loc, mask, currentMask);
-  }
-  return mask;
+
+  return currentMask ? rewriter.create<arith::AndIOp>(loc, mask, currentMask)
+                     : mask;
 }
 
-// Function to mask operations during scheduling.
+/// Function to mask operations during scheduling.
 static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
                               Value pred) {
   OpBuilder::InsertionGuard guard(rewriter);
-  if (mlir::isMemoryEffectFree(op))
+  if (mlir::isMemoryEffectFree(op) || isa<ttgi::PrefetchOp>(op))
     return op;
-  if (isa<triton::gpu::intel::PrefetchOp>(op))
-    return op;
+
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
     rewriter.setInsertionPoint(loadOp);
     Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),
@@ -179,7 +163,26 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
     loadOp.getMaskMutable().assign(mask);
     return op;
   }
-  llvm_unreachable("don't know how to predicate this op for intel");
+
+  llvm_unreachable("don't know how to predicate this operation");
+}
+
+/// Helper to get the defining operation of a value.
+static Operation *getDefOp(Value v, Operation *op, bool includeArg) {
+  llvm::SmallDenseSet<Value> seen;
+  while (auto arg = v.dyn_cast<BlockArgument>()) {
+    if (!includeArg)
+      break;
+    if (!seen.insert(v).second)
+      break;
+    if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
+      auto yieldOp = op->getBlock()->getTerminator();
+      v = yieldOp->getOperand(arg.getArgNumber() - 1);
+      continue;
+    }
+    break;
+  }
+  return v.getDefiningOp();
 }
 
 /// Helper to recursively add dependencies to the same stage.
@@ -190,25 +193,11 @@ static void addDep(Operation *op, DenseSet<Operation *> &deps,
     return;
   if (!deps.insert(op).second)
     return;
+
   for (Value operand : op->getOperands()) {
-    Value v = operand;
-    llvm::SmallDenseSet<Value> seen;
-    while (auto arg = v.dyn_cast<BlockArgument>()) {
-      if (!includeArg)
-        break;
-      if (!seen.insert(v).second)
-        break;
-      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-        auto yieldOp = op->getBlock()->getTerminator();
-        v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        continue;
-      }
-      break;
-    }
-    Operation *defOp = v.getDefiningOp();
-    if (defOp && defOp->getBlock() == op->getBlock()) {
+    Operation *defOp = getDefOp(operand, op, includeArg);
+    if (defOp && defOp->getBlock() == op->getBlock())
       addDep(defOp, deps, includeArg, filter);
-    }
   }
 }
 
@@ -224,8 +213,8 @@ static void addOps(scf::ForOp forOp, int stage,
   }
 }
 
-// create the schedule for a matmul loop. This is ad hoc based on how we know
-// matmul loops should be pipelined and is not a generic scheduler.
+/// Create the schedule for a matmul loop. This is ad hoc based on how we know
+/// matmul loops should be pipelined and is not a generic scheduler.
 static std::vector<std::pair<Operation *, unsigned>>
 createSchedule(scf::ForOp forOp, int numStages) {
   SmallVector<Operation *> prefetchOps;
@@ -233,44 +222,48 @@ createSchedule(scf::ForOp forOp, int numStages) {
   // Find the prefetch/load ops that will go respectively in stage 0 and stage
   // `numStages - 1`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<triton::gpu::intel::PrefetchOp>(op))
+    if (isa<ttgi::PrefetchOp>(op))
       prefetchOps.emplace_back(&op);
     if (isa<tt::LoadOp>(op))
       loadOps.emplace_back(&op);
   }
+
   DenseSet<Operation *> prefetchAndDeps;
-  for (Operation *op : prefetchOps) {
+  for (Operation *op : prefetchOps)
     addDep(op, prefetchAndDeps, false);
-  }
 
   // Find depenencies with distance of 1.
   SmallVector<Operation *> distanceOneUsers;
   for (Operation *op : prefetchAndDeps) {
     for (Value operand : op->getOperands()) {
+#if 1
+      Operation *defOp = getDefOp(operand, op, true);
+      if (defOp)
+        distanceOneUsers.push_back(defOp);
+#else
       if (auto arg = operand.dyn_cast<BlockArgument>()) {
         if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
           auto yieldOp = op->getBlock()->getTerminator();
           Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
           Operation *defOp = v.getDefiningOp();
-          if (defOp) {
+          if (defOp)
             distanceOneUsers.push_back(defOp);
-          }
         }
       }
+#endif
     }
   }
 
   // For the rest of the ops we can move then into stage 1 so that they can be
   // closer to their uses.
   DenseSet<Operation *> stage1deps;
-  for (Operation *op : distanceOneUsers) {
+  for (Operation *op : distanceOneUsers)
     addDep(op, stage1deps, true, &prefetchAndDeps);
-  }
 
   DenseSet<Operation *> loadAndDeps;
-  for (Operation *op : loadOps) {
+  for (Operation *op : loadOps)
     addDep(op, loadAndDeps, false, &prefetchAndDeps);
-  }
+
   std::vector<std::pair<Operation *, unsigned>> schedule;
 
   // Schedule some dependencies with distance of 1 into stage 1 to reduce
@@ -296,8 +289,8 @@ createSchedule(scf::ForOp forOp, int numStages) {
   return schedule;
 }
 
-bool mlir::triton::gpu::intel::preProcessLoopAndGetScheduleIntel(
-    scf::ForOp &forOp, int numStages, mlir::scf::PipeliningOption &options) {
+bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
+                                        mlir::scf::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   SmallVector<LoadDotOperand> loads;
@@ -305,8 +298,8 @@ bool mlir::triton::gpu::intel::preProcessLoopAndGetScheduleIntel(
   if (loads.empty())
     return false;
 
-  // 2. Convert the loads into async loads and create the prefetching.
-  createPrefetchOps(forOp, loads, numStages);
+  // 2. Create the prefetching operations for the loads collected.
+  createPrefetchOps(forOp, loads);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
