@@ -175,6 +175,36 @@ def TritonIntelGPURewriteTensorPointer : Pass<"tritonintelgpu-rewrite-tensor-poi
   ];
 }
 
+def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
+  let summary = "Pipeline loops";
+
+  let description = [{
+    Apply software pipelinining to loops containing expensive `tt.dot` operations.
+    The pass supports prefetching `tt.dot` operands. The `num-stages` argument controls 
+    the prefetching and distance (i.e. the number of iterations to prefetch in advance).
+  }];
+
+  let constructor = "mlir::triton::gpu::intel::createTritonIntelGPUPipelinePass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"numStages", "num-stages",
+           "int32_t", /*default*/"2",
+           "number of pipeline stages">,
+    Option<"deviceArch", "device-architecture",
+            "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
+            "device architecture",
+            "llvm::cl::values("
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::UNKNOWN, \"UNKNOWN\", \"Unknown arch\"), "
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::ATS, \"ATS\", \"ATS arch\"), "
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::PVC, \"PVC\", \"PVC arch\"))">
+  ];
+}
+
 def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::ModuleOp"> {
   let summary = "Prefetch a tensor block around loop";
 
@@ -244,36 +274,6 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
 
   let dependentDialects = ["mlir::triton::TritonDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
-}
-
-def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
-  let summary = "Intel GPU pipeline";
-
-  let description = [{
-    This pass pipelines the loop body with heavy `tt.dot` operations.
-    It supports to prefetch the `tt.dot` operands to cache on PVC. To prefetch operands to cache is in the first stage.
-    User can use the num-stages to control the prefetching and using distance.
-  }];
-
-  let constructor = "mlir::triton::gpu::intel::createTritonIntelGPUPipelinePass()";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
-                           "mlir::scf::SCFDialect",
-                           "mlir::arith::ArithDialect"];
-
-  let options = [
-    Option<"numStages", "num-stages",
-           "int32_t", /*default*/"2",
-           "number of pipeline stages">,
-    Option<"deviceArch", "device-architecture",
-            "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
-            "device architecture",
-            "llvm::cl::values("
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::UNKNOWN, \"UNKNOWN\", \"Unknown arch\"), "
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::ATS, \"ATS\", \"ATS arch\"), "
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::PVC, \"PVC\", \"PVC arch\"))">
-  ];
 }
 
 #endif // TRITON_INTEL_GPU_PASSES
