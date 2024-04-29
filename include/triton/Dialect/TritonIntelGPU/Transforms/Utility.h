@@ -15,6 +15,8 @@
 namespace mlir {
 namespace triton {
 namespace gpu {
+
+class DotOperandEncodingAttr;
 namespace intel {
 
 // data type for D_C_A_B.
@@ -38,7 +40,15 @@ DPASEngineType getDPASType(DotOp op);
 // Infers the encoding of the source of op given the result encoding.
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
 
+// Retuns true is the operation is an expensive load or store operation.
 bool isExpensiveLoadOrStore(Operation *op);
+
+// Returns true if the tensor type has a dot dpas encoding.
+bool hasDotDpasEncoding(RankedTensorType tensorType);
+
+// Returns the dot encoding of the tensor type or std::nullopt.
+std::optional<DotOperandEncodingAttr>
+getDotEncoding(RankedTensorType tensorType);
 
 // Get backward slice of tensor values starting from the root node along with
 // encoding propagation.

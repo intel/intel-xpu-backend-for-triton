@@ -1,21 +1,20 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
-#include "mlir/IR/Builders.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-
-#include <numeric>
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::gpu;
+using namespace mlir::triton::gpu::intel;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
@@ -143,54 +142,65 @@ struct LoadOpConversion
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         LoadStoreConversionBase(axisAnalysisPass) {}
 
-  std::tuple<Value, Value, Value, Value, Value, Value, Value>
-  getValuesFromBlockPointerStruct(Value blockPointer,
+  /// Holds the values related to a block pointer
+  //  It includes the offset base for Y and X, base height and width, row and
+  //  column stride, and the base value.
+  struct BlockPointerValues {
+    Value base;
+    Value offsetBaseX;
+    Value offsetBaseY;
+    Value baseWidth;
+    Value baseHeight;
+    Value rowStride;
+    Value colStride;
+  };
+
+  // Unpack values as the params to 2DBlockLoad Payload:
+  // offsetBaseY, offsetBaseX, baseHeight, baseWidth, rowStride, colStride,
+  // base
+  // FIXME: Only supports a 2D matrix for now.
+  BlockPointerValues
+  getValuesFromBlockPointerStruct(Value blockPointerStruct,
                                   ConversionPatternRewriter &rewriter) const {
-    SmallVector<Value> elems =
-        unpackLLElements(blockPointer.getLoc(), blockPointer, rewriter);
-    // Only support 2D matrix for now.
+    const SmallVector<Value> &elems = unpackLLElements(
+        blockPointerStruct.getLoc(), blockPointerStruct, rewriter);
     assert(elems.size() == 7 &&
-           "unexpected number of values unpacked from pointer of tensor");
-    // Unpack values as the params to 2DBlockLoad Payload:
-    // offsetBaseY, offsetBaseX, baseHeight, baseWidth, rowStride, colStride,
-    // base
-    return {elems[0], elems[1], elems[2], elems[3],
-            elems[4], elems[5], elems[6]};
+           "unexpected number of values unpacked from a block pointer");
+    BlockPointerValues values{
+        .base = elems[6],
+        .offsetBaseX = elems[1],
+        .offsetBaseY = elems[0],
+        .baseWidth = elems[3],
+        .baseHeight = elems[2],
+        .rowStride = elems[4],
+        .colStride = elems[5],
+    };
+    return values;
   }
 
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
-    TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
-    MLIRContext *ctx = rewriter.getContext();
-
-    // original values
     Value ptr = op.getPtr();
     Value mask = op.getMask();
     Value other = op.getOther();
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
-    // Only lower loadOp with dpas layout encoding
-    Attribute layoutEncoding = tensorType.getEncoding();
-    if (!layoutEncoding)
-      return failure();
-    DotOperandEncodingAttr dotLayout =
-        dyn_cast<DotOperandEncodingAttr>(layoutEncoding);
-    if (!dotLayout)
-      return failure();
-    DpasEncodingAttr dpasLayout =
-        dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
-    if (!dpasLayout)
+    // Only lower loadOp with dpas layout encoding.
+    if (!hasDotDpasEncoding(tensorType))
       return failure();
 
-    unsigned opIdx = dotLayout.getOpIdx();
+    DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
+    auto dpasLayout = cast<DpasEncodingAttr>(dotLayout.getParent());
+
+    const unsigned opIdx = dotLayout.getOpIdx();
     Type eltTy = tensorType.getElementType();
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
-        dpasLayout.getDPASRepetitions(tensorShape, dotLayout.getOpIdx());
+        dpasLayout.getDPASRepetitions(tensorShape, opIdx);
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
     int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
@@ -206,17 +216,15 @@ struct LoadOpConversion
     SmallVector<int64_t> elemsPerInstr = {operandShape[0], operandShape[1]};
     int64_t elemsPerLane = product<int64_t>(elemsPerInstr) /
                            product<unsigned>(getThreadsPerWarp(dpasLayout));
+    TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
     Type unpackType = LLVM::getFixedVectorType(
         typeConverter->convertType(eltTy), elemsPerLane);
 
     // pack scalar to i16 for operand A, to i32 for operand B.
-    Type elemType = opIdx == 0 ? type::i16Ty(ctx) : type::i32Ty(ctx);
+    Type elemType = (opIdx == 0) ? i16_ty : i32_ty;
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
-    if (opIdx == 0) {
-      elemsPerLane = opsPerChannel == 4 ? elemsPerLane / 2 : elemsPerLane;
-    } else {
-      elemsPerLane = elemsPerLane / opsPerChannel;
-    }
+    elemsPerLane = (opIdx == 0) ? elemsPerLane / (opsPerChannel == 4 ? 2 : 1)
+                                : elemsPerLane / opsPerChannel;
     Type load2DGenXType = LLVM::getFixedVectorType(elemType, elemsPerLane);
 
     // Outer dim, A is the M, B is the N. Inner dim, the K
@@ -225,10 +233,14 @@ struct LoadOpConversion
     Value outerDimWarpId =
         urem(multiDimWarpId[opIdx], i32_val(outerDimWarpNum));
 
-    Value blockPtr = adaptor.getPtr();
-    Value offsetBaseX, offsetBaseY, width, height, rowStride, colStride, base;
-    std::tie(offsetBaseY, offsetBaseX, height, width, rowStride, colStride,
-             base) = getValuesFromBlockPointerStruct(blockPtr, rewriter);
+    BlockPointerValues blockPtrStruct =
+        getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
+    Value base = blockPtrStruct.base;
+    Value offsetBaseX = blockPtrStruct.offsetBaseX;
+    Value offsetBaseY = blockPtrStruct.offsetBaseY;
+    Value baseHeight = blockPtrStruct.baseHeight;
+    Value baseWidth = blockPtrStruct.baseWidth;
+    Value rowStride = blockPtrStruct.rowStride;
 
     // Load the operand.
     int64_t numRepOuter = numReps[opIdx];
@@ -247,48 +259,50 @@ struct LoadOpConversion
                 ? add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
                       i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]))
                 : i32_val(k * elemsPerInstr[0]);
+
         offsetX = add(offsetX, offsetBaseX);
         offsetY = add(offsetY, offsetBaseY);
-        width = rewriter.create<arith::TruncIOp>(loc, i32_ty, width);
-        height = rewriter.create<arith::TruncIOp>(loc, i32_ty, height);
-        rowStride = rewriter.create<arith::TruncIOp>(loc, i32_ty, rowStride);
+        baseWidth = trunc(i32_ty, baseWidth);
+        baseHeight = trunc(i32_ty, baseHeight);
+        rowStride = trunc(i32_ty, rowStride);
+
+        auto getIntAttr = [](IntegerType type, unsigned val) {
+          return mlir::IntegerAttr::get(type, val);
+        };
+
         auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
-            op.getLoc(), load2DGenXType, /*ptr*/ base, /*base_width*/
-            sub(mul(width, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
+            loc, load2DGenXType, /*ptr*/ base, /*base_width*/
+            sub(mul(baseWidth, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
                 i32_val(1)),
-            /*base_height*/ sub(height, i32_val(1)),
+            /*base_height*/ sub(baseHeight, i32_val(1)),
             /*base_pitch*/
             sub(mul(rowStride, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
                 i32_val(1)),
-            /*x*/ rewriter.create<arith::TruncIOp>(loc, i32_ty, offsetX),
-            /*y*/ rewriter.create<arith::TruncIOp>(loc, i32_ty, offsetY),
+            /*x*/ trunc(i32_ty, offsetX),
+            /*y*/ trunc(i32_ty, offsetY),
             /*elem_size_in_bits*/
-            mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
-                                   eltTy.getIntOrFloatBitWidth()),
+            getIntAttr(i32_ty, eltTy.getIntOrFloatBitWidth()),
             /*tile_width*/
-            mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
-                                   elemsPerInstr[1]),
+            getIntAttr(i32_ty, elemsPerInstr[1]),
             /*tile_height*/
-            mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
-                                   elemsPerInstr[0]),
+            getIntAttr(i32_ty, elemsPerInstr[0]),
             /*v_blocks*/
-            mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32), 1),
+            getIntAttr(i32_ty, 1),
             /*transpose*/
-            mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 1), 0),
+            getIntAttr(i1_ty, 0),
             /*vnni_transform*/
-            mlir::IntegerAttr::get(
-                mlir::IntegerType::get(ctx, 1),
-                (opIdx == 0 || eltTy.getIntOrFloatBitWidth() == 32)
-                    ? /*A vnni=false*/ 0
-                    : /*B vnni=true*/ 1));
-        Value loadVal = bitcast(load2dOp, unpackType);
-        rets.push_back(loadVal);
+            getIntAttr(i1_ty,
+                       (opIdx == 0 || eltTy.getIntOrFloatBitWidth() == 32)
+                           ? /*A vnni=false*/ 0
+                           : /*B vnni=true*/ 1));
+
+        rets.push_back(bitcast(load2dOp, unpackType));
       }
     }
 
     SmallVector<Value> loadedVals;
     for (Value &ret : rets) {
-      VectorType loadTy = cast<VectorType>(unpackType);
+      auto loadTy = cast<VectorType>(unpackType);
       for (size_t i = 0; i < loadTy.getNumElements(); ++i) {
         Value loaded = extract_element(ret, i32_val(i));
         loadedVals.push_back(loaded);
