@@ -48,6 +48,14 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
     pm.addPass(mlir::triton::gpu::intel::
                    createTritonIntelGPURemoveLayoutConversionsPass());
   });
+  m.def(
+      "add_rewrite_tensor_pointer",
+      [](mlir::PassManager &pm, mlir::triton::gpu::intel::DeviceArch arch) {
+        pm.addPass(mlir::triton::gpu::intel::
+                       createTritonIntelGPURewriteTensorPointerPass(arch));
+      },
+      py::arg("pm"),
+      py::arg("arch") = mlir::triton::gpu::intel::DeviceArch::UNKNOWN);
 }
 
 void init_triton_intel_passes_ttnvgpuir(py::module &&m) {
