@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -1325,48 +1326,31 @@ struct FpToFpOpConversion
     return truncated;
   }
 
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v, const RoundingMode rounding) {
-    MLIRContext *ctx = rewriter.getContext();
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-
-    // FIXME: Avoid using `llvm.genx.GenISA` calls (use arith dialect instead
-    // once it has been enhanced).
-    std::string funcName = "llvm.genx.GenISA.ftof.";
-
+  static LLVM::RoundingMode
+  convertTritonRoundingModeToLLVM(const RoundingMode rounding) {
+    LLVM::RoundingMode roundingMode;
     switch (rounding) {
     case RoundingMode::RTNE:
-      funcName.append("rte.f32.f16");
-      break;
+      return LLVM::RoundingMode::NearestTiesToEven;
     case RoundingMode::RTZ:
-      funcName.append("rtz.f32.f16");
-      break;
+      return LLVM::RoundingMode::TowardZero;
     default:
       llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
                       "conversion: "
                    << stringifyRoundingMode(rounding) << "\n";
       llvm_unreachable("");
     }
+  }
 
-    Operation *funcOp = moduleOp.lookupSymbol(funcName);
-    if (!funcOp) {
-      auto funcType =
-          LLVM::LLVMFunctionType::get(f16_ty, {f32_ty}, /*isVarArg*/ false);
-      ConversionPatternRewriter::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(moduleOp.getBody());
-      funcOp = rewriter.create<LLVM::LLVMFuncOp>(
-          loc, funcName, funcType, LLVM::Linkage::External,
-          /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC,
-          /*comdat=*/SymbolRefAttr{});
-    }
-
-    SmallVector<Value> operands{v};
-    auto callOp = call(cast<LLVM::LLVMFuncOp>(funcOp), operands);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-
-    return callOp.getResult();
+  static Value convertFp32ToFp16(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 const Value &v, const RoundingMode rounding) {
+    MLIRContext *ctx = rewriter.getContext();
+    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
+        loc, f16_ty, v,
+        LLVM::RoundingModeAttr::get(ctx,
+                                    convertTritonRoundingModeToLLVM(rounding)),
+        arith::getLLVMDefaultFPExceptionBehavior(*ctx));
   }
 
   std::pair<ConverterT, size_t>
