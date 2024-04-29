@@ -26,7 +26,7 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
-// Check if given value is divisible by the divisor.
+/// Check if given value is divisible by the divisor.
 bool isDivisible(Value value, unsigned divisor) {
   // Case 1: Value is defined by a constant operation
   if (auto constantOp = value.getDefiningOp<mlir::arith::ConstantOp>()) {
@@ -53,11 +53,12 @@ bool isDivisible(Value value, unsigned divisor) {
   return false;
 }
 
-// Check if the tensor pointer should be removed, ops with three conditions
-// should be kept:
-// 1. MakeTensorPtrOp should have DpasEncodingAttr
-// 2. Pointed Tensor pitch should be divisible by Qword bitwidth(for PVC)
-// 3. Pointed Tensor should be contiguous on memory
+/// Check if the tensor pointer should be removed. The tensor pointer should be
+/// removed if:
+///   - the device architecture is not PVC
+///   - the tensor pointer does not have DpasEncodingAttr
+///   - the tensor pointer pitch is not divisible by Qword bitwidth
+///   - the tensor pointer is not contiguous on memory
 bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   // Non-PVC device should always remove the tensor pointer
   if (deviceArch != ttgi::DeviceArch::PVC)
@@ -104,10 +105,11 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   return true;
 }
 
-/// An additional struct to record the meta information of operations
-/// with tensor pointers.
+/// The `RewritedInfo` struct is used to store information about a rewritten
+/// tensor pointer. It holds the base pointer, shape, strides, offsets, and
+/// encoding of the tensor. This information is used later in the code to handle
+/// the rewritten tensor pointer.
 struct RewritedInfo {
-public:
   RewritedInfo() = default;
 
   RewritedInfo(Value base, const SmallVector<Value> &shape,
@@ -670,7 +672,6 @@ public:
     // Rewrite `make_tensor_ptr` and `advance` and make a tensor of pointers
     // Rewriting functions return the next operation to visit, if there is no
     // next one, simply return `nullptr`
-    std::pair<Value, RewritedInfo> rewrited;
     if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
       return rewriteMakeTensorPtrOp(builder, makeTensorPtrOp, eraser);
     } else if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op)) {
@@ -722,34 +723,30 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    auto checkAndMarkToRemove = [this](Value val) {
-      if (!tt::isTensorPointerType(val.getType()))
-        return;
-      tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
-      if (shouldRemove(makeTensorPtrOp, this->deviceArch))
-        valueToRemove.insert(val);
+    auto markTensorPointerForRemoval = [this](Value val) {
+      if (tt::isTensorPointerType(val.getType())) {
+        tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
+        if (shouldRemove(makeTensorPtrOp, deviceArch))
+          valueToRemove.insert(val);
+      }
     };
 
-    mod.walk([&checkAndMarkToRemove, this](Operation *op) {
+    mod.walk([&](Operation *op) {
       if (llvm::isa<tt::MakeTensorPtrOp>(op)) {
-        checkAndMarkToRemove(op->getResult(0));
+        markTensorPointerForRemoval(op->getResult(0));
       } else if (llvm::isa<tt::AdvanceOp, tt::LoadOp>(op)) {
-        checkAndMarkToRemove(op->getOperand(0));
+        markTensorPointerForRemoval(op->getOperand(0));
       } else if (llvm::isa<tt::StoreOp>(op)) {
         // TODO: Block store should not be removed when 2d store is enabled
         auto src = op->getOperand(0);
         if (tt::isTensorPointerType(src.getType()))
           valueToRemove.insert(src);
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        SmallVector<Value> iterOperands = llvm::to_vector(forOp.getInitArgs());
-        for (unsigned i = 0, size = forOp.getInitArgs().size(); i < size; ++i) {
-          checkAndMarkToRemove(iterOperands[i]);
-        }
+        for (auto arg : forOp.getInitArgs())
+          markTensorPointerForRemoval(arg);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
-        SmallVector<Value> operands = yieldOp->getOperands();
-        for (unsigned i = 0, size = yieldOp.getNumOperands(); i < size; ++i) {
-          checkAndMarkToRemove(operands[i]);
-        }
+        for (auto operand : yieldOp.getOperands())
+          markTensorPointerForRemoval(operand);
       }
     });
 
