@@ -40,7 +40,7 @@ DPASEngineType getDPASType(DotOp op);
 // Infers the encoding of the source of op given the result encoding.
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
 
-// Retuns true is the operation is an expensive load or store operation.
+// Retuns true if the operation is an expensive load or store operation.
 bool isExpensiveLoadOrStore(Operation *op);
 
 // Returns true if the tensor type has a dot dpas encoding.
