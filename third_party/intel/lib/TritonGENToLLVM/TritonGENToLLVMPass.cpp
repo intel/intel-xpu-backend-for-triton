@@ -629,6 +629,61 @@ struct TritonGENBarrierLowering
   }
 };
 
+struct TritonGENSplitBarrier {
+protected:
+  template <typename OpType>
+  void replaceWithCall(OpType op, ConversionPatternRewriter &rewriter) const {
+    static_assert(
+        std::is_same<OpType, TritonGEN::SplitBarrierSignalOp>::value ||
+            std::is_same<OpType, TritonGEN::SplitBarrierWaitOp>::value,
+        "Unexpected OpType");
+
+    auto funcName = isa<TritonGEN::SplitBarrierSignalOp>(op)
+                        ? "_Z31intel_work_group_barrier_arriveii"
+                        : "_Z29intel_work_group_barrier_waitii";
+    auto retType = LLVM::LLVMVoidType::get(rewriter.getContext());
+    Location loc = op->getLoc();
+    auto memFence = LLVM::createConstantI32(loc, rewriter,
+                                            static_cast<int>(op.getMemFence()));
+    auto memScope = LLVM::createConstantI32(loc, rewriter,
+                                            static_cast<int>(op.getMemScope()));
+    SmallVector<Value> args{memFence, memScope};
+    SmallVector<Type> argTypes;
+    for (auto arg : args)
+      argTypes.push_back(arg.getType());
+
+    LLVM::CallOp callOp = createDeviceFunctionCall(
+        rewriter, funcName, retType, argTypes, args, true /*convergent*/);
+    rewriter.replaceOp(op, callOp);
+  }
+};
+
+struct TritonGENSplitBarrierSignalLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierSignalOp>,
+      public TritonGENSplitBarrier {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SplitBarrierSignalOp>::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierSignalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    TritonGENSplitBarrier::replaceWithCall(op, rewriter);
+    return success();
+  }
+};
+
+struct TritonGENSplitBarrierWaitLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierWaitOp>,
+      public TritonGENSplitBarrier {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SplitBarrierWaitOp>::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    TritonGENSplitBarrier::replaceWithCall(op, rewriter);
+    return success();
+  }
+};
+
 struct TritonGENNamedBarrierSignalLowering
     : public ConvertOpToLLVMPattern<TritonGEN::NamedBarrierSignalOp> {
   using ConvertOpToLLVMPattern<
@@ -856,18 +911,19 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  patterns.add<TritonGENThreadIdXLowering, TritonGENThreadIdYLowering,
-               TritonGENThreadIdZLowering, TritonGENBlockIdXLowering,
-               TritonGENBlockIdYLowering, TritonGENBlockIdZLowering,
-               TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
-               TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
-               TritonGENGridDimYLowering, TritonGENGridDimZLowering,
-               TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
-               TritonGENNamedBarrierSignalLowering,
-               TritonGENNamedBarrierWaitLowering, TritonSubGroupShuffleLowering,
-               TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-               TritonMatrix2DBlockStoreLowering,
-               TritonMatrix2DBlockPrefetchLowering>(converter);
+  patterns.add<
+      TritonGENThreadIdXLowering, TritonGENThreadIdYLowering,
+      TritonGENThreadIdZLowering, TritonGENBlockIdXLowering,
+      TritonGENBlockIdYLowering, TritonGENBlockIdZLowering,
+      TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
+      TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
+      TritonGENGridDimYLowering, TritonGENGridDimZLowering,
+      TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
+      TritonGENSplitBarrierSignalLowering, TritonGENSplitBarrierWaitLowering,
+      TritonGENNamedBarrierSignalLowering, TritonGENNamedBarrierWaitLowering,
+      TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
+      TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+      TritonMatrix2DBlockPrefetchLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
