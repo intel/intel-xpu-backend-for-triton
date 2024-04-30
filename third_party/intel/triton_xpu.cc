@@ -62,22 +62,6 @@ void init_triton_intel(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 
-  // cluster info
-  py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo")
-      .def(py::init<>())
-      .def_readwrite("clusterDimX",
-                     &mlir::triton::nvidia_gpu::ClusterInfo::clusterDimX)
-      .def_readwrite("clusterDimY",
-                     &mlir::triton::nvidia_gpu::ClusterInfo::clusterDimY)
-      .def_readwrite("clusterDimZ",
-                     &mlir::triton::nvidia_gpu::ClusterInfo::clusterDimZ)
-      .def("__repr__", [](mlir::triton::nvidia_gpu::ClusterInfo &self) {
-        std::ostringstream oss;
-        oss << "(" << self.clusterDimX << ", " << self.clusterDimY << ", "
-            << self.clusterDimZ << ")";
-        return oss.str();
-      });
-
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
