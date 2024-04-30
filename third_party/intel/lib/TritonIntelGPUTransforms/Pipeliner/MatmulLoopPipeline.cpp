@@ -6,17 +6,11 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "llvm/Support/raw_ostream.h"
-
-#define int_attr(num) builder.getI64IntegerAttr(num)
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
-
-// TODO: We can extra some helpers into common utilities once we add more
-// schedules.
 
 namespace {
 
@@ -47,45 +41,40 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
 
 static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val);
 
-static ttg::DotOperandEncodingAttr getEncodingFromUser(Operation *user,
-                                                       Value val) {
-  assert(user->getNumResults() == 1 && "Expecting a single result");
+static ttg::DotOperandEncodingAttr getEncodingFromUser(Operation *user) {
+  if (user->getNumResults() != 1)
+    return nullptr;
 
   OpResult res = user->getResult(0);
   auto tensorType = dyn_cast<RankedTensorType>(res.getType());
   if (!tensorType)
     return nullptr;
 
-  if (isa<ttg::SharedEncodingAttr>(tensorType.getEncoding())) {
+  if (isa<ttg::SharedEncodingAttr>(tensorType.getEncoding()))
     return allTransitiveUsesHaveDotEncoding(res);
-  } else if (auto convertLayout = dyn_cast<ttg::ConvertLayoutOp>(user)) {
-    auto tensorType =
-        dyn_cast<RankedTensorType>(convertLayout.getResult().getType());
-    if (!tensorType)
-      return nullptr;
-    return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
-  } else if (auto dotOp = dyn_cast<tt::DotOp>(user)) {
-    auto tensorType = dyn_cast<RankedTensorType>(val.getType());
+
+  Operation *op = dyn_cast<ttg::ConvertLayoutOp>(user)
+                      ? dyn_cast<ttg::ConvertLayoutOp>(user)
+                      : dyn_cast<tt::DotOp>(user);
+  if (op) {
+    auto tensorType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
     if (!tensorType)
       return nullptr;
     return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
   }
+
   return nullptr;
 }
 
-/// If all the transitive uses of the given value have are used by a convert to
-/// the same dot operand encoding, return the encoding. Otherwise return
-/// nullptr.
+/// If all the transitive uses of the given value are used by a convert to the
+/// same dot operand encoding, return the encoding. Otherwise return nullptr.
 static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
   ttg::DotOperandEncodingAttr attr{nullptr};
   for (Operation *user : val.getUsers()) {
-    if (user->getNumResults() != 1)
+    ttg::DotOperandEncodingAttr dotAttr = getEncodingFromUser(user);
+    if (!dotAttr || (attr != nullptr && attr != dotAttr))
       return nullptr;
-
-    ttg::DotOperandEncodingAttr tempAttr = getEncodingFromUser(user, val);
-    if (!tempAttr || (attr != nullptr && attr != tempAttr))
-      return nullptr;
-    attr = tempAttr;
+    attr = dotAttr;
   }
   return attr;
 }
@@ -236,21 +225,9 @@ createSchedule(scf::ForOp forOp, int numStages) {
   SmallVector<Operation *> distanceOneUsers;
   for (Operation *op : prefetchAndDeps) {
     for (Value operand : op->getOperands()) {
-#if 1
       Operation *defOp = getDefOp(operand, op, true);
       if (defOp)
         distanceOneUsers.push_back(defOp);
-#else
-      if (auto arg = operand.dyn_cast<BlockArgument>()) {
-        if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-          auto yieldOp = op->getBlock()->getTerminator();
-          Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
-          Operation *defOp = v.getDefiningOp();
-          if (defOp)
-            distanceOneUsers.push_back(defOp);
-        }
-      }
-#endif
     }
   }
 

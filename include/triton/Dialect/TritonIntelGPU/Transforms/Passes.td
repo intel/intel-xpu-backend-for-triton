@@ -105,7 +105,7 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
   let summary = "Pipeline loops";
 
   let description = [{
-    Apply software pipelinining to loops containing expensive `tt.dot` operations.
+    Apply software pipelinining to loops containing `tt.dot` operations.
     The pass supports prefetching `tt.dot` operands. The `num-stages` argument controls
     the prefetching and distance (i.e. the number of iterations to prefetch in advance).
   }];
@@ -119,7 +119,7 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
 
   let options = [
     Option<"numStages", "num-stages",
-           "int32_t", /*default*/"2",
+           "int32_t", /*default*/"3",
            "number of pipeline stages">,
     Option<"deviceArch", "device-architecture",
             "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
