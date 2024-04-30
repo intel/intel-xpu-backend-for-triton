@@ -27,13 +27,13 @@ std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass(
 
 std::unique_ptr<Pass> createTritonIntelGPUDistributeToWarpsPass();
 
+std::unique_ptr<Pass> createTritonIntelGPUPipelinePass(
+    int numStages = 2, intel::DeviceArch arch = intel::DeviceArch::UNKNOWN);
+
 std::unique_ptr<Pass> createTritonIntelGPURemoveLayoutConversionsPass();
 
 std::unique_ptr<Pass> createTritonIntelGPURewriteTensorPointerPass(
     intel::DeviceArch arch = intel::DeviceArch::UNKNOWN);
-
-std::unique_ptr<Pass> createTritonIntelGPUPipelinePass(
-    int numStages = 2, intel::DeviceArch arch = intel::DeviceArch::UNKNOWN);
 
 std::unique_ptr<Pass> createPrefetchBlockPass();
 
