@@ -1,6 +1,5 @@
 add_triton_library(TritonIntelGPUToLLVM
     AllocateSharedMemory.cpp
-    ClusterOpsToLLVM.cpp
     ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandDPAS.cpp
     ConvertLayoutOpToLLVM.cpp
