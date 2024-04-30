@@ -140,7 +140,7 @@ class XPUBackend(BaseBackend):
             pm.run(mod)
             metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
             return mod
-        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.threads_per_warp, opt.num_ctas, device_arch)
+        passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
@@ -151,10 +151,10 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         if opt.optimize_epilogue:
             passes.ttgpuir.add_optimize_epilogue(pm)
-        passes.ttgpuir.add_optimize_dot_operands(pm)
+        passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
-        passes.ttgpuir.add_optimize_dot_operands(pm)
+        passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)

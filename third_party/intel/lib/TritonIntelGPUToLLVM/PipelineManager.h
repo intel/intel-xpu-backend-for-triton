@@ -198,7 +198,6 @@ public:
 
       intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
                                                 benefit);
-      intel::populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
       intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,
