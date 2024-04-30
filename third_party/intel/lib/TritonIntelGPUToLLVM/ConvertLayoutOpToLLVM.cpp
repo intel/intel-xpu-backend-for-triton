@@ -409,8 +409,7 @@ private:
     }
 
     // Cluster barrier
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
+    barrier();
 
     // Load from remote shared memory
     {
@@ -437,7 +436,8 @@ private:
         Value localOffset = linearize(rewriter, loc, localCoord, smemShape);
 
         Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, localOffset);
-        outVals.push_back(load_dsmem(ptr, remoteCTAId, llvmElemTy));
+        llvm_unreachable("Unhandled load_dsmem");
+        // outVals.push_back(load_dsmem(ptr, remoteCTAId, llvmElemTy));
       }
 
       Value result =
@@ -446,8 +446,7 @@ private:
     }
 
     // Cluster barrier
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
+    barrier();
 
     return success();
   }
