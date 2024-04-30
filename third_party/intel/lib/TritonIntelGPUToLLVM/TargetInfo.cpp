@@ -19,6 +19,12 @@ Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
   assert("TODO: implement ballot on XPU");
   return Value();
 }
+
+Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
+  // Clusters of thread blocks aren't supported.
+  return i32_val(0);
+}
+
 Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
                               Value ptr, Value val, Value pred) const {
   LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
