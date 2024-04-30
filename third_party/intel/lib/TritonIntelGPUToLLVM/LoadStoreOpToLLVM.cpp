@@ -227,7 +227,7 @@ struct LoadOpConversion
                               : elemsPerLane / opsPerChannel;
     Type load2DGenXType = LLVM::getFixedVectorType(elemType, elemsPerLane);
 
-    // Outer dim, A is the M, B is the N. Inner dim, the K
+    // Outer dim for A is the M, for B is the N. Inner dim for both is the K.
     int outerDimWarpNum = std::min<int>(
         warpsPerCTA[opIdx], ceil(tensorShape[opIdx], elemsPerInstr[opIdx]));
     Value outerDimWarpId =
