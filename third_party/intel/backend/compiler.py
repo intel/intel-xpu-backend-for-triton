@@ -131,8 +131,6 @@ class XPUBackend(BaseBackend):
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
-        # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        intel.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         intel.passes.ttgpuir.add_accelerate_matmul(pm, device_arch)
