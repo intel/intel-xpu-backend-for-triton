@@ -43,6 +43,8 @@ void init_triton_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_4("add_convert_to_ttgpuir",
                      createConvertTritonToTritonGPUPass, const std::string &,
                      int, int, int);
+  ADD_PASS_WRAPPER_1("add_convert_to_ttgpuir_warp",
+                     createConvertTritonToTritonGPUWarpPass, int);
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {

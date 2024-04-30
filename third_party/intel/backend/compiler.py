@@ -131,7 +131,9 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         if os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", ""):
             passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
-            passes.ttgpuir.add_prefetch_block(pm)
+            # guard prefetch generation by driver version
+            if metadata["target"].arch['driver_version'] <= "1.3.27642":
+                passes.ttgpuir.add_prefetch_block(pm)
             passes.ttgpuir.add_distribute_to_warps(pm)
             passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)
