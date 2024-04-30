@@ -369,89 +369,6 @@ private:
     }
   }
 
-  LogicalResult
-  lowerDistToDistWithDistSmem(triton::gpu::ConvertLayoutOp op,
-                              OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    auto typeConverter = getTypeConverter();
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
-    auto srcLayout = srcTy.getEncoding();
-    auto dstLayout = dstTy.getEncoding();
-    auto srcShapePerCTA = getShapePerCTA(srcTy);
-    auto srcCTAsPerCGA = triton::gpu::getCTAsPerCGA(srcLayout);
-    auto srcCTAOrder = triton::gpu::getCTAOrder(srcLayout);
-    unsigned rank = srcShapePerCTA.size();
-
-    auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-
-    Value smemBase =
-        LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
-    smemBase = bitcast(smemBase, elemPtrTy);
-    auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
-
-    // Store to local shared memory
-    {
-      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      auto inIndices = ::intel::emitIndices(loc, rewriter, srcLayout, srcTy,
-                                            /*withCTAOffset*/ false);
-
-      assert(inIndices.size() == inVals.size() &&
-             "Unexpected number of indices emitted");
-
-      for (unsigned i = 0; i < inIndices.size(); ++i) {
-        Value offset = linearize(rewriter, loc, inIndices[i], smemShape);
-        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
-        store(inVals[i], ptr);
-      }
-    }
-
-    // Cluster barrier
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
-
-    // Load from remote shared memory
-    {
-      SmallVector<Value> srcShapePerCTACache;
-      for (unsigned i = 0; i < rank; ++i)
-        srcShapePerCTACache.push_back(i32_val(srcShapePerCTA[i]));
-
-      SmallVector<Value> outVals;
-      auto outIndices = ::intel::emitIndices(loc, rewriter, dstLayout, dstTy,
-                                             /*withCTAOffset*/ true);
-
-      for (unsigned i = 0; i < outIndices.size(); ++i) {
-        auto coord = outIndices[i];
-        assert(coord.size() == rank && "Unexpected rank of index emitted");
-
-        SmallVector<Value> multiDimCTAId, localCoord;
-        for (unsigned d = 0; d < rank; ++d) {
-          multiDimCTAId.push_back(udiv(coord[d], srcShapePerCTACache[d]));
-          localCoord.push_back(urem(coord[d], srcShapePerCTACache[d]));
-        }
-
-        Value remoteCTAId =
-            linearize(rewriter, loc, multiDimCTAId, srcCTAsPerCGA, srcCTAOrder);
-        Value localOffset = linearize(rewriter, loc, localCoord, smemShape);
-
-        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, localOffset);
-        outVals.push_back(load_dsmem(ptr, remoteCTAId, llvmElemTy));
-      }
-
-      Value result =
-          packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
-      rewriter.replaceOp(op, result);
-    }
-
-    // Cluster barrier
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
-
-    return success();
-  }
-
   // blocked/dpas -> blocked/dpas.
   // Data padding in shared memory to avoid bank conflict.
   LogicalResult
@@ -465,8 +382,6 @@ private:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
-    if (shouldUseDistSmem(srcLayout, dstLayout))
-      return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
     Value smemBase =
         LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
