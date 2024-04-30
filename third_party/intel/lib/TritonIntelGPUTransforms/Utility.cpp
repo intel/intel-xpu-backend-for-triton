@@ -7,10 +7,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "triton/Analysis/Utility.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include <optional>
 
+using namespace mlir;
+namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir {
@@ -118,6 +123,31 @@ bool isExpensiveLoadOrStore(Operation *op) {
   }
 
   return false;
+}
+
+bool hasDotDpasEncoding(RankedTensorType tensorType) {
+  if (!tensorType.getEncoding())
+    return false;
+
+  auto dotLayout =
+      dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
+  if (!dotLayout)
+    return false;
+
+  return isa<ttgi::DpasEncodingAttr>(dotLayout.getParent());
+}
+
+std::optional<DotOperandEncodingAttr>
+getDotEncoding(RankedTensorType tensorType) {
+  if (!tensorType.getEncoding())
+    return std::nullopt;
+
+  auto dotLayout =
+      dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
+  if (!dotLayout)
+    return std::nullopt;
+
+  return dotLayout;
 }
 
 // Check if the convert will be a no-op in codegen.

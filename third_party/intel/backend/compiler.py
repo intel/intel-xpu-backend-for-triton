@@ -122,11 +122,6 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
-        cluster_info = intel.ClusterInfo()
-        if opt.cluster_dims is not None:
-            cluster_info.clusterDimX = opt.cluster_dims[0]
-            cluster_info.clusterDimY = opt.cluster_dims[1]
-            cluster_info.clusterDimZ = opt.cluster_dims[2]
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -145,8 +140,6 @@ class XPUBackend(BaseBackend):
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
-        # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        intel.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         intel.passes.ttgpuir.add_accelerate_matmul(pm, device_arch)
@@ -164,7 +157,6 @@ class XPUBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
-        metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
     @staticmethod
