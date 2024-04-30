@@ -177,7 +177,6 @@ jobs:
           python3 06-fused-attention.py
           python3 07-extern-functions.py
           python3 08-grouped-gemm.py
-          python3 09-experimental-block-pointer.py
           # Run block-pointer gemm tutorial
           TRITON_INTEL_ENABLE_BLOCK_PTR=1 \
           IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
@@ -186,7 +185,7 @@ jobs:
           UR_L0_IN_ORDER_BARRIER_BY_SIGNAL=0 \
           IGC_DisableLoopUnroll=1 \
           IGC_EnableVISANoSchedule=1 \
-          python3 09-intel-gemm-experimental-block-pointer.py
+          python3 09-experimental-block-pointer.py
 
       - name: Run CXX unittests
         run: |

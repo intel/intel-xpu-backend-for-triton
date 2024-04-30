@@ -10,6 +10,7 @@ import re
 import os
 import subprocess
 from pathlib import Path
+from packaging.version import Version
 
 
 def _path_to_binary(binary: str):
@@ -131,8 +132,8 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         if os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", ""):
             passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
-            # guard prefetch generation by driver version
-            if metadata["target"].arch['driver_version'] <= "1.3.27642":
+            # Prefetch instruction is not availble in older drivers.
+            if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
                 passes.ttgpuir.add_prefetch_block(pm)
             passes.ttgpuir.add_distribute_to_warps(pm)
             passes.ttgpuir.add_match_target_size(pm)
@@ -140,7 +141,6 @@ class XPUBackend(BaseBackend):
             passes.common.add_cse(pm)
             passes.common.add_symbol_dce(pm)
             pm.run(mod)
-            metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
             return mod
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         # optimize TTGIR
