@@ -58,15 +58,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       py::arg("arch") = mlir::triton::gpu::intel::DeviceArch::UNKNOWN);
 }
 
-void init_triton_intel_passes_ttnvgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_1("add_plan_cta", mlir::createTritonNvidiaGPUPlanCTAPass,
-                     mlir::triton::nvidia_gpu::ClusterInfo *);
-}
-
 void init_triton_intel(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
-  init_triton_intel_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
 
   // cluster info
   py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo")
