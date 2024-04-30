@@ -150,7 +150,7 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
     Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),
                              loadOp.getMask(), pred);
     loadOp.getMaskMutable().assign(mask);
-    return op;
+    return loadOp;
   }
 
   llvm_unreachable("don't know how to predicate this operation");
@@ -190,7 +190,7 @@ static void addDep(Operation *op, DenseSet<Operation *> &deps,
   }
 }
 
-// Add operations to the shedule with the given stage based on the filter
+// Add operations to the schedule with the given stage based on the filter
 // function.
 static void addOps(scf::ForOp forOp, int stage,
                    std::vector<std::pair<Operation *, unsigned>> &schedule,
