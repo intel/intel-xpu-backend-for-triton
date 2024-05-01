@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-prefetch-block | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-prefetch-block=inject-split-barriers=true | FileCheck %s
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], warpsPerCTA = [8, 4], order = [1, 0]}>
 
