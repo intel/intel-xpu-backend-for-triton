@@ -289,11 +289,13 @@ void distributeScfForOp(scf::ForOp op) {
 
 } // namespace
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+#define GEN_PASS_DEF_TRITONINTELGPUDISTRIBUTETOWARPS
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+} // namespace mlir
 
 class TritonIntelGPUDistributeToWarpsPass
-    : public TritonIntelGPUDistributeToWarpsBase<
+    : public impl::TritonIntelGPUDistributeToWarpsBase<
           TritonIntelGPUDistributeToWarpsPass> {
 public:
   void runOnOperation() override {
@@ -338,7 +340,3 @@ public:
     }
   }
 };
-
-std::unique_ptr<Pass> mlir::createTritonIntelGPUDistributeToWarps() {
-  return std::make_unique<TritonIntelGPUDistributeToWarpsPass>();
-}

@@ -235,17 +235,18 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+#define GEN_PASS_DEF_TRITONINTELGPUACCELERATEMATMUL
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+} // namespace mlir
 
 class TritonIntelGPUAccelerateMatmulPass
-    : public TritonIntelGPUAccelerateMatmulBase<
+    : public impl::TritonIntelGPUAccelerateMatmulBase<
           TritonIntelGPUAccelerateMatmulPass> {
 public:
-  TritonIntelGPUAccelerateMatmulPass() = default;
-  TritonIntelGPUAccelerateMatmulPass(ttgi::DeviceArch arch) {
-    this->deviceArch = arch;
-  }
+  using impl::TritonIntelGPUAccelerateMatmulBase<
+      TritonIntelGPUAccelerateMatmulPass>::TritonIntelGPUAccelerateMatmulBase;
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -260,14 +261,3 @@ public:
     decomposeMixedModeDotOp(m);
   }
 };
-
-std::unique_ptr<Pass> mlir::createTritonIntelGPUAccelerateMatmul() {
-  return createTritonIntelGPUAccelerateMatmul(
-      // Use default specified for the option class.
-      TritonIntelGPUAccelerateMatmulOptions{});
-}
-
-std::unique_ptr<Pass> mlir::createTritonIntelGPUAccelerateMatmul(
-    const TritonIntelGPUAccelerateMatmulOptions &Opt) {
-  return std::make_unique<TritonIntelGPUAccelerateMatmulPass>(Opt.deviceArch);
-}
