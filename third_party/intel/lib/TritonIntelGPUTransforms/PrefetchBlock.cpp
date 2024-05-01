@@ -362,14 +362,18 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
     prefetchPtrs.push_back(currPtr);
   }
 
-  // FIXME: add a named barrier to increase performance.
-  Location loc = loop.getLoc();
-  b.setInsertionPoint(loop);
-  b.create<tt::TritonGEN::SplitBarrierSignalOp>(
-      loc, tt::TritonGEN::MemFence::NONE, tt::TritonGEN::MemScope::WORK_GROUP);
-  b.setInsertionPoint(loop->getNextNode());
-  b.create<tt::TritonGEN::SplitBarrierWaitOp>(
-      loc, tt::TritonGEN::MemFence::NONE, tt::TritonGEN::MemScope::WORK_GROUP);
+  // FIXME: try to use a named barrier to increase performance.
+  if (injectSplitBarriers) {
+    Location loc = loop.getLoc();
+    b.setInsertionPoint(loop);
+    b.create<tt::TritonGEN::SplitBarrierSignalOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.setInsertionPoint(loop->getNextNode());
+    b.create<tt::TritonGEN::SplitBarrierWaitOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+  }
 }
 
 void PrefetchBlockPass::injectPrefetchOpsInBody(
@@ -411,13 +415,17 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
     i++;
   }
 
-  // FIXME: add a named barrier to increase performance
-  Location loc = loop.getLoc();
-  b.setInsertionPoint(yield);
-  b.create<tt::TritonGEN::SplitBarrierSignalOp>(
-      loc, tt::TritonGEN::MemFence::NONE, tt::TritonGEN::MemScope::WORK_GROUP);
-  b.create<tt::TritonGEN::SplitBarrierWaitOp>(
-      loc, tt::TritonGEN::MemFence::NONE, tt::TritonGEN::MemScope::WORK_GROUP);
+  // FIXME: try to use a named barrier to increase performance.
+  if (injectSplitBarriers) {
+    Location loc = loop.getLoc();
+    b.setInsertionPoint(yield);
+    b.create<tt::TritonGEN::SplitBarrierWaitOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.create<tt::TritonGEN::SplitBarrierSignalOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+  }
 
   yield.getResultsMutable().append(advances);
 }

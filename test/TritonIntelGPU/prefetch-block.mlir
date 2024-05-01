@@ -23,7 +23,7 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
 
     // COM: Prefetch the 2nd operand of the `tl.dot` operation 3 iterations in advance
     // CHECK:      [[B0:%.*]] = tt.make_tensor_ptr %arg1, {{.*}} : <tensor<32x256xf16, #blocked2>>
-    // CHECK-NEXT: triton_intel_gpu.prefetch %16 {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
+    // CHECK-NEXT: triton_intel_gpu.prefetch [[B0]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
     // CHECK:      [[B1:%.*]] = tt.advance [[B0]], {{.*}} : <tensor<32x256xf16, #blocked2>>
     // CHECK-NEXT: triton_intel_gpu.prefetch [[B1]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
     // CHECK:      [[B2:%.*]] = tt.advance [[B1]], {{.*}} : <tensor<32x256xf16, #blocked2>>
@@ -43,8 +43,8 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     // CHECK:        triton_intel_gpu.prefetch [[B5]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
     // CHECK-NEXT:   tt.advance [[B5]], {{.*}} : <tensor<32x256xf16, #blocked2>>
     // CHECK-DAG:    tt.advance [[B6]], {{.*}} : <tensor<32x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>>
-    // CHECK:        triton_gen.split_barrier_signal {mem_fence = None, mem_scope = WorkGroup}
-    // CHECK-NEXT:   triton_gen.split_barrier_wait {mem_fence = None, mem_scope = WorkGroup}    
+    // CHECK:        triton_gen.split_barrier_wait {mem_fence = None, mem_scope = WorkGroup}
+    // CHECK-NEXT:   triton_gen.split_barrier_signal {mem_fence = None, mem_scope = WorkGroup}
     // CHECK-NEXT:   scf.yield {{.*}}
     // CHECK-NEXT: }
     // CHECK-NEXT: triton_gen.split_barrier_wait {mem_fence = None, mem_scope = WorkGroup}
