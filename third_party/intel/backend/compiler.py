@@ -109,7 +109,7 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        if not os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", ""):
+        if os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "0":
             passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
@@ -125,7 +125,7 @@ class XPUBackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        if os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", ""):
+        if os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1":
             passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
             # Prefetch instruction is not availble in older drivers.
             if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
