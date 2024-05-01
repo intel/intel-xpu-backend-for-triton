@@ -31,7 +31,8 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     // CHECK-NEXT: [[B3:%.*]] = tt.advance [[B2]], {{.*}} : <tensor<32x256xf16, #blocked2>>
     // CHECK-NEXT: [[B4:%.*]] = tt.make_tensor_ptr %arg1, {{.*}} : <tensor<32x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>>
 
-    // CHECK:      scf.for [[IV:%.*]] = [[CST_ZERO]] to [[CST_4096]] step [[CST_32]]
+    // CHECK:      triton_gen.split_barrier_signal {mem_fence = None, mem_scope = WorkGroup}
+    // CHECK-NEXT: scf.for [[IV:%.*]] = [[CST_ZERO]] to [[CST_4096]] step [[CST_32]]
     // CHECK-SAME:      iter_args([[CST:%.*]] = {{.*}}, [[A6:%.*]] = [[A4]], [[B6:%.*]] = [[B4]], [[A5:%.*]] = [[A3]], [[B5:%.*]] = [[B3]])
     // CHECK-NEXT:   [[LD_A:%.*]] = tt.load [[A6]]
     // CHECK-NEXT:   [[LD_B:%.*]] = tt.load [[B6]]
@@ -42,8 +43,11 @@ module attributes {"triton_gpu.compute-capability" = 90 : i32, "triton_gpu.num-c
     // CHECK:        triton_intel_gpu.prefetch [[B5]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
     // CHECK-NEXT:   tt.advance [[B5]], {{.*}} : <tensor<32x256xf16, #blocked2>>
     // CHECK-DAG:    tt.advance [[B6]], {{.*}} : <tensor<32x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>>
-    // CHECK:        scf.yield
-    // CHECK:      }
+    // CHECK:        triton_gen.split_barrier_signal {mem_fence = None, mem_scope = WorkGroup}
+    // CHECK-NEXT:   triton_gen.split_barrier_wait {mem_fence = None, mem_scope = WorkGroup}    
+    // CHECK-NEXT:   scf.yield {{.*}}
+    // CHECK-NEXT: }
+    // CHECK-NEXT: triton_gen.split_barrier_wait {mem_fence = None, mem_scope = WorkGroup}
 
     %c64_i32 = arith.constant 64 : i32
     %c16_i32 = arith.constant 16 : i32
