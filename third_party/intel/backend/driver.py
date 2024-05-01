@@ -133,7 +133,6 @@ def make_launcher(constants, signature, ids):
     # generate glue code
     src = f"""
     #include <cstddef>
-    #include <cstdlib>
     #include <string>
     #include <iostream>
     #include <iomanip>
@@ -303,8 +302,6 @@ def make_launcher(constants, signature, ids):
       int shared_memory = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "shared"));
       int threads_per_warp = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "threads_per_warp"));
 
-      auto triton_intel_enable_block_ptr = getenv("TRITON_INTEL_ENABLE_BLOCK_PTR");
-      if (triton_intel_enable_block_ptr != nullptr) {{threads_per_warp = 16;}}
       // extract cluster dims
       PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
       if (!PyTuple_Check(kernel_metadata)) {{
