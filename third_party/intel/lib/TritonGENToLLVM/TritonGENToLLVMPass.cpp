@@ -28,6 +28,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/ErrorHandling.h"
+#include <type_traits>
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
@@ -632,15 +633,13 @@ struct TritonGENBarrierLowering
 struct TritonGENSplitBarrier {
 protected:
   template <typename OpType>
-  void replaceWithCall(OpType op, ConversionPatternRewriter &rewriter) const {
+  void replaceWithCall(OpType op, StringRef funcName,
+                       ConversionPatternRewriter &rewriter) const {
     static_assert(
         std::is_same<OpType, TritonGEN::SplitBarrierSignalOp>::value ||
             std::is_same<OpType, TritonGEN::SplitBarrierWaitOp>::value,
         "Unexpected OpType");
 
-    auto funcName = isa<TritonGEN::SplitBarrierSignalOp>(op)
-                        ? "_Z31intel_work_group_barrier_arriveii"
-                        : "_Z29intel_work_group_barrier_waitii";
     auto retType = LLVM::LLVMVoidType::get(rewriter.getContext());
     Location loc = op->getLoc();
     auto memFence = LLVM::createConstantI32(loc, rewriter,
@@ -666,7 +665,8 @@ struct TritonGENSplitBarrierSignalLowering
   LogicalResult
   matchAndRewrite(TritonGEN::SplitBarrierSignalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    TritonGENSplitBarrier::replaceWithCall(op, rewriter);
+    TritonGENSplitBarrier::replaceWithCall(
+        op, "_Z31intel_work_group_barrier_arriveii", rewriter);
     return success();
   }
 };
@@ -679,7 +679,8 @@ struct TritonGENSplitBarrierWaitLowering
   LogicalResult
   matchAndRewrite(TritonGEN::SplitBarrierWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    TritonGENSplitBarrier::replaceWithCall(op, rewriter);
+    TritonGENSplitBarrier::replaceWithCall(
+        op, "_Z29intel_work_group_barrier_waitii", rewriter);
     return success();
   }
 };
