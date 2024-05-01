@@ -101,6 +101,36 @@ def TritonIntelGPUDistributeToWarps
                            "mlir::gpu::GPUDialect"];
 }
 
+def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
+  let summary = "Pipeline loops";
+
+  let description = [{
+    Apply software pipelinining to loops containing `tt.dot` operations.
+    The pass supports prefetching `tt.dot` operands. The `num-stages` argument controls
+    the prefetching and distance (i.e. the number of iterations to prefetch in advance).
+  }];
+
+  let constructor = "mlir::triton::gpu::intel::createTritonIntelGPUPipelinePass()";
+
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
+
+  let options = [
+    Option<"numStages", "num-stages",
+           "int32_t", /*default*/"3",
+           "number of pipeline stages">,
+    Option<"deviceArch", "device-architecture",
+            "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
+            "device architecture",
+            "llvm::cl::values("
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::UNKNOWN, \"UNKNOWN\", \"Unknown arch\"), "
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::ATS, \"ATS\", \"ATS arch\"), "
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::PVC, \"PVC\", \"PVC arch\"))">
+  ];
+}
+
 def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-conversions", "mlir::ModuleOp"> {
   let summary = "remove superfluous layout conversions";
 

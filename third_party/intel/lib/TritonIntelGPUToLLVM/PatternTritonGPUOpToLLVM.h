@@ -19,6 +19,7 @@ void populateBarrierOpToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                           const TargetInfo &targetInfo,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
 
@@ -41,8 +42,8 @@ void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 
 void populateLoadStoreOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit);
+    const TargetInfo &targetInfo, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
 
 void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,

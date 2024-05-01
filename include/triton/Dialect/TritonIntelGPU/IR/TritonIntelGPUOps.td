@@ -108,7 +108,7 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
           : !tt.ptr<tensor<256x32xf16>
       ```
   }];
-  let arguments = (ins AnyTypeOf<[TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
+  let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
                        TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
   let results = (outs);
   let assemblyFormat = [{
