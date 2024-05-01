@@ -183,13 +183,13 @@ public:
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
     } else {
-      intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns,
-                                                   benefit);
+      intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
+                                                   patterns, benefit);
       intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateElementwiseOpToLLVMPatterns(
           typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-      intel::populateLoadStoreOpToLLVMPatterns(typeConverter, patterns,
-                                               axisInfoAnalysis, benefit);
+      intel::populateLoadStoreOpToLLVMPatterns(
+          typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
       intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                             benefit);
       intel::populateScanOpToLLVMPatterns(typeConverter, patterns, targetInfo,
