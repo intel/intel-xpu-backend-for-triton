@@ -339,7 +339,6 @@ public:
   }
 };
 
-std::unique_ptr<Pass>
-mlir::triton::gpu::intel::createTritonIntelGPUDistributeToWarpsPass() {
+std::unique_ptr<Pass> mlir::createTritonIntelGPUDistributeToWarps() {
   return std::make_unique<TritonIntelGPUDistributeToWarpsPass>();
 }

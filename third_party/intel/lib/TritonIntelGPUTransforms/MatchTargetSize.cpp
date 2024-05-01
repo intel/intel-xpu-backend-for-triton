@@ -702,7 +702,6 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
 
 } // namespace
 
-std::unique_ptr<mlir::Pass>
-mlir::triton::gpu::intel::createMatchTargetSizePass() {
+std::unique_ptr<mlir::Pass> mlir::createTritonIntelGPUMatchTargetSize() {
   return std::make_unique<MatchTargetSizePass>();
 }

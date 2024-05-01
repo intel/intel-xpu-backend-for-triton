@@ -410,7 +410,6 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
 
 } // namespace
 
-std::unique_ptr<mlir::Pass>
-mlir::triton::gpu::intel::createPrefetchBlockPass() {
+std::unique_ptr<mlir::Pass> mlir::createTritonIntelGPUPrefetchBlock() {
   return std::make_unique<PrefetchBlockPass>();
 }

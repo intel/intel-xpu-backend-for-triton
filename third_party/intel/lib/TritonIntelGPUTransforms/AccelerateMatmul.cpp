@@ -261,8 +261,13 @@ public:
   }
 };
 
-std::unique_ptr<Pass>
-mlir::triton::gpu::intel::createTritonIntelGPUAccelerateMatmulPass(
-    ttgi::DeviceArch arch) {
-  return std::make_unique<TritonIntelGPUAccelerateMatmulPass>(arch);
+std::unique_ptr<Pass> mlir::createTritonIntelGPUAccelerateMatmul() {
+  return createTritonIntelGPUAccelerateMatmul(
+      // Use default specified for the option class.
+      TritonIntelGPUAccelerateMatmulOptions{});
+}
+
+std::unique_ptr<Pass> mlir::createTritonIntelGPUAccelerateMatmul(
+    const TritonIntelGPUAccelerateMatmulOptions &Opt) {
+  return std::make_unique<TritonIntelGPUAccelerateMatmulPass>(Opt.deviceArch);
 }

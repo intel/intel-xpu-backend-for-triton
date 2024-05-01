@@ -7,8 +7,10 @@
 using namespace mlir;
 namespace ttgi = mlir::triton::gpu::intel;
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+#define GEN_PASS_DEF_TRITONINTELGPUPIPELINE
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+} // namespace mlir
 
 // Return true if the preconditions for pipelining the loop are met.
 static bool preCondition(scf::ForOp forOp) {
@@ -50,12 +52,10 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
 
 namespace {
 struct IntelGPUPipelinePass
-    : public TritonIntelGPUPipelineBase<IntelGPUPipelinePass> {
-  IntelGPUPipelinePass() = default;
-  IntelGPUPipelinePass(int numStages, ttgi::DeviceArch arch) {
-    numStages = numStages;
-    deviceArch = arch;
-  }
+    : public impl::TritonIntelGPUPipelineBase<IntelGPUPipelinePass> {
+
+  using impl::TritonIntelGPUPipelineBase<
+      IntelGPUPipelinePass>::TritonIntelGPUPipelineBase;
 
   void runOnOperation() override {
     if (deviceArch != ttgi::DeviceArch::PVC)
@@ -72,8 +72,3 @@ struct IntelGPUPipelinePass
   }
 };
 } // anonymous namespace
-
-std::unique_ptr<Pass>
-ttgi::createTritonIntelGPUPipelinePass(int numStages, ttgi::DeviceArch arch) {
-  return std::make_unique<IntelGPUPipelinePass>(numStages, arch);
-}

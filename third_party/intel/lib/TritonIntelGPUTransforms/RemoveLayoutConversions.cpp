@@ -26,9 +26,11 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+using namespace mlir;
+namespace tt = mlir::triton;
+namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
-namespace mlir::triton::gpu {
 namespace {
 
 // -----------------------------------------------------------------------------
@@ -39,21 +41,21 @@ namespace {
 class ConvertDotConvert : public RewritePattern {
 public:
   ConvertDotConvert(MLIRContext *context)
-      : RewritePattern(ConvertLayoutOp::getOperationName(), 1, context) {}
+      : RewritePattern(ttg::ConvertLayoutOp::getOperationName(), 1, context) {}
 
   LogicalResult matchAndRewrite(Operation *op,
                                 PatternRewriter &rewriter) const override {
-    auto dstOp = cast<ConvertLayoutOp>(op);
-    auto dotOp = dstOp.getSrc().getDefiningOp<DotOp>();
+    auto dstOp = cast<ttg::ConvertLayoutOp>(op);
+    auto dotOp = dstOp.getSrc().getDefiningOp<tt::DotOp>();
     if (!dotOp)
       return failure();
     if (std::distance(dstOp->user_begin(), dstOp->user_end()) != 1 ||
         std::distance(dotOp->user_begin(), dotOp->user_end()) != 1)
       return failure();
-    auto cvtOp = dotOp.getOperand(2).getDefiningOp<ConvertLayoutOp>();
+    auto cvtOp = dotOp.getOperand(2).getDefiningOp<ttg::ConvertLayoutOp>();
     if (!cvtOp)
       return failure();
-    if (!cvtOp.getSrc().getDefiningOp<LoadOp>())
+    if (!cvtOp.getSrc().getDefiningOp<tt::LoadOp>())
       return failure();
     RankedTensorType dstTy = dstOp.getType();
     RankedTensorType srcTy = cvtOp.getSrc().getType();
@@ -63,12 +65,12 @@ public:
     auto _0f = rewriter.create<arith::ConstantOp>(
         op->getLoc(), dstTy.getElementType(),
         rewriter.getZeroAttr(dstTy.getElementType()));
-    auto _0 = rewriter.create<SplatOp>(op->getLoc(), dotOp.getType(), _0f);
-    auto newDot = rewriter.create<DotOp>(
+    auto _0 = rewriter.create<tt::SplatOp>(op->getLoc(), dotOp.getType(), _0f);
+    auto newDot = rewriter.create<tt::DotOp>(
         op->getLoc(), dotOp.getType(), dotOp.getOperand(0), dotOp.getOperand(1),
         _0, dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
-    auto newCvt = rewriter.create<ConvertLayoutOp>(op->getLoc(), dstTy,
-                                                   newDot.getResult());
+    auto newCvt = rewriter.create<ttg::ConvertLayoutOp>(op->getLoc(), dstTy,
+                                                        newDot.getResult());
     rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getSrc());
     return success();
   }
@@ -100,7 +102,7 @@ public:
     LayoutInfo() {}
     llvm::SmallSetVector<Attribute, 8> encodings;
   };
-  LayoutPropagation(FuncOp F) : funcOp(F) {}
+  LayoutPropagation(tt::FuncOp F) : funcOp(F) {}
   // Find the anchor ops and set their layout in the data structure.
   void initAnchorLayout();
   // Recursively Propagate the layout to all the users of the anchor ops until
@@ -127,7 +129,7 @@ public:
   void rewriteYieldOp(scf::YieldOp yieldOp);
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
-  void rewriteAssertOp(AssertOp assertOp);
+  void rewriteAssertOp(tt::AssertOp assertOp);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   // Map the original value to the rewritten one.
@@ -144,12 +146,12 @@ private:
   // map of the values rewrite based on their encoding.
   DenseMap<std::pair<Value, Attribute>, Value> rewriteMapping;
   SetVector<Operation *> opToDelete;
-  FuncOp funcOp;
+  tt::FuncOp funcOp;
 };
 
 class LayoutRematerialization {
 public:
-  LayoutRematerialization(FuncOp F) : funcOp(F) {}
+  LayoutRematerialization(tt::FuncOp F) : funcOp(F) {}
   // Map the original value to the remat'ed one.
   void addRematValue(Value old, Attribute encoding, Value newV);
   bool hasRematValue(Value value, Attribute encoding) {
@@ -163,13 +165,13 @@ public:
   }
   void cleanup();
   void backwardRematerialization();
-  void backwardRematerialization(ConvertLayoutOp convertOp);
+  void backwardRematerialization(ttg::ConvertLayoutOp convertOp);
   void hoistConvertOnTopOfExtOrBroadcast();
-  void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
+  void hoistConvertOnTopOfExtOrBroadcast(ttg::ConvertLayoutOp convertOp);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                    ConvertLayoutOp convertOp, IRMapping &mapping);
+                    ttg::ConvertLayoutOp convertOp, IRMapping &mapping);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                    ConvertLayoutOp convertOp);
+                    ttg::ConvertLayoutOp convertOp);
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
@@ -181,7 +183,7 @@ private:
   DenseMap<std::pair<Value, Attribute>, Value> rematMapping;
   // DenseMap<std::pair<Operation*, Attribute>, Operation*>
   SetVector<Operation *> opToDelete;
-  FuncOp funcOp;
+  tt::FuncOp funcOp;
 };
 
 void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
@@ -203,21 +205,23 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
   SmallVector<Value> queue = {op->getResult(0)};
   SetVector<Operation *> forwardSlice;
   llvm::SmallDenseSet<Value> seen;
-  bool isMMAV3 = encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() == 3;
+  bool isMMAV3 =
+      encoding.cast<ttg::NvidiaMmaEncodingAttr>().getVersionMajor() == 3;
   while (!queue.empty()) {
     Value currentValue = queue.back();
     queue.pop_back();
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
-      if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
+      if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
         Attribute dstEncoding = convertOp.getType().getEncoding();
-        if (auto mmaLayout = dstEncoding.dyn_cast<NvidiaMmaEncodingAttr>())
+        if (auto mmaLayout = dstEncoding.dyn_cast<ttg::NvidiaMmaEncodingAttr>())
           return (mmaLayout.getVersionMajor() > 1) ? true
                                                    : mmaLayout == encoding;
-        if (dstEncoding.isa<DotOperandEncodingAttr>())
-          return encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() > 1;
+        if (dstEncoding.isa<ttg::DotOperandEncodingAttr>())
+          return encoding.cast<ttg::NvidiaMmaEncodingAttr>().getVersionMajor() >
+                 1;
       }
-      if (isMMAV3 && isa<LocalAllocOp>(op))
+      if (isMMAV3 && isa<ttg::LocalAllocOp>(op))
         return true;
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
@@ -239,9 +243,9 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
-  if (isa<LoadOp, StoreOp>(op))
+  if (isa<tt::LoadOp, tt::StoreOp>(op))
     return ttgi::isExpensiveLoadOrStore(op);
-  if (isa<DotOp, AtomicRMWOp, AtomicCASOp>(op))
+  if (isa<tt::DotOp, tt::AtomicRMWOp, tt::AtomicCASOp>(op))
     return true;
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
@@ -249,7 +253,7 @@ bool isLayoutAnchor(Operation *op) {
   // backwards pass to fix it up if necessary.  (If we didn't do this, then
   // anything following the reshape won't be covered by the forward pass at
   // all.)
-  if (auto reshape = dyn_cast<ReshapeOp>(op))
+  if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
     return reshape.getAllowReorder();
 
   return false;
@@ -262,7 +266,7 @@ void LayoutPropagation::initAnchorLayout() {
       // back to mma further down to avoid generating reduction with MMA
       // layout that may have lower performance.
       // This can be improved with more aggressive backward propagation.
-      if (tensorType.getEncoding().isa<NvidiaMmaEncodingAttr>() &&
+      if (tensorType.getEncoding().isa<ttg::NvidiaMmaEncodingAttr>() &&
           v.getDefiningOp() &&
           !hasConvertToMMATransisitiveUse(v.getDefiningOp(),
                                           tensorType.getEncoding())) {
@@ -297,7 +301,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
       std::optional<Attribute> dstEncoding;
-      if (isa<ConvertLayoutOp>(op)) {
+      if (isa<ttg::ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
         // encoding.
         dstEncoding = encoding;
@@ -357,8 +361,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp>(user)) {
+        isa<tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
+            tt::JoinOp, tt::SplitOp, ttg::ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -398,10 +402,11 @@ void LayoutPropagation::resolveConflicts() {
     // TODO: add a proper heuristic.
     Attribute encoding = *info.encodings.begin();
     bool isLoadOrStore =
-        op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
+        op &&
+        isa<tt::LoadOp, tt::StoreOp, tt::AtomicRMWOp, tt::AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
-      if ((isLoadOrStore && e.isa<BlockedEncodingAttr>()) ||
-          (!isLoadOrStore && e.isa<NvidiaMmaEncodingAttr>())) {
+      if ((isLoadOrStore && e.isa<ttg::BlockedEncodingAttr>()) ||
+          (!isLoadOrStore && e.isa<ttg::NvidiaMmaEncodingAttr>())) {
         encoding = e;
         break;
       }
@@ -431,7 +436,8 @@ void LayoutPropagation::rewrite() { rewriteRegion(funcOp->getRegion(0)); }
 bool reduceToScalar(Operation *op) {
   // For reductions returning a scalar we can change the src encoding without
   // affecting the output.
-  return isa<ReduceOp>(op) && !op->getResultTypes()[0].isa<RankedTensorType>();
+  return isa<tt::ReduceOp>(op) &&
+         !op->getResultTypes()[0].isa<RankedTensorType>();
 }
 
 void LayoutPropagation::rewriteRegion(Region &region) {
@@ -466,7 +472,7 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         rewriteConditionOp(conditionOp);
       } else if (reduceToScalar(&op)) {
         rewriteReduceToScalar(&op);
-      } else if (auto assertOp = dyn_cast<AssertOp>(&op)) {
+      } else if (auto assertOp = dyn_cast<tt::AssertOp>(&op)) {
         rewriteAssertOp(assertOp);
       } else {
         // If we don't need to rewrite the op we still need to remap the
@@ -517,8 +523,8 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
     rewriter.setInsertionPointAfterValue(rewrittenValue);
     auto tmpType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
-    Value converted = rewriter.create<ConvertLayoutOp>(value.getLoc(), tmpType,
-                                                       rewrittenValue);
+    Value converted = rewriter.create<ttg::ConvertLayoutOp>(
+        value.getLoc(), tmpType, rewrittenValue);
     // TODO: we could cache the conversion.
     return converted;
   }
@@ -729,7 +735,7 @@ void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
   }
 }
 
-void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
+void LayoutPropagation::rewriteAssertOp(tt::AssertOp assertOp) {
   Attribute srcEncoding;
   // Only need to deal with the first operand which is the condition tensor.
   Value operand = assertOp->getOperand(0);
@@ -751,7 +757,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     return rewriteIfOp(ifOp);
   OpBuilder rewriter(op);
   Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
-  if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
+  if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     Attribute srcEncoding = convertOp.getSrc().getType().getEncoding();
     auto it = layouts.find(convertOp.getSrc());
     if (it != layouts.end())
@@ -760,7 +766,8 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     auto tensorType = op->getResult(0).getType().cast<RankedTensorType>();
     auto newType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
-    auto cvt = rewriter.create<ConvertLayoutOp>(op->getLoc(), newType, src);
+    auto cvt =
+        rewriter.create<ttg::ConvertLayoutOp>(op->getLoc(), newType, src);
     map(op->getResult(0), cvt.getResult());
     return cvt.getOperation();
   }
@@ -769,15 +776,15 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     auto tensorType = op->getResult(0).getType().cast<RankedTensorType>();
     auto newType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
-    auto cvt = rewriter.create<ConvertLayoutOp>(op->getLoc(), newType,
-                                                newOp->getResult(0));
+    auto cvt = rewriter.create<ttg::ConvertLayoutOp>(op->getLoc(), newType,
+                                                     newOp->getResult(0));
     map(op->getResult(0), cvt.getResult());
     return cvt.getOperation();
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-          ConvertLayoutOp>(op)) {
+      isa<tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
+          tt::JoinOp, tt::SplitOp, ttg::ConvertLayoutOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults())) {
@@ -794,9 +801,9 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
 }
 
 bool canBeRemat(Operation *op) {
-  if (isa<LoadOp, StoreOp>(op))
+  if (isa<tt::LoadOp, tt::StoreOp>(op))
     return !ttgi::isExpensiveLoadOrStore(op);
-  if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
+  if (isa<tt::AtomicRMWOp, tt::AtomicCASOp, tt::DotOp>(op))
     return false;
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
@@ -831,7 +838,7 @@ void LayoutRematerialization::updateRematMapping(
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
-                                           ConvertLayoutOp convertOp,
+                                           ttg::ConvertLayoutOp convertOp,
                                            IRMapping &mapping) {
   SetVector<Operation *> opsToRewrite;
   for (Value v : slice) {
@@ -946,7 +953,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       auto newType = RankedTensorType::get(tensorType.getShape(),
                                            tensorType.getElementType(),
                                            layout[op->getResult(0)]);
-      auto cvt = builder.create<ConvertLayoutOp>(op->getLoc(), newType,
+      auto cvt = builder.create<ttg::ConvertLayoutOp>(op->getLoc(), newType,
                                                  newOp->getResult(0));
       mapping.map(op->getResult(0), cvt.getResult());
       addRematValue(op->getResult(0), layout[op->getResult(0)],
@@ -960,8 +967,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
         continue;
       Type oldType = old.getType();
       Type newType;
-      if (isTensorPointerType(oldType)) {
-        auto ptrType = oldType.cast<PointerType>();
+      if (tt::isTensorPointerType(oldType)) {
+        auto ptrType = oldType.cast<tt::PointerType>();
         auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
         newType = triton::PointerType::get(
             RankedTensorType::get(tensorType.getShape(),
@@ -992,7 +999,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
-                                           ConvertLayoutOp convertOp) {
+                                           ttg::ConvertLayoutOp convertOp) {
   IRMapping mapping;
   rewriteSlice(slice, layout, convertOp, mapping);
 }
@@ -1018,26 +1025,26 @@ LogicalResult getRematerializableSlice(
 
 void LayoutRematerialization::backwardRematerialization() {
   // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
+  SmallVector<ttg::ConvertLayoutOp> convertOps;
   funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
+      [&](ttg::ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  for (ttg::ConvertLayoutOp convertOp : convertOps) {
     backwardRematerialization(convertOp);
   }
 }
 
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
   // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
+  SmallVector<ttg::ConvertLayoutOp> convertOps;
   funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
+      [&](ttg::ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  for (ttg::ConvertLayoutOp convertOp : convertOps) {
     hoistConvertOnTopOfExtOrBroadcast(convertOp);
   }
 }
 
 void LayoutRematerialization::backwardRematerialization(
-    ConvertLayoutOp convertOp) {
+    ttg::ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
   Value oldV = convertOp->getOperand(0);
   LDBG("check backward remat with source " << oldV << " encoding "
@@ -1076,16 +1083,16 @@ void LayoutRematerialization::backwardRematerialization(
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
-    ConvertLayoutOp convertOp) {
+    ttg::ConvertLayoutOp convertOp) {
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-  if (targetType.getEncoding().isa<DotOperandEncodingAttr>())
+  if (targetType.getEncoding().isa<ttg::DotOperandEncodingAttr>())
     return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {
-    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
-               ExpandDimsOp>(op);
+    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, tt::BroadcastOp,
+               tt::ExpandDimsOp>(op);
   };
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
@@ -1140,7 +1147,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
       extOrBroadcatOp->getOperand(0).getType().cast<RankedTensorType>();
   auto newType = RankedTensorType::get(
       tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
-  auto newConvertOp = builder.create<ConvertLayoutOp>(
+  auto newConvertOp = builder.create<ttg::ConvertLayoutOp>(
       convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
   Operation *newExtOrBroadcast = builder.clone(*extOrBroadcatOp);
   newExtOrBroadcast->setOperand(0, newConvertOp.getResult());
@@ -1158,7 +1165,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
 }
 
 void backwardRematerialization(ModuleOp module) {
-  module.walk([](FuncOp funcOp) {
+  module.walk([](tt::FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
     layoutRemat.backwardRematerialization();
     layoutRemat.cleanup();
@@ -1166,13 +1173,15 @@ void backwardRematerialization(ModuleOp module) {
 }
 
 void hoistConvert(ModuleOp module) {
-  SmallVector<ConvertLayoutOp> convertOps;
-  module.walk([](FuncOp funcOp) {
+  SmallVector<ttg::ConvertLayoutOp> convertOps;
+  module.walk([](tt::FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
     layoutRemat.hoistConvertOnTopOfExtOrBroadcast();
     layoutRemat.cleanup();
   });
 }
+
+} // namespace
 
 class TritonIntelGPURemoveLayoutConversionsPass
     : public TritonIntelGPURemoveLayoutConversionsBase<
@@ -1185,7 +1194,7 @@ public:
     ModuleOp m = getOperation();
 
     // 1. Propagate layout forward starting from "anchor" ops.
-    m.walk([](FuncOp funcOp) {
+    m.walk([](tt::FuncOp funcOp) {
       LayoutPropagation layoutPropagation(funcOp);
       layoutPropagation.initAnchorLayout();
       layoutPropagation.propagateLayout();
@@ -1199,7 +1208,7 @@ public:
     });
 
     RewritePatternSet cleanUpPatterns(context);
-    ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
+    ttg::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
     if (applyPatternsAndFoldGreedily(m, std::move(cleanUpPatterns)).failed()) {
       signalPassFailure();
     }
@@ -1242,7 +1251,7 @@ public:
     populateForOpDeadArgumentElimination(cleanUpPatterns2);
     scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
     scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
+    ttg::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
     if (applyPatternsAndFoldGreedily(m, std::move(cleanUpPatterns2)).failed()) {
       signalPassFailure();
     }
@@ -1253,10 +1262,7 @@ public:
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> intel::createTritonIntelGPURemoveLayoutConversionsPass() {
+std::unique_ptr<mlir::Pass>
+mlir::createTritonIntelGPURemoveLayoutConversions() {
   return std::make_unique<TritonIntelGPURemoveLayoutConversionsPass>();
 }
-
-} // namespace mlir::triton::gpu

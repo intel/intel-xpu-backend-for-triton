@@ -769,7 +769,14 @@ public:
   }
 };
 
-std::unique_ptr<Pass>
-ttgi::createTritonIntelGPURewriteTensorPointerPass(ttgi::DeviceArch arch) {
-  return std::make_unique<TritonIntelGPURewriteTensorPointerPass>(arch);
+std::unique_ptr<Pass> mlir::createTritonIntelGPURewriteTensorPointer() {
+  return createTritonIntelGPURewriteTensorPointer(
+      // Use default from option class.
+      TritonIntelGPURewriteTensorPointerOptions{});
+}
+
+std::unique_ptr<Pass> mlir::createTritonIntelGPURewriteTensorPointer(
+    const TritonIntelGPURewriteTensorPointerOptions &Opt) {
+  return std::make_unique<TritonIntelGPURewriteTensorPointerPass>(
+      Opt.deviceArch);
 }
