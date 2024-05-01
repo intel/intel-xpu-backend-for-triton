@@ -126,12 +126,12 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         if os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1":
-            passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
+            intel.passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
             # Prefetch instruction is not availble in older drivers.
             if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
-                passes.ttgpuir.add_prefetch_block(pm)
-            passes.ttgpuir.add_distribute_to_warps(pm)
-            passes.ttgpuir.add_match_target_size(pm)
+                intel.passes.ttgpuir.add_prefetch_block(pm)
+            intel.passes.ttgpuir.add_distribute_to_warps(pm)
+            intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
             passes.common.add_symbol_dce(pm)
