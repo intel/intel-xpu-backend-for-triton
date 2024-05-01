@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TargetInfo.h"
 #include "Utility.h"
 
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -155,8 +156,11 @@ public:
 struct ConvertLayoutOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::ConvertLayoutOp>::ConvertTritonGPUOpToLLVMPattern;
+  ConvertLayoutOpConversion(const LLVMTypeConverter &typeConverter,
+                            const intel::TargetInfo &targetInfo,
+                            PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -465,12 +469,15 @@ private:
 
     return success();
   }
+
+private:
+  const intel::TargetInfo &targetInfo;
 };
 } // namespace
 
 void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
 }
