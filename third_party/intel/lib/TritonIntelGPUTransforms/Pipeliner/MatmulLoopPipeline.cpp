@@ -6,6 +6,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -14,10 +15,11 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
+/// Represent a candidate load operation which is used by operations that
+/// convert its layout to a 'dot' layout (e.g. triton_gpu.convert_layout).
 struct LoadDotOperand {
   LoadDotOperand(tt::LoadOp load,
-                 ttg::DotOperandEncodingAttr dotOperandEncoding,
-                 bool needTrans = false)
+                 ttg::DotOperandEncodingAttr dotOperandEncoding)
       : load(load), dotOperandEncoding(dotOperandEncoding) {}
   tt::LoadOp load;
   ttg::DotOperandEncodingAttr dotOperandEncoding;
@@ -41,7 +43,7 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
 
 static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val);
 
-static ttg::DotOperandEncodingAttr getEncodingFromUser(Operation *user) {
+static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
   if (user->getNumResults() != 1)
     return nullptr;
 
@@ -71,7 +73,7 @@ static ttg::DotOperandEncodingAttr getEncodingFromUser(Operation *user) {
 static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
   ttg::DotOperandEncodingAttr attr{nullptr};
   for (Operation *user : val.getUsers()) {
-    ttg::DotOperandEncodingAttr dotAttr = getEncodingFromUser(user);
+    ttg::DotOperandEncodingAttr dotAttr = getDotEncodingFromUser(user);
     if (!dotAttr || (attr != nullptr && attr != dotAttr))
       return nullptr;
     attr = dotAttr;
