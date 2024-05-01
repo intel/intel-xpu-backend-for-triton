@@ -23,20 +23,22 @@ enum class DeviceArch {
 };
 
 std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass(
-    triton::gpu::intel::DeviceArch arch =
-        triton::gpu::intel::DeviceArch::UNKNOWN);
+    intel::DeviceArch arch = intel::DeviceArch::UNKNOWN);
 
 std::unique_ptr<Pass> createTritonIntelGPUDistributeToWarpsPass();
+
+std::unique_ptr<Pass> createTritonIntelGPUPipelinePass(
+    int numStages = 3, intel::DeviceArch arch = intel::DeviceArch::UNKNOWN);
 
 std::unique_ptr<Pass> createTritonIntelGPURemoveLayoutConversionsPass();
 
 std::unique_ptr<Pass> createTritonIntelGPURewriteTensorPointerPass(
-    triton::gpu::intel::DeviceArch arch =
-        triton::gpu::intel::DeviceArch::UNKNOWN);
+    intel::DeviceArch arch = intel::DeviceArch::UNKNOWN);
 
 std::unique_ptr<Pass> createPrefetchBlockPass();
 
 std::unique_ptr<Pass> createMatchTargetSizePass();
+
 } // namespace intel
 } // namespace gpu
 } // namespace triton
