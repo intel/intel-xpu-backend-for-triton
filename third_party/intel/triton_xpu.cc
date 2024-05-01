@@ -67,7 +67,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
     pm.addPass(mlir::triton::gpu::intel::createPrefetchBlockPass());
   });
   m.def("add_distribute_to_warps", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::gpu::intel::createTritonIntelGPUDistributeToWarpsPass());
+    pm.addPass(
+        mlir::triton::gpu::intel::createTritonIntelGPUDistributeToWarpsPass());
   });
   m.def("add_match_target_size", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::gpu::intel::createMatchTargetSizePass());
