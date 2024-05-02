@@ -25,13 +25,12 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   return i32_val(0);
 }
 
-Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                              Value ptr, Value val, Value pred) const {
+void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                             Value ptr, Value val, Value pred) const {
   LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
     store(val, ptr);
     return ArrayRef<Value>();
   });
-  return Value();
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,

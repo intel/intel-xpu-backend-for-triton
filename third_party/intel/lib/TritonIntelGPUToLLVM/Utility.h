@@ -80,9 +80,6 @@ Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
   return createPredicatedBlock(rewriter, loc, cond, {}, thenOpsFn);
 }
 
-Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred);
-
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                  Type elemTy, Value pred);
 
