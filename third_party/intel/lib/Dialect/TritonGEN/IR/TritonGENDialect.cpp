@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
@@ -27,20 +27,20 @@ using namespace mlir::triton::TritonGEN;
 void TritonGENDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
-#include "triton/Dialect/TritonGEN/IR/TritonGENOps.cpp.inc"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENOps.cpp.inc"
       >();
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "triton/Dialect/TritonGEN/IR/TritonGENOpsAttrDefs.cpp.inc"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENOpsAttrDefs.cpp.inc"
       >();
 
   // Support unknown operations because not all GEN operations are registered.
   allowUnknownOperations();
 }
 
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.cpp.inc"
-#include "triton/Dialect/TritonGEN/IR/TritonGENOpsEnums.cpp.inc"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.cpp.inc"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENOpsEnums.cpp.inc"
 #define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonGEN/IR/TritonGENOpsAttrDefs.cpp.inc"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENOpsAttrDefs.cpp.inc"
 #define GET_OP_CLASSES
-#include "triton/Dialect/TritonGEN/IR/TritonGENOps.cpp.inc"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENOps.cpp.inc"

@@ -15,7 +15,7 @@
 
 include "mlir/IR/PatternBase.td"
 include "mlir/Dialect/GPU/IR/GPUOps.td"
-include "triton/Dialect/TritonGEN/IR/TritonGENOps.td"
+include "intel/include/Dialect/TritonGEN/IR/TritonGENOps.td"
 
 def : Pat<(GPU_BarrierOp), (TritonGEN_BarrierOp)>;
 

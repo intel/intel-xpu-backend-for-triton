@@ -3,7 +3,9 @@
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"

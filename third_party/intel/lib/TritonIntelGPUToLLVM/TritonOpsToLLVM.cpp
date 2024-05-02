@@ -1,8 +1,9 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "triton/Analysis/Utility.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;

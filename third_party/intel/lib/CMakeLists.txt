@@ -1,3 +1,4 @@
+add_subdirectory(Dialect)
 add_subdirectory(GPUToTritonGEN)
 add_subdirectory(TritonGENToLLVM)
 add_subdirectory(TritonIntelGPUToLLVM)
