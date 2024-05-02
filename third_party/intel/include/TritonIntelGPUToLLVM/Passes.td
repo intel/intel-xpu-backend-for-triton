@@ -3,17 +3,17 @@
 
 include "mlir/Pass/PassBase.td"
 
-def IntelDecomposeUnsupportedConversions 
+def IntelDecomposeUnsupportedConversions
     : Pass<"intel-decompose-unsupported-conversions", "mlir::ModuleOp"> {
   let summary = "Decompose conversions that are not supported by TritonGPU -> LLVM";
 }
 
-def IntelAllocateSharedMemory 
+def IntelAllocateSharedMemory
     : Pass<"intel-allocate-shared-memory", "mlir::ModuleOp"> {
   let summary = "Add metadata for shared memory allocation";
 }
 
-def ConvertTritonIntelGPUToLLVM 
+def ConvertTritonIntelGPUToLLVM
     : Pass<"convert-triton-intel-gpu-to-llvm", "mlir::ModuleOp"> {
   let summary = "Convert TritonIntelGPU to LLVM";
   let dependentDialects = ["mlir::arith::ArithDialect",
