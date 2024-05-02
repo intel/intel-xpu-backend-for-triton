@@ -62,8 +62,9 @@ struct PrintOpConversion
         SmallVector<SmallVector<Value>> indices;
         if (auto rankedTy =
                 op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
-          indices = ::intel::emitIndices(loc, rewriter, rankedTy.getEncoding(),
-                                         rankedTy, true);
+          indices =
+              ::intel::emitIndices(loc, rewriter, targetInfo,
+                                   rankedTy.getEncoding(), rankedTy, true);
           for (int64_t dim : rankedTy.getShape()) {
             if (dim > 0) {
               dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));

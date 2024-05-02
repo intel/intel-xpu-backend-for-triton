@@ -9,9 +9,12 @@ using namespace mlir::triton;
 struct MakeRangeOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp> {
 
-  MakeRangeOpConversion(LLVMTypeConverter &converter, PatternBenefit benefit)
+  MakeRangeOpConversion(LLVMTypeConverter &converter,
+                        const TargetInfoBase &targetInfo,
+                        PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(converter,
-                                                             benefit) {}
+                                                             benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
@@ -24,7 +27,8 @@ struct MakeRangeOpConversion
     auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs = ::intel::emitIndices(loc, rewriter, layout, ty, true);
+    auto idxs =
+        ::intel::emitIndices(loc, rewriter, targetInfo, layout, ty, true);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.
@@ -39,12 +43,15 @@ struct MakeRangeOpConversion
     rewriter.replaceOp(op, result);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
 
 void mlir::triton::intel::populateMakeRangeOpToLLVMPattern(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
+    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<MakeRangeOpConversion>(typeConverter, targetInfo, benefit);
 }

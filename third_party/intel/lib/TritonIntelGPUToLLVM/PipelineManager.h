@@ -199,15 +199,17 @@ public:
       intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
                                                 benefit);
       intel::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
-                                               benefit);
+                                               targetInfo, benefit);
       intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                           benefit);
       populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                     benefit);
-      intel::populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
+      intel::populateMemoryOpToLLVMPattern(typeConverter, targetInfo, patterns,
+                                           benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
-      intel::populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
+      intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
+                                              patterns, benefit);
     }
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
