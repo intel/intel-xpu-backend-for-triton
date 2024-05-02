@@ -46,6 +46,7 @@
 #include "mlir/Pass/Pass.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -363,6 +364,19 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
 
     prefetchPtrs.push_back(currPtr);
   }
+
+  // FIXME: try to use a named barrier to increase performance.
+  if (injectSplitBarriers) {
+    Location loc = loop.getLoc();
+    b.setInsertionPoint(loop);
+    b.create<tt::TritonGEN::SplitBarrierSignalOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.setInsertionPoint(loop->getNextNode());
+    b.create<tt::TritonGEN::SplitBarrierWaitOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+  }
 }
 
 void PrefetchBlockPass::injectPrefetchOpsInBody(
@@ -392,10 +406,6 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
   unsigned i = 0;
   for (tt::LoadOp load : loopLoads.at(loop)) {
     const LoadInfo &loadInfo = loadToLoadInfo.at(load);
-    // FIXME: add a named barrier to increase performance
-    // if (i == 0)
-    //   b.create<gpu::BarrierOp>(loc);
-
     b.setInsertionPoint(loadInfo.getAdvance());
     Location loc = loadInfo.getAdvance().getLoc();
 
@@ -406,6 +416,18 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
                                 args[num + 1 + i], loadInfo.getOffsets());
     advances.push_back(advance);
     i++;
+  }
+
+  // FIXME: try to use a named barrier to increase performance.
+  if (injectSplitBarriers) {
+    Location loc = loop.getLoc();
+    b.setInsertionPoint(yield);
+    b.create<tt::TritonGEN::SplitBarrierWaitOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.create<tt::TritonGEN::SplitBarrierSignalOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
   }
 
   yield.getResultsMutable().append(advances);

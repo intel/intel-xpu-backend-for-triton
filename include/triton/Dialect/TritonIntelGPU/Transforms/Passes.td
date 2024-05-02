@@ -208,13 +208,17 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::TritonGEN::TritonGENDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::gpu::GPUDialect"];
   let options = [
-    Option<"numAdvancePrefetches", "num-advance-prefetched",
+    Option<"numAdvancePrefetches", "num-advance-prefetches",
            "int32_t", /*default*/"3",
            "Number of loop iteration to prefetch in advance of the loop">,
+    Option<"injectSplitBarriers", "inject-split-barriers",
+           "bool", /*default*/"true",
+           "Whether to inject split barriers in (and around) the loop">,
   ];
 }
 
