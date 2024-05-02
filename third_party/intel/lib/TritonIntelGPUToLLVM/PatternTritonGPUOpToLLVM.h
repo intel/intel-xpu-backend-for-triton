@@ -38,6 +38,7 @@ void populateElementwiseOpToLLVMPatterns(
 
 void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
+                                       const TargetInfoBase &targetInfo,
                                        PatternBenefit benefit);
 
 void populateLoadStoreOpToLLVMPatterns(
@@ -68,6 +69,7 @@ void populatePrintOpToLLVMPattern(
     PatternBenefit benefit);
 
 void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   const TargetInfoBase &targetInfo,
                                    RewritePatternSet &patterns,
                                    PatternBenefit benefit);
 
@@ -76,6 +78,7 @@ void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                         PatternBenefit benefit);
 
 void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                      const TargetInfoBase &targetInfo,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit);
 

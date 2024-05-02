@@ -138,11 +138,6 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
-
-static Value getClusterCTAId(RewriterBase &rewriter, Location loc) {
-  // Clusters of thread blocks aren't supported.
-  return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-}
 } // namespace intel
 } // namespace LLVM
 
@@ -274,6 +269,7 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
 
 static SmallVector<Value> emitCTAOffsetForLayout(Location loc,
                                                  RewriterBase &rewriter,
+                                                 const TargetInfoBase &target,
                                                  Attribute layout,
                                                  ArrayRef<int64_t> shape) {
   unsigned rank = shape.size();
@@ -284,7 +280,7 @@ static SmallVector<Value> emitCTAOffsetForLayout(Location loc,
       triton::gpu::getShapePerCTA(CTASplitNum, shape);
 
   // Delinearize clusterCTAId
-  Value clusterCTAId = LLVM::intel::getClusterCTAId(rewriter, loc);
+  Value clusterCTAId = target.getClusterCTAId(rewriter, loc);
   SmallVector<Value> multiDimClusterCTAId =
       delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
 
@@ -303,7 +299,8 @@ static SmallVector<Value> emitCTAOffsetForLayout(Location loc,
 }
 
 static SmallVector<Value>
-emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
+emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
+                       const TargetInfoBase &target, Attribute layout,
                        RankedTensorType type, bool withCTAOffset) {
   auto shape = type.getShape();
 
@@ -327,8 +324,8 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
     auto parentShape = sliceLayout.paddedShape(type.getShape());
     RankedTensorType parentTy =
         RankedTensorType::get(parentShape, type.getElementType(), parentLayout);
-    result = ::intel::emitBaseIndexForLayout(loc, rewriter, parentLayout,
-                                             parentTy, withCTAOffset);
+    result = ::intel::emitBaseIndexForLayout(
+        loc, rewriter, target, parentLayout, parentTy, withCTAOffset);
     result.erase(result.begin() + sliceLayout.getDim());
     // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
     return result;
@@ -337,7 +334,7 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter, Attribute layout,
   }
   if (withCTAOffset) {
     auto CTAOffset =
-        ::intel::emitCTAOffsetForLayout(loc, rewriter, layout, shape);
+        ::intel::emitCTAOffsetForLayout(loc, rewriter, target, layout, shape);
     assert(CTAOffset.size() == result.size() && "Rank mismatch");
     for (unsigned k = 0; k < result.size(); ++k)
       result[k] = add(result[k], CTAOffset[k]);
@@ -358,11 +355,11 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
 static SmallVector<SmallVector<Value>>
-emitIndices(Location loc, RewriterBase &rewriter, Attribute layout,
-            RankedTensorType type, bool withCTAOffset) {
+emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+            Attribute layout, RankedTensorType type, bool withCTAOffset) {
   // step 1, delinearize threadId to get the base index
-  auto multiDimBase = ::intel::emitBaseIndexForLayout(loc, rewriter, layout,
-                                                      type, withCTAOffset);
+  auto multiDimBase = ::intel::emitBaseIndexForLayout(
+      loc, rewriter, target, layout, type, withCTAOffset);
   // step 2, get offset of each element
   auto offset = intel::emitOffsetForLayout(layout, type);
   // step 3, add offset to base, and reorder the sequence
@@ -382,9 +379,9 @@ emitIndices(Location loc, RewriterBase &rewriter, Attribute layout,
 /* ---------------- */
 /* ---------------- */
 DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
-    Location loc, unsigned inVec, RankedTensorType srcTy,
-    triton::gpu::SharedEncodingAttr resSharedLayout, Type resElemTy,
-    SharedMemoryObject smemObj, RewriterBase &rewriter,
+    Location loc, const TargetInfoBase &target, unsigned inVec,
+    RankedTensorType srcTy, triton::gpu::SharedEncodingAttr resSharedLayout,
+    Type resElemTy, SharedMemoryObject smemObj, RewriterBase &rewriter,
     SmallVectorImpl<Value> &offsetVals, SmallVectorImpl<Value> &srcStrides) {
   // This utility computes the pointers for accessing the provided swizzled
   // shared memory layout `resSharedLayout`. More specifically, it computes,
@@ -432,7 +429,7 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
              "Swizzling would generate out of bounds memory accesses");
   // Tensor indices held by the current thread, as LLVM values
   auto srcIndices =
-      ::intel::emitIndices(loc, rewriter, srcEncoding, srcTy, false);
+      ::intel::emitIndices(loc, rewriter, target, srcEncoding, srcTy, false);
   // Swizzling with leading offsets (e.g. Hopper GMMA)
   unsigned swizzlingByteWidth = 0;
   if (resSharedLayout.getHasLeadingOffset()) {
@@ -547,7 +544,8 @@ DenseMap<unsigned, Value> static getSwizzledSharedPtrs(
 static SmallVector<Value>
 loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
                         Value src, SharedMemoryObject smemObj, Type elemTy,
-                        Location loc, ConversionPatternRewriter &rewriter) {
+                        Location loc, ConversionPatternRewriter &rewriter,
+                        const TargetInfoBase &target) {
   auto dstTy = dst.getType().cast<RankedTensorType>();
   auto dstShape = dstTy.getShape();
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
@@ -582,7 +580,7 @@ loadSharedToDistributed(Value dst, ArrayRef<SmallVector<Value>> dstIndices,
   assert(outElems == dstIndices.size());
 
   DenseMap<unsigned, Value> sharedPtrs = ::intel::getSwizzledSharedPtrs(
-      loc, outVec, dstTy, srcSharedLayout, elemTy, smemObj, rewriter,
+      loc, target, outVec, dstTy, srcSharedLayout, elemTy, smemObj, rewriter,
       offsetVals, smemObj.strides);
   assert(outElems % minVec == 0 && "Unexpected number of elements");
   unsigned numVecs = outElems / minVec;
@@ -606,7 +604,8 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                                      ArrayRef<SmallVector<Value>> srcIndices,
                                      Value dst, Value smemBase, Type elemTy,
                                      Location loc,
-                                     ConversionPatternRewriter &rewriter) {
+                                     ConversionPatternRewriter &rewriter,
+                                     const TargetInfoBase &target) {
   auto srcTy = src.getType().cast<RankedTensorType>();
   auto srcShape = srcTy.getShape();
   auto rank = srcShape.size();
@@ -643,9 +642,9 @@ static void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   SmallVector<Value, 3> offsetVals(rank, i32_val(0));
   SharedMemoryObject smemObj(smemBase, elemTy, srcStrides, offsetVals);
 
-  DenseMap<unsigned, Value> sharedPtrs =
-      ::intel::getSwizzledSharedPtrs(loc, inVec, srcTy, dstSharedLayout, elemTy,
-                                     smemObj, rewriter, offsetVals, srcStrides);
+  DenseMap<unsigned, Value> sharedPtrs = ::intel::getSwizzledSharedPtrs(
+      loc, target, inVec, srcTy, dstSharedLayout, elemTy, smemObj, rewriter,
+      offsetVals, srcStrides);
   LDBG("storeDistributedToShared: numElems = " << numElems << " minVec = "
                                                << minVec << " " << wordTy);
   for (unsigned i = 0; i < numElems; ++i) {

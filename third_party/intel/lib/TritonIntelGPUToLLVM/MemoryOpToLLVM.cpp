@@ -12,7 +12,8 @@ using namespace mlir::triton::gpu;
 // A/B operands of dots.
 void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
                               const LLVMTypeConverter *typeConverter,
-                              ConversionPatternRewriter &rewriter) {
+                              ConversionPatternRewriter &rewriter,
+                              const TargetInfoBase &targetInfo) {
   auto loc = op.getLoc();
   auto srcTy = op.getSrc().getType();
   auto dstTy = op.getType();
@@ -31,18 +32,22 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
   auto dstStrides =
       LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
-  auto srcIndices = ::mlir::triton::intel::emitIndices(loc, rewriter, srcLayout,
-                                                       srcTy, false);
+  auto srcIndices = ::mlir::triton::intel::emitIndices(
+      loc, rewriter, targetInfo, srcLayout, srcTy, false);
   auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
   mlir::triton::intel::storeDistributedToShared(
       op.getSrc(), inVals, dstStrides, srcIndices, op.getResult(), smemBase,
-      elemTy, loc, rewriter);
+      elemTy, loc, rewriter, targetInfo);
 }
 
 struct LocalAllocOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::LocalAllocOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::LocalAllocOp>::ConvertTritonGPUOpToLLVMPattern;
+  LocalAllocOpConversion(const LLVMTypeConverter &converter,
+                         const TargetInfoBase &targetInfo,
+                         PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::LocalAllocOp>(converter,
+                                                                   benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::LocalAllocOp op, OpAdaptor adaptor,
@@ -69,7 +74,8 @@ struct LocalAllocOpConversion
 
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
-      lowerDistributedToShared(op, adaptor, typeConverter, rewriter);
+      lowerDistributedToShared(op, adaptor, typeConverter, rewriter,
+                               targetInfo);
     }
 
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
@@ -80,6 +86,9 @@ struct LocalAllocOpConversion
     rewriter.replaceOp(op, retVal);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct LocalDeallocOpConversion
@@ -98,8 +107,8 @@ struct LocalDeallocOpConversion
 } // namespace
 
 void mlir::triton::intel::populateMemoryOpToLLVMPattern(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<LocalAllocOpConversion>(typeConverter, benefit);
+    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
 }
