@@ -64,14 +64,13 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       },
       py::arg("pm"), py::arg("arch") = intel::DeviceArch::UNKNOWN);
   m.def("add_prefetch_block", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::gpu::intel::createPrefetchBlockPass());
+    pm.addPass(mlir::createTritonIntelGPUPrefetchBlock());
   });
   m.def("add_distribute_to_warps", [](mlir::PassManager &pm) {
-    pm.addPass(
-        mlir::triton::gpu::intel::createTritonIntelGPUDistributeToWarpsPass());
+    pm.addPass(mlir::createTritonIntelGPUDistributeToWarps());
   });
   m.def("add_match_target_size", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::gpu::intel::createMatchTargetSizePass());
+    pm.addPass(mlir::createTritonIntelGPUMatchTargetSize());
   });
 }
 
