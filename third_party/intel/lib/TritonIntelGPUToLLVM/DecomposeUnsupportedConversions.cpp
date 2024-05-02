@@ -1,29 +1,33 @@
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
-using namespace mlir::triton;
 
 namespace mlir {
 namespace triton {
+namespace gpu {
+namespace intel {
+
 #define GEN_PASS_DEF_INTELDECOMPOSEUNSUPPORTEDCONVERSIONS
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
+
+} // namespace intel
+} // namespace gpu
 } // namespace triton
 } // namespace mlir
 
 namespace {
 
 // pass ws related named attrs.
-static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
+static void addAttrs(Operation *op, ArrayRef<NamedAttribute> attrs) {
   for (const NamedAttribute attr : attrs)
     op->setAttr(attr.getName(), attr.getValue());
 }
 
 struct DecomposeUnsupportedConversions
-    : public mlir::triton::impl::IntelDecomposeUnsupportedConversionsBase<
+    : public triton::gpu::intel::impl::IntelDecomposeUnsupportedConversionsBase<
           DecomposeUnsupportedConversions> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
@@ -36,7 +40,7 @@ struct DecomposeUnsupportedConversions
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
       if (!getElementTypeOrSelf(cvtOp)
-               .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>())
+               .isa<Float8E4M3B11FNUZType, Float8E4M3FNType>())
         return;
       auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
       auto argEncoding =
@@ -49,13 +53,13 @@ struct DecomposeUnsupportedConversions
 
       auto newArgType = RankedTensorType::get(shape, F16Ty, argEncoding);
       auto newCvtType = RankedTensorType::get(shape, F16Ty, cvtEncoding);
-      auto newArg = builder.create<mlir::triton::FpToFpOp>(
-          cvtOp.getLoc(), newArgType, cvtOp.getSrc());
+      auto newArg = builder.create<triton::FpToFpOp>(cvtOp.getLoc(), newArgType,
+                                                     cvtOp.getSrc());
       addAttrs(newArg, cvtOp->getAttrs());
-      auto newCvt = builder.create<mlir::triton::gpu::ConvertLayoutOp>(
+      auto newCvt = builder.create<triton::gpu::ConvertLayoutOp>(
           cvtOp.getLoc(), newCvtType, newArg);
       addAttrs(newCvt, cvtOp->getAttrs());
-      auto newRet = builder.create<mlir::triton::FpToFpOp>(
+      auto newRet = builder.create<triton::FpToFpOp>(
           cvtOp.getLoc(), cvtOp.getType(), newCvt.getResult());
       newRet.setRounding(
           triton::RoundingMode::RTNE); // Downcast requires rounding mode
@@ -128,7 +132,7 @@ struct DecomposeUnsupportedConversions
       auto dstDotOp =
           dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
       if (srcBlocked && dstDotOp) {
-        auto tmpType = MemDescType::get(
+        auto tmpType = triton::MemDescType::get(
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::SharedEncodingAttr::get(
                 mod.getContext(), dstDotOp, srcType.getShape(),
@@ -148,20 +152,3 @@ struct DecomposeUnsupportedConversions
 };
 
 } // namespace
-
-namespace mlir {
-
-namespace triton {
-
-namespace gpu {
-
-std::unique_ptr<OperationPass<ModuleOp>>
-createIntelDecomposeUnsupportedConversionsPass() {
-  return std::make_unique<DecomposeUnsupportedConversions>();
-}
-
-} // namespace gpu
-
-} // namespace triton
-
-} // namespace mlir

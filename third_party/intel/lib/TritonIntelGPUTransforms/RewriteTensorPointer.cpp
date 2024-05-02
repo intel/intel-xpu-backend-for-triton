@@ -1,20 +1,8 @@
-//===- RewriteTensorPointer.cpp -----------------------------------------*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
-#include <memory>
 #include <stack>
 
 using namespace mlir;
@@ -23,8 +11,16 @@ namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir {
+namespace triton {
+namespace gpu {
+namespace intel {
+
 #define GEN_PASS_DEF_TRITONINTELGPUREWRITETENSORPOINTER
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+
+} // namespace intel
+} // namespace gpu
+} // namespace triton
 } // namespace mlir
 
 namespace {
@@ -32,7 +28,7 @@ namespace {
 /// Check if given value is divisible by the divisor.
 bool isDivisible(Value value, unsigned divisor) {
   // Case 1: Value is defined by a constant operation
-  if (auto constantOp = value.getDefiningOp<mlir::arith::ConstantOp>()) {
+  if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
     auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
     return integerAttr && integerAttr.getValue().getZExtValue() % divisor == 0;
   }
@@ -41,7 +37,7 @@ bool isDivisible(Value value, unsigned divisor) {
   if (value.getParentBlock()->isEntryBlock() && isa<BlockArgument>(value)) {
     BlockArgument blockArg = cast<BlockArgument>(value);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
-    if (auto funcOp = dyn_cast<tt::FuncOp>(parentOp)) {
+    if (auto funcOp = dyn_cast<triton::FuncOp>(parentOp)) {
       auto divisibilityAttr = funcOp.getArgAttrOfType<IntegerAttr>(
           blockArg.getArgNumber(), "tt.divisibility");
       return divisibilityAttr &&
@@ -50,7 +46,7 @@ bool isDivisible(Value value, unsigned divisor) {
   }
 
   // Case 3: Value is defined by a sign extension operation
-  if (auto extSIOp = value.getDefiningOp<mlir::arith::ExtSIOp>())
+  if (auto extSIOp = value.getDefiningOp<arith::ExtSIOp>())
     return isDivisible(extSIOp->getOperand(0), divisor);
 
   return false;
@@ -243,8 +239,8 @@ struct RewritedInfo {
       auto offsetWithRange = getExpandedOffsetWithRange(builder, loc, i);
 
       // Compare with lower bound
-      Value lowerBound = builder.create<mlir::arith::ConstantIntOp>(
-          loc, 0, builder.getI64Type());
+      Value lowerBound =
+          builder.create<arith::ConstantIntOp>(loc, 0, builder.getI64Type());
       Value splatLowerBound = builder.create<tt::SplatOp>(
           loc, offsetWithRange.getType(), lowerBound);
       Value cmpLower = builder.create<arith::CmpIOp>(
@@ -320,14 +316,14 @@ private:
 // very fragile and to solve we should expose convert Ptr of tensor to a
 // structure contains all values and not only offsets.
 class TritonIntelGPURewriteTensorPointerPass
-    : public impl::TritonIntelGPURewriteTensorPointerBase<
+    : public triton::gpu::intel::impl::TritonIntelGPURewriteTensorPointerBase<
           TritonIntelGPURewriteTensorPointerPass> {
 private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
   DenseSet<Value> valueToRemove;
 
 public:
-  using impl::TritonIntelGPURewriteTensorPointerBase<
+  using triton::gpu::intel::impl::TritonIntelGPURewriteTensorPointerBase<
       TritonIntelGPURewriteTensorPointerPass>::
       TritonIntelGPURewriteTensorPointerBase;
 

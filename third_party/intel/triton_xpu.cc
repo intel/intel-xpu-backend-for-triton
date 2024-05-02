@@ -1,14 +1,11 @@
-#include "TritonIntelGPUToLLVM/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "passes.h"
+
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/Support/TargetSelect.h"
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -26,34 +23,34 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .export_values();
 
   m.def("add_to_llvmir", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::createConvertTritonIntelGPUToLLVMPass());
+    pm.addPass(intel::createConvertTritonIntelGPUToLLVM());
   });
   m.def(
       "add_accelerate_matmul",
-      [](mlir::PassManager &pm, mlir::triton::gpu::intel::DeviceArch arch) {
-        pm.addPass(mlir::createTritonIntelGPUAccelerateMatmul({arch}));
+      [](mlir::PassManager &pm, intel::DeviceArch arch) {
+        pm.addPass(intel::createTritonIntelGPUAccelerateMatmul({arch}));
       },
       py::arg("pm"), py::arg("arch") = intel::DeviceArch::UNKNOWN);
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
-    pm.addPass(createIntelDecomposeUnsupportedConversionsPass());
+    pm.addPass(intel::createIntelDecomposeUnsupportedConversions());
   });
   m.def("add_allocate_shared_memory", [](mlir::PassManager &pm) {
-    pm.addPass(createIntelAllocateSharedMemoryPass());
+    pm.addPass(intel::createIntelAllocateSharedMemory());
   });
   m.def(
       "add_pipe_line_pass",
       [](mlir::PassManager &pm, int numStages, intel::DeviceArch arch) {
-        pm.addPass(mlir::createTritonIntelGPUPipeline({numStages, arch}));
+        pm.addPass(intel::createTritonIntelGPUPipeline({numStages, arch}));
       },
       py::arg("pm"), py::arg("numStages"),
       py::arg("arch") = intel::DeviceArch::UNKNOWN);
   m.def("add_remove_layout_conversions", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::createTritonIntelGPURemoveLayoutConversions());
+    pm.addPass(intel::createTritonIntelGPURemoveLayoutConversions());
   });
   m.def(
       "add_rewrite_tensor_pointer",
-      [](mlir::PassManager &pm, mlir::triton::gpu::intel::DeviceArch arch) {
-        pm.addPass(mlir::createTritonIntelGPURewriteTensorPointer({arch}));
+      [](mlir::PassManager &pm, intel::DeviceArch arch) {
+        pm.addPass(intel::createTritonIntelGPURewriteTensorPointer({arch}));
       },
       py::arg("pm"), py::arg("arch") = intel::DeviceArch::UNKNOWN);
 }

@@ -1,37 +1,36 @@
-//===- AccelerateMatmul.cpp - Lower tt.dot to Intel DPAS --------*- C++ -*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/Debug.h"
-#include <memory>
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
+
+namespace mlir {
+namespace triton {
+namespace gpu {
+namespace intel {
+
+#define GEN_PASS_DEF_TRITONINTELGPUACCELERATEMATMUL
+#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+
+} // namespace intel
+} // namespace gpu
+} // namespace triton
+} // namespace mlir
+
 namespace {
 using tt::DotOp;
-using ttg::BlockedEncodingAttr;
 using ttg::ConvertLayoutOp;
 using ttg::DotOperandEncodingAttr;
-using ttg::SliceEncodingAttr;
 using ttgi::DeviceArch;
 using ttgi::DpasEncodingAttr;
 
@@ -235,16 +234,11 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
-namespace mlir {
-#define GEN_PASS_DEF_TRITONINTELGPUACCELERATEMATMUL
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-} // namespace mlir
-
 class TritonIntelGPUAccelerateMatmulPass
-    : public impl::TritonIntelGPUAccelerateMatmulBase<
+    : public triton::gpu::intel::impl::TritonIntelGPUAccelerateMatmulBase<
           TritonIntelGPUAccelerateMatmulPass> {
 public:
-  using impl::TritonIntelGPUAccelerateMatmulBase<
+  using triton::gpu::intel::impl::TritonIntelGPUAccelerateMatmulBase<
       TritonIntelGPUAccelerateMatmulPass>::TritonIntelGPUAccelerateMatmulBase;
 
   void runOnOperation() override {

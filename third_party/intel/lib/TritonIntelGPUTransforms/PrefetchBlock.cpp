@@ -43,20 +43,25 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
-#include <memory>
 #include <optional>
 
 namespace mlir {
+namespace triton {
+namespace gpu {
+namespace intel {
+
 #define GEN_PASS_DEF_TRITONINTELGPUPREFETCHBLOCK
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+
+} // namespace intel
+} // namespace gpu
+} // namespace triton
 } // namespace mlir
 
 using namespace mlir;
@@ -134,7 +139,8 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
 }
 
 class PrefetchBlockPass
-    : public impl::TritonIntelGPUPrefetchBlockBase<PrefetchBlockPass> {
+    : public triton::gpu::intel::impl::TritonIntelGPUPrefetchBlockBase<
+          PrefetchBlockPass> {
 public:
   /// Groups information for a candidate load.
   struct LoadInfo {
@@ -155,7 +161,7 @@ public:
     tt::MakeTensorPtrOp blockPtr; /// Operation defining the blocked pointer
   };
 
-  using impl::TritonIntelGPUPrefetchBlockBase<
+  using triton::gpu::intel::impl::TritonIntelGPUPrefetchBlockBase<
       PrefetchBlockPass>::TritonIntelGPUPrefetchBlockBase;
 
   void runOnOperation() override {

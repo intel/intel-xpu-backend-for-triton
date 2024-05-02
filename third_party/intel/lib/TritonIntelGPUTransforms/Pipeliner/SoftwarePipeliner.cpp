@@ -1,4 +1,4 @@
-#include "Schedule.h"
+#include "Pipeliner/Schedule.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -8,8 +8,16 @@ using namespace mlir;
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir {
+namespace triton {
+namespace gpu {
+namespace intel {
+
 #define GEN_PASS_DEF_TRITONINTELGPUPIPELINE
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+
+} // namespace intel
+} // namespace gpu
+} // namespace triton
 } // namespace mlir
 
 // Return true if the preconditions for pipelining the loop are met.
@@ -52,9 +60,10 @@ static void pipelineLoop(scf::ForOp forOp, int numStages) {
 
 namespace {
 struct IntelGPUPipelinePass
-    : public impl::TritonIntelGPUPipelineBase<IntelGPUPipelinePass> {
+    : public triton::gpu::intel::impl::TritonIntelGPUPipelineBase<
+          IntelGPUPipelinePass> {
 
-  using impl::TritonIntelGPUPipelineBase<
+  using triton::gpu::intel::impl::TritonIntelGPUPipelineBase<
       IntelGPUPipelinePass>::TritonIntelGPUPipelineBase;
 
   void runOnOperation() override {
