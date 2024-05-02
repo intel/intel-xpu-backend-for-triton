@@ -178,6 +178,7 @@ jobs:
           python3 07-extern-functions.py
           python3 08-grouped-gemm.py
           python3 09-experimental-block-pointer.py
+          TRITON_INTEL_ENABLE_BLOCK_PTR=1 python3 09-experimental-block-pointer.py
 
       - name: Run CXX unittests
         run: |

@@ -2,6 +2,7 @@
 
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -11,6 +12,12 @@
 #include <pybind11/stl_bind.h>
 
 namespace py = pybind11;
+
+void init_triton_intel_passes_ttir(py::module &&m) {
+  m.def("add_convert_to_ttgpuir_warp", [](mlir::PassManager &pm, int numWarps) {
+    pm.addPass(mlir::triton::createConvertTritonToTritonGPUWarpPass(numWarps));
+  });
+}
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton::gpu;
@@ -53,10 +60,20 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
         pm.addPass(intel::createTritonIntelGPURewriteTensorPointer({arch}));
       },
       py::arg("pm"), py::arg("arch") = intel::DeviceArch::UNKNOWN);
+  m.def("add_prefetch_block", [](mlir::PassManager &pm) {
+    pm.addPass(intel::createTritonIntelGPUPrefetchBlock());
+  });
+  m.def("add_distribute_to_warps", [](mlir::PassManager &pm) {
+    pm.addPass(intel::createTritonIntelGPUDistributeToWarps());
+  });
+  m.def("add_match_target_size", [](mlir::PassManager &pm) {
+    pm.addPass(intel::createTritonIntelGPUMatchTargetSize());
+  });
 }
 
 void init_triton_intel(py::module &&m) {
   auto passes = m.def_submodule("passes");
+  init_triton_intel_passes_ttir(passes.def_submodule("ttir"));
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 
   // load dialects
