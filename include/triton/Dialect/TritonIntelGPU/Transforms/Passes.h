@@ -10,6 +10,7 @@
 #define TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H
 
 #include "mlir/Pass/Pass.h"
+#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 namespace mlir {
 namespace triton {
@@ -22,31 +23,16 @@ enum class DeviceArch {
   PVC,
 };
 
-std::unique_ptr<Pass> createTritonIntelGPUAccelerateMatmulPass(
-    intel::DeviceArch arch = intel::DeviceArch::UNKNOWN);
-
-std::unique_ptr<Pass> createTritonIntelGPUDistributeToWarpsPass();
-
-std::unique_ptr<Pass> createTritonIntelGPUPipelinePass(
-    int numStages = 3, intel::DeviceArch arch = intel::DeviceArch::UNKNOWN);
-
-std::unique_ptr<Pass> createTritonIntelGPURemoveLayoutConversionsPass();
-
-std::unique_ptr<Pass> createTritonIntelGPURewriteTensorPointerPass(
-    intel::DeviceArch arch = intel::DeviceArch::UNKNOWN);
-
-std::unique_ptr<Pass> createPrefetchBlockPass();
-
-std::unique_ptr<Pass> createMatchTargetSizePass();
-
 } // namespace intel
 } // namespace gpu
 } // namespace triton
 
+#define GEN_PASS_DECL
+#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H

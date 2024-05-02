@@ -22,8 +22,10 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+#define GEN_PASS_DEF_TRITONINTELGPUREWRITETENSORPOINTER
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+} // namespace mlir
 
 namespace {
 
@@ -318,16 +320,16 @@ private:
 // very fragile and to solve we should expose convert Ptr of tensor to a
 // structure contains all values and not only offsets.
 class TritonIntelGPURewriteTensorPointerPass
-    : public TritonIntelGPURewriteTensorPointerBase<
+    : public impl::TritonIntelGPURewriteTensorPointerBase<
           TritonIntelGPURewriteTensorPointerPass> {
 private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
   DenseSet<Value> valueToRemove;
 
 public:
-  TritonIntelGPURewriteTensorPointerPass(ttgi::DeviceArch arch) {
-    deviceArch = arch;
-  }
+  using impl::TritonIntelGPURewriteTensorPointerBase<
+      TritonIntelGPURewriteTensorPointerPass>::
+      TritonIntelGPURewriteTensorPointerBase;
 
   static bool needRewrite(Operation *op, const DenseSet<Value> &valueToRemove) {
     return std::any_of(op->getOperands().begin(), op->getOperands().end(),
@@ -768,8 +770,3 @@ public:
     }
   }
 };
-
-std::unique_ptr<Pass>
-ttgi::createTritonIntelGPURewriteTensorPointerPass(ttgi::DeviceArch arch) {
-  return std::make_unique<TritonIntelGPURewriteTensorPointerPass>(arch);
-}

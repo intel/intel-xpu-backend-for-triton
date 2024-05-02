@@ -159,6 +159,47 @@ def TritonGEN_BarrierOp : TritonGEN_Op<"barrier"> {
   let assemblyFormat = "attr-dict";
 }
 
+def TritonGEN_SplitBarrierSignalOp : TritonGEN_Op<"split_barrier_signal"> {
+  let summary = "Split barrier signal";
+  string baseDescription = [{
+    The `gen.split_barrier_signal` operation signals the arrival of a workgroup
+    thread at the current program point; the issuing thread continue execution.
+    Once all threads in a workgroup have signaled their arrival, any other thread
+    waiting at the `gen.split_barrier_wait` operation can exit it.
+    The '$mem_fence' attribute is a bitfield that specifies the memory address
+    spaces to apply the memory ordering constraints. The '$mem_scope' attribute
+    describes the work-items to apply the memory ordering constraints.
+    Behavior is undefined:
+      - unless all threads in a workgroup participate in the barrier
+      - a thread waits on a barrier before signaling
+      - the '$mem_fence' and '$mem_scope' attributes aren't the same for all
+        threads in a workgroup
+    Furthermore, if the `$mem_fence` argument differs between the barrier signal
+    and wait operation, then only memory operations for the address spaces specified
+    by the intersection of the two flags arguments are visible.
+  }];
+  let arguments = (ins TritonGEN_MemFence:$mem_fence, TritonGEN_MemScope:$mem_scope);
+  let results = (outs);
+  let assemblyFormat = [{
+    ` ` `{` `mem_fence` `=` $mem_fence `,` `mem_scope` `=` $mem_scope `}` attr-dict
+  }];
+}
+
+def TritonGEN_SplitBarrierWaitOp : TritonGEN_Op<"split_barrier_wait"> {
+  let summary = "Split barrier wait";
+  string baseDescription = [{
+    The `gen.split_barrier_wait` operation blocks the issuing workgroup thread
+    until all other threads arrive at the corresponding `gen.split_barrier_arrive`
+    operation. Please refer to the `gen.split_barrier_signal` documentation for the
+    description of the attributes and the constrains on the operation.
+  }];
+  let arguments = (ins TritonGEN_MemFence:$mem_fence, TritonGEN_MemScope:$mem_scope);
+  let results = (outs);
+  let assemblyFormat = [{
+    ` ` `{` `mem_fence` `=` $mem_fence `,` `mem_scope` `=` $mem_scope `}` attr-dict
+  }];
+}
+
 def TritonGEN_NamedBarrierSignalOp : TritonGEN_Op<"named_barrier_signal">,
   Arguments<(ins I32:$barrier_id, I32:$thread_group_count)> {
   let summary = "Named barrier signal";
