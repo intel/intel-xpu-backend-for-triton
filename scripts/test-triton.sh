@@ -171,6 +171,7 @@ run_tutorial_tests() {
   run_tutorial_test "09-experimental-block-pointer"
   export TRITON_INTEL_ENABLE_BLOCK_PTR=1
   run_tutorial_test "09-experimental-block-pointer"
+  unset TRITON_INTEL_ENABLE_BLOCK_PTR
 }
 
 test_triton() {

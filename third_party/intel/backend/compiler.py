@@ -109,7 +109,8 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        if os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "0":
+        isBlockPtrEnabled = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+        if not isBlockPtrEnabled:
             passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
@@ -125,9 +126,12 @@ class XPUBackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        if os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1":
+
+        isBlockPtrEnabled = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+        if isBlockPtrEnabled:
             intel.passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
-            # Prefetch instruction is not availble in older drivers.
+            # FIXME: Use a better way to check if prefetch instructions are supported once available.
+            # Prefetch instruction is not available in older drivers.
             if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
                 intel.passes.ttgpuir.add_prefetch_block(pm)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
@@ -165,8 +169,9 @@ class XPUBackend(BaseBackend):
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
-        # On the `TRITON_INTEL_ENABLE_BLOCK_PTR` path, get_threads_per_warp always return 1.
-        if os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "0":
+        # FIXME: On the `TRITON_INTEL_ENABLE_BLOCK_PTR` path, get_threads_per_warp always return 1.
+        isBlockPtrEnabled = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+        if not isBlockPtrEnabled:
             threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
             metadata["threads_per_warp"] = threads_per_warp
         mod = src
