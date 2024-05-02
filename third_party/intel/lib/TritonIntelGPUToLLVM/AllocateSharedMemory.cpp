@@ -1,9 +1,11 @@
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Pass/Pass.h"
+
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;

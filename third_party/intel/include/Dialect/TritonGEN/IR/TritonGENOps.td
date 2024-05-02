@@ -13,8 +13,8 @@
 #ifndef TRITONGEN_OPS
 #define TRITONGEN_OPS
 
-include "triton/Dialect/TritonGEN/IR/TritonGENDialect.td"
-include "triton/Dialect/TritonGEN/IR/TritonGENAttrDefs.td"
+include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.td"
+include "intel/include/Dialect/TritonGEN/IR/TritonGENAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"

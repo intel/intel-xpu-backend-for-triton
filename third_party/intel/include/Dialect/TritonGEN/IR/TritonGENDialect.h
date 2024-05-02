@@ -17,14 +17,15 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpDefinition.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h.inc"
-#include "triton/Dialect/TritonGEN/IR/TritonGENOpsEnums.h.inc"
+
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h.inc"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENOpsEnums.h.inc"
 
 #define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonGEN/IR/TritonGENOpsAttrDefs.h.inc"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENOpsAttrDefs.h.inc"
 
 #define GET_OP_CLASSES
-#include "triton/Dialect/TritonGEN/IR/TritonGENOps.h.inc"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENOps.h.inc"
 
 namespace mlir {
 namespace triton {

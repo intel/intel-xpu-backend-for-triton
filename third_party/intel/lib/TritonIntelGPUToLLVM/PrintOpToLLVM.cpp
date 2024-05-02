@@ -1,6 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 namespace {
 
