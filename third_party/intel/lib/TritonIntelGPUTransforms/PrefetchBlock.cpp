@@ -54,7 +54,7 @@
 #include <optional>
 
 namespace mlir {
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONINTELGPUPREFETCHBLOCK
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir
 
@@ -133,7 +133,7 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
 }
 
 class PrefetchBlockPass
-    : public TritonIntelGPUPrefetchBlockBase<PrefetchBlockPass> {
+    : public impl::TritonIntelGPUPrefetchBlockBase<PrefetchBlockPass> {
 public:
   /// Groups information for a candidate load.
   struct LoadInfo {
@@ -153,6 +153,9 @@ public:
     SmallVector<Value> offsets;   /// Offsets used by the AdvanceOp
     tt::MakeTensorPtrOp blockPtr; /// Operation defining the blocked pointer
   };
+
+  using impl::TritonIntelGPUPrefetchBlockBase<
+      PrefetchBlockPass>::TritonIntelGPUPrefetchBlockBase;
 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
@@ -409,8 +412,3 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
 }
 
 } // namespace
-
-std::unique_ptr<mlir::Pass>
-mlir::triton::gpu::intel::createPrefetchBlockPass() {
-  return std::make_unique<PrefetchBlockPass>();
-}
