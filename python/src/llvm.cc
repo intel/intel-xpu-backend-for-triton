@@ -319,25 +319,29 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "translate_to_spirv",
       [](const std::string llvmIR) -> std::tuple<py::object, std::string> {
-        py::gil_scoped_release allow_threads;
-        // create LLVM module from C++
-        llvm::LLVMContext context;
-        std::unique_ptr<llvm::MemoryBuffer> buffer =
-            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-        llvm::SMDiagnostic error;
-        std::unique_ptr<llvm::Module> module =
-            llvm::parseIR(buffer->getMemBufferRef(), error, context);
-        if (!module) {
-          llvm::report_fatal_error(
-              "failed to parse IR: " + error.getMessage() +
-              "lineno: " + std::to_string(error.getLineNo()));
+        std::string name;
+        std::string spirvBitcode;
+        {
+          py::gil_scoped_release allow_threads;
+          // create LLVM module from C++
+          llvm::LLVMContext context;
+          std::unique_ptr<llvm::MemoryBuffer> buffer =
+              llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+          llvm::SMDiagnostic error;
+          std::unique_ptr<llvm::Module> module =
+              llvm::parseIR(buffer->getMemBufferRef(), error, context);
+          if (!module) {
+            llvm::report_fatal_error(
+                "failed to parse IR: " + error.getMessage() +
+                "lineno: " + std::to_string(error.getLineNo()));
+          }
+          // Get name of kernel in the module
+          std::set<llvm::Function *> kernels;
+          uint32_t numKernels = findKernels(*module, kernels);
+          assert(numKernels == 1 && "Expecting a single SPIR kernel");
+          name = (*kernels.begin())->getName().str();
+          spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
         }
-        // Get name of kernel in the module
-        std::set<llvm::Function *> kernels;
-        uint32_t numKernels = findKernels(*module, kernels);
-        assert(numKernels == 1 && "Expecting a single SPIR kernel");
-        std::string name = (*kernels.begin())->getName().str();
-        std::string spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
         return std::make_tuple(py::bytes(spirvBitcode), name);
       },
       ret::take_ownership);
