@@ -273,11 +273,22 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   SmallVector<Value> baseIndex;
   RewriterBase::InsertionGuard guard(rewriter);
   SmallVector<Value> result;
-  if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>())
+  if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
     result = emitBaseIndexForDpasLayout(loc, rewriter, dpasLayout, type);
-  else
-    return ::emitBaseIndexForLayoutImpl(loc, rewriter, target, layout, type,
-                                        withCTAOffset);
+  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    auto parentLayout = sliceLayout.getParent();
+    auto parentShape = sliceLayout.paddedShape(type.getShape());
+    RankedTensorType parentTy =
+        RankedTensorType::get(parentShape, type.getElementType(), parentLayout);
+    result = ::intel::emitBaseIndexForLayoutImpl(
+        loc, rewriter, target, parentLayout, parentTy, withCTAOffset);
+    result.erase(result.begin() + sliceLayout.getDim());
+    // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
+    return result;
+  } else {
+    return mlir::emitBaseIndexForLayoutImpl(loc, rewriter, target, layout, type,
+                                            withCTAOffset);
+  }
   if (withCTAOffset) {
     auto CTAOffset =
         emitCTAOffsetForLayout(loc, rewriter, target, layout, shape);
@@ -324,7 +335,7 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   }
   if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
     return ::intel::emitOffsetForSliceLayout(sliceLayout, type);
-  return ::emitOffsetForLayout(layout, type);
+  return mlir::emitOffsetForLayout(layout, type);
 }
 
 // Emit indices calculation within each ConversionPattern, and returns a
