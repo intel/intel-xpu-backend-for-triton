@@ -3,10 +3,7 @@
 
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
+namespace mlir::triton::gpu::intel {
 
 #define GEN_PASS_DECL
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
@@ -14,9 +11,6 @@ namespace intel {
 #define GEN_PASS_REGISTRATION
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
 
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 #endif // TRITONGPU_CONVERSION_TRITONINTELGPUTOLLVM_PASSES_H

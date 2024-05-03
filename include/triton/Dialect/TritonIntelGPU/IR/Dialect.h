@@ -16,12 +16,4 @@
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonIntelGPU/IR/Ops.h.inc"
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
-
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_IR_DIALECT_H

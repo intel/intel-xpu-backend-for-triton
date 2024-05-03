@@ -12,18 +12,10 @@
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
-
+namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREMOVELAYOUTCONVERSIONS
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 #define DEBUG_TYPE "tritonintelgpu-remove-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")

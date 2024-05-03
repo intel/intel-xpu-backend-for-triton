@@ -52,18 +52,10 @@
 
 #include <optional>
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
-
+namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUPREFETCHBLOCK
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 using namespace mlir;
 namespace tt = mlir::triton;

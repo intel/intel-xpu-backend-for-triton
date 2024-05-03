@@ -11,9 +11,7 @@ static SmallVector<Value> identity_func(Location loc,
   return v;
 }
 } // namespace
-namespace mlir::triton {
 
-namespace gpu {
 namespace {
 
 /* ----- FP8E5M2 ------ */
@@ -1126,7 +1124,8 @@ public:
       return resultVals;
     }
 
-    SmallVector<unsigned> elemsPerThread = getElemsPerThread(rtType);
+    SmallVector<unsigned> elemsPerThread =
+        triton::gpu::getElemsPerThread(rtType);
     int rank = elemsPerThread.size();
     if (product<unsigned>(elemsPerThread) != resultVals.size())
       return resultVals;
@@ -1134,7 +1133,8 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> sizePerThread = getSizePerThread(encoding);
+    SmallVector<unsigned> sizePerThread =
+        triton::gpu::getSizePerThread(encoding);
     if (rank != sizePerThread.size())
       return resultVals;
 
@@ -1168,7 +1168,7 @@ public:
     if (rank > 1) {
       // reorder the shape and constancy vectors by the axis order:
       // from the fastest-changing to the smallest-changing axis
-      SmallVector<unsigned> order = getOrder(encoding);
+      SmallVector<unsigned> order = triton::gpu::getOrder(encoding);
       if (rank != order.size())
         return resultVals;
       elemsPerThread = applyPermutation(elemsPerThread, order);
@@ -2314,7 +2314,7 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
     auto typeConverter = getTypeConverter();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
     if (resultTensorTy) {
-      unsigned elems = getTotalElemsPerThread(resultTy);
+      unsigned elems = triton::gpu::getTotalElemsPerThread(resultTy);
       Type elemTy = typeConverter->convertType(
           resultTensorTy.getElementType().cast<PointerType>().getPointeeType());
       Type ptrTy = typeConverter->convertType(resultTensorTy.getElementType());
@@ -2341,9 +2341,9 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
 };
 
 } // namespace
-} // namespace gpu
 
-namespace intel {
+namespace mlir::triton::gpu::intel {
+
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
@@ -2453,5 +2453,5 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
       typeConverter, axisInfoAnalysis, benefitForPropNan);
 }
-} // namespace intel
-} // namespace mlir::triton
+
+} // namespace mlir::triton::gpu::intel

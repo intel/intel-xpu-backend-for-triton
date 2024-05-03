@@ -7,18 +7,10 @@
 using namespace mlir;
 namespace ttgi = mlir::triton::gpu::intel;
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
-
+namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUPIPELINE
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 // Return true if the preconditions for pipelining the loop are met.
 static bool preCondition(scf::ForOp forOp) {

@@ -11,9 +11,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-namespace mlir {
-namespace LLVM {
-namespace intel {
+namespace mlir::LLVM::intel {
 
 static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
                            Value val, Value i, TritonGEN::ShflKind mode) {
@@ -147,6 +145,4 @@ Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
   return msgValue;
 }
 
-} // namespace intel
-} // namespace LLVM
-} // namespace mlir
+} // namespace mlir::LLVM::intel

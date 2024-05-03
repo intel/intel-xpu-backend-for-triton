@@ -13,10 +13,7 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
+namespace mlir ::triton ::gpu::intel {
 
 enum class DeviceArch {
   UNKNOWN = 0,
@@ -31,9 +28,6 @@ enum class DeviceArch {
 #define GEN_PASS_REGISTRATION
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H

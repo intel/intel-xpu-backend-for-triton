@@ -5,18 +5,10 @@
 
 using namespace mlir;
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
-
+namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_INTELDECOMPOSEUNSUPPORTEDCONVERSIONS
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
-
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 namespace {
 

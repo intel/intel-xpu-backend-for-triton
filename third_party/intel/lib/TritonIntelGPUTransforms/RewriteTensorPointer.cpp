@@ -10,18 +10,10 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
-
+namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREWRITETENSORPOINTER
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 namespace {
 
@@ -37,7 +29,7 @@ bool isDivisible(Value value, unsigned divisor) {
   if (value.getParentBlock()->isEntryBlock() && isa<BlockArgument>(value)) {
     BlockArgument blockArg = cast<BlockArgument>(value);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
-    if (auto funcOp = dyn_cast<triton::FuncOp>(parentOp)) {
+    if (auto funcOp = dyn_cast<tt::FuncOp>(parentOp)) {
       auto divisibilityAttr = funcOp.getArgAttrOfType<IntegerAttr>(
           blockArg.getArgNumber(), "tt.divisibility");
       return divisibilityAttr &&

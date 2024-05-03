@@ -34,12 +34,10 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONGENTOLLVM
 #include "intel/include/TritonGENToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 using namespace mlir;
 using namespace mlir::triton;
