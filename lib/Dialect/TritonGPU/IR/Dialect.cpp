@@ -11,7 +11,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-// #include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -1083,7 +1083,8 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  printer << "<{" << "sizePerThread = [" << ArrayRef(getSizePerThread()) << "]"
+  printer << "<{"
+          << "sizePerThread = [" << ArrayRef(getSizePerThread()) << "]"
           << ", threadsPerWarp = [" << ArrayRef(getThreadsPerWarp()) << "]"
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"
           << ", order = [" << getOrder() << "]";
@@ -1161,7 +1162,8 @@ Attribute NvidiaMmaEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{" << "versionMajor = " << getVersionMajor()
+  printer << "<{"
+          << "versionMajor = " << getVersionMajor()
           << ", versionMinor = " << getVersionMinor() //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
 
@@ -1242,7 +1244,8 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{" << "versionMajor = " << getVersionMajor()              //
+  printer << "<{"
+          << "versionMajor = " << getVersionMajor()                      //
           << ", versionMinor = " << getVersionMinor()                    //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"    //
           << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
@@ -1302,7 +1305,8 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{" << "warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
+  printer << "<{"
+          << "warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
   printer << "}>";
@@ -1326,8 +1330,9 @@ Attribute SliceEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  printer << "<{" << "dim = " << getDim() << ", " << "parent = " << getParent()
-          << "}>";
+  printer << "<{"
+          << "dim = " << getDim() << ", "
+          << "parent = " << getParent() << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -1400,7 +1405,8 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void SharedEncodingAttr::print(AsmPrinter &printer) const {
-  printer << "<{" << "vec = " << getVec() //
+  printer << "<{"
+          << "vec = " << getVec() //
           << ", perPhase = " << getPerPhase()
           << ", maxPhase = " << getMaxPhase() //
           << ", order = [" << getOrder() << "]";
@@ -2007,7 +2013,8 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
 
 void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
   auto mmaParent = getParent().dyn_cast<NvidiaMmaEncodingAttr>();
-  printer << "<{" << "opIdx = " << getOpIdx() << ", parent = " << getParent();
+  printer << "<{"
+          << "opIdx = " << getOpIdx() << ", parent = " << getParent();
   if (mmaParent && mmaParent.isAmpere())
     printer << ", kWidth = " << getKWidth();
   printer << "}>";

@@ -12,8 +12,8 @@
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
-include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.td"
-include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
+include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.td"
+include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :

@@ -7,8 +7,9 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.cpp.inc"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.cpp.inc"
 
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -89,7 +90,7 @@ static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
 // Attribute methods
 //===----------------------------------------------------------------------===//
 #define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.cpp.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.cpp.inc"
 
 //===----------------------------------------------------------------------===//
 // DpasEncodingAttr
@@ -361,14 +362,17 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   auto shapeC = getShapeC();
   llvm::ArrayRef<unsigned> rC = shapeC;
   auto warpsPerCTA = getWarpsPerCTA();
-  printer << "<{" << "repeatCount = " << getRepeatCount() << ", "
+  printer << "<{"
+          << "repeatCount = " << getRepeatCount() << ", "
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
           << "opsPerChan = " << getOpsPerChannel() << ", "
           << "threadsPerWarp = " << getSubGroupSize() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
-          << "A = [" << rA << "], " << "B = [" << rB << "], " << "C = [" << rC
-          << "]" << "}>";
+          << "A = [" << rA << "], "
+          << "B = [" << rB << "], "
+          << "C = [" << rC << "]"
+          << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -436,10 +440,13 @@ Attribute WarpEncodingAttr::parse(AsmParser &parser, Type type) {
 void WarpEncodingAttr::print(mlir::AsmPrinter &printer) const {
   auto threadsPerWarp = getThreadsPerWarp();
   auto sizePerThread = getSizePerThread();
-  printer << "<{" << "sizePerThread = ["
-          << llvm::ArrayRef<unsigned>(sizePerThread) << "]"
+  printer << "<{"
+          << "sizePerThread = [" << llvm::ArrayRef<unsigned>(sizePerThread)
+          << "]"
           << ", threadsPerWarp = [" << llvm::ArrayRef<unsigned>(threadsPerWarp)
-          << "]" << ", order = [" << getOrder() << "]" << "}>";
+          << "]"
+          << ", order = [" << getOrder() << "]"
+          << "}>";
 }
 
 //===----------------------------------------------------------------------===//

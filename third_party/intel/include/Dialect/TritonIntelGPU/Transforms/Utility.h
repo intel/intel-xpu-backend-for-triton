@@ -10,7 +10,8 @@
 #define TRITON_DIALECT_TRITONINTELGPU_TRANSFORMS_UTILITY_H
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 namespace mlir {
 namespace triton {
