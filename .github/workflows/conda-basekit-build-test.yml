@@ -76,7 +76,7 @@ jobs:
       - name: Run tests
         run: |
           set -x
-
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/1031
           sed -ie '
             s/\(.*03-matrix-multiplication\)/#\1/
             s/\(.*07-extern-functions\)/#\1/
@@ -97,7 +97,7 @@ jobs:
 
       - name: Run E2E test
         run: |
-          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/866
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/1031
           exit 0
           cd ../pytorch || {
             PYTORCH_COMMIT_ID=$(<.github/pins/pytorch.txt)
