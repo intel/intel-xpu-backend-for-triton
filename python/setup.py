@@ -333,10 +333,6 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
-        user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
-            os.getenv("HOMEPATH") or None
-        if not user_home:
-            raise RuntimeError("Could not find user home directory")
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages([get_pybind11_package_info(), get_llvm_package_info()])
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
@@ -464,7 +460,7 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2",
 )
 
-backends = [*BackendInstaller.copy(["intel", "amd"]), *BackendInstaller.copy_externals()]
+backends = [*BackendInstaller.copy(["intel", "nvidia", "amd"]), *BackendInstaller.copy_externals()]
 
 
 def add_link_to_backends():
