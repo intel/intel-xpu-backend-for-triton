@@ -16,14 +16,6 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::gpu::intel;
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {}
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
-
 //===----------------------------------------------------------------------===//
 // Utility functions
 //===----------------------------------------------------------------------===//

@@ -23,12 +23,15 @@
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
-#include <memory>
-
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
+
+namespace mlir::triton::gpu::intel {
+#define GEN_PASS_DEF_TRITONINTELGPUDISTRIBUTETOWARPS
+#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gpu::intel
 
 namespace {
 
@@ -290,13 +293,8 @@ void distributeScfForOp(scf::ForOp op) {
 
 } // namespace
 
-namespace mlir {
-#define GEN_PASS_DEF_TRITONINTELGPUDISTRIBUTETOWARPS
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-} // namespace mlir
-
 class TritonIntelGPUDistributeToWarpsPass
-    : public impl::TritonIntelGPUDistributeToWarpsBase<
+    : public triton::gpu::intel::impl::TritonIntelGPUDistributeToWarpsBase<
           TritonIntelGPUDistributeToWarpsPass> {
 public:
   void runOnOperation() override {

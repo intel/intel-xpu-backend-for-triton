@@ -6,9 +6,7 @@
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
 
-namespace mlir {
-namespace triton {
-namespace intel {
+namespace mlir::triton::intel {
 
 void populateTritonOpsToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
@@ -87,8 +85,6 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit);
 
-} // namespace intel
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::intel
 
 #endif

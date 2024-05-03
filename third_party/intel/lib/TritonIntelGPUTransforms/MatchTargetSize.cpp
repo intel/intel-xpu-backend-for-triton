@@ -52,12 +52,12 @@
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
-#include <memory>
+namespace mlir::triton::gpu::intel {
 
-namespace mlir {
 #define GEN_PASS_DEF_TRITONINTELGPUMATCHTARGETSIZE
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-} // namespace mlir
+
+} // namespace mlir::triton::gpu::intel
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -97,7 +97,8 @@ private:
 };
 
 class MatchTargetSizePass
-    : public impl::TritonIntelGPUMatchTargetSizeBase<MatchTargetSizePass> {
+    : public triton::gpu::intel::impl::TritonIntelGPUMatchTargetSizeBase<
+          MatchTargetSizePass> {
 public:
   void runOnOperation() override {
     initNativeOperationSizes();
