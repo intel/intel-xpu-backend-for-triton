@@ -8,6 +8,7 @@ TEST_TUTORIAL=false
 TEST_UNIT=false
 VENV=false
 TRITON_TEST_REPORTS=false
+SKIP_DEPS=false
 ARGS=
 for arg in "$@"; do
   case $arg in
@@ -25,6 +26,10 @@ for arg in "$@"; do
       ;;
     --venv)
       VENV=true
+      shift
+      ;;
+    --skip-deps)
+      SKIP_DEPS=true
       shift
       ;;
     --reports)
@@ -62,11 +67,10 @@ export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
 
-python3 -m pip install lit
-python3 -m pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-select
+python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select
 
 source $SCRIPTS_DIR/pytest-utils.sh
-$SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
+$SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then
