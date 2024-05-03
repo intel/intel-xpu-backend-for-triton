@@ -17,8 +17,6 @@ if oneapi_root:
         os.path.join(oneapi_root, "compiler/latest/include/sycl")
     ]
 
-conda_prefix = os.getenv("CONDA_PREFIX")
-
 library_dir = [os.path.join(dirname, "lib")]
 libraries = ['ze_loader', 'sycl']
 
