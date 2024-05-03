@@ -1,4 +1,3 @@
-// #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 
@@ -9,9 +8,6 @@
 
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
-
-// #include "llvm/IR/Constants.h"
-// #include "llvm/Support/TargetSelect.h"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>

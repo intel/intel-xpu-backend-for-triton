@@ -6,7 +6,6 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-// ETTORE #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;

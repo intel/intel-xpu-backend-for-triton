@@ -1,6 +1,5 @@
 #include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "llvm/Support/ErrorHandling.h"
 
