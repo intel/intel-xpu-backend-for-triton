@@ -87,10 +87,7 @@ static unsigned getDimSize(Type type, unsigned dim) {
       });
 }
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
+namespace mlir::triton::gpu::intel {
 
 LogicalResult GlueOp::verify() {
   SmallVector<Type> inputTypes;
@@ -199,7 +196,4 @@ OpFoldResult ExtractOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel

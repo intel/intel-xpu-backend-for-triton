@@ -3,17 +3,11 @@
 
 #include "mlir/Dialect/SCF/Transforms/Transforms.h"
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
+namespace mlir::triton::gpu::intel {
 
 bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
                                   mlir::scf::PipeliningOption &options);
 
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_TRITONINTELGPU_TRANSFORM_PIPELINE_SCHEDULE_H

@@ -2,36 +2,33 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
-#include "mlir/Interfaces/InferTypeOpInterface.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/Passes.h"
-#include "mlir/Transforms/RegionUtils.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include <memory>
 
-namespace mlir {
+namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREMOVELAYOUTCONVERSIONS
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 #define DEBUG_TYPE "tritonintelgpu-remove-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace ttgi = mlir::triton::gpu::intel;
+using namespace mlir;
+using namespace mlir::triton;
+using namespace mlir::triton::gpu;
 
-namespace mlir::triton::gpu {
 namespace {
 
 // -----------------------------------------------------------------------------
@@ -1178,7 +1175,7 @@ void hoistConvert(ModuleOp module) {
 }
 
 class TritonIntelGPURemoveLayoutConversionsPass
-    : public impl::TritonIntelGPURemoveLayoutConversionsBase<
+    : public intel::impl::TritonIntelGPURemoveLayoutConversionsBase<
           TritonIntelGPURemoveLayoutConversionsPass> {
 public:
   void runOnOperation() override {
@@ -1255,4 +1252,3 @@ public:
 };
 
 } // namespace
-} // namespace mlir::triton::gpu

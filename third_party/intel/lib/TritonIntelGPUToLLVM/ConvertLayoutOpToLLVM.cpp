@@ -22,16 +22,14 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 // Forward declarations
-namespace SharedToDotOperandDPAS {
-namespace intel {
+namespace SharedToDotOperandDPAS::intel {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread);
 
-} // namespace intel
-} // namespace SharedToDotOperandDPAS
+} // namespace SharedToDotOperandDPAS::intel
 
 namespace {
 

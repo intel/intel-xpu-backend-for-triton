@@ -13,12 +13,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-
-class DotOperandEncodingAttr;
-namespace intel {
+namespace mlir::triton::gpu::intel {
 
 // data type for D_C_A_B.
 enum class DPASEngineType : uint8_t {
@@ -58,9 +53,6 @@ LogicalResult getConvertBackwardSlice(
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation = nullptr);
 
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITONINTELGPU_TRANSFORMS_UTILITY_H

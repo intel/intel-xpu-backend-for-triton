@@ -18,12 +18,8 @@
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
 using namespace mlir;
-using namespace mlir::triton;
 
-namespace mlir {
-namespace LLVM {
-
-namespace intel {
+namespace mlir::LLVM::intel {
 
 /// Create a predicated block, using \p cond as the condition and \p ops for the
 /// values supplied by the conditional branch to the exit block. The \p
@@ -135,8 +131,8 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
-} // namespace intel
-} // namespace LLVM
+
+} // namespace mlir::LLVM::intel
 
 // -----------------------------------------------------------------------
 // Shared memory utilities
@@ -227,8 +223,7 @@ emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
   return multiDimBase;
 }
 
-namespace triton {
-namespace intel {
+namespace mlir::triton::intel {
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type);
@@ -640,8 +635,6 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   }
 }
 
-} // namespace intel
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::intel
 
 #endif

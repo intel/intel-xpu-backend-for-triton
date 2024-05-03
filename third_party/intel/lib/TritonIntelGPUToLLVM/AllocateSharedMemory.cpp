@@ -1,27 +1,20 @@
-#include "mlir/Pass/Pass.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
-using namespace mlir::triton;
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_INTELALLOCATESHAREDMEMORY
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 namespace {
 
 struct AllocateSharedMemory
-    : public mlir::triton::impl::IntelAllocateSharedMemoryBase<
+    : public triton::gpu::intel::impl::IntelAllocateSharedMemoryBase<
           AllocateSharedMemory> {
   using IntelAllocateSharedMemoryBase<
       AllocateSharedMemory>::IntelAllocateSharedMemoryBase;
@@ -57,25 +50,9 @@ struct AllocateSharedMemory
       });
     });
     mod->setAttr("triton_gpu.shared",
-                 mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
-                                        allocation.getSharedMemorySize()));
+                 IntegerAttr::get(IntegerType::get(ctx, 32),
+                                  allocation.getSharedMemorySize()));
   }
 };
 
 } // namespace
-
-namespace mlir {
-
-namespace triton {
-
-namespace gpu {
-
-std::unique_ptr<OperationPass<ModuleOp>> createIntelAllocateSharedMemoryPass() {
-  return std::make_unique<AllocateSharedMemory>();
-}
-
-} // namespace gpu
-
-} // namespace triton
-
-} // namespace mlir

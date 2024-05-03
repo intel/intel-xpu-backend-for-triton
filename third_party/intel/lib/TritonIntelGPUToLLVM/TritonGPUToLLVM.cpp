@@ -1,16 +1,17 @@
 #include "PipelineManager.h"
-#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
-#include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Pass/Pass.h"
+
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
+#include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
@@ -18,12 +19,10 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_CONVERTTRITONINTELGPUTOLLVM
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 namespace mlir {
 FailureOr<LLVM::LLVMFuncOp>
@@ -33,7 +32,6 @@ convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
 }
 
 using namespace mlir;
-using namespace mlir::triton;
 
 namespace {
 
@@ -62,7 +60,7 @@ public:
 };
 
 struct ConvertTritonGPUToLLVM
-    : public triton::impl::ConvertTritonIntelGPUToLLVMBase<
+    : public triton::gpu::intel::impl::ConvertTritonIntelGPUToLLVMBase<
           ConvertTritonGPUToLLVM> {
   using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
 
@@ -119,14 +117,3 @@ struct ConvertTritonGPUToLLVM
 };
 
 } // anonymous namespace
-
-namespace mlir {
-namespace triton {
-
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonIntelGPUToLLVMPass() {
-  return std::make_unique<ConvertTritonGPUToLLVM>();
-}
-
-} // namespace triton
-} // namespace mlir

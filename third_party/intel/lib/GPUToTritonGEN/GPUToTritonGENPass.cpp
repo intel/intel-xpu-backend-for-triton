@@ -45,12 +45,10 @@
 #include "IndexIntrinsicsOpLowering.h"
 #include "OpToFuncCallLowering.h"
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTGPUTOTRITONGEN
 #include "intel/include/GPUToTritonGEN/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 using namespace mlir;
 using namespace mlir::triton;
