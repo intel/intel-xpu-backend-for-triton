@@ -1,10 +1,9 @@
-name: Conda build and test
+name: Conda Basekit build and test
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "5 2 * * *"
-  push:
 
 permissions: read-all
 
@@ -23,9 +22,7 @@ jobs:
       - runner-0.0.13
     strategy:
       matrix:
-        python:
-#          - "3.9"
-          - "3.10"
+        python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source {0}"
