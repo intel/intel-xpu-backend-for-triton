@@ -12,6 +12,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 #include <memory>
 #include <stack>
@@ -21,8 +22,10 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+#define GEN_PASS_DEF_TRITONINTELGPUREWRITETENSORPOINTER
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+} // namespace mlir
 
 namespace {
 
@@ -56,7 +59,7 @@ bool isDivisible(Value value, unsigned divisor) {
 /// Check if the tensor pointer should be removed. The tensor pointer should be
 /// removed if:
 ///   - the device architecture is not PVC
-///   - the tensor pointer does not have DpasEncodingAttr
+///   - the tensor pointer does not have DotEncoding with DpasEncoding parent
 ///   - the tensor pointer pitch is not divisible by Qword bitwidth
 ///   - the tensor pointer is not contiguous on memory
 bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
@@ -67,15 +70,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   auto ptrType = cast<tt::PointerType>(op.getType());
   auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
-  // Only keep the tensor pointer with the layout of DpasEncodingAttr
-  if (!tensorType.getEncoding())
-    return true;
-  auto dotLayout =
-      dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
-  if (!dotLayout)
-    return true;
-  auto dpasLayout = dyn_cast<ttgi::DpasEncodingAttr>(dotLayout.getParent());
-  if (!dpasLayout)
+  if (!ttgi::hasDotDpasEncoding(tensorType))
     return true;
 
   TypedValue<triton::PointerType> base = op.getBase();
@@ -325,16 +320,16 @@ private:
 // very fragile and to solve we should expose convert Ptr of tensor to a
 // structure contains all values and not only offsets.
 class TritonIntelGPURewriteTensorPointerPass
-    : public TritonIntelGPURewriteTensorPointerBase<
+    : public impl::TritonIntelGPURewriteTensorPointerBase<
           TritonIntelGPURewriteTensorPointerPass> {
 private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
   DenseSet<Value> valueToRemove;
 
 public:
-  TritonIntelGPURewriteTensorPointerPass(ttgi::DeviceArch arch) {
-    deviceArch = arch;
-  }
+  using impl::TritonIntelGPURewriteTensorPointerBase<
+      TritonIntelGPURewriteTensorPointerPass>::
+      TritonIntelGPURewriteTensorPointerBase;
 
   static bool needRewrite(Operation *op, const DenseSet<Value> &valueToRemove) {
     return std::any_of(op->getOperands().begin(), op->getOperands().end(),
@@ -775,8 +770,3 @@ public:
     }
   }
 };
-
-std::unique_ptr<Pass>
-ttgi::createTritonIntelGPURewriteTensorPointerPass(ttgi::DeviceArch arch) {
-  return std::make_unique<TritonIntelGPURewriteTensorPointerPass>(arch);
-}

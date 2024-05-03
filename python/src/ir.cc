@@ -19,7 +19,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>

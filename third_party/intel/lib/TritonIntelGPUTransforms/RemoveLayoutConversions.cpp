@@ -19,8 +19,10 @@
 #include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include <memory>
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+#define GEN_PASS_DEF_TRITONINTELGPUREMOVELAYOUTCONVERSIONS
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+} // namespace mlir
 
 #define DEBUG_TYPE "tritonintelgpu-remove-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -1175,11 +1177,9 @@ void hoistConvert(ModuleOp module) {
 }
 
 class TritonIntelGPURemoveLayoutConversionsPass
-    : public TritonIntelGPURemoveLayoutConversionsBase<
+    : public impl::TritonIntelGPURemoveLayoutConversionsBase<
           TritonIntelGPURemoveLayoutConversionsPass> {
 public:
-  TritonIntelGPURemoveLayoutConversionsPass() = default;
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -1254,9 +1254,4 @@ public:
 };
 
 } // namespace
-
-std::unique_ptr<Pass> intel::createTritonIntelGPURemoveLayoutConversionsPass() {
-  return std::make_unique<TritonIntelGPURemoveLayoutConversionsPass>();
-}
-
 } // namespace mlir::triton::gpu

@@ -63,12 +63,10 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.12
+      - runner-0.0.13
     strategy:
       matrix:
-        python:
-          - "3.9"
-          - "3.10"
+        python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -178,6 +176,7 @@ jobs:
           python3 07-extern-functions.py
           python3 08-grouped-gemm.py
           python3 09-experimental-block-pointer.py
+          TRITON_INTEL_ENABLE_BLOCK_PTR=1 python3 09-experimental-block-pointer.py
 
       - name: Run CXX unittests
         run: |

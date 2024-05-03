@@ -1,7 +1,8 @@
 #pragma once
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
+#include "third_party/intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -27,7 +28,6 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/InitAllPasses.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
 namespace test {
@@ -64,11 +64,11 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
 #ifdef USE_ROCM
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
+  mlir::triton::registerConvertBuiltinFuncToLLVM();
   mlir::triton::registerDecomposeUnsupportedAMDConversions();
 
   mlir::registerTritonAMDGPUAccelerateMatmul();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
-  mlir::registerTritonAMDGPURemoveLayoutConversions();
   mlir::registerTritonAMDGPUReorderInstructions();
   mlir::registerTritonAMDGPUStreamPipeline();
 

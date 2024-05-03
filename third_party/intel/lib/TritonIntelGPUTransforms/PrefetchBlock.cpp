@@ -45,6 +45,8 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -54,7 +56,7 @@
 #include <optional>
 
 namespace mlir {
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONINTELGPUPREFETCHBLOCK
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir
 
@@ -133,7 +135,7 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
 }
 
 class PrefetchBlockPass
-    : public TritonIntelGPUPrefetchBlockBase<PrefetchBlockPass> {
+    : public impl::TritonIntelGPUPrefetchBlockBase<PrefetchBlockPass> {
 public:
   /// Groups information for a candidate load.
   struct LoadInfo {
@@ -153,6 +155,9 @@ public:
     SmallVector<Value> offsets;   /// Offsets used by the AdvanceOp
     tt::MakeTensorPtrOp blockPtr; /// Operation defining the blocked pointer
   };
+
+  using impl::TritonIntelGPUPrefetchBlockBase<
+      PrefetchBlockPass>::TritonIntelGPUPrefetchBlockBase;
 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
@@ -360,6 +365,19 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
 
     prefetchPtrs.push_back(currPtr);
   }
+
+  // FIXME: try to use a named barrier to increase performance.
+  if (injectSplitBarriers) {
+    Location loc = loop.getLoc();
+    b.setInsertionPoint(loop);
+    b.create<tt::TritonGEN::SplitBarrierSignalOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.setInsertionPoint(loop->getNextNode());
+    b.create<tt::TritonGEN::SplitBarrierWaitOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+  }
 }
 
 void PrefetchBlockPass::injectPrefetchOpsInBody(
@@ -389,10 +407,6 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
   unsigned i = 0;
   for (tt::LoadOp load : loopLoads.at(loop)) {
     const LoadInfo &loadInfo = loadToLoadInfo.at(load);
-    // FIXME: add a named barrier to increase performance
-    // if (i == 0)
-    //   b.create<gpu::BarrierOp>(loc);
-
     b.setInsertionPoint(loadInfo.getAdvance());
     Location loc = loadInfo.getAdvance().getLoc();
 
@@ -405,12 +419,19 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
     i++;
   }
 
+  // FIXME: try to use a named barrier to increase performance.
+  if (injectSplitBarriers) {
+    Location loc = loop.getLoc();
+    b.setInsertionPoint(yield);
+    b.create<tt::TritonGEN::SplitBarrierWaitOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.create<tt::TritonGEN::SplitBarrierSignalOp>(
+        loc, tt::TritonGEN::MemFence::NONE,
+        tt::TritonGEN::MemScope::WORK_GROUP);
+  }
+
   yield.getResultsMutable().append(advances);
 }
 
 } // namespace
-
-std::unique_ptr<mlir::Pass>
-mlir::triton::gpu::intel::createPrefetchBlockPass() {
-  return std::make_unique<PrefetchBlockPass>();
-}

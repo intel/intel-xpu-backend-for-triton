@@ -156,6 +156,12 @@ public:
   using ConvertTritonGPUOpToLLVMPattern<
       triton::HistogramOp>::ConvertTritonGPUOpToLLVMPattern;
 
+  explicit HistogramOpConversion(LLVMTypeConverter &typeConverter,
+                                 const TargetInfoBase &targetInfo,
+                                 PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
   LogicalResult
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -189,8 +195,8 @@ public:
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     Attribute dstEncoding = dstType.getEncoding();
-    auto indices =
-        ::intel::emitIndices(op.getLoc(), rewriter, dstEncoding, dstType, true);
+    auto indices = ::intel::emitIndices(op.getLoc(), rewriter, targetInfo,
+                                        dstEncoding, dstType, true);
     SmallVector<Value> innerDimIndices;
     for (int i = 0; i < indices.size(); ++i)
       innerDimIndices.push_back(indices[i][0]);
@@ -203,11 +209,14 @@ public:
     rewriter.replaceOp(op, results);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 } // namespace
 
 void mlir::triton::intel::populateHistogramOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<HistogramOpConversion>(typeConverter, benefit);
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+  patterns.add<HistogramOpConversion>(typeConverter, targetInfo, benefit);
 }

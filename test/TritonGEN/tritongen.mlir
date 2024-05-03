@@ -38,6 +38,20 @@ llvm.func @triton_gen.barrier() {
   llvm.return
 }
 
+llvm.func @triton_gen.split_barrier_signal() {
+  // CHECK-LABEL: triton_gen.split_barrier_signal
+  // CHECK: triton_gen.split_barrier_signal {mem_fence = None, mem_scope = WorkGroup}
+  triton_gen.split_barrier_signal {mem_fence=None, mem_scope=WorkGroup}
+  llvm.return
+}
+
+llvm.func @triton_gen.split_barrier_wait() {
+  // CHECK-LABEL: triton_gen.split_barrier_wait
+  // CHECK: triton_gen.split_barrier_wait {mem_fence = Local, mem_scope = SubGroup}
+  triton_gen.split_barrier_wait {mem_fence=Local, mem_scope=SubGroup}
+  llvm.return
+}
+
 llvm.func @triton_gen.named_barrier_signal(%barrier_id : i32, %thread_group_count : i32) {
   // CHECK-LABEL: triton_gen.named_barrier_signal(%arg0: i32, %arg1: i32) {
   // CHECK-NEXT: triton_gen.named_barrier_signal %arg0, %arg1 : (i32, i32)

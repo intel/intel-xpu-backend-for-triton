@@ -1,14 +1,10 @@
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/TypeUtilities.h"
-
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TargetInfo.h"
 #include "Utility.h"
-
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-#include <numeric>
-
 using namespace mlir;
+using namespace mlir::triton::gpu;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
@@ -20,11 +16,11 @@ namespace {
 // Return the mask for the unique data accessed by given tensor type.
 // Used to mask out the redundant data accessed by threads.
 Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
-                        Location loc) {
+                        Location loc, const AMD::TargetInfo &targetInfo) {
   auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
   Value mask = int_val(1, 1);
   auto tid = tid_val();
-  auto clusterCTAId = getClusterCTAId(rewriter, loc);
+  auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
     auto shape = tensorTy.getShape();
@@ -92,8 +88,9 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
 }
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
-  explicit LoadStoreConversionBase(ModuleAxisInfoAnalysis &axisAnalysisPass)
-      : axisAnalysisPass(axisAnalysisPass) {}
+  explicit LoadStoreConversionBase(const AMD::TargetInfo &targetInfo,
+                                   ModuleAxisInfoAnalysis &axisAnalysisPass)
+      : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
   unsigned getContiguity(Value ptr) const {
     auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
@@ -118,6 +115,7 @@ struct LoadStoreConversionBase {
 
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
+  const AMD::TargetInfo &targetInfo;
 };
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
@@ -125,10 +123,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
   using ConvertOpToLLVMPattern<triton::LoadOp>::ConvertOpToLLVMPattern;
 
   LoadOpConversion(LLVMTypeConverter &converter,
+                   const AMD::TargetInfo &targetInfo,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
@@ -206,8 +205,26 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
       auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
-      auto loadVal = llLoad(rewriter, loc, getTypeConverter(), ptr, vecTy, pred,
-                            vecStart, otherElems);
+
+      mlir::Attribute zeroAttr = rewriter.getZeroAttr(valueElemTy);
+      auto denseValue =
+          DenseElementsAttr::get(vecTy.cast<mlir::ShapedType>(), zeroAttr);
+      Value zeroVal = rewriter.create<LLVM::ConstantOp>(loc, vecTy, denseValue);
+
+      Value falseVal = zeroVal;
+      // If we need to mask the loaded value with other elements
+      if (otherElems.size() != 0) {
+        Value v = undef(vecTy);
+        for (size_t s = 0; s < vec; ++s) {
+          Value otherElem = otherElems[vecStart + s];
+          Value indexVal = createIndexAttrConstant(
+              rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+          v = insert_element(vecTy, v, otherElem, indexVal);
+        }
+        falseVal = v;
+      }
+
+      auto loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii % vec);
@@ -229,10 +246,11 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
   using ConvertOpToLLVMPattern<triton::StoreOp>::ConvertOpToLLVMPattern;
 
   StoreOpConversion(LLVMTypeConverter &converter,
+                    const AMD::TargetInfo &targetInfo,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::StoreOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -269,7 +287,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       vec = std::min(vec, maskAlign);
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
@@ -309,8 +327,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         }
         llWord = bitcast(llWord, valArgTy);
         Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
-        llStore(rewriter, loc, ptrElems[vecStart + wordIdx * wordNElems],
-                llWord, maskVal);
+        auto address = ptrElems[vecStart + wordIdx * wordNElems];
+        llStore(rewriter, loc, address, llWord, maskVal);
       }
     }
     rewriter.eraseOp(op);
@@ -346,10 +364,11 @@ struct AtomicCASOpConversion
   using ConvertOpToLLVMPattern<triton::AtomicCASOp>::ConvertOpToLLVMPattern;
 
   AtomicCASOpConversion(LLVMTypeConverter &converter,
+                        const AMD::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicCASOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
@@ -387,7 +406,7 @@ struct AtomicCASOpConversion
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -481,10 +500,11 @@ struct AtomicRMWOpConversion
   using ConvertOpToLLVMPattern<triton::AtomicRMWOp>::ConvertOpToLLVMPattern;
 
   AtomicRMWOpConversion(LLVMTypeConverter &converter,
+                        const AMD::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicRMWOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   /// Try to match the mlir::triton::RMWOp to LLVM::AtomicBinOp.
   static std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
@@ -635,13 +655,13 @@ struct AtomicRMWOpConversion
 
 namespace mlir::triton::AMD {
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                       const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
                                        int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
-  patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
+               StoreOpConversion>(typeConverter, targetInfo, axisInfoAnalysis,
+                                  benefit);
 }
 } // namespace mlir::triton::AMD

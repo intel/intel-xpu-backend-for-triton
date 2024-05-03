@@ -15,8 +15,9 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -289,11 +290,13 @@ void distributeScfForOp(scf::ForOp op) {
 
 } // namespace
 
-#define GEN_PASS_CLASSES
+namespace mlir {
+#define GEN_PASS_DEF_TRITONINTELGPUDISTRIBUTETOWARPS
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+} // namespace mlir
 
 class TritonIntelGPUDistributeToWarpsPass
-    : public TritonIntelGPUDistributeToWarpsBase<
+    : public impl::TritonIntelGPUDistributeToWarpsBase<
           TritonIntelGPUDistributeToWarpsPass> {
 public:
   void runOnOperation() override {
@@ -338,8 +341,3 @@ public:
     }
   }
 };
-
-std::unique_ptr<Pass>
-mlir::triton::gpu::intel::createTritonIntelGPUDistributeToWarpsPass() {
-  return std::make_unique<TritonIntelGPUDistributeToWarpsPass>();
-}

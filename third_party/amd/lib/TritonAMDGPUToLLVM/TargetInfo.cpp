@@ -1,6 +1,7 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -53,6 +54,13 @@ Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 
+Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
+  // On AMD hardware we don't have CTA clusters like NVIDIA. So this will always
+  // be zero. Whoever calling into this should make sure the whole program does
+  // not try to utilize CTA clusters.
+  return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+}
+
 Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
                          Type type, Value cmp) const {
   auto stringAttr = rewriter.getStringAttr("llvm.amdgcn.ballot");
@@ -63,16 +71,17 @@ Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
   return asmResult;
 }
 
-Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                              Value ptr, Value val, Value pred) const {
-  return mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
+void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                             Value ptr, Value val, Value pred) const {
+  mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
                              const TypeConverter *converter, Value ptr,
                              Type elemTy, Value pred) const {
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, converter, ptr, elemTy, pred,
-                                 0 /*vecStart*/, {} /*otherElems*/);
+  Value falseVal = rewriter.create<arith::ConstantOp>(
+      loc, elemTy, rewriter.getZeroAttr(elemTy));
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
 }
 
 Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,

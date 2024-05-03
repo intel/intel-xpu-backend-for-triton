@@ -41,9 +41,12 @@ runs:
     - name: Load wheels from cache
       id: wheels-cache
       uses: ./.github/actions/load
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: "1"
       with:
         path: ~/wheels
-        key: wheels-py${{ inputs.python_version }}-${{ steps.run_id.outputs.run_id }}
+        key: wheels-py${{ inputs.python_version }}-${{ steps.run_id.outputs.run_id }}-$CACHE_NUMBER
 
     - name: Download wheels from specified workflow run artifacts
       if: ${{ steps.wheels-cache.outputs.status == 'miss' }}

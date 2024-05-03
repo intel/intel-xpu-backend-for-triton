@@ -40,9 +40,9 @@ SHELL ["/bin/bash", "-xec"]
 
 # TODO: install only necessary components
 RUN \
-  curl -sSLO https://registrationcenter-download.intel.com/akdlm/IRC_NAS/fdc7a2bc-b7a8-47eb-8876-de6201297144/l_BaseKit_p_2024.1.0.596_offline.sh; \
-  sh l_BaseKit*.sh -a --silent --eula accept; \
-  rm l_BaseKit*.sh
+  curl -sSLO https://registrationcenter-download.intel.com/akdlm/IRC_NAS/52723419-d344-42bf-93ca-867606409cf0/l_intel-for-pytorch-gpu-dev_p_0.5.0.49_offline.sh; \
+  sh l_intel-for-pytorch-gpu*.sh -a --silent --eula accept; \
+  rm l_intel-for-pytorch-gpu*.sh
 
 RUN \
   curl -sSLO https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh; \

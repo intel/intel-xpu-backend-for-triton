@@ -7,7 +7,9 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
+import zipfile
 import urllib.request
+from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
 from typing import NamedTuple
@@ -133,9 +135,8 @@ def get_pybind11_package_info():
 
 # json
 def get_json_package_info():
-    name = "json"
-    url = "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
-    return Package("json", name, url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
+    url = "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
+    return Package("json", "", url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
 
 
 # llvm
@@ -148,31 +149,21 @@ def get_llvm_package_info():
         if arch == 'arm64':
             system_suffix = 'ubuntu-arm64'
         else:
-            # Ubuntu 22.04 has GLIBCXX support up to GLIBCXX_3.4.30.
-            # Ubuntu 20.04 has GLIBCXX support up to GLIBCXX_3.4.28.
-            # Almalinux 8 (and other RHEL8 derivatives) have GLIBCXX
-            # support up to GLIBCXX_3.4.25.
-            target_libcxx_found = False
-            if os.path.isfile("/usr/lib/" + platform.machine() + "-linux-gnu/libstdc++.so.6"):
-                check_libcxx_version = \
-                    subprocess.run(
-                        "strings /usr/lib/" + platform.machine() + "-linux-gnu/libstdc++.so.6 | grep GLIBCXX_3.4.26",
-                        check=False, shell=True
-                    )
-                target_libcxx_found = check_libcxx_version.returncode == 0
-            elif os.path.isfile("/usr/lib64/libstdc++.so.6"):
-                check_libcxx_version = \
-                    subprocess.run(
-                        "strings /usr/lib64/libstdc++.so.6 | grep GLIBCXX_3.4.26",
-                        check=False, shell=True
-                    )
-                target_libcxx_found = check_libcxx_version.returncode == 0
-            if target_libcxx_found:
+            vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
+            vglibc = vglibc[0] * 100 + vglibc[1]
+            if vglibc > 228:
+                # Ubuntu 24 LTS (v2.39)
+                # Ubuntu 22 LTS (v2.35)
+                # Ubuntu 20 LTS (v2.31)
                 system_suffix = "ubuntu-x64"
+            elif vglibc > 217:
+                # Manylinux_2.28 (v2.28)
+                # AlmaLinux 8 (v2.28)
+                system_suffix = "almalinux-x64"
             else:
-                vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
-                vglibc = vglibc[0] * 100 + vglibc[1]
-                system_suffix = 'almalinux-x64' if vglibc > 217 else 'centos-x64'
+                # Manylinux_2014 (v2.17)
+                # CentOS 7 (v2.17)
+                system_suffix = "centos-x64"
     else:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
@@ -220,8 +211,14 @@ def get_thirdparty_packages(packages: list):
                 shutil.rmtree(package_root_dir)
             os.makedirs(package_root_dir, exist_ok=True)
             print(f'downloading and extracting {p.url} ...')
-            file = tarfile.open(fileobj=open_url(p.url), mode="r|*")
-            file.extractall(path=package_root_dir)
+            with open_url(p.url) as response:
+                if p.url.endswith(".zip"):
+                    file_bytes = BytesIO(response.read())
+                    with zipfile.ZipFile(file_bytes, "r") as file:
+                        file.extractall(path=package_root_dir)
+                else:
+                    with tarfile.open(fileobj=response, mode="r|*") as file:
+                        file.extractall(path=package_root_dir)
             # write version url to package_dir
             with open(os.path.join(package_dir, "version.txt"), "w") as f:
                 f.write(p.url)
@@ -589,7 +586,6 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",

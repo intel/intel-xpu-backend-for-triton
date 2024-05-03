@@ -8,7 +8,9 @@
 
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/OpDefinition.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include <cstdint>
 

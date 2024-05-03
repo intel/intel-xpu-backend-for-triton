@@ -73,4 +73,27 @@ def TritonGEN_PrefetchCacheControl : I32EnumAttr<"PrefetchCacheControl",
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
 
+/// Enum attribute of the different memory fence settings.
+def TritonGEN_MemFence : I32EnumAttr<"MemFence",
+  "TritonGEN memory fence",
+  [ I32EnumAttrCase<"NONE",             0, "None">,
+    I32EnumAttrCase<"LOCAL",            1, "Local">,
+    I32EnumAttrCase<"GLOBAL",           2, "Global">,
+    I32EnumAttrCase<"LOCAL_AND_GLOBAL", 3, "LocalAndGlobal">
+  ]> {
+  let cppNamespace = "::mlir::triton::TritonGEN";
+}
+
+/// Enum attribute of the different memory scope settings.
+def TritonGEN_MemScope : I32EnumAttr<"MemScope",
+  "TritonGEN memory scope",
+  [ I32EnumAttrCase<"WORK_ITEM",       0, "WorkItem">,
+    I32EnumAttrCase<"WORK_GROUP",      1, "WorkGroup">,
+    I32EnumAttrCase<"DEVICE",          2, "Device">,
+    I32EnumAttrCase<"ALL_SVM_DEVICES", 3, "AllSvmDevices">,
+    I32EnumAttrCase<"SUB_GROUP",       4, "SubGroup">
+  ]> {
+  let cppNamespace = "::mlir::triton::TritonGEN";
+}
+
 #endif // TRITONGEN_ATTRDEFS

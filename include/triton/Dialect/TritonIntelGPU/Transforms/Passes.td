@@ -20,8 +20,6 @@ def TritonIntelGPUAccelerateMatmul
     compatible with the Intel DPAS instruction requirements.
   }];
 
-  let constructor = "mlir::triton::gpu::intel::createTritonIntelGPUAccelerateMatmulPass()";
-
   let dependentDialects = [
     "mlir::triton::TritonDialect",
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
@@ -93,12 +91,38 @@ def TritonIntelGPUDistributeToWarps
     ```
   }];
 
-  let constructor = "mlir::triton::gpu::intel::createTritonIntelGPUDistributeToWarpsPass()";
-
   let dependentDialects = ["mlir::triton::TritonDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::arith::ArithDialect",
                            "mlir::gpu::GPUDialect"];
+}
+
+def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
+  let summary = "Pipeline loops";
+
+  let description = [{
+    Apply software pipelinining to loops containing `tt.dot` operations.
+    The pass supports prefetching `tt.dot` operands. The `num-stages` argument controls
+    the prefetching and distance (i.e. the number of iterations to prefetch in advance).
+  }];
+
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
+
+  let options = [
+    Option<"numStages", "num-stages",
+           "int32_t", /*default*/"3",
+           "number of pipeline stages">,
+    Option<"deviceArch", "device-architecture",
+            "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
+            "device architecture",
+            "llvm::cl::values("
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::UNKNOWN, \"UNKNOWN\", \"Unknown arch\"), "
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::ATS, \"ATS\", \"ATS arch\"), "
+            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::PVC, \"PVC\", \"PVC arch\"))">
+  ];
 }
 
 def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-conversions", "mlir::ModuleOp"> {
@@ -143,8 +167,6 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
     accesses in the IO buffer or cache them.
   }];
 
-  let constructor = "mlir::triton::gpu::intel::createTritonIntelGPURemoveLayoutConversionsPass()";
-
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
 
@@ -159,8 +181,6 @@ def TritonIntelGPURewriteTensorPointer : Pass<"tritonintelgpu-rewrite-tensor-poi
     create and advance the block pointer (that is `tt.make_tensor_tr` and
     `tt.advance`).
   }];
-
-  let constructor = "mlir::triton::gpu::intel::createTritonIntelGPURewriteTensorPointerPass()";
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
 
@@ -187,15 +207,18 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
       - only targets that have a dedicated prefetch instruction are supported
   }];
 
-  let constructor = "mlir::triton::gpu::intel::createPrefetchBlockPass()";
   let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::TritonGEN::TritonGENDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::gpu::GPUDialect"];
   let options = [
-    Option<"numAdvancePrefetches", "num-advance-prefetched",
+    Option<"numAdvancePrefetches", "num-advance-prefetches",
            "int32_t", /*default*/"3",
            "Number of loop iteration to prefetch in advance of the loop">,
+    Option<"injectSplitBarriers", "inject-split-barriers",
+           "bool", /*default*/"true",
+           "Whether to inject split barriers in (and around) the loop">,
   ];
 }
 
@@ -239,8 +262,6 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
       ...
       ```
   }];
-
-  let constructor = "mlir::triton::gpu::intel::createMatchTargetSizePass()";
 
   let dependentDialects = ["mlir::triton::TritonDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];

@@ -13,6 +13,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
@@ -201,31 +202,70 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
   SmallVector<Value> queue = {op->getResult(0)};
   SetVector<Operation *> forwardSlice;
   llvm::SmallDenseSet<Value> seen;
-  bool isMMAV3 = encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() == 3;
   while (!queue.empty()) {
     Value currentValue = queue.back();
     queue.pop_back();
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
+      // HACK: Stop propagation if the ReduceOp is using mma layout but is
+      // producing tensor smaller than the layout we would like to propagate.
+      // This is to avoid stepping into the known bug.
+      if (isa<mlir::triton::ReduceOp>(op)) {
+        auto tensorType =
+            op->getOperand(0).getType().dyn_cast<RankedTensorType>();
+        if (tensorType &&
+            tensorType.getEncoding().isa<NvidiaMmaEncodingAttr>()) {
+          auto mmaInstrShape =
+              encoding.cast<NvidiaMmaEncodingAttr>().getInstrShape();
+          if (tensorType.getShape()[tensorType.getRank() - 2] <
+                  mmaInstrShape[0] ||
+              tensorType.getShape()[tensorType.getRank() - 1] <
+                  mmaInstrShape[1]) {
+            return false;
+          }
+        }
+      }
+
       if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
         Attribute dstEncoding = convertOp.getType().getEncoding();
         if (auto mmaLayout = dstEncoding.dyn_cast<NvidiaMmaEncodingAttr>())
           return (mmaLayout.getVersionMajor() > 1) ? true
                                                    : mmaLayout == encoding;
-        if (dstEncoding.isa<DotOperandEncodingAttr>())
-          return encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() > 1;
+        if (dstEncoding.isa<triton::gpu::AMDMfmaEncodingAttr,
+                            triton::gpu::AMDWmmaEncodingAttr>())
+          return true;
+        if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>()) {
+          if (auto mmaLayout = encoding.dyn_cast<NvidiaMmaEncodingAttr>()) {
+            return mmaLayout.getVersionMajor() > 1;
+          } else if (encoding.isa<triton::gpu::AMDMfmaEncodingAttr>() ||
+                     encoding.isa<triton::gpu::AMDWmmaEncodingAttr>()) {
+            return true;
+          }
+        }
       }
+      bool isMMAV3 =
+          encoding.isa<NvidiaMmaEncodingAttr>() &&
+          encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() == 3;
       if (isMMAV3 && isa<LocalAllocOp>(op))
         return true;
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
         continue;
+      if (auto ifOp = dyn_cast<scf::IfOp>(yield->getParentOp())) {
+        for (OpOperand &operand : yield->getOpOperands()) {
+          Operation *def = operand.get().getDefiningOp();
+          if (def &&
+              (forwardSlice.count(def) || operand.get() == currentValue) &&
+              (seen.insert(operand.get()).second == true))
+            queue.push_back(ifOp.getResult(operand.getOperandNumber()));
+        }
+      }
       auto forOp = dyn_cast<scf::ForOp>(yield.getOperation()->getParentOp());
       if (!forOp)
         continue;
       for (OpOperand &operand : yield->getOpOperands()) {
         Operation *def = operand.get().getDefiningOp();
-        if (def && forwardSlice.count(def) &&
+        if (def && (forwardSlice.count(def) || operand.get() == currentValue) &&
             (seen.insert(operand.get()).second == true))
           queue.push_back(forOp.getRegionIterArg(operand.getOperandNumber()));
       }
@@ -260,6 +300,7 @@ void LayoutPropagation::initAnchorLayout() {
       // back to mma further down to avoid generating reduction with MMA
       // layout that may have lower performance.
       // This can be improved with more aggressive backward propagation.
+      // FIXME: Change back NvidiaMmaEncodingAttr to MmaEncodingTrait.
       if (tensorType.getEncoding().isa<NvidiaMmaEncodingAttr>() &&
           v.getDefiningOp() &&
           !hasConvertToMMATransisitiveUse(v.getDefiningOp(),
@@ -399,7 +440,7 @@ void LayoutPropagation::resolveConflicts() {
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && e.isa<BlockedEncodingAttr>()) ||
-          (!isLoadOrStore && e.isa<NvidiaMmaEncodingAttr>())) {
+          (!isLoadOrStore && e.isa<MmaEncodingTrait>())) {
         encoding = e;
         break;
       }

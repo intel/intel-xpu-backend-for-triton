@@ -121,17 +121,17 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttgpuir.add_coalesce(pm)
-        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
-        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         if options.num_stages == 0 and amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_stream_pipeline(pm)
             passes.common.add_canonicalizer(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if options.num_stages != 0:
             amd.passes.ttgpuir.add_reorder_instructions(pm)
@@ -158,6 +158,12 @@ class HIPBackend(BaseBackend):
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
+        # This pass (`add_builtin_func_to_llvmir`) serves as a temporary workaround to address the issue of excessive basic block
+        # count caused by predicated loads/stores. In certain kernels, the addition of these blocks can cause the MLIR
+        # canonicalizer to never finish when attempting to merge blocks. The permanent solution under consideration
+        # involves using MUBUF instructions that have built-in out-of-bounds checks, which would eliminate the need
+        # for conditional branching around memory accesses.
+        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":

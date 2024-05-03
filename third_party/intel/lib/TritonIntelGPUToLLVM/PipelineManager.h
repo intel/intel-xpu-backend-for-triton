@@ -183,13 +183,13 @@ public:
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
     } else {
-      intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, patterns,
-                                                   benefit);
+      intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
+                                                   patterns, benefit);
       intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateElementwiseOpToLLVMPatterns(
           typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-      intel::populateLoadStoreOpToLLVMPatterns(typeConverter, patterns,
-                                               axisInfoAnalysis, benefit);
+      intel::populateLoadStoreOpToLLVMPatterns(
+          typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
       intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                             benefit);
       intel::populateScanOpToLLVMPatterns(typeConverter, patterns, targetInfo,
@@ -199,15 +199,17 @@ public:
       intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
                                                 benefit);
       intel::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
-                                               benefit);
+                                               targetInfo, benefit);
       intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                           benefit);
       populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                     benefit);
-      intel::populateMemoryOpToLLVMPattern(typeConverter, patterns, benefit);
+      intel::populateMemoryOpToLLVMPattern(typeConverter, targetInfo, patterns,
+                                           benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
-      intel::populateMakeRangeOpToLLVMPattern(typeConverter, patterns, benefit);
+      intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
+                                              patterns, benefit);
     }
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
