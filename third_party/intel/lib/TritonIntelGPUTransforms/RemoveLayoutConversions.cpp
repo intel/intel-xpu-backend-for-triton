@@ -1172,9 +1172,8 @@ void hoistConvert(ModuleOp module) {
 }
 
 class TritonIntelGPURemoveLayoutConversionsPass
-    : public intel::impl::
-          TritonIntelGPURemoveLayoutConversionsBase<
-              TritonIntelGPURemoveLayoutConversionsPass> {
+    : public intel::impl::TritonIntelGPURemoveLayoutConversionsBase<
+          TritonIntelGPURemoveLayoutConversionsPass> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
