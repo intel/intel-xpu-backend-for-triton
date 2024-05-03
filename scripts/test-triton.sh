@@ -108,7 +108,6 @@ run_core_tests() {
     echo "Not found '${CORE_TEST_DIR}'. Build Triton please" ; exit 3
   fi
   cd ${CORE_TEST_DIR}
-sleep 6000
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
   pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
