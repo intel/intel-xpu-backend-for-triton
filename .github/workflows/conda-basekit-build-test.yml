@@ -89,7 +89,7 @@ jobs:
 
           conda create -y -n dpcpp -c intel -c conda-forge dpcpp_linux-64=2024.1.*
           ln -snf $HOME/miniconda3/envs/dpcpp/lib/clang/18/include/CL $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
-          ln -snf $HOME/miniconda3/envs/envs/dpcpp/include/sycl $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
+          ln -snf $HOME/miniconda3/envs/dpcpp/include/sycl $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
           export PATH=$PATH:$HOME/miniconda3/envs/dpcpp/bin
 
           export TRITON_TEST_REPORTS=true
