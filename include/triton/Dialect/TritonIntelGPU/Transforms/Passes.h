@@ -13,7 +13,7 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
-namespace mlir ::triton ::gpu::intel {
+namespace mlir::triton::gpu::intel {
 
 enum class DeviceArch {
   UNKNOWN = 0,
