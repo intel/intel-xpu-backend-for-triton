@@ -2,7 +2,7 @@
 #define TRITON_INTEL_GPU_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
-include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
+include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 
 //===----------------------------------------------------------------------===//

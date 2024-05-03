@@ -8,10 +8,11 @@
 
 #include "triton/Analysis/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include <optional>
 
 using namespace mlir;

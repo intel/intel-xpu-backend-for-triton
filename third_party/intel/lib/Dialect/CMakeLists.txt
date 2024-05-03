@@ -1,1 +1,2 @@
 add_subdirectory(TritonGEN)
+add_subdirectory(TritonIntelGPU)

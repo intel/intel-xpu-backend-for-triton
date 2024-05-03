@@ -4,18 +4,20 @@
 
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-using namespace mlir::triton::gpu::intel;
 
 // Utility
 namespace mlir {
@@ -2035,7 +2037,7 @@ public:
     } else if (auto blockedAttr = attr.dyn_cast<BlockedEncodingAttr>()) {
       os << "blocked";
       return AliasResult::FinalAlias;
-    } else if (auto warpAttr = attr.dyn_cast<WarpEncodingAttr>()) {
+    } else if (auto warpAttr = attr.dyn_cast<intel::WarpEncodingAttr>()) {
       os << "warp";
       return AliasResult::FinalAlias;
     } /* else if (auto sliceAttr = attr.dyn_cast<SliceEncodingAttr>()) {
@@ -2652,7 +2654,7 @@ struct CanonicalizeConvertFromConvert
     auto dstType = op.getType();
     if (dstType.getEncoding().isa<DotOperandEncodingAttr>() &&
         (srcType.getEncoding().isa<NvidiaMmaEncodingAttr>() ||
-         srcType.getEncoding().isa<DpasEncodingAttr>()))
+         srcType.getEncoding().isa<intel::DpasEncodingAttr>()))
       return failure();
 
     // for hopper MMAv3

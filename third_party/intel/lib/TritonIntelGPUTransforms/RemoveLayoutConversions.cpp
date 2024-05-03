@@ -7,14 +7,17 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREMOVELAYOUTCONVERSIONS
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
 #define DEBUG_TYPE "tritonintelgpu-remove-layout-conversions"

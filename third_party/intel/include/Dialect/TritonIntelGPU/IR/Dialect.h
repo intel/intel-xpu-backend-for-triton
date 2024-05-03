@@ -10,10 +10,11 @@
 #define TRITON_DIALECT_TRITON_INTEL_GPU_IR_DIALECT_H
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h.inc"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h.inc"
 
 #define GET_OP_CLASSES
-#include "triton/Dialect/TritonIntelGPU/IR/Ops.h.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Ops.h.inc"
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_IR_DIALECT_H

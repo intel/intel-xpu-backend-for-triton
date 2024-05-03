@@ -22,12 +22,11 @@ enum class DeviceArch {
 };
 
 #define GEN_PASS_DECL
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_TRANSFORMS_PASSES_H

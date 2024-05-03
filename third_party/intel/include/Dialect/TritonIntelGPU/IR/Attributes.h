@@ -2,6 +2,6 @@
 #define TRITON_DIALECT_TRITON_INTEL_GPU_IR_ATTRIBUTES_H
 
 #define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.h.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.h.inc"
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_IR_ATTRIBUTES_H

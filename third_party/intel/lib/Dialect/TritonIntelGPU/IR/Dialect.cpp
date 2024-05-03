@@ -6,9 +6,11 @@
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.cpp.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.cpp.inc"
+
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -80,7 +82,7 @@ static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
 // Attribute methods
 //===----------------------------------------------------------------------===//
 #define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.cpp.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.cpp.inc"
 
 //===----------------------------------------------------------------------===//
 // DpasEncodingAttr
@@ -539,13 +541,13 @@ void TritonIntelGPUDialect::initialize() {
 
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.cpp.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.cpp.inc"
       >();
 
   addInterfaces<TritonIntelGPUInferLayoutInterface>();
 
   addOperations<
 #define GET_OP_LIST
-#include "triton/Dialect/TritonIntelGPU/IR/Ops.cpp.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Ops.cpp.inc"
       >();
 }

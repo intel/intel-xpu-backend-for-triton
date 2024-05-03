@@ -2,11 +2,14 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -16,7 +19,7 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUACCELERATEMATMUL
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
 namespace {

@@ -1,10 +1,13 @@
 #pragma once
-#include "third_party/intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/TritonGENToLLVM/Passes.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #ifdef USE_ROCM
@@ -14,11 +17,8 @@
 #endif
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
-#include "intel/include/TritonGENToLLVM/Passes.h"
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "nvidia/include/NVGPUToLLVM/Passes.h"
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"

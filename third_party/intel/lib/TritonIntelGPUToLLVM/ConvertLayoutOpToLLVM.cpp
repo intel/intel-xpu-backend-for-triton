@@ -2,10 +2,9 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
