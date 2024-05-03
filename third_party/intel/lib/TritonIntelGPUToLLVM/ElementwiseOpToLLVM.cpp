@@ -2342,7 +2342,7 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
 
 } // namespace
 
-namespace mlir::triton::gpu::intel {
+namespace mlir::triton::intel {
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
@@ -2454,4 +2454,4 @@ void populateElementwiseOpToLLVMPatterns(
       typeConverter, axisInfoAnalysis, benefitForPropNan);
 }
 
-} // namespace mlir::triton::gpu::intel
+} // namespace mlir::triton::intel
