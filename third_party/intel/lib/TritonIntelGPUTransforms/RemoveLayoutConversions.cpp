@@ -1172,7 +1172,7 @@ void hoistConvert(ModuleOp module) {
 }
 
 class TritonIntelGPURemoveLayoutConversionsPass
-    : public triton::gpu::intel::impl::
+    : public intel::impl::
           TritonIntelGPURemoveLayoutConversionsBase<
               TritonIntelGPURemoveLayoutConversionsPass> {
 public:
