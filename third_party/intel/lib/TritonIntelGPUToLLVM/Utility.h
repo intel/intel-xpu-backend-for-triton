@@ -9,13 +9,11 @@
 #ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 

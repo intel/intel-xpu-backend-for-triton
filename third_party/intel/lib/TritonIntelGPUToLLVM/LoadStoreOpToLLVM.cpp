@@ -8,9 +8,9 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;

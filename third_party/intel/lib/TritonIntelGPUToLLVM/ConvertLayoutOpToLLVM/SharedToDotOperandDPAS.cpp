@@ -1,7 +1,7 @@
 #include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;

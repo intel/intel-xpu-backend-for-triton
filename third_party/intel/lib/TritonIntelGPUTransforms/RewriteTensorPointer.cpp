@@ -6,13 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Pass/Pass.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 #include <memory>
 #include <stack>
@@ -24,7 +25,7 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir {
 #define GEN_PASS_DEF_TRITONINTELGPUREWRITETENSORPOINTER
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir
 
 namespace {

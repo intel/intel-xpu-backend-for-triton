@@ -9,8 +9,9 @@
 //
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include <set>
 #include <type_traits>
 

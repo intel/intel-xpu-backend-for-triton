@@ -1,15 +1,15 @@
 #include "Schedule.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 using namespace mlir;
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir {
 #define GEN_PASS_DEF_TRITONINTELGPUPIPELINE
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir
 
 // Return true if the preconditions for pipelining the loop are met.

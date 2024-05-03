@@ -1,17 +1,13 @@
 #include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
-
 #include "mlir/IR/BuiltinTypes.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
-
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-
 #include <optional>
 #include <thread>
 

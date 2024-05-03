@@ -37,27 +37,24 @@
 ///     tt.advance %prefetch_ptr
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Debug.h"
-
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
-
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
 #include <memory>
 #include <optional>
 
 namespace mlir {
 #define GEN_PASS_DEF_TRITONINTELGPUPREFETCHBLOCK
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir
 
 using namespace mlir;

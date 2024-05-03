@@ -6,9 +6,10 @@
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.cpp.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.cpp.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -360,17 +361,14 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   auto shapeC = getShapeC();
   llvm::ArrayRef<unsigned> rC = shapeC;
   auto warpsPerCTA = getWarpsPerCTA();
-  printer << "<{"
-          << "repeatCount = " << getRepeatCount() << ", "
+  printer << "<{" << "repeatCount = " << getRepeatCount() << ", "
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
           << "opsPerChan = " << getOpsPerChannel() << ", "
           << "threadsPerWarp = " << getSubGroupSize() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
-          << "A = [" << rA << "], "
-          << "B = [" << rB << "], "
-          << "C = [" << rC << "]"
-          << "}>";
+          << "A = [" << rA << "], " << "B = [" << rB << "], " << "C = [" << rC
+          << "]" << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -438,13 +436,10 @@ Attribute WarpEncodingAttr::parse(AsmParser &parser, Type type) {
 void WarpEncodingAttr::print(mlir::AsmPrinter &printer) const {
   auto threadsPerWarp = getThreadsPerWarp();
   auto sizePerThread = getSizePerThread();
-  printer << "<{"
-          << "sizePerThread = [" << llvm::ArrayRef<unsigned>(sizePerThread)
-          << "]"
+  printer << "<{" << "sizePerThread = ["
+          << llvm::ArrayRef<unsigned>(sizePerThread) << "]"
           << ", threadsPerWarp = [" << llvm::ArrayRef<unsigned>(threadsPerWarp)
-          << "]"
-          << ", order = [" << getOrder() << "]"
-          << "}>";
+          << "]" << ", order = [" << getOrder() << "]" << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -547,13 +542,13 @@ void TritonIntelGPUDialect::initialize() {
 
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "triton/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.cpp.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.cpp.inc"
       >();
 
   addInterfaces<TritonIntelGPUInferLayoutInterface>();
 
   addOperations<
 #define GET_OP_LIST
-#include "triton/Dialect/TritonIntelGPU/IR/Ops.cpp.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Ops.cpp.inc"
       >();
 }
