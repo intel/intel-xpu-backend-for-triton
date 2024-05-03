@@ -37,8 +37,9 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/FormatVariadic.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 #include "GPUOpsLowering.h"
 #include "IndexIntrinsicsOpLowering.h"

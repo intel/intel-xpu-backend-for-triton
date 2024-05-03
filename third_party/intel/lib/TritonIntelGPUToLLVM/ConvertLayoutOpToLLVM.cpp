@@ -149,9 +149,9 @@ private:
     auto dstIndices =
         ::intel::emitIndices(loc, rewriter, targetInfo, dstLayout, dstTy, true);
 
-    SmallVector<Value> outVals = ::intel::loadSharedToDistributed(
-        op.getResult(), dstIndices, op.getSrc(), smemObj, elemTy, loc, rewriter,
-        targetInfo);
+    SmallVector<Value> outVals =
+        ::intel::loadSharedToDistributed(op.getResult(), op.getSrc(), smemObj,
+                                         elemTy, loc, rewriter, targetInfo);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);

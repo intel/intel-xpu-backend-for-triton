@@ -44,8 +44,9 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 

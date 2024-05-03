@@ -30,8 +30,9 @@
 #include "llvm/Support/ErrorHandling.h"
 #include <type_traits>
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 namespace mlir {
 namespace triton {

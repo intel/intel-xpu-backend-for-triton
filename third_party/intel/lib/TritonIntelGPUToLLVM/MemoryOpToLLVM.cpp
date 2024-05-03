@@ -36,8 +36,8 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
       loc, rewriter, targetInfo, srcLayout, srcTy, false);
   auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
   mlir::triton::intel::storeDistributedToShared(
-      op.getSrc(), inVals, dstStrides, srcIndices, op.getResult(), smemBase,
-      elemTy, loc, rewriter, targetInfo);
+      op.getSrc(), inVals, dstStrides, op.getResult(), smemBase, elemTy, loc,
+      rewriter, targetInfo);
 }
 
 struct LocalAllocOpConversion

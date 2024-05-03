@@ -1,12 +1,8 @@
-#include "mlir/Pass/PassManager.h"
-
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-
+#include "mlir/Pass/PassManager.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>

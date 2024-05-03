@@ -1,6 +1,6 @@
-﻿#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
+﻿#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
