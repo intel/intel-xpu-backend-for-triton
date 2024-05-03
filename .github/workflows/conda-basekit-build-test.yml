@@ -89,15 +89,8 @@ jobs:
 
           conda create -y -n dpcpp -c intel -c conda-forge dpcpp_linux-64=2024.1.*
           ln -snf $HOME/miniconda3/envs/dpcpp/lib/clang/18/include/CL $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
-          ln -snf $HOME/miniconda3/envs/envs/dpcpp/include/sycl $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/sycl
+          ln -snf $HOME/miniconda3/envs/envs/dpcpp/include/sycl $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
           export PATH=$PATH:$HOME/miniconda3/envs/dpcpp/bin
-
-          export LD_LIBRARY_PATH=/home/runner/intel/oneapi/tbb/2021.12/env/../lib/intel64/gcc4.8:/home/runner/intel/oneapi/mpi/2021.12/opt/mpi/libfabric/lib:/home/runner/intel/oneapi/mpi/2021.12/lib:/home/runner/intel/oneapi/mkl/2024.1/lib:/home/runner/intel/oneapi/ippcp/2021.11/lib/:/home/runner/intel/oneapi/ipp/2021.11/lib:/home/runner/intel/oneapi/dpl/2022.5/lib:/home/runner/intel/oneapi/dnnl/2024.1/lib:/home/runner/intel/oneapi/debugger/2024.1/opt/debugger/lib:/home/runner/intel/oneapi/dal/2024.2/lib:/home/runner/intel/oneapi/compiler/2024.1/opt/oclfpga/host/linux64/lib:/home/runner/intel/oneapi/compiler/2024.1/opt/compiler/lib:/home/runner/intel/oneapi/compiler/2024.1/lib:/home/runner/intel/oneapi/ccl/2021.12/lib/:/home/runner/miniconda3/envs/triton/lib:
-          export MANPATH=/home/runner/intel/oneapi/mpi/2021.12/share/man:/home/runner/intel/oneapi/debugger/2024.1/share/man:/home/runner/intel/oneapi/compiler/2024.1/share/man:
-          export MKLROOT=/home/runner/intel/oneapi/mkl/2024.1
-          export NLSPATH=/home/runner/intel/oneapi/mkl/2024.1/share/locale/%l_%t/%N:/home/runner/intel/oneapi/compiler/2024.1/lib/compiler/locale/%l_%t/%N
-          export OCL_ICD_FILENAMES=libintelocl_emu.so:libalteracl.so:/home/runner/intel/oneapi/compiler/2024.1/lib/libintelocl.so
-          export ONEAPI_ROOT=/home/runner/intel/oneapi
 
           export TRITON_TEST_REPORTS=true
           export TRITON_TEST_REPORTS_DIR=$HOME/reports
