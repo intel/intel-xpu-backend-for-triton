@@ -441,9 +441,6 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     tl.store(dq_ptrs, dq)
 
 
-empty = torch.empty(128, device="xpu")
-
-
 class _attention(torch.autograd.Function):
 
     @staticmethod
