@@ -218,14 +218,49 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
+static bool isOCLAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+  if (op.getVnniTransform() || op.getTranspose())
+    return false;
+
+  if (op.getElemSizeInBits() == 32)
+    return false;
+
+  if (op.getTileHeight() > 8)
+    return false;
+
+  if (op.getVBlocks() != 2)
+    return false;
+
+  return true;
+}
+
 static LLVM::CallOp
 createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                         ConversionPatternRewriter &rewriter) {
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *context = rewriter.getContext();
   Type resType = op->getResultTypes()[0];
   Location loc = op->getLoc();
 
+  // FIXME: Use the OpenCL API also for all other variants.
+  if (isOCLAvailable(op)) {
+    std::string fnName = "intel_subgroup_block_read_u" +
+                         std::to_string(op.getElemSizeInBits()) + "_m" +
+                         std::to_string(op.getTileHeight()) + "k" +
+                         std::to_string(op.getTileWidth()) + "v" +
+                         std::to_string(op.getVBlocks());
+    VectorType vecType = vec_ty(i32_ty, 2);
+    Value byteCoord = insert_element(
+        vecType, insert_element(vecType, undef(vecType), op.getX(), i32_val(0)),
+        op.getY(), i32_val(1));
+    SmallVector<Type> argTypes{ptr_ty(context, 1), i32_ty, i32_ty, i32_ty,
+                               vecType};
+    SmallVector<Value> args{op.getPtr(), op.getBaseWidth(), op.getBaseHeight(),
+                            op.getBasePitch(), byteCoord};
+    return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
+                                    true /*convergent*/);
+  }
+
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   Value ptr = op.getPtr();
   Value baseWidth = op.getBaseWidth();
   Value baseHeight = op.getBaseHeight();
