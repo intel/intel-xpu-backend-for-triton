@@ -1,8 +1,13 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TargetInfo.h"
 #include "Utility.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/IR/PatternMatch.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using mlir::isLayoutMmaV1;
@@ -53,10 +58,9 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (dstLayout.isa<DotOperandEncodingAttr>() &&
-        dstLayout.cast<DotOperandEncodingAttr>()
-            .getParent()
-            .isa<NvidiaMmaEncodingAttr>()) {
+    if (isa<DotOperandEncodingAttr>(dstLayout) &&
+        isa<NvidiaMmaEncodingAttr>(
+            cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
       return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
     }
     return failure();
@@ -88,7 +92,7 @@ private:
     } else if (!isOuter && mmaLayout.isVolta() && isMMA) { // tensor core v1
       bool isMMAv1Row = mmaLayout.getMMAv1IsRow(dotOperandLayout.getOpIdx());
       auto srcSharedLayout =
-          src.getType().getEncoding().cast<SharedEncodingAttr>();
+          cast<SharedEncodingAttr>(src.getType().getEncoding());
 
       // Can only convert [1, 0] to row or [0, 1] to col for now
       if ((srcSharedLayout.getOrder()[0] == 1 && !isMMAv1Row) ||
@@ -113,9 +117,9 @@ private:
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    auto dstEnc = op.getType().getEncoding().cast<DotOperandEncodingAttr>();
+    auto dstEnc = cast<DotOperandEncodingAttr>(op.getType().getEncoding());
     auto sharedLayout =
-        op.getSrc().getType().getEncoding().cast<SharedEncodingAttr>();
+        cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
 
     int K;
     if (dstEnc.getOpIdx() == 0) // $a
@@ -123,7 +127,7 @@ private:
     else // $b
       K = op.getType().getShape()[sharedLayout.getOrder()[1]];
     bool isOuter = K == 1;
-    auto mmaLayout = dstEnc.getParent().cast<NvidiaMmaEncodingAttr>();
+    auto mmaLayout = cast<NvidiaMmaEncodingAttr>(dstEnc.getParent());
     Value res = lowerSharedToDotOperandMMA(op, adaptor, typeConverter, rewriter,
                                            mmaLayout, dstEnc, isOuter);
 
@@ -145,8 +149,8 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     // forwarding on mma->mma shortcut, lower distributed->distributed otherwise
-    if (srcLayout.isa<NvidiaMmaEncodingAttr>() &&
-        dstLayout.isa<NvidiaMmaEncodingAttr>()) {
+    if (isa<NvidiaMmaEncodingAttr>(srcLayout) &&
+        isa<NvidiaMmaEncodingAttr>(dstLayout)) {
       if (isMmaToMmaShortcut(srcTy, dstTy)) {
         return lowerMmaToMma(op, adaptor, rewriter);
       }
@@ -167,8 +171,8 @@ private:
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
-    auto dstMmaLayout = dstTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
-    auto srcMmaLayout = srcTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+    auto dstMmaLayout = cast<NvidiaMmaEncodingAttr>(dstTy.getEncoding());
+    auto srcMmaLayout = cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
     assert(dstMmaLayout.isHopper() && srcMmaLayout.isHopper() &&
            "only MMAV3 layout is supported");
     auto dstShape = dstTy.getShape();
@@ -203,8 +207,11 @@ private:
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
-  using ConvertOpToLLVMPattern<
-      triton::gpu::ConvertLayoutOp>::ConvertOpToLLVMPattern;
+  ConvertLayoutOpConversion(const LLVMTypeConverter &typeConverter,
+                            const NVIDIA::TargetInfo &targetInfo,
+                            PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -219,8 +226,8 @@ public:
       if (isLayoutMmaV1(srcLayout) || isLayoutMmaV1(dstLayout))
         return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
-    if (srcLayout.isa<NvidiaMmaEncodingAttr>() &&
-        dstLayout.isa<DotOperandEncodingAttr>()) {
+    if (isa<NvidiaMmaEncodingAttr>(srcLayout) &&
+        isa<DotOperandEncodingAttr>(dstLayout)) {
       return lowerMmaToDotOperand(op, adaptor, rewriter);
     }
 
@@ -251,7 +258,7 @@ private:
     }
     auto elemTy = type.getElementType();
     bool isInt1 = elemTy.isInteger(1);
-    bool isPtr = elemTy.isa<triton::PointerType>();
+    bool isPtr = isa<triton::PointerType>(elemTy);
     auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
     if (isInt1)
       elemTy = IntegerType::get(elemTy.getContext(), 8);
@@ -276,7 +283,7 @@ private:
       //       of performance issue observed.
       for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
         SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type,
+            getMultiDimOffset(layout, loc, rewriter, targetInfo, elemId, type,
                               multiDimCTAInRepId, shapePerCTATile);
         SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
             rewriter, loc, multiDimOffset, origRepShape, shapePerCTATile,
@@ -329,10 +336,10 @@ private:
     unsigned accumNumCTAsEachRep = 1;
     auto typeConverter = getTypeConverter();
     auto layout = type.getEncoding();
-    NvidiaMmaEncodingAttr mma = layout.dyn_cast<NvidiaMmaEncodingAttr>();
-    auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>();
+    NvidiaMmaEncodingAttr mma = dyn_cast<NvidiaMmaEncodingAttr>(layout);
+    auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout);
     if (sliceLayout)
-      mma = sliceLayout.getParent().cast<NvidiaMmaEncodingAttr>();
+      mma = cast<NvidiaMmaEncodingAttr>(sliceLayout.getParent());
 
     auto order = getOrder(layout);
     auto rank = type.getRank();
@@ -370,7 +377,7 @@ private:
         // TODO[Superjomn]: Move the coordinate computation out of loop, it is
         // duplicate in Volta.
         SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type,
+            getMultiDimOffset(layout, loc, rewriter, targetInfo, elemId, type,
                               multiDimCTAInRepId, shapePerCTATile);
         coord2val[elemId] = std::make_pair(multiDimOffset, vals[elemId]);
       }
@@ -442,8 +449,8 @@ private:
     // Store to local shared memory
     {
       auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      auto inIndices =
-          emitIndices(loc, rewriter, srcLayout, srcTy, /*withCTAOffset*/ false);
+      auto inIndices = emitIndices(loc, rewriter, targetInfo, srcLayout, srcTy,
+                                   /*withCTAOffset*/ false);
 
       assert(inIndices.size() == inVals.size() &&
              "Unexpected number of indices emitted");
@@ -466,8 +473,8 @@ private:
         srcShapePerCTACache.push_back(i32_val(srcShapePerCTA[i]));
 
       SmallVector<Value> outVals;
-      auto outIndices =
-          emitIndices(loc, rewriter, dstLayout, dstTy, /*withCTAOffset*/ true);
+      auto outIndices = emitIndices(loc, rewriter, targetInfo, dstLayout, dstTy,
+                                    /*withCTAOffset*/ true);
 
       for (unsigned i = 0; i < outIndices.size(); ++i) {
         auto coord = outIndices[i];
@@ -695,7 +702,7 @@ private:
       // instructions to pack & unpack sub-word integers. A workaround is to
       // store the results of ldmatrix in i32
       auto elemSize = elemTy.getIntOrFloatBitWidth();
-      if (auto intTy = elemTy.dyn_cast<IntegerType>() && elemSize <= 16) {
+      if (auto intTy = dyn_cast<IntegerType>(elemTy) && elemSize <= 16) {
         auto fold = 32 / elemSize;
         for (unsigned i = 0; i < elems; i += fold) {
           Value val = i32_val(0);
@@ -740,6 +747,9 @@ private:
     }
     return failure();
   }
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
 };
 } // namespace
 
@@ -754,7 +764,7 @@ void mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   // For now give ConvertLayoutOpConversion higher benefit, I can split before
   // merging
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
   // Same default benefit
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
   mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,

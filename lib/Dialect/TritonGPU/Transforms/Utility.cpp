@@ -1,7 +1,11 @@
 #include "triton/Analysis/Utility.h"
+
+#include <fstream>
+
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -10,8 +14,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
-
-#include <fstream>
 #define DEBUG_TYPE "ttg-utility"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -100,8 +102,8 @@ Value getMemAccessPtr(Operation *op) {
 
 unsigned getElementBitWidth(RankedTensorType type) {
   auto typeForMem =
-      type.getElementType().isa<PointerType>()
-          ? type.getElementType().cast<PointerType>().getPointeeType()
+      isa<PointerType>(type.getElementType())
+          ? cast<PointerType>(type.getElementType()).getPointeeType()
           : type.getElementType();
   return typeForMem.getIntOrFloatBitWidth();
 }
@@ -109,7 +111,7 @@ unsigned getElementBitWidth(RankedTensorType type) {
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Value val = getMemAccessPtr(op);
-  auto ty = val.getType().cast<RankedTensorType>();
+  auto ty = cast<RankedTensorType>(val.getType());
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
   unsigned elemNumBits = getElementBitWidth(ty);
@@ -187,7 +189,7 @@ void GraphDumper::dumpToFile(triton::FuncOp func,
 std::string GraphDumper::getShapeStr(const Type &type) const {
   std::ostringstream oss;
   oss << "[";
-  if (auto tensorTy = type.dyn_cast<RankedTensorType>()) {
+  if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     auto shape = tensorTy.getShape();
     for (unsigned i = 0; i < shape.size(); ++i) {
       if (i > 0)
@@ -235,7 +237,7 @@ std::string GraphDumper::emitValueNode(Value value) const {
   NodeInfo info = onValue(value);
   if (info.find("label") == info.end()) {
     std::string shapeStr = getShapeStr(value.getType());
-    if (auto arg = value.dyn_cast<BlockArgument>())
+    if (auto arg = mlir::dyn_cast<BlockArgument>(value))
       info["label"] =
           "BlockArg" + std::to_string(arg.getArgNumber()) + " " + shapeStr;
     else
@@ -261,17 +263,17 @@ GraphDumper::NodeInfo GraphLayoutMarker::onValue(Value value) const {
 }
 
 std::string GraphLayoutMarker::getColor(const Type &type) const {
-  if (auto tensorTy = type.dyn_cast<RankedTensorType>()) {
+  if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     auto layout = tensorTy.getEncoding();
-    if (layout.isa<triton::gpu::BlockedEncodingAttr>())
+    if (isa<triton::gpu::BlockedEncodingAttr>(layout))
       return "green";
-    else if (layout.isa<triton::gpu::SliceEncodingAttr>())
+    else if (isa<triton::gpu::SliceEncodingAttr>(layout))
       return "yellow";
-    else if (layout.isa<triton::gpu::NvidiaMmaEncodingAttr>())
+    else if (isa<triton::gpu::NvidiaMmaEncodingAttr>(layout))
       return "lightslateblue";
-    else if (layout.isa<triton::gpu::DotOperandEncodingAttr>())
+    else if (isa<triton::gpu::DotOperandEncodingAttr>(layout))
       return "orange";
-    else if (layout.isa<triton::gpu::SharedEncodingAttr>())
+    else if (isa<triton::gpu::SharedEncodingAttr>(layout))
       return "orangered";
     else {
       llvm::report_fatal_error("Unrecognized layout");
@@ -291,7 +293,7 @@ static std::optional<Attribute> inferDstEncoding(triton::ReduceOp op,
 
 static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
                                                  Attribute encoding) {
-  auto sliceEncoding = encoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
+  auto sliceEncoding = mlir::dyn_cast<triton::gpu::SliceEncodingAttr>(encoding);
   if (!sliceEncoding)
     return std::nullopt;
   if (op.getAxis() != sliceEncoding.getDim())
@@ -325,7 +327,7 @@ static std::optional<Attribute> inferDstEncoding(SplitOp op, Attribute srcEnc) {
 
 static std::optional<Attribute> inferSrcEncoding(triton::ReduceOp op,
                                                  Attribute encoding) {
-  auto sliceEncoding = encoding.dyn_cast<triton::gpu::SliceEncodingAttr>();
+  auto sliceEncoding = mlir::dyn_cast<triton::gpu::SliceEncodingAttr>(encoding);
   if (!sliceEncoding)
     return std::nullopt;
   if (op.getAxis() != sliceEncoding.getDim())
@@ -489,7 +491,7 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
 
 bool isSingleValue(Value value) {
   // Don't consider load as expensive if it is loading a scalar.
-  if (auto tensorTy = value.getType().dyn_cast<RankedTensorType>())
+  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
     return tensorTy.getNumElements() == 1;
   // TODO: Handle other cases.
   // For example, when ptr is a tensor of single value.
@@ -511,7 +513,7 @@ bool isExpensiveLoadOrStore(Operation *op) {
     return false;
   // Case 2b: Tensor of pointers has more threads than elements
   // we can presume a high hit-rate that makes it cheap to load
-  auto ptrType = op->getOperand(0).getType().cast<RankedTensorType>();
+  auto ptrType = cast<RankedTensorType>(op->getOperand(0).getType());
   auto mod = op->getParentOfType<ModuleOp>();
   int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
   int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -541,7 +543,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     return !triton::gpu::isExpensiveCat(cast<triton::CatOp>(op),
                                         targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-    if (targetEncoding.isa<triton::gpu::NvidiaMmaEncodingAttr>()) {
+    if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
       if (targetEncoding != srcEncoding)
         return false;
@@ -638,8 +640,8 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 
   if (newOp->getNumResults() == 0)
     return newOp;
-  auto origType = op->getResult(0).getType().dyn_cast<RankedTensorType>();
-  auto argType = newOp->getOperand(0).getType().dyn_cast<RankedTensorType>();
+  auto origType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  auto argType = dyn_cast<RankedTensorType>(newOp->getOperand(0).getType());
   if (!origType || !argType)
     return newOp;
   auto newType = RankedTensorType::get(
@@ -680,7 +682,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     queue.pop_back();
     if (!visited.insert(currentValue).second)
       continue;
-    if (!currentValue.getType().isa<RankedTensorType>())
+    if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
     // Skip propagating through for op results for now.
     // TODO: enable this based on needs.
@@ -695,7 +697,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       auto results = ifOp.getResults();
-      unsigned argIdx = currentValue.cast<OpResult>().getResultNumber();
+      unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
 
       auto thenValue = ifOp.thenYield().getOperand(argIdx);
       auto elseValue = ifOp.elseYield().getOperand(argIdx);
@@ -708,7 +710,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     if (auto *definingOp = currentValue.getDefiningOp()) {
       // If the op has multiple results we need to update all results layout.
       for (Value result : definingOp->getResults()) {
-        if (result == currentValue || !result.getType().isa<RankedTensorType>())
+        if (result == currentValue || !isa<RankedTensorType>(result.getType()))
           continue;
         if (layout.find(result) != layout.end()) {
           if (layout[result] != encoding)
@@ -859,7 +861,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
     while (!queue.empty()) {
       Value value = queue.pop_back_val();
       if (auto nestedFor = value.getDefiningOp<scf::ForOp>()) {
-        auto result = value.cast<OpResult>();
+        auto result = mlir::cast<OpResult>(value);
         OpOperand &forOperand = *nestedFor.getTiedLoopInit(result);
         markLive(forOperand.get());
         auto nestedYieldOp =
@@ -870,7 +872,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
         continue;
       }
       if (auto nestedIf = value.getDefiningOp<scf::IfOp>()) {
-        auto result = value.cast<OpResult>();
+        auto result = mlir::cast<OpResult>(value);
         for (scf::YieldOp nestedYieldOp :
              {nestedIf.thenYield(), nestedIf.elseYield()}) {
           Value nestedYieldOperand =
@@ -889,7 +891,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
       }
       // If an argument block is live then the associated yield operand and
       // forOp operand are live.
-      auto arg = value.cast<BlockArgument>();
+      auto arg = mlir::cast<BlockArgument>(value);
       if (auto forOwner = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
         if (arg.getArgNumber() < forOwner.getNumInductionVars())
           continue;

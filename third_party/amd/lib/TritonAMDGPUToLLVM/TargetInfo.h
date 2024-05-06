@@ -1,21 +1,31 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOAMD_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOAMD_H
+
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include <string>
+
 namespace mlir::triton::AMD {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  TargetInfo(std::string arch) : arch(std::move(arch)) {}
+  explicit TargetInfo(std::string arch) : arch(std::move(arch)) {}
+
+  ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
+
+  int getSharedMemorySize() const;
 
   bool supportMaximumMinimum() const override;
+
+  Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
 
   Value ballot(ConversionPatternRewriter &rewriter, Location loc, Type type,
                Value cmp) const override;
 
-  Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                    Value ptr, Value val, Value pred) const override;
-  Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                   Type elemTy, Value pred) const override;
+  void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                   Value val, Value pred) const override;
+  Value loadShared(ConversionPatternRewriter &rewriter, Location loc,
+                   const TypeConverter *converter, Value ptr, Type elemTy,
+                   Value pred) const override;
 
   Value shuffleXor(ConversionPatternRewriter &rewriter, Location loc, Value val,
                    int i) const override;
@@ -54,4 +64,5 @@ private:
   std::string arch;
 };
 } // namespace mlir::triton::AMD
+
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOAMD_H

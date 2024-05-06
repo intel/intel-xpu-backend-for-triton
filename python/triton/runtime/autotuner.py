@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 import os
 import time
+import inspect
 from typing import Dict
 
 from ..testing import do_bench, do_bench_cudagraph
@@ -20,6 +21,8 @@ class Autotuner(KernelInterface):
         key,
         reset_to_zero,
         restore_value,
+        pre_hook=None,
+        post_hook=None,
         prune_configs_by: Dict = None,
         warmup=25,
         rep=100,
@@ -31,7 +34,6 @@ class Autotuner(KernelInterface):
             'top_k': number of configs to bench
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
         """
-        import torch
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
         else:
@@ -50,8 +52,10 @@ class Autotuner(KernelInterface):
 
         # Hook to reset or restore for required tensors
         self.pre_hook = lambda args, reset_only=False: 0
-        self.post_hook = lambda args: 0
-        if len(self.reset_idx) > 0 or len(self.restore_idx) > 0:
+        self.post_hook = lambda args, exception: 0
+        if pre_hook:
+            self.pre_hook = pre_hook
+        elif (len(self.reset_idx) > 0 or len(self.restore_idx) > 0):
 
             def _pre_hook(args, reset_only=False):
                 for i in self.reset_idx:
@@ -60,9 +64,12 @@ class Autotuner(KernelInterface):
                     self.restore_copies = [args[i].clone() for i in self.restore_idx]
 
             self.pre_hook = _pre_hook
-        if len(self.restore_idx) > 0:
 
-            def _post_hook(args):
+        if post_hook:
+            self.post_hook = post_hook
+        elif len(self.restore_idx) > 0:
+
+            def _post_hook(args, exception):
                 for i, j in enumerate(self.restore_idx):
                     args[j].copy_(self.restore_copies[i])
                 self.restore_copies = []
@@ -78,8 +85,12 @@ class Autotuner(KernelInterface):
             self.early_config_prune = prune_configs_by.get("early_config_prune", self.early_config_prune)
 
         self.fn = fn
+        self.base_fn = fn
+        while not inspect.isfunction(self.base_fn):
+            self.base_fn = self.base_fn.fn
         self.num_warmups = warmup
         self.num_reps = rep
+        import torch
         self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
         self.benchmarkig_stream = torch.cuda.Stream() if self.use_cuda_graph else None
 
@@ -98,23 +109,32 @@ class Autotuner(KernelInterface):
             if config.pre_hook:
                 config.pre_hook(full_nargs)
             self.pre_hook(args)
-            self.fn.run(
-                *args,
-                num_warps=config.num_warps,
-                num_stages=config.num_stages,
-                num_ctas=config.num_ctas,
-                **current,
-            )
-            self.post_hook(args)
+            try:
+                self.fn.run(
+                    *args,
+                    num_warps=config.num_warps,
+                    num_stages=config.num_stages,
+                    num_ctas=config.num_ctas,
+                    **current,
+                )
+            except Exception as e:
+                try:
+                    self.post_hook(args, exception=e)
+                finally:
+                    # Throw exception raised by `self.fn.run`
+                    raise
+
+            self.post_hook(args, exception=None)
 
         try:
             if self.use_cuda_graph:
+                import torch
                 with torch.cuda.stream(self.benchmarkig_stream):
                     bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
                 return bench_res
             return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except OutOfResources:
-            return [float("inf"), float("inf"), float("inf")]
+            return float("inf") if self.use_cuda_graph else [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -146,7 +166,7 @@ class Autotuner(KernelInterface):
             config = self.configs[0]
         self.best_config = config
         if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
-            print(f"Triton autotuning for function {self.fn} finished after "
+            print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
                   f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
         full_nargs = {**self.nargs, **kwargs, **self.best_config.kwargs}
         if config.pre_hook is not None:
@@ -238,8 +258,8 @@ class Config:
         return ", ".join(res)
 
 
-def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, warmup=25, rep=100,
-             use_cuda_graph=False):
+def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, pre_hook=None, post_hook=None,
+             warmup=25, rep=100, use_cuda_graph=False):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -277,6 +297,16 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     :type reset_to_zero: list[str]
     :param restore_value: a list of argument names whose value will be restored after evaluating any configs.
     :type restore_value: list[str]
+    :param pre_hook: a function that will be called before the kernel is called.
+        This overrides the default pre_hook used for 'reset_to_zero' and 'restore_value'.
+        'args': a list of arguments passed to the kernel.
+        'reset_only': a boolean indicating whether the pre_hook is called to reset the values only, without a corresponding post_hook.
+    :type pre_hook: lambda args, reset_only
+    :param post_hook: a function that will be called after the kernel is called.
+        This overrides the default post_hook used for 'restore_value'.
+        'args': a list of arguments passed to the kernel.
+        'exception': the exception raised by the kernel in case of a compilation or runtime error.
+    :type post_hook: lambda args, exception
     :param warmup: Warmup time (in ms) to pass to benchmarking, defaults to 25.
     :type warmup: int
     :param rep: Repetition time (in ms) to pass to benchmarking, defaults to 100.
@@ -284,7 +314,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     """
 
     def decorator(fn):
-        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, prune_configs_by, warmup, rep,
+        return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, pre_hook=pre_hook,
+                         post_hook=post_hook, prune_configs_by=prune_configs_by, warmup=warmup, rep=rep,
                          use_cuda_graph=use_cuda_graph)
 
     return decorator

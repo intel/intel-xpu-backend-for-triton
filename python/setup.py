@@ -7,7 +7,9 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
+import zipfile
 import urllib.request
+from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
 from typing import NamedTuple
@@ -122,10 +124,9 @@ class Package(NamedTuple):
 
 
 # pybind11
-
-
 def get_pybind11_package_info():
-    with open("../cmake/pybind11-version.txt", "r") as pybind11_version_file:
+    pybind11_version_path = os.path.join(get_base_dir(), "cmake", "pybind11-version.txt")
+    with open(pybind11_version_path, "r") as pybind11_version_file:
         version = pybind11_version_file.read().strip()
     name = f"pybind11-{version}"
     url = f"https://github.com/pybind/pybind11/archive/refs/tags/v{version}.tar.gz"
@@ -134,22 +135,15 @@ def get_pybind11_package_info():
 
 # json
 def get_json_package_info():
-    name = "json"
-    url = "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
-    return Package("json", name, url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
+    url = "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
+    return Package("json", "", url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
 
 
 # llvm
 def get_llvm_package_info():
-    # added statement for Apple Silicon
     system = platform.system()
-    arch = platform.machine()
-    if arch == 'aarch64':
-        arch = 'arm64'
+    arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
     if system == "Darwin":
-        arch = platform.machine()
-        if arch == "x86_64":
-            arch = "x64"
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
         if arch == 'arm64':
@@ -157,12 +151,25 @@ def get_llvm_package_info():
         else:
             vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
             vglibc = vglibc[0] * 100 + vglibc[1]
-            system_suffix = 'ubuntu-x64' if vglibc > 217 else 'centos-x64'
+            if vglibc > 228:
+                # Ubuntu 24 LTS (v2.39)
+                # Ubuntu 22 LTS (v2.35)
+                # Ubuntu 20 LTS (v2.31)
+                system_suffix = "ubuntu-x64"
+            elif vglibc > 217:
+                # Manylinux_2.28 (v2.28)
+                # AlmaLinux 8 (v2.28)
+                system_suffix = "almalinux-x64"
+            else:
+                # Manylinux_2014 (v2.17)
+                # CentOS 7 (v2.17)
+                system_suffix = "centos-x64"
     else:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     # release_suffix = "assert" if use_assert_enabled_llvm else "release"
-    with open("../cmake/llvm-hash.txt", "r") as llvm_hash_file:
+    llvm_hash_path = os.path.join(get_base_dir(), "cmake", "llvm-hash.txt")
+    with open(llvm_hash_path, "r") as llvm_hash_file:
         rev = llvm_hash_file.read(8)
     name = f"llvm-{rev}-{system_suffix}"
     url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
@@ -175,7 +182,7 @@ def open_url(url):
         'User-Agent': user_agent,
     }
     request = urllib.request.Request(url, None, headers)
-    # Set timeout to 300 seconds to prevent the request from hanging forver
+    # Set timeout to 300 seconds to prevent the request from hanging forever.
     return urllib.request.urlopen(request, timeout=300)
 
 
@@ -204,8 +211,14 @@ def get_thirdparty_packages(packages: list):
                 shutil.rmtree(package_root_dir)
             os.makedirs(package_root_dir, exist_ok=True)
             print(f'downloading and extracting {p.url} ...')
-            file = tarfile.open(fileobj=open_url(p.url), mode="r|*")
-            file.extractall(path=package_root_dir)
+            with open_url(p.url) as response:
+                if p.url.endswith(".zip"):
+                    file_bytes = BytesIO(response.read())
+                    with zipfile.ZipFile(file_bytes, "r") as file:
+                        file.extractall(path=package_root_dir)
+                else:
+                    with tarfile.open(fileobj=response, mode="r|*") as file:
+                        file.extractall(path=package_root_dir)
             # write version url to package_dir
             with open(os.path.join(package_dir, "version.txt"), "w") as f:
                 f.write(p.url)
@@ -216,7 +229,7 @@ def get_thirdparty_packages(packages: list):
     return thirdparty_cmake_args
 
 
-def download_and_copy(src_path, variable, version, url_func):
+def download_and_copy(name, src_path, variable, version, url_func):
     triton_cache_path = get_triton_cache_path()
     if variable in os.environ:
         return
@@ -224,11 +237,11 @@ def download_and_copy(src_path, variable, version, url_func):
     system = platform.system()
     arch = {"x86_64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
     url = url_func(arch, version)
-    tmp_path = os.path.join(triton_cache_path, "nvidia")  # path to cache the download
+    tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
-    if os.path.exists(dst_path) and system == "Linux":
+    if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
         curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
         download = download or curr_version != version
@@ -236,9 +249,12 @@ def download_and_copy(src_path, variable, version, url_func):
         print(f'downloading and extracting {url} ...')
         file = tarfile.open(fileobj=open_url(url), mode="r|*")
         file.extractall(path=tmp_path)
-    print(f'copy {src_path} to {dst_path} ...')
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
-    shutil.copy(src_path, dst_path)
+    print(f'copy {src_path} to {dst_path} ...')
+    if os.path.isdir(src_path):
+        shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+    else:
+        shutil.copy(src_path, dst_path)
 
 
 # ---- cmake extension ----
@@ -307,19 +323,16 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def get_proton_cmake_args(self):
-        cmake_args = ["-DTRITON_BUILD_PROTON=ON"]
-        cmake_args += get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
-        if cuda_root := get_env_with_keys(["CUDA_HOME", "CUDA_ROOT"]):
-            cmake_args += ["-DCUDAToolkit_ROOT=" + cuda_root]
+        cmake_args = get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
+        cupti_include_dir = get_env_with_keys(["CUPTI_INCLUDE_PATH"])
+        if cupti_include_dir == "":
+            cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
+        cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
         return cmake_args
 
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
-        user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or \
-            os.getenv("HOMEPATH") or None
-        if not user_home:
-            raise RuntimeError("Could not find user home directory")
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages([get_pybind11_package_info(), get_llvm_package_info()])
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
@@ -385,8 +398,7 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
             ]
 
-        if check_env_flag("TRITON_BUILD_PROTON"):
-            cmake_args += self.get_proton_cmake_args()
+        cmake_args += self.get_proton_cmake_args()
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
@@ -395,10 +407,12 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
 
-with open("../cmake/nvidia-toolchain-version.txt", "r") as nvidia_version_file:
+nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.txt")
+with open(nvidia_version_path, "r") as nvidia_version_file:
     NVIDIA_TOOLCHAIN_VERSION = nvidia_version_file.read().strip()
 
 download_and_copy(
+    name="ptxas",
     src_path="bin/ptxas",
     variable="TRITON_PTXAS_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION,
@@ -406,6 +420,7 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
 )
 download_and_copy(
+    name="cuobjdump",
     src_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION,
@@ -413,14 +428,39 @@ download_and_copy(
     f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
 )
 download_and_copy(
+    name="nvdisasm",
     src_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION,
     url_func=lambda arch, version:
     f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
+download_and_copy(
+    name="cudacrt",
+    src_path="include",
+    variable="TRITON_CUDACRT_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION,
+    url_func=lambda arch, version:
+    f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
+)
+download_and_copy(
+    name="cudart",
+    src_path="include",
+    variable="TRITON_CUDART_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION,
+    url_func=lambda arch, version:
+    f"https://anaconda.org/nvidia/cuda-cudart-dev/{version}/download/linux-{arch}/cuda-cudart-dev-{version}-0.tar.bz2",
+)
+download_and_copy(
+    name="cupti",
+    src_path="include",
+    variable="TRITON_CUPTI_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION,
+    url_func=lambda arch, version:
+    f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2",
+)
 
-backends = [*BackendInstaller.copy(["intel", "amd"]), *BackendInstaller.copy_externals()]
+backends = [*BackendInstaller.copy(["intel", "nvidia", "amd"]), *BackendInstaller.copy_externals()]
 
 
 def add_link_to_backends():
@@ -497,22 +537,17 @@ def get_packages():
         "triton/tools",
     ]
     packages += [f'triton/backends/{backend.name}' for backend in backends]
-    if check_env_flag("TRITON_BUILD_PROTON"):
-        packages += ["triton/profiler"]
+    packages += ["triton/profiler"]
     return packages
 
 
 def get_entry_points():
-    entry_points = {}
-    if check_env_flag("TRITON_BUILD_PROTON"):
-        entry_points["console_scripts"] = ["proton-viewer = triton.profiler.viewer:main"]
+    entry_points = {"console_scripts": ["proton-viewer = triton.profiler.viewer:main"]}
     return entry_points
 
 
 def get_install_requires():
-    install_requires = ["filelock"]
-    if check_env_flag("TRITON_BUILD_PROTON"):
-        install_requires.append("llnl-hatchet")
+    install_requires = ["filelock", "llnl-hatchet"]
     return install_requires
 
 
@@ -547,11 +582,11 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
     test_suite="tests",
     extras_require={

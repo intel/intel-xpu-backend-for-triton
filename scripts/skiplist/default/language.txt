@@ -1,0 +1,5 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/936
+test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-True-none-tf32-int8-int8-1_0]
+test/unit/language/test_core.py::test_dot[1-64-128-128-4-True-True-none-tf32-int8-int8-1_1]
+test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-True-none-tf32-int8-int8-1_0]
+test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-True-none-tf32-int8-int8-1_1]

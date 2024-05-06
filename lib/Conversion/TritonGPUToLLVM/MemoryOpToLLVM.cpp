@@ -1,5 +1,10 @@
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace {
 
@@ -12,13 +17,14 @@ using namespace mlir::triton::gpu;
 // A/B operands of dots.
 void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
                               const LLVMTypeConverter *typeConverter,
-                              ConversionPatternRewriter &rewriter) {
+                              ConversionPatternRewriter &rewriter,
+                              const TargetInfoBase &targetInfo) {
   auto loc = op.getLoc();
   auto srcTy = op.getSrc().getType();
   auto dstTy = op.getType();
   auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
   auto srcLayout = srcTy.getEncoding();
-  auto outOrd = dstTy.getEncoding().cast<SharedEncodingAttr>().getOrder();
+  auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   assert(srcTy.getShape().size() == 2 ||
          (srcTy.getShape().size() <= 3 && outOrd[2] == 0) &&
              "Unexpected rank of ConvertLayout(blocked->shared)");
@@ -32,13 +38,16 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
       LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
   auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
   storeDistributedToShared(op.getSrc(), inVals, dstStrides, op.getResult(),
-                           smemBase, elemTy, loc, rewriter);
+                           smemBase, elemTy, loc, rewriter, targetInfo);
 }
 
 struct LocalAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp> {
-  using ConvertOpToLLVMPattern<
-      triton::gpu::LocalAllocOp>::ConvertOpToLLVMPattern;
+  LocalAllocOpConversion(const LLVMTypeConverter &converter,
+                         const TargetInfoBase &targetInfo,
+                         PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp>(converter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::LocalAllocOp op, OpAdaptor adaptor,
@@ -46,10 +55,10 @@ struct LocalAllocOpConversion
     Location loc = op->getLoc();
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
-    auto resultTy = op.getType().cast<MemDescType>();
+    auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
-        resultTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+        cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
     auto order = sharedLayout.getOrder();
     // Workaround for 3D tensors
     // TODO: we need to modify the pipeline pass to give a proper shared
@@ -65,7 +74,8 @@ struct LocalAllocOpConversion
 
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
-      lowerDistributedToShared(op, adaptor, typeConverter, rewriter);
+      lowerDistributedToShared(op, adaptor, typeConverter, rewriter,
+                               targetInfo);
     }
 
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
@@ -76,6 +86,9 @@ struct LocalAllocOpConversion
     rewriter.replaceOp(op, retVal);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct LocalDeallocOpConversion
@@ -94,8 +107,8 @@ struct LocalDeallocOpConversion
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPattern(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<LocalAllocOpConversion>(typeConverter, benefit);
+    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
 }

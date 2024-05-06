@@ -1,3 +1,5 @@
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "triton/Analysis/Allocation.h"
@@ -25,8 +27,11 @@ namespace {
 struct LocalLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
-  using ConvertOpToLLVMPattern<
-      triton::gpu::LocalLoadOp>::ConvertOpToLLVMPattern;
+  LocalLoadOpConversion(LLVMTypeConverter &typeConverter,
+                        const TargetInfoBase &targetInfo,
+                        PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
@@ -36,15 +41,13 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
     // TODO: do we need to check if src is shared ?
-    if (srcLayout.isa<SharedEncodingAttr>() &&
-        isaDistributedLayout(dstLayout)) {
+    if (isa<SharedEncodingAttr>(srcLayout) && isaDistributedLayout(dstLayout)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
-    if (dstLayout.isa<DotOperandEncodingAttr>() &&
-        dstLayout.cast<DotOperandEncodingAttr>()
-            .getParent()
-            .isa<BlockedEncodingAttr>()) {
+    if (isa<DotOperandEncodingAttr>(dstLayout) &&
+        isa<BlockedEncodingAttr>(
+            cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
       return lowerSharedToDotOpFMA(op, adaptor, getTypeConverter(), rewriter);
     }
     return failure();
@@ -59,10 +62,9 @@ private:
     auto loc = op.getLoc();
     RankedTensorType dstTy = op.getType();
     Attribute dstLayout = dstTy.getEncoding();
-    auto dotLayout = dstLayout.cast<DotOperandEncodingAttr>();
-    auto blockedLayout = dstLayout.cast<DotOperandEncodingAttr>()
-                             .getParent()
-                             .cast<BlockedEncodingAttr>();
+    auto dotLayout = cast<DotOperandEncodingAttr>(dstLayout);
+    auto blockedLayout = cast<BlockedEncodingAttr>(
+        cast<DotOperandEncodingAttr>(dstLayout).getParent());
     auto thread = getThreadId(rewriter, loc);
     Value res = SharedToDotOperandFMA::convertLayout(
         dotLayout.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
@@ -81,7 +83,7 @@ private:
     auto dstShape = dstTy.getShape();
     assert(dstShape.size() <= 2 &&
            "Unexpected rank of ConvertLayout(shared->blocked)");
-    auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
+    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
     auto dstLayout = dstTy.getEncoding();
     auto inOrd = getOrder(srcSharedLayout);
 
@@ -93,25 +95,28 @@ private:
     auto srcStrides =
         getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
 
-    SmallVector<Value> outVals = loadSharedToDistributed(
-        op.getResult(), op.getSrc(), smemObj, elemTy, loc, rewriter);
+    SmallVector<Value> outVals =
+        loadSharedToDistributed(op.getResult(), op.getSrc(), smemObj, elemTy,
+                                loc, rewriter, targetInfo);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
-  explicit ConvertLayoutOpConversion(LLVMTypeConverter &typeConverter,
-                                     const TargetInfoBase &targetInfo,
-                                     PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<triton::gpu::ConvertLayoutOp>(typeConverter,
-                                                             benefit),
-        targetInfo(targetInfo) {}
+  ConvertLayoutOpConversion(LLVMTypeConverter &typeConverter,
+                            const TargetInfoBase &targetInfo,
+                            PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -154,7 +159,7 @@ private:
     }
     auto elemTy = type.getElementType();
     bool isInt1 = elemTy.isInteger(1);
-    bool isPtr = elemTy.isa<triton::PointerType>();
+    bool isPtr = isa<triton::PointerType>(elemTy);
     auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
     if (isInt1)
       elemTy = IntegerType::get(elemTy.getContext(), 8);
@@ -179,7 +184,7 @@ private:
       //       of performance issue observed.
       for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
         SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, elemId, type,
+            getMultiDimOffset(layout, loc, rewriter, targetInfo, elemId, type,
                               multiDimCTAInRepId, shapePerCTATile);
         SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
             rewriter, loc, multiDimOffset, origRepShape, shapePerCTATile,
@@ -315,5 +320,5 @@ void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
+  patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
 }

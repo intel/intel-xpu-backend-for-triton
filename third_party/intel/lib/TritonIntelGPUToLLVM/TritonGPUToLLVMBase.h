@@ -4,18 +4,14 @@
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
-#include "triton/Analysis/Allocation.h"
-
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
-//
-#include "TritonIntelGPUToLLVM/Passes.h"
-#include "Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+#include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
+#include "intel/lib/TritonIntelGPUToLLVM/Utility.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <set>
 #include <type_traits>
 
@@ -29,22 +25,21 @@ using ::mlir::LLVM::SharedMemoryObject;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
-namespace ttng = ::mlir::triton::nvidia_gpu;
 
 typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
 
 class ConvertTritonGPUOpToLLVMPatternBase {
 public:
-  explicit ConvertTritonGPUOpToLLVMPatternBase(LLVMTypeConverter &typeConverter)
+  explicit ConvertTritonGPUOpToLLVMPatternBase(
+      const LLVMTypeConverter &typeConverter)
       : converter(&typeConverter) {}
 
-  LLVMTypeConverter *getTypeConverter() const { return converter; }
+  const LLVMTypeConverter *getTypeConverter() const { return converter; }
 
 protected:
-  LLVMTypeConverter *converter;
+  const LLVMTypeConverter *converter;
 };
 
 template <typename SourceOp>
@@ -54,17 +49,17 @@ class ConvertTritonGPUOpToLLVMPattern
 public:
   using OpAdaptor = typename SourceOp::Adaptor;
 
-  explicit ConvertTritonGPUOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                           PatternBenefit benefit = 1)
+  explicit ConvertTritonGPUOpToLLVMPattern(
+      const LLVMTypeConverter &typeConverter, PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<SourceOp>(typeConverter, benefit),
         ConvertTritonGPUOpToLLVMPatternBase(typeConverter) {}
 
 protected:
-  TritonGPUToLLVMTypeConverter *getTypeConverter() const {
-    LLVMTypeConverter *ret =
+  TritonIntelGPUToLLVMTypeConverter *getTypeConverter() const {
+    const LLVMTypeConverter *ret =
         ((ConvertTritonGPUOpToLLVMPatternBase *)this)->getTypeConverter();
-    return (TritonGPUToLLVMTypeConverter *)ret;
+    return (TritonIntelGPUToLLVMTypeConverter *)ret;
   }
 };
 
-#endif
+#endif // TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_BASE_H

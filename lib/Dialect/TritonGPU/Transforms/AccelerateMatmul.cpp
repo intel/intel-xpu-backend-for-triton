@@ -1,4 +1,7 @@
+#include <memory>
+
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
@@ -6,9 +9,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
-#include <memory>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -64,7 +65,7 @@ warpsPerTileV2(tt::DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps) {
         continue;
       }
       if (auto mmaEncoding =
-              resTy.getEncoding().dyn_cast<NvidiaMmaEncodingAttr>()) {
+              dyn_cast<NvidiaMmaEncodingAttr>(resTy.getEncoding())) {
         return ttg::getWarpsPerCTA(mmaEncoding);
       }
       hasChainedDot = true;
@@ -161,7 +162,7 @@ class BlockedToMMA : public mlir::RewritePattern {
     getBackwardSlice(x, &slice, opt);
     for (auto op : slice) {
       if (Value arg = op->getOperand(0))
-        if (auto argTy = arg.getType().dyn_cast<RankedTensorType>()) {
+        if (auto argTy = dyn_cast<RankedTensorType>(arg.getType())) {
           auto argBitWidth = argTy.getElementType().getIntOrFloatBitWidth();
           if (argBitWidth != origBitWidth) {
             origBitWidth = std::min<int>(origBitWidth, argBitWidth);
@@ -197,7 +198,7 @@ public:
     Value arg = v;
     if (auto cvtOp = v.getDefiningOp<ttg::ConvertLayoutOp>())
       arg = cvtOp.getSrc();
-    auto argType = arg.getType().cast<RankedTensorType>();
+    auto argType = cast<RankedTensorType>(arg.getType());
     auto eltType = argType.getElementType();
     assert(argType.getEncoding() && "unexpected tensor type");
     auto newOrder = ttg::getOrder(argType.getEncoding());
@@ -232,7 +233,7 @@ public:
     // TODO: Check data-types and SM compatibility
     RankedTensorType oldRetType = dotOp.getType();
     if (!oldRetType.getEncoding() ||
-        oldRetType.getEncoding().isa<ttg::NvidiaMmaEncodingAttr>())
+        mlir::isa<ttg::NvidiaMmaEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
     // get MMA encoding for the given number of warps
@@ -264,11 +265,8 @@ public:
       getBackwardSlice(b, &bBwdSlices, opt);
       // get the source of the first conversion found in slices
       auto getCvtArgOrder = [](Operation *op) {
-        return cast<ConvertLayoutOp>(op)
-            .getSrc()
-            .getType()
-            .getEncoding()
-            .cast<BlockedEncodingAttr>()
+        return mlir::cast<BlockedEncodingAttr>(
+                   cast<ConvertLayoutOp>(op).getSrc().getType().getEncoding())
             .getOrder();
       };
       bool isARow = true;
@@ -341,26 +339,9 @@ public:
 
 static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                             Type promotedType) {
-  auto tensorPromotedType =
-      operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
-                                                           promotedType);
-  Type elemType = tensorPromotedType.getElementType();
-  return llvm::TypeSwitch<Type, Value>(elemType)
-      .Case<FloatType>([&](auto) {
-        return builder.create<tt::FpToFpOp>(loc, tensorPromotedType, operand);
-      })
-      .Case<IntegerType>([&](auto) {
-        unsigned tgtBitWidth = elemType.getIntOrFloatBitWidth(),
-                 valBitWidth = operand.getType()
-                                   .cast<RankedTensorType>()
-                                   .getElementTypeBitWidth();
-        Operation *castOp = (valBitWidth <= tgtBitWidth)
-                                ? builder.create<arith::ExtSIOp>(
-                                      loc, tensorPromotedType, operand)
-                                : builder.create<arith::TruncIOp>(
-                                      loc, tensorPromotedType, operand);
-        return castOp->getResult(0);
-      });
+  Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
+                                .cloneWith(std::nullopt, promotedType);
+  return builder.create<tt::FpToFpOp>(loc, tensorPromotedType, operand);
 }
 
 // promote operands of dot op if the existing combination is not natively
@@ -372,7 +353,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
     Type AElType = dotOp.getA().getType().getElementType();
     Type promoteType;
     NvidiaMmaEncodingAttr mmaLayout =
-        D.getType().getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
+        dyn_cast<NvidiaMmaEncodingAttr>(D.getType().getEncoding());
     if (mmaLayout) {
       bool isNativeFP8 = AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
       // promote operands for sm < 89 since fp8 mma is not natively supported

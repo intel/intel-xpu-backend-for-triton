@@ -65,7 +65,7 @@ arbitrary LLVM version.
        $ cd $HOME/llvm-project  # your clone of LLVM.
        $ mkdir build
        $ cd build
-       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON  ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm"
+       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
        $ ninja
 
 4. Grab a snack, this will take a while.
@@ -136,6 +136,8 @@ $ ninja -C build && ( cd build ; lit test )
 
 # Tips for hacking
 
+For detailed instructions on how to debug Triton's frontend, please refer to this [tutorial](https://triton-lang.org/main/programming-guide/chapter-3/debugging.html). The following includes additional tips for hacking on Triton's backend.
+
 **Helpful environment variables**
 
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs.
@@ -144,13 +146,32 @@ $ ninja -C build && ( cd build ; lit test )
   GPU.  You can insert Python breakpoints in your kernel code!
 - `TRITON_ENABLE_LLVM_DEBUG=1` passes `-debug` to LLVM, printing a lot of
   debugging information to stdout.  If this is too noisy, run with just
+  `TRITON_LLVM_DEBUG_ONLY` instead to limit the output.
+
+  An alternative way to reduce output noisiness is running with
   `LLVM_IR_ENABLE_DUMP=1`, extract the IR before the LLVM pass of interest, and
   then run LLVM's `opt` standalone, perhaps passing `-debug-only=foo` on the
   command line.
-- `USE_TTGIR_LOC` reparses the ttgir such that the location information will
+- `TRITON_LLVM_DEBUG_ONLY=<comma-separated>` is the equivalent of LLVM's
+  `-debug-only` command-line option. This limits the LLVM debug output to
+  specific pass or component names (which are specified using `#define
+  DEBUG_TYPE` throughout LLVM and Triton) in order to allow the debug output to
+  be less noisy. `TRITON_LLVM_DEBUG_ONLY` allows for one or more comma
+  separated values to be specified (eg
+  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
+  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
+- `USE_TTGIR_LOC=1` reparses the ttgir such that the location information will
   be the line number of the ttgir instead of line number of the python file.
   This can provide a direct mapping from ttgir to llir/ptx. When used with
   performance tools, it can provide a breakdown on ttgir instructions.
+- `TRITON_PRINT_AUTOTUNING=1` prints out the best autotuning config and total time
+  spent for each kernel after autotuning is complete.
+- `DISABLE_LLVM_OPT` will disable llvm optimizations for make_llir and make_ptx
+  if its value is true when parsing as Bool. Otherwise, it will be parsed as a list
+  of flags to disable llvm optimizations. One usage case is
+  `DISABLE_LLVM_OPT="disable-lsr"`
+  Loop strength reduction is known to cause up to 10% performance changes for
+  certain kernels with register pressure.
 
 # Changelog
 

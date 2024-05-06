@@ -4,15 +4,19 @@ import tempfile
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
+from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
 
 dirname = os.getenv("ZE_PATH", default="/usr/local")
-oneapi_root = os.getenv("ONEAPI_ROOT", default="/opt/intel/oneapi")
-include_dir = [
-    os.path.join(dirname, "include"),
-    os.path.join(oneapi_root, "compiler/latest/include"),
-    os.path.join(oneapi_root, "compiler/latest/include/sycl")
-]
+include_dir = [os.path.join(dirname, "include")]
+
+oneapi_root = os.getenv("ONEAPI_ROOT")
+if oneapi_root:
+    include_dir += [
+        os.path.join(oneapi_root, "compiler/latest/include"),
+        os.path.join(oneapi_root, "compiler/latest/include/sycl")
+    ]
+
 library_dir = [os.path.join(dirname, "lib")]
 libraries = ['ze_loader', 'sycl']
 
@@ -412,7 +416,7 @@ class XPUDriver(DriverBase):
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
         warp_size = 32
-        return ("xpu", dev_property, warp_size)
+        return GPUTarget("xpu", dev_property, warp_size)
 
     @staticmethod
     def is_active():

@@ -23,8 +23,10 @@
 
 #include "DumpLayout.h"
 #ifdef AMD_TARGET
+#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #else
+#include "intel/lib/TritonIntelGPUToLLVM/TargetInfo.h"
 #include "intel/lib/TritonIntelGPUToLLVM/Utility.h"
 #endif
 namespace mlir {
@@ -57,7 +59,13 @@ class IndexEmitter {
 public:
   IndexEmitter(MLIRContext *context_)
       : context(context_), option(context), rewriter(context),
-        loc(UnknownLoc::get(context)) {
+        loc(UnknownLoc::get(context)),
+#ifdef AMD_TARGET
+        targetInfo("gfx942")
+#else
+        targetInfo(90)
+#endif
+  {
     mlir::OpBuilder builder(context);
     std::vector<mlir::Type> inTypes{};
     std::vector<mlir::Type> outTypes{};
@@ -73,7 +81,8 @@ public:
   emitIndices(Attribute layout, llvm::ArrayRef<int64_t> shape,
               bool withCTAOffset) {
     auto type = RankedTensorType::get(shape, rewriter.getF16Type(), layout);
-    return mlir::emitIndices(loc, rewriter, layout, type, withCTAOffset);
+    return mlir::emitIndices(loc, rewriter, targetInfo, layout, type,
+                             withCTAOffset);
   }
 
   llvm::DenseMap<unsigned, Value>
@@ -83,9 +92,9 @@ public:
     auto srcTy = RankedTensorType::get(shape, elemTy, srcLayout);
     SharedMemoryObject smemObj(getMockSmemBaseImpl(rewriter, loc), elemTy,
                                shape, sharedLayout.getOrder(), loc, rewriter);
-    return getSwizzledSharedPtrs(loc, /*inVec=*/1, srcTy, sharedLayout, elemTy,
-                                 smemObj, rewriter, smemObj.offsets,
-                                 smemObj.strides);
+    return getSwizzledSharedPtrs(loc, targetInfo, /*inVec=*/1, srcTy,
+                                 sharedLayout, elemTy, smemObj, rewriter,
+                                 smemObj.offsets, smemObj.strides);
   }
 
 private:
@@ -94,6 +103,11 @@ private:
   LowerToLLVMOptions option;
   IRRewriter rewriter;
   Location loc;
+#ifdef AMD_TARGET
+  AMD::TargetInfo targetInfo;
+#else
+  NVIDIA::TargetInfo targetInfo;
+#endif
 };
 
 //===----------------------------------------------------------------------===//
@@ -140,7 +154,7 @@ int evalGEPOp(mlir::LLVM::GEPOp gepOp, int ctaid, int tid) {
   assert(gepOp.getNumOperands() == 2 && "Unrecognized format of GEPOp");
   int base = eval(gepOp.getBase(), ctaid, tid);
   int offset = eval(gepOp.getOperand(1), ctaid, tid);
-  auto llPtrTy = gepOp.getRes().getType().cast<LLVM::LLVMPointerType>();
+  auto llPtrTy = cast<LLVM::LLVMPointerType>(gepOp.getRes().getType());
   int bytesPerElem = llPtrTy.getIntOrFloatBitWidth() / 8;
   return base + offset * bytesPerElem;
 }
@@ -150,7 +164,7 @@ int eval(Value value, int ctaid, int tid) {
   assert(op && "Unrecognized source value in the index expression");
   if (auto constantOp = llvm::dyn_cast<mlir::LLVM::ConstantOp>(op)) {
     auto attr = constantOp.getValue();
-    return attr.cast<mlir::IntegerAttr>().getInt();
+    return mlir::cast<mlir::IntegerAttr>(attr).getInt();
   } else if (auto addOp = llvm::dyn_cast<mlir::LLVM::AddOp>(op)) {
     return eval(addOp.getLhs(), ctaid, tid) + eval(addOp.getRhs(), ctaid, tid);
   } else if (auto mulOp = llvm::dyn_cast<mlir::LLVM::MulOp>(op)) {
@@ -309,7 +323,7 @@ std::string dumpSharedLayout(Attribute layout, llvm::ArrayRef<int64_t> shape,
   if (!multiCTA)
     assert(numCTAs == 1 && "numCTAs must be 1 when multiCTA is false");
 
-  auto sharedLayout = layout.cast<SharedEncodingAttr>();
+  auto sharedLayout = mlir::cast<SharedEncodingAttr>(layout);
   auto blockedLayout = BlockedEncodingAttr::get(
       /*context=*/layout.getContext(), /*shape=*/shape,
       /*sizePerThread=*/{1, 1}, /*order=*/sharedLayout.getOrder(),

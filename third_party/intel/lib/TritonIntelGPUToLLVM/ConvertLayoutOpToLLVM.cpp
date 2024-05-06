@@ -1,10 +1,10 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TargetInfo.h"
 #include "Utility.h"
 
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -22,16 +22,14 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 // Forward declarations
-namespace SharedToDotOperandDPAS {
-namespace intel {
+namespace SharedToDotOperandDPAS::intel {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread);
 
-} // namespace intel
-} // namespace SharedToDotOperandDPAS
+} // namespace SharedToDotOperandDPAS::intel
 
 namespace {
 
@@ -95,43 +93,14 @@ LogicalResult lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
   return success();
 }
 
-LogicalResult lowerSharedToDistributed(triton::gpu::LocalLoadOp op,
-                                       triton::gpu::LocalLoadOpAdaptor adaptor,
-                                       const LLVMTypeConverter *typeConverter,
-                                       ConversionPatternRewriter &rewriter) {
-  auto loc = op.getLoc();
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getResult().getType();
-  auto dstShape = dstTy.getShape();
-  assert(dstShape.size() <= 2 &&
-         "Unexpected rank of ConvertLayout(shared->blocked)");
-  auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
-  auto dstLayout = dstTy.getEncoding();
-  auto inOrd = getOrder(srcSharedLayout);
-
-  auto smemObj = getSharedMemoryObjectFromStruct(
-      loc, adaptor.getSrc(), typeConverter->convertType(srcTy.getElementType()),
-      rewriter);
-  auto elemTy = typeConverter->convertType(dstTy.getElementType());
-
-  auto srcStrides =
-      getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
-  auto dstIndices = ::intel::emitIndices(loc, rewriter, dstLayout, dstTy, true);
-
-  SmallVector<Value> outVals = ::intel::loadSharedToDistributed(
-      op.getResult(), dstIndices, op.getSrc(), smemObj, elemTy, loc, rewriter);
-
-  Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
-  rewriter.replaceOp(op, result);
-
-  return success();
-}
-
 struct LocalLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
-  using ConvertOpToLLVMPattern<
-      triton::gpu::LocalLoadOp>::ConvertOpToLLVMPattern;
+  LocalLoadOpConversion(LLVMTypeConverter &typeConverter,
+                        const TargetInfoBase &targetInfo,
+                        PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
@@ -150,13 +119,55 @@ public:
     }
     return failure();
   }
+
+private:
+  LogicalResult
+  lowerSharedToDistributed(triton::gpu::LocalLoadOp op,
+                           triton::gpu::LocalLoadOpAdaptor adaptor,
+                           const LLVMTypeConverter *typeConverter,
+                           ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getResult().getType();
+    auto dstShape = dstTy.getShape();
+    assert(dstShape.size() <= 2 &&
+           "Unexpected rank of ConvertLayout(shared->blocked)");
+    auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
+    auto dstLayout = dstTy.getEncoding();
+    auto inOrd = getOrder(srcSharedLayout);
+
+    auto smemObj = getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(),
+        typeConverter->convertType(srcTy.getElementType()), rewriter);
+    auto elemTy = typeConverter->convertType(dstTy.getElementType());
+
+    auto srcStrides =
+        getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
+    auto dstIndices =
+        ::intel::emitIndices(loc, rewriter, targetInfo, dstLayout, dstTy, true);
+
+    SmallVector<Value> outVals =
+        ::intel::loadSharedToDistributed(op.getResult(), op.getSrc(), smemObj,
+                                         elemTy, loc, rewriter, targetInfo);
+
+    Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
+    rewriter.replaceOp(op, result);
+
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct ConvertLayoutOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::ConvertLayoutOp> {
 public:
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::ConvertLayoutOp>::ConvertTritonGPUOpToLLVMPattern;
+  ConvertLayoutOpConversion(const LLVMTypeConverter &typeConverter,
+                            const intel::TargetInfo &targetInfo,
+                            PatternBenefit benefit = 1)
+      : ConvertTritonGPUOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
@@ -184,7 +195,7 @@ private:
     unsigned rank = shape.size();
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
       auto multiDimOffsetFirstElem = ::intel::emitBaseIndexForLayout(
-          loc, rewriter, blockedLayout, type, false);
+          loc, rewriter, targetInfo, blockedLayout, type, false);
       SmallVector<Value> multiDimOffset(rank);
       SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
           elemId, getSizePerThread(layout), getOrder(layout));
@@ -226,8 +237,8 @@ private:
       return multiDimOffset;
     }
     if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
-      SmallVector<Value> multiDimBase =
-          ::intel::emitBaseIndexForLayout(loc, rewriter, layout, type, false);
+      SmallVector<Value> multiDimBase = ::intel::emitBaseIndexForLayout(
+          loc, rewriter, targetInfo, layout, type, false);
 
       // clang-format off
       // For C operand the layout illustration.
@@ -369,89 +380,6 @@ private:
     }
   }
 
-  LogicalResult
-  lowerDistToDistWithDistSmem(triton::gpu::ConvertLayoutOp op,
-                              OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    auto typeConverter = getTypeConverter();
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
-    auto srcLayout = srcTy.getEncoding();
-    auto dstLayout = dstTy.getEncoding();
-    auto srcShapePerCTA = getShapePerCTA(srcTy);
-    auto srcCTAsPerCGA = triton::gpu::getCTAsPerCGA(srcLayout);
-    auto srcCTAOrder = triton::gpu::getCTAOrder(srcLayout);
-    unsigned rank = srcShapePerCTA.size();
-
-    auto llvmElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-
-    Value smemBase =
-        LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
-    smemBase = bitcast(smemBase, elemPtrTy);
-    auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
-
-    // Store to local shared memory
-    {
-      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      auto inIndices = ::intel::emitIndices(loc, rewriter, srcLayout, srcTy,
-                                            /*withCTAOffset*/ false);
-
-      assert(inIndices.size() == inVals.size() &&
-             "Unexpected number of indices emitted");
-
-      for (unsigned i = 0; i < inIndices.size(); ++i) {
-        Value offset = linearize(rewriter, loc, inIndices[i], smemShape);
-        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
-        store(inVals[i], ptr);
-      }
-    }
-
-    // Cluster barrier
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
-
-    // Load from remote shared memory
-    {
-      SmallVector<Value> srcShapePerCTACache;
-      for (unsigned i = 0; i < rank; ++i)
-        srcShapePerCTACache.push_back(i32_val(srcShapePerCTA[i]));
-
-      SmallVector<Value> outVals;
-      auto outIndices = ::intel::emitIndices(loc, rewriter, dstLayout, dstTy,
-                                             /*withCTAOffset*/ true);
-
-      for (unsigned i = 0; i < outIndices.size(); ++i) {
-        auto coord = outIndices[i];
-        assert(coord.size() == rank && "Unexpected rank of index emitted");
-
-        SmallVector<Value> multiDimCTAId, localCoord;
-        for (unsigned d = 0; d < rank; ++d) {
-          multiDimCTAId.push_back(udiv(coord[d], srcShapePerCTACache[d]));
-          localCoord.push_back(urem(coord[d], srcShapePerCTACache[d]));
-        }
-
-        Value remoteCTAId =
-            linearize(rewriter, loc, multiDimCTAId, srcCTAsPerCGA, srcCTAOrder);
-        Value localOffset = linearize(rewriter, loc, localCoord, smemShape);
-
-        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, localOffset);
-        outVals.push_back(load_dsmem(ptr, remoteCTAId, llvmElemTy));
-      }
-
-      Value result =
-          packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
-      rewriter.replaceOp(op, result);
-    }
-
-    // Cluster barrier
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
-
-    return success();
-  }
-
   // blocked/dpas -> blocked/dpas.
   // Data padding in shared memory to avoid bank conflict.
   LogicalResult
@@ -465,8 +393,6 @@ private:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
-    if (shouldUseDistSmem(srcLayout, dstLayout))
-      return lowerDistToDistWithDistSmem(op, adaptor, rewriter);
     Value smemBase =
         LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
@@ -550,12 +476,15 @@ private:
 
     return success();
   }
+
+private:
+  const intel::TargetInfo &targetInfo;
 };
 } // namespace
 
 void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
-  patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
 }

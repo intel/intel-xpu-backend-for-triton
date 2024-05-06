@@ -1,5 +1,6 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -10,36 +11,9 @@ using namespace mlir::triton::gpu;
 
 namespace mlir::triton::gpu {
 
-Type getFunctionType(Type resultType, ValueRange operands) {
-  SmallVector<Type> operandTypes(operands.getTypes());
-  return LLVM::LLVMFunctionType::get(resultType, operandTypes);
-}
-
-LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
-                                         Operation *op, StringRef funcName,
-                                         Type funcType,
-                                         StringRef libname /*= ""*/,
-                                         StringRef libpath /*= ""*/) {
-  using LLVM::LLVMFuncOp;
-
-  auto funcAttr = StringAttr::get(op->getContext(), funcName);
-  Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
-  if (funcOp)
-    return cast<LLVMFuncOp>(*funcOp);
-
-  auto parent = op->getParentOfType<LLVM::LLVMFuncOp>();
-  OpBuilder b(parent);
-  auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
-  ret.getOperation()->setAttr("libname",
-                              StringAttr::get(op->getContext(), libname));
-  ret.getOperation()->setAttr("libpath",
-                              StringAttr::get(op->getContext(), libpath));
-  return ret;
-}
-
 Type getElementType(Value value) {
   auto type = value.getType();
-  if (auto tensorType = type.dyn_cast<RankedTensorType>())
+  if (auto tensorType = dyn_cast<RankedTensorType>(type))
     return tensorType.getElementType();
   return type;
 }
@@ -47,8 +21,8 @@ Type getElementType(Value value) {
 // reorder if we're in this case.
 SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
                                  Type ouType) {
-  auto inTensorTy = inType.dyn_cast<RankedTensorType>();
-  auto ouTensorTy = ouType.dyn_cast<RankedTensorType>();
+  auto inTensorTy = dyn_cast<RankedTensorType>(inType);
+  auto ouTensorTy = dyn_cast<RankedTensorType>(ouType);
   if (!inTensorTy || !ouTensorTy)
     return values;
   auto inEncoding = dyn_cast<DotOperandEncodingAttr>(inTensorTy.getEncoding());
@@ -108,11 +82,11 @@ SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
 SmallVector<Value> unpackI32(const SmallVector<Value> &inValues, Type srcTy,
                              ConversionPatternRewriter &rewriter, Location loc,
                              const LLVMTypeConverter *typeConverter) {
-  auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
+  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
   if (!tensorTy)
     return inValues;
-  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
-  if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
+  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
+  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
     return inValues;
   SmallVector<Value> outValues;
   for (auto v : inValues) {
@@ -130,11 +104,11 @@ SmallVector<Value> unpackI32(const SmallVector<Value> &inValues, Type srcTy,
 SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
                            ConversionPatternRewriter &rewriter, Location loc,
                            const LLVMTypeConverter *typeConverter) {
-  auto tensorTy = srcTy.dyn_cast<RankedTensorType>();
+  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
   if (!tensorTy)
     return inValues;
-  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
-  if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
+  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
+  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
     return inValues;
   SmallVector<Value> outValues;
   auto eltType = typeConverter->convertType(tensorTy.getElementType());
@@ -153,16 +127,16 @@ SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
 int getNumElementsPerThreads(Type type,
                              const LLVMTypeConverter *typeConverter) {
   int numElemsPerThread = 1;
-  auto tensorTy = type.dyn_cast<RankedTensorType>();
+  auto tensorTy = dyn_cast<RankedTensorType>(type);
   if (!tensorTy)
     return numElemsPerThread;
   auto structType =
-      typeConverter->convertType(type).dyn_cast<LLVM::LLVMStructType>();
+      dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
   if (structType) {
     numElemsPerThread = structType.getBody().size();
   }
-  auto encoding = tensorTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
-  if (!(encoding && encoding.getParent().isa<NvidiaMmaEncodingAttr>()))
+  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
+  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
     return numElemsPerThread;
   auto eltType = tensorTy.getElementType();
   assert(eltType.getIntOrFloatBitWidth() <= 32 &&
@@ -185,11 +159,11 @@ struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
     Location loc = op->getLoc();
     auto resultTy = op.getType();
     auto typeConverter = getTypeConverter();
-    auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
+    auto resultTensorTy = dyn_cast<RankedTensorType>(resultTy);
     if (resultTensorTy) {
       unsigned elems = getTotalElemsPerThread(resultTy);
       Type elemTy = typeConverter->convertType(
-          resultTensorTy.getElementType().cast<PointerType>().getPointeeType());
+          cast<PointerType>(resultTensorTy.getElementType()).getPointeeType());
       Type ptrTy = typeConverter->convertType(resultTensorTy.getElementType());
       auto ptrs = unpackLLElements(loc, adaptor.getPtr(), rewriter);
       auto offsets = unpackLLElements(loc, adaptor.getOffset(), rewriter);
@@ -201,10 +175,10 @@ struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
           packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
       rewriter.replaceOp(op, view);
     } else {
-      assert(resultTy.isa<PointerType>());
+      assert(isa<PointerType>(resultTy));
       auto resultPtrTy = typeConverter->convertType(resultTy);
       auto resultElemTy = typeConverter->convertType(
-          resultTy.cast<PointerType>().getPointeeType());
+          cast<PointerType>(resultTy).getPointeeType());
       Value result =
           gep(resultPtrTy, resultElemTy, adaptor.getPtr(), adaptor.getOffset());
       rewriter.replaceOp(op, result);
@@ -478,7 +452,7 @@ struct ElementwiseInlineAsmOpConversion
         } else {
           val = asmResults;
         }
-        if (auto vectorTy = val.getType().dyn_cast<VectorType>()) {
+        if (auto vectorTy = dyn_cast<VectorType>(val.getType())) {
           for (int k = 0; k < vectorTy.getNumElements(); k++) {
             ret[i].push_back(extract_element(val, i32_val(k)));
           }
@@ -804,6 +778,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
+  POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
   POPULATE_UNARY_OP(math::Log2Op, math::Log2Op)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)

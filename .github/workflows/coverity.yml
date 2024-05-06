@@ -1,0 +1,113 @@
+name: Coverity
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "5 2 * * *"
+
+permissions: read-all
+
+jobs:
+  coverity:
+    name: Coverity
+
+    runs-on:
+      - glados
+      - cpu
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Load coverity from cache
+        id: coverity-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        with:
+          path: $HOME/coverity
+          key: coverity-$CACHE_NUMBER
+
+      - name: Download coverity
+        if: ${{ steps.coverity-cache.outputs.status == 'miss' }}
+        env:
+          COVERITY_TOKEN: ${{ secrets.COVERITY_TOKEN }}
+        run: |
+          cd $HOME
+          wget https://scan.coverity.com/download/linux64 --no-verbose --post-data "token=$COVERITY_TOKEN&project=intel%2Fintel-xpu-backend-for-triton" -O coverity.tgz
+          tar zxf coverity.tgz
+          mv -T cov-analysis-linux64-* coverity
+
+      - name: Add coverity to PATH
+        run: |
+          echo "$HOME/coverity/bin" >> $GITHUB_PATH
+
+      - name: Show coverity version
+        run: |
+          coverity --version
+
+      - name: Save coverity to cache
+        if: ${{ steps.coverity-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.coverity-cache.outputs.path }}
+          dest: ${{ steps.coverity-cache.outputs.dest }}
+
+      - name: Run coverity build
+        run: |
+          pip install wheel
+          cd python
+          cov-build --dir $HOME/cov-int pip install -e .
+          tail $HOME/cov-int/build-log.txt
+
+      - name: Create coverity results tarball
+        run: |
+          cd $HOME
+          tar zcf cov-int.tgz cov-int
+
+      - name: Version for coverity build
+        run: |
+          version_id="$(python -c 'import triton; print(triton.__version__)')"
+          version_local_id="$(git rev-parse --short HEAD)"
+          version="${version_id}+git${version_local_id}"
+          echo "version=$version" | tee -a $GITHUB_ENV
+
+      - name: Create coverity build
+        env:
+          COVERITY_TOKEN: ${{ secrets.COVERITY_TOKEN }}
+        run: |
+          cd $HOME
+          curl -X POST \
+            -d version="$version" \
+            -d email=pavel.chekin@intel.com \
+            -d token=$COVERITY_TOKEN \
+            -d file_name="cov-int.tgz" \
+            https://scan.coverity.com/projects/30045/builds/init \
+            | tee response
+          upload_url="$(jq -r '.url' response)"
+          build_id="$(jq -r '.build_id' response)"
+          echo "upload_url=$upload_url" >> $GITHUB_ENV
+          echo "build_id=$build_id" | tee -a $GITHUB_ENV
+
+      - name: Upload coverity build
+        env:
+          COVERITY_TOKEN: ${{ secrets.COVERITY_TOKEN }}
+        run: |
+          cd $HOME
+          curl -X PUT \
+            --header 'Content-Type: application/json' \
+            --upload-file cov-int.tgz \
+            $upload_url
+
+          curl -X PUT \
+            -d token=$COVERITY_TOKEN \
+            https://scan.coverity.com/projects/30045/builds/$build_id/enqueue

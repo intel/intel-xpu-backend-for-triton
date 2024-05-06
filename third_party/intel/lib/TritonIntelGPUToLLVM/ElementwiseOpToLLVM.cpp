@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -10,9 +11,7 @@ static SmallVector<Value> identity_func(Location loc,
   return v;
 }
 } // namespace
-namespace mlir::triton {
 
-namespace gpu {
 namespace {
 
 /* ----- FP8E5M2 ------ */
@@ -318,9 +317,8 @@ Bf16_to_Fp8E5M2_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
 
 /* ----- FP8E4M3B15 ------ */
 // This data-type is a variant of the standard FP8E4M3 format.
-// It was designed for fast software conversion to FP16 on
-// nvidia GPUs that do not support it natively.
-// Specifically, this data-type:
+// It was designed for fast software conversion to FP16 on GPUs that do not
+// support it natively. Specifically, this data-type:
 //    - has infinities
 //    - has multiple nans (when all exponent bits are 1)
 //    - has an exponent bias of 15 (vs. 7 for fp8e4m3)
@@ -923,11 +921,13 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
   assert(inEncoding == ouEncoding);
   if (!inEncoding)
     return values;
+
   // If the parent of the dot operand is in block encoding, we don't need to
   // reorder elements
   auto parentEncoding = dyn_cast<NvidiaMmaEncodingAttr>(ouEncoding.getParent());
   if (!parentEncoding)
     return values;
+
   size_t inBitWidth = inTensorTy.getElementType().getIntOrFloatBitWidth();
   size_t ouBitWidth = ouTensorTy.getElementType().getIntOrFloatBitWidth();
   auto ouEltTy = ouTensorTy.getElementType();
@@ -968,25 +968,6 @@ static SmallVector<Value> reorderValues(const SmallVector<Value> &values,
       ret.push_back(values[i + 15]);
     }
     return ret;
-    // for (unsigned i = 0; i < values.size(); i += 16) {
-    //   ret.push_back(values[i]);
-    //   ret.push_back(values[i + 1]);
-    //   ret.push_back(values[i + 4]);
-    //   ret.push_back(values[i + 5]);
-    //   ret.push_back(values[i + 8]);
-    //   ret.push_back(values[i + 9]);
-    //   ret.push_back(values[i + 12]);
-    //   ret.push_back(values[i + 13]);
-
-    //   ret.push_back(values[i + 2]);
-    //   ret.push_back(values[i + 3]);
-    //   ret.push_back(values[i + 6]);
-    //   ret.push_back(values[i + 7]);
-    //   ret.push_back(values[i + 10]);
-    //   ret.push_back(values[i + 11]);
-    //   ret.push_back(values[i + 14]);
-    //   ret.push_back(values[i + 15]);
-    // }
   }
   llvm_unreachable("unimplemented code path");
 }
@@ -1143,7 +1124,8 @@ public:
       return resultVals;
     }
 
-    SmallVector<unsigned> elemsPerThread = getElemsPerThread(rtType);
+    SmallVector<unsigned> elemsPerThread =
+        triton::gpu::getElemsPerThread(rtType);
     int rank = elemsPerThread.size();
     if (product<unsigned>(elemsPerThread) != resultVals.size())
       return resultVals;
@@ -1151,7 +1133,8 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> sizePerThread = getSizePerThread(encoding);
+    SmallVector<unsigned> sizePerThread =
+        triton::gpu::getSizePerThread(encoding);
     if (rank != sizePerThread.size())
       return resultVals;
 
@@ -1185,7 +1168,7 @@ public:
     if (rank > 1) {
       // reorder the shape and constancy vectors by the axis order:
       // from the fastest-changing to the smallest-changing axis
-      SmallVector<unsigned> order = getOrder(encoding);
+      SmallVector<unsigned> order = triton::gpu::getOrder(encoding);
       if (rank != order.size())
         return resultVals;
       elemsPerThread = applyPermutation(elemsPerThread, order);
@@ -1295,9 +1278,8 @@ struct FpToFpOpConversion
 
   explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability, PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        computeCapability(computeCapability) {}
+                              PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit) {}
 
   static Value convertBf16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
@@ -1344,48 +1326,31 @@ struct FpToFpOpConversion
     return truncated;
   }
 
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v, const RoundingMode rounding) {
-    MLIRContext *ctx = rewriter.getContext();
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-
-    // FIXME: Avoid using `llvm.genx.GenISA` calls (use arith dialect instead
-    // once it has been enhanced).
-    std::string funcName = "llvm.genx.GenISA.ftof.";
-
+  static LLVM::RoundingMode
+  convertTritonRoundingModeToLLVM(const RoundingMode rounding) {
+    LLVM::RoundingMode roundingMode;
     switch (rounding) {
     case RoundingMode::RTNE:
-      funcName.append("rte.f32.f16");
-      break;
+      return LLVM::RoundingMode::NearestTiesToEven;
     case RoundingMode::RTZ:
-      funcName.append("rtz.f32.f16");
-      break;
+      return LLVM::RoundingMode::TowardZero;
     default:
       llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
                       "conversion: "
                    << stringifyRoundingMode(rounding) << "\n";
       llvm_unreachable("");
     }
+  }
 
-    Operation *funcOp = moduleOp.lookupSymbol(funcName);
-    if (!funcOp) {
-      auto funcType =
-          LLVM::LLVMFunctionType::get(f16_ty, {f32_ty}, /*isVarArg*/ false);
-      ConversionPatternRewriter::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(moduleOp.getBody());
-      funcOp = rewriter.create<LLVM::LLVMFuncOp>(
-          loc, funcName, funcType, LLVM::Linkage::External,
-          /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC,
-          /*comdat=*/SymbolRefAttr{});
-    }
-
-    SmallVector<Value> operands{v};
-    auto callOp = call(cast<LLVM::LLVMFuncOp>(funcOp), operands);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-
-    return callOp.getResult();
+  static Value convertFp32ToFp16(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 const Value &v, const RoundingMode rounding) {
+    MLIRContext *ctx = rewriter.getContext();
+    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
+        loc, f16_ty, v,
+        LLVM::RoundingModeAttr::get(ctx,
+                                    convertTritonRoundingModeToLLVM(rounding)),
+        arith::getLLVMDefaultFPExceptionBehavior(*ctx));
   }
 
   std::pair<ConverterT, size_t>
@@ -1509,11 +1474,7 @@ struct FpToFpOpConversion
       return outVals;
     }
 
-    bool useFP16IntermediateSrc =
-        srcElementType.isF32() &&
-        (!(computeCapability >= 90 && (dstElementType.isFloat8E4M3FNUZ() ||
-                                       dstElementType.isFloat8E5M2())) ||
-         roundingMode.value() == RoundingMode::RTZ);
+    bool useFP16IntermediateSrc = srcElementType.isF32();
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;
@@ -1536,9 +1497,6 @@ struct FpToFpOpConversion
     // Pack values
     return outVals;
   }
-
-private:
-  int computeCapability;
 };
 
 template <typename OP>
@@ -2058,7 +2016,8 @@ struct ExpOpConversionApprox
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    // For non-FP32 input, call __nv_expf for higher-precision calculation
+    // For non-FP32 input, call math library expf for higher-precision
+    // calculation
     if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
@@ -2133,21 +2092,14 @@ struct MinMaxFOpConversion
 
   explicit MinMaxFOpConversion(LLVMTypeConverter &typeConverter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               int computeCapability,
                                PatternBenefit benefit = 1)
       : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
-                                          benefit),
-        computeCapability(computeCapability) {}
+                                          benefit) {}
 
   SmallVector<Value> createDestOps(OpTy op, Adaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    if (computeCapability >= 80) {
-      return {rewriter.create<DestOpNanProp>(loc, elemTy, operands[0][0],
-                                             operands[0][1])};
-    }
-    // Handle pre-80 compute capability.
     // If any of the operands is NaN, return NaN.
     auto lhs = operands[0][0];
     auto rhs = operands[0][1];
@@ -2163,9 +2115,6 @@ struct MinMaxFOpConversion
     // Select the result based on the isNan flag.
     return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
   }
-
-private:
-  int computeCapability;
 };
 
 struct ClampFOpConversion
@@ -2176,15 +2125,13 @@ struct ClampFOpConversion
 
   explicit ClampFOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability, PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        computeCapability(computeCapability) {}
+                              PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit) {}
 
   SmallVector<Value> createDestOps(ClampFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    bool xorsignAbsAvailable = (computeCapability >= 90);
     // Pattern matching the sequence of clamp(x, -limit, limit) to generate more
     // efficient PTX code.
     // NOTE: This pattern matching is not general enough, but it is sufficient.
@@ -2198,7 +2145,6 @@ struct ClampFOpConversion
     //   %cst_6 = arith.constant dense<-6.0000e+00>
     //   %cst_7 = arith.constant dense<6.0000e+00>
     //   %160 = tt.clamp %158, %cst_6, %cst_7
-    bool clipPatternFound = false;
 
     auto getSplatInitializer = [](Value v) -> std::optional<double> {
       if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
@@ -2212,38 +2158,11 @@ struct ClampFOpConversion
       return std::nullopt;
     };
 
-    if (xorsignAbsAvailable) {
-      if (auto subOp = op.getOperand(1).getDefiningOp<arith::SubFOp>()) {
-        if (subOp.getOperand(1) == op.getOperand(2)) {
-          auto initializer = getSplatInitializer(subOp.getOperand(0));
-          if (initializer.has_value() && initializer.value() == 0.0) {
-            clipPatternFound = true;
-          }
-        }
-      } else {
-        auto initializer1 = getSplatInitializer(op.getOperand(1));
-        auto initializer2 = getSplatInitializer(op.getOperand(2));
-        if (initializer1.has_value() && initializer2.has_value() &&
-            initializer1.value() == -initializer2.value()) {
-          clipPatternFound = true;
-        }
-      }
-    }
-
     assert(elemTy.isF32() || elemTy.isF16());
 
-    if (clipPatternFound)
-      llvm_unreachable("TODO");
-
-    // Clip pattern not found, use min/max.
     if (op.getPropagateNan() == PropagateNan::ALL) {
-      if (computeCapability >= 80) {
-        auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
-                                                  operands[0][1]);
-        return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
-      }
-      // On pre-80 compute capability, we need to handle NaN propagation
-      // manually. We need to check only the first operand for clamp.
+      // handle NaN propagation manually. We need to check only the first
+      // operand for clamp.
       auto lhs = operands[0][0];
       auto isNan = rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une,
                                                  lhs, lhs);
@@ -2261,9 +2180,6 @@ struct ClampFOpConversion
                                              operands[0][1]);
     return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
   }
-
-private:
-  int computeCapability;
 };
 
 /// The lowering of index_cast becomes an integer conversion since index
@@ -2398,7 +2314,7 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
     auto typeConverter = getTypeConverter();
     auto resultTensorTy = resultTy.dyn_cast<RankedTensorType>();
     if (resultTensorTy) {
-      unsigned elems = getTotalElemsPerThread(resultTy);
+      unsigned elems = triton::gpu::getTotalElemsPerThread(resultTy);
       Type elemTy = typeConverter->convertType(
           resultTensorTy.getElementType().cast<PointerType>().getPointeeType());
       Type ptrTy = typeConverter->convertType(resultTensorTy.getElementType());
@@ -2425,13 +2341,13 @@ struct AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
 };
 
 } // namespace
-} // namespace gpu
 
-namespace intel {
+namespace mlir::triton::intel {
+
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
-    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
+    PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
 #define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
@@ -2472,6 +2388,7 @@ void populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
+  POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
   POPULATE_UNARY_OP(math::Log2Op, math::Log2Op)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
@@ -2512,8 +2429,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<IndexCastOpLowering>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
-                                   computeCapability, benefit);
+  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
@@ -2521,12 +2437,11 @@ void populateElementwiseOpToLLVMPatterns(
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
-  // __nv_expf for higher-precision calculation
+  // a vendor specific math library for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
                                     benefit);
-  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
-                                   computeCapability, benefit);
+  patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   PatternBenefit benefitForPropNan = benefit;
   // TODO(FIXME): spirv's OpenCL extension (fmin/fmax) does not support
   // nan propagation. Set these conversion benefit to the max benefit:
@@ -2534,9 +2449,9 @@ void populateElementwiseOpToLLVMPatterns(
   // correctness
   benefitForPropNan = 65534;
   patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability, benefitForPropNan);
+      typeConverter, axisInfoAnalysis, benefitForPropNan);
   patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
-      typeConverter, axisInfoAnalysis, computeCapability, benefitForPropNan);
+      typeConverter, axisInfoAnalysis, benefitForPropNan);
 }
-} // namespace intel
-} // namespace mlir::triton
+
+} // namespace mlir::triton::intel

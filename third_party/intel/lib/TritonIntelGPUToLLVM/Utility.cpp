@@ -11,23 +11,12 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-namespace mlir {
-namespace LLVM {
-namespace intel {
+namespace mlir::LLVM::intel {
 
 static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
                            Value val, Value i, TritonGEN::ShflKind mode) {
   Type type = val.getType();
   return rewriter.create<TritonGEN::SubGroupShuffleOp>(loc, type, val, i, mode);
-}
-
-Value storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                  Value val, Value pred) {
-  createPredicatedBlock(rewriter, loc, pred, [&] {
-    store(val, ptr);
-    return ArrayRef<Value>();
-  });
-  return Value();
 }
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
@@ -156,6 +145,4 @@ Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
   return msgValue;
 }
 
-} // namespace intel
-} // namespace LLVM
-} // namespace mlir
+} // namespace mlir::LLVM::intel

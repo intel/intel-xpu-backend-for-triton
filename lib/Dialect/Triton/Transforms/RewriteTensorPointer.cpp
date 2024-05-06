@@ -1,11 +1,12 @@
+#include <memory>
+#include <stack>
+
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
-
-#include <memory>
-#include <stack>
 
 using namespace mlir;
 
@@ -92,7 +93,7 @@ public:
            tensorShape.size() == strides.size());
     auto indexTensorType =
         RankedTensorType::get(tensorShape, builder.getI64Type());
-    auto ptrType = base.getType().cast<triton::PointerType>();
+    auto ptrType = cast<triton::PointerType>(base.getType());
     auto ptrTensorType = RankedTensorType::get(tensorShape, ptrType);
 
     // Generate offsets per dimension
@@ -166,20 +167,20 @@ public:
 
     // Create element attribute
     auto elementType =
-        base.getType().cast<triton::PointerType>().getPointeeType();
+        cast<triton::PointerType>(base.getType()).getPointeeType();
     auto otherTensorType = RankedTensorType::get(tensorShape, elementType);
 
     // Set zero padding value
     TypedAttr attr =
         elementType.isIntOrIndex()
-            ? builder.getIntegerAttr(elementType, 0).cast<TypedAttr>()
-            : builder.getFloatAttr(elementType, 0).cast<TypedAttr>();
+            ? cast<TypedAttr>(builder.getIntegerAttr(elementType, 0))
+            : cast<TypedAttr>(builder.getFloatAttr(elementType, 0));
 
     // Float NaN padding case
     if (padding.value() == triton::PaddingOption::PAD_NAN) {
       assert(!elementType.isIntOrIndex());
       auto apNaN = llvm::APFloat::getNaN(
-          attr.cast<FloatAttr>().getValue().getSemantics());
+          cast<FloatAttr>(attr).getValue().getSemantics());
       attr = builder.getFloatAttr(elementType, apNaN);
     }
 
@@ -226,8 +227,8 @@ public:
                                     triton::MakeTensorPtrOp op,
                                     std::stack<Operation *> &eraser) {
     // Save info for later use
-    auto ptrType = op.getType().cast<triton::PointerType>();
-    auto tensorType = ptrType.getPointeeType().cast<RankedTensorType>();
+    auto ptrType = cast<triton::PointerType>(op.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
     // Cast I32 offsets into I64
     SmallVector<Value> i64Offsets;

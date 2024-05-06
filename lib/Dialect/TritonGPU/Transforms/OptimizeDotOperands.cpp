@@ -31,14 +31,14 @@ public:
     if (!trans || trans.getOrder() != ArrayRef<int32_t>{1, 0})
       return failure();
 
-    auto srcTy = trans.getSrc().getType().dyn_cast<RankedTensorType>();
+    auto srcTy = dyn_cast<RankedTensorType>(trans.getSrc().getType());
 
     if (auto srcCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
       srcTy = srcCvt.getSrc().getType();
     }
-    auto sharedLoadTy = cvtOp.getType().cast<RankedTensorType>();
+    auto sharedLoadTy = cast<RankedTensorType>(cvtOp.getType());
     auto cvtEncoding =
-        sharedLoadTy.getEncoding().dyn_cast<DotOperandEncodingAttr>();
+        dyn_cast<DotOperandEncodingAttr>(sharedLoadTy.getEncoding());
     if (!cvtEncoding)
       return failure();
 
@@ -110,20 +110,20 @@ public:
   LogicalResult matchAndRewrite(ConvertLayoutOp cvt,
                                 PatternRewriter &rewriter) const override {
     // Only consider conversions to dot operand.
-    auto cvtTy = cvt.getType().cast<RankedTensorType>();
-    if (!cvtTy.getEncoding().isa<DotOperandEncodingAttr>())
+    auto cvtTy = cast<RankedTensorType>(cvt.getType());
+    if (!isa<DotOperandEncodingAttr>(cvtTy.getEncoding()))
       return failure();
 
     auto src = cvt.getSrc().getDefiningOp();
     if (!src || src->getNumOperands() == 0 || src->getNumResults() != 1)
       return failure();
 
-    auto srcTy = src->getResult(0).getType().dyn_cast<RankedTensorType>();
+    auto srcTy = dyn_cast<RankedTensorType>(src->getResult(0).getType());
     if (!srcTy)
       return failure();
 
     if (!all_of(src->getOperandTypes(),
-                [](Type ty) { return ty.isa<RankedTensorType>(); }))
+                [](Type ty) { return isa<RankedTensorType>(ty); }))
       return failure();
 
     // Only consider custom conversions or arith ops.
@@ -180,7 +180,7 @@ public:
     SmallVector<ConvertLayoutOp> newOperands;
     for (auto operand : src->getOperands()) {
       // We checked earlier that all operands are ranked tensors.
-      auto operandTy = operand.getType().cast<RankedTensorType>();
+      auto operandTy = cast<RankedTensorType>(operand.getType());
       Type newCvtTy = RankedTensorType::get(
           srcTy.getShape(), operandTy.getElementType(), cvtTy.getEncoding());
       newOperands.push_back(
@@ -214,11 +214,8 @@ public:
       return failure();
 
     auto dot = *allocOp->getUsers().begin();
-    auto dotEnc = dot->getResult(0)
-                      .getType()
-                      .cast<RankedTensorType>()
-                      .getEncoding()
-                      .dyn_cast<NvidiaMmaEncodingAttr>();
+    auto dotEnc = dyn_cast<NvidiaMmaEncodingAttr>(
+        cast<RankedTensorType>(dot->getResult(0).getType()).getEncoding());
     if (!dotEnc || dotEnc.getVersionMajor() != 3)
       return failure();
 
@@ -231,7 +228,7 @@ public:
       return failure();
 
     MemDescType allocType = allocOp.getType();
-    auto allocEncoding = allocType.getEncoding().cast<SharedEncodingAttr>();
+    auto allocEncoding = cast<SharedEncodingAttr>(allocType.getEncoding());
     TensorOrMemDesc srcTy = trans.getSrc().getType();
 
     // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
@@ -280,18 +277,18 @@ struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
       return failure();
 
     auto getEncoding = [](Value v) {
-      return v.getType().cast<TensorOrMemDesc>().getEncoding();
+      return cast<TensorOrMemDesc>(v.getType()).getEncoding();
     };
 
-    if (!getEncoding(dotOp.getOperand(0)).isa<SharedEncodingAttr>())
+    if (!isa<SharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
       return failure();
-    auto srcEnc = getEncoding(alloc.getSrc()).dyn_cast<NvidiaMmaEncodingAttr>();
+    auto srcEnc = dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(alloc.getSrc()));
     auto dstEnc =
-        getEncoding(dotOp.getResult()).dyn_cast<NvidiaMmaEncodingAttr>();
+        dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
     if (!srcEnc || srcEnc.getVersionMajor() != 3 || !dstEnc ||
         dstEnc.getVersionMajor() != 3)
       return failure();
-    auto srcTy = alloc.getSrc().getType().cast<RankedTensorType>();
+    auto srcTy = cast<RankedTensorType>(alloc.getSrc().getType());
     auto dotOperandEnc = DotOperandEncodingAttr::get(
         dotOp.getContext(), /*opIdx=*/0, srcEnc, /*kWidth=*/0);
     auto newTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),
@@ -317,7 +314,9 @@ class TritonGPUOptimizeDotOperandsPass
     : public TritonGPUOptimizeDotOperandsBase<
           TritonGPUOptimizeDotOperandsPass> {
 public:
-  TritonGPUOptimizeDotOperandsPass() = default;
+  explicit TritonGPUOptimizeDotOperandsPass(bool hoistLayoutConversion) {
+    this->hoistLayoutConversion = hoistLayoutConversion;
+  }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -329,16 +328,18 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
-    if (triton::gpu::TritonGPUDialect::getComputeCapability(m) >= 80)
+    if (this->hoistLayoutConversion.getValue())
       patterns.add<HoistLayoutConversion>(context);
     patterns.add<FuseTransHopper>(context);
     patterns.add<MMAV3UseRegOperand>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+    if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
       signalPassFailure();
   }
 };
 
-std::unique_ptr<Pass> mlir::triton::gpu::createOptimizeDotOperandsPass() {
-  return std::make_unique<TritonGPUOptimizeDotOperandsPass>();
+std::unique_ptr<Pass>
+mlir::triton::gpu::createOptimizeDotOperandsPass(bool hoistLayoutConversion) {
+  return std::make_unique<TritonGPUOptimizeDotOperandsPass>(
+      hoistLayoutConversion);
 }

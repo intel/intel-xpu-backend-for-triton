@@ -23,11 +23,10 @@ namespace mlir {
 /// If the input values are of f16 type, the value is first casted to f32, the
 /// function called and then the result casted back.
 ///
-/// Example with NVVM:
+/// Example:
 ///   %exp_f32 = math.exp %arg_f32 : f32
 ///
-/// will be transformed into
-///   llvm.call @__nv_expf(%arg_f32) : (f32) -> f32
+/// will be transformed into a call to a vendor specific math library.
 template <typename SourceOp>
 struct OpToFuncCallLowering : public ConvertOpToLLVMPattern<SourceOp> {
 public:

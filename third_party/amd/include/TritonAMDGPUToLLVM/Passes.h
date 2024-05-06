@@ -20,13 +20,14 @@ namespace triton {
 
 namespace AMD {
 std::unique_ptr<OperationPass<ModuleOp>>
-createDecomposeUnsupportedConversionsPass();
+createDecomposeUnsupportedConversionsPass(StringRef targetArch);
 
 } // namespace AMD
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonAMDGPUToLLVMPass();
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(int32_t computeCapability);
+createConvertTritonAMDGPUToLLVMPass(StringRef targetArch);
+std::unique_ptr<OperationPass<ModuleOp>> createConvertBuiltinFuncToLLVMPass();
+
 #define GEN_PASS_REGISTRATION
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 

@@ -1,7 +1,7 @@
 #include "TargetInfo.h"
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
-#include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -53,7 +53,7 @@ void storeDistributedToSharedWithStMatrix(
     ArrayRef<unsigned> origRepShape, Location loc,
     ConversionPatternRewriter &rewriter) {
   auto shapePerCTA = getShapePerCTA(tensorTy);
-  auto mmaLayout = tensorTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+  auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   auto order = triton::gpu::getOrder(mmaLayout);
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto shapePerCTATile = getShapePerCTATile(mmaLayout);
@@ -101,7 +101,8 @@ void storeDistributedToSharedWithStMatrix(
 }
 
 bool isStMatrixCompatible(RankedTensorType tensorTy) {
-  auto mmaLayout = tensorTy.getEncoding().dyn_cast<NvidiaMmaEncodingAttr>();
+  auto mmaLayout =
+      mlir::dyn_cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
   if (!mmaLayout || !mmaLayout.isHopper())
     return false;
   if (tensorTy.getElementType().getIntOrFloatBitWidth() != 16)
@@ -190,7 +191,7 @@ static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
   if (!reduceOp || reduceOp->getNumOperands() != 2 ||
       reduceOp->getNumResults() != 1)
     return std::nullopt;
-  auto intType = reduceOp->getResultTypes()[0].dyn_cast<IntegerType>();
+  auto intType = dyn_cast<IntegerType>(reduceOp->getResultTypes()[0]);
   if (!intType || intType.getWidth() > 32)
     return std::nullopt;
   if (reduceOp->getOperand(0) != block->getArgument(0) ||
@@ -218,13 +219,19 @@ static std::optional<NVVM::ReduxKind> matchReduxKind(triton::ReduceOp op,
 bool TargetInfo::supportMaximumMinimum() const {
   return computeCapability >= 80;
 }
+
+Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
+  return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(loc,
+                                                        rewriter.getI32Type());
+}
+
 Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
                          Type type, Value cmp) const {
   Value threadMask = int_val(type.getIntOrFloatBitWidth(), -1);
   return rewriter.create<NVVM::VoteBallotOp>(loc, type, threadMask, cmp);
 }
-Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                              Value ptr, Value val, Value pred) const {
+void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                             Value ptr, Value val, Value pred) const {
   MLIRContext *ctx = rewriter.getContext();
   unsigned bits = std::max(8u, val.getType().getIntOrFloatBitWidth());
   const char *c = bits == 64 ? "l" : (bits == 16 ? "h" : "r");
@@ -234,13 +241,14 @@ Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
   auto *valOpr = builder.newOperand(val, c);
   auto &st = builder.create<>("st")->shared().b(bits);
   st(ptrOpr, valOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, void_ty(ctx));
+  builder.launch(rewriter, loc, void_ty(ctx));
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Type elemTy, Value pred) const {
+                             const TypeConverter *converter, Value ptr,
+                             Type elemTy, Value pred) const {
   MLIRContext *ctx = rewriter.getContext();
-  auto ptrTy = ptr.getType().cast<LLVM::LLVMPointerType>();
+  auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for loadShared");
   unsigned bitwidth = std::max(8u, elemTy.getIntOrFloatBitWidth());
 
@@ -300,7 +308,7 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                    and_(laneId, i32_val(~(numLaneToReduce - 1))));
       }
       for (unsigned i = 0; i < acc.size(); ++i) {
-        unsigned bitwidth = acc[i].getType().cast<IntegerType>().getWidth();
+        unsigned bitwidth = cast<IntegerType>(acc[i].getType()).getWidth();
         if (bitwidth < 32) {
           if (*kind == NVVM::ReduxKind::MIN || *kind == NVVM::ReduxKind::MAX)
             acc[i] = sext(i32_ty, acc[i]);

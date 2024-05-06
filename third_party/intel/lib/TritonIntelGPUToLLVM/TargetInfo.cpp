@@ -19,17 +19,23 @@ Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
   assert("TODO: implement ballot on XPU");
   return Value();
 }
-Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                              Value ptr, Value val, Value pred) const {
+
+Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
+  // Clusters of thread blocks aren't supported.
+  return i32_val(0);
+}
+
+void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                             Value ptr, Value val, Value pred) const {
   LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
     store(val, ptr);
     return ArrayRef<Value>();
   });
-  return Value();
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Type elemTy, Value pred) const {
+                             const TypeConverter *converter, Value ptr,
+                             Type elemTy, Value pred) const {
   assert(ptr.getType().cast<mlir::LLVM::LLVMPointerType>().getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");

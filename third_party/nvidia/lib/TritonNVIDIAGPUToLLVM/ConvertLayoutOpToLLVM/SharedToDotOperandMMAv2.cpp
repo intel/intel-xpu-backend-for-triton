@@ -1,5 +1,6 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
+#include "mlir/Support/LLVM.h"
 
 using namespace mlir;
 
@@ -319,15 +320,15 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
   Value ptr = getPtr(ptrIdx);
 
   // The struct should have exactly the same element types.
-  auto resTy = matTy.cast<LLVM::LLVMStructType>();
-  Type elemTy = matTy.cast<LLVM::LLVMStructType>().getBody()[0];
+  auto resTy = cast<LLVM::LLVMStructType>(matTy);
+  Type elemTy = cast<LLVM::LLVMStructType>(matTy).getBody()[0];
 
   // For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
   // instructions to pack & unpack sub-word integers. A workaround is to
   // store the results of ldmatrix in i32
-  if (auto vecElemTy = elemTy.dyn_cast<VectorType>()) {
+  if (auto vecElemTy = dyn_cast<VectorType>(elemTy)) {
     Type elemElemTy = vecElemTy.getElementType();
-    if (auto intTy = elemElemTy.dyn_cast<IntegerType>()) {
+    if (auto intTy = dyn_cast<IntegerType>(elemElemTy)) {
       if (intTy.getWidth() <= 16) {
         elemTy = rewriter.getI32Type();
         resTy =
@@ -534,7 +535,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   Type eltTy = descTy.getElementType();
   // We assumes that the input operand of Dot should be from shared layout.
   // TODO(Superjomn) Consider other layouts if needed later.
-  auto sharedLayout = descTy.getEncoding().cast<SharedEncodingAttr>();
+  auto sharedLayout = mlir::cast<SharedEncodingAttr>(descTy.getEncoding());
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
   const int vecPhase = sharedLayout.getVec();
@@ -592,7 +593,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
               const LLVMTypeConverter *typeConverter, Value thread, bool isA) {
   auto shapePerCTA = getShapePerCTA(descTy);
   int bitwidth = descTy.getElementTypeBitWidth();
-  auto mmaLayout = encoding.getParent().cast<NvidiaMmaEncodingAttr>();
+  auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(encoding.getParent());
 
   ValueTable vals;
   int mmaInstrM = 16, mmaInstrN = 8, mmaInstrK = 4 * 64 / bitwidth;
@@ -679,7 +680,7 @@ CTALayoutAttr getExpandedCTALayout(MLIRContext *ctx,
 
 Attribute getExpandedEncoding(Attribute encoding) {
   auto ctx = encoding.getContext();
-  if (auto sharedEncoding = encoding.dyn_cast<SharedEncodingAttr>()) {
+  if (auto sharedEncoding = mlir::dyn_cast<SharedEncodingAttr>(encoding)) {
     auto order = sharedEncoding.getOrder();
     auto rank = order.size();
     if (rank == 3) {
@@ -695,7 +696,8 @@ Attribute getExpandedEncoding(Attribute encoding) {
         getExpandedCTALayout(ctx, sharedEncoding.getCTALayout()),
         sharedEncoding.getHasLeadingOffset());
     return expandedEncoding;
-  } else if (auto mmaEncoding = encoding.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  } else if (auto mmaEncoding =
+                 mlir::dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(mmaEncoding);
     auto rank = warpsPerCTA.size();
     if (rank == 3) {
@@ -711,9 +713,9 @@ Attribute getExpandedEncoding(Attribute encoding) {
         expandedInstrShape);
     return expandedMmaEncoding;
   } else if (auto dotOperandEncoding =
-                 encoding.dyn_cast<DotOperandEncodingAttr>()) {
+                 mlir::dyn_cast<DotOperandEncodingAttr>(encoding)) {
     auto mmaEncoding =
-        dotOperandEncoding.getParent().cast<NvidiaMmaEncodingAttr>();
+        mlir::cast<NvidiaMmaEncodingAttr>(dotOperandEncoding.getParent());
     auto expandedMMAEncoding = getExpandedEncoding(mmaEncoding);
     auto expandedEncoding = DotOperandEncodingAttr::get(
         ctx, dotOperandEncoding.getOpIdx(), expandedMMAEncoding,
@@ -763,10 +765,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   // Expand shared/dotOp to 3D before calling loadArg.
-  auto descTy = tensor.getType().cast<MemDescType>();
+  auto descTy = cast<MemDescType>(tensor.getType());
   auto expandedDescTy = getExpandedDesc(descTy);
   auto expandedEncoding =
-      getExpandedEncoding(encoding).cast<DotOperandEncodingAttr>();
+      cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
   auto expandedSmemObj =
       getExpandedSharedMemoryObject(rewriter, loc, smemObj, descTy.getShape());
   if (opIdx == 0)

@@ -146,8 +146,9 @@ private:
         ::intel::emitOffsetForLayout(helper.getSrcLayout(), operandType);
     unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
-    auto srcIndices = ::intel::emitIndices(
-        op.getLoc(), rewriter, helper.getSrcLayout(), operandType, true);
+    auto srcIndices =
+        ::intel::emitIndices(op.getLoc(), rewriter, targetInfo,
+                             helper.getSrcLayout(), operandType, true);
     // reduce within threads
     for (unsigned i = 0; i < srcElems; ++i) {
       SmallVector<unsigned> key = offset[i];
@@ -353,8 +354,8 @@ private:
               gep(ptr_ty(rewriter.getContext(),
                          triton::TritonGEN::TritonGENMemorySpace::kWorkgroup),
                   elemTy, smemBases[i], readOffset);
-          acc[i] = targetInfo.loadShared(rewriter, loc, readPtr, elemTy,
-                                         threadIsNeeded);
+          acc[i] = targetInfo.loadShared(rewriter, loc, getTypeConverter(),
+                                         readPtr, elemTy, threadIsNeeded);
         }
         warpReduce(rewriter, loc, acc, op, reduceLaneNumber,
                    1 /* interleave */);
@@ -412,8 +413,8 @@ private:
         // nd-tensor where n >= 1
         auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
         unsigned resultElems = getTotalElemsPerThread(resultTy);
-        auto resultIndices =
-            ::intel::emitIndices(loc, rewriter, resultLayout, resultTy, true);
+        auto resultIndices = ::intel::emitIndices(loc, rewriter, targetInfo,
+                                                  resultLayout, resultTy, true);
         auto resultShape = resultTy.getShape();
         auto resultCTATile = getShapePerCTATile(resultLayout, resultShape);
         assert(resultIndices.size() == resultElems);

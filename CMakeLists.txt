@@ -24,6 +24,8 @@ endif()
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
+option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
+option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 
 # Ensure Python3 vars are set correctly
@@ -171,13 +173,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
 
-  # Always build NVidia dialects for MLIR tools.
-  if (NOT "nvidia" IN_LIST TRITON_CODEGEN_BACKENDS)
-    set(NVIDIA_DIALECTS_ONLY "")
-    add_subdirectory(third_party/nvidia)
-  endif()
-
-  if (DEFINED TRITON_BUILD_PROTON)
+  if (TRITON_BUILD_PROTON)
     add_subdirectory(third_party/proton)
   endif()
 
@@ -281,4 +277,7 @@ endif()
 
 add_subdirectory(bin)
 add_subdirectory(test)
-add_subdirectory(unittest)
+
+if(TRITON_BUILD_UT)
+  add_subdirectory(unittest)
+endif()

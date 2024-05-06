@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend
+from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
 from dataclasses import dataclass
 from typing import Any, Tuple
@@ -26,27 +26,10 @@ class HIPOptions:
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
-    capability: int = None
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
+    allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
-
-    @staticmethod
-    def get_warp_size(arch: str) -> int:
-        # 64 is not supported for RDNA for now
-        if 'gfx10' in arch or 'gfx11' in arch:
-            return 32
-        if 'gfx9' in arch:
-            return 64
-        print("Warning: Unexpected device. Wave Size is set to 64.")
-        return 64  # Default value
-
-    def has_amd_mma_instr(self) -> bool:
-        is_RDNA3 = 'gfx11' in self.arch
-        is_CDNA1 = self.arch in ['gfx908']
-        is_CDNA2 = self.arch in ['gfx90a']
-        is_CDNA3 = self.arch in ['gfx940', 'gfx941', 'gfx942']
-        return is_RDNA3 or is_CDNA1 or is_CDNA2 or is_CDNA3
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -69,17 +52,16 @@ class HIPOptions:
 class HIPBackend(BaseBackend):
 
     @staticmethod
-    def supports_target(target: list):
-        return target[0] == 'hip'
+    def supports_target(target: GPUTarget):
+        return target.backend == 'hip'
 
-    def __init__(self, target: list) -> None:
+    def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
-        assert isinstance(target, list) and len(target) == 3
-        assert isinstance(target[1], str)
+        assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': self.target[1]}
+        args = {'arch': self.target.arch}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 
@@ -94,7 +76,7 @@ class HIPBackend(BaseBackend):
         )
 
     def get_codegen_implementation(self):
-        codegen_fns = {}
+        codegen_fns = dict()
         return codegen_fns
 
     def load_dialects(self, ctx):
@@ -115,7 +97,7 @@ class HIPBackend(BaseBackend):
         raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found")
 
     @staticmethod
-    def make_ttir(mod, metadata, opt):
+    def make_ttir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -130,28 +112,28 @@ class HIPBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_ttgir(mod, metadata, opt):
+    def make_ttgir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        # TODO: capability
-        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.warp_size, opt.num_ctas, 90)
+        passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
+                                           options.num_ctas)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttgpuir.add_coalesce(pm)
-        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        amd.passes.ttgpuir.add_accelerate_matmul(pm, opt.arch, opt.matrix_instr_nonkdim, opt.kpack)
-        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
-        passes.ttgpuir.add_optimize_dot_operands(pm)
-        if opt.num_stages == 0 and opt.has_amd_mma_instr():
+        passes.ttgpuir.add_optimize_dot_operands(pm, True)
+        if options.num_stages == 0 and amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_stream_pipeline(pm)
             passes.common.add_canonicalizer(pm)
-        passes.ttgpuir.add_optimize_dot_operands(pm)
-        amd.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_optimize_dot_operands(pm, True)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        if opt.num_stages != 0:
+        if options.num_stages != 0:
             amd.passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
@@ -159,24 +141,29 @@ class HIPBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_llir(src, metadata, options, capability):
+    def make_llir(src, metadata, options):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
+        amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm, options.arch)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
 
         passes.ttgpuir.add_allocate_shared_memory(pm)
-        amd.passes.ttgpuir.add_to_llvmir(pm)
+        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 
-        passes.convert.add_scf_to_cf(pm)
         passes.convert.add_cf_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
+        # This pass (`add_builtin_func_to_llvmir`) serves as a temporary workaround to address the issue of excessive basic block
+        # count caused by predicated loads/stores. In certain kernels, the addition of these blocks can cause the MLIR
+        # canonicalizer to never finish when attempting to merge blocks. The permanent solution under consideration
+        # involves using MUBUF instructions that have built-in out-of-bounds checks, which would eliminate the need
+        # for conditional branching around memory accesses.
+        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
@@ -193,7 +180,6 @@ class HIPBackend(BaseBackend):
         amd.set_isa_version(llvm_mod, options.arch)
         amd.set_abi_version(llvm_mod, 400)
         amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
-        amd.set_bool_control_constant(llvm_mod, "__oclc_daz_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
         amd.set_bool_control_constant(llvm_mod, "__oclc_unsafe_math_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_wavefrontsize64", options.warp_size == 64)
@@ -204,14 +190,15 @@ class HIPBackend(BaseBackend):
         kernels[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
         kernels[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
         kernels[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
-        kernels[0].add_fn_attr("denormal-fp-math-f32", "preserve-sign")
+        denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
+        kernels[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
         amd.set_all_fn_arg_inreg(kernels[0])
 
         if options.extern_libs:
-            paths = [path for (name, path) in options.extern_libs]
+            paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
@@ -231,7 +218,7 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        amdgcn = llvm.translate_to_asm(src, 'amdgcn-amd-amdhsa', options.arch, '', [], options.enable_fp_fusion, False)
+        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', [], options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
@@ -254,7 +241,7 @@ class HIPBackend(BaseBackend):
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, 90)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 

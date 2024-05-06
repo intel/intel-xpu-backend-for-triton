@@ -1,20 +1,26 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFONVIDIA_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFONVIDIA_H
+
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+
 namespace mlir::triton::NVIDIA {
+
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   TargetInfo(int computeCapability) : computeCapability(computeCapability) {}
 
   bool supportMaximumMinimum() const override;
 
+  Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
+
   Value ballot(ConversionPatternRewriter &rewriter, Location loc, Type type,
                Value cmp) const override;
 
-  Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                    Value ptr, Value val, Value pred) const override;
-  Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                   Type elemTy, Value pred) const override;
+  void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                   Value val, Value pred) const override;
+  Value loadShared(ConversionPatternRewriter &rewriter, Location loc,
+                   const TypeConverter *converter, Value ptr, Type elemTy,
+                   Value pred) const override;
 
   Value shuffleXor(ConversionPatternRewriter &rewriter, Location loc, Value val,
                    int i) const override;
@@ -49,5 +55,7 @@ public:
 private:
   int computeCapability;
 };
+
 } // namespace mlir::triton::NVIDIA
+
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFONVIDIA_H

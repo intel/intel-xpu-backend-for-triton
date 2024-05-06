@@ -94,19 +94,21 @@ Math Ops
 
     abs
     cdiv
+    ceil
     clamp
     cos
     div_rn
     erf
     exp
     exp2
-    fma
     fdiv
     floor
+    fma
     log
     log2
     maximum
     minimum
+    rsqrt
     sigmoid
     sin
     softmax

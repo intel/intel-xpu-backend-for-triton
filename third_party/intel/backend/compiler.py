@@ -1,17 +1,16 @@
-from triton.backends.compiler import BaseBackend
+from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import XPUUtils
+from triton.backends.intel.driver import compile_module_from_src
 
 from dataclasses import dataclass
 import functools
 from typing import Any, Tuple
 import hashlib
 import re
-import tempfile
-import signal
 import os
 import subprocess
 from pathlib import Path
+from packaging.version import Version
 
 
 def _path_to_binary(binary: str):
@@ -66,15 +65,16 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def supports_target(target: tuple):
-        return target[0] == 'xpu'
+        return target.backend == 'xpu'
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        assert isinstance(target[1], dict)
-        # TODO: Deprecate capability in XPU compilation
-        # capability should be < 80, because some features in passes with capability >= 80 are not supported on PVC
-        self.capability = intel.passes.ttgpuir.DEVICE_ARCH.PVC
-        self.properties = self._parse_target(target[1])
+        assert isinstance(target.arch, dict)
+        dirname = os.path.dirname(os.path.realpath(__file__))
+        mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
+        self.parse_device_arch = mod.parse_device_arch
+        self.properties = self._parse_target(target.arch)
+        self.device_arch = self.properties["device_arch"]
         self.binary_ext = "spv"
 
     def _parse_target(self, tgt_prop) -> dict:
@@ -90,6 +90,7 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
+        dev_prop['device_arch'] = self.parse_device_arch(tgt_prop.get('device_arch', 0))
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -108,7 +109,9 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        passes.ttir.add_rewrite_tensor_pointer(pm)
+        isBlockPtrEnabled = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+        if not isBlockPtrEnabled:
+            passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_reorder_broadcast(pm)
@@ -119,30 +122,38 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_ttgir(mod, metadata, opt, capability):
-        cluster_info = intel.ClusterInfo()
-        if opt.cluster_dims is not None:
-            cluster_info.clusterDimX = opt.cluster_dims[0]
-            cluster_info.clusterDimY = opt.cluster_dims[1]
-            cluster_info.clusterDimZ = opt.cluster_dims[2]
+    def make_ttgir(mod, metadata, opt, device_arch):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.ttir.add_convert_to_ttgpuir(pm, opt.num_warps, opt.threads_per_warp, opt.num_ctas, capability)
+
+        isBlockPtrEnabled = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+        if isBlockPtrEnabled:
+            intel.passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
+            # FIXME: Use a better way to check if prefetch instructions are supported once available.
+            # Prefetch instruction is not available in older drivers.
+            if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
+                intel.passes.ttgpuir.add_prefetch_block(pm)
+            intel.passes.ttgpuir.add_distribute_to_warps(pm)
+            intel.passes.ttgpuir.add_match_target_size(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
+            passes.common.add_symbol_dce(pm)
+            pm.run(mod)
+            return mod
+        passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
-        # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        intel.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        intel.passes.ttgpuir.add_accelerate_matmul(pm, intel.passes.ttgpuir.DEVICE_ARCH.PVC)
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, device_arch)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         if opt.optimize_epilogue:
             passes.ttgpuir.add_optimize_epilogue(pm)
-        passes.ttgpuir.add_optimize_dot_operands(pm)
+        passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
-        passes.ttgpuir.add_optimize_dot_operands(pm)
+        passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
@@ -150,17 +161,19 @@ class XPUBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
-        metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
     @staticmethod
-    def make_llir(src, metadata, options, capability):
+    def make_llir(src, metadata, options, device_arch):
         # warp-specialization mutates num_warps
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
-        threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
-        metadata["threads_per_warp"] = threads_per_warp
+        # FIXME: On the `TRITON_INTEL_ENABLE_BLOCK_PTR` path, get_threads_per_warp always return 1.
+        isBlockPtrEnabled = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+        if not isBlockPtrEnabled:
+            threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
+            metadata["threads_per_warp"] = threads_per_warp
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
@@ -169,7 +182,7 @@ class XPUBackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm, capability)
+        intel.passes.ttgpuir.add_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -201,13 +214,13 @@ class XPUBackend(BaseBackend):
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.capability)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.capability)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.device_arch)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.device_arch)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata)
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"])
+        version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"], text=True).strip()
         return f'{version}-{self.properties}'
 
     def get_codegen_implementation(self):

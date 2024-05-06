@@ -239,8 +239,8 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto intAttr = op.getValue().template dyn_cast<IntegerAttr>();
-    auto boolAttr = op.getValue().template dyn_cast<BoolAttr>();
+    auto intAttr = dyn_cast<IntegerAttr>(op.getValue());
+    auto boolAttr = dyn_cast<BoolAttr>(op.getValue());
     if (intAttr || boolAttr) {
       int64_t value{};
       if (intAttr)
@@ -253,10 +253,10 @@ public:
                       /*knownConstantValue=*/{value});
     }
     // TODO: generalize to dense attr
-    auto splatAttr = op.getValue().template dyn_cast<SplatElementsAttr>();
+    auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
       int64_t value = splatAttr.template getSplatValue<APInt>().getZExtValue();
-      TensorType ty = splatAttr.getType().template cast<TensorType>();
+      TensorType ty = cast<TensorType>(splatAttr.getType());
       return AxisInfo(
           /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
           /*divisibility=*/
@@ -405,7 +405,7 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    auto resTy = op.getType().template dyn_cast<RankedTensorType>();
+    auto resTy = dyn_cast<RankedTensorType>(op.getType());
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -460,7 +460,7 @@ public:
 private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
-    auto resTy = op.getType().template dyn_cast<RankedTensorType>();
+    auto resTy = dyn_cast<RankedTensorType>(op.getType());
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getContiguity(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -494,7 +494,7 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    auto resTy = op.getType().template dyn_cast<RankedTensorType>();
+    auto resTy = dyn_cast<RankedTensorType>(op.getType());
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -526,7 +526,7 @@ public:
   getAxisInfo(triton::SplatOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     Type _retTy = *op->result_type_begin();
-    TensorType retTy = _retTy.cast<TensorType>();
+    TensorType retTy = cast<TensorType>(_retTy);
     AxisInfo opInfo = operands[0]->getValue();
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
@@ -616,8 +616,8 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     Type _retTy = *op->result_type_begin();
     Type _opTy = *op->operand_type_begin();
-    TensorType retTy = _retTy.cast<TensorType>();
-    TensorType opTy = _opTy.cast<TensorType>();
+    TensorType retTy = cast<TensorType>(_retTy);
+    TensorType opTy = cast<TensorType>(_opTy);
     ArrayRef<int64_t> retShape = retTy.getShape();
     ArrayRef<int64_t> opShape = opTy.getShape();
     AxisInfo opInfo = operands[0]->getValue();
@@ -643,7 +643,7 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto resTy = op.getType().template dyn_cast<RankedTensorType>();
+    auto resTy = dyn_cast<RankedTensorType>(op.getType());
     if (!resTy)
       return AxisInfo();
     auto shape = resTy.getShape();
@@ -794,7 +794,7 @@ public:
       // The condition can be either a tensor or i1.
       // If i1 is used as the condition, the entire tensor of either
       // lhs or rhs is selected.
-      bool i1Cond = op.getOperand(0).getType().template isa<IntegerType>();
+      bool i1Cond = isa<IntegerType>(op.getOperand(0).getType());
       for (auto d = 0; d < rank; ++d) {
         if (i1Cond) {
           constancy.push_back(
@@ -1058,15 +1058,15 @@ void AxisInfoAnalysis::visitOperation(
   auto newDivisibility = curr.getDivisibility();
   auto newConstancy = curr.getConstancy();
   if (Attribute attr = op->getDiscardableAttr("tt.contiguity")) {
-    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
     newContiguity = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
   if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
-    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
     newDivisibility = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
   if (Attribute attr = op->getDiscardableAttr("tt.constancy")) {
-    auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+    auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
     newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
   curr = AxisInfo(newContiguity, newDivisibility, newConstancy,
@@ -1105,9 +1105,9 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   // initialize attributes one by one
   for (auto [vec, attrName] : retVecs) {
     Attribute attr = funcOp.getArgAttr(argNumber, attrName);
-    if (auto int_attr = attr.dyn_cast_or_null<IntegerAttr>())
+    if (auto int_attr = dyn_cast_or_null<IntegerAttr>(attr))
       *vec = DimVectorT(contiguity->size(), int_attr.getValue().getZExtValue());
-    if (auto dense_attr = attr.dyn_cast_or_null<DenseElementsAttr>()) {
+    if (auto dense_attr = dyn_cast_or_null<DenseElementsAttr>(attr)) {
       auto vals = dense_attr.getValues<int>();
       *vec = DimVectorT(vals.begin(), vals.end());
     }
@@ -1116,17 +1116,17 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
 
 /*static*/ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
   auto rank = 1;
-  if (TensorType ty = value.getType().dyn_cast<TensorType>())
+  if (TensorType ty = dyn_cast<TensorType>(value.getType()))
     rank = ty.getRank();
-  if (triton::PointerType ty = value.getType().dyn_cast<triton::PointerType>())
-    if (TensorType elemTy = ty.getPointeeType().dyn_cast<TensorType>())
+  if (triton::PointerType ty = dyn_cast<triton::PointerType>(value.getType()))
+    if (TensorType elemTy = dyn_cast<TensorType>(ty.getPointeeType()))
       rank = elemTy.getRank();
 
   DimVectorT knownContiguity(rank, 1);
   DimVectorT knownDivisibility(rank, 1);
   DimVectorT knownConstancy(rank, 1);
 
-  BlockArgument blockArg = value.dyn_cast<BlockArgument>();
+  BlockArgument blockArg = dyn_cast<BlockArgument>(value);
 
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
@@ -1152,15 +1152,15 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
     // Other operations are conservatively initialized with the lowest possible
     // divisibility, contiguity, and constancy unless they have specified.
     if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
-      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
       knownDivisibility = DimVectorT(vals.begin(), vals.end());
     }
     if (Attribute attr = op->getDiscardableAttr("tt.contiguity")) {
-      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
       knownContiguity = DimVectorT(vals.begin(), vals.end());
     }
     if (Attribute attr = op->getDiscardableAttr("tt.constancy")) {
-      auto vals = attr.cast<DenseElementsAttr>().getValues<int>();
+      auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
       knownConstancy = DimVectorT(vals.begin(), vals.end());
     }
   }
@@ -1191,7 +1191,7 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
 }
 
 unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
-  auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
     return 1;
   auto layout = tensorTy.getEncoding();
@@ -1213,7 +1213,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
 }
 
 unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
-  auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
     return 1;
   auto *axisInfo = getAxisInfo(ptr);
@@ -1241,7 +1241,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
 }
 
 unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
-  auto tensorTy = mask.getType().dyn_cast<RankedTensorType>();
+  auto tensorTy = dyn_cast<RankedTensorType>(mask.getType());
   if (!tensorTy)
     return 1;
   auto *axisInfo = getAxisInfo(mask);

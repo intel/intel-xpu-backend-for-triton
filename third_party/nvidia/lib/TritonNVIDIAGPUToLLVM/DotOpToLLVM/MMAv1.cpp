@@ -45,22 +45,16 @@ LogicalResult convertMMA884(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   Value A = op.getA();
   Value B = op.getB();
   Value D = op.getResult();
-  auto mmaLayout = D.getType()
-                       .cast<RankedTensorType>()
-                       .getEncoding()
-                       .cast<NvidiaMmaEncodingAttr>();
-  auto ALayout = A.getType()
-                     .cast<RankedTensorType>()
-                     .getEncoding()
-                     .cast<DotOperandEncodingAttr>();
-  auto BLayout = B.getType()
-                     .cast<RankedTensorType>()
-                     .getEncoding()
-                     .cast<DotOperandEncodingAttr>();
+  auto mmaLayout = cast<NvidiaMmaEncodingAttr>(
+      cast<RankedTensorType>(D.getType()).getEncoding());
+  auto ALayout = cast<DotOperandEncodingAttr>(
+      cast<RankedTensorType>(A.getType()).getEncoding());
+  auto BLayout = cast<DotOperandEncodingAttr>(
+      cast<RankedTensorType>(B.getType()).getEncoding());
 
-  auto ATensorTy = A.getType().cast<RankedTensorType>();
-  auto BTensorTy = B.getType().cast<RankedTensorType>();
-  auto DTensorTy = D.getType().cast<RankedTensorType>();
+  auto ATensorTy = cast<RankedTensorType>(A.getType());
+  auto BTensorTy = cast<RankedTensorType>(B.getType());
+  auto DTensorTy = cast<RankedTensorType>(D.getType());
   auto AShape = ATensorTy.getShape();
   auto BShape = BTensorTy.getShape();
 

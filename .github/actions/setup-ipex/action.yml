@@ -35,7 +35,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: "1"
+        CACHE_NUMBER: "1-ptdb"
       with:
         path: intel-extension-for-pytorch/dist
         key: ipex-$PYTHON_VERSION-$IPEX_COMMIT_ID-$CACHE_NUMBER

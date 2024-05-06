@@ -26,8 +26,7 @@ from .standard import (
 from .core import (
     PropagateNan,
     TRITON_MAX_TENSOR_NUMEL,
-    _experimental_join,
-    _experimental_split,
+    _experimental_descriptor_load,
     advance,
     arange,
     associative_scan,
@@ -44,6 +43,7 @@ from .core import (
     broadcast,
     broadcast_to,
     cat,
+    cast,
     clamp,
     const,
     const_pointer_type,
@@ -102,7 +102,8 @@ from .core import (
     void,
     where,
 )
-from .math import (umulhi, exp, exp2, fma, log, log2, cos, rsqrt, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor)
+from .math import (umulhi, exp, exp2, fma, log, log2, cos, rsqrt, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor,
+                   ceil)
 from .random import (
     pair_uniform_to_normal,
     philox,
@@ -119,8 +120,7 @@ from .random import (
 __all__ = [
     "PropagateNan",
     "TRITON_MAX_TENSOR_NUMEL",
-    "_experimental_join",
-    "_experimental_split",
+    "_experimental_descriptor_load",
     "abs",
     "advance",
     "arange",
@@ -141,7 +141,9 @@ __all__ = [
     "broadcast_to",
     "builtin",
     "cat",
+    "cast",
     "cdiv",
+    "ceil",
     "clamp",
     "const",
     "const_pointer_type",
@@ -257,10 +259,10 @@ def str_to_ty(name):
         return pointer_type(ty)
     tys = {
         "fp8e4nv": float8e4nv,
-        "fp8e5": float8e5,
-        "fp8e4b15": float8e4b15,
         "fp8e4b8": float8e4b8,
+        "fp8e5": float8e5,
         "fp8e5b16": float8e5b16,
+        "fp8e4b15": float8e4b15,
         "fp16": float16,
         "bf16": bfloat16,
         "fp32": float32,

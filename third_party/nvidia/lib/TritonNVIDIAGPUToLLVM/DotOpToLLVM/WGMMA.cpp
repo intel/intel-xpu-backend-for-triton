@@ -22,6 +22,7 @@
  */
 
 #include "Utility.h"
+#include "mlir/Support/LLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -33,7 +34,7 @@ using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
-  auto dTy = d.getType().cast<RankedTensorType>().getElementType();
+  auto dTy = cast<RankedTensorType>(d.getType()).getElementType();
   if (dTy.isF32()) {
     return triton::nvgpu::WGMMAEltType::f32;
   } else if (dTy.isF16()) {
@@ -46,7 +47,7 @@ triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
 }
 
 triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
-  auto aTy = a.getType().cast<TensorOrMemDesc>().getElementType();
+  auto aTy = cast<TensorOrMemDesc>(a.getType()).getElementType();
   if (aTy.isF16()) {
     return triton::nvgpu::WGMMAEltType::f16;
   } else if (aTy.isBF16()) {
@@ -139,8 +140,8 @@ public:
                        ConversionPatternRewriter &rewriter, Location loc)
       : base(base), shape(shape), warpId(warpId), dimWpt(dimWpt), trans(trans),
         instrShape(instrShape) {
-    auto ty = tensor.getType().cast<MemDescType>();
-    auto sharedLayout = ty.getEncoding().cast<SharedEncodingAttr>();
+    auto ty = cast<MemDescType>(tensor.getType());
+    auto sharedLayout = cast<SharedEncodingAttr>(ty.getEncoding());
     ord = sharedLayout.getOrder();
     const int perPhase = sharedLayout.getPerPhase();
     const int maxPhase = sharedLayout.getMaxPhase();
@@ -196,8 +197,8 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
-  auto aTy = tensor.getType().cast<TensorOrMemDesc>();
-  auto aSharedLayout = aTy.getEncoding().dyn_cast<SharedEncodingAttr>();
+  auto aTy = cast<TensorOrMemDesc>(tensor.getType());
+  auto aSharedLayout = dyn_cast<SharedEncodingAttr>(aTy.getEncoding());
   assert(aSharedLayout && "only support load dot operand from shared.");
   auto instrShape = mmaEncoding.getInstrShape();
   auto wpt = mmaEncoding.getWarpsPerCTA();
@@ -233,8 +234,8 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            NvidiaMmaEncodingAttr &mmaEncoding, Value tensor,
                            Value base, Value thread) {
-  auto bTy = tensor.getType().cast<MemDescType>();
-  auto bSharedLayout = bTy.getEncoding().cast<SharedEncodingAttr>();
+  auto bTy = cast<MemDescType>(tensor.getType());
+  auto bSharedLayout = cast<SharedEncodingAttr>(bTy.getEncoding());
   assert(bSharedLayout && "only support load B from shared.");
   auto instrShape = mmaEncoding.getInstrShape();
   auto wpt = mmaEncoding.getWarpsPerCTA();
@@ -322,7 +323,7 @@ static bool isFP8(triton::nvgpu::WGMMAEltType eltType) {
 
 static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
                             Value a, Value b) {
-  int numEl = a.getType().cast<LLVM::LLVMStructType>().getBody().size();
+  int numEl = cast<LLVM::LLVMStructType>(a.getType()).getBody().size();
   Value newStruct = rewriter.create<LLVM::UndefOp>(loc, a.getType());
   for (int i = 0; i < numEl; ++i) {
     Value lhs = rewriter.create<LLVM::ExtractValueOp>(loc, a, i);
@@ -331,18 +332,6 @@ static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
     newStruct = rewriter.create<LLVM::InsertValueOp>(loc, newStruct, add, i);
   }
   return newStruct;
-}
-
-static bool isZero(Value v) {
-  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
-  if (!constantOp)
-    return false;
-  if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero();
-  if (auto denseAttr =
-          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
-  return false;
 }
 
 static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
@@ -371,12 +360,12 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value loadedA, Value loadedB, Value loadedC,
                          bool allowTF32, uint32_t maxNumImpreciseAcc, bool sync,
                          Value thread) {
-  auto aTensorTy = a.getType().cast<TensorOrMemDesc>();
-  auto bTensorTy = b.getType().cast<TensorOrMemDesc>();
-  auto dTensorTy = d.getType().cast<RankedTensorType>();
-  auto aSharedLayout = aTensorTy.getEncoding().dyn_cast<SharedEncodingAttr>();
-  auto bSharedLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
-  auto mmaEncoding = dTensorTy.getEncoding().cast<NvidiaMmaEncodingAttr>();
+  auto aTensorTy = cast<TensorOrMemDesc>(a.getType());
+  auto bTensorTy = cast<TensorOrMemDesc>(b.getType());
+  auto dTensorTy = cast<RankedTensorType>(d.getType());
+  auto aSharedLayout = dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding());
+  auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
+  auto mmaEncoding = cast<NvidiaMmaEncodingAttr>(dTensorTy.getEncoding());
   auto bOrd = bSharedLayout.getOrder();
   bool transA = false;
   Value baseA;
@@ -402,7 +391,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   int M = 4 * instrShape[0];
   int N = instrShape[1];
   int K = instrShape[2];
-  bool zeroAcc = isZero(c);
+  bool zeroAcc = isZeroConst(c);
   auto shapePerCTATile = getShapePerCTATile(mmaEncoding);
   int numRepM = ceil<unsigned>(dShapePerCTA[0], shapePerCTATile[0]);
   int numRepN = ceil<unsigned>(dShapePerCTA[1], shapePerCTATile[1]);
@@ -516,8 +505,8 @@ LogicalResult convertWGMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                            ConversionPatternRewriter &rewriter, Value thread) {
   auto AEnc = op.getA().getType().getEncoding();
   auto BEnc = op.getB().getType().getEncoding();
-  assert(AEnc.isa<SharedEncodingAttr>() || AEnc.isa<DotOperandEncodingAttr>());
-  assert(BEnc.isa<SharedEncodingAttr>() &&
+  assert((mlir::isa<SharedEncodingAttr, DotOperandEncodingAttr>(AEnc)));
+  assert(mlir::isa<SharedEncodingAttr>(BEnc) &&
          "Operand B should use Shared layout.");
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
                     op.getA(), op.getB(), op.getC(), op.getD(),              //
@@ -533,8 +522,9 @@ LogicalResult convertAsyncWGMMA(triton::nvidia_gpu::DotAsyncOp op,
                                 Value thread) {
   auto AEnc = op.getA().getType().getEncoding();
   auto BEnc = op.getB().getType().getEncoding();
-  assert(AEnc.isa<SharedEncodingAttr>() || AEnc.isa<DotOperandEncodingAttr>());
-  assert(BEnc.isa<SharedEncodingAttr>() &&
+  assert(mlir::isa<SharedEncodingAttr>(AEnc) ||
+         mlir::isa<DotOperandEncodingAttr>(AEnc));
+  assert(mlir::isa<SharedEncodingAttr>(BEnc) &&
          "Operand B should use Shared layout.");
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(), //
                     op.getA(), op.getB(), op.getC(), op.getD(),              //

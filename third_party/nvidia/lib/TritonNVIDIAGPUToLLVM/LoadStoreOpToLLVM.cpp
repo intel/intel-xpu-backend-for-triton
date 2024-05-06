@@ -1,3 +1,4 @@
+#include "TargetInfo.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
@@ -6,8 +7,6 @@
 
 #include "Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-
-#include <numeric>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -25,11 +24,11 @@ namespace {
 // Return the mask for the unique data accessed by given tensor type.
 // Used to mask out the redundant data accessed by threads.
 Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
-                        Location loc) {
-  auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+                        Location loc, const NVIDIA::TargetInfo &targetInfo) {
+  auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
   Value mask = int_val(1, 1);
   auto tid = tid_val();
-  auto clusterCTAId = getClusterCTAId(rewriter, loc);
+  auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
     auto shape = tensorTy.getShape();
@@ -98,18 +97,19 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
 
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
-  explicit LoadStoreConversionBase(ModuleAxisInfoAnalysis &axisAnalysisPass)
-      : axisAnalysisPass(axisAnalysisPass) {}
+  explicit LoadStoreConversionBase(const NVIDIA::TargetInfo &targetInfo,
+                                   ModuleAxisInfoAnalysis &axisAnalysisPass)
+      : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
   unsigned getContiguity(Value ptr) const {
-    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return 1;
     return axisAnalysisPass.getPtrContiguity(ptr);
   }
 
   unsigned getVectorSize(Value ptr) const {
-    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return 1;
     auto contiguity = getContiguity(ptr);
@@ -125,18 +125,18 @@ struct LoadStoreConversionBase {
   }
 
 protected:
+  const NVIDIA::TargetInfo &targetInfo;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
 };
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                           public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::LoadOp>::ConvertOpToLLVMPattern;
-
   LoadOpConversion(LLVMTypeConverter &converter,
+                   const NVIDIA::TargetInfo &targetInfo,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
@@ -187,9 +187,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     bool otherIsSplatConstInt = false;
     DenseElementsAttr constAttr;
     int64_t splatVal = 0;
-    if (other && valueElemTy.isa<IntegerType>() &&
+    if (other && isa<IntegerType>(valueElemTy) &&
         matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-        constAttr.getElementType().isa<IntegerType>()) {
+        isa<IntegerType>(constAttr.getElementType())) {
       otherIsSplatConstInt = true;
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
@@ -315,7 +315,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       SmallVector<Value> rets;
       for (unsigned int ii = 0; ii < nWords; ++ii) {
         Value curr;
-        if (retTy.isa<LLVM::LLVMStructType>()) {
+        if (isa<LLVM::LLVMStructType>(retTy)) {
           curr = extract_val(IntegerType::get(getContext(), width), ret, ii);
         } else {
           curr = ret;
@@ -343,13 +343,12 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
 struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                            public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::StoreOp>::ConvertOpToLLVMPattern;
-
   StoreOpConversion(LLVMTypeConverter &converter,
+                    const NVIDIA::TargetInfo &targetInfo,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::StoreOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -386,7 +385,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       vec = std::min(vec, maskAlign);
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
@@ -480,13 +479,12 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::AtomicCASOp>::ConvertOpToLLVMPattern;
-
   AtomicCASOpConversion(LLVMTypeConverter &converter,
+                        const NVIDIA::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicCASOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
@@ -507,7 +505,7 @@ struct AtomicCASOpConversion
     auto valElements = unpackLLElements(loc, llVal, rewriter);
 
     auto valueTy = op.getType();
-    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
     Type valueElemTy =
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
@@ -517,11 +515,11 @@ struct AtomicCASOpConversion
     auto vec = getVectorSize(op.getPtr());
     // tensor
     if (tensorTy) {
-      auto valTy = op.getVal().getType().cast<RankedTensorType>();
+      auto valTy = cast<RankedTensorType>(op.getVal().getType());
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -595,13 +593,12 @@ struct AtomicCASOpConversion
 struct AtomicRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicRMWOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<triton::AtomicRMWOp>::ConvertOpToLLVMPattern;
-
   AtomicRMWOpConversion(LLVMTypeConverter &converter,
+                        const NVIDIA::TargetInfo &targetInfo,
                         ModuleAxisInfoAnalysis &axisAnalysisPass,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicRMWOp>(converter, benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
@@ -629,7 +626,7 @@ struct AtomicRMWOpConversion
       maskElements = unpackLLElements(loc, llMask, rewriter);
 
     auto valueTy = op.getType();
-    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
     Type valueElemTy =
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
@@ -640,12 +637,12 @@ struct AtomicRMWOpConversion
     int numElems = 1;
     // tensor
     if (tensorTy) {
-      auto valTy = val.getType().cast<RankedTensorType>();
+      auto valTy = cast<RankedTensorType>(val.getType());
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
       // mask
       numElems = tensorTy.getNumElements();
     }
-    Value mask = redundantDataMask(valueTy, rewriter, loc);
+    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
 
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
@@ -761,15 +758,12 @@ struct AtomicRMWOpConversion
 struct AsyncCopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::gpu::AsyncCopyGlobalToLocalOp>::ConvertOpToLLVMPattern;
-
   AsyncCopyGlobalToLocalOpConversion(LLVMTypeConverter &converter,
+                                     const NVIDIA::TargetInfo &targetInfo,
                                      ModuleAxisInfoAnalysis &axisAnalysisPass,
                                      PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>(converter,
-                                                                      benefit),
-        LoadStoreConversionBase(axisAnalysisPass) {}
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
@@ -784,9 +778,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto dstTy = op.getResult().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
-    assert((srcLayout.isa<BlockedEncodingAttr, SliceEncodingAttr>() &&
+    assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcLayout) &&
             "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
-    auto resSharedLayout = dstTy.getEncoding().cast<SharedEncodingAttr>();
+    auto resSharedLayout = cast<SharedEncodingAttr>(dstTy.getEncoding());
     auto srcShape = srcTy.getShape();
     assert((srcShape.size() <= 3) &&
            "insert_slice_async: Unexpected rank of %src");
@@ -832,9 +826,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     unsigned perPhase = resSharedLayout.getPerPhase();
     unsigned maxPhase = resSharedLayout.getMaxPhase();
     SmallVector<Value> offsetVals = {smemObj.strides.size(), i32_val(0)};
-    DenseMap<unsigned, Value> sharedPtrs =
-        getSwizzledSharedPtrs(loc, inVec, srcTy, resSharedLayout, resElemTy,
-                              smemObj, rewriter, offsetVals, smemObj.strides);
+    DenseMap<unsigned, Value> sharedPtrs = getSwizzledSharedPtrs(
+        loc, targetInfo, inVec, srcTy, resSharedLayout, resElemTy, smemObj,
+        rewriter, offsetVals, smemObj.strides);
 
     // A sharedLayout encoding has a "vec" parameter.
     // On the column dimension, if inVec > outVec, it means we have to divide
@@ -882,7 +876,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         // When 'other != 0' is supported, we will need to fold the op.getMask()
         // and redundantDataMask() into the same predicate, the way it is done
         // for LoadOp.
-        Value maskVal = redundantDataMask(srcTy, rewriter, loc);
+        Value maskVal = redundantDataMask(srcTy, rewriter, loc, targetInfo);
 
         // TODO: Masking does not work for CTA multicast with cp.async. This is
         // a quick and dirty workaround to avoid the issue.
@@ -906,6 +900,95 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
+struct AsyncTMACopyGlobalToLocalOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    assert(op.getCache() == triton::CacheModifier::NONE &&
+           "cache modifiers not supported yet.");
+    assert(op.getEvict() == triton::EvictionPolicy::NORMAL &&
+           "eviction policy not supported yet.");
+    auto loc = op.getLoc();
+    Type llvmElemTy =
+        typeConverter->convertType(op.getResult().getType().getElementType());
+    auto barrierMemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getBarrier(),
+        typeConverter->convertType(op.getBarrier().getType().getElementType()),
+        rewriter);
+    auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getResult(), llvmElemTy, rewriter);
+    auto voidTy = void_ty(op->getContext());
+    auto id = getThreadId(rewriter, loc);
+    Value pred = icmp_eq(id, i32_val(0));
+    pred = and_(pred, adaptor.getPred());
+    int elementSizeInBytes =
+        op.getResult().getType().getElementType().getIntOrFloatBitWidth() / 8;
+    int totalNumElements = product(op.getResult().getType().getShape());
+    int64_t size = totalNumElements * elementSizeInBytes;
+    ::mlir::triton::PTXBuilder ptxBuilder;
+    auto &arrive = *ptxBuilder.create<>(
+        "@$0 mbarrier.arrive.expect_tx.shared.b64 _, [$1], " +
+        std::to_string(size) + ";");
+    arrive({ptxBuilder.newOperand(pred, "b"),
+            ptxBuilder.newOperand(barrierMemObj.getBase(), "r")},
+           /*onlyAttachMLIRArgs=*/true);
+    ptxBuilder.launch(rewriter, loc, voidTy);
+
+    barrier();
+
+    int innerBlockSize = op.getResult().getType().getShape().back();
+    int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;
+    int numCopies = 1;
+    int rank = op.getCoord().size();
+    if (rank > 1)
+      numCopies = ceil<int>(contigDimSizeInByte, 128);
+
+    // The bounding box inner dimension must be less than or equal to the
+    // swizzle size.
+    // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
+    // We clamp the block size and the codegen will emit multiple copy
+    // operations.
+    for (int copyIdx = 0; copyIdx < numCopies; copyIdx++) {
+      ::mlir::triton::PTXBuilder ptxBuilderTMA;
+      Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+      Value shMemPtr = gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(),
+                           i32_val(copyIdx * (totalNumElements / numCopies)));
+      SmallVector<PTXBuilder::Operand *> operands = {
+          ptxBuilderTMA.newOperand(pred, "b"),
+          ptxBuilderTMA.newOperand(shMemPtr, "r"),
+          ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
+      std::string tmaInst =
+          "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
+          "d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {";
+      int operandIdx = 3;
+      for (int i = 0; i < rank; i++) {
+        Value coord = adaptor.getCoord()[rank - i - 1];
+        if (i == 0) {
+          int offset = copyIdx * (128 / elementSizeInBytes);
+          coord = add(coord, i32_val(offset));
+        }
+        operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
+        tmaInst += "$" + std::to_string(operandIdx++);
+        if (i != rank - 1)
+          tmaInst += ", ";
+      }
+      operands.push_back(
+          ptxBuilderTMA.newOperand(barrierMemObj.getBase(), "r"));
+      tmaInst += "}], [$" + std::to_string(operandIdx++) + "];";
+      auto &tma = *ptxBuilderTMA.create<>(tmaInst);
+      tma(operands, /*onlyAttachMLIRArgs=*/true);
+      ptxBuilderTMA.launch(rewriter, loc, voidTy);
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct AsyncWaitOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
   using ConvertOpToLLVMPattern<
@@ -924,8 +1007,11 @@ struct AsyncWaitOpConversion
     auto voidTy = void_ty(ctx);
     ptxBuilder.launch(rewriter, loc, voidTy);
 
-    // Safe to remove the op since it doesn't have any return value.
-    rewriter.eraseOp(op);
+    // Drop the result token.
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), IntegerType::get(op.getContext(), 32),
+        rewriter.getI32IntegerAttr(0));
+    rewriter.replaceOp(op, zero);
     return success();
   }
 };
@@ -955,14 +1041,13 @@ struct AsyncCommitGroupOpConversion
 } // namespace
 
 void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
-  patterns.add<LoadOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<StoreOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AtomicCASOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AtomicRMWOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AsyncCopyGlobalToLocalOpConversion>(typeConverter,
-                                                   axisInfoAnalysis, benefit);
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    PatternBenefit benefit) {
+  patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
+               AtomicRMWOpConversion, LoadOpConversion, StoreOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncTMACopyGlobalToLocalOpConversion>(typeConverter, benefit);
 }

@@ -1,5 +1,7 @@
 #include "triton/Analysis/Alias.h"
+
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -37,7 +39,7 @@ void SharedMemoryAliasAnalysis::visitOperation(
     aliasInfo = AliasInfo(operands[0]->getValue());
     pessimistic = false;
   } else {
-    assert(!result.getType().isa<triton::MemDescType>() &&
+    assert(!isa<triton::MemDescType>(result.getType()) &&
            "unknown operation creating memory descriptor");
   }
 

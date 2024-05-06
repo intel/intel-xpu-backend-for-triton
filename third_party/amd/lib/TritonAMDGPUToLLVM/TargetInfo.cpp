@@ -1,8 +1,8 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton::AMD {
@@ -51,7 +51,17 @@ Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
 }
 } // namespace
 
+int TargetInfo::getSharedMemorySize() const { return 64 * 1024; }
+
 bool TargetInfo::supportMaximumMinimum() const { return false; }
+
+Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
+  // On AMD hardware we don't have CTA clusters like NVIDIA. So this will always
+  // be zero. Whoever calling into this should make sure the whole program does
+  // not try to utilize CTA clusters.
+  return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+}
+
 Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
                          Type type, Value cmp) const {
   auto stringAttr = rewriter.getStringAttr("llvm.amdgcn.ballot");
@@ -62,33 +72,17 @@ Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
   return asmResult;
 }
 
-Value TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                              Value ptr, Value val, Value pred) const {
-  rewriter.create<scf::IfOp>(
-      loc, pred,
-      [&](OpBuilder &builder, Location loc) {
-        auto storeOp = builder.create<LLVM::StoreOp>(loc, val, ptr);
-        builder.create<scf::YieldOp>(loc);
-      },
-      nullptr);
-  return val;
+void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
+                             Value ptr, Value val, Value pred) const {
+  mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Type elemTy, Value pred) const {
-  auto width = elemTy.getIntOrFloatBitWidth();
-  auto loaded = rewriter.create<scf::IfOp>(
-      loc, pred,
-      [&](OpBuilder &builder, Location loc) {
-        auto loadVal = builder.create<LLVM::LoadOp>(loc, elemTy, ptr);
-        builder.create<mlir::scf::YieldOp>(loc, ValueRange({loadVal}));
-      },
-      [&](OpBuilder &builder, Location loc) {
-        Value falseVal = builder.create<arith::ConstantOp>(
-            loc, elemTy, builder.getZeroAttr(elemTy));
-        builder.create<mlir::scf::YieldOp>(loc, ValueRange({falseVal}));
-      });
-  return loaded.getResult(0);
+                             const TypeConverter *converter, Value ptr,
+                             Type elemTy, Value pred) const {
+  Value falseVal = rewriter.create<arith::ConstantOp>(
+      loc, elemTy, rewriter.getZeroAttr(elemTy));
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
 }
 
 Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,

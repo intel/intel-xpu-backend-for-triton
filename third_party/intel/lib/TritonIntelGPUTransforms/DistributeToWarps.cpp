@@ -6,28 +6,32 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/TypeSwitch.h"
-
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
-#include <memory>
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
+
+namespace mlir::triton::gpu::intel {
+#define GEN_PASS_DEF_TRITONINTELGPUDISTRIBUTETOWARPS
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
+} // namespace mlir::triton::gpu::intel
 
 namespace {
 
@@ -289,11 +293,8 @@ void distributeScfForOp(scf::ForOp op) {
 
 } // namespace
 
-#define GEN_PASS_CLASSES
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
-
 class TritonIntelGPUDistributeToWarpsPass
-    : public TritonIntelGPUDistributeToWarpsBase<
+    : public triton::gpu::intel::impl::TritonIntelGPUDistributeToWarpsBase<
           TritonIntelGPUDistributeToWarpsPass> {
 public:
   void runOnOperation() override {
@@ -338,8 +339,3 @@ public:
     }
   }
 };
-
-std::unique_ptr<Pass>
-mlir::triton::gpu::intel::createTritonIntelGPUDistributeToWarpsPass() {
-  return std::make_unique<TritonIntelGPUDistributeToWarpsPass>();
-}

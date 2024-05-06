@@ -37,7 +37,9 @@ static std::vector<std::pair<sycl::device, ze_device_handle_t>>
 static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   if (code != ZE_RESULT_SUCCESS) {
     const char *prefix = "Triton Error [ZE]: ";
-    std::string str = std::to_string(code);
+    std::stringstream ss;
+    ss << "0x" << std::hex << code;
+    std::string str = ss.str();
     char err[1024] = {0};
     strcat(err, prefix);
     strcat(err, str.c_str());
@@ -78,20 +80,6 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
   int sm_clock_rate = device_properties.coreClockRate;
 
-  // Extract triton::gpu::intel::DeviceArch from pci_device_id
-  // https://dgpu-docs.intel.com/devices/hardware-table.html
-  int pci_device_id = device_properties.deviceId;
-  int gpu_arch = 2; // triton::gpu::intel::DeviceArch::UNKNOWN
-  switch ((pci_device_id >> 8) & 0xFF) {
-  case 0x56:
-    gpu_arch = 0; // Arc GPUs 56xx
-    break;
-  case 0x0B:      // PVC GPUs 0Bxx
-    gpu_arch = 1; // PVC
-    break;
-  default:; // fall through
-  }
-
   ze_device_compute_properties_t compute_properties = {};
   compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
   zeDeviceGetComputeProperties(phDevice, &compute_properties);
@@ -118,12 +106,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   delete[] pMemoryProperties;
 
-  return Py_BuildValue(
-      "{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:O}", "max_shared_mem",
-      max_shared_mem, "multiprocessor_count", multiprocessor_count,
-      "sm_clock_rate", sm_clock_rate, "mem_clock_rate", mem_clock_rate,
-      "mem_bus_width", mem_bus_width, "device_arch", gpu_arch,
-      "max_work_group_size", max_group_size, "sub_group_sizes", subgroup_sizes);
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:N}", "max_shared_mem",
+                       max_shared_mem, "multiprocessor_count",
+                       multiprocessor_count, "sm_clock_rate", sm_clock_rate,
+                       "mem_clock_rate", mem_clock_rate, "mem_bus_width",
+                       mem_bus_width, "max_work_group_size", max_group_size,
+                       "sub_group_sizes", subgroup_sizes);
 }
 
 /*Sycl code Start*/

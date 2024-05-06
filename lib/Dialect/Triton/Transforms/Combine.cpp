@@ -1,15 +1,15 @@
+#include <memory>
+
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
-
-#include <memory>
 
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
@@ -30,17 +30,17 @@ bool isZero(Value val) {
 }
 
 bool isBroadcastConstantCombinable(Attribute value) {
-  if (auto denseValue = value.dyn_cast<DenseElementsAttr>()) {
+  if (auto denseValue = dyn_cast<DenseElementsAttr>(value)) {
     return denseValue.isSplat();
   }
-  return value.isa<FloatAttr, IntegerAttr>();
+  return isa<FloatAttr, IntegerAttr>(value);
 }
 
 DenseElementsAttr getConstantValue(Builder &builder, Attribute value,
                                    Value bcast_res) {
-  auto resType = bcast_res.getType().cast<ShapedType>();
+  auto resType = cast<ShapedType>(bcast_res.getType());
   DenseElementsAttr res;
-  if (auto denseValue = value.dyn_cast<DenseElementsAttr>()) {
+  if (auto denseValue = dyn_cast<DenseElementsAttr>(value)) {
     res =
         DenseElementsAttr::get(resType, denseValue.getSplatValue<Attribute>());
   } else {
@@ -203,14 +203,14 @@ public:
     if (expandLhsAxis != 2 || expandRhsAxis != 0)
       return failure();
     auto broadcastLhsShape =
-        broadcastLhsOp.getType().cast<ShapedType>().getShape();
+        cast<ShapedType>(broadcastLhsOp.getType()).getShape();
     auto broadcastRhsShape =
-        broadcastLhsOp.getType().cast<ShapedType>().getShape();
+        cast<ShapedType>(broadcastLhsOp.getType()).getShape();
     if (broadcastLhsShape[2] < 16 || broadcastRhsShape[0] < 16)
       return failure();
     Type newAccType = RankedTensorType::get(
         {broadcastLhsShape[0], broadcastRhsShape[2]},
-        broadcastLhsOp.getSrc().getType().cast<ShapedType>().getElementType());
+        cast<ShapedType>(broadcastLhsOp.getSrc().getType()).getElementType());
     rewriter.setInsertionPoint(op);
     auto newAcc = rewriter.create<SplatOp>(
         op->getLoc(), newAccType,

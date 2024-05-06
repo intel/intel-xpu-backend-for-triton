@@ -1,10 +1,13 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+
+#include <algorithm>
+#include <numeric>
+
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include <algorithm>
-#include <numeric>
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -36,7 +39,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   addConversion([this](triton::PointerType ptrType) -> triton::PointerType {
     // Check whether tensor pointer `tt.ptr<tensor<>>`
     auto pointeeTensorType =
-        ptrType.getPointeeType().dyn_cast<RankedTensorType>();
+        dyn_cast<RankedTensorType>(ptrType.getPointeeType());
     if (pointeeTensorType == nullptr)
       return ptrType;
 
@@ -109,11 +112,11 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
   // We have requirements for the data layouts
   addDynamicallyLegalOp<triton::DotOp>([](triton::DotOp dotOp) -> bool {
     Attribute aEncoding =
-        dotOp.getA().getType().cast<RankedTensorType>().getEncoding();
+        cast<RankedTensorType>(dotOp.getA().getType()).getEncoding();
     Attribute bEncoding =
-        dotOp.getB().getType().cast<RankedTensorType>().getEncoding();
-    if (aEncoding && aEncoding.isa<triton::gpu::DotOperandEncodingAttr>() &&
-        bEncoding && bEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+        cast<RankedTensorType>(dotOp.getB().getType()).getEncoding();
+    if (aEncoding && isa<triton::gpu::DotOperandEncodingAttr>(aEncoding) &&
+        bEncoding && isa<triton::gpu::DotOperandEncodingAttr>(bEncoding))
       return true;
     return false;
   });

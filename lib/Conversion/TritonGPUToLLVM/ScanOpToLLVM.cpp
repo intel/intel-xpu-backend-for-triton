@@ -1,12 +1,12 @@
+#include <iterator>
+
 #include "ReduceScanCommon.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
 #include "llvm/ADT/STLExtras.h"
-
-#include <iterator>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -572,7 +572,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 
   auto valuesTransposed = transpose(srcValues);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-    auto resultTy = op.getResult()[i].getType().dyn_cast<RankedTensorType>();
+    auto resultTy = dyn_cast<RankedTensorType>(op.getResult()[i].getType());
     results[i] = packLLElements(loc, getTypeConverter(), valuesTransposed[i],
                                 rewriter, resultTy);
   }

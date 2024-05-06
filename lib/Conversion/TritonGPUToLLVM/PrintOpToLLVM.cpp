@@ -57,9 +57,9 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       SmallVector<int, 8> dimWidths;
       SmallVector<SmallVector<Value>> indices;
       if (auto rankedTy =
-              op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
-        indices =
-            emitIndices(loc, rewriter, rankedTy.getEncoding(), rankedTy, true);
+              dyn_cast<RankedTensorType>(op.getOperand(i).getType())) {
+        indices = emitIndices(loc, rewriter, targetInfo, rankedTy.getEncoding(),
+                              rankedTy, true);
         for (int64_t dim : rankedTy.getShape()) {
           if (dim > 0) {
             dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
@@ -171,7 +171,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
   std::string getFormatSubstr(Value value, bool hex = false,
                               std::optional<int> width = std::nullopt) const {
     Type type = value.getType();
-    if (type.isa<LLVM::LLVMPointerType>()) {
+    if (isa<LLVM::LLVMPointerType>(type)) {
       return "%p";
     }
     // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the

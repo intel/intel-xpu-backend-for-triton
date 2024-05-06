@@ -37,19 +37,18 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/FormatVariadic.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 #include "GPUOpsLowering.h"
 #include "IndexIntrinsicsOpLowering.h"
 #include "OpToFuncCallLowering.h"
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTGPUTOTRITONGEN
 #include "intel/include/GPUToTritonGEN/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 using namespace mlir;
 using namespace mlir::triton;

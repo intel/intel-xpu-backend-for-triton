@@ -1,6 +1,6 @@
-﻿#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
+﻿#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
@@ -57,6 +57,22 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       *optPtr = true;
     }
   }
+  bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
+  if (!disableLLVMOpt) {
+    // Check to see if we are passing a list of flags to disable optimizations.
+    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    if (!flagList.empty()) {
+      llvm::SmallVector<StringRef, 3> split;
+      StringRef(flagList.c_str()).split(split, ',');
+      for (auto flag : split) {
+        auto optIt = options.find(flag);
+        if (optIt != options.end()) {
+          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+          *optPtr = true;
+        }
+      }
+    }
+  }
 
   // inline everything
   for (llvm::Function &f : module.functions())
@@ -83,7 +99,9 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   opt.TrapUnreachable = true;
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
-      std::nullopt, llvm::CodeGenOptLevel::Aggressive)};
+      std::nullopt,
+      disableLLVMOpt ? llvm::CodeGenOptLevel::None
+                     : llvm::CodeGenOptLevel::Aggressive)};
   // set data layout
   module.setDataLayout(machine->createDataLayout());
   // emit machine code
@@ -264,6 +282,20 @@ void init_triton_llvm(py::module &&m) {
                               const llvm::OptimizationLevel &opt) {
     if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
       return;
+    // Check to see if we are passing a list of flags to disable optimizations.
+    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    if (!flagList.empty()) {
+      auto options = llvm::cl::getRegisteredOptions();
+      llvm::SmallVector<StringRef, 3> split;
+      StringRef(flagList.c_str()).split(split, ',');
+      for (auto flag : split) {
+        auto optIt = options.find(flag);
+        if (optIt != options.end()) {
+          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+          *optPtr = true;
+        }
+      }
+    }
     using namespace llvm;
     LoopAnalysisManager lam;
     FunctionAnalysisManager fam;
@@ -319,25 +351,29 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "translate_to_spirv",
       [](const std::string llvmIR) -> std::tuple<py::object, std::string> {
-        py::gil_scoped_release allow_threads;
-        // create LLVM module from C++
-        llvm::LLVMContext context;
-        std::unique_ptr<llvm::MemoryBuffer> buffer =
-            llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-        llvm::SMDiagnostic error;
-        std::unique_ptr<llvm::Module> module =
-            llvm::parseIR(buffer->getMemBufferRef(), error, context);
-        if (!module) {
-          llvm::report_fatal_error(
-              "failed to parse IR: " + error.getMessage() +
-              "lineno: " + std::to_string(error.getLineNo()));
+        std::string name;
+        std::string spirvBitcode;
+        {
+          py::gil_scoped_release allow_threads;
+          // create LLVM module from C++
+          llvm::LLVMContext context;
+          std::unique_ptr<llvm::MemoryBuffer> buffer =
+              llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+          llvm::SMDiagnostic error;
+          std::unique_ptr<llvm::Module> module =
+              llvm::parseIR(buffer->getMemBufferRef(), error, context);
+          if (!module) {
+            llvm::report_fatal_error(
+                "failed to parse IR: " + error.getMessage() +
+                "lineno: " + std::to_string(error.getLineNo()));
+          }
+          // Get name of kernel in the module
+          std::set<llvm::Function *> kernels;
+          uint32_t numKernels = findKernels(*module, kernels);
+          assert(numKernels == 1 && "Expecting a single SPIR kernel");
+          name = (*kernels.begin())->getName().str();
+          spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
         }
-        // Get name of kernel in the module
-        std::set<llvm::Function *> kernels;
-        uint32_t numKernels = findKernels(*module, kernels);
-        assert(numKernels == 1 && "Expecting a single SPIR kernel");
-        std::string name = (*kernels.begin())->getName().str();
-        std::string spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
         return std::make_tuple(py::bytes(spirvBitcode), name);
       },
       ret::take_ownership);

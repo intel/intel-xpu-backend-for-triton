@@ -14,17 +14,20 @@
 namespace mlir::triton::intel {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  TargetInfo(int computeCapability) : computeCapability(computeCapability) {}
+  TargetInfo() = default;
 
   bool supportMaximumMinimum() const override;
+
+  Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
 
   Value ballot(ConversionPatternRewriter &rewriter, Location loc, Type type,
                Value cmp) const override;
 
-  Value storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                    Value ptr, Value val, Value pred) const override;
-  Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                   Type elemTy, Value pred) const override;
+  void storeShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+                   Value val, Value pred) const override;
+  Value loadShared(ConversionPatternRewriter &rewriter, Location loc,
+                   const TypeConverter *converter, Value ptr, Type elemTy,
+                   Value pred) const override;
 
   Value shuffleXor(ConversionPatternRewriter &rewriter, Location loc, Value val,
                    int i) const override;
@@ -57,8 +60,6 @@ public:
                   int line) const override;
 
 private:
-  // TODO: revisit the computeCapability field, as it should not be used on XPU.
-  int computeCapability;
 };
 } // namespace mlir::triton::intel
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H

@@ -1,9 +1,13 @@
 #pragma once
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/TritonGENToLLVM/Passes.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #ifdef USE_ROCM
@@ -13,11 +17,8 @@
 #endif
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
-#include "intel/include/TritonGENToLLVM/Passes.h"
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "nvidia/include/NVGPUToLLVM/Passes.h"
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
@@ -27,7 +28,6 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/InitAllPasses.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
 namespace test {
@@ -43,7 +43,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonPasses();
   mlir::registerTritonGPUPasses();
   mlir::registerTritonNvidiaGPUPasses();
-  mlir::registerTritonIntelGPUPasses();
   mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
@@ -55,30 +54,18 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertNVGPUToLLVMPass();
   mlir::triton::registerDecomposeUnsupportedNVIDIAConversions();
   mlir::registerLLVMDIScope();
-  // Intel passes
-  mlir::triton::registerIntelDecomposeUnsupportedConversionsPass();
-  mlir::triton::registerIntelAllocateSharedMemoryPass();
-  mlir::triton::registerConvertTritonIntelGPUToLLVMPass();
+  mlir::triton::gpu::intel::registerTritonIntelGPUPasses();
+  mlir::triton::gpu::intel::registerTritonIntelGPUToLLVMPasses();
   mlir::triton::registerConvertTritonGENToLLVM();
   mlir::triton::registerTritonGENToLLVMPasses();
 
 #ifdef USE_ROCM
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
+  mlir::triton::registerConvertBuiltinFuncToLLVM();
   mlir::triton::registerDecomposeUnsupportedAMDConversions();
-
-  // TODO: Uncomment when fixed undefined symbols and
-  // remove section below
-  // List of undefined symbols:
-  // createTritonAMDGPUCoalesce is not defined
-  // createTritonAMDGPUOptimizeDotOperands is not defined
-  // createTritonAMDGPUPipeline is not defined
-  // createTritonAMDGPUPrefetch is not defined
-
-  // mlir::registerTritonAMDGPUPasses();
 
   mlir::registerTritonAMDGPUAccelerateMatmul();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
-  mlir::registerTritonAMDGPURemoveLayoutConversions();
   mlir::registerTritonAMDGPUReorderInstructions();
   mlir::registerTritonAMDGPUStreamPipeline();
 

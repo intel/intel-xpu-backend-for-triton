@@ -1,7 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
 
 namespace SharedToDotOperandMMAv1 {
 using CoordTy = SmallVector<Value>;
@@ -109,6 +109,37 @@ getMNCoords(Value thread, Location loc, ConversionPatternRewriter &rewriter,
 } // namespace SharedToDotOperandMMAv1
 namespace mlir {
 
+namespace triton::gpu {
+Type getFunctionType(Type resultType, ValueRange operands) {
+  SmallVector<Type> operandTypes(operands.getTypes());
+  return LLVM::LLVMFunctionType::get(resultType, operandTypes);
+}
+
+LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
+                                         Operation *op, StringRef funcName,
+                                         Type funcType,
+                                         StringRef libname /*= ""*/,
+                                         StringRef libpath /*= ""*/) {
+  using LLVM::LLVMFuncOp;
+
+  auto funcAttr = StringAttr::get(op->getContext(), funcName);
+  Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
+  if (funcOp)
+    return cast<LLVMFuncOp>(*funcOp);
+
+  Operation *parent = op;
+  if (!isa<LLVM::LLVMFuncOp>(op))
+    parent = op->getParentOfType<LLVM::LLVMFuncOp>();
+  OpBuilder b(parent);
+  auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+  ret.getOperation()->setAttr("libname",
+                              StringAttr::get(op->getContext(), libname));
+  ret.getOperation()->setAttr("libpath",
+                              StringAttr::get(op->getContext(), libpath));
+  return ret;
+}
+} // namespace triton::gpu
+
 namespace LLVM {
 using namespace mlir::triton;
 using mlir::triton::gpu::getOrder;
@@ -145,16 +176,16 @@ Value createConstantF64(Location loc, OpBuilder &rewriter, double v) {
 }
 
 Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type) {
-  if (!type.isa<FloatType>()) {
+  if (!isa<FloatType>(type)) {
     llvm::report_fatal_error("Creating NaN constant for non-float type!");
   }
   return rewriter.create<LLVM::ConstantOp>(
-      loc, type, APFloat::getNaN(type.cast<FloatType>().getFloatSemantics()));
+      loc, type, APFloat::getNaN(cast<FloatType>(type).getFloatSemantics()));
 }
 
 // Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
-                          TypeConverter *converter, int64_t value) {
+                          const TypeConverter *converter, int64_t value) {
   Type ty = converter->convertType(builder.getIndexType());
   return builder.create<LLVM::ConstantOp>(loc, ty,
                                           builder.getIntegerAttr(ty, value));
@@ -168,101 +199,11 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                           builder.getIntegerAttr(ty, value));
 }
 
-// A wrapper of LoadDSmemOp when vec = 1
-// (1) Get bitwidth from elemTy
-// (2) Create LoadDSmemOp
-// (3) Bitcast result from dataTy (u16/u32/u64) back to elemTy
-Value createLoadDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Type elemTy) {
-  assert(addr.getType().isa<LLVMPointerType>() &&
-         "addr must be a pointer type");
-  auto ptrTy = addr.getType().cast<LLVMPointerType>();
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
-  Value ret =
-      rewriter.create<triton::nvgpu::LoadDSmemOp>(loc, addr, ctaId, bitwidth);
-  return bitcast(ret, elemTy);
-}
-
-// A wrapper of LoadDSmemOp when vec > 1
-// (1) Get bitwidth from elemTy
-// (2) Create LoadDSmemOp and extract results from retStruct
-// (3) Bitcast results from dataTy (u16/u32/u64) back to elemTy
-SmallVector<Value> createLoadDSmem(Location loc, PatternRewriter &rewriter,
-                                   Value addr, Value ctaId, unsigned vec,
-                                   Type elemTy) {
-  assert(addr.getType().isa<LLVMPointerType>() &&
-         "addr must be a pointer type");
-  auto ptrTy = addr.getType().cast<LLVMPointerType>();
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
-  Value retStruct = rewriter.create<triton::nvgpu::LoadDSmemOp>(
-      loc, addr, ctaId, bitwidth, vec);
-  SmallVector<Value> retVals;
-  for (unsigned i = 0; i < vec; ++i) {
-    auto dataTy = rewriter.getIntegerType(bitwidth);
-    Value data = extract_val(dataTy, retStruct, i);
-    retVals.push_back(bitcast(data, elemTy));
-  }
-  return retVals;
-}
-
-// A wrapper of StoreDSmemOp when vec = 1
-// (1) Get bitwidth from elemTy
-// (2) Bitcast value from elemTy to dataTy (u16/u32/u64)
-// (3) Create StoreDSmemOp
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Value value, Value pred) {
-  assert(addr.getType().isa<LLVMPointerType>() &&
-         "addr must be a pointer type");
-  auto ptrTy = addr.getType().cast<LLVMPointerType>();
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  unsigned bitwidth = value.getType().getIntOrFloatBitWidth();
-  auto dataTy = rewriter.getIntegerType(bitwidth);
-  Value data = bitcast(value, dataTy);
-  rewriter.create<triton::nvgpu::StoreDSmemOp>(loc, addr, ctaId, data, pred);
-}
-
-// A wrapper of StoreDSmemOp when vec = 1 and pred = 1
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, Value value) {
-  Value pred = int_val(/*width=*/1, 1);
-  createStoreDSmem(loc, rewriter, addr, ctaId, value, pred);
-}
-
-// A wrapper of StoreDSmemOp when vec > 1
-// (1) Get bitwidth from elemTy
-// (2) Bitcast values from elemTy to dataTy (u16/u32/u64)
-// (3) Create StoreDSmemOp
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, ArrayRef<Value> values, Value pred) {
-  assert(addr.getType().isa<LLVMPointerType>() &&
-         "addr must be a pointer type");
-  auto ptrTy = addr.getType().cast<LLVMPointerType>();
-  assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
-  unsigned bitwidth = 0;
-  if (!values.empty()) {
-    bitwidth = values.back().getType().getIntOrFloatBitWidth();
-  }
-  auto dataTy = rewriter.getIntegerType(bitwidth);
-  SmallVector<Value> data;
-  for (unsigned i = 0; i < values.size(); ++i)
-    data.push_back(bitcast(values[i], dataTy));
-  rewriter.create<triton::nvgpu::StoreDSmemOp>(loc, addr, ctaId, data, pred);
-}
-
-// A wrapper of StoreDSmemOp when vec > 1 and pred = 1
-void createStoreDSmem(Location loc, PatternRewriter &rewriter, Value addr,
-                      Value ctaId, ArrayRef<Value> values) {
-  Value pred = int_val(/*width=*/1, 1);
-  createStoreDSmem(loc, rewriter, addr, ctaId, values, pred);
-}
-
 SharedMemoryObject
 getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
                                 ConversionPatternRewriter &rewriter) {
   ArrayRef<Type> types =
-      llvmStruct.getType().cast<LLVM::LLVMStructType>().getBody();
+      cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
   SmallVector<Value> elems(types.size());
   for (unsigned i = 0; i < types.size(); ++i) {
     Type type = types[i];
@@ -300,8 +241,9 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
   auto reordered = applyPermutation(shape, order);
   SmallVector<Value> reorderedMultiDim(rank);
   if (auto constantOp = linear.getDefiningOp<arith::ConstantOp>()) {
-    unsigned intVal =
-        constantOp.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+    unsigned intVal = mlir::cast<IntegerAttr>(constantOp.getValue())
+                          .getValue()
+                          .getSExtValue();
     reorderedMultiDim = delinearize(rewriter, loc, intVal, reordered);
   } else {
     reorderedMultiDim = delinearize(rewriter, loc, linear, reordered);
@@ -399,14 +341,15 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 
 SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
                                      ConversionPatternRewriter &rewriter,
+                                     const TargetInfoBase &targetInfo,
                                      unsigned elemId, RankedTensorType type,
                                      ArrayRef<unsigned> multiDimCTAInRepId,
                                      ArrayRef<unsigned> shapePerCTATile) {
   auto shape = type.getShape();
   unsigned rank = shape.size();
-  if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-    auto multiDimOffsetFirstElem =
-        emitBaseIndexForLayout(loc, rewriter, blockedLayout, type, false);
+  if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
+    auto multiDimOffsetFirstElem = emitBaseIndexForLayout(
+        loc, rewriter, targetInfo, blockedLayout, type, false);
     SmallVector<Value> multiDimOffset(rank);
     SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
         elemId, getSizePerThread(layout), getOrder(layout));
@@ -418,7 +361,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     }
     return multiDimOffset;
   }
-  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     unsigned dim = sliceLayout.getDim();
     auto parentEncoding = sliceLayout.getParent();
     auto parentSizePerThread = getSizePerThread(parentEncoding);
@@ -433,10 +376,10 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
       auto it = std::find(parentOffset.begin(), parentOffset.end(), off);
       idxs.push_back(std::distance(parentOffset.begin(), it));
     }
-    auto multiDimOffsetParent =
-        getMultiDimOffset(parentEncoding, loc, rewriter, idxs[elemId], parentTy,
-                          sliceLayout.paddedShape(multiDimCTAInRepId),
-                          sliceLayout.paddedShape(shapePerCTATile));
+    auto multiDimOffsetParent = getMultiDimOffset(
+        parentEncoding, loc, rewriter, targetInfo, idxs[elemId], parentTy,
+        sliceLayout.paddedShape(multiDimCTAInRepId),
+        sliceLayout.paddedShape(shapePerCTATile));
     SmallVector<Value> multiDimOffset(rank);
     for (unsigned d = 0; d < rank + 1; ++d) {
       if (d == dim)
@@ -446,7 +389,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     }
     return multiDimOffset;
   }
-  if (auto mmaLayout = layout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  if (auto mmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     assert(rank == 2 ||
            (rank == 3 && mmaLayout.isAmpere()) && "Unexpected rank");
     auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
@@ -535,16 +478,16 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     }
     return multiDimOffset;
   }
-  if (layout.isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>()) {
+  if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(layout)) {
     auto multiDimBase =
-        emitBaseIndexForLayout(loc, rewriter, layout, type, false);
+        emitBaseIndexForLayout(loc, rewriter, targetInfo, layout, type, false);
     SmallVector<SmallVector<unsigned>> offsets;
     assert(rank == 2);
     SmallVector<Value> multiDimOffset(rank);
-    if (auto mfmaLayout = layout.dyn_cast<AMDMfmaEncodingAttr>()) {
+    if (auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout)) {
       emitMfmaOffsetForCTA(mfmaLayout, offsets, 0, multiDimCTAInRepId[0],
                            multiDimCTAInRepId[1]);
-    } else if (auto wmmaLayout = layout.dyn_cast<AMDWmmaEncodingAttr>()) {
+    } else if (auto wmmaLayout = dyn_cast<AMDWmmaEncodingAttr>(layout)) {
       emitWmmaOffsetForCTA(wmmaLayout, offsets, multiDimCTAInRepId[0],
                            multiDimCTAInRepId[1]);
     }

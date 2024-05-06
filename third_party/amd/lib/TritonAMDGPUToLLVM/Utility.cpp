@@ -3,7 +3,9 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
-#include "triton/Dialect/NVGPU/IR/Dialect.h"
+
+using mlir::triton::gpu::appendOrGetExternFuncOp;
+using mlir::triton::gpu::getFunctionType;
 
 namespace {
 enum class ShflKind : uint32_t {
@@ -12,7 +14,28 @@ enum class ShflKind : uint32_t {
   down = 2,
   idx = 3,
 };
+
+std::string getTypeString(Type ty) {
+  std::string str;
+  llvm::raw_string_ostream rso(str);
+  ty.print(rso);
+  rso.flush();
+  return str;
 }
+
+std::string mangleFunc(std::string name, Type type) {
+  auto funcType = dyn_cast<LLVM::LLVMFunctionType>(type);
+  assert(funcType && "Expecting an LLVMFunctionType");
+  std::string mangled = name + "_";
+  auto retTy = funcType.getReturnType();
+  mangled += getTypeString(retTy) + "_";
+  auto params = funcType.getParams();
+  for (auto paramType : params) {
+    mangled += getTypeString(paramType) + "_";
+  }
+  return mangled;
+}
+} // namespace
 
 namespace mlir::LLVM::AMD {
 static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
@@ -135,6 +158,31 @@ Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
                                                   mlir::gpu::Dimension::z};
   Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+}
+
+Value llLoad(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+             Type elemTy, Value pred, Value falseVal) {
+  Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
+  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
+  auto funcName = mangleFunc(mlir::LLVM::AMD::Predicated_Load, funcType);
+  LLVM::LLVMFuncOp funcOp =
+      appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
+  auto loadVal =
+      rewriter
+          .create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, pred, falseVal}))
+          .getResult();
+  return loadVal;
+}
+
+void llStore(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+             Value val, Value pred) {
+  auto ctx = ptr.getContext();
+  Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
+  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
+  auto funcName = mangleFunc(mlir::LLVM::AMD::Predicated_Store, funcType);
+  LLVM::LLVMFuncOp funcOp =
+      appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
+  rewriter.create<LLVM::CallOp>(loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
 } // namespace mlir::LLVM::AMD

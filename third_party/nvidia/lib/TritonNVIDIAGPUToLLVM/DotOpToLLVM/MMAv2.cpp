@@ -1,6 +1,6 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
-
 #include "Utility.h"
+#include "mlir/Support/LLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -14,14 +14,14 @@ Value loadC(Value tensor, Value llTensor,
             const LLVMTypeConverter *typeConverter, Location loc,
             ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = tensor.getContext();
-  auto tensorTy = tensor.getType().cast<RankedTensorType>();
+  auto tensorTy = cast<RankedTensorType>(tensor.getType());
   size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
 
-  assert(tensorTy.getEncoding().isa<NvidiaMmaEncodingAttr>() &&
+  assert(isa<NvidiaMmaEncodingAttr>(tensorTy.getEncoding()) &&
          "Currently, we only support $c with a mma layout.");
   // Load a normal C tensor with mma layout, that should be a
   // LLVM::struct with fcSize elements.
-  auto structTy = llTensor.getType().cast<LLVM::LLVMStructType>();
+  auto structTy = cast<LLVM::LLVMStructType>(llTensor.getType());
   assert(structTy.getBody().size() == fcSize &&
          "DotOp's $c operand should pass the same number of values as $d in "
          "mma layout.");
@@ -307,21 +307,21 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value loadedB, Value loadedC, DotOp op,
                          DotOpAdaptor adaptor, bool isTuring) {
   MLIRContext *ctx = c.getContext();
-  auto aTensorTy = a.getType().cast<RankedTensorType>();
-  auto bTensorTy = b.getType().cast<RankedTensorType>();
-  auto dTensorTy = d.getType().cast<RankedTensorType>();
+  auto aTensorTy = cast<RankedTensorType>(a.getType());
+  auto bTensorTy = cast<RankedTensorType>(b.getType());
+  auto dTensorTy = cast<RankedTensorType>(d.getType());
 
   auto aShapePerCTA = triton::gpu::getShapePerCTA(aTensorTy);
   auto bShapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
   auto dShapePerCTA = triton::gpu::getShapePerCTA(dTensorTy);
 
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
-  auto dotOpA = aTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-  auto repA = dotOpA.getParent().cast<NvidiaMmaEncodingAttr>().getMMAv2Rep(
-      aShapePerCTA, bitwidth, dotOpA.getOpIdx());
-  auto dotOpB = bTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-  auto repB = dotOpB.getParent().cast<NvidiaMmaEncodingAttr>().getMMAv2Rep(
-      bShapePerCTA, bitwidth, dotOpB.getOpIdx());
+  auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+  auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
+                  .getMMAv2Rep(aShapePerCTA, bitwidth, dotOpA.getOpIdx());
+  auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
+  auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
+                  .getMMAv2Rep(bShapePerCTA, bitwidth, dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
@@ -371,7 +371,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     Value mmaOut =
         builder.launch(rewriter, loc, getMmaRetType(mmaType, op.getContext()));
 
-    Type elemTy = mmaOut.getType().cast<LLVM::LLVMStructType>().getBody()[0];
+    Type elemTy = cast<LLVM::LLVMStructType>(mmaOut.getType()).getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
       fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + batchOffset * b] =
           extract_val(elemTy, mmaOut, i);
@@ -408,8 +408,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, bool isTuring) {
-  assert(op.getA().getType().getEncoding().isa<DotOperandEncodingAttr>() &&
-         op.getB().getType().getEncoding().isa<DotOperandEncodingAttr>() &&
+  assert(mlir::isa<DotOperandEncodingAttr>(op.getA().getType().getEncoding()) &&
+         mlir::isa<DotOperandEncodingAttr>(op.getB().getType().getEncoding()) &&
          "Both $a and %b should be DotOperand layout.");
 
   Value loadedC =

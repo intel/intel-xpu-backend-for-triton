@@ -10,8 +10,8 @@ The following command installs the latest version of Proton.
 
 ```bash
 git clone https://github.com/openai/triton
-cd triton/third_party/proton
-TRITON_BUILD_PROTON=1 pip install .
+cd triton/python
+pip install .
 ```
 
 ## Usage

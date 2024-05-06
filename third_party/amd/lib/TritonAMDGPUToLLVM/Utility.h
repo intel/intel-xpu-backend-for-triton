@@ -10,6 +10,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 namespace mlir::LLVM::AMD {
 
+const char Predicated_Load[] = "__predicated_load";
+const char Predicated_Store[] = "__predicated_store";
+
 Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
                  int i);
 Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
@@ -21,6 +24,15 @@ Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
 
 Value llGetPid(Location loc, ConversionPatternRewriter &rewriter,
                ModuleOp moduleOp, int axis);
+
+// Loads from shared or global memory with predication.
+// `otherElems` is used to mask out the elements that are not loaded
+Value llLoad(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+             Type elemTy, Value pred, Value falseVal);
+
+// Stores to shared or global memory with predication.
+void llStore(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
+             Value val, Value pred);
 } // namespace mlir::LLVM::AMD
 
 #endif

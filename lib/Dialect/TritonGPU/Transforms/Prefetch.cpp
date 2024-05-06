@@ -27,6 +27,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -92,14 +93,11 @@ void Prefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &vals,
   for (int i = 2; i < vals.size(); i++) {
     Value v = vals[i];
     Value curr = builder.clone(*v.getDefiningOp(), mapping)->getResult(0);
-    if (curr.getType().isa<RankedTensorType>()) {
+    if (isa<RankedTensorType>(curr.getType())) {
       auto retType = RankedTensorType::get(
-          ret.getType().cast<RankedTensorType>().getShape(),
-          curr.getType().cast<RankedTensorType>().getElementType(),
-          curr.getDefiningOp()
-              ->getOperand(0)
-              .getType()
-              .cast<RankedTensorType>()
+          cast<RankedTensorType>(ret.getType()).getShape(),
+          cast<RankedTensorType>(curr.getType()).getElementType(),
+          cast<RankedTensorType>(curr.getDefiningOp()->getOperand(0).getType())
               .getEncoding());
       curr.setType(retType);
     }
@@ -114,7 +112,7 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
                                    std::optional<int64_t> offsetK,
                                    std::optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
-  auto type = v.getType().cast<triton::MemDescType>();
+  auto type = cast<triton::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
   SmallVector<int64_t> offset{0, 0};
   Type elementType = type.getElementType();
@@ -193,14 +191,14 @@ LogicalResult Prefetcher::initialize() {
   };
 
   auto getIncomingOp = [this](Value v) -> Value {
-    if (auto arg = v.dyn_cast<BlockArgument>())
+    if (auto arg = mlir::dyn_cast<BlockArgument>(v))
       if (arg.getOwner()->getParentOp() == forOp.getOperation())
         return forOp.getTiedLoopInit(arg)->get();
     return Value();
   };
 
   auto getYieldOp = [this](Value v) -> Value {
-    auto arg = v.cast<BlockArgument>();
+    auto arg = mlir::cast<BlockArgument>(v);
     unsigned yieldIdx = arg.getArgNumber() - forOp.getNumInductionVars();
     return yieldOp.getOperand(yieldIdx);
   };
@@ -208,8 +206,10 @@ LogicalResult Prefetcher::initialize() {
   for (triton::DotOp dot : dotsInFor) {
     auto aType = dot.getA().getType();
     auto bType = dot.getB().getType();
-    auto aEnc = aType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
-    auto bEnc = bType.getEncoding().cast<triton::gpu::DotOperandEncodingAttr>();
+    auto aEnc =
+        mlir::cast<triton::gpu::DotOperandEncodingAttr>(aType.getEncoding());
+    auto bEnc =
+        mlir::cast<triton::gpu::DotOperandEncodingAttr>(bType.getEncoding());
     int aKWidth = aEnc.getKWidth();
     int bKWidth = bEnc.getKWidth();
     assert(aKWidth == bKWidth);

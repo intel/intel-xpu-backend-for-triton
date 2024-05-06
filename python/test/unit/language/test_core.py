@@ -25,15 +25,22 @@ def is_interpreter():
 
 
 def is_cuda():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "cuda"
+    return not is_interpreter() and \
+        triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
 def is_hip():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "hip"
+    return not is_interpreter() and \
+        triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
 def is_xpu():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target()[0] == "xpu"
+    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "xpu"
+
+
+def xpu_has_fp64():
+    assert is_xpu()
+    return triton.runtime.driver.active.get_current_target().arch['has_fp64']
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -52,7 +59,7 @@ GPU_DIALECT = "triton_gpu"
 if is_interpreter():
     THREADS_PER_WARP = 1
 elif is_hip():
-    THREADS_PER_WARP = triton.runtime.driver.active.get_current_target()[2]
+    THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 else:
     THREADS_PER_WARP = 32
 
@@ -166,6 +173,9 @@ def check_type_supported(dtype, device):
     if is_interpreter():
         if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
             pytest.xfail("bfloat16 is not supported in the interpreter")
+    elif device in ['xpu']:
+        if dtype in [torch.float64, "float64"] and not xpu_has_fp64():
+            pytest.xfail("float64 not supported on current xpu hardware")
 
 
 class MfmaLayout:
@@ -198,11 +208,11 @@ class DpasLayout:
 
     def __init__(self, repeatCount, systolic_depth, execution_size, ops_per_chan, threads_per_warp, warps_per_cta):
         self.repeatCount = repeatCount
-        self.systolic_depth = str(systolic_depth)
-        self.execution_size = str(execution_size)
-        self.ops_per_chan = str(ops_per_chan)
-        self.threads_per_warp = str(threads_per_warp)
-        self.warps_per_cta = str(warps_per_cta)
+        self.systolic_depth = systolic_depth
+        self.execution_size = execution_size
+        self.ops_per_chan = ops_per_chan
+        self.threads_per_warp = threads_per_warp
+        self.warps_per_cta = warps_per_cta
 
     def __str__(self):
         return f"#triton_intel_gpu.dpas<{{repeatCount={self.repeatCount}, systolicDepth={self.systolic_depth}, executionSize = {self.execution_size}, opsPerChan = {self.ops_per_chan}, threadsPerWarp = {self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}}}>"
@@ -284,7 +294,7 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
     # triton result
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
     z_tri = to_triton(np.empty_like(x), device=device, dst_type=dtype_x)
-    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
+    kernel[(1, )](Z=z_tri, X=x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
     # compare
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
 
@@ -374,7 +384,11 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         # triton result
         x_tri = to_triton(x, device=device, dst_type=dtype_x)
         y_tri = to_triton(y, device=device, dst_type=dtype_y)
+        if is_xpu() and not xpu_has_fp64() and z_ref.dtype in ["float64"]:
+            # Downcast the output type. Assumes similar overflow behavior to reference eval on the device.
+            z_ref = z_ref.astype("float32")
         z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
+
         kernel_fn[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
         err_msg = f"{expr}, {kernel_fn.__name__}"
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=1e-3, rtol=0.01)
@@ -931,10 +945,11 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_x, expr, x", [(dtype_x, expr, x)
-                                              for dtype_x in ["float32", "float64"]
-                                              for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'floor']
-                                              for x in ['x', '3.0']])
+@pytest.mark.parametrize("dtype_x, expr, x",
+                         [(dtype_x, expr, x)
+                          for dtype_x in ["float32", "float64"]
+                          for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'floor', 'ceil']
+                          for x in ['x', '3.0']])
 def test_math_op(dtype_x, expr, x, device):
     _test_unary(dtype_x, f'tl.{expr}({x})', f'np.{expr}({x}) ', device=device)
 
@@ -1034,7 +1049,7 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
 
     if is_xpu():
         # use cpu result as reference, see https://github.com/llvm/llvm-project/issues/88222
-        out_ref = torch.div(x.to(torch.float64).cpu(), y.to(torch.float64).cpu()).to(torch.float32).to(device=device)
+        out_ref = torch.div(x.cpu().to(torch.float64), y.cpu().to(torch.float64)).to(torch.float32).to(device=device)
     assert torch.all(out == out_ref)  # bitwise exact
 
 
@@ -1367,6 +1382,7 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
+    check_type_supported(dtype_x_str, device)
     if is_interpreter():
         if dtype_x_str == 'float16':
             pytest.skip("Only test atomic float16 ops on GPU")
@@ -1573,9 +1589,13 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
                               for size in [1024, 32]]) if torch.__version__ >= "2.1" else []))
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
-    # bfloat16 on cc < 80 will not be tested
-    check_type_supported(dtype_x, device)
-    check_type_supported(dtype_z, device)
+    # CUDA: bfloat16 on cc < 80 will not be tested
+    # Interpreter: Only bfloat16 <-> float32 is supported
+    if not is_interpreter() or \
+        (is_interpreter() and not ((dtype_z == 'bfloat16' and dtype_x == 'float32')
+                                   or (dtype_z == 'float32' and dtype_x == 'bfloat16'))):
+        check_type_supported(dtype_x, device)
+        check_type_supported(dtype_z, device)
 
     if is_hip() and (dtype_z in ("bfloat16", "float8_e4m3fn") or dtype_x == "float8_e4m3fn"):
         pytest.skip(f'test_cast{(dtype_x, dtype_z)} cast to bfloat16 not supported on HIP.')
@@ -1600,12 +1620,25 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     # triton kernel
 
     @triton.jit
-    def kernel(X, Z, BITCAST: tl.constexpr, SIZE: tl.constexpr):
+    def kernel(X, Z, BITCAST: tl.constexpr, SIZE: tl.constexpr, ARG_HASH: tl.constexpr):
         x_ptr = X + tl.arange(0, SIZE)
         z_ptr = Z + tl.arange(0, SIZE)
         x = tl.load(x_ptr)
-        z = x.to(Z.dtype.element_ty, bitcast=BITCAST)
+
+        # Depending on the value of ARG_HASH (a "random" number determined by
+        # the test parameters), spell the cast one of three different ways.
+        if ARG_HASH % 3 == 0:
+            z = x.to(Z.dtype.element_ty, bitcast=BITCAST)
+        elif ARG_HASH % 3 == 1:
+            z = x.cast(Z.dtype.element_ty, bitcast=BITCAST)
+        else:
+            z = tl.cast(x, Z.dtype.element_ty, bitcast=BITCAST)
+
         tl.store(z_ptr, z)
+
+    # "Random" number used inside the kernel to determine how we spell the cast.
+    # This way we don't have to increase the number of tests.
+    arg_hash = hash((dtype_x, dtype_z, bitcast, size, num_ctas))
 
     dtype_z_np = dtype_z if dtype_z != 'int1' else 'bool_'
     # triton result
@@ -1615,7 +1648,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         z_tri = torch.empty((size, ), dtype=torch.half, device=device).to(dtype=getattr(torch, dtype_z))
     else:
         z_tri = to_triton(np.empty((size, ), dtype=getattr(np, dtype_z_np)), device=device)
-    kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, num_warps=1, num_ctas=num_ctas)
+    kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, ARG_HASH=arg_hash, num_warps=1, num_ctas=num_ctas)
     # torch result
     if dtype_z.startswith('bfloat') or dtype_x.startswith('bfloat') or dtype_z.startswith(
             'float8') or dtype_x.startswith('float8'):
@@ -1941,6 +1974,24 @@ def deserialize_fp8(np_data, in_dtype):
 # ---------------
 # test reduce
 # ---------------
+
+
+@pytest.mark.interpreter
+def test_max_returns_zero(device):
+    # Simple test with a tl.max call that returns 0.  The interpreter had a bug
+    # where it didn't handle this correctly.
+    @triton.jit
+    def kernel(X, Z, BLOCK: tl.constexpr):
+        x = tl.load(X + tl.arange(0, BLOCK))
+        z = tl.max(x)
+        tl.store(Z, z)
+
+    BLOCK = 128
+    x = torch.zeros((BLOCK, ), device=device)
+    z = torch.ones((1, ), device=device)
+
+    kernel[(1, )](x, z, BLOCK=BLOCK)
+    assert z[0] == 0
 
 
 def get_reduced_dtype(dtype_str, op):
@@ -2866,6 +2917,11 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
     if is_hip() and shape == (128, 128) and dtype_str == 'float32':
         pytest.skip("TODO Out of LDS for float32 with shape 128x128")
+    if is_xpu() and shape == (128, 128) and dtype_str == 'float32':
+        # check maximum shared memory
+        if triton.runtime.driver.active.utils.get_device_properties(
+                triton.runtime.driver.active.get_current_device())["max_shared_mem"] <= 65536:
+            pytest.xfail("XPU: Not enough shared memory for float32 with shape 128x128")
 
     # triton kernel
     @triton.jit
@@ -3045,19 +3101,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     if is_xpu() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
         pytest.skip("FIXME: float8e4nv and float8e5 fails to run on XPU")
-
-    if is_xpu() and '-'.join(
-            map(str, (M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack))
-    ) in ('64-128-128-4-True-True-none-ieee-float32-float32-1', '64-128-128-4-False-True-none-ieee-float32-float32-1',
-          '128-128-64-4-True-True-none-ieee-float32-float32-1', '128-128-64-4-False-True-none-ieee-float32-float32-1',
-          '64-128-128-4-True-False-none-ieee-float32-float32-1', '64-128-128-4-False-False-none-ieee-float32-float32-1',
-          '128-128-64-4-True-False-none-ieee-float32-float32-1', '128-128-64-4-False-False-none-ieee-float32-float32-1',
-          '64-128-128-2-True-True-none-ieee-float32-float32-1', '128-128-64-2-True-True-none-ieee-float32-float32-1',
-          '64-128-128-2-False-True-none-ieee-float32-float32-1', '128-128-64-2-False-True-none-ieee-float32-float32-1',
-          '64-128-128-2-True-False-none-ieee-float32-float32-1', '128-128-64-2-True-False-none-ieee-float32-float32-1',
-          '64-128-128-2-False-False-none-ieee-float32-float32-1',
-          '128-128-64-2-False-False-none-ieee-float32-float32-1'):
-        pytest.skip("FIXME: RuntimeError: Triton Error [ZE]: 1879048196 on XPU")
 
     if is_cuda():
         torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
@@ -4785,6 +4828,10 @@ def compute_rep_shape(layout):
         warp_shape = np.multiply(layout.sz_per_thread, layout.threads_per_warp)
         rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
         return rep_shape
+    elif type(layout) is DpasLayout:
+        warp_shape = [layout.repeatCount, layout.execution_size]
+        rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
+        return rep_shape
     else:
         assert False, "TODO: support compute_rep_shape for layout " + str(type(layout))
 
@@ -4810,17 +4857,21 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
         pytest.xfail("Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.xfail("Do not convert same layout")
-    if is_hip():
+    if is_hip() or is_xpu():
         try:
             scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
         except AssertionError:
+            if is_xpu():
+                # expect compute scratch buffer to not error on xpu
+                raise
             pytest.skip("Can't compute scratch buffer size")
-        lds_size = 65536
+        shared_mem_size = triton.runtime.driver.active.utils.get_device_properties(
+            triton.runtime.driver.active.get_current_device())["max_shared_mem"] if is_xpu() else 65536
         # consider int32 dtype in scratch buffer size,
         # because it is the largest dtype used in convert_layout in this test
         int32_size = 4
-        # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
-        if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
+        # skip even if scratch buffer equal to shared mem size, because real scratch buffer is typically larger due to padding
+        if scratch_shape[0] * scratch_shape[1] * int32_size >= shared_mem_size:
             pytest.skip("Scratch buffer is too large")
 
     layouts = f"""

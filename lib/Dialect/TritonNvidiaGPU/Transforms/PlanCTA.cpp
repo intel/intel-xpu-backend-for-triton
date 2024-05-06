@@ -21,10 +21,12 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <queue>
+
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include <queue>
 
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
@@ -44,10 +46,10 @@ unsigned getNumUsers(Value value) {
 
 Type replaceLayout(const Type &type, const Attribute &newLayout) {
   Type curType = type;
-  auto ptrTy = curType.dyn_cast<triton::PointerType>();
+  auto ptrTy = dyn_cast<triton::PointerType>(curType);
   if (ptrTy)
     curType = ptrTy.getPointeeType();
-  if (auto tensorTy = curType.dyn_cast<RankedTensorType>())
+  if (auto tensorTy = dyn_cast<RankedTensorType>(curType))
     curType = RankedTensorType::get(tensorTy.getShape(),
                                     tensorTy.getElementType(), newLayout);
   if (ptrTy)
@@ -57,12 +59,13 @@ Type replaceLayout(const Type &type, const Attribute &newLayout) {
 
 Attribute replaceCTALayout(Attribute layout, llvm::ArrayRef<int64_t> shape,
                            const ttg::CTALayoutAttr &newCTALayout) {
-  if (auto blockedLayout = layout.dyn_cast<ttg::BlockedEncodingAttr>()) {
+  if (auto blockedLayout = mlir::dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     return ttg::BlockedEncodingAttr::get(
         layout.getContext(), shape, blockedLayout.getSizePerThread(),
         blockedLayout.getOrder(), ttg::getNumWarpsPerCTA(layout), 32,
         newCTALayout);
-  } else if (auto sliceLayout = layout.dyn_cast<ttg::SliceEncodingAttr>()) {
+  } else if (auto sliceLayout =
+                 mlir::dyn_cast<ttg::SliceEncodingAttr>(layout)) {
     return ttg::SliceEncodingAttr::get(
         layout.getContext(), sliceLayout.getDim(),
         replaceCTALayout(sliceLayout.getParent(), shape, newCTALayout));
@@ -256,18 +259,18 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
   funcOp.walk([&](triton::DotOp dot) {
     MLIRContext *ctx = dot.getContext();
 
-    auto aTy = dot.getA().getType().cast<RankedTensorType>();
-    auto bTy = dot.getB().getType().cast<RankedTensorType>();
-    auto dTy = dot.getD().getType().cast<RankedTensorType>();
+    auto aTy = cast<RankedTensorType>(dot.getA().getType());
+    auto bTy = cast<RankedTensorType>(dot.getB().getType());
+    auto dTy = cast<RankedTensorType>(dot.getD().getType());
 
-    assert(aTy.getEncoding().isa<ttg::DotOperandEncodingAttr>() &&
-           bTy.getEncoding().isa<ttg::DotOperandEncodingAttr>() &&
-           dTy.getEncoding().isa<ttg::BlockedEncodingAttr>() &&
+    assert(isa<ttg::DotOperandEncodingAttr>(aTy.getEncoding()) &&
+           isa<ttg::DotOperandEncodingAttr>(bTy.getEncoding()) &&
+           isa<ttg::BlockedEncodingAttr>(dTy.getEncoding()) &&
            "PlanCTAPass should follow immediately after CoalescePass");
 
-    auto aLayout = aTy.getEncoding().cast<ttg::DotOperandEncodingAttr>();
-    auto bLayout = bTy.getEncoding().cast<ttg::DotOperandEncodingAttr>();
-    auto dLayout = dTy.getEncoding().cast<ttg::BlockedEncodingAttr>();
+    auto aLayout = cast<ttg::DotOperandEncodingAttr>(aTy.getEncoding());
+    auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
+    auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
     unsigned M = dTy.getShape()[0];
     unsigned N = dTy.getShape()[1];
@@ -304,7 +307,7 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
     Value src = reduce.getOperands()[0];
     unsigned axis = reduce.getAxis();
 
-    auto srcTy = src.getType().cast<RankedTensorType>();
+    auto srcTy = cast<RankedTensorType>(src.getType());
     auto srcShape = srcTy.getShape();
     auto srcLayout = srcTy.getEncoding();
 
@@ -374,7 +377,7 @@ void CTAPlanner::processStoreLikeOps(triton::FuncOp &funcOp) {
   ttg::CTALayoutAttr CTALayout;
   for (Operation *store : stores) {
     if (auto tensorTy =
-            store->getOperand(0).getType().dyn_cast<RankedTensorType>()) {
+            dyn_cast<RankedTensorType>(store->getOperand(0).getType())) {
       if (!tiled) {
         // Use CTA tiling of the first store-like op as global CTA tiling
         CTALayout = ttg::getCTALayout(tensorTy.getEncoding());
@@ -406,14 +409,14 @@ bool CTAPlanner::propagateBackward(CastOp cast) {
     return false;
   } else if (numUsers == 1) {
     Type outTy = output.getType();
-    if (auto ptrTy = outTy.dyn_cast<triton::PointerType>())
+    if (auto ptrTy = dyn_cast<triton::PointerType>(outTy))
       outTy = ptrTy.getPointeeType();
-    Attribute layout = outTy.cast<RankedTensorType>().getEncoding();
+    Attribute layout = mlir::cast<RankedTensorType>(outTy).getEncoding();
     Operation *op = input.getDefiningOp();
     if (op == nullptr) {
-      assert(input.isa<BlockArgument>() &&
+      assert(isa<BlockArgument>(input) &&
              "Unexpected Value without defining op");
-      processBlockArgBackward(input.cast<BlockArgument>(), cast);
+      processBlockArgBackward(llvm::cast<BlockArgument>(input), cast);
     } else if (auto prevCast = llvm::dyn_cast<CastOp>(op)) {
       eliminateAdjacentCasts(prevCast, cast);
     } else if (isLoadStoreOp(op)) {
@@ -461,9 +464,9 @@ bool CTAPlanner::propagateForward(CastOp cast) {
     cast.erase();
   } else if (numUsers == 1) {
     Type inTy = input.getType();
-    if (auto ptrTy = inTy.dyn_cast<triton::PointerType>())
+    if (auto ptrTy = dyn_cast<triton::PointerType>(inTy))
       inTy = ptrTy.getPointeeType();
-    Attribute layout = inTy.cast<RankedTensorType>().getEncoding();
+    Attribute layout = mlir::cast<RankedTensorType>(inTy).getEncoding();
     Operation *op = *output.user_begin();
     if (auto nextCast = llvm::dyn_cast<CastOp>(op)) {
       eliminateAdjacentCasts(cast, nextCast);
@@ -590,7 +593,7 @@ bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {
   //     LoadOp -> SliceLayout
   // Transform to:
   //     LoadOp -> originalLayout -> ConvertLayout(DSmem) -> SliceLayout
-  if (auto sliceLayout = layout.dyn_cast<ttg::SliceEncodingAttr>()) {
+  if (auto sliceLayout = mlir::dyn_cast<ttg::SliceEncodingAttr>(layout)) {
     auto dim = sliceLayout.getDim();
     auto CTAsPerCGA = ttg::getCTAsPerCGA(sliceLayout.getParent());
     if (CTAsPerCGA[dim] > 1) {
@@ -598,7 +601,7 @@ bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {
       Value val =
           op->getNumResults() > 0 ? op->getResult(0) : op->getOperand(0);
       Attribute originalLayout =
-          val.getType().cast<RankedTensorType>().getEncoding();
+          cast<RankedTensorType>(val.getType()).getEncoding();
       // Insert casts using originalLayout. Adjacent casts will be eliminated
       // and generate a ConvertLayoutOp with DSmem access
       return processLoadStore(op, originalLayout);
@@ -610,9 +613,9 @@ bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {
   llvm::SmallVector<Attribute> newOperandLayouts;
   for (unsigned i = 0; i < op->getNumOperands(); ++i) {
     auto type = op->getOperand(i).getType();
-    if (auto ptrTy = type.dyn_cast<triton::PointerType>())
+    if (auto ptrTy = dyn_cast<triton::PointerType>(type))
       type = ptrTy.getPointeeType();
-    auto tensorTy = type.cast<RankedTensorType>();
+    auto tensorTy = cast<RankedTensorType>(type);
     auto newLayout = replaceCTALayout(tensorTy.getEncoding(),
                                       tensorTy.getShape(), CTALayout);
     newOperandLayouts.push_back(newLayout);
@@ -621,9 +624,9 @@ bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {
   llvm::SmallVector<Attribute> newResultLayouts;
   for (unsigned i = 0; i < op->getNumResults(); ++i) {
     auto type = op->getResult(i).getType();
-    if (auto ptrTy = type.dyn_cast<triton::PointerType>())
+    if (auto ptrTy = dyn_cast<triton::PointerType>(type))
       type = ptrTy.getPointeeType();
-    auto tensorTy = type.cast<RankedTensorType>();
+    auto tensorTy = cast<RankedTensorType>(type);
     auto newLayout = replaceCTALayout(tensorTy.getEncoding(),
                                       tensorTy.getShape(), CTALayout);
     newResultLayouts.push_back(newLayout);
@@ -651,10 +654,9 @@ bool CTAPlanner::isElementwiseOp(Operation *op) const {
                 math::CeilOp, math::CopySignOp, math::CosOp, math::SinOp,
                 math::CountLeadingZerosOp, math::CountTrailingZerosOp,
                 math::CtPopOp, math::ErfOp, math::ExpOp, math::Exp2Op,
-                math::FloorOp, math::ExpM1Op, math::FloorOp, math::FmaOp,
-                math::LogOp, math::Log10Op, math::Log1pOp, math::Log2Op,
-                math::PowFOp, math::RsqrtOp, math::SqrtOp, math::RsqrtOp,
-                math::TanhOp>(op))
+                math::FloorOp, math::ExpM1Op, math::FmaOp, math::LogOp,
+                math::Log10Op, math::Log1pOp, math::Log2Op, math::PowFOp,
+                math::RsqrtOp, math::SqrtOp, math::RsqrtOp, math::TanhOp>(op))
     return true;
   if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
                 triton::FpToFpOp, triton::AddPtrOp, triton::PreciseSqrtOp,
@@ -675,8 +677,8 @@ bool CTAPlanner::processElementwise(Operation *op, Attribute layout) {
 }
 
 bool CTAPlanner::processConstant(arith::ConstantOp constant, Attribute layout) {
-  if (auto tensorTy = constant.getType().dyn_cast<RankedTensorType>()) {
-    if (auto attr = constant.getValue().dyn_cast<SplatElementsAttr>()) {
+  if (auto tensorTy = dyn_cast<RankedTensorType>(constant.getType())) {
+    if (auto attr = dyn_cast<SplatElementsAttr>(constant.getValue())) {
 
       auto newTensorTy = RankedTensorType::get(
           tensorTy.getShape(), tensorTy.getElementType(), layout);
@@ -956,10 +958,10 @@ bool CTAPlanner::processMultiUsersBackward(Value input, CastOp cast) {
     if (Operation *defOp = newInput.getDefiningOp()) {
       builder.setInsertionPointAfter(defOp);
     } else {
-      assert(newInput.isa<BlockArgument>() &&
+      assert(isa<BlockArgument>(newInput) &&
              "Unexpected Value without defining op");
       builder.setInsertionPointToStart(
-          newInput.cast<BlockArgument>().getOwner());
+          llvm::cast<BlockArgument>(newInput).getOwner());
     }
     auto newCast = markBackward(builder.create<CastOp>(loc, type, newInput));
     queue.push(newCast);

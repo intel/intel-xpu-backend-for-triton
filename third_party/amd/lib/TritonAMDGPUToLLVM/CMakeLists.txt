@@ -10,8 +10,10 @@ add_triton_library(TritonAMDGPUToLLVM
     LoadStoreOpToLLVM.cpp
     GCNAsmFormat.cpp
     TritonGPUToLLVM.cpp
+    BuiltinFuncToLLVM.cpp
     Utility.cpp
     TargetInfo.cpp
+    TargetUtils.cpp
     DecomposeUnsupportedConversions.cpp
     SPMDOpToLLVM.cpp
 

@@ -1,15 +1,12 @@
 #include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
-
 #include "mlir/IR/BuiltinTypes.h"
-#include "triton/Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "llvm/IR/DerivedTypes.h"
+
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
-#include <thread>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -25,7 +22,7 @@ public:
 
   DotOpDPASConversionHelper(DpasEncodingAttr dpasLayout,
                             ConversionPatternRewriter &rewriter,
-                            TritonGPUToLLVMTypeConverter *typeConverter,
+                            TritonIntelGPUToLLVMTypeConverter *typeConverter,
                             Location loc)
       : dpasLayout(dpasLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
@@ -302,7 +299,7 @@ private:
 
   DpasEncodingAttr dpasLayout;
   ConversionPatternRewriter &rewriter;
-  TritonGPUToLLVMTypeConverter *typeConverter;
+  TritonIntelGPUToLLVMTypeConverter *typeConverter;
   Location loc;
   MLIRContext *ctx;
 };
@@ -311,7 +308,7 @@ private:
 
 namespace fma_details {
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                          TritonGPUToLLVMTypeConverter *typeConverter,
+                          TritonIntelGPUToLLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   LLVM_DEBUG({
     auto module = op->getParentOfType<ModuleOp>();

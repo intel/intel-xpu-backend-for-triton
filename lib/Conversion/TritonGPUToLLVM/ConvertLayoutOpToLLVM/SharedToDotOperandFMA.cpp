@@ -1,3 +1,4 @@
+#include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;
@@ -91,8 +92,8 @@ ValueTable getValueTableFromStruct(Value val, int K, int n0, int shapePerCTA,
 Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
                Location loc, const LLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter) {
-  auto aTensorTy = A.getType().cast<MemDescType>();
-  auto aLayout = aTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto aTensorTy = cast<MemDescType>(A.getType());
+  auto aLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
   auto aShapePerCTA = getShapePerCTA(aTensorTy);
 
   auto aOrder = aLayout.getOrder();
@@ -157,8 +158,8 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
 Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
                Location loc, const LLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter) {
-  auto bTensorTy = B.getType().cast<MemDescType>();
-  auto bLayout = bTensorTy.getEncoding().cast<SharedEncodingAttr>();
+  auto bTensorTy = cast<MemDescType>(B.getType());
+  auto bLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
   auto bShapePerCTA = getShapePerCTA(bTensorTy);
 
   auto bOrder = bLayout.getOrder();

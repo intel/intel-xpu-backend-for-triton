@@ -698,7 +698,7 @@ def broadcast_impl_value(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) ->
 #######
 
 
-def _str_to_rounding_mode(rounding_mode: str):
+def _str_to_rounding_mode(rounding_mode: Optional[str]):
     if rounding_mode is None:
         return None
     if rounding_mode == 'rtne':
@@ -727,7 +727,8 @@ def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tenso
     return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)), dst_ty)
 
 
-def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_rounding: str = None) -> tl.tensor:
+def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder,
+         fp_downcast_rounding: Optional[str] = None) -> tl.tensor:
     src_ty = input.type
     if isinstance(dst_ty, tl.constexpr):
         dst_ty = dst_ty.value
@@ -758,8 +759,8 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder, fp_downcast_ro
         assert builder.options.allow_fp8e4nv, "fp8e4nv data type is not supported on CUDA arch < 89"
 
     if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
-        assert builder.codegen_fns[
-            "convert_custom_types"] is not None, "target doesn't provide conversion for this type."
+        assert builder.codegen_fns.get(
+            "convert_custom_types") is not None, "target doesn't provide conversion for this type."
         return builder.codegen_fns["convert_custom_types"](input, dst_ty, fp_downcast_rounding, _builder=builder)
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     # and non-default rounding modes for downcasting
@@ -1034,6 +1035,15 @@ def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], 
     else:
         # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
         return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
+
+
+def descriptor_load(desc_ptr: tl.tensor, offsets, cache_modifier: str, eviction_policy: str, type,
+                    builder: ir.builder) -> tl.tensor:
+    offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
+    x = builder.create_descriptor_load(desc_ptr.handle, offsets, type.to_ir(builder),
+                                       _str_to_load_cache_modifier(cache_modifier),
+                                       _str_to_eviction_policy(eviction_policy))
+    return tl.tensor(x, type)
 
 
 def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):
