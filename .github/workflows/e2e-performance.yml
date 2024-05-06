@@ -274,6 +274,8 @@ jobs:
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
           echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
 
+          source ./scripts/capture-hw-details.sh --quiet
+
           cat <<EOF | tee inductor_log/.env
           TIMESTAMP=$TIMESTAMP
           JOB_NAME=${{ join(matrix.*, '-') }}
@@ -296,6 +298,10 @@ jobs:
           TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
           TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION
           TIMM_COMMIT_ID=$TIMM_COMMIT_ID
+          LIBIGC1_VERSION=$LIBIGC1_VERSION
+          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
+          GPU_DEVICE=$GPU_DEVICE
+          AGAMA_VERSION=$AGAMA_VERSION
           EOF
 
       - name: Copy reports
