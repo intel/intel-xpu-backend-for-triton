@@ -31,7 +31,7 @@ runs:
         GH_TOKEN: ${{ inputs.gh_token }}
       run: |
         set -e
-        run_id=$(gh run list -w "${{ inputs.workflow }}" --repo ${{ inputs.repository }} --json databaseId --jq '.[0].databaseId')
+        run_id=$(gh run list -w "${{ inputs.workflow }}" -s success --repo ${{ inputs.repository }} --json databaseId --jq '.[0].databaseId')
         if [[ ! $run_id ]]; then
           exit 1
         fi
