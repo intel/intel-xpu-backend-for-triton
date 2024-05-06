@@ -1573,11 +1573,11 @@ void init_triton_ir(py::module &&m) {
              if (haveDiagnostics) {
                context->printOpOnDiagnostic(true);
                context->printStackTraceOnDiagnostic(true);
-               context->getDiagEngine().registerHandler([](Diagnostic &diag) {
-                 llvm::outs() << diag << "\n";
-                 return success();
-               });
              }
+             context->getDiagEngine().registerHandler([](Diagnostic &diag) {
+               llvm::outs() << diag << "\n";
+               return success();
+             });
              if (haveDump) {
                auto printingFlags = OpPrintingFlags();
                printingFlags.elideLargeElementsAttrs(16);
