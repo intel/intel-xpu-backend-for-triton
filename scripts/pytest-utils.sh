@@ -4,6 +4,7 @@ SCRIPTS_DIR="${SCRIPTS_DIR:-$PWD/scripts}"
 TRITON_TEST_REPORTS="${TRITON_TEST_REPORTS:-false}"
 TRITON_TEST_REPORTS_DIR="${TRITON_TEST_REPORTS_DIR:-$HOME/reports/$TIMESTAMP}"
 TRITON_TEST_SKIPLIST_DIR="${TRITON_TEST_SKIPLIST_DIR:-$SCRIPTS_DIR/skiplist/default}"
+TRITON_TEST_WARNING_REPORTS="${TRITON_TEST_WARNING_REPORTS:-false}"
 
 # absolute path for the selected skip list
 TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
@@ -17,6 +18,13 @@ pytest() {
         mkdir -p "$TRITON_TEST_REPORTS_DIR"
         pytest_extra_args+=(
             "--junitxml=$TRITON_TEST_REPORTS_DIR/$TRITON_TEST_SUITE.xml"
+        )
+    fi
+
+    if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_WARNING_REPORTS = true ]]; then
+        mkdir -p "$TRITON_TEST_REPORTS_DIR"
+        pytest_extra_args+=(
+            "--warnings-output-file=$TRITON_TEST_REPORTS_DIR/${TRITON_TEST_SUITE}-warnings.txt"
         )
     fi
 
