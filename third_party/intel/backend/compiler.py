@@ -48,12 +48,13 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     isBlockPtrEnabled: bool = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
-    
+
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
-            extern_libs['libdevice'] = os.getenv("TRITON_LIBDEVICE_PATH", str(default_libdir / 'libsycl-spir64-unknown-unknown.bc'))
+            extern_libs['libdevice'] = os.getenv("TRITON_LIBDEVICE_PATH",
+                                                 str(default_libdir / 'libsycl-spir64-unknown-unknown.bc'))
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
             "num_warps must be a power of 2"
@@ -99,7 +100,6 @@ class XPUBackend(BaseBackend):
             passes.common.add_symbol_dce(pm)
             pm.run(mod)
             return mod
-
 
     @staticmethod
     def supports_target(target: tuple):
@@ -152,7 +152,7 @@ class XPUBackend(BaseBackend):
     def make_ttir(mod, metadata, opt):
         if XPUOptions.isBlockPtrEnabled:
             return XPUBackend.Experimental.make_ttir(mod, metadata, opt)
-        
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -170,7 +170,7 @@ class XPUBackend(BaseBackend):
     def make_ttgir(mod, metadata, opt, device_arch):
         if XPUOptions.isBlockPtrEnabled:
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt, device_arch)
-        
+
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -193,7 +193,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         return mod
-    
+
     @staticmethod
     def make_llir(src, metadata, options, device_arch):
         # warp-specialization mutates num_warps
