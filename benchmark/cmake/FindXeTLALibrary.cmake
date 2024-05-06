@@ -18,7 +18,10 @@ if (NOT XeTLALibrary_FOUND)
             SOURCE_DIR ${XeTLALibrary_SOURCE_DIR}
             )
 
-    FetchContent_Declare(xetla-library)
+    FetchContent_GetProperties(xetla-library)
+    if(NOT xetla-library_POPULATED)
+       FetchContent_Populate(xetla-library)
+    endif()
 
     # add the XeTLA library.
     #set(XETLA_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/xetla/include)
