@@ -85,7 +85,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT:   [[RES1:%.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32)>
     // CHECK-NEXT:   [[RES2:%.*]] = llvm.insertvalue [[EE1]], [[RES1]][0] : !llvm.struct<(f32, f32)>
     // CHECK-NEXT:   [[RES3:%.*]] = llvm.insertvalue [[EE2]], [[RES2]][1] : !llvm.struct<(f32, f32)>
-
     %1 = tt.load %a_ptr_init, %cst, %cst_0 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -730,9 +729,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK-LABEL: convert_layout_mmav2_block
-  tt.func @convert_layout_mmav2_blocked(%arg0: tensor<32x16xf32, #mma>) {
-
+  // CHECK-LABEL: convert_layout_dpas_block
+  tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x16xf32, #mma>) {
+    // CHECK: llvm.store
+    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK: llvm.store
+    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK: llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
+    // CHECK: llvm.load
+    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     %0 = triton_gpu.convert_layout %arg0 : tensor<32x16xf32, #mma> -> tensor<32x16xf32, #blocked0>
     tt.return
   }
@@ -743,8 +748,19 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK-LABEL: convert_layout_mmav1_block
-  tt.func @convert_layout_mmav1_blocked(%arg0: tensor<32x64xf32, #mma>) {
+  // CHECK-LABEL: convert_layout_dpas_block
+  tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x64xf32, #mma>) {
+    // CHECK: llvm.store
+    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK: llvm.store
+    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK: llvm.store
+    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK: llvm.store
+    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
+    // CHECK: llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
+    // CHECK: llvm.load
+    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     %0 = triton_gpu.convert_layout %arg0 : tensor<32x64xf32, #mma> -> tensor<32x64xf32, #blocked>
     tt.return
   }
@@ -851,48 +867,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // COM: 2 repetitions along axis for N.
     // CHECK-COUNT-2: llvm.call @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v4i32.v8i32
     %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<8x8xf32, #dot_operand_a> * tensor<8x32xf32, #dot_operand_b> -> tensor<8x32xf32, #mma>
-    tt.return
-  }
-}
-
-// -----
-
-#blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK-LABEL: convert_layout_dpas_block
-  tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x16xf32, #mma>) {
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
-    %0 = triton_gpu.convert_layout %arg0 : tensor<32x16xf32, #mma> -> tensor<32x16xf32, #blocked0>
-    tt.return
-  }
-}
-
-// -----
-
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK-LABEL: convert_layout_dpas_block
-  tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x64xf32, #mma>) {
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.store
-    // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
-    // CHECK: llvm.call @_Z7barrierj({{.*}}) {passthrough = ["convergent"]} : (i32) -> ()
-    // CHECK: llvm.load
-    // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
-    %0 = triton_gpu.convert_layout %arg0 : tensor<32x64xf32, #mma> -> tensor<32x64xf32, #blocked>
     tt.return
   }
 }
