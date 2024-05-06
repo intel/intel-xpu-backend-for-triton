@@ -99,6 +99,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (!LLVM::isKernel(funcOp))
       amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
+    for (unsigned i = 0; i < funcOp.getNumArguments(); ++i)
+      amendedFuncOp.removeArgAttr(i, "tt.divisibility");
+
     LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
         amendedFuncOp, rewriter, *getTypeConverter());
     if (!newFuncOp)
