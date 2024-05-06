@@ -15,62 +15,37 @@
 
 namespace py = pybind11;
 
+using namespace mlir::triton;
+using namespace mlir::triton::gpu;
+
 void init_triton_intel_passes_ttir(py::module &&m) {
-  m.def("add_convert_to_ttgpuir_warp", [](mlir::PassManager &pm, int numWarps) {
-    pm.addPass(mlir::triton::createConvertTritonToTritonGPUWarpPass(numWarps));
-  });
+  ADD_PASS_WRAPPER_1("add_convert_to_llvmir",
+                     mlir::triton::createConvertTritonToTritonGPUWarpPass,
+                     unsigned);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  using namespace mlir::triton::gpu;
-
-  // Device arch
-  py::enum_<intel::DeviceArch>(m, "DEVICE_ARCH", py::module_local())
-      .value("UNKNOWN", intel::DeviceArch::UNKNOWN)
-      .value("ATS", intel::DeviceArch::ATS)
-      .value("PVC", intel::DeviceArch::PVC)
-      .export_values();
-
-  m.def("add_to_llvmir", [](mlir::PassManager &pm) {
-    pm.addPass(intel::createConvertTritonIntelGPUToLLVM());
-  });
-  m.def(
-      "add_accelerate_matmul",
-      [](mlir::PassManager &pm, intel::DeviceArch arch) {
-        pm.addPass(intel::createTritonIntelGPUAccelerateMatmul({arch}));
-      },
-      py::arg("pm"), py::arg("arch") = intel::DeviceArch::UNKNOWN);
-  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
-    pm.addPass(intel::createIntelDecomposeUnsupportedConversions());
-  });
-  m.def("add_allocate_shared_memory", [](mlir::PassManager &pm) {
-    pm.addPass(intel::createIntelAllocateSharedMemory());
-  });
-  m.def(
-      "add_pipe_line_pass",
-      [](mlir::PassManager &pm, int numStages, intel::DeviceArch arch) {
-        pm.addPass(intel::createTritonIntelGPUPipeline({numStages, arch}));
-      },
-      py::arg("pm"), py::arg("numStages"),
-      py::arg("arch") = intel::DeviceArch::UNKNOWN);
-  m.def("add_remove_layout_conversions", [](mlir::PassManager &pm) {
-    pm.addPass(intel::createTritonIntelGPURemoveLayoutConversions());
-  });
-  m.def(
-      "add_rewrite_tensor_pointer",
-      [](mlir::PassManager &pm, intel::DeviceArch arch) {
-        pm.addPass(intel::createTritonIntelGPURewriteTensorPointer({arch}));
-      },
-      py::arg("pm"), py::arg("arch") = intel::DeviceArch::UNKNOWN);
-  m.def("add_prefetch_block", [](mlir::PassManager &pm) {
-    pm.addPass(intel::createTritonIntelGPUPrefetchBlock());
-  });
-  m.def("add_distribute_to_warps", [](mlir::PassManager &pm) {
-    pm.addPass(intel::createTritonIntelGPUDistributeToWarps());
-  });
-  m.def("add_match_target_size", [](mlir::PassManager &pm) {
-    pm.addPass(intel::createTritonIntelGPUMatchTargetSize());
-  });
+  ADD_PASS_WRAPPER_0("add_to_llvmir", intel::createConvertTritonIntelGPUToLLVM);
+  ADD_PASS_WRAPPER_1("add_accelerate_matmul",
+                     intel::createTritonIntelGPUAccelerateMatmul,
+                     const intel::TritonIntelGPUAccelerateMatmulOptions &);
+  ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
+                     intel::createIntelDecomposeUnsupportedConversions);
+  ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
+                     intel::createIntelAllocateSharedMemory);
+  ADD_PASS_WRAPPER_1("add_pipe_line_pass", intel::createTritonIntelGPUPipeline,
+                     const intel::TritonIntelGPUPipelineOptions &);
+  ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
+                     intel::createTritonIntelGPURemoveLayoutConversions);
+  ADD_PASS_WRAPPER_1("add_rewrite_tensor_pointer",
+                     intel::createTritonIntelGPURewriteTensorPointer,
+                     const intel::TritonIntelGPURewriteTensorPointerOptions &);
+  ADD_PASS_WRAPPER_0("add_prefetch_block",
+                     intel::createTritonIntelGPUPrefetchBlock);
+  ADD_PASS_WRAPPER_0("add_distribute_to_warps",
+                     intel::createTritonIntelGPUDistributeToWarps);
+  ADD_PASS_WRAPPER_0("add_match_target_size",
+                     intel::createTritonIntelGPUMatchTargetSize);
 }
 
 void init_triton_intel(py::module &&m) {
@@ -81,8 +56,8 @@ void init_triton_intel(py::module &&m) {
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
-    registry.insert<mlir::triton::TritonGEN::TritonGENDialect,
-                    mlir::triton::gpu::intel::TritonIntelGPUDialect>();
+    registry
+        .insert<TritonGEN::TritonGENDialect, intel::TritonIntelGPUDialect>();
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
