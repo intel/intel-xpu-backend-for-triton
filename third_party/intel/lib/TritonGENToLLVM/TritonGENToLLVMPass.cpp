@@ -218,7 +218,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
-static bool isOCLAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   if (op.getVnniTransform() || op.getTranspose())
     return false;
 
@@ -242,7 +242,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   Location loc = op->getLoc();
 
   // FIXME: Use the OpenCL API also for all other variants.
-  if (isOCLAvailable(op)) {
+  if (isOCLBuiltinAvailable(op)) {
     std::string fnName = "intel_subgroup_block_read_u" +
                          std::to_string(op.getElemSizeInBits()) + "_m" +
                          std::to_string(op.getTileHeight()) + "k" +
