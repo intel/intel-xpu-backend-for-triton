@@ -4,16 +4,14 @@
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
-#include "triton/Analysis/Allocation.h"
-
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
-//
-#include "TritonIntelGPUToLLVM/Passes.h"
-#include "Utility.h"
+#include "intel/lib/TritonIntelGPUToLLVM/Utility.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include <set>
 #include <type_traits>
 

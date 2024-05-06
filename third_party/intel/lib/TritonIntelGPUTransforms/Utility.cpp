@@ -8,20 +8,18 @@
 
 #include "triton/Analysis/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include <optional>
 
 using namespace mlir;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
+namespace mlir::triton::gpu::intel {
 
 bool supportDPAS(DotOp op, DeviceArch arch) {
   if (arch == DeviceArch::UNKNOWN)
@@ -237,7 +235,4 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
   return success();
 }
 
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel

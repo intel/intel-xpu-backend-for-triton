@@ -9,23 +9,17 @@
 #ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
 using namespace mlir;
-using namespace mlir::triton;
 
-namespace mlir {
-namespace LLVM {
-
-namespace intel {
+namespace mlir::LLVM::intel {
 
 /// Create a predicated block, using \p cond as the condition and \p ops for the
 /// values supplied by the conditional branch to the exit block. The \p
@@ -137,8 +131,8 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
-} // namespace intel
-} // namespace LLVM
+
+} // namespace mlir::LLVM::intel
 
 // -----------------------------------------------------------------------
 // Shared memory utilities
@@ -229,8 +223,7 @@ emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
   return multiDimBase;
 }
 
-namespace triton {
-namespace intel {
+namespace mlir::triton::intel {
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type);
@@ -642,8 +635,6 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   }
 }
 
-} // namespace intel
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::intel
 
 #endif

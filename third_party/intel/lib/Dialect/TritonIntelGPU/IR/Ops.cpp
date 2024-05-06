@@ -14,10 +14,11 @@
 
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #define GET_OP_CLASSES
-#include "triton/Dialect/TritonIntelGPU/IR/Ops.cpp.inc"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Ops.cpp.inc"
 
 using namespace mlir;
 
@@ -86,10 +87,7 @@ static unsigned getDimSize(Type type, unsigned dim) {
       });
 }
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
+namespace mlir::triton::gpu::intel {
 
 LogicalResult GlueOp::verify() {
   SmallVector<Type> inputTypes;
@@ -198,7 +196,4 @@ OpFoldResult ExtractOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel

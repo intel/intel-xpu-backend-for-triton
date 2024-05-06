@@ -27,9 +27,7 @@
 #define GET_OP_CLASSES
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENOps.h.inc"
 
-namespace mlir {
-namespace triton {
-namespace TritonGEN {
+namespace mlir::triton::TritonGEN {
 
 /// TritonGEN memory space identifiers following SPIRV storage class convention
 /// https://github.com/KhronosGroup/SPIRV-LLVM-Translator/blob/main/docs/SPIRVRepresentationInLLVM.rst#address-spaces
@@ -42,8 +40,6 @@ enum TritonGENMemorySpace {
   kGeneric = 4          // OpenCL Generic memory
 };
 
-} // namespace TritonGEN
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::TritonGEN
 
 #endif // TRITON_DIALECT_TRITONGENDIALECT_H

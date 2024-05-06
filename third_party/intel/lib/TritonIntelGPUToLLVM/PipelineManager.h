@@ -33,9 +33,9 @@ FailureOr<LLVM::LLVMFuncOp>
 convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
                           ConversionPatternRewriter &rewriter,
                           const LLVMTypeConverter &converter);
+}
 
-namespace triton {
-namespace intel {
+namespace mlir::triton::intel {
 
 /// FuncOp legalization pattern that converts MemRef arguments to pointers to
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
@@ -234,8 +234,6 @@ private:
   bool blockPtrPathIsEnabled = false;
 };
 
-} // namespace intel
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::intel
 
 #endif // TRITONINTELGPUTOLLVM_PIPELINEMANAGER_H

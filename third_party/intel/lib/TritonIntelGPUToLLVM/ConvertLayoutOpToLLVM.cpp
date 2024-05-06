@@ -2,10 +2,9 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonIntelGPU/IR/Dialect.h"
-
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -23,16 +22,14 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 // Forward declarations
-namespace SharedToDotOperandDPAS {
-namespace intel {
+namespace SharedToDotOperandDPAS::intel {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor,
                     DotOperandEncodingAttr bEncoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread);
 
-} // namespace intel
-} // namespace SharedToDotOperandDPAS
+} // namespace SharedToDotOperandDPAS::intel
 
 namespace {
 
