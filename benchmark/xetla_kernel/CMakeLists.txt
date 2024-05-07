@@ -2,3 +2,4 @@
 find_package(XeTLALibrary REQUIRED)
 
 add_subdirectory(softmax)
+add_subdirectory(bgemm)

@@ -1,3 +1,4 @@
+#include "bgemm.h"
 #include "softmax.h"
 #include <ipex.h>
 #include <torch/extension.h>
@@ -63,6 +64,11 @@ at::Tensor softmax_shape_4096_4096(const at::Tensor &input, const int64_t dim) {
   return output;
 }
 
+void bgemm_shape_4096_4096_4096(int mode, const int64_t iter) {
+
+  bgemm_run<Test_4096x4096x4096_row_row>(mode, iter);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("softmax_shape_256_256", &softmax_shape_256_256,
         "softmax forward (XeTLA)");
@@ -72,4 +78,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "softmax forward (XeTLA)");
   m.def("softmax_shape_4096_4096", &softmax_shape_4096_4096,
         "softmax forward (XeTLA)");
+  m.def("bgemm_shape_4096_4096_4096", &bgemm_shape_4096_4096_4096,
+        "bgemm (XeTLA)");
 }

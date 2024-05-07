@@ -87,6 +87,6 @@ setup(
     }, ext_modules=[
         DPCPPExtension('triton_intel_benchmark.xetla_kernel', [
             cmake.current_dir + '/xetla_kernel/python_main.cpp',
-        ], libraries=['xetla_kernel'], library_dirs=[cmake.extdir],
-                       include_dirs=[cmake.current_dir + '/xetla_kernel/softmax']),
+        ], libraries=['softmax_performance','bgemm_performance'], library_dirs=[cmake.extdir],
+                       include_dirs=[cmake.current_dir + '/xetla_kernel/softmax',cmake.current_dir + '/xetla_kernel/bgemm']),
     ], cmdclass={'build_ext': DpcppBuildExtension})
