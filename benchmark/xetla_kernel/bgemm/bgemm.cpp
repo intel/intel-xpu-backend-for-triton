@@ -229,4 +229,5 @@ void bgemm_run(ExecutionMode mode, int iter) {
 // INSTANTIATE_TYPED_TEST_SUITE_P(
 //         bgemm_performance_test_suite, bgemm_performance_test, tests);
 
-template void bgemm_run<Test_4096x4096x4096_row_row>(int mode, const int64_t iter);
+template void bgemm_run<Test_4096x4096x4096_row_row>(ExecutionMode mode,
+                                                     const int64_t iter);

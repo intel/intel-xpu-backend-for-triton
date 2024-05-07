@@ -19,6 +19,6 @@
 #include "test.hpp"
 
 template <class Test>
-void bgemm_run(int mode, const int64_t iter);
+void bgemm_run(ExecutionMode mode, const int64_t iter);
 
 #endif // TRITONBENCHMARK_BGEMM_H
