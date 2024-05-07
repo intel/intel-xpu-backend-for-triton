@@ -40,7 +40,7 @@ int gemm_result_validate(data_type_a *A, data_type_b *B, data_type_c *C,
 //mode: distinguish CM and ESIMD paths
 //iter: indicate the iterations of the kernel
 template <class Test>
-void bgemm_run(ExecutionMode mode, int iter) {
+void bgemm_run(int iter) {
     //Accept incoming parameters
     size_t matrix_m = Test::mat_m;
     size_t matrix_n = Test::mat_n;
@@ -142,50 +142,47 @@ void bgemm_run(ExecutionMode mode, int iter) {
 
     long ops = 2 * matrix_m * matrix_n * matrix_k;
     profiling_helper prof("bgemm", ops, "gflops");
+    std::vector<kernel_id> kernelId = {get_kernel_id<Test>()};
+    auto inputBundle =
+        get_kernel_bundle<bundle_state::input>(context, kernelId);
+    setenv("SYCL_PROGRAM_COMPILE_OPTIONS",
+           " -vc-codegen -doubleGRF -vc-disable-indvars-opt "
+           " -Xfinalizer '-printregusage -enableBCR -DPASTokenReduction '",
+           1);
+    kernel_bundle<bundle_state::executable> exeBundle = build(inputBundle);
+    unsetenv("SYCL_PROGRAM_COMPILE_OPTIONS");
 
-    // esimd kernel prepratation and execution
-    if (mode == ExecutionMode::ESIMD) {
-        std::vector<kernel_id> kernelId = {get_kernel_id<Test>()};
-        auto inputBundle
-                = get_kernel_bundle<bundle_state::input>(context, kernelId);
-        setenv("SYCL_PROGRAM_COMPILE_OPTIONS",
-                " -vc-codegen -doubleGRF -vc-disable-indvars-opt "
-                " -Xfinalizer '-printregusage -enableBCR -DPASTokenReduction '",
-                1);
-        kernel_bundle<bundle_state::executable> exeBundle = build(inputBundle);
-        unsetenv("SYCL_PROGRAM_COMPILE_OPTIONS");
-
-        try {
-            for (int i = 0; i < iter; i++) {
-                prof.cpu_start();
-                auto e_esimd = queue.submit([&](handler &cgh) {
-                    cgh.use_kernel_bundle(exeBundle);
-                    cgh.parallel_for<Test>(
-                            nd_range, [=](nd_item<3> item) KERNEL_MAIN {
-                                constexpr uint32_t barrier_count
-                                        = bgemm_functor::barrier_count;
-                                constexpr uint32_t slm_size
-                                        = bgemm_functor::slm_size;
-                                if constexpr (barrier_count != 0) {
-                                    xetla_nbarrier_init<barrier_count>();
-                                }
-                                if constexpr (slm_size != 0) {
-                                    xetla_local_init<slm_size>();
-                                }
-                                bgemm_functor::run(item, A, B, C, matrix_m,
-                                        matrix_n, matrix_k, lda, ldb, ldc, Acc,
-                                        Cnt);
-                            });
-                });
-                e_esimd.wait();
-                prof.cpu_end();
-                prof.add_gpu_event(e_esimd);
-            }
-        } catch (cl::sycl::exception const &e) {
-            std::cout << "SYCL exception caught: " << e.what() << '\n';
-            FAIL();
+try {
+        for (int i = 0; i < iter; i++) {
+        prof.cpu_start();
+        auto e_esimd = queue.submit([&](handler &cgh) {
+                cgh.use_kernel_bundle(exeBundle);
+                cgh.parallel_for<Test>(
+                        nd_range, [=](nd_item<3> item) KERNEL_MAIN {
+                        constexpr uint32_t barrier_count
+                                = bgemm_functor::barrier_count;
+                        constexpr uint32_t slm_size
+                                = bgemm_functor::slm_size;
+                        if constexpr (barrier_count != 0) {
+                                xetla_nbarrier_init<barrier_count>();
+                        }
+                        if constexpr (slm_size != 0) {
+                                xetla_local_init<slm_size>();
+                        }
+                        bgemm_functor::run(item, A, B, C, matrix_m,
+                                matrix_n, matrix_k, lda, ldb, ldc, Acc,
+                                Cnt);
+                        });
+        });
+        e_esimd.wait();
+        prof.cpu_end();
+        prof.add_gpu_event(e_esimd);
         }
-    }
+} catch (cl::sycl::exception const &e) {
+        std::cout << "SYCL exception caught: " << e.what() << '\n';
+        FAIL();
+}
+
 
     prof.print_profiling_result(profiling_selector::GPU);
 
@@ -202,32 +199,31 @@ void bgemm_run(ExecutionMode mode, int iter) {
     free(Cnt, context);
 }
 
-// template <typename T>
-// class bgemm_performance_test : public ::testing::Test {};
-// TYPED_TEST_SUITE_P(bgemm_performance_test);
-// TYPED_TEST_P(bgemm_performance_test, esimd) {
-//     bgemm_run<TypeParam>(ExecutionMode::ESIMD, ITER);
-// }
-// REGISTER_TYPED_TEST_SUITE_P(bgemm_performance_test, esimd);
-// using tests =
-//     ::testing::Types<Test_4096x4096x4096_row_row, Test_3968x3968x3968_row_row,
-//                      Test_3840x3840x3840_row_row, Test_3712x3712x3712_row_row,
-//                      Test_3584x3584x3584_row_row, Test_3456x3456x3456_row_row,
-//                      Test_3328x3328x3328_row_row, Test_3200x3200x3200_row_row,
-//                      Test_3072x3072x3072_row_row, Test_2944x2944x2944_row_row,
-//                      Test_2816x2816x2816_row_row, Test_2688x2688x2688_row_row,
-//                      Test_2560x2560x2560_row_row, Test_2432x2432x2432_row_row,
-//                      Test_2304x2304x2304_row_row, Test_2176x2176x2176_row_row,
-//                      Test_2048x2048x2048_row_row, Test_1920x1920x1920_row_row,
-//                      Test_1792x1792x1792_row_row, Test_1664x1664x1664_row_row,
-//                      Test_1536x1536x1536_row_row, Test_1408x1408x1408_row_row,
-//                      Test_1280x1280x1280_row_row, Test_1152x1152x1152_row_row,
-//                      Test_1024x1024x1024_row_row, Test_896x896x896_row_row,
-//                      Test_768x768x768_row_row, Test_512x512x512_row_row,
-//                      Test_640x640x640_row_row, Test_384x384x384_row_row,
-//                      Test_256x256x256_row_row>;
-// INSTANTIATE_TYPED_TEST_SUITE_P(
-//         bgemm_performance_test_suite, bgemm_performance_test, tests);
+template <typename T>
+class bgemm_performance_test : public ::testing::Test {};
+TYPED_TEST_SUITE_P(bgemm_performance_test);
+TYPED_TEST_P(bgemm_performance_test, esimd) {
+    bgemm_run<TypeParam>(ITER);
+}
+REGISTER_TYPED_TEST_SUITE_P(bgemm_performance_test, esimd);
+using tests =
+    ::testing::Types<Test_4096x4096x4096_row_row, Test_3968x3968x3968_row_row,
+                     Test_3840x3840x3840_row_row, Test_3712x3712x3712_row_row,
+                     Test_3584x3584x3584_row_row, Test_3456x3456x3456_row_row,
+                     Test_3328x3328x3328_row_row, Test_3200x3200x3200_row_row,
+                     Test_3072x3072x3072_row_row, Test_2944x2944x2944_row_row,
+                     Test_2816x2816x2816_row_row, Test_2688x2688x2688_row_row,
+                     Test_2560x2560x2560_row_row, Test_2432x2432x2432_row_row,
+                     Test_2304x2304x2304_row_row, Test_2176x2176x2176_row_row,
+                     Test_2048x2048x2048_row_row, Test_1920x1920x1920_row_row,
+                     Test_1792x1792x1792_row_row, Test_1664x1664x1664_row_row,
+                     Test_1536x1536x1536_row_row, Test_1408x1408x1408_row_row,
+                     Test_1280x1280x1280_row_row, Test_1152x1152x1152_row_row,
+                     Test_1024x1024x1024_row_row, Test_896x896x896_row_row,
+                     Test_768x768x768_row_row, Test_512x512x512_row_row,
+                     Test_640x640x640_row_row, Test_384x384x384_row_row,
+                     Test_256x256x256_row_row>;
+INSTANTIATE_TYPED_TEST_SUITE_P(
+        bgemm_performance_test_suite, bgemm_performance_test, tests);
 
-template void bgemm_run<Test_4096x4096x4096_row_row>(ExecutionMode mode,
-                                                     const int64_t iter);
+// template void bgemm_run<Test_4096x4096x4096_row_row>(const int64_t iter);

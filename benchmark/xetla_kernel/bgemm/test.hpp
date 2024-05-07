@@ -21,7 +21,7 @@
 
 using namespace gpu::xetla;
 // The number of times the kernel is executed
-// constexpr int ITER = 100;
+constexpr int ITER = 100;
 
 class Test_256x256x256_row_row {
 public:
