@@ -113,6 +113,11 @@ struct ConvertTritonGPUToLLVM
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
+
+    mod.walk([&](LLVM::LLVMFuncOp funcOp) {
+      for (unsigned i = 0; i < funcOp.getNumArguments(); ++i)
+        funcOp.removeArgAttr(i, "tt.divisibility");
+    });
   }
 };
 
