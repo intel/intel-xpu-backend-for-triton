@@ -1284,22 +1284,33 @@ struct FpToFpOpConversion
   static Value convertBf16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
-    auto as_int16 = bitcast(v, i16_ty);
-    auto as_int32 = zext(i32_ty, as_int16);
-    auto shifted = shl(i32_ty, as_int32, i32_val(16));
-    return (bitcast(shifted, f32_ty));
+    auto moduleOp =
+        v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
+    StringRef name = "_Z31intel_convert_as_bfloat16_floatt";
+    auto ext_func = intel::lookupOrCreateSPIRVFn(moduleOp, name, i16_ty, f32_ty);
+    auto call = intel::createSPIRVBuiltinCall(loc, rewriter, ext_func, v);
+    return call.getResult();
   }
 
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
-    auto ctx = rewriter.getContext();
     return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
   }
 
   static Value convertFp32ToBf16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v, const RoundingMode rounding) {
+    if (rounding == RoundingMode::RTNE) {
+      auto moduleOp =
+          v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
+      // Intel SPIR-V extension only supports round-to-nearest-even
+      StringRef name = "_Z32intel_convert_bfloat16_as_ushortf";
+      auto trunc_func = intel::lookupOrCreateSPIRVFn(moduleOp, name, f32_ty, i16_ty);
+      auto call = intel::createSPIRVBuiltinCall(loc, rewriter, trunc_func, v);
+      return call.getResult();
+    }
+
     auto as_uint32 = bitcast(v, i32_ty);
     auto check_exponent =
         and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)),
@@ -1307,13 +1318,6 @@ struct FpToFpOpConversion
     auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0));
     auto exponent_all1s = icmp_eq(check_exponent, i32_val(0));
     Value rounded = as_uint32;
-    if (rounding == RoundingMode::RTNE) {
-      rounded =
-          add(i32_ty, i32_val(0x7fff),
-              and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)));
-      rounded = add(i32_ty, rounded, as_uint32);
-      rounded = select(exponent_not_all1s, rounded, as_uint32);
-    }
 
     auto preserve_nan =
         and_(i1_ty, exponent_all1s,
