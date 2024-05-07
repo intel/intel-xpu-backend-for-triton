@@ -42,7 +42,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports | --warning-reports]"
       exit 1
       ;;
     *)
