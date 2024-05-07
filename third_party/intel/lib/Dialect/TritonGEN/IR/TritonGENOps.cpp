@@ -41,36 +41,32 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
     return op->emitOpError(
         "4th operand (base pitch) should be >= 2nd operand (base width)");
 
-  uint32_t TileWidth = op.getTileWidth();
   uint32_t TileHeight = op.getTileHeight();
+  if (TileHeight != 1 && TileHeight != 2 && TileHeight != 4 &&
+      TileHeight != 8 && TileHeight != 16 && TileHeight != 32)
+    return op->emitOpError("expecting tile_height to be 1, 2, 4, 8, 16, or 32");
+
+  uint32_t TileWidth = op.getTileWidth();
   switch (op.getElemSizeInBits()) {
   case 32:
     if (TileWidth != 8)
       return op->emitOpError("tile_width for 32 bit elements should be equal "
                              "to systolic depth, i.e., 8 elements");
-    if (TileHeight != 8)
-      return op->emitOpError("tile_height for 32 bit elements should be 8");
     break;
-
   case 16:
     if (TileWidth != 16)
       return op->emitOpError("tile_width for 16 bit elements should be equal "
                              "to systolic depth times 2, i.e., 16 elements");
-    if (TileHeight != 16)
-      return op->emitOpError("tile_height for 16 bit elements should be 16");
     break;
-
   case 8:
     if (TileWidth != 32)
       return op->emitOpError("tile_width for 8 bit elements should be equal "
                              "to systolic depth times 4, i.e., 32 elements");
-    if (TileHeight != 32)
-      return op->emitOpError("tile_height for 8 bit elements should be 32");
     break;
-
   default:
     return op->emitOpError("element size should be 8, 16 or 32 bits");
   }
+
   return success();
 }
 
