@@ -13,8 +13,8 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.language as tl
 
-import triton_intel_benchmark
-import triton_intel_benchmark.xetla_kernel as xetla_kernel
+import xetla_benchmark
+import xetla_benchmark.xetla_kernel as xetla_kernel
 
 
 @torch.jit.script
