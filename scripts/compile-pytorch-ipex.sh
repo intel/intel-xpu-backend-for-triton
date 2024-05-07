@@ -115,7 +115,7 @@ fi
 if [ "$BUILD_FROM_SOURCE" = false ]; then
   TEMP_DIR=`mktemp -d`
   cd $TEMP_DIR
-  gh run download $(gh run list -w "Triton wheels" -s success -R intel/intel-xpu-backend-for-triton --json databaseId | jq '.[0].databaseId') -R intel/intel-xpu-backend-for-triton
+  gh run download $(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId') -R intel/intel-xpu-backend-for-triton
   PYTHON_VERSION=$( python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" )
   cd wheels-py${PYTHON_VERSION}*
   pip install torch-* intel_extension_for_pytorch-*
