@@ -93,17 +93,22 @@ jobs:
 
       - name: Install dnnl
         run: |
+          set -ex; \
           sudo apt update
-          sudo apt install intel-oneapi-dnnl-devel intel-oneapi-dnnl -y
+          sudo apt install -y gpg-agent wget
+          wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt update
+          sudo apt-get install -y intel-oneapi-dnnl-devel intel-oneapi-dnnl;
 
       - name: Install xetla benchmark
         run: |
-          cd benchmark
+          cd benchmarks
           python setup.py install
 
       - name: Run xetla benchmark
         run: |
-          cd benchmark/xetla_benchmark
+          cd benchmarks/xetla_benchmark
           python fused_softmax.py
 
       - name: Save pip cache
