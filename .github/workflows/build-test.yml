@@ -116,6 +116,7 @@ jobs:
         run: |
           mkdir ~/reports
           echo "TRITON_TEST_REPORTS=true" >> $GITHUB_ENV
+          echo "TRITON_TEST_WARNING_REPORTS=true" >> $GITHUB_ENV
           echo "TRITON_TEST_REPORTS_DIR=$HOME/reports" >> $GITHUB_ENV
 
       - name: Run core tests
