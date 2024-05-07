@@ -1,4 +1,4 @@
-name: Triton-benchmark
+name: Triton-benchmarks
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ env:
 
 jobs:
   build:
-    name: Test
+    name: xetla benchmark
     runs-on:
       - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
@@ -91,16 +91,19 @@ jobs:
           path: ${{ steps.triton-cache.outputs.path }}
           dest: ${{ steps.triton-cache.outputs.dest }}
 
-      - name: Install triton intel benchmark
+      - name: Install dnnl
         run: |
-          ls /home/runner/intel/oneapi | grep dnnl
-          source /home/runner/intel/oneapi/dnnl/latest/env/vars.sh
+          sudo apt update
+          sudo apt install intel-oneapi-dnnl-devel intel-oneapi-dnnl -y
+
+      - name: Install xetla benchmark
+        run: |
           cd benchmark
           python setup.py install
 
-      - name: Run triton intel benchmark
+      - name: Run xetla benchmark
         run: |
-          cd benchmark/triton_intel_benchmark
+          cd benchmark/xetla_benchmark
           python fused_softmax.py
 
       - name: Save pip cache

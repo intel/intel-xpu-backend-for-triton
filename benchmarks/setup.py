@@ -80,12 +80,12 @@ cmake = CMakeBuild()
 cmake.run()
 
 setup(
-    name='triton-intel-benchmark', packages=[
-        "triton_intel_benchmark",
+    name='xetla-benchmark', packages=[
+        "xetla_benchmark",
     ], package_dir={
-        "triton_intel_benchmark": "triton_intel_benchmark",
+        "xetla_benchmark": "xetla_benchmark",
     }, ext_modules=[
-        DPCPPExtension('triton_intel_benchmark.xetla_kernel', [
+        DPCPPExtension('xetla_benchmark.xetla_kernel', [
             cmake.current_dir + '/xetla_kernel/python_main.cpp',
         ], libraries=['xetla_kernel'], library_dirs=[cmake.extdir],
                        include_dirs=[cmake.current_dir + '/xetla_kernel/softmax']),
