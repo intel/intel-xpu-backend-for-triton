@@ -5,6 +5,7 @@ add_triton_library(TritonGPUIR
   DEPENDS
   TritonGPUTableGen
   TritonGPUAttrDefsIncGen
+  TritonIntelGPUAttrDefsIncGen
 
   LINK_LIBS PUBLIC
   MLIRGPUDialect
