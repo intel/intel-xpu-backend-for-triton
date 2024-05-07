@@ -1,2 +1,0 @@
-# FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/841
-test/unit/language/test_core.py::test_unary_math[rsqrt]
