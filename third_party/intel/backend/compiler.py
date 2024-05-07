@@ -70,20 +70,6 @@ class XPUBackend(BaseBackend):
     class Experimental:
 
         @staticmethod
-        def make_ttir(mod, metadata, opt):
-            pm = ir.pass_manager(mod.context)
-            pm.enable_debug()
-            passes.common.add_inliner(pm)
-            passes.ttir.add_combine(pm)
-            passes.common.add_canonicalizer(pm)
-            passes.ttir.add_reorder_broadcast(pm)
-            passes.common.add_cse(pm)
-            passes.common.add_licm(pm)
-            passes.common.add_symbol_dce(pm)
-            pm.run(mod)
-            return mod
-
-        @staticmethod
         def make_ttgir(mod, metadata, opt, device_arch):
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
@@ -150,13 +136,9 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
-        if XPUOptions.isBlockPtrEnabled:
-            return XPUBackend.Experimental.make_ttir(mod, metadata, opt)
-
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_reorder_broadcast(pm)
@@ -175,13 +157,16 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
+
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm, device_arch)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm, device_arch)
+
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
