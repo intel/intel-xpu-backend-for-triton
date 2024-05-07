@@ -201,12 +201,8 @@ class XPUBackend(BaseBackend):
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
-
-        # FIXME: On the experimental path, get_threads_per_warp always return 1.
-        if not XPUOptions.isBlockPtrEnabled:
-            threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
-            metadata["threads_per_warp"] = threads_per_warp
-
+        threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
+        metadata["threads_per_warp"] = threads_per_warp
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)

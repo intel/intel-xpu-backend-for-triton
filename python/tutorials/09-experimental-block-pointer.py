@@ -233,7 +233,9 @@ print(f"torch_output={torch_output}")
 
 # Note: the torch.matmul and Triton implementations uses different
 # algorithms so we need to adjust tolerance.
-if torch.allclose(triton_output, torch_output, atol=1e-4, rtol=1e-3):
+allclose = torch.allclose(triton_output, torch_output, atol=1e-4, rtol=1e-3)
+assert allclose, "Triton and Torch differ"
+if allclose:
     print("✅ Triton and Torch match")
 else:
     print("❌ Triton and Torch differ")

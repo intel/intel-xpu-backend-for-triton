@@ -153,6 +153,14 @@ public:
     canonicalize();
     LLVM_DEBUG(llvm::dbgs() << "Module after canonicalization:\n"
                             << m << "\n\n");
+
+    // by default, tritongpu are lowered to simt mode(threads-per-warp=16)
+    // instead of simd mode(threads-per-warp=1)
+    // FIXME: force threads-per-warp=16 in simt(this should be done via an
+    // analysis designed to determine whether the kernel contains tt.dot
+    // operations that use block pointers).
+    m->setAttr("triton_gpu.threads-per-warp",
+               IntegerAttr::get(IntegerType::get(ctx, 32), 16));
   }
 
 private:
