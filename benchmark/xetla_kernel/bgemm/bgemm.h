@@ -81,12 +81,6 @@ void bgemm_run(void* _A, void* _B, void* _C, void* _Acc, sycl::queue &queue) {
     size_t subgroup_range_n = (wg_tile_n % sg_tile_n == 0)
                               ? wg_tile_n / sg_tile_n
                               : (wg_tile_n / sg_tile_n) + 1;
-    std::cout << "group_num_x: " << group_range_n
-              << ", group_num_y: " << group_range_m
-              << ", group_num_z: " << Test::global_kslicing << "\n";
-    std::cout << "group_size_x: " << subgroup_range_n
-              << ", group_size_y: " << subgroup_range_m
-              << ", group_size_z: " << Test::local_kslicing << std::endl;
     cl::sycl::range<3> group_range {
             Test::global_kslicing, group_range_m, group_range_n};
     cl::sycl::range<3> local_range {
