@@ -602,7 +602,7 @@ setup(
             "numpy",
             "pytest",
             "scipy>=1.7.1",
-            "pytest-capturewarnings-ng @ git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.0"
+            "pytest-capturewarnings-ng @ git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.1"
         ],
         "tutorials": [
             "matplotlib",
