@@ -17,7 +17,6 @@ import re
 import errno
 import torch
 import intel_extension_for_pytorch
-from intel_extension_for_pytorch.xpu.cpp_extension import DPCPPExtension, DpcppBuildExtension
 
 
 class CMakeBuild():
@@ -25,7 +24,7 @@ class CMakeBuild():
     def __init__(self):
         self.current_dir = os.path.abspath(os.path.dirname(__file__))
         self.build_temp = self.current_dir + '/build/temp'
-        self.extdir = self.build_temp + '/benchmark'
+        self.extdir = self.current_dir + '/triton_intel_benchmark'
 
     def run(self):
         try:
@@ -84,9 +83,5 @@ setup(
         "triton_intel_benchmark",
     ], package_dir={
         "triton_intel_benchmark": "triton_intel_benchmark",
-    }, ext_modules=[
-        DPCPPExtension('triton_intel_benchmark.xetla_kernel', [
-            cmake.current_dir + '/xetla_kernel/python_main.cpp',
-        ], libraries=['softmax_performance','bgemm_performance'], library_dirs=[cmake.extdir],
-                       include_dirs=[cmake.current_dir + '/xetla_kernel/softmax',cmake.current_dir + '/xetla_kernel/bgemm']),
-    ], cmdclass={'build_ext': DpcppBuildExtension})
+    },
+    package_data={"triton_intel_benchmark": ["xetla_kernel.so"]})

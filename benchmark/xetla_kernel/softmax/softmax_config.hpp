@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *******************************************************************************/
-#ifndef TRITONBENCHMARK_TEST_H
-#define TRITONBENCHMARK_TEST_H
+#ifndef TRITON_MICROBENCH_SOFTMAKX_CONFIG_H
+#define TRITON_MICROBENCH_SOFTMAKX_CONFIG_H
 
 #include <sycl.hpp>
 
@@ -96,4 +96,4 @@ public:
   using data_type_acc = float;
 };
 
-#endif // TRITONBENCHMARK_TEST_H
+#endif // TRITON_MICROBENCH_SOFTMAKX_CONFIG_H

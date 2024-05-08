@@ -64,12 +64,31 @@ at::Tensor softmax_shape_4096_4096(const at::Tensor &input, const int64_t dim) {
   return output;
 }
 
-void bgemm_shape_4096_4096_4096(int mode, const int64_t iter) {
+at::Tensor bgemm_shape_4096_4096_4096(const at::Tensor &a, const at::Tensor &b, const at::Tensor &c, const at::Tensor &d) {
+  CHECK_INPUT(a);
+  CHECK_INPUT(b);
+  CHECK_INPUT(c);
+  CHECK_INPUT(d);
 
-  bgemm_run<Test_4096x4096x4096_row_row>(mode, iter);
+  auto queue = get_current_sycl_queue();
+  bgemm_run<Test_4096x4096x4096_row_row>(a.data_ptr(), b.data_ptr(), c.data_ptr(), d.data_ptr(), queue);
+
+  return d;
 }
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+at::Tensor bgemm_shape_2048_2048_2048(const at::Tensor &a, const at::Tensor &b, const at::Tensor &c, const at::Tensor &d) {
+    CHECK_INPUT(a);
+    CHECK_INPUT(b);
+    CHECK_INPUT(c);
+    CHECK_INPUT(d);
+
+    auto queue = get_current_sycl_queue();
+    bgemm_run<Test_2048x2048x2048_row_row>(a.data_ptr(), b.data_ptr(), c.data_ptr(), d.data_ptr(), queue);
+
+    return d;
+}
+
+PYBIND11_MODULE(xetla_kernel, m) {
   m.def("softmax_shape_256_256", &softmax_shape_256_256,
         "softmax forward (XeTLA)");
   m.def("softmax_shape_1024_1024", &softmax_shape_1024_1024,
@@ -79,5 +98,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("softmax_shape_4096_4096", &softmax_shape_4096_4096,
         "softmax forward (XeTLA)");
   m.def("bgemm_shape_4096_4096_4096", &bgemm_shape_4096_4096_4096,
+        "bgemm (XeTLA)");
+  m.def("bgemm_shape_2048_2048_2048", &bgemm_shape_2048_2048_2048,
         "bgemm (XeTLA)");
 }

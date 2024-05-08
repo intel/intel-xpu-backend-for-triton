@@ -16,26 +16,24 @@
 #pragma once
 #include "xetla.hpp"
 
-using namespace gpu::xetla;
-
 template <typename dtype_a, typename dtype_b, typename dtype_c,
         typename dtype_acc, uint32_t wg_m, uint32_t wg_n, uint32_t sg_m,
-        uint32_t sg_n, uint32_t sg_k, mem_layout layout_a, mem_layout layout_b,
+        uint32_t sg_n, uint32_t sg_k, gpu::xetla::mem_layout layout_a, gpu::xetla::mem_layout layout_b,
         uint32_t global_kslicing, uint32_t local_kslicing>
 struct bgemm_test_func {
   using tile_shape = gpu::xetla::group::tile_shape_t<wg_n, wg_m, sg_n, sg_m>;
   static constexpr uint32_t periodic_sync_interval = 8;
   static constexpr uint32_t prefetch_distance = 3;
   using gemm_t = typename gpu::xetla::group::gemm_selector_t<
-      dtype_a, dtype_b, layout_a, layout_b, mem_space::global,
-      mem_space::global, 8, 8, dtype_acc, tile_shape, sg_k, mma_engine::xmx,
-      gpu_arch::Xe, prefetch_distance, periodic_sync_interval>::gemm;
+      dtype_a, dtype_b, layout_a, layout_b, gpu::xetla::mem_space::global,
+          gpu::xetla::mem_space::global, 8, 8, dtype_acc, tile_shape, sg_k, gpu::xetla::mma_engine::xmx,
+          gpu::xetla::gpu_arch::Xe, prefetch_distance, periodic_sync_interval>::gemm;
   using epilogue_t = gpu::xetla::group::epilogue_t<
-      gpu::xetla::group::epilogue_policy_default<gpu_arch::Xe>, tile_shape,
-      mem_desc_t<dtype_c, mem_layout::row_major, mem_space::global>>;
+      gpu::xetla::group::epilogue_policy_default<gpu::xetla::gpu_arch::Xe>, tile_shape,
+          gpu::xetla::mem_desc_t<dtype_c, gpu::xetla::mem_layout::row_major, gpu::xetla::mem_space::global>>;
 
   using group_swizzle_t =
-      gpu::xetla::kernel::group_swizzle_default<gpu_arch::Xe>;
+      gpu::xetla::kernel::group_swizzle_default<gpu::xetla::gpu_arch::Xe>;
 
   using gemm_op_t = gpu::xetla::kernel::gemm_universal_t<
       gpu::xetla::kernel::dispatch_policy_kslicing<
