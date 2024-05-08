@@ -228,7 +228,7 @@ def matmul(a, b):
         x_names=['M', 'N', 'K'],
         x_vals=[  
             [4096,4096,4096],
-            [2048,2048,2048],        
+            # [2048,2048,2048],        
             # [128 * i, 128 * i, 128 * i] for i in range(2,33)
         ],  # different possible values for `x_name`
         line_arg='provider',
