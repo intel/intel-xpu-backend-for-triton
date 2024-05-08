@@ -20,8 +20,8 @@
 #include "kernel_func.hpp"
 
 template <class Test>
-void bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
-               sycl::queue &queue) {
+sycl::event bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
+                      sycl::queue &queue) {
   // Accept incoming parameters
   size_t matrix_m = Test::mat_m;
   size_t matrix_n = Test::mat_n;
@@ -130,6 +130,7 @@ void bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
                            ldb, ldc, Acc, Cnt);
       });
     });
+    return e_esimd;
   } catch (cl::sycl::exception const &e) {
     std::cout << "SYCL exception caught: " << e.what() << '\n';
     abort();

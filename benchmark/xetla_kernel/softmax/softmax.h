@@ -20,7 +20,7 @@
 #include "softmax_config.hpp"
 
 template <typename Config>
-void softmax_forward(void *input, void *output, sycl::queue &queue) {
+sycl::event softmax_forward(void *input, void *output, sycl::queue &queue) {
   // Accept incoming parameters
   size_t mat_n = Config::mat_n;
   size_t mat_m = Config::mat_m;
@@ -85,6 +85,7 @@ void softmax_forward(void *input, void *output, sycl::queue &queue) {
                                   mat_n, sqrt_dk_inv);
           });
     });
+    return e_softmax_fwd;
   } catch (cl::sycl::exception const &e) {
     std::cout << "SYCL exception caught: " << e.what() << '\n';
   }
