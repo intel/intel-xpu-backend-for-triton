@@ -102,6 +102,7 @@ import triton.language as tl
 import triton_intel_benchmark
 import triton_intel_benchmark.xetla_kernel as xetla_kernel
 
+
 @triton.autotune(
     configs=[
         triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
@@ -221,14 +222,15 @@ def matmul(a, b):
         threads_per_warp=16)
     return c
 
+
 #### Benchmark Performance
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['M', 'N', 'K'],
-        x_vals=[  
-            [4096,4096,4096],
-            # [2048,2048,2048],        
+        x_vals=[
+            [4096, 4096, 4096],
+            # [2048,2048,2048],
             # [128 * i, 128 * i, 128 * i] for i in range(2,33)
         ],  # different possible values for `x_name`
         line_arg='provider',
@@ -247,28 +249,29 @@ def matmul(a, b):
 def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device='xpu', dtype=torch.float16)
     b = torch.randn((K, N), device='xpu', dtype=torch.float16)
-    c = torch.empty((M, N), device='xpu', dtype=torch.float16)
-    d = torch.empty((M, N), device='xpu', dtype=torch.float16)
     quantiles = [0.5, 0.2, 0.8]
 
-    # calculate tflops for oneDNN kernel 
+    # calculate tflops for oneDNN kernel
     def calculate_tflops(ms):
         return 2 * M * N * K * 1e-12 / (ms * 1e-3)
-    
+
     if provider == 'onednn':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100, quantiles=quantiles,
                                                      fast_flush=False)
-        # print(f"oneDNN Peak TFlops {calculate_tflops(min_ms)}")                                                
+        # print(f"oneDNN Peak TFlops {calculate_tflops(min_ms)}")
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100, quantiles=quantiles,
                                                      fast_flush=False)
     if provider == 'xetla':
+        c = torch.empty((M, N), device='xpu', dtype=torch.float16)
+        d = torch.empty((M, N), device='xpu', dtype=torch.float16)
+        cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
         name = "bgemm_shape_{}_{}_{}".format(M, N, K)
         func = getattr(xetla_kernel, name)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: func(a,b,c,d), rep=100, quantiles=quantiles,
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: func(a, b, c, d, cnt), rep=100, quantiles=quantiles,
                                                      fast_flush=False)
 
     return calculate_tflops(ms), calculate_tflops(min_ms), calculate_tflops(max_ms)
 
 
-benchmark.run(show_plots=True, print_data=True)    
+benchmark.run(show_plots=True, print_data=True)

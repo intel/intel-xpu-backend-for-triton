@@ -17,7 +17,7 @@ if (NOT XeTLALibrary_FOUND)
             GIT_TAG           ${XeTLALibrary_TAG}
             SOURCE_DIR ${XeTLALibrary_SOURCE_DIR}
             )
-    
+
     FetchContent_GetProperties(xetla-library)
     if(NOT xetla-library_POPULATED)
        FetchContent_Populate(xetla-library)
