@@ -1,6 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "ReduceScanCommon.h"
-#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
+#include "Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;

@@ -7,7 +7,7 @@
 #include "triton/Analysis/Allocation.h"
 
 //
-#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
+#include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"

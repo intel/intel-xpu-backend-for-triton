@@ -7,7 +7,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
-#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
+#include "intel/lib/TritonIntelGPUToLLVM/Utility.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"

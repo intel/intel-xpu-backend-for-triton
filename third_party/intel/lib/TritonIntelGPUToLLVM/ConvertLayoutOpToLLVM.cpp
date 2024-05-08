@@ -1,6 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
-#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
+#include "Utility.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"

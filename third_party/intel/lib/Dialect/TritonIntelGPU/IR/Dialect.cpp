@@ -1,7 +1,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -272,6 +272,75 @@ SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() {
     llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
                              "be smaller than the threads required per row.");
   }
+}
+
+static void
+emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
+                              SmallVector<SmallVector<unsigned>> &offsets,
+                              unsigned ctaOffsetX, unsigned ctaOffsetY) {
+  SmallVector<unsigned> sizePerThreads = getSizePerThread(dpasLayout);
+  uint32_t elemsPerThreadPerGroup = product<unsigned>(sizePerThreads);
+  uint32_t rowsPerWarp =
+      dpasLayout.getSubGroupSize() / dpasLayout.getExecutionSize();
+  SmallVector<unsigned> shapePerCTA =
+      triton::gpu::getShapePerCTATile(dpasLayout);
+
+  for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
+    uint32_t elemRowIndex = (elem / sizePerThreads[1]) * rowsPerWarp;
+    uint32_t elemColIndex = elem % sizePerThreads[1];
+    offsets.push_back({ctaOffsetX + elemRowIndex, ctaOffsetY + elemColIndex});
+  }
+}
+
+static SmallVector<SmallVector<unsigned>>
+emitOffsetForDpasLayout(const DpasEncodingAttr &dpasLayout,
+                        RankedTensorType type) {
+  ArrayRef<int64_t> shape = type.getShape();
+  SmallVector<SmallVector<unsigned>> offsets;
+  SmallVector<unsigned> shapePerCTA = getShapePerCTATile(dpasLayout);
+
+  for (unsigned i = 0; i < shape[0]; i += shapePerCTA[0]) {
+    for (unsigned j = 0; j < shape[1]; j += shapePerCTA[1]) {
+      emitOffsetForDpasLayoutPerCTA(dpasLayout, offsets, i, j);
+    }
+  }
+
+  return offsets;
+}
+
+static SmallVector<Value>
+emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
+                           const DpasEncodingAttr &dpasLayout,
+                           RankedTensorType type) {
+  Value threadId = getThreadId(rewriter, loc);
+  Value warpSize = i32_val(triton::gpu::getWarpSize(dpasLayout));
+  Value warpId = udiv(threadId, warpSize);
+  Value laneId = urem(threadId, warpSize);
+
+  auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
+  ArrayRef<int64_t> shape = type.getShape();
+
+  auto order = triton::gpu::getOrder(dpasLayout);
+  SmallVector<Value> multiDimWarpId =
+      delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+
+  // Compute the 2-dim coordinates of the warp containing the tensor element
+  // operated on by this thread.
+  SmallVector<unsigned> warpShape = dpasLayout.getShapeC();
+  Value rowWarpId = urem(multiDimWarpId[0],
+                         i32_val(mlir::ceil<unsigned>(shape[0], warpShape[0])));
+  Value colWarpId = urem(multiDimWarpId[1],
+                         i32_val(mlir::ceil<unsigned>(shape[1], warpShape[1])));
+  Value rowWarpOffset = mul(rowWarpId, i32_val(warpShape[0]));
+  Value colWarpOffset = mul(colWarpId, i32_val(warpShape[1]));
+
+  // Compute the 2-dim coordinates of the first element in the warp operated
+  // on by this thread.
+  SmallVector<unsigned> threadsPerWarp = getThreadsPerWarp(dpasLayout);
+  SmallVector<Value> multiDimBase = {
+      add(udiv(laneId, i32_val(threadsPerWarp[1])), rowWarpOffset),
+      add(urem(laneId, i32_val(threadsPerWarp[1])), colWarpOffset)};
+  return multiDimBase;
 }
 
 SmallVector<Value> DpasEncodingAttr::emitBaseIndexWithinCTAForLayout(

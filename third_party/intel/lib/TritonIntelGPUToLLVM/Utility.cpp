@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
+#include "Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
