@@ -145,14 +145,7 @@ public:
   TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx)
       : mod(mod), ctx(ctx),
         blockPtrPathIsEnabled(
-            mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {
-    // FIXME: force subgroupSize = 16 (this should be done via an analysis
-    // designed to determine whether the kernel contains tt.dot operations that
-    // use block pointers).
-    if (blockPtrPathIsEnabled)
-      mod->setAttr("triton_gpu.threads-per-warp",
-                   IntegerAttr::get(IntegerType::get(ctx, 32), 16));
-  }
+            mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
