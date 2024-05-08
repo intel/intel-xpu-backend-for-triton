@@ -229,9 +229,9 @@ def matmul(a, b):
         # argument names to use as an x-axis for the plot
         x_names=['M', 'N', 'K'],
         x_vals=[
-            [4096, 4096, 4096],
+            # [4096, 4096, 4096],
             # [2048,2048,2048],
-            # [128 * i, 128 * i, 128 * i] for i in range(2,33)
+            [256 * i, 256 * i, 256 * i] for i in range(1, 17)
         ],  # different possible values for `x_name`
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
