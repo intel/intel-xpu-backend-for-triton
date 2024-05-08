@@ -302,7 +302,8 @@ void LayoutPropagation::initAnchorLayout() {
       // back to mma further down to avoid generating reduction with MMA
       // layout that may have lower performance.
       // This can be improved with more aggressive backward propagation.
-      if (tensorType.getEncoding().isa<MmaEncodingTrait>() &&
+      // FIXME: Change back NvidiaMmaEncodingAttr to MmaEncodingTrait.
+      if (isa<NvidiaMmaEncodingAttr>(tensorType.getEncoding() &&
           v.getDefiningOp() &&
           !hasConvertToMMATransisitiveUse(v.getDefiningOp(),
                                           tensorType.getEncoding())) {
