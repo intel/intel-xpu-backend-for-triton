@@ -78,10 +78,8 @@ class CMakeBuild():
 cmake = CMakeBuild()
 cmake.run()
 
-setup(
-    name='triton-intel-benchmark', packages=[
-        "triton_intel_benchmark",
-    ], package_dir={
-        "triton_intel_benchmark": "triton_intel_benchmark",
-    },
-    package_data={"triton_intel_benchmark": ["xetla_kernel.so"]})
+setup(name='triton-intel-benchmark', packages=[
+    "triton_intel_benchmark",
+], package_dir={
+    "triton_intel_benchmark": "triton_intel_benchmark",
+}, package_data={"triton_intel_benchmark": ["xetla_kernel.so"]})

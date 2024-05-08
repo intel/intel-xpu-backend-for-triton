@@ -63,29 +63,37 @@ at::Tensor softmax_shape_4096_4096(const at::Tensor &input, const int64_t dim) {
                                             queue);
   return output;
 }
-// bgemm: M=N=K [256, 512 ... 4096]
-at::Tensor bgemm_shape_4096_4096_4096(const at::Tensor &a, const at::Tensor &b, const at::Tensor &c, const at::Tensor &d) {
+
+at::Tensor bgemm_shape_4096_4096_4096(const at::Tensor &a, const at::Tensor &b,
+                                      const at::Tensor &c, const at::Tensor &d,
+                                      const at::Tensor &cnt) {
   CHECK_INPUT(a);
   CHECK_INPUT(b);
   CHECK_INPUT(c);
   CHECK_INPUT(d);
 
   auto queue = get_current_sycl_queue();
-  bgemm_run<Test_4096x4096x4096_row_row>(a.data_ptr(), b.data_ptr(), c.data_ptr(), d.data_ptr(), queue);
+  bgemm_run<Test_4096x4096x4096_row_row>(a.data_ptr(), b.data_ptr(),
+                                         c.data_ptr(), d.data_ptr(),
+                                         cnt.data_ptr(), queue);
 
   return d;
 }
 
-at::Tensor bgemm_shape_2048_2048_2048(const at::Tensor &a, const at::Tensor &b, const at::Tensor &c, const at::Tensor &d) {
-    CHECK_INPUT(a);
-    CHECK_INPUT(b);
-    CHECK_INPUT(c);
-    CHECK_INPUT(d);
+at::Tensor bgemm_shape_2048_2048_2048(const at::Tensor &a, const at::Tensor &b,
+                                      const at::Tensor &c, const at::Tensor &d,
+                                      const at::Tensor &cnt) {
+  CHECK_INPUT(a);
+  CHECK_INPUT(b);
+  CHECK_INPUT(c);
+  CHECK_INPUT(d);
 
-    auto queue = get_current_sycl_queue();
-    bgemm_run<Test_2048x2048x2048_row_row>(a.data_ptr(), b.data_ptr(), c.data_ptr(), d.data_ptr(), queue);
+  auto queue = get_current_sycl_queue();
+  bgemm_run<Test_2048x2048x2048_row_row>(a.data_ptr(), b.data_ptr(),
+                                         c.data_ptr(), d.data_ptr(),
+                                         cnt.data_ptr(), queue);
 
-    return d;
+  return d;
 }
 
 PYBIND11_MODULE(xetla_kernel, m) {

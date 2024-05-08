@@ -16,9 +16,9 @@
 #ifndef TRITON_MICROBENCH_BGEMM_CONFIG_H
 #define TRITON_MICROBENCH_BGEMM_CONFIG_H
 
-#include <sycl.hpp>
-#include "common/core/common.hpp"
 #include "common/common.hpp"
+#include "common/core/common.hpp"
+#include <sycl.hpp>
 
 class Test_256x256x256_row_row {
 public:
@@ -32,8 +32,10 @@ public:
   static constexpr size_t sg_k = 16;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 8;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -51,8 +53,10 @@ public:
   static constexpr size_t sg_k = 16;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 4;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -70,8 +74,10 @@ public:
   static constexpr size_t sg_k = 16;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 4;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -89,8 +95,10 @@ public:
   static constexpr size_t sg_k = 64;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -108,8 +116,10 @@ public:
   static constexpr size_t sg_k = 64;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -127,8 +137,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 2;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -146,8 +158,10 @@ public:
   static constexpr size_t sg_k = 64;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -165,8 +179,10 @@ public:
   static constexpr size_t sg_k = 16;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -184,8 +200,10 @@ public:
   static constexpr size_t sg_k = 16;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -203,8 +221,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -222,8 +242,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -241,8 +263,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -260,8 +284,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -279,8 +305,10 @@ public:
   static constexpr size_t sg_k = 16;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -298,8 +326,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -317,8 +347,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -336,8 +368,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -355,8 +389,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -374,8 +410,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -393,8 +431,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -412,8 +452,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -431,8 +473,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -450,8 +494,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -469,8 +515,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -488,8 +536,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -507,8 +557,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -526,8 +578,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -545,8 +599,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -564,8 +620,10 @@ public:
   static constexpr size_t sg_k = 16;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -583,8 +641,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
@@ -602,8 +662,10 @@ public:
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr uint32_t local_kslicing = 1;
-  static constexpr gpu::xetla::mem_layout layout_a = gpu::xetla::mem_layout::row_major;
-  static constexpr gpu::xetla::mem_layout layout_b = gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
   using data_type_a = cl::sycl::half;
   using data_type_b = cl::sycl::half;
   using data_type_c = cl::sycl::half;
