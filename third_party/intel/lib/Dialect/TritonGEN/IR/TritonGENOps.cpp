@@ -97,8 +97,8 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
 
   constexpr unsigned SD = 8;
   if (BTy.getNumElements() != SD)
-    return this->emitOpError(
-        "the dimension for 3rd operand (B) should match 8 (systolic depth)");
+    return this->emitOpError("the dimension for the 3rd operand (B) should "
+                             "match the systolic depth of 8");
 
   Type AElemTy = ATy.getElementType();
   Type BElemTy = BTy.getElementType();
@@ -116,14 +116,14 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
   switch (precision) {
   case TritonGEN::PrecisionType::TF32:
     if (ATy.getNumElements() != getRc() / 2)
-      return this->emitOpError("the dimension for 2nd operand (A) should match "
-                               "half the repeat count");
+      return this->emitOpError("the dimension for the 2nd operand (A) should "
+                               "be equal to half of the repeat count");
     if (!AElemTy.isa<Float32Type>() && !AElemTy.isInteger(32))
       return this->emitOpError("2nd operand (A) element type should be f32 or "
-                               "i32 when precision type is tf32");
+                               "i32 when the precision type is tf32");
     if (!BElemTy.isa<Float32Type>() && !BElemTy.isInteger(32))
       return this->emitOpError("3rd operand (B) element type should be f32 or "
-                               "i32 when precision type is tf32");
+                               "i32 when the precision type is tf32");
     break;
   case TritonGEN::PrecisionType::BF16:
   case TritonGEN::PrecisionType::FP16:
@@ -135,11 +135,11 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
     if (!AElemTy.isInteger(16))
       return this->emitOpError(
           "2nd operand (A) element type should be i16 when "
-          "precision type is not tf32");
+          "the precision type is not tf32");
     if (!BElemTy.isInteger(32))
       return this->emitOpError(
           "3rd operand (B) element type should be i32 when "
-          "precision type is not tf32");
+          "the precision type is not tf32");
     break;
   default:
     return this->emitOpError(

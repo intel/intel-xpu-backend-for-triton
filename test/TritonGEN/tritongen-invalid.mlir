@@ -33,7 +33,7 @@ llvm.func @triton_gen.dpas(%c : vector<16xi32>, %a : vector<8xi16>, %b : vector<
 // -----
 
 llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<16xi32>) {
-  // expected-error @+1 {{'triton_gen.dpas' op the dimension for 3rd operand (B) should match 8 (systolic depth)}}
+  // expected-error @+1 {{'triton_gen.dpas' op the dimension for the 3rd operand (B) should match the systolic depth of 8}}
   %0 = triton_gen.dpas %c, %a, %b {pa=i8, pb=i8, rc=8} : (vector<8xi32>, vector<8xi16>, vector<16xi32>) -> vector<8xi32>
   llvm.return
 }
@@ -57,7 +57,7 @@ llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8
 // -----
 
 llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xf32>, %b : vector<8xf32>) {
-  // expected-error @+1 {{'triton_gen.dpas' op the dimension for 2nd operand (A) should match half the repeat count}}
+  // expected-error @+1 {{'triton_gen.dpas' op the dimension for the 2nd operand (A) should be equal to half of the repeat count}}
   %0 = triton_gen.dpas %c, %a, %b {pa = tf32, pb = tf32, rc = 8} : (vector<8xf32>, vector<8xf32>, vector<8xf32>) -> vector<8xf32>
   llvm.return
 }
@@ -65,7 +65,7 @@ llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xf32>, %b : vector<8
 // -----
 
 llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<4xi16>, %b : vector<8xf32>) {
-  // expected-error @+1 {{'triton_gen.dpas' op 2nd operand (A) element type should be f32 or i32 when precision type is tf32}}
+  // expected-error @+1 {{'triton_gen.dpas' op 2nd operand (A) element type should be f32 or i32 when the precision type is tf32}}
   %0 = triton_gen.dpas %c, %a, %b {pa = tf32, pb = tf32, rc = 8} : (vector<8xf32>, vector<4xi16>, vector<8xf32>) -> vector<8xf32>
   llvm.return
 }
@@ -74,7 +74,7 @@ llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<4xi16>, %b : vector<8
 
 
 llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<4xf32>, %b : vector<8xi16>) {
-  // expected-error @+1 {{'triton_gen.dpas' op 3rd operand (B) element type should be f32 or i32 when precision type is tf32}}
+  // expected-error @+1 {{'triton_gen.dpas' op 3rd operand (B) element type should be f32 or i32 when the precision type is tf32}}
   %0 = triton_gen.dpas %c, %a, %b {pa = tf32, pb = tf32, rc = 8} : (vector<8xf32>, vector<4xf32>, vector<8xi16>) -> vector<8xf32>
   llvm.return
 }
@@ -90,7 +90,7 @@ llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<4xi16>, %b : vector<8
 // -----
 
 llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi8>, %b : vector<8xi32>) {
-  // expected-error @+1 {{'triton_gen.dpas' op 2nd operand (A) element type should be i16 when precision type is not tf32}}
+  // expected-error @+1 {{'triton_gen.dpas' op 2nd operand (A) element type should be i16 when the precision type is not tf32}}
   %0 = triton_gen.dpas %c, %a, %b {pa=i8, pb=i8, rc=8} : (vector<8xi32>, vector<8xi8>, vector<8xi32>) -> vector<8xi32>
   llvm.return
 }
@@ -98,7 +98,7 @@ llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi8>, %b : vector<8x
 // -----
 
 llvm.func @triton_gen.dpas(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xf32>) {
-  // expected-error @+1 {{'triton_gen.dpas' op 3rd operand (B) element type should be i32 when precision type is not tf32}}
+  // expected-error @+1 {{'triton_gen.dpas' op 3rd operand (B) element type should be i32 when the precision type is not tf32}}
   %0 = triton_gen.dpas %c, %a, %b {pa=f16, pb=f16, rc=8} : (vector<8xf32>, vector<8xi16>, vector<8xf32>) -> vector<8xf32>
   llvm.return
 }
