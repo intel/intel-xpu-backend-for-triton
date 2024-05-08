@@ -100,7 +100,7 @@ static Value getStackPointer(PatternRewriter &rewriter,
   LLVM::LLVMPointerType ptrTy = ptr_ty(
       rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
   if (mod->getAttrOfType<IntegerAttr>("triton_gpu.shared").getInt() == 0)
-    return rewriter.create<LLVM::UndefOp>(funcOp.getLoc(), ptrTy);
+    return rewriter.create<LLVM::PoisonOp>(funcOp.getLoc(), ptrTy);
   return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
 
