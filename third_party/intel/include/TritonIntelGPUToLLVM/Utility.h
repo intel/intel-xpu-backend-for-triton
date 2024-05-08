@@ -100,19 +100,18 @@ static Value getStackPointer(PatternRewriter &rewriter,
   LLVM::LLVMPointerType ptrTy = ptr_ty(
       rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
   if (mod->getAttrOfType<IntegerAttr>("triton_gpu.shared").getInt() == 0)
-    return rewriter.create<LLVM::UndefOp>(funcOp.getLoc(), ptrTy);
+    return rewriter.create<LLVM::PoisonOp>(funcOp.getLoc(), ptrTy);
   return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
 
 static Value getSharedMemoryBase(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  Operation *op) {
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
-  FunctionOpInterface func =
-      op->template getParentOfType<FunctionOpInterface>();
+  auto ptrTy = LLVM::LLVMPointerType::get(
+      rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
+  FunctionOpInterface func = op->getParentOfType<FunctionOpInterface>();
   assert(op->hasAttr("allocation.offset"));
-  size_t offset = op->getAttr("allocation.offset")
-                      .cast<IntegerAttr>()
+  size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
                       .getValue()
                       .getZExtValue();
   Value offVal = i32_val(offset);
