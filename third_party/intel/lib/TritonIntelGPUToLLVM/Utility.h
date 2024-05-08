@@ -107,12 +107,11 @@ static Value getStackPointer(PatternRewriter &rewriter,
 static Value getSharedMemoryBase(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  Operation *op) {
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
-  FunctionOpInterface func =
-      op->template getParentOfType<FunctionOpInterface>();
+  auto ptrTy = LLVM::LLVMPointerType::get(
+      rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
+  FunctionOpInterface func = op->getParentOfType<FunctionOpInterface>();
   assert(op->hasAttr("allocation.offset"));
-  size_t offset = op->getAttr("allocation.offset")
-                      .cast<IntegerAttr>()
+  size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
                       .getValue()
                       .getZExtValue();
   Value offVal = i32_val(offset);
