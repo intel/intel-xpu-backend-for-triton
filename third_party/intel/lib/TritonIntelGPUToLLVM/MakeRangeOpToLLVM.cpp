@@ -1,5 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
+#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
 
 namespace {
 
@@ -27,8 +27,7 @@ struct MakeRangeOpConversion
     auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    auto idxs =
-        ::intel::emitIndices(loc, rewriter, targetInfo, layout, ty, true);
+    auto idxs = emitIndices(loc, rewriter, targetInfo, layout, ty, true);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
     // TODO: slice layout has more elements than expected.

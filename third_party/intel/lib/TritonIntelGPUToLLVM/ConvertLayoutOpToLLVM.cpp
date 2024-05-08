@@ -1,6 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
-#include "Utility.h"
+#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -144,11 +144,11 @@ private:
     auto srcStrides =
         getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
     auto dstIndices =
-        ::intel::emitIndices(loc, rewriter, targetInfo, dstLayout, dstTy, true);
+        emitIndices(loc, rewriter, targetInfo, dstLayout, dstTy, true);
 
     SmallVector<Value> outVals =
-        ::intel::loadSharedToDistributed(op.getResult(), op.getSrc(), smemObj,
-                                         elemTy, loc, rewriter, targetInfo);
+        loadSharedToDistributed(op.getResult(), op.getSrc(), smemObj, elemTy,
+                                loc, rewriter, targetInfo);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
@@ -194,7 +194,7 @@ private:
     auto shape = type.getShape();
     unsigned rank = shape.size();
     if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
-      auto multiDimOffsetFirstElem = ::intel::emitBaseIndexForLayout(
+      auto multiDimOffsetFirstElem = emitBaseIndexForLayout(
           loc, rewriter, targetInfo, blockedLayout, type, false);
       SmallVector<Value> multiDimOffset(rank);
       SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
@@ -214,9 +214,8 @@ private:
       auto parentShape = sliceLayout.paddedShape(shape);
       auto parentTy = RankedTensorType::get(parentShape, type.getElementType(),
                                             parentEncoding);
-      auto offsets = ::intel::emitOffsetForLayout(layout, type);
-      auto parentOffset =
-          ::intel::emitOffsetForLayout(parentEncoding, parentTy);
+      auto offsets = emitOffsetForLayout(layout, type);
+      auto parentOffset = emitOffsetForLayout(parentEncoding, parentTy);
       SmallVector<int> idxs;
       for (SmallVector<unsigned> off : offsets) {
         off.insert(off.begin() + dim, 0);
@@ -237,7 +236,7 @@ private:
       return multiDimOffset;
     }
     if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
-      SmallVector<Value> multiDimBase = ::intel::emitBaseIndexForLayout(
+      SmallVector<Value> multiDimBase = emitBaseIndexForLayout(
           loc, rewriter, targetInfo, layout, type, false);
 
       // clang-format off

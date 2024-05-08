@@ -1040,21 +1040,7 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   SmallVector<Value> baseIndex;
   RewriterBase::InsertionGuard guard(rewriter);
   SmallVector<Value> result;
-  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(layout)) {
-    result = emitBaseIndexWithinCTAForBlockedLayout(loc, rewriter,
-                                                    blockedLayout, type);
-  } else if (auto mmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-    if (mmaLayout.isVolta())
-      result =
-          emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter, mmaLayout, type);
-    if (mmaLayout.isAmpere() || mmaLayout.isHopper())
-      result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter, mmaLayout,
-                                                      type);
-  } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
-    result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
-  } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(layout)) {
-    result = emitBaseIndexForWmmaLayout(loc, rewriter, wmmaLayout, type);
-  } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
+  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     auto parentLayout = sliceLayout.getParent();
     auto parentShape = sliceLayout.paddedShape(type.getShape());
     RankedTensorType parentTy =
@@ -1064,8 +1050,13 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
     result.erase(result.begin() + sliceLayout.getDim());
     // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
     return result;
+  } else if (auto distributedLayout =
+                 mlir::dyn_cast<triton::gpu::DistributedEncodingTrait>(
+                     layout)) {
+    result =
+        distributedLayout.emitBaseIndexWithinCTAForLayout(loc, rewriter, type);
   } else {
-    llvm_unreachable("unsupported emitBaseIndexForLayout");
+    llvm_unreachable("unsupported emitBaseIndexWithinCTAForLayout");
   }
   if (withCTAOffset) {
     auto CTAOffset =
@@ -1108,24 +1099,10 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
-  if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout))
-    return emitOffsetForBlockedLayout(blockedLayout, type);
-  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-    if (mmaLayout.isVolta())
-      return emitOffsetForMmaLayoutV1(mmaLayout, type);
-    if (mmaLayout.isAmpere())
-      return emitOffsetForMmaLayoutV2(mmaLayout, type);
-    if (mmaLayout.isHopper())
-      return emitOffsetForMmaLayoutV3(mmaLayout, type);
+  if (auto distributedLayout =
+          mlir::dyn_cast<triton::gpu::DistributedEncodingTrait>(layout)) {
+    return distributedLayout.emitOffsetForLayout(type);
   }
-  if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
-    return emitOffsetForMfmaLayout(mfmaLayout, type);
-  }
-  if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(layout)) {
-    return emitOffsetForWmmaLayout(wmmaLayout, type);
-  }
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout))
-    return emitOffsetForSliceLayout(sliceLayout, type);
   llvm_unreachable("unsupported emitOffsetForLayout");
 }
 

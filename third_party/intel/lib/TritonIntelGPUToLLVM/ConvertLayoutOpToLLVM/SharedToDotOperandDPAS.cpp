@@ -1,5 +1,4 @@
 #include "../TritonGPUToLLVMBase.h"
-#include "../Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "llvm/Support/ErrorHandling.h"
 

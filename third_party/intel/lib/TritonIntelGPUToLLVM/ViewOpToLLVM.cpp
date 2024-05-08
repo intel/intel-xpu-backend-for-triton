@@ -1,5 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
+#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
 
@@ -235,10 +235,8 @@ struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
           loc, "ExpandDimsOp only supports SliceEncodingAttr as its input");
     }
     auto resultLayout = resultTy.getEncoding();
-    auto srcOffsets =
-        mlir::triton::intel::emitOffsetForLayout(srcLayout, srcTy);
-    auto resultOffsets =
-        mlir::triton::intel::emitOffsetForLayout(resultLayout, resultTy);
+    auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
+    auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
     std::map<SmallVector<unsigned>, Value> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {
       srcValues[srcOffsets[i]] = srcVals[i];
@@ -323,10 +321,8 @@ struct BroadcastOpConversion
     auto typeConverter = getTypeConverter();
     assert(rank == resultTy.getRank());
     auto order = triton::gpu::getOrder(srcLayout);
-    auto srcOffsets =
-        mlir::triton::intel::emitOffsetForLayout(srcLayout, srcTy);
-    auto resultOffsets =
-        mlir::triton::intel::emitOffsetForLayout(resultLayout, resultTy);
+    auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
+    auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
     SmallVector<Value> srcVals = unpackLLElements(loc, src, rewriter);
     std::map<SmallVector<unsigned>, Value> srcValues;
     for (size_t i = 0; i < srcOffsets.size(); i++) {

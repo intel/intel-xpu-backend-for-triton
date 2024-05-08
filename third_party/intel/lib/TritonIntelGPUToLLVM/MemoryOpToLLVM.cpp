@@ -1,5 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
+#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
 
 namespace {
 
@@ -32,12 +32,11 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
   auto dstStrides =
       LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
-  auto srcIndices = ::mlir::triton::intel::emitIndices(
-      loc, rewriter, targetInfo, srcLayout, srcTy, false);
+  auto srcIndices =
+      emitIndices(loc, rewriter, targetInfo, srcLayout, srcTy, false);
   auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-  mlir::triton::intel::storeDistributedToShared(
-      op.getSrc(), inVals, dstStrides, op.getResult(), smemBase, elemTy, loc,
-      rewriter, targetInfo);
+  storeDistributedToShared(op.getSrc(), inVals, dstStrides, op.getResult(),
+                           smemBase, elemTy, loc, rewriter, targetInfo);
 }
 
 struct LocalAllocOpConversion

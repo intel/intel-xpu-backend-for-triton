@@ -1,7 +1,5 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
-
-#include <numeric>
-
+#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -274,6 +272,16 @@ SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() {
     llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
                              "be smaller than the threads required per row.");
   }
+}
+
+SmallVector<Value> DpasEncodingAttr::emitBaseIndexWithinCTAForLayout(
+    Location loc, RewriterBase &rewriter, RankedTensorType type) const {
+  return emitBaseIndexForDpasLayout(loc, rewriter, *this, type);
+}
+
+SmallVector<SmallVector<unsigned>>
+DpasEncodingAttr::emitOffsetForLayout(RankedTensorType type) const {
+  return emitOffsetForDpasLayout(*this, type);
 }
 
 LogicalResult DpasEncodingAttr::verify(

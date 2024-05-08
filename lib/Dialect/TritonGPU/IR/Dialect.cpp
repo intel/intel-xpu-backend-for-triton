@@ -9,6 +9,7 @@
 
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -642,6 +643,16 @@ BlockedEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   return shape;
 }
 
+SmallVector<Value> BlockedEncodingAttr::emitBaseIndexWithinCTAForLayout(
+    Location loc, RewriterBase &rewriter, RankedTensorType type) const {
+  return emitBaseIndexWithinCTAForBlockedLayout(loc, rewriter, *this, type);
+}
+
+SmallVector<SmallVector<unsigned>>
+BlockedEncodingAttr::emitOffsetForLayout(RankedTensorType type) const {
+  return emitOffsetForBlockedLayout(*this, type);
+}
+
 template <class T>
 SmallVector<T> SliceEncodingAttr::paddedShape(ArrayRef<T> shape) const {
   size_t rank = shape.size();
@@ -749,6 +760,11 @@ SliceEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   return shape;
 }
 
+SmallVector<SmallVector<unsigned>>
+SliceEncodingAttr::emitOffsetForLayout(RankedTensorType type) const {
+  return emitOffsetForSliceLayout(*this, type);
+};
+
 //
 
 SmallVector<unsigned>
@@ -785,6 +801,16 @@ AMDMfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 unsigned AMDMfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                      Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
+}
+
+SmallVector<Value> AMDMfmaEncodingAttr::emitBaseIndexWithinCTAForLayout(
+    Location loc, RewriterBase &rewriter, RankedTensorType type) const {
+  return emitBaseIndexForMfmaLayout(loc, rewriter, *this, type);
+}
+
+SmallVector<SmallVector<unsigned>>
+AMDMfmaEncodingAttr::emitOffsetForLayout(RankedTensorType type) const {
+  return emitOffsetForMfmaLayout(*this, type);
 }
 
 //
@@ -897,6 +923,27 @@ unsigned NvidiaMmaEncodingAttr::getElemsPerThreadOfOperand(
 unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                        Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
+}
+
+SmallVector<Value> NvidiaMmaEncodingAttr::emitBaseIndexWithinCTAForLayout(
+    Location loc, RewriterBase &rewriter, RankedTensorType type) const {
+  SmallVector<Value> result;
+  if (isVolta())
+    result = emitBaseIndexWithinCTAForMmaLayoutV1(loc, rewriter, *this, type);
+  if (isAmpere() || isHopper())
+    result = emitBaseIndexWithinCTAForMmaLayoutV2V3(loc, rewriter, *this, type);
+  return result;
+}
+
+SmallVector<SmallVector<unsigned>>
+NvidiaMmaEncodingAttr::emitOffsetForLayout(RankedTensorType type) const {
+  if (isVolta())
+    return emitOffsetForMmaLayoutV1(*this, type);
+  if (isAmpere())
+    return emitOffsetForMmaLayoutV2(*this, type);
+  if (isHopper())
+    return emitOffsetForMmaLayoutV3(*this, type);
+  llvm_unreachable("unsupported emitOffsetForLayout");
 }
 
 //
@@ -1670,6 +1717,16 @@ AMDWmmaEncodingAttr::getWMMARepForOperands(ArrayRef<int64_t> operandShape,
 SmallVector<unsigned> AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr() {
   // TODO: move magic numbers out of the code
   return {16, 16, 16};
+}
+
+SmallVector<Value> AMDWmmaEncodingAttr::emitBaseIndexWithinCTAForLayout(
+    Location loc, RewriterBase &rewriter, RankedTensorType type) const {
+  return emitBaseIndexForWmmaLayout(loc, rewriter, *this, type);
+}
+
+SmallVector<SmallVector<unsigned>>
+AMDWmmaEncodingAttr::emitOffsetForLayout(RankedTensorType type) const {
+  return emitOffsetForWmmaLayout(*this, type);
 }
 
 //===----------------------------------------------------------------------===//

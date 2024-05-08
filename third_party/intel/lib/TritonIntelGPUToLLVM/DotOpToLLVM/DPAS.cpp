@@ -1,5 +1,4 @@
 #include "../TritonGPUToLLVMBase.h"
-#include "../Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"

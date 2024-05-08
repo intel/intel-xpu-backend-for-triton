@@ -526,6 +526,18 @@ For the Threads Per Warp and Values Per Thread level, the linear id distribution
     InterfaceMethod<"Gets the number of contiguous elements per thread.",
                     "SmallVector<unsigned>",
                     "getContigPerThread">,
+
+    InterfaceMethod<"emit base index",
+                    "SmallVector<Value>",
+                    "emitBaseIndexWithinCTAForLayout",
+                     (ins "Location":$loc,
+                          "RewriterBase&":$rewriter,
+                          "RankedTensorType":$type)>,
+
+    InterfaceMethod<"emit offset",
+                    "SmallVector<SmallVector<unsigned>>",
+                    "emitOffsetForLayout",
+                     (ins "RankedTensorType":$type)>,
   ];
 }
 
@@ -745,6 +757,12 @@ for
       // Block encoding is dense stride layout. The elements per thread are contiguous.
       return getSizePerThread();
     };
+
+    SmallVector<Value> emitBaseIndexWithinCTAForLayout(Location loc,
+                                              RewriterBase &rewriter,
+                                              RankedTensorType type) const;
+
+    SmallVector<SmallVector<unsigned>> emitOffsetForLayout(RankedTensorType type) const;
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -904,6 +922,11 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
       return contigPerThread;
     };
 
+    SmallVector<Value> emitBaseIndexWithinCTAForLayout(Location loc,
+                                              RewriterBase &rewriter,
+                                              RankedTensorType type) const;
+
+    SmallVector<SmallVector<unsigned>> emitOffsetForLayout(RankedTensorType type) const;
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -968,6 +991,13 @@ Suppose we have a tensor with shape [32, 48], `warpsPerCTA` set to [2, 3].
       SmallVector<unsigned> contigPerThread(rank, 1);
       return contigPerThread;
     };
+
+    SmallVector<Value> emitBaseIndexWithinCTAForLayout(Location loc,
+                                              RewriterBase &rewriter,
+                                              RankedTensorType type) const;
+
+    SmallVector<SmallVector<unsigned>> emitOffsetForLayout(RankedTensorType type) const;
+
   }];
 }
 
@@ -1169,6 +1199,12 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       return contigPerThread;
     };
 
+    SmallVector<Value> emitBaseIndexWithinCTAForLayout(Location loc,
+                                              RewriterBase &rewriter,
+                                              RankedTensorType type) const;
+
+    SmallVector<SmallVector<unsigned>> emitOffsetForLayout(RankedTensorType type) const;
+
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1210,6 +1246,15 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
       auto parentLayout = mlir::cast<DistributedEncodingTrait>(getParent());
       return parentLayout.getContigPerThread();
     };
+
+
+    SmallVector<Value> emitBaseIndexWithinCTAForLayout(Location loc,
+                                              RewriterBase &rewriter,
+                                              RankedTensorType type) const {
+      llvm_unreachable("SliceEncodingAttr doesn't support emitBaseIndexWithinCTAForLayout interface");
+    };
+
+    SmallVector<SmallVector<unsigned>> emitOffsetForLayout(RankedTensorType type) const;
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1256,8 +1301,18 @@ section 9.7.13.4.1 for more details.
 
   let hasCustomAssemblyFormat = 1;
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<unsigned> getContigPerThread() {
+    SmallVector<unsigned> getContigPerThread() const {
       return getSizePerThread();
+    };
+
+    SmallVector<Value> emitBaseIndexWithinCTAForLayout(Location loc,
+                                              RewriterBase &rewriter,
+                                              RankedTensorType type) const {
+      llvm_unreachable("DotOperandEncodingAttr doesn't support emitBaseIndexWithinCTAForLayout interface");
+    };
+
+    SmallVector<SmallVector<unsigned>> emitOffsetForLayout(RankedTensorType type) const {
+      llvm_unreachable("DotOperandEncodingAttr doesn't support emitOffsetForLayout interface");
     };
   }];
 }

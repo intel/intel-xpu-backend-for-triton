@@ -87,6 +87,12 @@ along the row (resp. col) dimension.
     }
 
     SmallVector<unsigned> getContigPerThread();
+
+    SmallVector<Value> emitBaseIndexWithinCTAForLayout(Location loc,
+                                              RewriterBase &rewriter,
+                                              RankedTensorType type) const;
+
+    SmallVector<SmallVector<unsigned>> emitOffsetForLayout(RankedTensorType type) const;
   }];
 
   let hasCustomAssemblyFormat = 1;

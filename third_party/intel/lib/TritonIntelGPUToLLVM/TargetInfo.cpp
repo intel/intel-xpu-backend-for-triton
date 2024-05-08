@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "TargetInfo.h"
-#include "Utility.h"
+#include "intel/include/TritonIntelGPUToLLVM/Utility.h"
 
 using namespace mlir;
 
