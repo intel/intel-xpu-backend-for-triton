@@ -95,20 +95,14 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
     return this->emitOpError("the dimension for 1st operand (C) and "
                              "result (D) should match repeat count");
 
+  constexpr unsigned SD = 8;
+  if (BTy.getNumElements() != SD)
+    return this->emitOpError("the dimension for the 3rd operand (B) should "
+                             "match the systolic depth of 8");
+
   Type AElemTy = ATy.getElementType();
   Type BElemTy = BTy.getElementType();
   Type CElemTy = CTy.getElementType();
-
-  // ATy is required to be vector<RC x i16> as hard coded by IGC.
-  if (ATy.getNumElements() * AElemTy.getIntOrFloatBitWidth() != getRc() * 16)
-    return this->emitOpError(
-        "2nd operand (A) bit-size should be repeat count times 16");
-
-  // BTy is required to be vector<SD x i32> as hard coded by IGC.
-  constexpr unsigned SD = 8;
-  if (BTy.getNumElements() * BElemTy.getIntOrFloatBitWidth() != SD * 32)
-    return this->emitOpError(
-        "3rd operand (B) bit-size should be systolic depth (8) times 32");
 
   if (precision == TritonGEN::PrecisionType::U8 ||
       precision == TritonGEN::PrecisionType::S8) {
@@ -121,31 +115,31 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
 
   switch (precision) {
   case TritonGEN::PrecisionType::TF32:
+    if (ATy.getNumElements() != getRc() / 2)
+      return this->emitOpError("the dimension for the 2nd operand (A) should "
+                               "be equal to half of the repeat count");
     if (!AElemTy.isa<Float32Type>() && !AElemTy.isInteger(32))
-      return this->emitOpError("A and B operand element type should be f32 or "
-                               "i32 when precision type is tf32");
+      return this->emitOpError("2nd operand (A) element type should be f32 or "
+                               "i32 when the precision type is tf32");
+    if (!BElemTy.isa<Float32Type>() && !BElemTy.isInteger(32))
+      return this->emitOpError("3rd operand (B) element type should be f32 or "
+                               "i32 when the precision type is tf32");
     break;
   case TritonGEN::PrecisionType::BF16:
-    if (!AElemTy.isa<BFloat16Type>() && !AElemTy.isInteger(16))
-      return this->emitOpError("A and B operand element type should be bf16 or "
-                               "i16 when precision type is bf16");
-    break;
   case TritonGEN::PrecisionType::FP16:
-    if (!AElemTy.isa<Float16Type>() && !AElemTy.isInteger(16))
-      return this->emitOpError("A and B operand element type should be f16 or "
-                               "i16 when precision type is f16");
-    break;
   case TritonGEN::PrecisionType::U8:
-    if (!(AElemTy.isInteger(8) && !AElemTy.cast<IntegerType>().isSigned()) &&
-        !AElemTy.isInteger(16))
-      return this->emitOpError("A and B operand element type should be u8, i8, "
-                               "or i16 when precision type is u8");
-    break;
   case TritonGEN::PrecisionType::S8:
-    if (!(AElemTy.isInteger(8) && !AElemTy.cast<IntegerType>().isUnsigned()) &&
-        !AElemTy.isInteger(16))
-      return this->emitOpError("A and B operand element type should be s8, i8, "
-                               "or i16 when precision type is s8");
+    if (ATy.getNumElements() != getRc())
+      return this->emitOpError("2nd operand (A) should have the same number of "
+                               "elements as repeat count");
+    if (!AElemTy.isInteger(16))
+      return this->emitOpError(
+          "2nd operand (A) element type should be i16 when "
+          "the precision type is not tf32");
+    if (!BElemTy.isInteger(32))
+      return this->emitOpError(
+          "3rd operand (B) element type should be i32 when "
+          "the precision type is not tf32");
     break;
   default:
     return this->emitOpError(

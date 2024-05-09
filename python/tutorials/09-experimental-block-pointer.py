@@ -236,4 +236,4 @@ print(f"torch_output={torch_output}")
 if torch.allclose(triton_output, torch_output, atol=1e-4, rtol=1e-3):
     print("✅ Triton and Torch match")
 else:
-    print("❌ Triton and Torch differ")
+    exit("❌ Triton and Torch differ")
