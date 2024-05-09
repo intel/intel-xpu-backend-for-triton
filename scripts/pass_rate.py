@@ -16,6 +16,7 @@ class ReportStats:
     """Report stats."""
     name: str = ''
     passed: int = 0
+    failed: int = 0
     skipped: int = 0
     xfailed: int = 0
     total: int = 0
@@ -60,10 +61,14 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
                 stats.skipped += 1
             elif skipped.get('type') == 'pytest.xfail':
                 stats.xfailed += 1
+        for _ in testsuite.iter('failure'):
+            stats.failed += 1
+        for _ in testsuite.iter('error'):
+            stats.failed += 1
     deselected = get_deselected(report_path)
     stats.skipped += deselected
     stats.total += deselected
-    stats.passed = stats.total - stats.skipped - stats.xfailed
+    stats.passed = stats.total - stats.failed - stats.skipped - stats.xfailed
     return stats
 
 
@@ -72,6 +77,7 @@ def overall_stats(stats: List[ReportStats]) -> ReportStats:
     overall = ReportStats(name='all')
     for item in stats:
         overall.passed += item.passed
+        overall.failed += item.failed
         overall.skipped += item.skipped
         overall.xfailed += item.xfailed
         overall.total += item.total
@@ -88,6 +94,7 @@ def print_stats(stats: ReportStats):
     print(
         f'{stats.name}:'
         f' passed: {stats.passed},'
+        f' failed: {stats.failed},'
         f' skipped: {stats.skipped},'
         f' xfailed: {stats.xfailed},'
         f' total: {stats.total},'
@@ -112,6 +119,7 @@ def print_json_stats(stats: List[ReportStats]):
         'python_version': platform.python_version(),
         'testsuite': overall.name,
         'passed': overall.passed,
+        'failed': overall.failed,
         'skipped': overall.skipped,
         'xfailed': overall.xfailed,
         'total': overall.total,
