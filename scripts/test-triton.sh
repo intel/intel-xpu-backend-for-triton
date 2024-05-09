@@ -9,6 +9,7 @@ TEST_UNIT=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
+TRITON_TEST_IGNORE_ERRORS=false
 SKIP_DEPS=false
 ARGS=
 for arg in "$@"; do
@@ -41,8 +42,12 @@ for arg in "$@"; do
       TRITON_TEST_WARNING_REPORTS=true
       shift
       ;;
+    --ignore-errors)
+      TRITON_TEST_IGNORE_ERRORS=true
+      shift
+      ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports | --warning-reports]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports | --warning-reports | --ignore-errors]"
       exit 1
       ;;
     *)

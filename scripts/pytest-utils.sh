@@ -5,6 +5,7 @@ TRITON_TEST_REPORTS="${TRITON_TEST_REPORTS:-false}"
 TRITON_TEST_REPORTS_DIR="${TRITON_TEST_REPORTS_DIR:-$HOME/reports/$TIMESTAMP}"
 TRITON_TEST_SKIPLIST_DIR="${TRITON_TEST_SKIPLIST_DIR:-$SCRIPTS_DIR/skiplist/default}"
 TRITON_TEST_WARNING_REPORTS="${TRITON_TEST_WARNING_REPORTS:-false}"
+TRITON_TEST_IGNORE_ERRORS="${TRITON_TEST_IGNORE_ERRORS:-false}"
 
 # absolute path for the selected skip list
 TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
@@ -39,5 +40,5 @@ pytest() {
         )
     fi
 
-    python3 -m pytest "${pytest_extra_args[@]}" "$@"
+    python3 -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
 }
