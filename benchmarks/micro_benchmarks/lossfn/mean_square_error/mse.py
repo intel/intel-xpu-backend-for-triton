@@ -31,17 +31,20 @@ class MSETritonKernel:
         block_size: tl.constexpr,
     ):
 
-        predicted_pointers = utils.GetStartingPointerData(predicted_ptr, predicted_stride_row, block_size)
-        expected_pointers = utils.GetStartingPointerData(expected_ptr, expected_stride_row, block_size)
+        pid = tl.program_id(0)
+        offsets = tl.arange(0, block_size)
+        predicted_pointers = predicted_ptr + (pid * predicted_stride_row) + offsets
+        expected_pointers = expected_ptr + (pid * expected_stride_row) + offsets
         row_mask = tl.arange(0, block_size) < N  # only load or write the real data
 
         predicted_row_data = tl.load(predicted_pointers, mask=row_mask)
         expected_row_data = tl.load(expected_pointers, mask=row_mask)
 
-        sm_out = tl.sum(tl.math.pow(predicted_row_data - expected_row_data, 2) / N, 0)
+        sm_out = tl.sum(tl.extra.intel.libdevice.pow(predicted_row_data - expected_row_data, 2) / N, 0)
 
         # move SRAM to HBM
-        tl.store(utils.GetStartingPointerData(output_ptr, stride_output_row, block_size), sm_out, mask=row_mask)
+        output_pointers = output_ptr + (pid * stride_output_row) + offsets
+        tl.store(output_pointers, sm_out, mask=row_mask)
 
     @staticmethod
     @triton.jit
@@ -49,8 +52,10 @@ class MSETritonKernel:
                             expected_stride_row, N, block_size: tl.constexpr):
 
         # setup input ptrs
-        predicted_pointer = utils.GetStartingPointerData(predicted_ptr, predicted_stride_row, block_size)
-        expected_pointer = utils.GetStartingPointerData(expected_ptr, expected_stride_row, block_size)
+        pid = tl.program_id(0)
+        offsets = tl.arange(0, block_size)
+        predicted_pointer = predicted_ptr + (pid * predicted_stride_row) + offsets
+        expected_pointer = expected_ptr + (pid * expected_stride_row) + offsets
 
         # move data to SRAM
         row_mask = tl.arange(0, block_size) < N  # only load or write the real data
@@ -120,33 +125,34 @@ class MSETriton(torch.autograd.Function):
 def triton_MSE(predicted: torch.tensor, expected: torch.tensor) -> torch.tensor:
     predicted.grad = None
     output = MSETriton.apply(predicted, expected)
-    output.backward(predicted)
+    output.backward(predicted, retain_graph=True)
     return output.data[0][0]
 
 
 def torch_MSE(predicted: torch.tensor, expected: torch.tensor) -> torch.tensor:
     predicted.grad = None
     MSELoss = torch.nn.MSELoss()
-    Output = MSELoss(predicted, expected)
-    Output.backward()
-    return Output
+    output = MSELoss(predicted, expected)
+    output.backward()
+    return output
 
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
-        x_names=["M", "N"],
-        x_vals=[(1, 1024), (512, 1024), (1024, 1024)],
-        line_arg="provider",
-        line_vals=["triton", "torch"],
-        line_names=["triton", "torch"],
-        ylabel="GB/s",
-        plot_name="mse-performance",
-        args={},
+        x_names=['N'],
+        x_vals=[256, 1024, 2048, 4096],
+        line_arg='provider',
+        line_vals=['triton', 'torch'],
+        line_names=['Triton', 'Torch'],
+        styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
+        ylabel='GB/s',
+        plot_name='layer-norm-backward',
+        args={'M': 4096, 'dtype': torch.float32, 'mode': 'forward'},
     ))
-def benchmark(M, N, provider):
-    predicted = torch.rand(1, M * N, dtype=torch.float32, device="xpu", requires_grad=True)
+def benchmark(M, N, dtype, provider, mode='forward'):
+    predicted = torch.rand(1, M * N, dtype=dtype, device="xpu", requires_grad=True)
 
-    expected = torch.rand(1, M * N, dtype=torch.float32, device="xpu")
+    expected = torch.rand(1, M * N, dtype=dtype, device="xpu")
 
     if provider == "triton":
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_MSE(predicted, expected))

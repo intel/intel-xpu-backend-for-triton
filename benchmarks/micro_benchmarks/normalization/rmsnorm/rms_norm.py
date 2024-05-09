@@ -430,7 +430,7 @@ def test_backward(y_size, x_size, p, device='xpu'):
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['N'],
-        x_vals=[512 * i for i in range(2, 32)],
+        x_vals=[256, 1024, 2048, 4096],
         line_arg='provider',
         line_vals=['triton', 'torch'],
         line_names=['Triton', 'Torch'],

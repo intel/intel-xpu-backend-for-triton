@@ -104,7 +104,7 @@ def benchmark(num_tokens, num_dims, N, dtype, provider):
     if provider == "torch":
         ms, min_ms, max_ms = triton.testing.do_bench(torch_sin_encoding, quantiles=quantiles)
 
-    gbps = 2 * num_tokens * num_dims * input_positions.element_size() / ms * 1e-6
+    gbps = lambda ms: 2 * num_tokens * num_dims * input_positions.element_size() / ms * 1e-6
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 

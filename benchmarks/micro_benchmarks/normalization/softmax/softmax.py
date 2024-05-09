@@ -222,14 +222,14 @@ class Softmax(torch.autograd.Function):
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
-        x_names=["M", "N"],
-        x_vals=[(256, 256), (512, 1024), (1024, 1024)],
+        x_names=["N"],
+        x_vals=[256, 1024, 2048, 4096],
         line_arg="provider",
         line_vals=["triton-inf", "triton-train", "torch-inf", "torch_train"],
         line_names=["triton-inf", "triton-train", "torch-inf", "torch_train"],
         ylabel="GB/s",
         plot_name="softmax-performance",
-        args={"dtype": torch.float16},
+        args={'M': 4096, "dtype": torch.float16},
     ))
 def benchmark(M, N, provider, dtype):
 
@@ -239,16 +239,16 @@ def benchmark(M, N, provider, dtype):
     dy = .1 * torch.randn_like(x)
     if provider == 'torch-inf':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_softmax_inf(x), quantiles=quantiles)
-    if provider == 'torch-train':
+    if provider == 'torch_train':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_softmax_train(x, dy), quantiles=quantiles)
     if provider == 'triton-inf':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_softmax_inf(x), quantiles=quantiles)
     if provider == 'triton-train':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_softmax_train(x, dy), quantiles=quantiles)
 
-    gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-6)
+    gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
 if __name__ == "__main__":
-    benchmark.run(print_data=True, show_plots=True)
+    benchmark.run(print_data=True)

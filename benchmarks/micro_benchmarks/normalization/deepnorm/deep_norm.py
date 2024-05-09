@@ -275,7 +275,7 @@ def test_deep_norm(M, N, dtype, eps=1e-5, device='xpu'):
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['N'],
-        x_vals=[512 * i for i in range(2, 32)],
+        x_vals=[256, 1024, 2048, 4096],
         line_arg='provider',
         line_vals=['triton', 'torch'],
         line_names=['Triton', 'Torch'],
