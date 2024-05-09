@@ -436,12 +436,12 @@ def test_backward(y_size, x_size, p, device='xpu'):
         line_names=['Triton', 'Torch'],
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
-        plot_name='rms-norm-backward',
+        plot_name='rms-norm-performance',
         args={'M': 4096, 'dtype': torch.float16, 'mode': 'forward'},
     ))
 def benchmark(M, N, dtype, provider, mode='backeard', eps=1e-5):
-    # create data
 
+    # create data
     input = torch.randn((N, M), device="xpu", dtype=dtype)
     weight = torch.randn(M, device="xpu", dtype=dtype)
     grad_output = torch.randn(N, M, device="xpu", dtype=dtype)

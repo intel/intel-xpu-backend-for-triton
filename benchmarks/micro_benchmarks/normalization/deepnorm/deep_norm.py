@@ -282,7 +282,7 @@ def test_deep_norm(M, N, dtype, eps=1e-5, device='xpu'):
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
         plot_name='deep-norm-performance',
-        args={'M': 4096, 'dtype': torch.float16, 'mode': 'backward'},
+        args={'M': 4096, 'dtype': torch.float16, 'mode': 'forward'},
     ))
 def benchmark(M, N, dtype, provider, mode='backward', eps=1e-5):
     # create data

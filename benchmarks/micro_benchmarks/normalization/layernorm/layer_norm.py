@@ -286,7 +286,7 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='xpu'):
         line_names=['Triton', 'Torch'],
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
-        plot_name='layer-norm-backward',
+        plot_name='layer-norm-performance',
         args={'M': 4096, 'dtype': torch.float16, 'mode': 'forward'},
     ))
 def benchmark(M, N, dtype, provider, mode='backward', eps=1e-5):

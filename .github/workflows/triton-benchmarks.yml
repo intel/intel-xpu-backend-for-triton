@@ -17,7 +17,7 @@ env:
 
 jobs:
   build:
-    name: xetla benchmark
+    name: Triton benchmarks
     runs-on:
       - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
@@ -108,6 +108,12 @@ jobs:
           source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           cd benchmarks/xetla_benchmark
           python fused_softmax.py
+
+      - name: Run micro benchmark
+        run: |
+          source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
+          cd benchmarks/micro_benchmarks
+          python run_benchmarks.py
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

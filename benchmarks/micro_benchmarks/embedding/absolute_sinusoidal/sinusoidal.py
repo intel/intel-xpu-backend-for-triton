@@ -81,14 +81,13 @@ def posenc_sin_pytorch(Tokens: int, dimensions: torch.tensor, dtype, N=10000) ->
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['num_tokens'],
-        x_vals=[10000 * i for i in range(2, 20, 2)],
-        # x_vals=[512],
+        x_vals=[10000 * i for i in range(2, 10, 2)],
         line_arg='provider',
         line_vals=['triton', 'torch'],
         line_names=['Triton', 'Torch'],
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
-        plot_name='Sinusoidal-Encoding-Performance',
+        plot_name='sinusoidal-encoding-performance',
         args={'num_dims': 512, 'N': 10000, 'dtype': torch.float16},
     ))
 def benchmark(num_tokens, num_dims, N, dtype, provider):

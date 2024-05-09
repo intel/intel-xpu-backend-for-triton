@@ -140,7 +140,7 @@ swiglu_tri = TritonSwiGLU.apply
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
         plot_name='swiglu-performance',
-        args={'M': 1024, 'dtype': torch.float16, 'mode': 'backward'},
+        args={'M': 4096, 'dtype': torch.float16, 'mode': 'forward'},
     ))
 def benchmark(M, N, dtype, provider, mode='forward'):
 

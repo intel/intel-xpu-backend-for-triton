@@ -140,7 +140,7 @@ class GeluTriton(torch.autograd.Function):
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
         plot_name='gelu-performance',
-        args={'M': 1024, 'dtype': torch.float16, 'mode': 'backward'},
+        args={'M': 4096, 'dtype': torch.float16, 'mode': 'forward'},
     ))
 def benchmark(M, N, dtype, provider, mode='forward'):
     quantiles = [0.5, 0.2, 0.8]
