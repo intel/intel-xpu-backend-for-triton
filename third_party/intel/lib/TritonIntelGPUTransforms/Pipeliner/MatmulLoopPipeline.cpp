@@ -49,38 +49,25 @@ static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
   if (user->getNumResults() != 1)
     return nullptr;
 
-  LLVM_DEBUG(llvm::dbgs() << "at line: " << __LINE__ << "\n");
   OpResult res = user->getResult(0);
   auto tensorType = dyn_cast<RankedTensorType>(res.getType());
-  if (!tensorType) {
-    LLVM_DEBUG(llvm::dbgs() << "at line: " << __LINE__ << "\n");
+  if (!tensorType)
     return nullptr;
-  }
 
-  if (isa<ttg::SharedEncodingAttr>(tensorType.getEncoding())) {
-    LLVM_DEBUG(llvm::dbgs() << "at line: " << __LINE__ << "\n");
+  if (isa<ttg::SharedEncodingAttr>(tensorType.getEncoding()))
     return allTransitiveUsesHaveDotEncoding(res);
-  }
 
   Operation *op = dyn_cast<ttg::ConvertLayoutOp>(user)
                       ? dyn_cast<ttg::ConvertLayoutOp>(user)
                       : dyn_cast<tt::DotOp>(user);
 
-  LLVM_DEBUG(llvm::dbgs() << "at line: " << __LINE__ << "\n");
   if (op) {
     auto tensorType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-    if (!tensorType) {
-      LLVM_DEBUG(llvm::dbgs() << "at line: " << __LINE__ << "\n");
+    if (!tensorType)
       return nullptr;
-    }
 
-    LLVM_DEBUG(llvm::dbgs() << "at line: " << __LINE__ << "\n");
-    LLVM_DEBUG(llvm::dbgs()
-               << "encoding: " << tensorType.getEncoding() << "\n");
     return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
   }
-
-  LLVM_DEBUG(llvm::dbgs() << "at line: " << __LINE__ << "\n");
 
   return nullptr;
 }
@@ -91,22 +78,16 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
   ttg::DotOperandEncodingAttr attr{nullptr};
   LLVM_DEBUG(llvm::dbgs() << "Checking users of " << val << "\n");
   for (Operation *user : val.getUsers()) {
-    LLVM_DEBUG(llvm::dbgs() << "user: " << *user << "\n");
-
     if (isa<triton::DotOp>(user)) {
       auto tensorType = cast<RankedTensorType>(val.getType());
       return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
     }
 
     ttg::DotOperandEncodingAttr dotAttr = getDotEncodingFromUser(user);
-
-    if (dotAttr)
-      LLVM_DEBUG(llvm::dbgs() << "dotAttr: " << dotAttr << "\n");
-    if (attr)
-      LLVM_DEBUG(llvm::dbgs() << "attr: " << attr << "\n");
-
     if (!dotAttr || (attr != nullptr && attr != dotAttr)) {
-      LLVM_DEBUG(llvm::dbgs() << "no dot attribute found\n");
+      LLVM_DEBUG({
+        llvm::dbgs() << "no dot attribute found for user: " << user << "\n";
+      });
       return nullptr;
     }
     attr = dotAttr;
