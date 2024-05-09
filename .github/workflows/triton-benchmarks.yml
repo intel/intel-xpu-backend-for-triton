@@ -7,12 +7,8 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
-  pull_request:
-    branches:
-      - llvm-target
-  push:
-    branches:
-      - llvm-target
+  schedule:
+    - cron: "5 23 * * *"
 
 permissions: read-all
 
