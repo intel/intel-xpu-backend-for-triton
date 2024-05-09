@@ -35,7 +35,7 @@ class Autotuner(KernelInterface):
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
         """
         if not configs:
-            self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
+            self.configs = [Config({}, num_warps=4, threads_per_warp=32, num_stages=2, num_ctas=1)]
         else:
             self.configs = configs
         self.key_idx = [arg_names.index(k) for k in key]
@@ -113,6 +113,7 @@ class Autotuner(KernelInterface):
                 self.fn.run(
                     *args,
                     num_warps=config.num_warps,
+                    threads_per_warp=config.threads_per_warp,
                     num_stages=config.num_stages,
                     num_ctas=config.num_ctas,
                     **current,
@@ -176,6 +177,7 @@ class Autotuner(KernelInterface):
             num_warps=config.num_warps,
             num_stages=config.num_stages,
             num_ctas=config.num_ctas,
+            threads_per_warp=config.threads_per_warp,
             **kwargs,
             **config.kwargs,
         )
@@ -200,6 +202,7 @@ class Autotuner(KernelInterface):
                         num_stages=config.num_stages,
                         num_warps=config.num_warps,
                         num_ctas=config.num_ctas,
+                        threads_per_warp=config.threads_per_warp,
                     )
                     for config in pruned_configs
                 }
@@ -216,6 +219,7 @@ class Autotuner(KernelInterface):
                     num_warps=config.num_warps,
                     num_ctas=config.num_ctas,
                     num_stages=config.num_stages,
+                    threads_per_warp=config.threads_per_warp,
                     **kwargs,
                     **config.kwargs,
                 ))
@@ -231,8 +235,10 @@ class Config:
     :type kwargs: dict[Str, Any]
     :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
                       `num_warps=8`, then each kernel instance will be automatically parallelized to
-                      cooperatively execute using `8 * 32 = 256` threads.
+                      cooperatively execute using `8 * threads_per_warp` threads.
     :type num_warps: int
+    :ivar threads_per_warp: the number of threads per warp.
+    :type threads_per_warp: int
     :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
     :type num_ctas: int
@@ -241,9 +247,10 @@ class Config:
                     function are args.
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, pre_hook=None):
+    def __init__(self, kwargs, num_warps=4, threads_per_warp=32, num_stages=2, num_ctas=1, pre_hook=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
+        self.threads_per_warp = threads_per_warp
         self.num_ctas = num_ctas
         self.num_stages = num_stages
         self.pre_hook = pre_hook
@@ -253,6 +260,7 @@ class Config:
         for k, v in self.kwargs.items():
             res.append(f"{k}: {v}")
         res.append(f"num_warps: {self.num_warps}")
+        res.append(f"threads_per_warp: {self.threads_per_warp}")
         res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"num_stages: {self.num_stages}")
         return ", ".join(res)
