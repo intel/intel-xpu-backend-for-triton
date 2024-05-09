@@ -163,7 +163,7 @@ run_tutorial_test() {
   echo
   echo "****** Running $1 test ******"
   echo
-  python $1.py
+  python $1.py || $TRITON_TEST_IGNORE_ERRORS
 }
 
 run_tutorial_tests() {
