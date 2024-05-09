@@ -4,6 +4,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
+#include "llvm/Support/Debug.h"
+
 #include <stack>
 
 using namespace mlir;
@@ -15,6 +17,8 @@ namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREWRITETENSORPOINTER
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
+
+#define DEBUG_TYPE "tritonintelgpu-rewrite-tensor-pointer"
 
 namespace {
 
@@ -200,6 +204,8 @@ struct RewritedInfo {
 
     // Generate offsets per dimension
     Value ptr = builder.create<tt::SplatOp>(loc, ptrTensorType, base);
+    LLVM_DEBUG(llvm::dbgs() << "Created: " << ptr << "\n");
+
     for (unsigned i = 0; i < tensorShape.size(); ++i) {
       auto offsetWithRange = getExpandedOffsetWithRange(builder, loc, i);
 
@@ -207,6 +213,8 @@ struct RewritedInfo {
       // the divisibility information given by strides
       Value splatStride = builder.create<tt::SplatOp>(
           loc, offsetWithRange.getType(), strides[i]);
+      LLVM_DEBUG(llvm::dbgs() << "splatStride: " << splatStride << "\n");
+
       Value offsetWithStride =
           builder.create<arith::MulIOp>(loc, offsetWithRange, splatStride);
       Value broadcasted = builder.create<tt::BroadcastOp>(loc, indexTensorType,
@@ -236,12 +244,18 @@ struct RewritedInfo {
           builder.create<arith::ConstantIntOp>(loc, 0, builder.getI64Type());
       Value splatLowerBound = builder.create<tt::SplatOp>(
           loc, offsetWithRange.getType(), lowerBound);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "splatLowerBound: " << splatLowerBound << "\n");
+
       Value cmpLower = builder.create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::sge, offsetWithRange, splatLowerBound);
 
       // Compare with upper bound
       Value splatUpperBound =
           builder.create<tt::SplatOp>(loc, offsetWithRange.getType(), shape[i]);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "splatUpperBound: " << splatUpperBound << "\n");
+
       Value cmpUpper = builder.create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::slt, offsetWithRange, splatUpperBound);
 
@@ -288,7 +302,10 @@ struct RewritedInfo {
 
     // Create tensor
     Value constant = builder.create<arith::ConstantOp>(loc, attr);
-    return builder.create<tt::SplatOp>(loc, otherTensorType, constant);
+    auto spatOp = builder.create<tt::SplatOp>(loc, otherTensorType, constant);
+    LLVM_DEBUG(llvm::dbgs() << "Created: " << spatOp << "\n");
+
+    return spatOp;
   }
 
 private:
@@ -346,6 +363,7 @@ public:
                                     std::stack<Operation *> &eraser) {
     if (!valueToRemove.count(op.getResult()))
       return nullptr;
+
     // Save info for later use
     auto ptrType = cast<tt::PointerType>(op.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
@@ -447,10 +465,14 @@ public:
           loadOp.getLoc(), newPtr, newMask, newOther, loadOp.getCache(),
           loadOp.getEvict(), loadOp.getIsVolatile());
       op->getResult(0).replaceAllUsesWith(newResult);
+      LLVM_DEBUG(llvm::dbgs() << "Replace " << op->getResult(0) << " with "
+                              << newResult << "\n");
     } else if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
-      builder.create<tt::StoreOp>(storeOp.getLoc(), newPtr, storeOp.getValue(),
-                                  newMask, storeOp.getCache(),
-                                  storeOp.getEvict());
+      auto newStoreOp = builder.create<tt::StoreOp>(
+          storeOp.getLoc(), newPtr, storeOp.getValue(), newMask,
+          storeOp.getCache(), storeOp.getEvict());
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Created new store op: " << newStoreOp << "\n");
     }
 
     // Erase the original operation
@@ -710,8 +732,10 @@ public:
     auto markTensorPointerForRemoval = [this](Value val) {
       if (tt::isTensorPointerType(val.getType())) {
         tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
-        if (shouldRemove(makeTensorPtrOp, deviceArch))
+        if (shouldRemove(makeTensorPtrOp, deviceArch)) {
+          LLVM_DEBUG(llvm::dbgs() << val << " is going to be removed\n");
           valueToRemove.insert(val);
+        }
       }
     };
 
@@ -731,6 +755,16 @@ public:
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         for (auto operand : yieldOp.getOperands())
           markTensorPointerForRemoval(operand);
+      }
+    });
+
+    LLVM_DEBUG({
+      if (valueToRemove.empty())
+        llvm::dbgs() << "No tensor pointer to remove\n";
+      else {
+        llvm::dbgs() << "Values to remove: \n";
+        for (auto val : valueToRemove)
+          llvm::dbgs() << val << "\n";
       }
     });
 

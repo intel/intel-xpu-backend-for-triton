@@ -213,11 +213,11 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
       // This is to avoid stepping into the known bug.
       if (isa<mlir::triton::ReduceOp>(op)) {
         auto tensorType =
-            op->getOperand(0).getType().dyn_cast<RankedTensorType>();
+            dyn_cast<RankedTensorType>(op->getOperand(0).getType());
         if (tensorType &&
-            tensorType.getEncoding().isa<NvidiaMmaEncodingAttr>()) {
+            isa<NvidiaMmaEncodingAttr>(tensorType.getEncoding())) {
           auto mmaInstrShape =
-              encoding.cast<NvidiaMmaEncodingAttr>().getInstrShape();
+              cast<NvidiaMmaEncodingAttr>(encoding).getInstrShape();
           if (tensorType.getShape()[tensorType.getRank() - 2] <
                   mmaInstrShape[0] ||
               tensorType.getShape()[tensorType.getRank() - 1] <
@@ -229,25 +229,29 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 
       if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
         Attribute dstEncoding = convertOp.getType().getEncoding();
-        if (auto mmaLayout = dstEncoding.dyn_cast<NvidiaMmaEncodingAttr>())
+        if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstEncoding))
           return (mmaLayout.getVersionMajor() > 1) ? true
                                                    : mmaLayout == encoding;
-        if (dstEncoding.isa<triton::gpu::AMDMfmaEncodingAttr,
-                            triton::gpu::AMDWmmaEncodingAttr>())
+        if (isa<ttgi::DpasEncodingAttr>(dstEncoding))
           return true;
-        if (dstEncoding.isa<triton::gpu::DotOperandEncodingAttr>()) {
-          if (auto mmaLayout = encoding.dyn_cast<NvidiaMmaEncodingAttr>()) {
+        if (isa<triton::gpu::AMDMfmaEncodingAttr,
+                triton::gpu::AMDWmmaEncodingAttr>(dstEncoding))
+          return true;
+        if (isa<triton::gpu::DotOperandEncodingAttr>(dstEncoding)) {
+          if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
             return mmaLayout.getVersionMajor() > 1;
+          } else if (isa<ttgi::DpasEncodingAttr>(encoding)) {
+            return true;
           } else {
-            assert(encoding.isa<triton::gpu::AMDMfmaEncodingAttr>() ||
-                   encoding.isa<triton::gpu::AMDWmmaEncodingAttr>());
+            assert((mlir::isa<triton::gpu::AMDMfmaEncodingAttr,
+                              triton::gpu::AMDWmmaEncodingAttr>(encoding)));
             return true;
           }
         }
       }
       bool isMMAV3 =
-          encoding.isa<NvidiaMmaEncodingAttr>() &&
-          encoding.cast<NvidiaMmaEncodingAttr>().getVersionMajor() == 3;
+          isa<NvidiaMmaEncodingAttr>(encoding) &&
+          cast<NvidiaMmaEncodingAttr>(encoding).getVersionMajor() == 3;
       if (isMMAV3 && isa<LocalAllocOp>(op))
         return true;
       auto yield = dyn_cast<scf::YieldOp>(op);
@@ -302,8 +306,7 @@ void LayoutPropagation::initAnchorLayout() {
       // back to mma further down to avoid generating reduction with MMA
       // layout that may have lower performance.
       // This can be improved with more aggressive backward propagation.
-      // FIXME: Change back NvidiaMmaEncodingAttr to MmaEncodingTrait.
-      if (isa<NvidiaMmaEncodingAttr>(tensorType.getEncoding()) &&
+      if (isa<MmaEncodingTrait>(tensorType.getEncoding()) &&
           v.getDefiningOp() &&
           !hasConvertToMMATransisitiveUse(v.getDefiningOp(),
                                           tensorType.getEncoding())) {
@@ -441,8 +444,8 @@ void LayoutPropagation::resolveConflicts() {
     bool isLoadOrStore =
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
     for (Attribute e : info.encodings) {
-      if ((isLoadOrStore && e.isa<BlockedEncodingAttr>()) ||
-          (!isLoadOrStore && e.isa<MmaEncodingTrait>())) {
+      if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
+          (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
         encoding = e;
         break;
       }
@@ -888,14 +891,14 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
       if (auto ifOp = v.getDefiningOp<scf::IfOp>()) {
-        unsigned operandIdx = v.cast<OpResult>().getResultNumber();
+        unsigned operandIdx = cast<OpResult>(v).getResultNumber();
         opsToRewrite.insert(ifOp.thenYield().getOperation());
         yieldOperandsMap[ifOp.thenYield()].push_back(operandIdx);
         opsToRewrite.insert(ifOp.elseYield().getOperation());
         yieldOperandsMap[ifOp.elseYield()].push_back(operandIdx);
       }
     } else {
-      BlockArgument blockArg = v.cast<BlockArgument>();
+      BlockArgument blockArg = cast<BlockArgument>(v);
       Operation *parentOp = blockArg.getOwner()->getParentOp();
       if (auto loopOp = cast<LoopLikeOpInterface>(parentOp)) {
         opsToRewrite.insert(loopOp.getOperation());
@@ -1094,13 +1097,12 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
 void LayoutRematerialization::backwardRematerialization(
     ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
-  // we don't backward propagate the dot layout with blocked layout as parent.
+  // We don't backward propagate the dot layout with blocked layout as parent.
   // It introduces a lot of duplicated values in multiple-threads.
   if (auto dotLayout =
-          dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding())) {
+          dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding()))
     if (dotLayout.getParent().isa<BlockedEncodingAttr>())
       return;
-  }
   Value oldV = convertOp->getOperand(0);
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
@@ -1142,7 +1144,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-  if (targetType.getEncoding().isa<DotOperandEncodingAttr>())
+  if (mlir::isa<DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {

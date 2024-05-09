@@ -164,14 +164,16 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm, device_arch)
 
         passes.ttgpuir.add_coalesce(pm)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
 
+        intel.passes.ttgpuir.add_accelerate_matmul(pm, device_arch)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
@@ -186,12 +188,8 @@ class XPUBackend(BaseBackend):
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
-
-        # FIXME: On the experimental path, get_threads_per_warp always return 1.
-        if not XPUOptions.isBlockPtrEnabled:
-            threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
-            metadata["threads_per_warp"] = threads_per_warp
-
+        threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
+        metadata["threads_per_warp"] = threads_per_warp
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)

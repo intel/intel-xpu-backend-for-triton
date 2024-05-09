@@ -8,6 +8,7 @@ TEST_TUTORIAL=false
 TEST_UNIT=false
 VENV=false
 TRITON_TEST_REPORTS=false
+TRITON_TEST_WARNING_REPORTS=false
 SKIP_DEPS=false
 ARGS=
 for arg in "$@"; do
@@ -36,8 +37,12 @@ for arg in "$@"; do
       TRITON_TEST_REPORTS=true
       shift
       ;;
+    --warning-reports)
+      TRITON_TEST_WARNING_REPORTS=true
+      shift
+      ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports | --warning-reports]"
       exit 1
       ;;
     *)
@@ -68,6 +73,10 @@ export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
 
 python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select
+
+if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
+    python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.0
+fi
 
 source $SCRIPTS_DIR/pytest-utils.sh
 $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
