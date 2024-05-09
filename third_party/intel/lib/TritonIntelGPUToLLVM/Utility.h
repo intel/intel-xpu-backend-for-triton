@@ -14,8 +14,6 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "llvm/Support/raw_ostream.h"
-#include <cstdint>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
