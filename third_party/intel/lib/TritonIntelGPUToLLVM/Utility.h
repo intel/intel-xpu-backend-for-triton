@@ -634,29 +634,13 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   }
 }
 
-
-inline LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
+LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
                                        ArrayRef<Type> paramTypes,
-                                       Type resultType) {
-  auto func = dyn_cast_or_null<LLVM::LLVMFuncOp>(
-      SymbolTable::lookupSymbolIn(symbolTable, name));
-  if (!func) {
-    OpBuilder b(symbolTable->getRegion(0));
-    func = b.create<LLVM::LLVMFuncOp>(
-        symbolTable->getLoc(), name,
-        LLVM::LLVMFunctionType::get(resultType, paramTypes));
-    func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-  }
-  return func;
-}
+                                       Type resultType);
 
-inline LLVM::CallOp createSPIRVBuiltinCall(Location loc,
+LLVM::CallOp createSPIRVBuiltinCall(Location loc,
                                     ConversionPatternRewriter &rewriter,
-                                    LLVM::LLVMFuncOp func, ValueRange args) {
-  auto call = rewriter.create<LLVM::CallOp>(loc, func, args);
-  call.setCConv(func.getCConv());
-  return call;
-}
+                                    LLVM::LLVMFuncOp func, ValueRange args);
 
 } // namespace mlir::triton::intel
 

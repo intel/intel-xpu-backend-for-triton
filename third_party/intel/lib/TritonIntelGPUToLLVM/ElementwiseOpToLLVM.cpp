@@ -1286,8 +1286,9 @@ struct FpToFpOpConversion
                                  const Value &v) {
     auto moduleOp =
         v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
-    StringRef name = "_Z31intel_convert_as_bfloat16_floatt";
-    auto ext_func = intel::lookupOrCreateSPIRVFn(moduleOp, name, i16_ty, f32_ty);
+    constexpr StringRef name = "_Z31intel_convert_as_bfloat16_floatt";
+    auto ext_func =
+        intel::lookupOrCreateSPIRVFn(moduleOp, name, i16_ty, f32_ty);
     auto call = intel::createSPIRVBuiltinCall(loc, rewriter, ext_func, v);
     return call.getResult();
   }
@@ -1305,8 +1306,9 @@ struct FpToFpOpConversion
       auto moduleOp =
           v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
       // Intel SPIR-V extension only supports round-to-nearest-even
-      StringRef name = "_Z32intel_convert_bfloat16_as_ushortf";
-      auto trunc_func = intel::lookupOrCreateSPIRVFn(moduleOp, name, f32_ty, i16_ty);
+      constexpr StringRef name = "_Z32intel_convert_bfloat16_as_ushortf";
+      auto trunc_func =
+          intel::lookupOrCreateSPIRVFn(moduleOp, name, f32_ty, i16_ty);
       auto call = intel::createSPIRVBuiltinCall(loc, rewriter, trunc_func, v);
       return call.getResult();
     }
