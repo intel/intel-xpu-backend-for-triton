@@ -1094,6 +1094,13 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
 void LayoutRematerialization::backwardRematerialization(
     ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
+  // we don't backward propagate the dot layout with blocked layout as parent.
+  // It introduces a lot of duplicated values in multiple-threads.
+  if (auto dotLayout =
+          dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding())) {
+    if (dotLayout.getParent().isa<BlockedEncodingAttr>())
+      return;
+  }
   Value oldV = convertOp->getOperand(0);
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
