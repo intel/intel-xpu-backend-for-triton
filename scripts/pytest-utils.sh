@@ -1,6 +1,6 @@
 TIMESTAMP="$(date '+%Y%m%d%H%M%S')"
 
-SCRIPTS_DIR="${SCRIPTS_DIR:-$PWD/scripts}"
+SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 TRITON_TEST_REPORTS="${TRITON_TEST_REPORTS:-false}"
 TRITON_TEST_REPORTS_DIR="${TRITON_TEST_REPORTS_DIR:-$HOME/reports/$TIMESTAMP}"
 TRITON_TEST_SKIPLIST_DIR="${TRITON_TEST_SKIPLIST_DIR:-$SCRIPTS_DIR/skiplist/default}"
