@@ -419,8 +419,6 @@ inline SmallVector<Value>
 emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
                            const TargetInfoBase &target, Attribute layout,
                            RankedTensorType type, bool withCTAOffset) {
-  llvm::errs() << "at line " << __LINE__ << "\n";
-  llvm::errs() << "type: " << type << "\n";
   auto shape = type.getShape();
 
   SmallVector<Value> baseIndex;
@@ -441,8 +439,6 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
     result = emitBaseIndexForDotOpLayout(loc, rewriter, dotLayout, type);
   } else {
-    llvm::errs() << "at line " << __LINE__ << "\n";
-    llvm::errs() << "layout: " << layout << "\n";
     return mlir::emitBaseIndexForLayoutImpl(loc, rewriter, target, layout, type,
                                             withCTAOffset);
   }

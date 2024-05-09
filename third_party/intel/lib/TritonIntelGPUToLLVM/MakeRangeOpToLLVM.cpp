@@ -27,8 +27,6 @@ struct MakeRangeOpConversion
     auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
-    llvm::errs() << "at line " << __LINE__ << "\n";
-    llvm::errs() << "op: " << op << "\n";
     auto idxs =
         ::intel::emitIndices(loc, rewriter, targetInfo, layout, ty, true);
 
