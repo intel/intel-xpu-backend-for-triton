@@ -280,6 +280,16 @@ def make_launcher(constants, signature, ids):
       }}
       }};
     auto event = stream.submit(cgf);
+    event.wait();
+    auto startTime = event.get_profiling_info<
+        sycl::info::event_profiling::command_start>();
+    auto endTime = event.get_profiling_info<
+        sycl::info::event_profiling::command_end>();
+    auto gap = float(endTime - startTime) / 1000000.0f;
+    // calculate tflops for triton kernel
+    float M = 256 * 1;
+    float throughput = 2 * M * M * M *(1e-12);     
+    std::cout << "Triton Peak TFlops " << (throughput/(gap * 1e-3)) << std::endl;    
   }}
 // end sycl
     static PyObject* launch(PyObject* self, PyObject* args) {{
