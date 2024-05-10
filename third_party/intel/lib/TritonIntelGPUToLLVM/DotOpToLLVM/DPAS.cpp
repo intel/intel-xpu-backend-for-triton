@@ -20,12 +20,14 @@ class DotOpDPASConversionHelper {
 public:
   using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
 
-  DotOpDPASConversionHelper(DpasEncodingAttr dpasLayout,
+  DotOpDPASConversionHelper(DpasEncodingAttr dpasLayout, Type tensorTy,
                             ConversionPatternRewriter &rewriter,
+                            const TargetInfoBase &targetInfo,
                             TritonIntelGPUToLLVMTypeConverter *typeConverter,
                             Location loc)
       : dpasLayout(dpasLayout), rewriter(rewriter),
-        typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
+        typeConverter(typeConverter), targetInfo(targetInfo), loc(loc),
+        ctx(dpasLayout.getContext()), tensorTy(tensorTy) {}
 
   std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
       DPASEngineType dpasType, MLIRContext *ctx, DpasEncodingAttr layout) {
@@ -227,10 +229,24 @@ private:
                                               int64_t dim0, int64_t dim1,
                                               Type elemTy) const {
 
+    //    int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+    //
+    //    Value warpSize = i32_val(threadsPerWarp);
+    //    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
+    //    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    //    Value programId =
+    //        targetInfo.programId(rewriter, loc,
+    //        rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
+    //        0);
+
     std::vector<Value> elems;
     for (int m = 0; m < dim0; ++m)
       for (int k = 0; k < dim1; ++k) {
         auto matVal = vals.at({m, k});
+        //        LLVM::intel::llPrintf(rewriter, "A pid=%d sgid=%d,tid=%d,
+        //        m=%d, n=%d, val=%f",
+        //                              ValueRange{programId, warpId, laneId,
+        //                              i32_val(m), i32_val(k), matVal});
         auto vecType = cast<mlir::VectorType>(matVal.getType());
         auto valTy = vecType.getElementType();
         for (int i = 0; i < vecType.getNumElements(); ++i) {
@@ -245,7 +261,10 @@ private:
 
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(elems.size(), elemTy));
-    return packLLElements(loc, typeConverter, elems, rewriter, structTy);
+    auto result = packLLElements(loc, typeConverter, elems, rewriter, structTy);
+    //    mlir::LLVM::intel::printTensor("johnlu dot result", result, tensorTy,
+    //    rewriter, targetInfo);
+    return result;
   }
 
   ValueTable getValuesFromDotOperandLayoutStruct(Value val, int64_t dim0,
@@ -302,6 +321,8 @@ private:
   TritonIntelGPUToLLVMTypeConverter *typeConverter;
   Location loc;
   MLIRContext *ctx;
+  const TargetInfoBase &targetInfo;
+  Type tensorTy;
 };
 
 } // namespace
@@ -309,7 +330,8 @@ private:
 namespace fma_details {
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                          ConversionPatternRewriter &rewriter) {
+                          ConversionPatternRewriter &rewriter,
+                          const TargetInfoBase &targetInfo) {
   LLVM_DEBUG({
     auto module = op->getParentOfType<ModuleOp>();
     llvm::dbgs() << "module before DPAS generation\n";
@@ -336,8 +358,8 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto dpasLayout = cast<DpasEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
 
-  DotOpDPASConversionHelper helper(dpasLayout, rewriter, typeConverter,
-                                   op.getLoc());
+  DotOpDPASConversionHelper helper(dpasLayout, DTensorTy, rewriter, targetInfo,
+                                   typeConverter, op.getLoc());
 
   return helper.convertDot(op, adaptor);
 }
