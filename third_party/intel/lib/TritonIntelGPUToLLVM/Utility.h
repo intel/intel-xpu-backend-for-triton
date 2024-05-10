@@ -116,15 +116,18 @@ static Value getSharedMemoryBase(Location loc,
 }
 
 // Returns a Value for the format string, which you can reuse.
-Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
-               ValueRange args);
+Value llPrintf(RewriterBase &rewriter, StringRef msg, ValueRange args);
 
-void llPrintf(ConversionPatternRewriter &rewriter, Value msg, ValueRange args);
+void llPrintf(RewriterBase &rewriter, Value msg, ValueRange args);
 
 static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
+
+void printTensor(StringRef msg, Value tensor, Type tensorTy,
+                 ConversionPatternRewriter &rewriter,
+                 const TargetInfoBase &targetInfo);
 
 } // namespace mlir::LLVM::intel
 
