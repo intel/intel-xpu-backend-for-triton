@@ -205,7 +205,7 @@ bool TargetInfo::warpBatchReduce(
           auto inputRange = llvm::enumerate(inputs);
           Value batchedReduceVal = std::accumulate(
               std::begin(inputRange), std::end(inputRange),
-              rewriter.create<LLVM::PoisonOp>(loc, reduceTy).getRes(),
+              LLVM::PoisonOp::create(rewriter, loc, reduceTy).getRes(),
               [reduceTy, loc, &rewriter](Value acc, auto entry) -> Value {
                 auto [index, src] = entry;
                 auto b = TritonLLVMOpBuilder(loc, rewriter);
