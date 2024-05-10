@@ -1,0 +1,1387 @@
+diff --git a/examples_cm_esimd/bgemm_performance/main.cpp b/examples_cm_esimd/bgemm_performance/main.cpp
+index 83b81d51..82ee437e 100644
+--- a/examples_cm_esimd/bgemm_performance/main.cpp
++++ b/examples_cm_esimd/bgemm_performance/main.cpp
+@@ -1,4 +1,5 @@
+ //Enable the FLAG when testing ESIMD
++#include <cstdint>
+ #define XETLA_CODE_BASE __ESIMD__
+ #define ESIMD_XE_HPC
+ #include "kernel_func.hpp"
+@@ -99,21 +100,21 @@ void bgemm_run(ExecutionMode mode, int iter) {
+     uint32_t *Cnt = static_cast<uint32_t *>(
+             malloc_shared(size_cnt * sizeof(uint32_t), device, context));
+ 
+-    for (size_t i = 0; i < size_a; ++i) {
+-        A[i] = (random_float() - 0.5f);
+-    }
+-    for (size_t i = 0; i < size_b; ++i) {
+-        B[i] = (random_float() - 0.5f);
+-    }
+-    for (size_t i = 0; i < size_c; ++i) {
+-        C[i] = 0;
+-    }
+-    for (size_t i = 0; i < size_acc; ++i) {
+-        Acc[i] = 0;
+-    }
+-    for (size_t i = 0; i < size_cnt; ++i) {
+-        Cnt[i] = 0;
+-    }
++//     for (size_t i = 0; i < size_a; ++i) {
++//         A[i] = (random_float() - 0.5f);
++//     }
++//     for (size_t i = 0; i < size_b; ++i) {
++//         B[i] = (random_float() - 0.5f);
++//     }
++//     for (size_t i = 0; i < size_c; ++i) {
++//         C[i] = 0;
++//     }
++//     for (size_t i = 0; i < size_acc; ++i) {
++//         Acc[i] = 0;
++//     }
++//     for (size_t i = 0; i < size_cnt; ++i) {
++//         Cnt[i] = 0;
++//     }
+     // here keep the same dim in CM and esimd, diff the index in kernel code
+     size_t group_range_m = (matrix_m % wg_tile_m == 0)
+             ? matrix_m / wg_tile_m
+@@ -141,97 +142,9 @@ void bgemm_run(ExecutionMode mode, int iter) {
+ 
+     long ops = 2 * matrix_m * matrix_n * matrix_k;
+     profiling_helper prof("bgemm", ops, "gflops");
+-    // interop kernel prepratation and execution
+-    if (mode == ExecutionMode::CM) {
+-        cl_context opencl_context = get_native<backend::opencl>(context);
+-        cl_device_id opencl_device = get_native<backend::opencl>(device);
+-
+-        auto kernel_file_path = "cm_kernel.cpp";
+-
+-        cl_int OpenCLError;
+-        cl_program ocl_program = get_program_from_online_compiler(
+-                opencl_context, opencl_device, OpenCLError, kernel_file_path);
+-        ASSERT_EQ(OpenCLError, CL_SUCCESS);
+-        std::string cmc_options
+-                = " -cmc  /Qxcm_doubleGRF  -mCM_printregusage "
+-                  "-Qxcm_jit_option=-DPASTokenReduction "
+-                  " -mllvm --vc-disable-indvars-opt=true "
+-                  "/Qxcm_jit_option=-enableBCR   "
+-                  "-fcm-pointer -I./ -I"
+-                + std::string(XETLA_INCLUDE_DIR) + " -DXETLA_CODE_BASE=__CM__ "
+-                + "  -DMEM_LAYOUT_A=" + (mem_layout_a_str)
+-                + "  -DMEM_LAYOUT_B=" + (mem_layout_b_str)
+-                + "  -Dwg_tile_m_d=" + std::to_string(wg_tile_m)
+-                + "  -Dwg_tile_n_d=" + std::to_string(wg_tile_n)
+-                + "  -Dsg_tile_m_d=" + std::to_string(sg_tile_m)
+-                + "  -Dsg_tile_k_d=" + std::to_string(sg_tile_k)
+-                + "  -Dsg_tile_n_d=" + std::to_string(sg_tile_n)
+-                + "  -Dglobal_kslicing_d="
+-                + std::to_string(Test::global_kslicing)
+-                + "  -Dlocal_kslicing_d=" + std::to_string(Test::local_kslicing)
+-                + " -Ddata_type_a=" + getTypeName<data_type_a>()
+-                + " -Ddata_type_b=" + getTypeName<data_type_b>()
+-                + " -Ddata_type_c=" + getTypeName<data_type_c>()
+-                + " -Ddata_type_acc=" + getTypeName<data_type_acc>();
+-        std::cout << "cmc_options: " << cmc_options << std::endl;
+-
+-        OpenCLError = clBuildProgram(ocl_program, 1, &opencl_device,
+-                cmc_options.c_str(), nullptr, nullptr);
+-        if (OpenCLError != CL_SUCCESS) {
+-            fprintf(stderr, " err= %d\n", (int)OpenCLError);
+-            size_t log_length = 0;
+-            clGetProgramBuildInfo(ocl_program, opencl_device,
+-                    CL_PROGRAM_BUILD_LOG, 0, 0, &log_length);
+-
+-            std::vector<uint8_t> log(log_length);
+-
+-            clGetProgramBuildInfo(ocl_program, opencl_device,
+-                    CL_PROGRAM_BUILD_LOG, log_length, &log[0], 0);
+-
+-            fprintf(stderr,
+-                    "err happened during the build of OpenCL prog.\n"
+-                    "Build log:\n %s\n",
+-                    log.data());
+-            FAIL();
+-        }
+-        cl_kernel ocl_kernel
+-                = clCreateKernel(ocl_program, "bgemm", &OpenCLError);
+-        ASSERT_EQ(OpenCLError, CL_SUCCESS);
+-
+-        sycl::kernel interop_kernel
+-                = make_kernel<backend::opencl>(ocl_kernel, context);
+-
+-        try {
+-            //Iteratively execute the kernel function
+-            for (int i = 0; i < iter; i++) {
+-                prof.cpu_start();
+-                auto e_interop = queue.submit([&](handler &cgh) {
+-                    // precompiled interop kernel launch
+-                    cgh.set_arg(0, A);
+-                    cgh.set_arg(1, B);
+-                    cgh.set_arg(2, C);
+-                    cgh.set_arg(3, matrix_m);
+-                    cgh.set_arg(4, matrix_n);
+-                    cgh.set_arg(5, matrix_k);
+-                    cgh.set_arg(6, lda);
+-                    cgh.set_arg(7, ldb);
+-                    cgh.set_arg(8, ldc);
+-                    cgh.set_arg(9, Acc);
+-                    cgh.set_arg(10, Cnt);
+-                    cgh.parallel_for(nd_range, interop_kernel);
+-                });
+-                e_interop.wait();
+-                prof.cpu_end();
+-                prof.add_gpu_event(e_interop);
+-            }
+-        } catch (cl::sycl::exception const &e) {
+-            std::cout << "SYCL exception caught: " << e.what() << '\n';
+-            FAIL();
+-        }
+-    }
+ 
+     // esimd kernel prepratation and execution
+-    else if (mode == ExecutionMode::ESIMD) {
++    if (mode == ExecutionMode::ESIMD) {
+         std::vector<kernel_id> kernelId = {get_kernel_id<Test>()};
+         auto inputBundle
+                 = get_kernel_bundle<bundle_state::input>(context, kernelId);
+@@ -243,7 +156,21 @@ void bgemm_run(ExecutionMode mode, int iter) {
+         unsetenv("SYCL_PROGRAM_COMPILE_OPTIONS");
+ 
+         try {
++        //     auto size = 256*1024*1024;
++        //     auto host_ptr = static_cast<int8_t *>(
++        //             malloc(size * sizeof(int8_t)));
++
++        //     for (size_t i = 0; i < size; ++i) {
++        //         host_ptr[i] = 0;
++        //     }
++        //     auto device_ptr = static_cast<int8_t *>(
++        //             aligned_alloc_device(DEVICE_MEM_ALIGNMENT,
++        //                     size * sizeof(int8_t), device, context));
++            
+             for (int i = 0; i < iter; i++) {
++                // queue.memcpy((void *)(device_ptr), (void *)host_ptr,
++                //              size * sizeof(int8_t))
++                //         .wait();
+                 prof.cpu_start();
+                 auto e_esimd = queue.submit([&](handler &cgh) {
+                     cgh.use_kernel_bundle(exeBundle);
+@@ -268,6 +195,7 @@ void bgemm_run(ExecutionMode mode, int iter) {
+                 prof.cpu_end();
+                 prof.add_gpu_event(e_esimd);
+             }
++        //     free(host_ptr);
+         } catch (cl::sycl::exception const &e) {
+             std::cout << "SYCL exception caught: " << e.what() << '\n';
+             FAIL();
+@@ -295,30 +223,12 @@ TYPED_TEST_SUITE_P(bgemm_performance_test);
+ TYPED_TEST_P(bgemm_performance_test, esimd) {
+     bgemm_run<TypeParam>(ExecutionMode::ESIMD, ITER);
+ }
+-TYPED_TEST_P(bgemm_performance_test, cm_interop) {
+-    bgemm_run<TypeParam>(ExecutionMode::CM, ITER);
+-}
+-REGISTER_TYPED_TEST_SUITE_P(bgemm_performance_test, cm_interop, esimd);
+-using tests = ::testing::Types<Test_4096x512x4096_row_row,
+-        Test_4096x512x4096_row_col, Test_4096x512x4096_col_row,
+-        Test_4096x1024x4096_row_row, Test_4096x1024x4096_row_col,
+-        Test_4096x1024x4096_col_row, Test_4096x2048x4096_row_row,
+-        Test_4096x2048x4096_row_col, Test_4096x2048x4096_col_row,
+-        Test_4096x4096x4096_row_row, Test_4096x4096x4096_row_col,
+-        Test_4096x4096x4096_col_row,
+-
+-        Test_2048x4096x2048_row_row, Test_2048x4096x2048_row_col,
+-        Test_2048x4096x2048_col_row, Test_1024x4096x1024_row_row,
+-        Test_1024x4096x1024_row_col, Test_1024x4096x1024_col_row,
+-        Test_1024x4096x1024_row_row_slm_k2, Test_1024x4096x1024_row_row_fp32,
+-        Test_1024x4096x1024_row_col_fp32, Test_1024x4096x1024_col_row_fp32,
+-        Test_512x4096x512_row_row, Test_512x4096x512_row_col,
+-        Test_512x4096x512_col_row, Test_512x4096x512_row_row_fp32,
+-        Test_512x4096x512_row_col_fp32, Test_512x4096x512_col_row_fp32,
+-
+-        Test_8192x2x1024_row_row, Test_8192x1024x1024_row_row,
+-        Test_8192x1024x4096_row_row, Test_8192x4096x1024_row_row,
+-        Test_1216x1024x1024_row_row, Test_1216x1024x30528_row_row,
+-        Test_1216x30528x1024_row_row>;
++//TYPED_TEST_P(bgemm_performance_test, cm_interop) {
++//    bgemm_run<TypeParam>(ExecutionMode::CM, ITER);
++//}
++REGISTER_TYPED_TEST_SUITE_P(bgemm_performance_test, esimd);
++//using tests = ::testing::Types<Test_256x256x256_row_row, Test_384x384x384_row_row, Test_512x512x512_row_row, Test_640x640x640_row_row, Test_768x768x768_row_row, Test_896x896x896_row_row, Test_1024x1024x1024_row_row, Test_1152x1152x1152_row_row, Test_1280x1280x1280_row_row, Test_1408x1408x1408_row_row, Test_1536x1536x1536_row_row, Test_1664x1664x1664_row_row, Test_1792x1792x1792_row_row, Test_1920x1920x1920_row_row, Test_2048x2048x2048_row_row, Test_2176x2176x2176_row_row, Test_2304x2304x2304_row_row, Test_2432x2432x2432_row_row, Test_2560x2560x2560_row_row, Test_2688x2688x2688_row_row, Test_2816x2816x2816_row_row, Test_2944x2944x2944_row_row, Test_3072x3072x3072_row_row, Test_3200x3200x3200_row_row, Test_3328x3328x3328_row_row, Test_3456x3456x3456_row_row, Test_3584x3584x3584_row_row, Test_3712x3712x3712_row_row, Test_3840x3840x3840_row_row, Test_3968x3968x3968_row_row, Test_4096x4096x4096_row_row>;
++// using tests = ::testing::Types<Test_4096x4096x4096_row_row, Test_3968x3968x3968_row_row, Test_3840x3840x3840_row_row, Test_3712x3712x3712_row_row, Test_3584x3584x3584_row_row, Test_3456x3456x3456_row_row, Test_3328x3328x3328_row_row, Test_3200x3200x3200_row_row, Test_3072x3072x3072_row_row, Test_2944x2944x2944_row_row, Test_2816x2816x2816_row_row, Test_2688x2688x2688_row_row, Test_2560x2560x2560_row_row, Test_2432x2432x2432_row_row, Test_2304x2304x2304_row_row, Test_2176x2176x2176_row_row, Test_2048x2048x2048_row_row, Test_1920x1920x1920_row_row, Test_1792x1792x1792_row_row, Test_1664x1664x1664_row_row, Test_1536x1536x1536_row_row, Test_1408x1408x1408_row_row, Test_1280x1280x1280_row_row, Test_1152x1152x1152_row_row, Test_1024x1024x1024_row_row, Test_896x896x896_row_row, Test_768x768x768_row_row, Test_512x512x512_row_row, Test_640x640x640_row_row, Test_384x384x384_row_row, Test_256x256x256_row_row>;
++using tests = ::testing::Types<Test_4096x4096x4096_row_row,Test_2560x2560x2560_row_row>;
+ INSTANTIATE_TYPED_TEST_SUITE_P(
+         bgemm_performance_test_suite, bgemm_performance_test, tests);
+diff --git a/examples_cm_esimd/bgemm_performance/test.hpp b/examples_cm_esimd/bgemm_performance/test.hpp
+index a136a709..9ddf0167 100644
+--- a/examples_cm_esimd/bgemm_performance/test.hpp
++++ b/examples_cm_esimd/bgemm_performance/test.hpp
+@@ -5,139 +5,182 @@ using namespace gpu::xetla;
+ //The number of times the kernel is executed
+ constexpr int ITER = 100;
+ 
+-class Test_4096x512x4096_row_row {
++class Test_256x256x256_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
+-    static constexpr size_t mat_k = 512;
+-    static constexpr size_t mat_n = 4096;
+-    static constexpr size_t wg_m = 256;
+-    static constexpr size_t wg_n = 256;
+-    static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 64;
+-    static constexpr size_t sg_k = 32;
++    static constexpr size_t mat_m = 256;
++    static constexpr size_t mat_k = 256;
++    static constexpr size_t mat_n = 256;
++    static constexpr size_t wg_m = 16;
++    static constexpr size_t wg_n = 64;
++    static constexpr size_t sg_m = 16;
++    static constexpr size_t sg_n = 16;
++    static constexpr size_t sg_k = 16;
+     static constexpr uint32_t global_kslicing = 1;
+-    static constexpr uint32_t local_kslicing = 1;
++    static constexpr uint32_t local_kslicing = 8;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+-class Test_4096x512x4096_row_col {
++
++class Test_384x384x384_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
+-    static constexpr size_t mat_k = 512;
+-    static constexpr size_t mat_n = 4096;
+-    static constexpr size_t wg_m = 256;
+-    static constexpr size_t wg_n = 256;
++    static constexpr size_t mat_m = 384;
++    static constexpr size_t mat_k = 384;
++    static constexpr size_t mat_n = 384;
++    static constexpr size_t wg_m = 32;
++    static constexpr size_t wg_n = 128;
+     static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 64;
+-    static constexpr size_t sg_k = 32;
++    static constexpr size_t sg_n = 16;
++    static constexpr size_t sg_k = 16;
+     static constexpr uint32_t global_kslicing = 1;
+-    static constexpr uint32_t local_kslicing = 1;
++    static constexpr uint32_t local_kslicing = 4;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+-    static constexpr mem_layout layout_b = mem_layout::col_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    static constexpr mem_layout layout_b = mem_layout::row_major;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+-class Test_4096x512x4096_col_row {
++
++class Test_512x512x512_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
++    static constexpr size_t mat_m = 512;
+     static constexpr size_t mat_k = 512;
+-    static constexpr size_t mat_n = 4096;
+-    static constexpr size_t wg_m = 256;
+-    static constexpr size_t wg_n = 256;
++    static constexpr size_t mat_n = 512;
++    static constexpr size_t wg_m = 32;
++    static constexpr size_t wg_n = 128;
+     static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 64;
++    static constexpr size_t sg_n = 16;
+     static constexpr size_t sg_k = 16;
+     static constexpr uint32_t global_kslicing = 1;
++    static constexpr uint32_t local_kslicing = 4;
++    static constexpr mem_layout layout_a = mem_layout::row_major;
++    static constexpr mem_layout layout_b = mem_layout::row_major;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
++};
++
++class Test_640x640x640_row_row {
++public:
++    static constexpr size_t mat_m = 640;
++    static constexpr size_t mat_k = 640;
++    static constexpr size_t mat_n = 640;
++    static constexpr size_t wg_m = 128;
++    static constexpr size_t wg_n = 64;
++    static constexpr size_t sg_m = 16;
++    static constexpr size_t sg_n = 16;
++    static constexpr size_t sg_k = 64;
++    static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+-    static constexpr mem_layout layout_a = mem_layout::col_major;
++    static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_4096x1024x4096_row_row {
++class Test_768x768x768_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
+-    static constexpr size_t mat_k = 1024;
+-    static constexpr size_t mat_n = 4096;
+-    static constexpr size_t wg_m = 256;
+-    static constexpr size_t wg_n = 256;
+-    static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 64;
+-    static constexpr size_t sg_k = 32;
++    static constexpr size_t mat_m = 768;
++    static constexpr size_t mat_k = 768;
++    static constexpr size_t mat_n = 768;
++    static constexpr size_t wg_m = 128;
++    static constexpr size_t wg_n = 128;
++    static constexpr size_t sg_m = 16;
++    static constexpr size_t sg_n = 32;
++    static constexpr size_t sg_k = 64;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+-class Test_4096x1024x4096_row_col {
++
++class Test_896x896x896_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
+-    static constexpr size_t mat_k = 1024;
+-    static constexpr size_t mat_n = 4096;
+-    static constexpr size_t wg_m = 256;
+-    static constexpr size_t wg_n = 256;
++    static constexpr size_t mat_m = 896;
++    static constexpr size_t mat_k = 896;
++    static constexpr size_t mat_n = 896;
++    static constexpr size_t wg_m = 128;
++    static constexpr size_t wg_n = 128;
+     static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 64;
++    static constexpr size_t sg_n = 32;
+     static constexpr size_t sg_k = 32;
+     static constexpr uint32_t global_kslicing = 1;
+-    static constexpr uint32_t local_kslicing = 1;
++    static constexpr uint32_t local_kslicing = 2;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+-    static constexpr mem_layout layout_b = mem_layout::col_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    static constexpr mem_layout layout_b = mem_layout::row_major;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+-class Test_4096x1024x4096_col_row {
++
++class Test_1024x1024x1024_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
++    static constexpr size_t mat_m = 1024;
+     static constexpr size_t mat_k = 1024;
+-    static constexpr size_t mat_n = 4096;
+-    static constexpr size_t wg_m = 256;
++    static constexpr size_t mat_n = 1024;
++    static constexpr size_t wg_m = 128;
++    static constexpr size_t wg_n = 128;
++    static constexpr size_t sg_m = 16;
++    static constexpr size_t sg_n = 32;
++    static constexpr size_t sg_k = 64;
++    static constexpr uint32_t global_kslicing = 1;
++    static constexpr uint32_t local_kslicing = 1;
++    static constexpr mem_layout layout_a = mem_layout::row_major;
++    static constexpr mem_layout layout_b = mem_layout::row_major;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
++};
++
++class Test_1152x1152x1152_row_row {
++public:
++    static constexpr size_t mat_m = 1152;
++    static constexpr size_t mat_k = 1152;
++    static constexpr size_t mat_n = 1152;
++    static constexpr size_t wg_m = 128;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 64;
++    static constexpr size_t sg_n = 32;
+     static constexpr size_t sg_k = 16;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+-    static constexpr mem_layout layout_a = mem_layout::col_major;
++    static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_4096x2048x4096_row_row {
++class Test_1280x1280x1280_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
+-    static constexpr size_t mat_k = 2048;
+-    static constexpr size_t mat_n = 4096;
+-    static constexpr size_t wg_m = 256;
++    static constexpr size_t mat_m = 1280;
++    static constexpr size_t mat_k = 1280;
++    static constexpr size_t mat_n = 1280;
++    static constexpr size_t wg_m = 128;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 64;
+-    static constexpr size_t sg_k = 32;
++    static constexpr size_t sg_n = 32;
++    static constexpr size_t sg_k = 16;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+-class Test_4096x2048x4096_row_col {
++
++class Test_1408x1408x1408_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
+-    static constexpr size_t mat_k = 2048;
+-    static constexpr size_t mat_n = 4096;
++    static constexpr size_t mat_m = 1408;
++    static constexpr size_t mat_k = 1408;
++    static constexpr size_t mat_n = 1408;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+@@ -146,35 +189,36 @@ public:
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+-    static constexpr mem_layout layout_b = mem_layout::col_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    static constexpr mem_layout layout_b = mem_layout::row_major;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+-class Test_4096x2048x4096_col_row {
++
++class Test_1536x1536x1536_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
+-    static constexpr size_t mat_k = 2048;
+-    static constexpr size_t mat_n = 4096;
++    static constexpr size_t mat_m = 1536;
++    static constexpr size_t mat_k = 1536;
++    static constexpr size_t mat_n = 1536;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+     static constexpr size_t sg_n = 64;
+-    static constexpr size_t sg_k = 16;
++    static constexpr size_t sg_k = 32;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+-    static constexpr mem_layout layout_a = mem_layout::col_major;
++    static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_4096x4096x4096_row_row {
++class Test_1664x1664x1664_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 4096;
++    static constexpr size_t mat_m = 1664;
++    static constexpr size_t mat_k = 1664;
++    static constexpr size_t mat_n = 1664;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+@@ -184,15 +228,16 @@ public:
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+-class Test_4096x4096x4096_row_col {
++
++class Test_1792x1792x1792_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 4096;
++    static constexpr size_t mat_m = 1792;
++    static constexpr size_t mat_k = 1792;
++    static constexpr size_t mat_n = 1792;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+@@ -201,34 +246,35 @@ public:
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+-    static constexpr mem_layout layout_b = mem_layout::col_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    static constexpr mem_layout layout_b = mem_layout::row_major;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+-class Test_4096x4096x4096_col_row {
++
++class Test_1920x1920x1920_row_row {
+ public:
+-    static constexpr size_t mat_m = 4096;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 4096;
++    static constexpr size_t mat_m = 1920;
++    static constexpr size_t mat_k = 1920;
++    static constexpr size_t mat_n = 1920;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+-    static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 64;
++    static constexpr size_t sg_m = 64;
++    static constexpr size_t sg_n = 32;
+     static constexpr size_t sg_k = 16;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+-    static constexpr mem_layout layout_a = mem_layout::col_major;
++    static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_2048x4096x2048_row_row {
++class Test_2048x2048x2048_row_row {
+ public:
+     static constexpr size_t mat_m = 2048;
+-    static constexpr size_t mat_k = 4096;
++    static constexpr size_t mat_k = 2048;
+     static constexpr size_t mat_n = 2048;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+@@ -239,15 +285,16 @@ public:
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+-class Test_2048x4096x2048_row_col {
++
++class Test_2176x2176x2176_row_row {
+ public:
+-    static constexpr size_t mat_m = 2048;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 2048;
++    static constexpr size_t mat_m = 2176;
++    static constexpr size_t mat_k = 2176;
++    static constexpr size_t mat_n = 2176;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+@@ -256,298 +303,188 @@ public:
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+-    static constexpr mem_layout layout_b = mem_layout::col_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    static constexpr mem_layout layout_b = mem_layout::row_major;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+-class Test_2048x4096x2048_col_row {
++
++class Test_2304x2304x2304_row_row {
+ public:
+-    static constexpr size_t mat_m = 2048;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 2048;
++    static constexpr size_t mat_m = 2304;
++    static constexpr size_t mat_k = 2304;
++    static constexpr size_t mat_n = 2304;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+     static constexpr size_t sg_n = 64;
+-    static constexpr size_t sg_k = 16;
+-    static constexpr uint32_t global_kslicing = 1;
+-    static constexpr uint32_t local_kslicing = 1;
+-    static constexpr mem_layout layout_a = mem_layout::col_major;
+-    static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
+-};
+-
+-class Test_1024x4096x1024_row_row {
+-public:
+-    static constexpr size_t mat_m = 1024;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t wg_m = 128;
+-    static constexpr size_t wg_n = 128;
+-    static constexpr size_t sg_m = 16;
+-    static constexpr size_t sg_n = 32;
+     static constexpr size_t sg_k = 32;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
+-};
+-class Test_1024x4096x1024_row_col {
+-public:
+-    static constexpr size_t mat_m = 1024;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t wg_m = 128;
+-    static constexpr size_t wg_n = 128;
+-    static constexpr size_t sg_m = 16;
+-    static constexpr size_t sg_n = 32;
+-    static constexpr size_t sg_k = 32;
+-    static constexpr uint32_t global_kslicing = 1;
+-    static constexpr uint32_t local_kslicing = 1;
+-    static constexpr mem_layout layout_a = mem_layout::row_major;
+-    static constexpr mem_layout layout_b = mem_layout::col_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
+-};
+-class Test_1024x4096x1024_col_row {
+-public:
+-    static constexpr size_t mat_m = 1024;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t wg_m = 128;
+-    static constexpr size_t wg_n = 128;
+-    static constexpr size_t sg_m = 16;
+-    static constexpr size_t sg_n = 32;
+-    static constexpr size_t sg_k = 32;
+-    static constexpr uint32_t global_kslicing = 1;
+-    static constexpr uint32_t local_kslicing = 1;
+-    static constexpr mem_layout layout_a = mem_layout::col_major;
+-    static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_512x4096x512_row_row {
++class Test_2432x2432x2432_row_row {
+ public:
+-    static constexpr size_t mat_m = 512;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 512;
+-    static constexpr size_t wg_m = 64;
+-    static constexpr size_t wg_n = 64;
+-    static constexpr size_t sg_m = 8;
+-    static constexpr size_t sg_n = 16;
++    static constexpr size_t mat_m = 2432;
++    static constexpr size_t mat_k = 2432;
++    static constexpr size_t mat_n = 2432;
++    static constexpr size_t wg_m = 256;
++    static constexpr size_t wg_n = 256;
++    static constexpr size_t sg_m = 32;
++    static constexpr size_t sg_n = 64;
+     static constexpr size_t sg_k = 32;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_512x4096x512_row_col {
++class Test_2560x2560x2560_row_row {
+ public:
+-    static constexpr size_t mat_m = 512;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 512;
+-    static constexpr size_t wg_m = 64;
+-    static constexpr size_t wg_n = 64;
+-    static constexpr size_t sg_m = 8;
+-    static constexpr size_t sg_n = 16;
++    static constexpr size_t mat_m = 2560;
++    static constexpr size_t mat_k = 2560;
++    static constexpr size_t mat_n = 2560;
++    static constexpr size_t wg_m = 256;
++    static constexpr size_t wg_n = 256;
++    static constexpr size_t sg_m = 32;
++    static constexpr size_t sg_n = 64;
+     static constexpr size_t sg_k = 32;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+-    static constexpr mem_layout layout_b = mem_layout::col_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
+-};
+-
+-class Test_512x4096x512_col_row {
+-public:
+-    static constexpr size_t mat_m = 512;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 512;
+-    static constexpr size_t wg_m = 64;
+-    static constexpr size_t wg_n = 64;
+-    static constexpr size_t sg_m = 8;
+-    static constexpr size_t sg_n = 16;
+-    static constexpr size_t sg_k = 32;
+-    static constexpr uint32_t global_kslicing = 1;
+-    static constexpr uint32_t local_kslicing = 1;
+-    static constexpr mem_layout layout_a = mem_layout::col_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_1024x4096x1024_row_row_fp32 {
++class Test_2688x2688x2688_row_row {
+ public:
+-    static constexpr size_t mat_m = 1024;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t wg_m = 128;
++    static constexpr size_t mat_m = 2688;
++    static constexpr size_t mat_k = 2688;
++    static constexpr size_t mat_n = 2688;
++    static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 32;
++    static constexpr size_t sg_n = 64;
+     static constexpr size_t sg_k = 32;
+-    static constexpr uint32_t global_kslicing = 2;
++    static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_1024x4096x1024_row_row_slm_k2 {
++class Test_2816x2816x2816_row_row {
+ public:
+-    static constexpr size_t mat_m = 1024;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t wg_m = 128;
+-    static constexpr size_t wg_n = 128;
++    static constexpr size_t mat_m = 2816;
++    static constexpr size_t mat_k = 2816;
++    static constexpr size_t mat_n = 2816;
++    static constexpr size_t wg_m = 256;
++    static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 32;
++    static constexpr size_t sg_n = 64;
+     static constexpr size_t sg_k = 32;
+     static constexpr uint32_t global_kslicing = 1;
+-    static constexpr uint32_t local_kslicing = 2;
++    static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_1024x4096x1024_row_col_fp32 {
++class Test_2944x2944x2944_row_row {
+ public:
+-    static constexpr size_t mat_m = 1024;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t wg_m = 128;
++    static constexpr size_t mat_m = 2944;
++    static constexpr size_t mat_k = 2944;
++    static constexpr size_t mat_n = 2944;
++    static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 32;
++    static constexpr size_t sg_n = 64;
+     static constexpr size_t sg_k = 32;
+-    static constexpr uint32_t global_kslicing = 2;
++    static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+-    static constexpr mem_layout layout_b = mem_layout::col_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
+-};
+-class Test_1024x4096x1024_col_row_fp32 {
+-public:
+-    static constexpr size_t mat_m = 1024;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t wg_m = 128;
+-    static constexpr size_t wg_n = 256;
+-    static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 32;
+-    static constexpr size_t sg_k = 32;
+-    static constexpr uint32_t global_kslicing = 2;
+-    static constexpr uint32_t local_kslicing = 1;
+-    static constexpr mem_layout layout_a = mem_layout::col_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_512x4096x512_row_row_fp32 {
++class Test_3072x3072x3072_row_row {
+ public:
+-    static constexpr size_t mat_m = 512;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 512;
+-    static constexpr size_t wg_m = 128;
+-    static constexpr size_t wg_n = 128;
+-    static constexpr size_t sg_m = 16;
+-    static constexpr size_t sg_n = 32;
++    static constexpr size_t mat_m = 3072;
++    static constexpr size_t mat_k = 3072;
++    static constexpr size_t mat_n = 3072;
++    static constexpr size_t wg_m = 256;
++    static constexpr size_t wg_n = 256;
++    static constexpr size_t sg_m = 32;
++    static constexpr size_t sg_n = 64;
+     static constexpr size_t sg_k = 32;
+-    static constexpr uint32_t global_kslicing = 4;
++    static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_512x4096x512_row_col_fp32 {
++class Test_3200x3200x3200_row_row {
+ public:
+-    static constexpr size_t mat_m = 512;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 512;
+-    static constexpr size_t wg_m = 128;
+-    static constexpr size_t wg_n = 128;
+-    static constexpr size_t sg_m = 16;
+-    static constexpr size_t sg_n = 32;
++    static constexpr size_t mat_m = 3200;
++    static constexpr size_t mat_k = 3200;
++    static constexpr size_t mat_n = 3200;
++    static constexpr size_t wg_m = 256;
++    static constexpr size_t wg_n = 256;
++    static constexpr size_t sg_m = 32;
++    static constexpr size_t sg_n = 64;
+     static constexpr size_t sg_k = 32;
+-    static constexpr uint32_t global_kslicing = 4;
++    static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+-    static constexpr mem_layout layout_b = mem_layout::col_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
+-};
+-
+-class Test_512x4096x512_col_row_fp32 {
+-public:
+-    static constexpr size_t mat_m = 512;
+-    static constexpr size_t mat_k = 4096;
+-    static constexpr size_t mat_n = 512;
+-    static constexpr size_t wg_m = 128;
+-    static constexpr size_t wg_n = 128;
+-    static constexpr size_t sg_m = 16;
+-    static constexpr size_t sg_n = 32;
+-    static constexpr size_t sg_k = 32;
+-    static constexpr uint32_t global_kslicing = 4;
+-    static constexpr uint32_t local_kslicing = 1;
+-    static constexpr mem_layout layout_a = mem_layout::col_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_8192x2x1024_row_row {
++class Test_3328x3328x3328_row_row {
+ public:
+-    static constexpr size_t mat_m = 8192;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t mat_k = 2;
++    static constexpr size_t mat_m = 3328;
++    static constexpr size_t mat_k = 3328;
++    static constexpr size_t mat_n = 3328;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+     static constexpr size_t sg_n = 64;
+-    static constexpr size_t sg_k = 16;
++    static constexpr size_t sg_k = 32;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_8192x1024x1024_row_row {
++class Test_3456x3456x3456_row_row {
+ public:
+-    static constexpr size_t mat_m = 8192;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t mat_k = 1024;
++    static constexpr size_t mat_m = 3456;
++    static constexpr size_t mat_k = 3456;
++    static constexpr size_t mat_n = 3456;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+@@ -557,16 +494,16 @@ public:
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_8192x1024x4096_row_row {
++class Test_3584x3584x3584_row_row {
+ public:
+-    static constexpr size_t mat_m = 8192;
+-    static constexpr size_t mat_n = 4096;
+-    static constexpr size_t mat_k = 1024;
++    static constexpr size_t mat_m = 3584;
++    static constexpr size_t mat_k = 3584;
++    static constexpr size_t mat_n = 3584;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+@@ -576,16 +513,16 @@ public:
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_8192x4096x1024_row_row {
++class Test_3712x3712x3712_row_row {
+ public:
+-    static constexpr size_t mat_m = 8192;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t mat_k = 4096;
++    static constexpr size_t mat_m = 3712;
++    static constexpr size_t mat_k = 3712;
++    static constexpr size_t mat_n = 3712;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+@@ -595,37 +532,37 @@ public:
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_1216x1024x1024_row_row {
++class Test_3840x3840x3840_row_row {
+ public:
+-    static constexpr size_t mat_m = 1216;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t mat_k = 1024;
+-    static constexpr size_t wg_m = 160;
+-    static constexpr size_t wg_n = 128;
+-    static constexpr size_t sg_m = 40;
+-    static constexpr size_t sg_n = 16;
+-    static constexpr size_t sg_k = 32;
++    static constexpr size_t mat_m = 3840;
++    static constexpr size_t mat_k = 3840;
++    static constexpr size_t mat_n = 3840;
++    static constexpr size_t wg_m = 128;
++    static constexpr size_t wg_n = 512;
++    static constexpr size_t sg_m = 64;
++    static constexpr size_t sg_n = 32;
++    static constexpr size_t sg_k = 16;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_1216x1024x30528_row_row {
++class Test_3968x3968x3968_row_row {
+ public:
+-    static constexpr size_t mat_m = 1216;
+-    static constexpr size_t mat_n = 30528;
+-    static constexpr size_t mat_k = 1024;
+-    static constexpr size_t wg_m = 128;
+-    static constexpr size_t wg_n = 512;
++    static constexpr size_t mat_m = 3968;
++    static constexpr size_t mat_k = 3968;
++    static constexpr size_t mat_n = 3968;
++    static constexpr size_t wg_m = 256;
++    static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+     static constexpr size_t sg_n = 64;
+     static constexpr size_t sg_k = 32;
+@@ -633,26 +570,26 @@ public:
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+ 
+-class Test_1216x30528x1024_row_row {
++class Test_4096x4096x4096_row_row {
+ public:
+-    static constexpr size_t mat_m = 1216;
+-    static constexpr size_t mat_n = 1024;
+-    static constexpr size_t mat_k = 30528;
+-    static constexpr size_t wg_m = 160;
+-    static constexpr size_t wg_n = 128;
+-    static constexpr size_t sg_m = 40;
+-    static constexpr size_t sg_n = 16;
++    static constexpr size_t mat_m = 4096;
++    static constexpr size_t mat_k = 4096;
++    static constexpr size_t mat_n = 4096;
++    static constexpr size_t wg_m = 256;
++    static constexpr size_t wg_n = 256;
++    static constexpr size_t sg_m = 32;
++    static constexpr size_t sg_n = 64;
+     static constexpr size_t sg_k = 32;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+     static constexpr mem_layout layout_b = mem_layout::row_major;
+-    using data_type_a = bf16;
+-    using data_type_b = bf16;
+-    using data_type_c = bf16;
++    using data_type_a = fp16;
++    using data_type_b = fp16;
++    using data_type_c = fp16;
+ };
+diff --git a/include/common/core/base_types.hpp b/include/common/core/base_types.hpp
+index ebde2156..16567c42 100644
+--- a/include/common/core/base_types.hpp
++++ b/include/common/core/base_types.hpp
+@@ -334,7 +334,8 @@ concept xetla_matrix_ref
+ 
+ } // namespace gpu::xetla
+ 
+-#ifdef XETLA_EMBARGO
++#if (__LIBSYCL_MAJOR_VERSION > 7) \
++        || ((__LIBSYCL_MAJOR_VERSION == 7) && (__LIBSYCL_MINOR_VERSION >= 1))
+ 
+ namespace sycl::detail {
+ template <typename T>
+diff --git a/tests/utils/execution.hpp b/tests/utils/execution.hpp
+index 82d1e974..f3e98a1b 100644
+--- a/tests/utils/execution.hpp
++++ b/tests/utils/execution.hpp
+@@ -27,6 +27,32 @@ using namespace cl::sycl;
+ using namespace gpu;
+ using namespace gpu::xetla;
+ 
++#define CACHE_FLUSH 1
++
++template <typename data_type>
++inline data_type *alloc_device_and_init(size_t size, size_t test_iter,
++        std::function<void(data_type *data, size_t elements)> init_func,
++        sycl::queue &queue, sycl::device &device, sycl::context &context) {
++    auto host_ptr = static_cast<data_type *>(malloc(size * sizeof(data_type)));
++
++    for (size_t i = 0; i < size; ++i) {
++        init_func(host_ptr, i);
++    }
++
++    auto device_ptr = static_cast<data_type *>(
++            aligned_alloc_device(DEVICE_MEM_ALIGNMENT,
++                    test_iter * size * sizeof(data_type), device, context));
++    for (int it = 0; it < test_iter; it++) {
++        queue.memcpy((void *)(device_ptr + it * size), (void *)host_ptr,
++                     size * sizeof(data_type))
++                .wait();
++    }
++
++    free(host_ptr);
++
++    return device_ptr;
++}
++
+ template <typename Test, typename validate_func, typename kernel_t>
+ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
+     test_result result = test_result::complete;
+@@ -41,6 +67,12 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
+     using data_type_c = typename Test::data_type_c;
+     using data_type_acc = typename Test::data_type_acc;
+ 
++    int iter = 10, warmup = 10;
++#ifdef CACHE_FLUSH
++    batch = iter + warmup;
++#else
++    batch = 1;
++#endif
+     constexpr size_t matrix_m = Test::mat_m;
+     constexpr size_t matrix_n = Test::mat_n;
+     constexpr size_t matrix_k = Test::mat_k;
+@@ -63,19 +95,19 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
+               << device.get_info<info::device::name>() << "\n";
+ 
+     auto A = alloc_device_and_init<data_type_a>(
+-            batch * size_a,
++            size_a, batch,
+             [](data_type_a *data, size_t idx) {
+                 data[idx] = static_cast<data_type_a>(random_float() - 0.5f);
+             },
+             queue, device, context);
+     auto B = alloc_device_and_init<data_type_b>(
+-            batch * size_b,
++            size_b, batch,
+             [](data_type_b *data, size_t idx) {
+                 data[idx] = static_cast<data_type_b>(random_float() - 0.5f);
+             },
+             queue, device, context);
+     auto C = alloc_device_and_init<data_type_c>(
+-            batch * size_c,
++            size_c, batch,
+             [](data_type_c *data, size_t idx) {
+                 data[idx] = static_cast<data_type_c>(0);
+             },
+@@ -84,13 +116,13 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
+     size_t size_acc = gemm_op_t::get_acc_buf_size(matrix_m, matrix_n);
+     size_t size_cnt = gemm_op_t::get_cnt_buf_size(matrix_m, matrix_n);
+     auto Acc = alloc_device_and_init<data_type_acc>(
+-            batch * size_acc,
++            size_acc, batch,
+             [](data_type_acc *data, size_t idx) {
+                 data[idx] = static_cast<data_type_acc>(0);
+             },
+             queue, device, context);
+     auto Cnt = alloc_device_and_init<uint32_t>(
+-            batch * size_cnt,
++            size_cnt, batch,
+             [](uint32_t *data, size_t idx) {
+                 data[idx] = static_cast<uint32_t>(0);
+             },
+@@ -120,42 +152,50 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
+                 Test::layout_b == mem_layout::col_major ? matrix_k : matrix_n,
+                 nullptr, matrix_n, nullptr, nullptr);
+ 
+-        cl::sycl::nd_range<3> nd_range = gemm_op_t::get_nd_range(arg);
+-
+-        for (size_t i = 0; i < batch; i++) {
+-            auto A_ptr = A + i * size_a;
+-            auto B_ptr = B + i * size_b;
+-            auto C_ptr = C + i * size_c;
+-            auto Acc_ptr = Acc + i * size_acc;
+-            auto Cnt_ptr = Cnt + i * size_cnt;
+-
+-            arg.matA_base = A_ptr;
+-            arg.matB_base = B_ptr;
+-            arg.matC_base = C_ptr;
+-            arg.acc_base = Acc_ptr;
+-            arg.cnt_base = Cnt_ptr;
+-
+-            if (!gemm_op_t::can_implement(arg)) {
+-                std::cout << "The arguments cannot be supported, skip ... "
+-                          << std::endl;
+-                result = test_result::skip;
+-                break;
+-            }
+-
+-            auto e_esimd = queue.submit([&](handler &cgh) {
+-                if (value == NULL || strcmp(value, "on") != 0) {
++            arg.matA_base = A;
++            arg.matB_base = B;
++            arg.matC_base = C;
++            arg.acc_base = Acc;
++            arg.cnt_base = Cnt;
++
++            // if (!gemm_op_t::can_implement(arg)) {
++            //     std::cout << "The arguments cannot be supported, skip ... "
++            //               << std::endl;
++            //     result = test_result::skip;
++            //     break;
++            // }
++            cl::sycl::nd_range<3> nd_range = gemm_op_t::get_nd_range(arg);
++
++            std::vector<float> event_times(iter + warmup);
++            for (uint32_t j = 0; j < iter + warmup; j++) {
++                
++                auto e_esimd = queue.submit([&](handler &cgh) {
+                     cgh.use_kernel_bundle(exeBundle);
+-                }
+-                cgh.parallel_for<Test>(
+-                        nd_range, [=](nd_item<3> item) KERNEL_MAIN {
+-                            gpu::xetla::xetla_local_init<slm_size>();
+-                            gpu::xetla::xetla_nbarrier_init<barrier_num>();
+-                            kernel_t::run(item, A_ptr, B_ptr, C_ptr, matrix_m,
+-                                    matrix_n, matrix_k, Acc_ptr, Cnt_ptr);
+-                        });
+-            });
++                    cgh.parallel_for<Test>(
++                            nd_range, [=](nd_item<3> item) KERNEL_MAIN {
++#ifdef CACHE_FLUSH
++                                int batch_idx = j;
++                                auto A_ptr = A + batch_idx * size_a;
++                                auto B_ptr = B + batch_idx * size_b;
++                                auto C_ptr = C + batch_idx * size_c;
++                                auto Acc_ptr = Acc + batch_idx * size_acc;
++                                auto Cnt_ptr = Cnt + batch_idx * size_cnt;
++#else
++                            auto A_ptr = A;
++                            auto B_ptr = B;
++                            auto C_ptr = C;
++                            auto Acc_ptr = Acc;
++                            auto Cnt_ptr = Cnt;
++#endif
++                                gpu::xetla::xetla_local_init<slm_size>();
++                                gpu::xetla::xetla_nbarrier_init<barrier_num>();
++                                kernel_t::run(item, A_ptr, B_ptr, C_ptr,
++                                        matrix_m, matrix_n, matrix_k, Acc_ptr,
++                                        Cnt_ptr);
++                            });
++                });
+             e_esimd.wait();
+-        }
++            }
+     } catch (cl::sycl::exception const &e) {
+         std::cout << "SYCL exception caught: " << e.what() << '\n';
+         result = test_result::fail;
+diff --git a/tools/scripts/env.sh b/tools/scripts/env.sh
+index e0928fea..5bb25eca 100755
+--- a/tools/scripts/env.sh
++++ b/tools/scripts/env.sh
+@@ -2,7 +2,7 @@
+ script_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+ source ${script_dir}/clang_format.sh
+ 
+-source /opt/intel/oneapi/setvars.sh
++source /opt/intel/oneapi/setvars.sh --force
+ export DPCPP_ROOT=${ONEAPI_ROOT}/compiler/latest/linux
+ 
+ export CC=icx
