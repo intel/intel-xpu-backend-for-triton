@@ -9,13 +9,21 @@ using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 namespace fma_details {
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                          ConversionPatternRewriter &rewriter);
+                          ConversionPatternRewriter &rewriter,
+                          const TargetInfoBase &targetInfo);
 } // namespace fma_details
 
 namespace {
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
+  //  using ConvertTritonGPUOpToLLVMPattern<
+  //      triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  DotOpConversion(LLVMTypeConverter &converter,
+                  const TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::DotOp>(converter, benefit),
+        targetInfo(targetInfo) {}
+
+  const TargetInfoBase &targetInfo;
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
@@ -33,8 +41,8 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
     if (!isOuter && isa<DpasEncodingAttr>(
                         cast<RankedTensorType>(D.getType()).getEncoding())) {
-      return fma_details::convertDPAS(op, adaptor, getTypeConverter(),
-                                      rewriter);
+      return fma_details::convertDPAS(op, adaptor, getTypeConverter(), rewriter,
+                                      targetInfo);
     }
 
     if (isa<BlockedEncodingAttr>(
@@ -45,10 +53,12 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
 };
+
 } // namespace
 
 void mlir::triton::intel::populateDotOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter,
+    const TargetInfoBase &targetInfo, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, benefit);
+  patterns.add<DotOpConversion>(typeConverter, targetInfo, benefit);
 }
