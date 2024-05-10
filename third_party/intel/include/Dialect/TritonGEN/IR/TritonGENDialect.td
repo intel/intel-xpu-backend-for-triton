@@ -15,6 +15,7 @@ def TritonGEN_Dialect : Dialect {
   let name = "triton_gen";
   let cppNamespace = "::mlir::triton::TritonGEN";
   let summary = "The TritonGEN dialect in Triton.";
+  let useDefaultAttributePrinterParser = 1;
 
   let description = [{
     TritonGEN is a dialect for representing operations on Intel GPUs.

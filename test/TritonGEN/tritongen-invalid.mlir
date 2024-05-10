@@ -1,5 +1,21 @@
 // RUN: triton-opt -split-input-file -verify-diagnostics %s
 
+llvm.func @triton_gen.empty_cache_controls(%arg0: !llvm.ptr) {
+  // expected-error @+1 {{'triton_gen.cache_controls' op expecting at least one cache control decoration}}
+  %0 = triton_gen.cache_controls %arg0, [] : !llvm.ptr
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.duplicated_cache_controls(%arg0: !llvm.ptr) {
+  // expected-error @+1 {{'triton_gen.cache_controls' op cannot specify more than one cache control decoration of the same nature for the same cache level}}
+  %0 = triton_gen.cache_controls %arg0, [#triton_gen.store_cache_control<0, Uncached>, #triton_gen.store_cache_control<0, Streaming>] : !llvm.ptr
+  llvm.return
+}
+
+// -----
+
 llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // expected-error @+1 {{'triton_gen.dpas' op expecting repeat count to be 1, 2, 4, or 8}}
   %0 = triton_gen.dpas %c, %a, %b {pa=i8, pb=i8, rc=16} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>

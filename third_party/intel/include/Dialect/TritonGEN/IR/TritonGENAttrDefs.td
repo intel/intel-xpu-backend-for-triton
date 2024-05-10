@@ -9,7 +9,16 @@
 #ifndef TRITONGEN_ATTRDEFS
 #define TRITONGEN_ATTRDEFS
 
+include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.td"
+
+include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
+
+class TritonGEN_Attr<string name, string attrMnemonic, list<Trait> traits = []>
+    : AttrDef<TritonGEN_Dialect, name, traits> {
+  let mnemonic = attrMnemonic;
+  let cppNamespace = "::mlir::triton::TritonGEN";
+}
 
 /// Enum attribute of the different shuffle kinds.
 def TritonGEN_ShflKindAttr : I32EnumAttr<"ShflKind", "TritonGEN shuffle kind",
@@ -108,5 +117,62 @@ def TritonGEN_MemScope : I32EnumAttr<"MemScope",
   ]> {
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
+
+/// Enum attribute for load cache controls.
+///
+/// See
+/// https://github.com/KhronosGroup/SPIRV-Registry/blob/main/extensions/INTEL/SPV_INTEL_cache_controls.asciidoc#Load_Cache_Control.
+def TritonGEN_LoadCacheControlDecorationEnum : I32EnumAttr<"LoadCacheControlDecorationEnum",
+  "TritonGEN load cache controls",
+  [ I32EnumAttrCase<"Uncached",            0, "Uncached">,
+    I32EnumAttrCase<"Cached",              1, "Cached">,
+    I32EnumAttrCase<"Streaming",           2, "Streaming">,
+    I32EnumAttrCase<"InvalidateAfterRead", 3, "InvalidateAfterRead">,
+    I32EnumAttrCase<"ConstCached",         4, "ConstCached">
+  ]> {
+  let cppNamespace = "::mlir::triton::TritonGEN";
+}
+
+class TritonGEN_LoadStoreCacheControlDecoration<string loadOrStore>
+    : TritonGEN_Attr<loadOrStore # "CacheControlDecoration", !tolower(loadOrStore) # "_cache_control"> {
+  let summary = "An attribute specifying " # !tolower(loadOrStore) # " cache control";
+  let description = [{
+    A }] # !tolower(loadOrStore) # [{ cache control attribute has a one-to-one correspondance with the SPIR-V
+    decoration shown in
+    https://github.com/KhronosGroup/SPIRV-Registry/blob/main/extensions/INTEL/SPV_INTEL_cache_controls.asciidoc#decorations. The
+    only difference is there is no need to add the SPIR-V decoration key as that
+    will be inferred from the value.
+  }];
+  let parameters = (ins "uint32_t":$cache_level,
+                        loadOrStore # "CacheControlDecorationEnum":$cache_control);
+  let assemblyFormat = "`<` $cache_level `,` $cache_control `>`";
+}
+
+def TritonGEN_LoadCacheControlDecoration
+    : TritonGEN_LoadStoreCacheControlDecoration<"Load">;
+
+/// Enum attribute for store cache controls.
+///
+/// See
+/// https://github.com/KhronosGroup/SPIRV-Registry/blob/main/extensions/INTEL/SPV_INTEL_cache_controls.asciidoc#Store_Cache_Control.
+def TritonGEN_StoreCacheControlDecorationEnum : I32EnumAttr<"StoreCacheControlDecorationEnum",
+  "TritonGEN store cache controls",
+  [ I32EnumAttrCase<"Uncached",     0, "Uncached">,
+    I32EnumAttrCase<"WriteThrough", 1, "WriteThrough">,
+    I32EnumAttrCase<"WriteBack",    2, "WriteBack">,
+    I32EnumAttrCase<"Streaming",    3, "Streaming">,
+  ]> {
+  let cppNamespace = "::mlir::triton::TritonGEN";
+}
+
+def TritonGEN_StoreCacheControlDecoration
+    : TritonGEN_LoadStoreCacheControlDecoration<"Store">;
+
+def CacheControls
+    : AnyAttrOf<[TritonGEN_LoadCacheControlDecoration,
+                 TritonGEN_StoreCacheControlDecoration]>;
+
+def CacheControlsArray
+    : TypedArrayAttrBase<CacheControls, "Array of cache control attributes">;
 
 #endif // TRITONGEN_ATTRDEFS

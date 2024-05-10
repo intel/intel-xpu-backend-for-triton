@@ -105,6 +105,21 @@ llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8
   llvm.return
 }
 
+llvm.func @triton_gen.cache_controls(%arg0: !llvm.ptr) {
+  // CHECK-LABEL:   llvm.func @triton_gen.cache_controls(
+  // CHECK-SAME:                                         %[[VAL_0:.*]]: !llvm.ptr) {
+  // CHECK:           %[[VAL_1:.*]] = triton_gen.cache_controls %[[VAL_0]], [#triton_gen.store_cache_control<0, Uncached>, #triton_gen.store_cache_control<1, WriteThrough>, #triton_gen.load_cache_control<0, Cached>, #triton_gen.load_cache_control<1, Uncached>] : !llvm.ptr
+  // CHECK:           %[[VAL_2:.*]] = triton_gen.cache_controls %[[VAL_0]], [#triton_gen.store_cache_control<0, WriteBack>, #triton_gen.store_cache_control<1, Streaming>, #triton_gen.load_cache_control<0, Streaming>, #triton_gen.load_cache_control<1, InvalidateAfterRead>, #triton_gen.load_cache_control<2, ConstCached>] : !llvm.ptr
+  // CHECK:           %[[VAL_3:.*]] = llvm.load %[[VAL_1]] : !llvm.ptr -> i32
+  // CHECK:           llvm.store %[[VAL_3]], %[[VAL_2]] : i32, !llvm.ptr
+  // CHECK:           llvm.return
+  %0 = triton_gen.cache_controls %arg0, [#triton_gen.store_cache_control<0, Uncached>, #triton_gen.store_cache_control<1, WriteThrough>, #triton_gen.load_cache_control<0, Cached>, #triton_gen.load_cache_control<1, Uncached>] : !llvm.ptr
+  %1 = triton_gen.cache_controls %arg0, [#triton_gen.store_cache_control<0, WriteBack>, #triton_gen.store_cache_control<1, Streaming>, #triton_gen.load_cache_control<0, Streaming>, #triton_gen.load_cache_control<1, InvalidateAfterRead>, #triton_gen.load_cache_control<2, ConstCached>] : !llvm.ptr
+  %2 = llvm.load %0 : !llvm.ptr -> i32
+  llvm.store %2, %1 : i32, !llvm.ptr
+  llvm.return
+}
+
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:      llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
   // CHECK-NEXT:   %0 = triton_gen.2Dblockload %arg0, %arg1, %arg2, %arg3, %arg4, %arg5 {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 1, transpose = false, vnni_transform = false, cache_control = Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<16xf16>

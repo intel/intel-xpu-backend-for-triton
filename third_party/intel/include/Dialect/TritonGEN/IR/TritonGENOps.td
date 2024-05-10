@@ -264,6 +264,22 @@ def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
 }
 
 //===----------------------------------------------------------------------===//
+// Metaoperations
+//===----------------------------------------------------------------------===//
+
+def TritonGEN_CacheControls
+    : TritonGEN_Op<"cache_controls",
+                   [AllTypesMatch<["ptr", "decorated_ptr"]>, Pure]> {
+  let arguments = (ins LLVM_AnyPointer:$ptr,
+                       CacheControlsArray:$cache_controls);
+  let results = (outs LLVM_AnyPointer:$decorated_ptr);
+  let assemblyFormat = [{
+    $ptr `,` $cache_controls attr-dict `:` type($ptr)
+  }];
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
 
