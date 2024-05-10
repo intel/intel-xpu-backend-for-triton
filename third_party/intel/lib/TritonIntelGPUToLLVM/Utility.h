@@ -88,6 +88,14 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
+void printTensor(StringRef msg, Value tensor, Type tensorTy,
+                 ConversionPatternRewriter &rewriter,
+                 const TargetInfoBase &targetInfo);
+
+Value llPrintf(StringRef msg, ValueRange args,
+               ConversionPatternRewriter &rewriter,
+               const TargetInfoBase &targetInfo,
+               int *formatStrByteCount = nullptr);
 } // namespace mlir::LLVM::intel
 
 using mlir::triton::gpu::intel::DpasEncodingAttr;
