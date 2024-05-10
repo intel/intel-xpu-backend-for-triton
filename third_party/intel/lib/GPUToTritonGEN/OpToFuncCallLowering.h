@@ -60,8 +60,7 @@ public:
     if (funcName.empty())
       return failure();
 
-    Operation *op_ptr = op;
-    auto moduleOp = op_ptr->getParentWithTrait<OpTrait::SymbolTable>();
+    auto moduleOp = op->template getParentWithTrait<OpTrait::SymbolTable>();
     auto funcOp = triton::gpu::intel::lookupOrCreateSPIRVFn(
         moduleOp, funcName, parameters, resultType);
     auto callOp = triton::gpu::intel::createSPIRVBuiltinCall(
