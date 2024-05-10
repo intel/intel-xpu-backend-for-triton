@@ -310,8 +310,8 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<Value> multiDimWarpId =
       mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
-  double ceilRes =
-      ceil(static_cast<double>(shapePerCTA[opIdx]) / elemsPerInstr[opIdx]);
+  unsigned ceilRes =
+      mlir::ceil<unsigned>(shapePerCTA[opIdx], elemsPerInstr[opIdx]);
   Value outerWarpDim = urem(multiDimWarpId[opIdx], i32_val(ceilRes));
   int warpsPerTile = std::min<int>(warpsPerCTA[opIdx], ceilRes);
 
