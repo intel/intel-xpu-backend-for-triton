@@ -6,6 +6,9 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "tritonintelgpu-pipeline"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -71,10 +74,20 @@ static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
 /// same dot operand encoding, return the encoding. Otherwise return nullptr.
 static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
   ttg::DotOperandEncodingAttr attr{nullptr};
+  LLVM_DEBUG(llvm::dbgs() << "Checking users of " << val << "\n");
   for (Operation *user : val.getUsers()) {
+    if (isa<triton::DotOp>(user)) {
+      auto tensorType = cast<RankedTensorType>(val.getType());
+      return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
+    }
+
     ttg::DotOperandEncodingAttr dotAttr = getDotEncodingFromUser(user);
-    if (!dotAttr || (attr != nullptr && attr != dotAttr))
+    if (!dotAttr || (attr != nullptr && attr != dotAttr)) {
+      LLVM_DEBUG({
+        llvm::dbgs() << "no dot attribute found for user: " << user << "\n";
+      });
       return nullptr;
+    }
     attr = dotAttr;
   }
   return attr;
@@ -273,8 +286,16 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
   // them. This gives a coarse scheduling for the loop.
   SmallVector<LoadDotOperand> loads;
   collectOpsToPipeline(forOp, loads);
-  if (loads.empty())
+  if (loads.empty()) {
+    LLVM_DEBUG(llvm::dbgs() << "No loads to pipeline\n");
     return false;
+  }
+
+  LLVM_DEBUG({
+    llvm::dbgs() << "Loads to pipeline:\n";
+    for (const LoadDotOperand &load : loads)
+      llvm::dbgs() << "  " << *load.load << "\n";
+  });
 
   // 2. Create the prefetching operations for the loads collected.
   createPrefetchOps(forOp, loads);
