@@ -104,6 +104,10 @@ Value convertWithFunctionCall(TritonLLVMIRRewriter &rewriter, Value value,
                               StringRef baseName, Type inType, Type outType,
                               StringRef hasAttrName = {});
 
+void printTensor(StringRef msg, Value tensor, Type tensorTy,
+                 ConversionPatternRewriter &rewriter,
+                 const TargetInfoBase &targetInfo);
+
 } // namespace mlir::triton::intel
 
 #endif // TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
