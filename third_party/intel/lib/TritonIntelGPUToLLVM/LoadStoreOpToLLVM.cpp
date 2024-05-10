@@ -455,6 +455,8 @@ struct LoadOpConversion
     unsigned warpOuterStride = elemsPerInstr[opIdx] * numRepOuter;
     unsigned repKStride = elemsPerInstr[opIdx == 0 ? 1 : 0];
 
+    Value programId = targetInfo.programId(rewriter, loc, op->getParentOfType<ModuleOp>(), 0);
+
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; outer += composedOuterDimPerLoad) {
       for (int k = 0; k < numRepK; k += composedKDimPerLoad) {
@@ -513,7 +515,16 @@ struct LoadOpConversion
 
             // Save the unpacked vals to the map;
             if (opIdx == 0) {
-              loadVals[{outer + row, k + col}] = bitcast(loadVal, unpackType);
+              Value vals =  bitcast(loadVal, unpackType);
+//              LLVM::intel::llPrintf(rewriter, "A pid=%d sgid=%d, tid=%d, base=%p, baseWidth=%d, baseHeight=%d, offsetX=%d, offsetY=%d, tileHeight=%d",
+//                                    ValueRange{programId, warpId, laneId, base,
+//                                               baseWidth, baseHeight,
+//                                               offsetX, offsetY, i32_val(tileHeight)});
+//              LLVM::intel::llPrintf(rewriter, "A pid=%d sgid=%d, tid=%d, base=%p, outer=%d, k=%d, packedRow=%d, packedCol=%d, val=%f",
+//                                    ValueRange{programId, warpId, laneId, base,
+//                                               i32_val(outer), i32_val(k),
+//                                               i32_val(row), i32_val(col), vals});
+              loadVals[{outer + row, k + col}] = vals;
             } else {
               loadVals[{outer + col, k + row}] = bitcast(loadVal, unpackType);
             }

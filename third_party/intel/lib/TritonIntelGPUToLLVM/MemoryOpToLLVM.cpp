@@ -27,8 +27,17 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
       LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
+  //  llvm::outs() << "johnlu lowerDistributedToShared:" << op << "\n";
+  //  llvm::outs().flush();
+  //  llvm::outs() << "johnlu dstTy:" << dstTy << "\n";
+  //  llvm::outs().flush();
+  //  llvm::outs() << "johnlu dstShapePerCTA:";
+  //  for (auto size : dstShapePerCTA) {
+  //    llvm::outs() << " " << size << ",";
+  //  }
+  //  llvm::outs() << "\n";
+  //  llvm::outs().flush();
   int32_t elemSize = elemTy.getIntOrFloatBitWidth();
-  auto mmaLayout = dyn_cast<DpasEncodingAttr>(srcLayout);
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
   auto dstStrides =
       LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
