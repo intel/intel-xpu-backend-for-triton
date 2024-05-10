@@ -2,6 +2,7 @@
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
+#include "third_party/intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 namespace {
@@ -1287,9 +1288,10 @@ struct FpToFpOpConversion
     auto moduleOp =
         v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
     constexpr StringLiteral name = "_Z31intel_convert_as_bfloat16_floatt";
-    auto ext_func =
-        intel::lookupOrCreateSPIRVFn(moduleOp, name, i16_ty, f32_ty);
-    auto call = intel::createSPIRVBuiltinCall(loc, rewriter, ext_func, v);
+    auto ext_func = triton::gpu::intel::lookupOrCreateSPIRVFn(moduleOp, name,
+                                                              i16_ty, f32_ty);
+    auto call =
+        triton::gpu::intel::createSPIRVBuiltinCall(loc, rewriter, ext_func, v);
     return call.getResult();
   }
 
@@ -1307,9 +1309,10 @@ struct FpToFpOpConversion
           v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
       // Intel SPIR-V extension only supports round-to-nearest-even
       constexpr StringLiteral name = "_Z32intel_convert_bfloat16_as_ushortf";
-      auto trunc_func =
-          intel::lookupOrCreateSPIRVFn(moduleOp, name, f32_ty, i16_ty);
-      auto call = intel::createSPIRVBuiltinCall(loc, rewriter, trunc_func, v);
+      auto trunc_func = triton::gpu::intel::lookupOrCreateSPIRVFn(
+          moduleOp, name, f32_ty, i16_ty);
+      auto call = triton::gpu::intel::createSPIRVBuiltinCall(loc, rewriter,
+                                                             trunc_func, v);
       return call.getResult();
     }
 

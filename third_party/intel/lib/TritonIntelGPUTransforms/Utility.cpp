@@ -8,11 +8,13 @@
 
 #include "triton/Analysis/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
 #include <optional>
 
 using namespace mlir;
@@ -233,6 +235,29 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     return failure();
   }
   return success();
+}
+
+LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
+                                       ArrayRef<Type> paramTypes,
+                                       Type resultType) {
+  auto func = dyn_cast_or_null<LLVM::LLVMFuncOp>(
+      SymbolTable::lookupSymbolIn(symbolTable, name));
+  if (!func) {
+    OpBuilder b(symbolTable->getRegion(0));
+    func = b.create<LLVM::LLVMFuncOp>(
+        symbolTable->getLoc(), name,
+        LLVM::LLVMFunctionType::get(resultType, paramTypes));
+    func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  }
+  return func;
+}
+
+LLVM::CallOp createSPIRVBuiltinCall(Location loc,
+                                    ConversionPatternRewriter &rewriter,
+                                    LLVM::LLVMFuncOp func, ValueRange args) {
+  auto call = rewriter.create<LLVM::CallOp>(loc, func, args);
+  call.setCConv(func.getCConv());
+  return call;
 }
 
 } // namespace mlir::triton::gpu::intel

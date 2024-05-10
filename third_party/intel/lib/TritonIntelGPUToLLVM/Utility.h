@@ -634,14 +634,6 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   }
 }
 
-LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
-                                       ArrayRef<Type> paramTypes,
-                                       Type resultType);
-
-LLVM::CallOp createSPIRVBuiltinCall(Location loc,
-                                    ConversionPatternRewriter &rewriter,
-                                    LLVM::LLVMFuncOp func, ValueRange args);
-
 } // namespace mlir::triton::intel
 
 #endif
