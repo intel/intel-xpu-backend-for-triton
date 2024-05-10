@@ -89,6 +89,10 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
 Value convertFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
                         const Value &v, triton::RoundingMode rounding);
 
+void printTensor(StringRef msg, Value tensor, Type tensorTy,
+                 ConversionPatternRewriter &rewriter,
+                 const TargetInfoBase &targetInfo);
+
 } // namespace mlir::LLVM::intel
 
 namespace mlir::triton::intel {
