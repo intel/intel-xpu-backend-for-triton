@@ -217,7 +217,7 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
            "int32_t", /*default*/"3",
            "Number of loop iteration to prefetch in advance of the loop">,
     Option<"injectSplitBarriers", "inject-split-barriers",
-           "bool", /*default*/"true",
+           "bool", /*default*/"false",
            "Whether to inject split barriers in (and around) the loop">,
   ];
 }
