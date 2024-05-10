@@ -207,7 +207,8 @@ public:
     } else {
       intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                    patterns, benefit);
-      intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
+      intel::populateDotOpToLLVMPatterns(typeConverter, targetInfo, patterns,
+                                         benefit);
       intel::populateElementwiseOpToLLVMPatterns(
           typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
       intel::populateLoadStoreOpToLLVMPatterns(
