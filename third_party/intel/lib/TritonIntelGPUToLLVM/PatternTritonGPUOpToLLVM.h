@@ -56,6 +56,7 @@ void populateWarpIdOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 /* Third party patterns start */
 
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                 const TargetInfoBase &targetInfo,
                                  RewritePatternSet &patterns,
                                  PatternBenefit benefit);
 
