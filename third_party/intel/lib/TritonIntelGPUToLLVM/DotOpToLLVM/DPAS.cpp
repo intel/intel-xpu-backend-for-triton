@@ -21,12 +21,14 @@ class DotOpDPASConversionHelper {
 public:
   using ValueTable = std::map<std::array<unsigned, 3>, Value>;
 
-  DotOpDPASConversionHelper(DpasEncodingAttr dpasLayout,
+  DotOpDPASConversionHelper(DpasEncodingAttr dpasLayout, Type tensorTy,
                             ConversionPatternRewriter &rewriter,
+                            const TargetInfoBase &targetInfo,
                             TritonIntelGPUToLLVMTypeConverter *typeConverter,
                             Location loc)
       : dpasLayout(dpasLayout), rewriter(rewriter),
-        typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
+        typeConverter(typeConverter), targetInfo(targetInfo), loc(loc),
+        ctx(dpasLayout.getContext()), tensorTy(tensorTy) {}
 
   std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
       DPASAnalysis::DPASEngineType dpasType, MLIRContext *ctx,
@@ -226,6 +228,18 @@ public:
       llvm::dbgs() << "fc.size()= " << fc.size() << "\n";
     });
 
+#if 0
+    auto mod = op->getParentOfType<ModuleOp>();
+    auto warpSize =
+        i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
+    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    Value programId =
+        targetInfo.programId(rewriter, loc,
+                             rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
+                             0);
+#endif
+
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
       auto tb = TritonLLVMOpBuilder(loc, rewriter);
       Value valA = ha.at({b, m, k});
@@ -343,6 +357,17 @@ private:
                                               int64_t dimBatch, int64_t dimRow,
                                               int64_t dimCol,
                                               Type elemTy) const {
+
+    //    int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+    //
+    //    Value warpSize = i32_val(threadsPerWarp);
+    //    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
+    //    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    //    Value programId =
+    //        targetInfo.programId(rewriter, loc,
+    //        rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
+    //        0);
+
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     size_t rank = repCluster.size();
@@ -354,6 +379,11 @@ private:
             for (int repCol = 0; repCol < repCluster[rank - 1]; ++repCol) {
               Value matVal = vals.at({b, m * repCluster[rank - 2] + repRow,
                                       k * repCluster[rank - 1] + repCol});
+              //        LLVM::intel::llPrintf(rewriter, "A pid=%d
+              //        sgid=%d,tid=%d, m=%d, n=%d, val=%f",
+              //                              ValueRange{programId, warpId,
+              //                              laneId, i32_val(m), i32_val(k),
+              //                              matVal});
               VectorType vecType = cast<mlir::VectorType>(matVal.getType());
               Type valTy = vecType.getElementType();
               for (int i = 0; i < vecType.getNumElements(); ++i) {
@@ -539,6 +569,8 @@ private:
   TritonIntelGPUToLLVMTypeConverter *typeConverter;
   Location loc;
   MLIRContext *ctx;
+  const TargetInfoBase &targetInfo;
+  Type tensorTy;
 };
 
 } // namespace
@@ -546,8 +578,9 @@ private:
 namespace fma_details {
 template <typename OpTy>
 LogicalResult convertDPAS(OpTy op, typename OpTy::Adaptor adaptor,
-                            TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                          ConversionPatternRewriter &rewriter) {
+                          TritonIntelGPUToLLVMTypeConverter *typeConverter,
+                          ConversionPatternRewriter &rewriter,
+                          const TargetInfoBase &targetInfo) {
   LLVM_DEBUG({
     Operation *opPtr = op.getOperation();
     auto module = opPtr->getParentOfType<ModuleOp>();
@@ -575,8 +608,8 @@ LogicalResult convertDPAS(OpTy op, typename OpTy::Adaptor adaptor,
   auto dpasLayout = cast<DpasEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
 
-  DotOpDPASConversionHelper helper(dpasLayout, rewriter, typeConverter,
-                                   op.getLoc());
+  DotOpDPASConversionHelper helper(dpasLayout, DTensorTy, rewriter, targetInfo,
+                                   typeConverter, op.getLoc());
 
   return helper.convertDot(op, adaptor);
 }
