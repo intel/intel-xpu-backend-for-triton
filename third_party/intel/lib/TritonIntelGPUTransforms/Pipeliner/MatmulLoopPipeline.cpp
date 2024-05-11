@@ -57,15 +57,10 @@ static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
   if (isa<ttg::SharedEncodingAttr>(tensorType.getEncoding()))
     return allTransitiveUsesHaveDotEncoding(res);
 
-  Operation *op = dyn_cast<ttg::ConvertLayoutOp>(user)
-                      ? dyn_cast<ttg::ConvertLayoutOp>(user)
-                      : dyn_cast<tt::DotOp>(user);
-  if (op) {
-    auto tensorType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-    if (!tensorType)
-      return nullptr;
-    return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
-  }
+  if (auto op = dyn_cast<ttg::ConvertLayoutOp>(user))
+    if (auto tensorType =
+            dyn_cast<RankedTensorType>(op->getResult(0).getType()))
+      return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
 
   return nullptr;
 }
@@ -76,12 +71,13 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
   ttg::DotOperandEncodingAttr attr{nullptr};
   LLVM_DEBUG(llvm::dbgs() << "Checking users of " << val << "\n");
   for (Operation *user : val.getUsers()) {
+    ttg::DotOperandEncodingAttr dotAttr;
     if (isa<triton::DotOp>(user)) {
       auto tensorType = cast<RankedTensorType>(val.getType());
-      return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
+      dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
+    } else {
+      dotAttr = getDotEncodingFromUser(user);
     }
-
-    ttg::DotOperandEncodingAttr dotAttr = getDotEncodingFromUser(user);
     if (!dotAttr || (attr != nullptr && attr != dotAttr)) {
       LLVM_DEBUG({
         llvm::dbgs() << "no dot attribute found for user: " << user << "\n";

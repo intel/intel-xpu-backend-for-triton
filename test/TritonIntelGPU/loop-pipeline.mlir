@@ -135,7 +135,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 // -----
 
-// COM: Test that loads for a tt.dot operation are prefetched when the loaded value feeds the tt.dor operation directly.
+// COM: Test that loads for a tt.dot operation are prefetched when the loaded value feeds the tt.dot operation directly.
 // CHECK: #[[$BLOCK:.+]] = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 4], order = [1, 0]}>
 // CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], A = [8, 16], B = [16, 16], C = [8, 16]}>
 
