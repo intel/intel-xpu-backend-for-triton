@@ -42,7 +42,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
 
 def get_deselected(report_path: pathlib.Path) -> int:
     """Calculates deselected (via skiplist) tests."""
-    skiplist_dir = os.getenv('TRITON_TEST_SKIPLIST_DIR', 'scripts/skiplist/default')
+    skiplist_dir = os.getenv('TRITON_TEST_SKIPLIST_DIR', 'scripts/skiplist/pvc_rolling')
     skiplist_path = pathlib.Path(skiplist_dir) / f'{report_path.stem}.txt'
     if not skiplist_path.exists():
         return 0
