@@ -17,7 +17,6 @@ import re
 import errno
 import torch
 import intel_extension_for_pytorch
-from intel_extension_for_pytorch.xpu.cpp_extension import DPCPPExtension, DpcppBuildExtension
 
 
 class CMakeBuild():
@@ -25,7 +24,7 @@ class CMakeBuild():
     def __init__(self):
         self.current_dir = os.path.abspath(os.path.dirname(__file__))
         self.build_temp = self.current_dir + '/build/temp'
-        self.extdir = self.build_temp + '/benchmark'
+        self.extdir = self.current_dir + '/xetla_benchmark'
 
     def run(self):
         try:
@@ -79,14 +78,8 @@ class CMakeBuild():
 cmake = CMakeBuild()
 cmake.run()
 
-setup(
-    name='xetla-benchmark', packages=[
-        "xetla_benchmark",
-    ], package_dir={
-        "xetla_benchmark": "xetla_benchmark",
-    }, ext_modules=[
-        DPCPPExtension('xetla_benchmark.xetla_kernel', [
-            cmake.current_dir + '/xetla_kernel/python_main.cpp',
-        ], libraries=['xetla_kernel'], library_dirs=[cmake.extdir],
-                       include_dirs=[cmake.current_dir + '/xetla_kernel/softmax']),
-    ], cmdclass={'build_ext': DpcppBuildExtension})
+setup(name='xetla-benchmark', packages=[
+    "xetla_benchmark",
+], package_dir={
+    "xetla_benchmark": "xetla_benchmark",
+}, package_data={"xetla_benchmark": ["xetla_kernel.so"]})

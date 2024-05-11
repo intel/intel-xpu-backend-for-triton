@@ -103,10 +103,10 @@ sycl::event bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
   std::call_once(jit_once, [&]() {
     auto inputBundle =
         sycl::get_kernel_bundle<sycl::bundle_state::input>(context, kernelId);
-    // setenv("SYCL_PROGRAM_COMPILE_OPTIONS",
-    //        " -vc-codegen -doubleGRF -vc-disable-indvars-opt "
-    //        " -Xfinalizer '-printregusage -enableBCR -DPASTokenReduction '",
-    //        1);
+    setenv("SYCL_PROGRAM_COMPILE_OPTIONS",
+           " -vc-codegen -doubleGRF -vc-disable-indvars-opt "
+           " -Xfinalizer '-printregusage -enableBCR -DPASTokenReduction '",
+           1);
     sycl::kernel_bundle<sycl::bundle_state::executable> exeBundle =
         build(inputBundle);
     unsetenv("SYCL_PROGRAM_COMPILE_OPTIONS");
@@ -130,6 +130,14 @@ sycl::event bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
                            ldb, ldc, Acc, Cnt);
       });
     });
+    // e_esimd.wait();
+    // double time = (e_esimd.template get_profiling_info<
+    //                    sycl::info::event_profiling::command_end>() -
+    //                e_esimd.template get_profiling_info<
+    //                    sycl::info::event_profiling::command_start>()) /
+    //               (1000.0f * 1000.0f * 1000.f);
+
+    // printf("matrix_m: %d, Data_type_in(A): %lu, tflops: %f \n", matrix_m, sizeof(data_type_a), ((matrix_m * matrix_n * matrix_k * sizeof(data_type_a) * 2 / 1e12) / time));
     return e_esimd;
   } catch (cl::sycl::exception const &e) {
     std::cout << "SYCL exception caught: " << e.what() << '\n';

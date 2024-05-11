@@ -99,8 +99,8 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.language as tl
 
-import triton_intel_benchmark
-import triton_intel_benchmark.xetla_kernel as xetla_kernel
+import xetla_benchmark
+import xetla_benchmark.xetla_kernel as xetla_kernel
 
 
 @triton.autotune(
@@ -238,7 +238,7 @@ def matmul(a, b):
         # possible values for `line_arg``
         line_vals=['onednn', 'triton', 'xetla'],
         # label name for the lines
-        line_names=["oneDNN", "Triton", "xetla"],
+        line_names=["oneDNN", "Triton", "Xetla"],
         # line styles
         #styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel="TFLOPS",  # label name for the y-axis
