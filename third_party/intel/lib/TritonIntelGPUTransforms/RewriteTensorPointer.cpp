@@ -4,6 +4,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
+#include "llvm/Support/Debug.h"
+
 #include <stack>
 
 using namespace mlir;
@@ -15,6 +17,8 @@ namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREWRITETENSORPOINTER
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
+
+#define DEBUG_TYPE "tritonintelgpu-rewrite-tensor-pointer"
 
 namespace {
 
@@ -346,6 +350,7 @@ public:
                                     std::stack<Operation *> &eraser) {
     if (!valueToRemove.count(op.getResult()))
       return nullptr;
+
     // Save info for later use
     auto ptrType = cast<tt::PointerType>(op.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
@@ -731,6 +736,16 @@ public:
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         for (auto operand : yieldOp.getOperands())
           markTensorPointerForRemoval(operand);
+      }
+    });
+
+    LLVM_DEBUG({
+      if (valueToRemove.empty())
+        llvm::dbgs() << "No tensor pointer to remove\n";
+      else {
+        llvm::dbgs() << "Values to remove: \n";
+        for (auto val : valueToRemove)
+          llvm::dbgs() << val << "\n";
       }
     });
 
