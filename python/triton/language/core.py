@@ -1748,7 +1748,6 @@ def atomic_cas(pointer, cmp, val, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("exchange")
 def atomic_xchg(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
-    mask = _constexpr_to_value(mask)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
     mask = _constexpr_to_value(mask)
@@ -1760,7 +1759,6 @@ def atomic_xchg(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("add")
 def atomic_add(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
-    mask = _constexpr_to_value(mask)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
     mask = _constexpr_to_value(mask)
@@ -1772,7 +1770,6 @@ def atomic_add(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("max")
 def atomic_max(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
-    mask = _constexpr_to_value(mask)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
     mask = _constexpr_to_value(mask)
@@ -1784,7 +1781,6 @@ def atomic_max(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("min")
 def atomic_min(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
-    mask = _constexpr_to_value(mask)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
     mask = _constexpr_to_value(mask)
@@ -1796,7 +1792,6 @@ def atomic_min(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("logical and")
 def atomic_and(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
-    mask = _constexpr_to_value(mask)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
     mask = _constexpr_to_value(mask)
@@ -1808,7 +1803,6 @@ def atomic_and(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("logical or")
 def atomic_or(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
-    mask = _constexpr_to_value(mask)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
     mask = _constexpr_to_value(mask)
@@ -1820,7 +1814,6 @@ def atomic_or(pointer, val, mask=None, sem=None, scope=None, _builder=None):
 @_add_atomic_docstr("logical xor")
 def atomic_xor(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     val = _to_tensor(val, _builder)
-    mask = _constexpr_to_value(mask)
     sem = _constexpr_to_value(sem)
     scope = _constexpr_to_value(scope)
     mask = _constexpr_to_value(mask)

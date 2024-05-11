@@ -13,7 +13,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;

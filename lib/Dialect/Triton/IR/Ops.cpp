@@ -271,7 +271,7 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
     assert(bEnc);
-    Dialect &dialect = retEnc.getDialect();
+    Dialect &dialect = aEnc.getDialect();
     auto interface = dyn_cast<DialectInferLayoutInterface>(&dialect);
     if (interface->inferDotOpEncoding(aEnc, 0, retEnc, location).failed())
       return failure();
@@ -295,11 +295,7 @@ LogicalResult DotOp::verify() {
   // Verify that the encodings are valid.
   if (!aEncoding || !bEncoding)
     return emitError("mismatching encoding between A and B operands");
-
-  // type is the same as the accumulator
-  auto accTy = getOperand(2).getType().cast<RankedTensorType>();
-  auto retEnc = accTy.getEncoding();
-  Dialect &dialect = retEnc.getDialect();
+  Dialect &dialect = aEncoding.getDialect();
   auto interface = cast<DialectInferLayoutInterface>(&dialect);
   return interface->verifyDotOpEncodingCompatibility(getOperation(), aEncoding,
                                                      bEncoding);
