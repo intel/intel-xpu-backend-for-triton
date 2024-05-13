@@ -419,9 +419,9 @@ private:
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto elemTy = getElementType(op, i);
       if (auto resultTy =
-              op.getResult()[i].getType().dyn_cast<RankedTensorType>()) {
+              dyn_cast<RankedTensorType>(op.getResult()[i].getType())) {
         // nd-tensor where n >= 1
-        auto resultLayout = resultTy.getEncoding().cast<SliceEncodingAttr>();
+        auto resultLayout = cast<SliceEncodingAttr>(resultTy.getEncoding());
         unsigned resultElems = getTotalElemsPerThread(resultTy);
         auto resultIndices = ::intel::emitIndices(loc, rewriter, targetInfo,
                                                   resultLayout, resultTy, true);

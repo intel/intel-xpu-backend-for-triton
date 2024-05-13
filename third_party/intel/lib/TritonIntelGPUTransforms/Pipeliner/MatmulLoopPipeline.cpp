@@ -169,7 +169,7 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
 /// Helper to get the defining operation of a value.
 static Operation *getDefOp(Value v, Operation *op, bool includeArg) {
   llvm::SmallDenseSet<Value> seen;
-  while (auto arg = v.dyn_cast<BlockArgument>()) {
+  while (auto arg = dyn_cast<BlockArgument>(v)) {
     if (!includeArg)
       break;
     if (!seen.insert(v).second)

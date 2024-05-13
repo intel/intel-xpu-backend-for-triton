@@ -116,7 +116,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   Value iOff = mul(warpId, warpMatStride);
 
   SharedEncodingAttr sharedLayout =
-      descTy.getEncoding().cast<SharedEncodingAttr>();
+      cast<SharedEncodingAttr>(descTy.getEncoding());
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
   const int vec = sharedLayout.getVec();
@@ -196,7 +196,7 @@ Value composeValuesToDotOperandLayoutStruct(
   for (int m = 0; m < n0; ++m) {
     for (int k = 0; k < n1; ++k) {
       Value matVal = vals.at({m, k});
-      auto matType = matVal.getType().cast<LLVM::LLVMStructType>();
+      auto matType = cast<LLVM::LLVMStructType>(matVal.getType());
       Type valTy = matType.getBody()[0];
       for (int i = 0; i < matType.getBody().size(); ++i) {
         auto val = extract_val(valTy, matVal, i);
@@ -241,7 +241,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   auto shapePerCTA = getShapePerCTA(descTy);
   Type eltTy = descTy.getElementType();
 
-  auto sharedLayout = descTy.getEncoding().cast<SharedEncodingAttr>();
+  auto sharedLayout = cast<SharedEncodingAttr>(descTy.getEncoding());
   ArrayRef<unsigned> order = sharedLayout.getOrder();
 
   // (a, b) is the coordinate.
@@ -287,7 +287,7 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   static_assert(opIdx == 0 || opIdx == 1);
 
   auto shapePerCTA = getShapePerCTA(descTy);
-  auto dpasLayout = encoding.getParent().cast<DpasEncodingAttr>();
+  auto dpasLayout = cast<DpasEncodingAttr>(encoding.getParent());
   const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
 
   SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
@@ -343,7 +343,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value threadId) {
-  auto descTy = tensor.getType().cast<MemDescType>();
+  auto descTy = cast<MemDescType>(tensor.getType());
   switch (opIdx) {
   case 0:
     return loadOperand<0>(rewriter, loc, descTy, encoding, smemObj,

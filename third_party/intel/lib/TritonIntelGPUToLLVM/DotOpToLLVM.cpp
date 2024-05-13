@@ -40,18 +40,14 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
     unsigned K = AShapePerCTA[reduceAxis];
     bool isOuter = K == 1;
 
-    if (!isOuter && D.getType()
-                        .cast<RankedTensorType>()
-                        .getEncoding()
-                        .isa<DpasEncodingAttr>()) {
+    if (!isOuter && isa<DpasEncodingAttr>(
+                        cast<RankedTensorType>(D.getType()).getEncoding())) {
       return fma_details::convertDPAS(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
 
-    if (D.getType()
-            .cast<RankedTensorType>()
-            .getEncoding()
-            .isa<BlockedEncodingAttr>())
+    if (isa<BlockedEncodingAttr>(
+            cast<RankedTensorType>(D.getType()).getEncoding()))
       return fma_details::convertFMADot(op, adaptor, getTypeConverter(),
                                         rewriter);
 

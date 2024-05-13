@@ -51,10 +51,10 @@ bool supportDPAS(DotOp op, DeviceArch arch) {
 
 DPASEngineType getDPASType(DotOp op) {
   // d = a * b + c
-  auto aTy = op.getA().getType().cast<RankedTensorType>();
-  auto bTy = op.getB().getType().cast<RankedTensorType>();
-  auto cTy = op.getC().getType().cast<RankedTensorType>();
-  auto dTy = op.getD().getType().cast<RankedTensorType>();
+  auto aTy = cast<RankedTensorType>(op.getA().getType());
+  auto bTy = cast<RankedTensorType>(op.getB().getType());
+  auto cTy = cast<RankedTensorType>(op.getC().getType());
+  auto dTy = cast<RankedTensorType>(op.getD().getType());
 
   if (aTy.getElementType() != bTy.getElementType() ||
       cTy.getElementType() != dTy.getElementType())
@@ -113,7 +113,7 @@ bool isExpensiveLoadOrStore(Operation *op) {
 
   // Case 2: Tensor of pointers has more threads than elements
   // we can presume a high hit-rate that makes it cheap to load
-  if (auto ptrType = base.getType().dyn_cast<RankedTensorType>()) {
+  if (auto ptrType = dyn_cast<RankedTensorType>(base.getType())) {
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -179,7 +179,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       auto results = ifOp.getResults();
-      unsigned argIdx = currentValue.cast<OpResult>().getResultNumber();
+      unsigned argIdx = cast<OpResult>(currentValue).getResultNumber();
 
       auto thenValue = ifOp.thenYield().getOperand(argIdx);
       auto elseValue = ifOp.elseYield().getOperand(argIdx);
