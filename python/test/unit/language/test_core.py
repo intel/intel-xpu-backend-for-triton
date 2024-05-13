@@ -1385,10 +1385,13 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
         if dtype_x_str == 'float16':
-            pytest.skip("Only test atomic float16 ops on GPU")
-    if is_xpu():
-        if dtype_x_str == 'float16' and (mode != "min_neg" or sem != "acquire"):
-            pytest.skip("FIXME: Atomic RMW for float16 not yet supported by IGC")
+            pytest.xfail("Only test atomic float16 ops on GPU")
+
+    if torch.cuda.is_available():
+        capability = torch.cuda.get_device_capability()
+        if capability[0] < 7:
+            if dtype_x_str == 'float16':
+                pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
 
     n_programs = 5
 
@@ -3400,7 +3403,7 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
 def test_max_num_imprecise_acc(device):
 
     if not hasattr(torch, 'float8_e5m2'):
-        pytest.skip(f"torch {torch.__version__} does not support float8_e5m2")
+        pytest.xfail(f"torch {torch.__version__} does not support float8_e5m2")
 
     if is_cuda():
         capability = torch.cuda.get_device_capability()
