@@ -1,34 +1,3 @@
-"""
-Layer Normalization
-====================
-In this tutorial, you will write a high-performance layer normalization
-kernel that runs faster than the PyTorch implementation.
-
-In doing so, you will learn about:
-
-* Implementing backward pass in Triton.
-
-* Implementing parallel reduction in Triton.
-
-"""
-
-# %%
-# Motivations
-# -----------
-#
-# The *LayerNorm* operator was first introduced in [BA2016]_ as a way to improve the performance
-# of sequential models (e.g., Transformers) or neural networks with small batch size.
-# It takes a vector :math:`x` as input and produces a vector :math:`y` of the same shape as output.
-# The normalization is performed by subtracting the mean and dividing by the standard deviation of :math:`x`.
-# After the normalization, a learnable linear transformation with weights :math:`w` and biases :math:`b` is applied.
-# The forward pass can be expressed as follows:
-#
-# .. math::
-#    y = \frac{ x - \text{E}[x] }{ \sqrt{\text{Var}(x) + \epsilon} } * w + b
-#
-# where :math:`\epsilon` is a small constant added to the denominator for numerical stability.
-# Let’s first take a look at the forward pass implementation.
-
 import torch
 import intel_extension_for_pytorch
 
@@ -175,15 +144,6 @@ def _layer_norm_bwd_dwdb(DW,  # pointer to the partial sum of weights gradient
     tl.store(FINAL_DB + cols, sum_db, mask=cols < N)
 
 
-# %%
-# Benchmark
-# ---------
-#
-# We can now compare the performance of our kernel against that of PyTorch.
-# Here we focus on inputs that have Less than 64KB per feature.
-# Specifically, one can set :code:`'mode': 'backward'` to benchmark the backward pass.
-
-
 class LayerNorm(torch.autograd.Function):
 
     @staticmethod
@@ -301,33 +261,23 @@ def benchmark(M, N, dtype, provider, mode='backward', eps=1e-5):
     quantiles = [0.5, 0.2, 0.8]
     # utility functions
     if provider == 'triton':
-
-        def y_fwd():
-            return layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
+        y_fwd = lambda: layer_norm(x, w_shape, weight, bias, eps)
 
     if provider == 'torch':
-
-        def y_fwd():
-            return torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)  # noqa: F811, E704
+        y_fwd = lambda: torch.nn.functional.layer_norm(x, w_shape, weight, bias, eps)
 
     # forward pass
     if mode == 'forward':
         gbps = lambda ms: 2 * x.numel() * x.element_size() / ms * 1e-6
-        ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=quantiles, rep=500)
+        ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=quantiles)
     # backward pass
     if mode == 'backward':
         gbps = lambda ms: 3 * x.numel() * x.element_size() / ms * 1e-6
         y = y_fwd()
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True), quantiles=quantiles,
-                                                     grad_to_none=[x], rep=500)
+                                                     grad_to_none=[x])
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
 if __name__ == "__main__":
     benchmark.run(print_data=True)
-
-# %%
-# References
-# ----------
-#
-# .. [BA2016] Jimmy Lei Ba and Jamie Ryan Kiros and Geoffrey E. Hinton, "Layer Normalization", Arxiv 2016

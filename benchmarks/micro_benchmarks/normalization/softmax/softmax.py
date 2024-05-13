@@ -1,54 +1,8 @@
-"""
-Fused Softmax
-=============
-
-In this tutorial, you will write a fused softmax operation that is significantly faster
-than PyTorch's native op for a particular class of matrices: those whose rows can fit in
-the GPU's SRAM.
-
-In doing so, you will learn about:
-
-* The benefits of kernel fusion for bandwidth-bound operations.
-
-* Reduction operators in Triton.
-
-This code is developed by referring softmax tutorial from openAI Triton github repo.
-"""
-
-# %%
-# Motivations
-# -----------
-#
-# Custom GPU kernels for elementwise additions are educationally valuable but won't get you very far in practice.
-# Let us consider instead the case of a simple (numerically stabilized) softmax operation:
-
 import torch
 import intel_extension_for_pytorch
 
 import triton
 import triton.language as tl
-
-
-def torch_softmax_inf(x):
-    y = torch.softmax(x, axis=-1)
-    return y
-
-
-def torch_softmax_train(x, dy):
-    y = torch.softmax(x, axis=-1)
-    y.backward(dy, retain_graph=True)
-    return x.grad
-
-
-def triton_softmax_inf(x):
-    y = Softmax.apply(x)
-    return y
-
-
-def triton_softmax_train(x, dy):
-    y = Softmax.apply(x)
-    y.backward(dy, retain_graph=True)
-    return x.grad
 
 
 @torch.jit.script
@@ -70,28 +24,6 @@ def naive_softmax(x):
     ret = numerator / denominator[:, None]
     # in total: read 5MN + 2M elements ; wrote 3MN + 2M elements
     return ret
-
-
-# %%
-# When implemented naively in PyTorch, computing :code:`y = naive_softmax(x)` for :math:`x \in R^{M \times N}`
-# requires reading :math:`5MN + 2M` elements from DRAM and writing back :math:`3MN + 2M` elements.
-# This is obviously wasteful; we'd prefer to have a custom "fused" kernel that only reads
-# X once and does all the necessary computations on-chip.
-# Doing so would require reading and writing back only :math:`MN` bytes, so we could
-# expect a theoretical speed-up of ~4x (i.e., :math:`(8MN + 4M) / 2MN`).
-# The `torch.jit.script` flags aims to perform this kind of "kernel fusion" automatically
-# but, as we will see later, it is still far from ideal.
-
-# %%
-# Compute Kernel
-# --------------
-#
-# Our softmax kernel works as follows: each program loads a row of the input matrix X,
-# normalizes it and writes back the result to the output Y.
-#
-# Note that one important limitation of Triton is that each block must have a
-# power-of-two number of elements, so we need to internally "pad" each row and guard the
-# memory operations properly if we want to handle any possible input shapes:
 
 
 @triton.jit
@@ -147,10 +79,6 @@ def _softmax_backward_kernel(grad_input, grad_output, output, grad_input_stride,
 
     grad_input_ptrs = row_start_ptr + col_offsets
     tl.store(grad_input_ptrs, grad_input, mask=col_offsets < n_cols)
-
-
-# %%
-# We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
 
 class Softmax(torch.autograd.Function):
@@ -211,42 +139,40 @@ class Softmax(torch.autograd.Function):
         return grad_in.reshape_as(grad_out)
 
 
-# %%
-# Unit Test
-# ---------
-
-# %%
-# We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
-# This will allow us to verify that our padding mechanism works.
-
-
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=["N"],
         x_vals=[256, 1024, 2048, 4096],
         line_arg="provider",
-        line_vals=["triton-inf", "triton-train", "torch-inf", "torch_train"],
-        line_names=["triton-inf", "triton-train", "torch-inf", "torch_train"],
+        line_vals=["triton", "torch"],
+        line_names=["triton", "torch"],
+        styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel="GB/s",
         plot_name="softmax-performance",
-        args={'M': 4096, "dtype": torch.float16},
+        args={'M': 4096, "dtype": torch.float16, 'mode': 'forward'},
     ))
-def benchmark(M, N, provider, dtype):
+def benchmark(M, N, dtype, provider, mode='backward'):
 
     # create data
     x = torch.randn(M, N, device="xpu", dtype=dtype, requires_grad=True)
     quantiles = [0.5, 0.2, 0.8]
     dy = .1 * torch.randn_like(x)
-    if provider == 'torch-inf':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_softmax_inf(x), quantiles=quantiles)
-    if provider == 'torch_train':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_softmax_train(x, dy), quantiles=quantiles)
-    if provider == 'triton-inf':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_softmax_inf(x), quantiles=quantiles)
-    if provider == 'triton-train':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_softmax_train(x, dy), quantiles=quantiles)
 
-    gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
+    if provider == 'torch':
+        y_fwd = lambda: torch.softmax(x, axis=-1)
+    if provider == 'triton':
+        y_fwd = lambda: Softmax.apply(x)
+
+    # forward pass
+    if mode == 'forward':
+        ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=quantiles)
+        gbps = lambda ms: x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
+
+    if mode == 'backward':
+        y = y_fwd()
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: y.backward(dy, retain_graph=True), quantiles=quantiles)
+        gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
+
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 

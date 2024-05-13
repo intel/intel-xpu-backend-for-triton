@@ -439,32 +439,28 @@ def test_backward(y_size, x_size, p, device='xpu'):
         plot_name='rms-norm-performance',
         args={'M': 4096, 'dtype': torch.float16, 'mode': 'forward'},
     ))
-def benchmark(M, N, dtype, provider, mode='backeard', eps=1e-5):
+def benchmark(M, N, dtype, provider, mode='backward', eps=1e-5):
 
     # create data
-    input = torch.randn((N, M), device="xpu", dtype=dtype)
-    weight = torch.randn(M, device="xpu", dtype=dtype)
-    grad_output = torch.randn(N, M, device="xpu", dtype=dtype)
-    bias = torch.randn(M, device="xpu", dtype=dtype)
+    input = torch.randn((N, M), device="xpu", dtype=dtype, requires_grad=True)
+    weight = torch.randn(M, device="xpu", dtype=dtype, requires_grad=True)
+    grad_output = torch.randn(N, M, device="xpu", dtype=dtype, requires_grad=True)
+    bias = torch.randn(M, device="xpu", dtype=dtype, requires_grad=True)
     p = 1.0
     quantiles = [0.5, 0.2, 0.8]
 
     if provider == 'triton':
-        y_fwd = rms_norm
+        y_fwd = lambda: rms_norm(input, p, weight, bias)
     if provider == 'torch':
-        y_fwd = rms_norm_ref
+        y_fwd = lambda: rms_norm_ref(input, p, weight, bias)
 
     # forward pass
     if mode == 'forward':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: y_fwd(input, p, weight, bias), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(y_fwd, quantiles=quantiles)
         gbps = lambda ms: 2 * input.numel() * input.element_size() / ms * 1e-6
     # backward pass
-    else:
-        i = input.clone()
-        j = weight.clone()
-        k = bias.clone()
-        i.requires_grad = j.requires_grad = k.requires_grad = True
-        y = y_fwd(i, p, j, k)
+    if mode == 'backward':
+        y = y_fwd()
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: y.backward(grad_output, retain_graph=True),
                                                      quantiles=quantiles)
         gbps = lambda ms: 3 * input.numel() * input.element_size() / ms * 1e-6
