@@ -13,6 +13,9 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/SymbolTable.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 namespace mlir {
 
@@ -52,17 +55,17 @@ public:
     for (Value operand : adaptor.getOperands())
       castedOperands.push_back(maybeCast(operand, rewriter));
 
-    Type resultType = castedOperands.front().getType();
-    Type funcType = getFunctionType(resultType, castedOperands);
-    StringRef funcName =
-        getFunctionName(cast<LLVM::LLVMFunctionType>(funcType).getReturnType());
+    SmallVector<Type> parameters(ValueRange(castedOperands).getTypes());
+    Type resultType = parameters.front();
+    StringRef funcName = getFunctionName(resultType);
     if (funcName.empty())
       return failure();
 
-    LLVMFuncOp funcOp = appendOrGetFuncOp(funcName, funcType, op);
-    auto callOp =
-        rewriter.create<LLVM::CallOp>(op->getLoc(), funcOp, castedOperands);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    auto moduleOp = op->template getParentWithTrait<OpTrait::SymbolTable>();
+    auto funcOp = triton::gpu::intel::lookupOrCreateSPIRVFn(
+        moduleOp, funcName, parameters, resultType);
+    auto callOp = triton::gpu::intel::createSPIRVBuiltinCall(
+        op->getLoc(), rewriter, funcOp, castedOperands);
 
     if (resultType == adaptor.getOperands().front().getType()) {
       rewriter.replaceOp(op, {callOp.getResult()});
@@ -86,30 +89,12 @@ private:
         operand.getLoc(), Float32Type::get(rewriter.getContext()), operand);
   }
 
-  Type getFunctionType(Type resultType, ValueRange operands) const {
-    SmallVector<Type> operandTypes(operands.getTypes());
-    return LLVM::LLVMFunctionType::get(resultType, operandTypes);
-  }
-
   StringRef getFunctionName(Type type) const {
     if (isa<Float32Type>(type))
       return f32Func;
     if (isa<Float64Type>(type))
       return f64Func;
     return "";
-  }
-
-  LLVM::LLVMFuncOp appendOrGetFuncOp(StringRef funcName, Type funcType,
-                                     Operation *op) const {
-    using LLVM::LLVMFuncOp;
-
-    auto funcAttr = StringAttr::get(op->getContext(), funcName);
-    Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
-    if (funcOp)
-      return cast<LLVMFuncOp>(*funcOp);
-
-    mlir::OpBuilder b(op->getParentOfType<FunctionOpInterface>());
-    return b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
   }
 
   const std::string f32Func;
