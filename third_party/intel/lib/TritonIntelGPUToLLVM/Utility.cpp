@@ -21,7 +21,7 @@ static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                  Type elemTy, Value pred) {
-  assert(ptr.getType().cast<LLVMPointerType>().getAddressSpace() == 3 &&
+  assert(cast<LLVMPointerType>(ptr.getType()).getAddressSpace() == 3 &&
          "Invalid addr space for loadShared");
   Value undef = undef(elemTy);
   Block &endBlock = createPredicatedBlock(rewriter, loc, pred,

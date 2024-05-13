@@ -32,7 +32,7 @@ namespace {
 Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
                         Location loc,
                         const triton::intel::TargetInfo &targetInfo) {
-  auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+  auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
   Value mask = int_val(1, 1);
   auto tid = tid_val();
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
@@ -109,14 +109,14 @@ struct LoadStoreConversionBase {
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
   unsigned getContiguity(Value ptr) const {
-    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return 1;
     return axisAnalysisPass.getPtrContiguity(ptr);
   }
 
   unsigned getVectorSize(Value ptr) const {
-    auto tensorTy = ptr.getType().dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return 1;
     auto contiguity = getContiguity(ptr);
@@ -365,9 +365,9 @@ struct LoadOpConversion
     bool otherIsSplatConstInt = false;
     DenseElementsAttr constAttr;
     int64_t splatVal = 0;
-    if (other && valueElemTy.isa<IntegerType>() &&
+    if (other && isa<IntegerType>(valueElemTy) &&
         matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-        constAttr.getElementType().isa<IntegerType>()) {
+        isa<IntegerType>(constAttr.getElementType())) {
       otherIsSplatConstInt = true;
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
@@ -447,7 +447,7 @@ struct LoadOpConversion
       SmallVector<Value> rets;
       for (unsigned int ii = 0; ii < nWords; ++ii) {
         Value curr;
-        if (retTy.isa<VectorType>()) {
+        if (isa<VectorType>(retTy)) {
           curr =
               extract_element(IntegerType::get(ctx, width), ret, i32_val(ii));
         } else {
@@ -625,7 +625,7 @@ struct AtomicCASOpConversion
     auto valElements = unpackLLElements(loc, llVal, rewriter);
 
     auto valueTy = op.getType();
-    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
     Type valueElemTy =
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
@@ -635,7 +635,7 @@ struct AtomicCASOpConversion
     auto vec = getVectorSize(op.getPtr());
     // tensor
     if (tensorTy) {
-      auto valTy = op.getVal().getType().cast<RankedTensorType>();
+      auto valTy = cast<RankedTensorType>(op.getVal().getType());
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
@@ -745,7 +745,7 @@ struct AtomicRMWOpConversion
       maskElements = unpackLLElements(loc, llMask, rewriter);
 
     auto valueTy = op.getType();
-    auto tensorTy = valueTy.dyn_cast<RankedTensorType>();
+    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
     Type valueElemTy =
         tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
                  : valueTy;
@@ -756,7 +756,7 @@ struct AtomicRMWOpConversion
     int numElems = 1;
     // tensor
     if (tensorTy) {
-      auto valTy = val.getType().cast<RankedTensorType>();
+      auto valTy = cast<RankedTensorType>(val.getType());
       auto maxVecSize =
           valueElemNBits / valTy.getElementType().getIntOrFloatBitWidth();
       vec = std::min<unsigned>(vec,
@@ -896,7 +896,7 @@ struct AtomicRMWOpConversion
     // a vector of two fp16 values as a single i32. The second lowest bit is
     // extracted to later be used as an index to extract the required vector
     // element.
-    assert(rmwPtr.getType().isa<LLVM::LLVMPointerType>());
+    assert(isa<LLVM::LLVMPointerType>(rmwPtr.getType()));
     auto intPtr = ptrtoint(i64_ty, rmwPtr);
     auto lowPtrBits = and_(intPtr, i64_val(3));
     auto elemIndex = trunc(i32_ty, lshr(lowPtrBits, i64_val(1)));

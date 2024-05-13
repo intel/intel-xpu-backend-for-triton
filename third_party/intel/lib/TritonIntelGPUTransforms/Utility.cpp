@@ -8,11 +8,13 @@
 
 #include "triton/Analysis/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
 #include <optional>
 
 using namespace mlir;
@@ -51,10 +53,10 @@ bool supportDPAS(DotOp op, DeviceArch arch) {
 
 DPASEngineType getDPASType(DotOp op) {
   // d = a * b + c
-  auto aTy = op.getA().getType().cast<RankedTensorType>();
-  auto bTy = op.getB().getType().cast<RankedTensorType>();
-  auto cTy = op.getC().getType().cast<RankedTensorType>();
-  auto dTy = op.getD().getType().cast<RankedTensorType>();
+  auto aTy = cast<RankedTensorType>(op.getA().getType());
+  auto bTy = cast<RankedTensorType>(op.getB().getType());
+  auto cTy = cast<RankedTensorType>(op.getC().getType());
+  auto dTy = cast<RankedTensorType>(op.getD().getType());
 
   if (aTy.getElementType() != bTy.getElementType() ||
       cTy.getElementType() != dTy.getElementType())
@@ -113,7 +115,7 @@ bool isExpensiveLoadOrStore(Operation *op) {
 
   // Case 2: Tensor of pointers has more threads than elements
   // we can presume a high hit-rate that makes it cheap to load
-  if (auto ptrType = base.getType().dyn_cast<RankedTensorType>()) {
+  if (auto ptrType = dyn_cast<RankedTensorType>(base.getType())) {
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -179,7 +181,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       auto results = ifOp.getResults();
-      unsigned argIdx = currentValue.cast<OpResult>().getResultNumber();
+      unsigned argIdx = cast<OpResult>(currentValue).getResultNumber();
 
       auto thenValue = ifOp.thenYield().getOperand(argIdx);
       auto elseValue = ifOp.elseYield().getOperand(argIdx);
@@ -233,6 +235,29 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     return failure();
   }
   return success();
+}
+
+LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
+                                       ArrayRef<Type> paramTypes,
+                                       Type resultType) {
+  auto func = dyn_cast_or_null<LLVM::LLVMFuncOp>(
+      SymbolTable::lookupSymbolIn(symbolTable, name));
+  if (!func) {
+    OpBuilder b(symbolTable->getRegion(0));
+    func = b.create<LLVM::LLVMFuncOp>(
+        symbolTable->getLoc(), name,
+        LLVM::LLVMFunctionType::get(resultType, paramTypes));
+    func.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  }
+  return func;
+}
+
+LLVM::CallOp createSPIRVBuiltinCall(Location loc,
+                                    ConversionPatternRewriter &rewriter,
+                                    LLVM::LLVMFuncOp func, ValueRange args) {
+  auto call = rewriter.create<LLVM::CallOp>(loc, func, args);
+  call.setCConv(func.getCConv());
+  return call;
 }
 
 } // namespace mlir::triton::gpu::intel
