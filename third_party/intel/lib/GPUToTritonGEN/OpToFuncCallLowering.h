@@ -14,7 +14,8 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/SymbolTable.h"
-#include "third_party/intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 namespace mlir {
 
