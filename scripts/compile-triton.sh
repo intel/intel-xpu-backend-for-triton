@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+
 # Select what to build.
 BUILD_LLVM=false
 BUILD_TRITON=false
