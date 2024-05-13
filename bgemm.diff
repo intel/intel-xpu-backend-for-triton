@@ -1,5 +1,5 @@
 diff --git a/examples_cm_esimd/bgemm_performance/main.cpp b/examples_cm_esimd/bgemm_performance/main.cpp
-index 83b81d51..82ee437e 100644
+index 83b81d51..779d15b5 100644
 --- a/examples_cm_esimd/bgemm_performance/main.cpp
 +++ b/examples_cm_esimd/bgemm_performance/main.cpp
 @@ -1,4 +1,5 @@
@@ -8,45 +8,8 @@ index 83b81d51..82ee437e 100644
  #define XETLA_CODE_BASE __ESIMD__
  #define ESIMD_XE_HPC
  #include "kernel_func.hpp"
-@@ -99,21 +100,21 @@ void bgemm_run(ExecutionMode mode, int iter) {
-     uint32_t *Cnt = static_cast<uint32_t *>(
-             malloc_shared(size_cnt * sizeof(uint32_t), device, context));
- 
--    for (size_t i = 0; i < size_a; ++i) {
--        A[i] = (random_float() - 0.5f);
--    }
--    for (size_t i = 0; i < size_b; ++i) {
--        B[i] = (random_float() - 0.5f);
--    }
--    for (size_t i = 0; i < size_c; ++i) {
--        C[i] = 0;
--    }
--    for (size_t i = 0; i < size_acc; ++i) {
--        Acc[i] = 0;
--    }
--    for (size_t i = 0; i < size_cnt; ++i) {
--        Cnt[i] = 0;
--    }
-+//     for (size_t i = 0; i < size_a; ++i) {
-+//         A[i] = (random_float() - 0.5f);
-+//     }
-+//     for (size_t i = 0; i < size_b; ++i) {
-+//         B[i] = (random_float() - 0.5f);
-+//     }
-+//     for (size_t i = 0; i < size_c; ++i) {
-+//         C[i] = 0;
-+//     }
-+//     for (size_t i = 0; i < size_acc; ++i) {
-+//         Acc[i] = 0;
-+//     }
-+//     for (size_t i = 0; i < size_cnt; ++i) {
-+//         Cnt[i] = 0;
-+//     }
-     // here keep the same dim in CM and esimd, diff the index in kernel code
-     size_t group_range_m = (matrix_m % wg_tile_m == 0)
-             ? matrix_m / wg_tile_m
 @@ -141,97 +142,9 @@ void bgemm_run(ExecutionMode mode, int iter) {
- 
+
      long ops = 2 * matrix_m * matrix_n * matrix_k;
      profiling_helper prof("bgemm", ops, "gflops");
 -    // interop kernel prepratation and execution
@@ -137,7 +100,7 @@ index 83b81d51..82ee437e 100644
 -            FAIL();
 -        }
 -    }
- 
+
      // esimd kernel prepratation and execution
 -    else if (mode == ExecutionMode::ESIMD) {
 +    if (mode == ExecutionMode::ESIMD) {
@@ -146,23 +109,23 @@ index 83b81d51..82ee437e 100644
                  = get_kernel_bundle<bundle_state::input>(context, kernelId);
 @@ -243,7 +156,21 @@ void bgemm_run(ExecutionMode mode, int iter) {
          unsetenv("SYCL_PROGRAM_COMPILE_OPTIONS");
- 
+
          try {
-+        //     auto size = 256*1024*1024;
-+        //     auto host_ptr = static_cast<int8_t *>(
-+        //             malloc(size * sizeof(int8_t)));
++            auto size = 256*1024*1024;
++            auto host_ptr = static_cast<int8_t *>(
++                    malloc(size * sizeof(int8_t)));
 +
-+        //     for (size_t i = 0; i < size; ++i) {
-+        //         host_ptr[i] = 0;
-+        //     }
-+        //     auto device_ptr = static_cast<int8_t *>(
-+        //             aligned_alloc_device(DEVICE_MEM_ALIGNMENT,
-+        //                     size * sizeof(int8_t), device, context));
-+            
++            for (size_t i = 0; i < size; ++i) {
++                host_ptr[i] = 0;
++            }
++            auto device_ptr = static_cast<int8_t *>(
++                    aligned_alloc_device(DEVICE_MEM_ALIGNMENT,
++                            size * sizeof(int8_t), device, context));
++
              for (int i = 0; i < iter; i++) {
-+                // queue.memcpy((void *)(device_ptr), (void *)host_ptr,
-+                //              size * sizeof(int8_t))
-+                //         .wait();
++                queue.memset((void *)(device_ptr), 0,
++                             size * sizeof(int8_t))
++                        .wait();
                  prof.cpu_start();
                  auto e_esimd = queue.submit([&](handler &cgh) {
                      cgh.use_kernel_bundle(exeBundle);
@@ -170,7 +133,7 @@ index 83b81d51..82ee437e 100644
                  prof.cpu_end();
                  prof.add_gpu_event(e_esimd);
              }
-+        //     free(host_ptr);
++            free(host_ptr);
          } catch (cl::sycl::exception const &e) {
              std::cout << "SYCL exception caught: " << e.what() << '\n';
              FAIL();
@@ -203,13 +166,13 @@ index 83b81d51..82ee437e 100644
 -        Test_8192x1024x4096_row_row, Test_8192x4096x1024_row_row,
 -        Test_1216x1024x1024_row_row, Test_1216x1024x30528_row_row,
 -        Test_1216x30528x1024_row_row>;
-+//TYPED_TEST_P(bgemm_performance_test, cm_interop) {
-+//    bgemm_run<TypeParam>(ExecutionMode::CM, ITER);
-+//}
++// TYPED_TEST_P(bgemm_performance_test, cm_interop) {
++//     bgemm_run<TypeParam>(ExecutionMode::CM, ITER);
++// }
 +REGISTER_TYPED_TEST_SUITE_P(bgemm_performance_test, esimd);
 +//using tests = ::testing::Types<Test_256x256x256_row_row, Test_384x384x384_row_row, Test_512x512x512_row_row, Test_640x640x640_row_row, Test_768x768x768_row_row, Test_896x896x896_row_row, Test_1024x1024x1024_row_row, Test_1152x1152x1152_row_row, Test_1280x1280x1280_row_row, Test_1408x1408x1408_row_row, Test_1536x1536x1536_row_row, Test_1664x1664x1664_row_row, Test_1792x1792x1792_row_row, Test_1920x1920x1920_row_row, Test_2048x2048x2048_row_row, Test_2176x2176x2176_row_row, Test_2304x2304x2304_row_row, Test_2432x2432x2432_row_row, Test_2560x2560x2560_row_row, Test_2688x2688x2688_row_row, Test_2816x2816x2816_row_row, Test_2944x2944x2944_row_row, Test_3072x3072x3072_row_row, Test_3200x3200x3200_row_row, Test_3328x3328x3328_row_row, Test_3456x3456x3456_row_row, Test_3584x3584x3584_row_row, Test_3712x3712x3712_row_row, Test_3840x3840x3840_row_row, Test_3968x3968x3968_row_row, Test_4096x4096x4096_row_row>;
-+// using tests = ::testing::Types<Test_4096x4096x4096_row_row, Test_3968x3968x3968_row_row, Test_3840x3840x3840_row_row, Test_3712x3712x3712_row_row, Test_3584x3584x3584_row_row, Test_3456x3456x3456_row_row, Test_3328x3328x3328_row_row, Test_3200x3200x3200_row_row, Test_3072x3072x3072_row_row, Test_2944x2944x2944_row_row, Test_2816x2816x2816_row_row, Test_2688x2688x2688_row_row, Test_2560x2560x2560_row_row, Test_2432x2432x2432_row_row, Test_2304x2304x2304_row_row, Test_2176x2176x2176_row_row, Test_2048x2048x2048_row_row, Test_1920x1920x1920_row_row, Test_1792x1792x1792_row_row, Test_1664x1664x1664_row_row, Test_1536x1536x1536_row_row, Test_1408x1408x1408_row_row, Test_1280x1280x1280_row_row, Test_1152x1152x1152_row_row, Test_1024x1024x1024_row_row, Test_896x896x896_row_row, Test_768x768x768_row_row, Test_512x512x512_row_row, Test_640x640x640_row_row, Test_384x384x384_row_row, Test_256x256x256_row_row>;
-+using tests = ::testing::Types<Test_4096x4096x4096_row_row,Test_2560x2560x2560_row_row>;
++using tests = ::testing::Types<Test_4096x4096x4096_row_row, Test_3968x3968x3968_row_row, Test_3840x3840x3840_row_row, Test_3712x3712x3712_row_row, Test_3584x3584x3584_row_row, Test_3456x3456x3456_row_row, Test_3328x3328x3328_row_row, Test_3200x3200x3200_row_row, Test_3072x3072x3072_row_row, Test_2944x2944x2944_row_row, Test_2816x2816x2816_row_row, Test_2688x2688x2688_row_row, Test_2560x2560x2560_row_row, Test_2432x2432x2432_row_row, Test_2304x2304x2304_row_row, Test_2176x2176x2176_row_row, Test_2048x2048x2048_row_row, Test_1920x1920x1920_row_row, Test_1792x1792x1792_row_row, Test_1664x1664x1664_row_row, Test_1536x1536x1536_row_row, Test_1408x1408x1408_row_row, Test_1280x1280x1280_row_row, Test_1152x1152x1152_row_row, Test_1024x1024x1024_row_row, Test_896x896x896_row_row, Test_768x768x768_row_row, Test_512x512x512_row_row, Test_640x640x640_row_row, Test_384x384x384_row_row, Test_256x256x256_row_row>;
++// using tests = ::testing::Types<Test_4096x4096x4096_row_row,Test_2560x2560x2560_row_row>;
  INSTANTIATE_TYPED_TEST_SUITE_P(
          bgemm_performance_test_suite, bgemm_performance_test, tests);
 diff --git a/examples_cm_esimd/bgemm_performance/test.hpp b/examples_cm_esimd/bgemm_performance/test.hpp
@@ -219,7 +182,7 @@ index a136a709..9ddf0167 100644
 @@ -5,139 +5,182 @@ using namespace gpu::xetla;
  //The number of times the kernel is executed
  constexpr int ITER = 100;
- 
+
 -class Test_4096x512x4096_row_row {
 +class Test_256x256x256_row_row {
  public:
@@ -331,7 +294,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_4096x1024x4096_row_row {
 +class Test_768x768x768_row_row {
  public:
@@ -440,7 +403,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_4096x2048x4096_row_row {
 +class Test_1280x1280x1280_row_row {
  public:
@@ -523,7 +486,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_4096x4096x4096_row_row {
 +class Test_1664x1664x1664_row_row {
  public:
@@ -602,7 +565,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_2048x4096x2048_row_row {
 +class Test_2048x2048x2048_row_row {
  public:
@@ -730,7 +693,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_512x4096x512_row_row {
 +class Test_2432x2432x2432_row_row {
  public:
@@ -760,7 +723,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_512x4096x512_row_col {
 +class Test_2560x2560x2560_row_row {
  public:
@@ -809,7 +772,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_1024x4096x1024_row_row_fp32 {
 +class Test_2688x2688x2688_row_row {
  public:
@@ -838,7 +801,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_1024x4096x1024_row_row_slm_k2 {
 +class Test_2816x2816x2816_row_row {
  public:
@@ -868,7 +831,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_1024x4096x1024_row_col_fp32 {
 +class Test_2944x2944x2944_row_row {
  public:
@@ -915,7 +878,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_512x4096x512_row_row_fp32 {
 +class Test_3072x3072x3072_row_row {
  public:
@@ -946,7 +909,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_512x4096x512_row_col_fp32 {
 +class Test_3200x3200x3200_row_row {
  public:
@@ -996,7 +959,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_8192x2x1024_row_row {
 +class Test_3328x3328x3328_row_row {
  public:
@@ -1023,7 +986,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_8192x1024x1024_row_row {
 +class Test_3456x3456x3456_row_row {
  public:
@@ -1047,7 +1010,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_8192x1024x4096_row_row {
 +class Test_3584x3584x3584_row_row {
  public:
@@ -1071,7 +1034,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_8192x4096x1024_row_row {
 +class Test_3712x3712x3712_row_row {
  public:
@@ -1095,7 +1058,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_1216x1024x1024_row_row {
 +class Test_3840x3840x3840_row_row {
  public:
@@ -1126,7 +1089,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_1216x1024x30528_row_row {
 +class Test_3968x3968x3968_row_row {
  public:
@@ -1154,7 +1117,7 @@ index a136a709..9ddf0167 100644
 +    using data_type_b = fp16;
 +    using data_type_c = fp16;
  };
- 
+
 -class Test_1216x30528x1024_row_row {
 +class Test_4096x4096x4096_row_row {
  public:
@@ -1189,13 +1152,13 @@ index ebde2156..16567c42 100644
 --- a/include/common/core/base_types.hpp
 +++ b/include/common/core/base_types.hpp
 @@ -334,7 +334,8 @@ concept xetla_matrix_ref
- 
+
  } // namespace gpu::xetla
- 
+
 -#ifdef XETLA_EMBARGO
 +#if (__LIBSYCL_MAJOR_VERSION > 7) \
 +        || ((__LIBSYCL_MAJOR_VERSION == 7) && (__LIBSYCL_MINOR_VERSION >= 1))
- 
+
  namespace sycl::detail {
  template <typename T>
 diff --git a/tests/utils/execution.hpp b/tests/utils/execution.hpp
@@ -1205,7 +1168,7 @@ index 82d1e974..f3e98a1b 100644
 @@ -27,6 +27,32 @@ using namespace cl::sycl;
  using namespace gpu;
  using namespace gpu::xetla;
- 
+
 +#define CACHE_FLUSH 1
 +
 +template <typename data_type>
@@ -1238,7 +1201,7 @@ index 82d1e974..f3e98a1b 100644
 @@ -41,6 +67,12 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
      using data_type_c = typename Test::data_type_c;
      using data_type_acc = typename Test::data_type_acc;
- 
+
 +    int iter = 10, warmup = 10;
 +#ifdef CACHE_FLUSH
 +    batch = iter + warmup;
@@ -1250,7 +1213,7 @@ index 82d1e974..f3e98a1b 100644
      constexpr size_t matrix_k = Test::mat_k;
 @@ -63,19 +95,19 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
                << device.get_info<info::device::name>() << "\n";
- 
+
      auto A = alloc_device_and_init<data_type_a>(
 -            batch * size_a,
 +            size_a, batch,
@@ -1290,7 +1253,7 @@ index 82d1e974..f3e98a1b 100644
 @@ -120,42 +152,50 @@ void gemm_exec(const std::string &compile_str, size_t batch = 1) {
                  Test::layout_b == mem_layout::col_major ? matrix_k : matrix_n,
                  nullptr, matrix_n, nullptr, nullptr);
- 
+
 -        cl::sycl::nd_range<3> nd_range = gemm_op_t::get_nd_range(arg);
 -
 -        for (size_t i = 0; i < batch; i++) {
@@ -1331,7 +1294,7 @@ index 82d1e974..f3e98a1b 100644
 +
 +            std::vector<float> event_times(iter + warmup);
 +            for (uint32_t j = 0; j < iter + warmup; j++) {
-+                
++
 +                auto e_esimd = queue.submit([&](handler &cgh) {
                      cgh.use_kernel_bundle(exeBundle);
 -                }
@@ -1379,9 +1342,9 @@ index e0928fea..5bb25eca 100755
 @@ -2,7 +2,7 @@
  script_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
  source ${script_dir}/clang_format.sh
- 
+
 -source /opt/intel/oneapi/setvars.sh
 +source /opt/intel/oneapi/setvars.sh --force
  export DPCPP_ROOT=${ONEAPI_ROOT}/compiler/latest/linux
- 
+
  export CC=icx
