@@ -1385,10 +1385,13 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
         if dtype_x_str == 'float16':
-            pytest.skip("Only test atomic float16 ops on GPU")
-    if is_xpu():
-        if dtype_x_str == 'float16' and (mode != "min_neg" or sem != "acquire"):
-            pytest.skip("FIXME: Atomic RMW for float16 not yet supported by IGC")
+            pytest.xfail("Only test atomic float16 ops on GPU")
+
+    if torch.cuda.is_available():
+        capability = torch.cuda.get_device_capability()
+        if capability[0] < 7:
+            if dtype_x_str == 'float16':
+                pytest.skip("Only test atomic float16 ops on devices with sm >= 70")
 
     n_programs = 5
 
@@ -2492,7 +2495,7 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
     BLOCK_M = 32
     x = torch.randn((BLOCK_M, N), dtype=torch.float32, device=device)
     y = torch.randn((BLOCK_M, num_pid_n), dtype=torch.float32, device=device)
-    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N, NUM_PID_N=num_pid_n, num_warps=4)
+    h = kernel[(1, num_pid_n, 1)](x, y, N, BLOCK_M, BLOCK_N, NUM_PID_N=num_pid_n)
     if not is_interpreter():
         assert h.asm['ttgir'].count(
             '"tt.reduce"') == 2, "tt.reduce should be called twice, otherwise the optimization didn't work"
@@ -2505,6 +2508,7 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
 @pytest.mark.parametrize("src_layout", scan_layouts)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_scan_layouts(M, N, src_layout, axis, device):
+
     ir = f"""
     #blocked = {src_layout}
     module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
@@ -3399,7 +3403,7 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
 def test_max_num_imprecise_acc(device):
 
     if not hasattr(torch, 'float8_e5m2'):
-        pytest.skip(f"torch {torch.__version__} does not support float8_e5m2")
+        pytest.xfail(f"torch {torch.__version__} does not support float8_e5m2")
 
     if is_cuda():
         capability = torch.cuda.get_device_capability()

@@ -4,8 +4,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/TritonGENToLLVM/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"

@@ -321,7 +321,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
         pytest.skip(f"{src_dtype} upcast tests not supported on ROCm")
 
     if src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_on_mi300()):
-        pytest.skip("{src_dtype} upcast tests only supported on AMDGPU MI300")
+        pytest.xfail("{src_dtype} upcast tests only supported on AMDGPU MI300")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
