@@ -1101,7 +1101,7 @@ void LayoutRematerialization::backwardRematerialization(
   // It introduces a lot of duplicated values in multiple-threads.
   if (auto dotLayout =
           dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding()))
-    if (dotLayout.getParent().isa<BlockedEncodingAttr>())
+    if (isa<BlockedEncodingAttr>(dotLayout.getParent()))
       return;
   Value oldV = convertOp->getOperand(0);
   LDBG("check backward remat with source " << oldV << " encoding "
