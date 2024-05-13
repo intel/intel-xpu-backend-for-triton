@@ -137,7 +137,9 @@ sycl::event bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
     //                    sycl::info::event_profiling::command_start>()) /
     //               (1000.0f * 1000.0f * 1000.f);
 
-    // printf("matrix_m: %d, Data_type_in(A): %lu, tflops: %f \n", matrix_m, sizeof(data_type_a), ((matrix_m * matrix_n * matrix_k * sizeof(data_type_a) * 2 / 1e12) / time));
+    // printf("matrix_m: %d, Data_type_in(A): %lu, tflops: %f \n", matrix_m,
+    // sizeof(data_type_a), ((matrix_m * matrix_n * matrix_k *
+    // sizeof(data_type_a) * 2 / 1e12) / time));
     return e_esimd;
   } catch (cl::sycl::exception const &e) {
     std::cout << "SYCL exception caught: " << e.what() << '\n';
