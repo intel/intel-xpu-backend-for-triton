@@ -1,0 +1,66 @@
+diff --git a/examples/01_gemm_universal/gemm_universal.cpp b/examples/01_gemm_universal/gemm_universal.cpp
+index 94c44764..cd67fed4 100644
+--- a/examples/01_gemm_universal/gemm_universal.cpp
++++ b/examples/01_gemm_universal/gemm_universal.cpp
+@@ -17,18 +17,18 @@
+ #include "xetla.hpp"
+ 
+ enum class kslicing_impl_t : uint8_t { none = 0, global = 1, local = 2 };
+-
+-inline size_t time_event(sycl::event &e) {
+-    // get start and end times
+-    cl_ulong start_time = e.template get_profiling_info<
+-            sycl::info::event_profiling::command_start>();
+-
+-    cl_ulong end_time = e.template get_profiling_info<
+-            sycl::info::event_profiling::command_end>();
+-
+-    // return the delta
+-    return static_cast<size_t>(end_time - start_time);
+-}
++// redefinition of 'time_event'
++// inline size_t time_event(sycl::event &e) {
++//     // get start and end times
++//     cl_ulong start_time = e.template get_profiling_info<
++//             sycl::info::event_profiling::command_start>();
++
++//     cl_ulong end_time = e.template get_profiling_info<
++//             sycl::info::event_profiling::command_end>();
++
++//     // return the delta
++//     return static_cast<size_t>(end_time - start_time);
++// }
+ 
+ template <int m, int n, int k,
+         kslicing_impl_t kslicing_type = kslicing_impl_t::none>
+diff --git a/tests/integration/gemm/bf16/main.cpp b/tests/integration/gemm/bf16/main.cpp
+index 670fc015..7e15ac60 100644
+--- a/tests/integration/gemm/bf16/main.cpp
++++ b/tests/integration/gemm/bf16/main.cpp
+@@ -34,8 +34,9 @@ TYPED_TEST_P(bf16_gemm_test, esimd) {
+ }
+ REGISTER_TYPED_TEST_SUITE_P(bf16_gemm_test, esimd);
+ // using tests = ::testing::Types<Habana_Batch_Test0,Habana_Batch_Test1,Habana_Batch_Test2,Habana_Batch_Test3,Habana_Batch_Test4>;
+-using tests = ::testing::Types<Habana_Test0, Habana_Test1, Habana_Test2,
+-        Habana_Test3, Habana_Test4, Habana_Test5, Habana_Test6, Habana_Test7,
+-        Habana_Test8, Habana_Test9, Habana_Test10>;
++// using tests = ::testing::Types<Habana_Test0, Habana_Test1, Habana_Test2,
++//         Habana_Test3, Habana_Test4, Habana_Test5, Habana_Test6, Habana_Test7,
++//         Habana_Test8, Habana_Test9, Habana_Test10>;
+ // using tests = ::testing::Types<Test1, Test2, Test3, Test4, Test5, Test6, Test7, Test8, Test9, Test10,Test11,Test12,Test13,Test14,Test15>;
++using tests = ::testing::Types<Test2,Test3,Test6,Test10,Test12>;
+ INSTANTIATE_TYPED_TEST_SUITE_P(bf16_gemm_test_suite, bf16_gemm_test, tests);
+\ No newline at end of file
+diff --git a/tools/scripts/env.sh b/tools/scripts/env.sh
+index 36c5cf1e..68c92ef5 100755
+--- a/tools/scripts/env.sh
++++ b/tools/scripts/env.sh
+@@ -6,7 +6,7 @@ source ${script_dir}/clang_format.sh
+ # ONEAPI_INSTALL_PATH below assumes you installed to the default folder /opt/intel/oneapi
+ # If you customized the installation folder, please update ONEAPI_INSTALL_PATH to your custom folder
+ ONEAPI_INSTALL_PATH=/opt/intel/oneapi
+-source ${ONEAPI_INSTALL_PATH}/setvars.sh
++source ${ONEAPI_INSTALL_PATH}/setvars.sh --force
+ 
+ # Export environment variables
+ export CC=icx

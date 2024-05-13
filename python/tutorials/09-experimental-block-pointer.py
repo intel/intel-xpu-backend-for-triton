@@ -99,26 +99,26 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
-        #               num_warps=32),
-        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
-        #               num_warps=32),
-        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
-        #               num_warps=32),
-        # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
-        #               num_warps=32),
-        # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
-        #               num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
         triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
                       num_warps=32),
-        # triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
-        #               num_warps=32),
-        # triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
-        #               num_warps=32),
-        # triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
-        #               num_warps=32),
-        # triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
-        #               num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
     ],
     key=['M', 'N', 'K'],
 )
@@ -243,8 +243,8 @@ def matmul(a, b):
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['M', 'N', 'K'],
-        x_vals=[[256 * i, 256 * i, 256 * i] for i in [16]],  # different possible values for `x_name`
+        x_names=['M', 'K', 'N'],
+        x_vals=[[4096, 4096, 4096]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -260,8 +260,8 @@ def matmul(a, b):
     ))
 def benchmark(M, N, K, provider):
     torch.manual_seed(0)
-    a = torch.randn((M, K), device='xpu', dtype=torch.float16)
-    b = torch.randn((K, N), device='xpu', dtype=torch.float16)
+    a = torch.randn((M, K), device='xpu', dtype=torch.bfloat16)
+    b = torch.randn((K, N), device='xpu', dtype=torch.bfloat16)
     quantiles = [0.5, 0.2, 0.8]
 
     # calculate tflops for oneDNN kernel
