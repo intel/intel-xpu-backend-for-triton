@@ -102,7 +102,7 @@ jobs:
           source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           cd benchmarks
           python setup.py bdist_wheel
-          pip install python/dist/*.whl
+          pip install dist/*.whl
 
       - name: Run xetla benchmark
         run: |
