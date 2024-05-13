@@ -391,20 +391,35 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
   RankedTensorType parentTy =
       RankedTensorType::get(parentShape, type.getElementType(), parentEncoding);
   auto parentOffsets = ::intel::emitOffsetForLayout(parentEncoding, parentTy);
+  if (parentOffsets.empty())
+    return {};
 
-  unsigned numOffsets = parentOffsets.size();
   SmallVector<SmallVector<unsigned>> resultOffsets;
   std::set<SmallVector<unsigned>> uniqueOffsets;
 
-  for (unsigned i = 0; i < numOffsets; ++i) {
-    SmallVector<unsigned> offsets = parentOffsets[i];
+  for (unsigned i = 0; i < parentOffsets.size(); ++i) {
+    SmallVector<unsigned> offsets(parentOffsets[i].begin(),
+                                  parentOffsets[i].end());
     offsets.erase(offsets.begin() + dim);
-    if (uniqueOffsets.find(offsets) == uniqueOffsets.end()) {
+    if (auto [it, inserted] = uniqueOffsets.insert(offsets); inserted) {
       resultOffsets.push_back(offsets);
-      uniqueOffsets.insert(offsets);
     }
   }
-  return resultOffsets;
+
+  // It can happen that after deduplicating elements above, resultOffsets has
+  // fewer than getTotalElementsPerThread() elements.  In that case repeat the
+  // sequence.
+  int elemsPerThread = triton::gpu::getTotalElemsPerThread(type);
+  assert(resultOffsets.size() > 0);
+  assert(elemsPerThread % resultOffsets.size() == 0);
+  int numRepeats = elemsPerThread / resultOffsets.size();
+  SmallVector<SmallVector<unsigned>> ret;
+  for (int i = 0; i < numRepeats; ++i) {
+    for (unsigned j = 0; j < resultOffsets.size(); ++j) {
+      ret.push_back(SmallVector<unsigned>(resultOffsets[j]));
+    }
+  }
+  return ret;
 }
 
 //
@@ -494,7 +509,21 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
 // [elemsPerThread X rank] index matrix.
 inline SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-            Attribute layout, RankedTensorType type, bool withCTAOffset) {
+            Attribute layout, RankedTensorType type, bool withCTAOffset,
+            bool allowLL = false) {
+  // TODO(jlebar): LLs are disabled for now due to bugs found on AMD and A100
+  // GPUs.  Enable again wth allowLL = true above.
+
+  // Eventually the LinearLayout path will be the only one.  For now we allow
+  // both paths so we can test that they produce the same results.
+  if (allowLL) {
+    std::optional<SmallVector<SmallVector<Value>>> llOffsets =
+        emitIndicesUsingLinearLayouts(loc, rewriter, target, layout, type,
+                                      withCTAOffset);
+    if (llOffsets.has_value())
+      return *llOffsets;
+  }
+
   // step 1, delinearize threadId to get the base index
   auto multiDimBase = ::intel::emitBaseIndexForLayout(
       loc, rewriter, target, layout, type, withCTAOffset);
@@ -511,6 +540,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   for (unsigned n = 0; n < elemsPerThread; ++n)
     for (unsigned k = 0; k < rank; ++k)
       multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
+
   return multiDimIdx;
 }
 
@@ -566,8 +596,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
          outVec * maxPhase <= srcShape[outOrder[0]] &&
              "Swizzling would generate out of bounds memory accesses");
   // Tensor indices held by the current thread, as LLVM values
-  auto srcIndices =
-      ::intel::emitIndices(loc, rewriter, target, srcEncoding, srcTy, false);
+  auto srcIndices = ::intel::emitIndices(loc, rewriter, target, srcEncoding,
+                                         srcTy, /*withCTAOffset=*/false);
   // Swizzling with leading offsets (e.g. Hopper GMMA)
   unsigned swizzlingByteWidth = 0;
   if (resSharedLayout.getHasLeadingOffset()) {

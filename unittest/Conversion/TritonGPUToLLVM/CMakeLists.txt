@@ -15,8 +15,8 @@ add_triton_ut(
 )
 
 add_triton_ut(
- 	NAME TestEmitIndicesAMD
- 	SRCS EmitIndicesTest.cpp DumpLayout.cpp
- 	LIBS TritonGPUIR TritonAMDGPUToLLVM
- 	DEFS AMD_TARGET=1
+	NAME TestEmitIndicesAMD
+	SRCS EmitIndicesTest.cpp DumpLayout.cpp
+	LIBS TritonGPUIR TritonAMDGPUToLLVM
+	DEFS AMD_TARGET=1
 )
