@@ -37,7 +37,7 @@ else
 fi
 
 if command -v clinfo &> /dev/null; then
-    export GPU_DEVICE=$(clinfo --json | jq -r '.devices[].online[].CL_DEVICE_NAME')
+    export GPU_DEVICE=$(clinfo --json | jq -r '[.devices[].online[] | select(.CL_DEVICE_TYPE.raw == 4)][0].CL_DEVICE_NAME')
 elif command -v nvidia-smi &> /dev/null; then
     export GPU_DEVICE=$(nvidia-smi -L | sed -e 's,\(.*\) (UUID.*),\1,')
 else
