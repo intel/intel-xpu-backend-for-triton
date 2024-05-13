@@ -182,8 +182,8 @@ public:
         case Workload::Gemm: {
           auto &info0 = loopDotInfo.dotInfo0;
           auto dot = info0.dot;
-          auto aType = dot.getA().getType().cast<RankedTensorType>();
-          auto bType = dot.getB().getType().cast<RankedTensorType>();
+          auto aType = cast<RankedTensorType>(dot.getA().getType());
+          auto bType = cast<RankedTensorType>(dot.getB().getType());
           auto m = aType.getShape()[0];
           auto n = bType.getShape()[1];
           auto [sizePerWarp, warpsPerCTA] = determineDotConfig(m, n, numWarps);
@@ -285,7 +285,7 @@ public:
     auto makePtrOp = cast<tt::MakeTensorPtrOp>(op.getPtr().getDefiningOp());
     auto result = makePtrOp.getResult();
     auto newType = addAttrToType(result.getType(), attr);
-    result.setType(newType.cast<tt::PointerType>());
+    result.setType(cast<tt::PointerType>(newType));
   }
   void transformScfForOp(scf::ForOp op) {
     auto body = op.getBody();
@@ -303,7 +303,7 @@ public:
   void transformArithConstantOp(arith::ConstantOp op, Attribute attr) {
     auto newType = addAttrToType(op.getType(), attr);
     auto value = cast<DenseElementsAttr>(op.getValue());
-    value = value.reshape(newType.cast<ShapedType>());
+    value = value.reshape(cast<ShapedType>(newType));
     OpBuilder b(op);
     auto newOp = b.create<arith::ConstantOp>(op.getLoc(), newType, value);
     addNamedAttrs(newOp, op->getAttrDictionary());

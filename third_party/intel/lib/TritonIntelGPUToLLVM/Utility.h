@@ -170,7 +170,7 @@ emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
 static SmallVector<SmallVector<unsigned>>
 emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
                          RankedTensorType type) {
-  auto dpasLayout = dotLayout.getParent().dyn_cast<DpasEncodingAttr>();
+  auto dpasLayout = dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
   if (!dpasLayout) {
     llvm::errs() << "dotLayout: " << dotLayout << "\n";
     llvm_unreachable("unsupported parent layout in emitOffsetForDotOpLayout");
@@ -266,7 +266,7 @@ static SmallVector<Value>
 emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
                             const DotOperandEncodingAttr &dotLayout,
                             RankedTensorType type) {
-  auto dpasLayout = dotLayout.getParent().dyn_cast<DpasEncodingAttr>();
+  auto dpasLayout = dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
   if (!dpasLayout) {
     llvm::errs() << "dotLayout: " << dotLayout << "\n";
     llvm_unreachable(
@@ -437,9 +437,9 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   SmallVector<Value> baseIndex;
   RewriterBase::InsertionGuard guard(rewriter);
   SmallVector<Value> result;
-  if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+  if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
     result = emitBaseIndexForDpasLayout(loc, rewriter, dpasLayout, type);
-  } else if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
     auto parentLayout = sliceLayout.getParent();
     auto parentShape = sliceLayout.paddedShape(type.getShape());
     RankedTensorType parentTy =
@@ -449,7 +449,7 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
     result.erase(result.begin() + sliceLayout.getDim());
     // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
     return result;
-  } else if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>()) {
+  } else if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     result = emitBaseIndexForDotOpLayout(loc, rewriter, dotLayout, type);
   } else {
     return mlir::emitBaseIndexForLayoutImpl(loc, rewriter, target, layout, type,
@@ -496,11 +496,11 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
-  if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>())
+  if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout))
     return emitOffsetForDpasLayout(dpasLayout, type);
-  if (auto dotLayout = layout.dyn_cast<DotOperandEncodingAttr>())
+  if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout))
     return emitOffsetForDotOpLayout(dotLayout, type);
-  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
+  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout))
     return ::intel::emitOffsetForSliceLayout(sliceLayout, type);
   return mlir::emitOffsetForLayout(layout, type);
 }
@@ -660,7 +660,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
       if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
               add.getRhs().getDefiningOp())) {
         unsigned cst =
-            _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+            cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (outVec * maxPhase);
         cacheCol.insert({key, idxCol});
         idxCol = cacheCol[key];
@@ -671,7 +671,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
       if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
               add.getRhs().getDefiningOp())) {
         unsigned cst =
-            _cst.getValue().cast<IntegerAttr>().getValue().getSExtValue();
+            cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (perPhase * maxPhase);
         cacheRow.insert({key, idxRow});
         idxRow = cacheRow[key];
@@ -717,12 +717,12 @@ inline SmallVector<Value> loadSharedToDistributed(
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
   auto srcTy = cast<MemDescType>(src.getType());
   auto dstDistributedLayout = dstTy.getEncoding();
-  if (auto mmaLayout = dstDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
            "ConvertLayout Shared->MMAv1 is not supported yet");
   }
   auto srcSharedLayout =
-      srcTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+      cast<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding());
   auto srcElemTy = srcTy.getElementType();
   auto dstElemTy = dstTy.getElementType();
   LDBG("loadSharedToDistributed elemTy " << elemTy << " srcElemTy " << srcElemTy
@@ -776,12 +776,12 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
          rank == 3 && "Unexpected rank of storeDistributedToShared");
   auto dstTy = cast<MemDescType>(dst.getType());
   auto srcDistributedLayout = srcTy.getEncoding();
-  if (auto mmaLayout = srcDistributedLayout.dyn_cast<NvidiaMmaEncodingAttr>()) {
+  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
            "ConvertLayout MMAv1->Shared is not supported yet");
   }
   auto dstSharedLayout =
-      dstTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+      cast<triton::gpu::SharedEncodingAttr>(dstTy.getEncoding());
   auto dstElemTy = dstTy.getElementType();
   auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
   auto outOrd = dstSharedLayout.getOrder();

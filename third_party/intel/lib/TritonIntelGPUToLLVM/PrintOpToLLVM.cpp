@@ -62,7 +62,7 @@ struct PrintOpConversion
         SmallVector<int, 8> dimWidths;
         SmallVector<SmallVector<Value>> indices;
         if (auto rankedTy =
-                op.getOperand(i).getType().dyn_cast<RankedTensorType>()) {
+                dyn_cast<RankedTensorType>(op.getOperand(i).getType())) {
           indices =
               ::intel::emitIndices(loc, rewriter, targetInfo,
                                    rankedTy.getEncoding(), rankedTy, true);
@@ -181,7 +181,7 @@ struct PrintOpConversion
   std::string getFormatSubstr(Value value, bool hex = false,
                               std::optional<int> width = std::nullopt) const {
     Type type = value.getType();
-    if (type.isa<LLVM::PointerType>()) {
+    if (isa<LLVM::PointerType>(type)) {
       return "%p";
     }
 
@@ -204,7 +204,7 @@ struct PrintOpConversion
       prefix += std::to_string(*width);
     }
 
-    if (type.isa<LLVM::LLVMPointerType>()) {
+    if (isa<LLVM::LLVMPointerType>(type)) {
       return prefix + "p";
     } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
       return prefix + "f";
