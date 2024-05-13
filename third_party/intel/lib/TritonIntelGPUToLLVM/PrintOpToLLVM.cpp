@@ -187,7 +187,6 @@ struct PrintOpConversion
 
     // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
     // type (so 4 for fp16, 8 for int32, 16 for int64).
-    int typeBits = type.getIntOrFloatBitWidth();
     if (hex) {
       // Ignore `width` for `hex` values, pad to typeWidth.
       std::string ret =

@@ -1517,3 +1517,15 @@ module attributes {"triton_gpu.target" = "xpu:PVC", "triton_gpu.num-ctas" = 1 : 
     tt.return
   }
 }
+
+// -----
+
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // CHECK-LABEL: print_ptr
+
+  tt.func @print_ptr(%arg0 : tensor<256x!tt.ptr<i32>, #blocked0>) {
+    tt.print "ptr: " {hex = false} : %arg0 : tensor<256x!tt.ptr<i32>, #blocked0>
+    tt.return
+  }
+}
