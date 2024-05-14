@@ -27,6 +27,7 @@ void populateViewOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 
 void populateDotOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateElementwiseOpToLLVMPatterns(

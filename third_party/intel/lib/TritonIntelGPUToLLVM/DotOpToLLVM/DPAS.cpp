@@ -22,10 +22,11 @@ public:
 
   DotOpDPASConversionHelper(DpasEncodingAttr dpasLayout,
                             ConversionPatternRewriter &rewriter,
+                            const TargetInfoBase &targetInfo,
                             TritonIntelGPUToLLVMTypeConverter *typeConverter,
                             Location loc)
       : dpasLayout(dpasLayout), rewriter(rewriter),
-        typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
+        typeConverter(typeConverter), targetInfo(targetInfo), loc(loc), ctx(dpasLayout.getContext()) {}
 
   std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
       DPASEngineType dpasType, MLIRContext *ctx, DpasEncodingAttr layout) {
@@ -302,6 +303,7 @@ private:
   TritonIntelGPUToLLVMTypeConverter *typeConverter;
   Location loc;
   MLIRContext *ctx;
+  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
@@ -309,7 +311,8 @@ private:
 namespace fma_details {
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                          ConversionPatternRewriter &rewriter) {
+                          ConversionPatternRewriter &rewriter,
+                          const TargetInfoBase &targetInfo) {
   LLVM_DEBUG({
     auto module = op->getParentOfType<ModuleOp>();
     llvm::dbgs() << "module before DPAS generation\n";
@@ -336,7 +339,7 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto dpasLayout = cast<DpasEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
 
-  DotOpDPASConversionHelper helper(dpasLayout, rewriter, typeConverter,
+  DotOpDPASConversionHelper helper(dpasLayout, rewriter, targetInfo, typeConverter,
                                    op.getLoc());
 
   return helper.convertDot(op, adaptor);
