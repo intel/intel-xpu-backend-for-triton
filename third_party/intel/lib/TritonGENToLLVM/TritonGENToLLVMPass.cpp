@@ -254,8 +254,12 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
         op.getY(), i32_val(1));
     SmallVector<Type> argTypes{ptr_ty(context, 1), i32_ty, i32_ty, i32_ty,
                                vecType};
-    SmallVector<Value> args{op.getPtr(), op.getBaseWidth(), op.getBaseHeight(),
-                            op.getBasePitch(), byteCoord};
+    Value one = i32_val(1);
+    // We use minus 1 encoding in Gen lower pass,
+    // need to add it back for OpenCL call
+    SmallVector<Value> args{op.getPtr(), add(op.getBaseWidth(), one),
+                            add(op.getBaseHeight(), one),
+                            add(op.getBasePitch(), one), byteCoord};
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
                                     true /*convergent*/);
   }
