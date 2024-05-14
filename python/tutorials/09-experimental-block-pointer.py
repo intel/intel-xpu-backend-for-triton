@@ -119,6 +119,9 @@ import triton.language as tl
                       num_warps=32),
         triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
                       num_warps=32),
+       # For mxnxk=4x4096x512
+        triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N':64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1}, num_stages=4,
+                      num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
