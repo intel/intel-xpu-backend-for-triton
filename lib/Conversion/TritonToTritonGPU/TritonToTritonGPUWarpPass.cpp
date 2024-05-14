@@ -26,6 +26,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "llvm/ADT/APSInt.h"
@@ -331,8 +332,6 @@ public:
 
     // assume llvm dot size is 8x16
     //((n % 16) == 0 && (m % 8) == 0)
-    auto maxWarpsX = n / 16;
-    auto maxWarpsY = m / 8;
     auto root = std::sqrt(numWarps);
     auto numWarpsX = 1;
     if (n / 16 <= root)
@@ -343,10 +342,17 @@ public:
       numWarpsX = n / 64;
     else
       numWarpsX = n / 128;
-    warpsPerCTA[1] = numWarpsX;
-    warpsPerCTA[0] = numWarps / warpsPerCTA[1];
-    sizePerWarp[1] = n / warpsPerCTA[1];
-    sizePerWarp[0] = m / warpsPerCTA[0];
+    warpsPerCTA[1] = std::max(numWarpsX, 1);
+    warpsPerCTA[0] = ceil<unsigned>(numWarps, warpsPerCTA[1]);
+    sizePerWarp[1] = ceil<unsigned>(n, warpsPerCTA[1]);
+    sizePerWarp[0] = ceil<unsigned>(m, warpsPerCTA[0]);
+    if (sizePerWarp[0] < 8) {
+      sizePerWarp[0] = 8;
+      warpsPerCTA[0] = 1;
+      warpsPerCTA[1] = numWarps;
+      sizePerWarp[1] = ceil<unsigned>(n, warpsPerCTA[1]);
+    }
+
     return {sizePerWarp, warpsPerCTA};
   }
 
