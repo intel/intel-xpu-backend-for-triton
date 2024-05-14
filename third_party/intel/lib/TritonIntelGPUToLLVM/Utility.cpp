@@ -143,19 +143,17 @@ Value llPrintf(RewriterBase &rewriter, StringRef msg, ValueRange args) {
 }
 
 static std::string getFormatSubstr(Value value, bool hex = false,
-                            std::optional<int> width = std::nullopt) {
+                                   std::optional<int> width = std::nullopt) {
   Type type = value.getType();
-  if (type.isa<LLVM::PointerType>()) {
+  if (isa<LLVM::PointerType>(type)) {
     return "%p";
   }
 
   // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
   // type (so 4 for fp16, 8 for int32, 16 for int64).
-  int typeBits = type.getIntOrFloatBitWidth();
   if (hex) {
     // Ignore `width` for `hex` values, pad to typeWidth.
-    std::string ret =
-        "0x%0" + std::to_string(type.getIntOrFloatBitWidth() / 4);
+    std::string ret = "0x%0" + std::to_string(type.getIntOrFloatBitWidth() / 4);
     if (type.getIntOrFloatBitWidth() > 32) {
       ret += "ll";
     }
@@ -168,7 +166,7 @@ static std::string getFormatSubstr(Value value, bool hex = false,
     prefix += std::to_string(*width);
   }
 
-  if (type.isa<LLVM::LLVMPointerType>()) {
+  if (isa<LLVM::LLVMPointerType>(type)) {
     return prefix + "p";
   } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
     return prefix + "f";
@@ -190,7 +188,7 @@ static std::string getFormatSubstr(Value value, bool hex = false,
 void printTensor(StringRef msg, Value tensor, Type tensorTy,
                  ConversionPatternRewriter &rewriter,
                  const TargetInfoBase &targetInfo) {
-  auto* context = rewriter.getContext();
+  auto *context = rewriter.getContext();
 
   llvm::SmallString<64> msgNewline(msg);
   Value prefixStr = addStringToModule(
@@ -207,7 +205,7 @@ void printTensor(StringRef msg, Value tensor, Type tensorTy,
   // out how many digits we need for each of the dimensions.
   SmallVector<int, 8> dimWidths;
   SmallVector<SmallVector<Value>> indices;
-  if (auto rankedTy = tensorTy.dyn_cast<RankedTensorType>()) {
+  if (auto rankedTy = dyn_cast<RankedTensorType>(tensorTy)) {
     indices =
         ::intel::emitIndices(UnknownLoc::get(context), rewriter, targetInfo,
                              rankedTy.getEncoding(), rankedTy, true);
@@ -227,8 +225,10 @@ void printTensor(StringRef msg, Value tensor, Type tensorTy,
   size_t rank = dimWidths.size();
 
   auto getPid = [&](int axis) {
-    return targetInfo.programId(rewriter, UnknownLoc::get(context),
-                                rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(), axis);
+    return targetInfo.programId(
+        rewriter, UnknownLoc::get(context),
+        rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
+        axis);
   };
   std::array<Value, 3> pid = {getPid(0), getPid(1), getPid(2)};
   // Format is:
@@ -284,7 +284,8 @@ void printTensor(StringRef msg, Value tensor, Type tensorTy,
     os << ") ";
 
     auto loc = UnknownLoc::get(rewriter.getContext());
-    auto mod = rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>();
+    auto mod =
+        rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>();
     unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     Value threadId = getThreadId(rewriter, loc);
     Value warpSize = i32_val(iWarpSize);

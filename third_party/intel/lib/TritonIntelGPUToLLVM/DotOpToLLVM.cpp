@@ -24,14 +24,13 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
 namespace {
 struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
-//  using ConvertTritonGPUOpToLLVMPattern<
-//      triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
+  //  using ConvertTritonGPUOpToLLVMPattern<
+  //      triton::DotOp>::ConvertTritonGPUOpToLLVMPattern;
 
-    DotOpConversion(LLVMTypeConverter &converter,
-                    const TargetInfoBase &targetInfo,
-                    PatternBenefit benefit)
-    : ConvertTritonGPUOpToLLVMPattern<triton::DotOp>(converter, benefit),
-      targetInfo(targetInfo) {}
+  DotOpConversion(LLVMTypeConverter &converter,
+                  const TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::DotOp>(converter, benefit),
+        targetInfo(targetInfo) {}
 
   const TargetInfoBase &targetInfo;
 
@@ -51,8 +50,7 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
 
     if (!isOuter && isa<DpasEncodingAttr>(
                         cast<RankedTensorType>(D.getType()).getEncoding())) {
-      return fma_details::convertDPAS(op, adaptor, getTypeConverter(),
-                                      rewriter,
+      return fma_details::convertDPAS(op, adaptor, getTypeConverter(), rewriter,
                                       targetInfo);
     }
 
@@ -66,12 +64,11 @@ struct DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<triton::DotOp> {
   }
 };
 
-
 } // namespace
 
 void mlir::triton::intel::populateDotOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    const TargetInfoBase &targetInfo, RewritePatternSet &patterns,
+    PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, targetInfo, benefit);
 }

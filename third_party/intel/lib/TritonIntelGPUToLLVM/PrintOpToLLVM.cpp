@@ -154,8 +154,11 @@ struct PrintOpConversion
       os << ") ";
 
       auto loc = UnknownLoc::get(rewriter.getContext());
-      auto mod = rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>();
-      unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      auto mod = rewriter.getInsertionBlock()
+                     ->getParent()
+                     ->getParentOfType<ModuleOp>();
+      unsigned iWarpSize =
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
       Value threadId = getThreadId(rewriter, loc);
       Value warpSize = i32_val(iWarpSize);
       Value warpId = udiv(threadId, warpSize);

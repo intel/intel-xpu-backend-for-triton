@@ -26,7 +26,8 @@ public:
                             TritonIntelGPUToLLVMTypeConverter *typeConverter,
                             Location loc)
       : dpasLayout(dpasLayout), rewriter(rewriter),
-        typeConverter(typeConverter), targetInfo(targetInfo), loc(loc), ctx(dpasLayout.getContext()) {}
+        typeConverter(typeConverter), targetInfo(targetInfo), loc(loc),
+        ctx(dpasLayout.getContext()) {}
 
   std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
       DPASEngineType dpasType, MLIRContext *ctx, DpasEncodingAttr layout) {
@@ -339,8 +340,8 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto dpasLayout = cast<DpasEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
 
-  DotOpDPASConversionHelper helper(dpasLayout, rewriter, targetInfo, typeConverter,
-                                   op.getLoc());
+  DotOpDPASConversionHelper helper(dpasLayout, rewriter, targetInfo,
+                                   typeConverter, op.getLoc());
 
   return helper.convertDot(op, adaptor);
 }

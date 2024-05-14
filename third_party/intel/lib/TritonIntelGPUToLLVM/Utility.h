@@ -237,10 +237,7 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
             {repRowIndex + elemRowIndex, repColIndex + elemColIndex});
       }
 
-    return offsets;
-  } else {
-    llvm_unreachable("unsupported parent layout in emitOffsetForDotOpLayout");
-  }
+  return offsets;
 }
 
 static SmallVector<SmallVector<unsigned>>

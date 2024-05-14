@@ -200,12 +200,12 @@ void Load2DOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                            MLIRContext *context) {}
 
 static Type getLoadOpResultType(OpBuilder &builder, Type ptrType) {
-  auto ptrTensorType = ptrType.dyn_cast<RankedTensorType>();
+  auto ptrTensorType = dyn_cast<RankedTensorType>(ptrType);
   if (!ptrTensorType)
-    return ptrType.cast<PointerType>().getPointeeType();
+    return cast<PointerType>(ptrType).getPointeeType();
   auto shape = ptrTensorType.getShape();
   Type elementType =
-      ptrTensorType.getElementType().cast<PointerType>().getPointeeType();
+      cast<PointerType>(ptrTensorType.getElementType()).getPointeeType();
   return RankedTensorType::get(shape, elementType);
 }
 

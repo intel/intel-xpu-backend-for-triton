@@ -208,8 +208,8 @@ struct PrefetchOpConversion
 
     // only to materialize the prefetch op with block pointer for now.
     if (isTensorPointerType(ptrTy)) {
-      auto ptrType = ptrTy.cast<PointerType>();
-      auto tensorTy = ptrType.getPointeeType().cast<RankedTensorType>();
+      auto ptrType = cast<PointerType>(ptrTy);
+      auto tensorTy = cast<RankedTensorType>(ptrType.getPointeeType());
       Type eltTy = tensorTy.getElementType();
       const ArrayRef<int64_t> tensorShape = tensorTy.getShape();
       auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -682,11 +682,11 @@ struct Load2DOpConversion
     assert(isTensorPointerType(ptr.getType()) && "must be block pointer");
 
     Type resultTy = op.getType();
-    if (auto tensorType = resultTy.dyn_cast<RankedTensorType>()) {
+    if (auto tensorType = dyn_cast<RankedTensorType>(resultTy)) {
       if (auto dotLayout =
-              tensorType.getEncoding().dyn_cast<DotOperandEncodingAttr>()) {
+              dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding())) {
         if (auto dpasLayout =
-                dotLayout.getParent().dyn_cast<DpasEncodingAttr>()) {
+                dyn_cast<DpasEncodingAttr>(dotLayout.getParent())) {
 
           auto opIdx = dotLayout.getOpIdx();
           Type eltTy = tensorType.getElementType();
