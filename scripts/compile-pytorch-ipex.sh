@@ -185,8 +185,10 @@ build_ipex() {
     if [ "$BUILD_PINNED" = true ]; then
       git fetch --all
       IPEX_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
+      git fetch origin $IPEX_COMMIT_ID
       git checkout $IPEX_COMMIT_ID
-      git submodule update --recursive
+      git submodule sync
+      git submodule update --init --recursive
     fi
     pip install -r requirements.txt
     python setup.py bdist_wheel
