@@ -1,9 +1,6 @@
 """
-Block Pointer (Experimental)
+Gemm benchmark
 ============================
-This tutorial will guide you through writing a matrix multiplication algorithm that utilizes block pointer semantics.
-These semantics are more friendly for Triton to optimize and can result in better performance on specific hardware.
-Note that this feature is still experimental and may change in the future.
 
 This benchmark is come from the Triton tutorial 09-experimental-block-pointer.py
 To compare the performance to XeTLA kernel.
@@ -256,11 +253,11 @@ def benchmark(M, N, K, provider):
         return 2 * M * N * K * 1e-12 / (ms * 1e-3)
 
     if provider == 'onednn':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100, quantiles=quantiles,
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10, quantiles=quantiles,
                                                      fast_flush=False)
         # print(f"oneDNN Peak TFlops {calculate_tflops(min_ms)}")
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100, quantiles=quantiles,
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), warmup=10, rep=10, quantiles=quantiles,
                                                      fast_flush=False)
     if provider == 'xetla':
         c = torch.empty((M, N), device='xpu', dtype=torch.float16)
@@ -268,8 +265,8 @@ def benchmark(M, N, K, provider):
         cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
         name = "bgemm_shape_{}_{}_{}".format(M, N, K)
         func = getattr(xetla_kernel, name)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: func(a, b, c, d, cnt), rep=100, quantiles=quantiles,
-                                                     fast_flush=False)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: func(a, b, c, d, cnt), warmup=10, rep=10,
+                                                     quantiles=quantiles, fast_flush=False)
 
     return calculate_tflops(ms), calculate_tflops(min_ms), calculate_tflops(max_ms)
 
