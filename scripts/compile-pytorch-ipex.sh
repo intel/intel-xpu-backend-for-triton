@@ -183,7 +183,6 @@ build_ipex() {
   cd $IPEX_PROJ
   if [ ! -d "$IPEX_PROJ/dist" ]; then
     if [ "$BUILD_PINNED" = true ]; then
-      git fetch --all
       IPEX_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
       git fetch origin $IPEX_COMMIT_ID
       git checkout $IPEX_COMMIT_ID
