@@ -61,7 +61,7 @@ def naive_softmax(x):
         triton.Config({'BLOCK_SIZE': 1024}, num_warps=4),
         triton.Config({'BLOCK_SIZE': 2048}, num_warps=4),
     ],
-    key=['BLOCK_SIZE'],
+    key=['n_cols'],
 )
 @triton.jit
 def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, BLOCK_SIZE: tl.constexpr):
