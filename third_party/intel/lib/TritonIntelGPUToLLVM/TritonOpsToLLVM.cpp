@@ -168,10 +168,45 @@ public:
           getVectorType(cast<RankedTensorType>(op.getResult().getType()),
                         idx == 0 ? i16_ty : i32_ty);
       bool vnni = (idx == 1) && dataSize <= 32;
+
+      // according to gfxspec: For vnni, max height is 32
+      constexpr unsigned maxLoadHeightVNNI = 32;
+      const auto oldBlockHeight = blockHeight;
+      if (vnni && (blockHeight > maxLoadHeightVNNI))
+        blockHeight = maxLoadHeightVNNI;
+
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
           dataSize, blockWidth, blockHeight, vBlks, false /* transpose*/, vnni);
-      rewriter.replaceOp(op, bitcast(load, resType));
+      Value res = load.getRes();
+      if (vnni) {
+        // TODO: Current max supported ld/st size is 512DWs = 64 x 16 x w (for
+        // 16bits dtype) so the tailHeight is less than(or eqaul to) 32, just
+        // need one more load
+        auto tailHeight = oldBlockHeight - maxLoadHeightVNNI;
+        if (tailHeight > 0) {
+          auto cstAttr = rewriter.getIntegerAttr(i32_ty, blockHeight);
+          auto cstBlkHeight =
+              rewriter.create<LLVM::ConstantOp>(loc, i32_ty, cstAttr);
+
+          auto newOffsetY =
+              rewriter.create<arith::AddIOp>(loc, offsetY, cstBlkHeight);
+          auto tailLoad = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
+              loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX,
+              newOffsetY, dataSize, blockWidth, tailHeight, vBlks,
+              false /*transpose*/, vnni);
+          SmallVector<int32_t> indices((maxLoadHeightVNNI / 2) +
+                                       (tailHeight / 2));
+          std::iota(indices.begin(), indices.begin() + maxLoadHeightVNNI / 2,
+                    0);
+          std::iota(indices.begin() + maxLoadHeightVNNI / 2, indices.end(),
+                    maxLoadHeightVNNI);
+          auto attr = rewriter.getDenseI32ArrayAttr(indices);
+          res = rewriter.create<LLVM::ShuffleVectorOp>(
+              loc, load.getRes().getType(), load, tailLoad, attr);
+        }
+      }
+      rewriter.replaceOp(op, bitcast(res, resType));
     } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
       rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
