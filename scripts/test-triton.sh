@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+
 # Select which tests to run.
 TEST_CORE=false
 TEST_TUTORIAL=false

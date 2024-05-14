@@ -60,8 +60,6 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
     tri_dq, q.grad = q.grad.clone(), None
     # compare
     atol = 1e-1 if dtype == torch.bfloat16 else 1e-2
-    if device == "xpu" and dtype != torch.bfloat16:
-        atol = 7e-2
     torch.testing.assert_close(torch.nn.functional.normalize(torch.flatten(ref_out), dim=0),
                                torch.nn.functional.normalize(torch.flatten(tri_out), dim=0), atol=atol, rtol=0)
     torch.testing.assert_close(torch.nn.functional.normalize(torch.flatten(ref_dv), dim=0),

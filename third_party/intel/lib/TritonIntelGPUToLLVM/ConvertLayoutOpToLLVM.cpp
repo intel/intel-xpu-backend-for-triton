@@ -63,9 +63,9 @@ LogicalResult lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
                                       const LLVMTypeConverter *typeConverter,
                                       ConversionPatternRewriter &rewriter) {
   auto loc = op.getLoc();
-  auto dstEnc = op.getType().getEncoding().cast<DotOperandEncodingAttr>();
+  auto dstEnc = cast<DotOperandEncodingAttr>(op.getType().getEncoding());
   auto sharedLayout =
-      op.getSrc().getType().getEncoding().cast<SharedEncodingAttr>();
+      cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
 
   int K;
   if (dstEnc.getOpIdx() == 0) // $a
@@ -76,11 +76,11 @@ LogicalResult lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
 
   Value res;
   if (auto dpasLayout =
-          dstEnc.getParent().dyn_cast_or_null<DpasEncodingAttr>()) {
+          dyn_cast_or_null<DpasEncodingAttr>(dstEnc.getParent())) {
     res = lowerSharedToDotOperandDPAS(op, adaptor, typeConverter, rewriter,
                                       dpasLayout, dstEnc, isOuter);
   } else if (auto blockedLayout =
-                 dstEnc.getParent().dyn_cast_or_null<BlockedEncodingAttr>()) {
+                 dyn_cast_or_null<BlockedEncodingAttr>(dstEnc.getParent())) {
     auto thread = getThreadId(rewriter, loc);
     res = SharedToDotOperandFMA::convertLayout(
         dstEnc.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout, thread,
@@ -109,11 +109,10 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (dstLayout.isa<DotOperandEncodingAttr>()) {
+    if (isa<DotOperandEncodingAttr>(dstLayout)) {
       return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
     }
-    if (srcLayout.isa<SharedEncodingAttr>() &&
-        isaDistributedLayout(dstLayout)) {
+    if (isa<SharedEncodingAttr>(srcLayout) && isaDistributedLayout(dstLayout)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -132,7 +131,7 @@ private:
     auto dstShape = dstTy.getShape();
     assert(dstShape.size() <= 2 &&
            "Unexpected rank of ConvertLayout(shared->blocked)");
-    auto srcSharedLayout = srcTy.getEncoding().cast<SharedEncodingAttr>();
+    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
     auto dstLayout = dstTy.getEncoding();
     auto inOrd = getOrder(srcSharedLayout);
 
@@ -193,7 +192,7 @@ private:
                     ArrayRef<unsigned> shapePerCTATile) const {
     auto shape = type.getShape();
     unsigned rank = shape.size();
-    if (auto blockedLayout = layout.dyn_cast<BlockedEncodingAttr>()) {
+    if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
       auto multiDimOffsetFirstElem = ::intel::emitBaseIndexForLayout(
           loc, rewriter, targetInfo, blockedLayout, type, false);
       SmallVector<Value> multiDimOffset(rank);
@@ -207,7 +206,7 @@ private:
       }
       return multiDimOffset;
     }
-    if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
       unsigned dim = sliceLayout.getDim();
       auto parentEncoding = sliceLayout.getParent();
       auto parentSizePerThread = getSizePerThread(parentEncoding);
@@ -236,7 +235,7 @@ private:
       }
       return multiDimOffset;
     }
-    if (auto dpasLayout = layout.dyn_cast<DpasEncodingAttr>()) {
+    if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
       SmallVector<Value> multiDimBase = ::intel::emitBaseIndexForLayout(
           loc, rewriter, targetInfo, layout, type, false);
 
@@ -316,7 +315,7 @@ private:
     }
     auto elemTy = type.getElementType();
     bool isInt1 = elemTy.isInteger(1);
-    bool isPtr = elemTy.isa<triton::PointerType>();
+    bool isPtr = isa<triton::PointerType>(elemTy);
     auto llvmElemTyOrig = getTypeConverter()->convertType(elemTy);
     if (isInt1)
       elemTy = IntegerType::get(elemTy.getContext(), 8);
@@ -428,8 +427,8 @@ private:
     unsigned outVec = 0;
     auto origRepShape = getRepShapeForCvtLayout(op);
     auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
-    if (getElementTypeOrSelf(op.getType())
-            .isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>()) {
+    if (isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>(
+            getElementTypeOrSelf(op.getType()))) {
       assert(inVec % 4 == 0 && "conversion not supported for FP8E4M3B15");
       assert(outVec % 4 == 0 && "conversion not supported for FP8E4M3B15");
     }
@@ -444,9 +443,9 @@ private:
       if (repId != 0) {
         barrier();
       }
-      if (srcLayout.isa<BlockedEncodingAttr>() ||
-          srcLayout.isa<SliceEncodingAttr>() ||
-          srcLayout.isa<DpasEncodingAttr>()) {
+      if (isa<BlockedEncodingAttr>(srcLayout) ||
+          isa<SliceEncodingAttr>(srcLayout) ||
+          isa<DpasEncodingAttr>(srcLayout)) {
         processReplica(loc, rewriter, /*stNotRd*/ true, srcTy, inNumCTAsEachRep,
                        multiDimRepId, inVec, paddedRepShape, origRepShape,
                        outOrd, vals, smemBase);
@@ -457,9 +456,9 @@ private:
       }
 
       barrier();
-      if (dstLayout.isa<BlockedEncodingAttr>() ||
-          dstLayout.isa<SliceEncodingAttr>() ||
-          dstLayout.isa<DpasEncodingAttr>()) {
+      if (isa<BlockedEncodingAttr>(dstLayout) ||
+          isa<SliceEncodingAttr>(dstLayout) ||
+          isa<DpasEncodingAttr>(dstLayout)) {
         processReplica(loc, rewriter, /*stNotRd*/ false, dstTy,
                        outNumCTAsEachRep, multiDimRepId, outVec, paddedRepShape,
                        origRepShape, outOrd, outVals, smemBase);

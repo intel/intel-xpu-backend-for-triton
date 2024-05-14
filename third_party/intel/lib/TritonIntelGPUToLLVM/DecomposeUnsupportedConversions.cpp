@@ -31,15 +31,15 @@ struct DecomposeUnsupportedConversions
     /* ---------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      if (!getElementTypeOrSelf(cvtOp)
-               .isa<Float8E4M3B11FNUZType, Float8E4M3FNType>())
+      if (!isa<Float8E4M3B11FNUZType, Float8E4M3FNType>(
+              getElementTypeOrSelf(cvtOp)))
         return;
-      auto shape = cvtOp.getType().cast<RankedTensorType>().getShape();
+      auto shape = cast<RankedTensorType>(cvtOp.getType()).getShape();
       auto argEncoding =
-          cvtOp.getSrc().getType().cast<RankedTensorType>().getEncoding();
-      auto cvtEncoding = cvtOp.getType().cast<RankedTensorType>().getEncoding();
-      if (argEncoding.isa<triton::gpu::DotOperandEncodingAttr>() ||
-          cvtEncoding.isa<triton::gpu::DotOperandEncodingAttr>())
+          cast<RankedTensorType>(cvtOp.getSrc().getType()).getEncoding();
+      auto cvtEncoding = cast<RankedTensorType>(cvtOp.getType()).getEncoding();
+      if (isa<triton::gpu::DotOperandEncodingAttr>(argEncoding) ||
+          isa<triton::gpu::DotOperandEncodingAttr>(cvtEncoding))
         return;
       auto F16Ty = builder.getF16Type();
 
@@ -64,9 +64,9 @@ struct DecomposeUnsupportedConversions
     // with `splat -> blocked -> shared
     /* -------------------------------- */
     mod.walk([&](triton::SplatOp splatOp) -> void {
-      auto dstType = splatOp.getType().cast<RankedTensorType>();
+      auto dstType = cast<RankedTensorType>(splatOp.getType());
       auto shared =
-          dstType.getEncoding().dyn_cast<triton::gpu::SharedEncodingAttr>();
+          dyn_cast<triton::gpu::SharedEncodingAttr>(dstType.getEncoding());
       if (shared) {
         OpBuilder builder(splatOp);
         SmallVector<unsigned, 4> sizePerThread(dstType.getRank(), 1);
@@ -89,12 +89,12 @@ struct DecomposeUnsupportedConversions
     /* -------------------------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
+      auto dstType = cast<RankedTensorType>(cvtOp.getType());
       auto srcMma =
-          srcType.getEncoding().dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>();
+          dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(srcType.getEncoding());
       auto dstDotOp =
-          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+          dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (srcMma && dstDotOp && !isMmaToDotShortcut(srcType, dstType)) {
         auto tmpType = RankedTensorType::get(
             dstType.getShape(), dstType.getElementType(),
@@ -117,12 +117,12 @@ struct DecomposeUnsupportedConversions
     /* -------------------------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getSrc().getType().cast<RankedTensorType>();
-      auto dstType = cvtOp.getType().cast<RankedTensorType>();
+      auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
+      auto dstType = cast<RankedTensorType>(cvtOp.getType());
       auto srcBlocked =
-          srcType.getEncoding().dyn_cast<triton::gpu::BlockedEncodingAttr>();
+          dyn_cast<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding());
       auto dstDotOp =
-          dstType.getEncoding().dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+          dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (srcBlocked && dstDotOp) {
         auto tmpType = triton::MemDescType::get(
             dstType.getShape(), dstType.getElementType(),

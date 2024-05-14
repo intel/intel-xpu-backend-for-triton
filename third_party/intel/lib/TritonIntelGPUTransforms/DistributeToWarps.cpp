@@ -309,7 +309,7 @@ public:
       // record old type before transform
       DenseMap<Operation *, RankedTensorType> typeMap;
       func.walk([&](ttg::ConvertLayoutOp op) {
-        typeMap[op] = op.getSrc().getType().cast<RankedTensorType>();
+        typeMap[op] = cast<RankedTensorType>(op.getSrc().getType());
       });
 
       Dialect *arithDialect = getContext().getLoadedDialect("arith");

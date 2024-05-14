@@ -13,6 +13,10 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
+namespace mlir {
+class ConversionPatternRewriter;
+}
+
 namespace mlir::triton::gpu::intel {
 
 // data type for D_C_A_B.
@@ -52,6 +56,14 @@ LogicalResult getConvertBackwardSlice(
     Value root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation = nullptr);
+
+LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
+                                       ArrayRef<Type> paramTypes,
+                                       Type resultType);
+
+LLVM::CallOp createSPIRVBuiltinCall(Location loc,
+                                    ConversionPatternRewriter &rewriter,
+                                    LLVM::LLVMFuncOp func, ValueRange args);
 
 } // namespace mlir::triton::gpu::intel
 
