@@ -617,7 +617,7 @@ Triton will be able to operate independently of PyTorch, eliminating the need fo
 Links and materials
 *******************
 
-.. [c1] Triton repo: https://github.com/openai/triton
+.. [c1] Triton repo: https://github.com/triton-lang/triton
 .. [c2] PyTorch 2.0 release notes: https://pytorch.org/get-started/pytorch-2.0/#developervendor-experience
 .. [c3] FX graph documentation: https://pytorch.org/docs/stable/fx.html
 .. [c4] Torch Dynamo deep dive: https://pytorch.org/docs/stable/torch.compiler_deepdive.html
@@ -631,12 +631,12 @@ Links and materials
 .. [c12] Extern operators selection mechanism: https://github.com/pytorch/pytorch/blob/94db6578ccee2551c986d92c245e0a0729b99449/torch/_inductor/select_algorithm.py
 .. [c13] Guards overview: https://pytorch.org/docs/stable/torch.compiler_guards_overview.html
 .. [c14] Triton heuristics: https://github.com/pytorch/pytorch/blob/6ebb26d572d5fcdc6ac0d1297bdf8d1eb5d20722/torch/_inductor/triton_heuristics.py
-.. [c15] Softmax implementation example: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/python/tutorials/02-fused-softmax.py
+.. [c15] Softmax implementation example: https://github.com/triton-lang/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/python/tutorials/02-fused-softmax.py
 .. [c16] Triton language: https://triton-lang.org/main/python-api/triton.language.html
-.. [c17] Triton dialect ops: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/Triton/IR/TritonOps.td
-.. [c18] TritonGPU dialect ops: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td
-.. [c19] Triton layouts definition: https://github.com/openai/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td
-.. [c20] Swizzling examples for shared layout: https://github.com/openai/triton/discussions/2026#discussioncomment-6746579
+.. [c17] Triton dialect ops: https://github.com/triton-lang/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/Triton/IR/TritonOps.td
+.. [c18] TritonGPU dialect ops: https://github.com/triton-lang/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/TritonGPU/IR/TritonGPUOps.td
+.. [c19] Triton layouts definition: https://github.com/triton-lang/triton/blob/ded624282e67e5f58db332380e6ff088f276d534/include/triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td
+.. [c20] Swizzling examples for shared layout: https://github.com/triton-lang/triton/discussions/2026#discussioncomment-6746579
 .. [c21] Nvidia’s Matrix Multiply-Accumulate Instructions: https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-multiply-accumulate-instructions
 .. [c22] Intel’s Xe-HPG overview & white paper: https://www.intel.com/content/www/us/en/developer/articles/technical/introduction-to-the-xe-hpg-architecture.html
 .. [c23] AMD’s Matrix cores: https://gpuopen.com/learn/amd-lab-notes/amd-lab-notes-matrix-cores-readme/
