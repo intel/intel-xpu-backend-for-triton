@@ -36,7 +36,7 @@ void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
 Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
                              const TypeConverter *converter, Value ptr,
                              Type elemTy, Value pred) const {
-  assert(ptr.getType().cast<mlir::LLVM::LLVMPointerType>().getAddressSpace() ==
+  assert(cast<mlir::LLVM::LLVMPointerType>(ptr.getType()).getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");
   Value undef = undef(elemTy);
@@ -93,7 +93,8 @@ bool TargetInfo::processReplicaUsingStMatrix(
     ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates) const {
+    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
+    int swizzleByteWidth) const {
   return false;
 }
 

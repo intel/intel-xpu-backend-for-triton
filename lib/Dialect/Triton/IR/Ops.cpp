@@ -297,7 +297,7 @@ LogicalResult DotOp::verify() {
     return emitError("mismatching encoding between A and B operands");
 
   // type is the same as the accumulator
-  auto accTy = getOperand(2).getType().cast<RankedTensorType>();
+  auto accTy = cast<RankedTensorType>(getOperand(2).getType());
   auto retEnc = accTy.getEncoding();
   Dialect &dialect = retEnc.getDialect();
   auto interface = cast<DialectInferLayoutInterface>(&dialect);
