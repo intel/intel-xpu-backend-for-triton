@@ -76,14 +76,14 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   // TODO: support column-major tensor
   // HW 2D block read instruction has restriction on pitch divisibility
   if (strides.size() == 2) {
-    auto pitch = strides[order[1]];
+    auto pitch = strides[0];
     // PVC requires pitch to be a multiple of QWord(64 bits).
     if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
       return true;
   }
 
   // HW 2D block read instruction only supports contiguous accessing.
-  auto fastChangeStride = strides[order[0]];
+  auto fastChangeStride = strides[1];
   if (auto stride =
           dyn_cast<arith::ConstantOp>(fastChangeStride.getDefiningOp())) {
     if (auto strideInt = dyn_cast<IntegerAttr>(stride.getValue()))
