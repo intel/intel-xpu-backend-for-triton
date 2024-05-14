@@ -193,7 +193,6 @@ void printTensor(StringRef msg, Value tensor, Type tensorTy,
   auto* context = rewriter.getContext();
 
   llvm::SmallString<64> msgNewline(msg);
-  msgNewline.push_back('\n');
   Value prefixStr = addStringToModule(
       UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
       msgNewline, TritonGEN::TritonGENMemorySpace::kUniformConstant);
@@ -250,10 +249,31 @@ void printTensor(StringRef msg, Value tensor, Type tensorTy,
     constexpr int kMaxPrintfOperands = 32;
     SmallVector<Value, kMaxPrintfOperands> printfOperands;
 
+    // If `rank` is large enough, we could end up exceeding
+    // kMaxPrintfOperands.  In that case, just truncate the index.
+    // (Subtract 2 because we're going to add two operands after the index.)
+    int maxAllowedRank = kMaxPrintfOperands - printfOperands.size() - 2;
+
+    os << "idx (";
+    const auto &index = indices[i];
+    for (size_t dim = 0; dim < index.size(); dim++) {
+      if (dim != 0) {
+        os << ", ";
+      }
+      if (dim == maxAllowedRank) {
+        os << "... (truncated)";
+        break;
+      }
+      os << getFormatSubstr(index[dim], /*hex=*/false,
+                            /*width=*/dimWidths[dim]);
+      printfOperands.push_back(index[dim]);
+    }
+    os << ")";
+
     // TODO(jlebar): We really should pad the pid, but because the max pid is
     // not known at compile-time, this would require nontrivial device-side
     // work.
-    os << "pid (";
+    os << " pid (";
     for (int j = 0; j < pid.size(); j++) {
       if (j != 0) {
         os << ", ";
@@ -274,27 +294,6 @@ void printTensor(StringRef msg, Value tensor, Type tensorTy,
     printfOperands.push_back(warpId);
     os << " lane " << getFormatSubstr(laneId);
     printfOperands.push_back(laneId);
-
-    // If `rank` is large enough, we could end up exceeding
-    // kMaxPrintfOperands.  In that case, just truncate the index.
-    // (Subtract 2 because we're going to add two operands after the index.)
-    int maxAllowedRank = kMaxPrintfOperands - printfOperands.size() - 2;
-
-    os << " idx (";
-    const auto &index = indices[i];
-    for (size_t dim = 0; dim < index.size(); dim++) {
-      if (dim != 0) {
-        os << ", ";
-      }
-      if (dim == maxAllowedRank) {
-        os << "... (truncated)";
-        break;
-      }
-      os << getFormatSubstr(index[dim], /*hex=*/false,
-                            /*width=*/dimWidths[dim]);
-      printfOperands.push_back(index[dim]);
-    }
-    os << ")";
 
     os << "%s";
     printfOperands.push_back(prefixStr);
