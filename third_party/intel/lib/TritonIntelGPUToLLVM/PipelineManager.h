@@ -110,17 +110,12 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (LLVM::isKernel(funcOp))
       newFuncOp.setCConv(LLVM::CConv::SPIR_KERNEL);
 
-    auto maxWorkGroupSizeAttr = rewriter.getArrayAttr(
-        {rewriter.getStringAttr(
-             TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName()),
-         rewriter.getStringAttr(std::to_string(threadsPerWarp * numWarps) +
-                                ",1,1")});
-    auto reqSubGroupSizeAttr = rewriter.getArrayAttr(
-        {rewriter.getStringAttr(
-             TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName()),
-         rewriter.getStringAttr(std::to_string(threadsPerWarp))});
-    newFuncOp.setPassthroughAttr(
-        ArrayAttr::get(ctx, {reqSubGroupSizeAttr, maxWorkGroupSizeAttr}));
+    NamedAttrList attrs;
+    attrs.append(TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
+                 rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
+    attrs.append(TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName(),
+                 rewriter.getI32ArrayAttr({threadsPerWarp}));
+    newFuncOp->setDialectAttrs(attrs);
 
     if (!LLVM::isKernel(funcOp)) {
       newFuncOp.setPassthroughAttr(
