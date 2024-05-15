@@ -40,28 +40,14 @@ def naive_softmax(x):
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE': 128}, num_warps=32),
-        triton.Config({'BLOCK_SIZE': 256}, num_warps=32),
-        triton.Config({'BLOCK_SIZE': 512}, num_warps=32),
-        triton.Config({'BLOCK_SIZE': 1024}, num_warps=32),
-        triton.Config({'BLOCK_SIZE': 2048}, num_warps=32),
-        triton.Config({'BLOCK_SIZE': 128}, num_warps=16),
-        triton.Config({'BLOCK_SIZE': 256}, num_warps=16),
-        triton.Config({'BLOCK_SIZE': 512}, num_warps=16),
-        triton.Config({'BLOCK_SIZE': 1024}, num_warps=16),
-        triton.Config({'BLOCK_SIZE': 2048}, num_warps=16),
-        triton.Config({'BLOCK_SIZE': 128}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 256}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 512}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 1024}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 2048}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 128}, num_warps=4),
-        triton.Config({'BLOCK_SIZE': 256}, num_warps=4),
-        triton.Config({'BLOCK_SIZE': 512}, num_warps=4),
-        triton.Config({'BLOCK_SIZE': 1024}, num_warps=4),
-        triton.Config({'BLOCK_SIZE': 2048}, num_warps=4),
+        triton.Config({}, num_warps=32, threads_per_warp=32),
+        triton.Config({}, num_warps=8, threads_per_warp=32),
+        triton.Config({}, num_warps=4, threads_per_warp=32),
+        triton.Config({}, num_warps=32, threads_per_warp=16),
+        triton.Config({}, num_warps=8, threads_per_warp=16),
+        triton.Config({}, num_warps=4, threads_per_warp=16),
     ],
-    key=['n_cols'],
+    key=['n_cols', 'BLOCK_SIZE'],
 )
 @triton.jit
 def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, BLOCK_SIZE: tl.constexpr):
@@ -91,16 +77,11 @@ def softmax(x):
     n_rows, n_cols = x.shape
     # The block size is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
-    # Another trick we can use is to ask the compiler to use more threads per row by
-    # increasing the number of warps (`num_warps`) over which each row is distributed.
-    # You will see in the next tutorial how to auto-tune this value in a more natural
-    # way so you don't have to come up with manual heuristics yourself.
-    num_warps = 32
     # Allocate output
     y = torch.empty_like(x)
     # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o
     # f the input matrix
-    softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_cols)
+    softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_cols, BLOCK_SIZE=BLOCK_SIZE)
     return y
 
 
