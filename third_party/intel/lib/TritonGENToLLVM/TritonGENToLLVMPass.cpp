@@ -231,6 +231,9 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   if (op.getVBlocks() != 2)
     return false;
 
+  if (op.getCacheControl() != TritonGEN::LoadCacheControl::DEFAULT)
+    return false;
+
   return true;
 }
 
@@ -312,8 +315,8 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
       rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getTranspose());
   auto vnniTransform =
       rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getVnniTransform());
-  // FIXME: Add argument to control cache.
-  auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
+  auto cache = rewriter.create<LLVM::ConstantOp>(
+      loc, int32Ty, static_cast<int>(op.getCacheControl()));
 
   SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
                           x,          y,         elemSize,     tileWidth,
@@ -383,8 +386,8 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
       rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getTranspose());
   auto vnniTransform =
       rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getVnniTransform());
-  // FIXME: Add argument to control cache.
-  auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
+  auto cache = rewriter.create<LLVM::ConstantOp>(
+      loc, int32Ty, static_cast<int>(op.getCacheControl()));
 
   SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
                           x,          y,         elemSize,     tileWidth,

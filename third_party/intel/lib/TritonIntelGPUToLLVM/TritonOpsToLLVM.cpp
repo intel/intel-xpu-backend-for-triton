@@ -170,13 +170,14 @@ public:
       bool vnni = (idx == 1) && dataSize <= 32;
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
-          dataSize, blockWidth, blockHeight, vBlks, false /* transpose*/, vnni);
+          dataSize, blockWidth, blockHeight, vBlks, false /*transpose*/, vnni,
+          TritonGEN::LoadCacheControl::DEFAULT);
       rewriter.replaceOp(op, bitcast(load, resType));
     } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
       rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, false /*transpose*/, false /*vnni*/,
-          TritonGEN::PrefetchCacheControl::L1C_L3C);
+          TritonGEN::LoadCacheControl::L1C_L3C);
       rewriter.eraseOp(op);
     } else {
       VectorType vectorType = getVectorType(
@@ -184,6 +185,7 @@ public:
       rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, false /*transpose*/, false /*vnni*/,
+          TritonGEN::StoreCacheControl::DEFAULT,
           bitcast(adaptor.getValue(), vectorType));
       rewriter.eraseOp(op);
     }

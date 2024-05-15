@@ -294,7 +294,9 @@ struct LoadOpConversion
             getIntAttr(i1_ty,
                        (isOperandA || eltTy.getIntOrFloatBitWidth() == 32)
                            ? /*A vnni=false*/ 0
-                           : /*B vnni=true*/ 1));
+                           : /*B vnni=true*/ 1),
+            TritonGEN::LoadCacheControlAttr::get(
+                rewriter.getContext(), TritonGEN::LoadCacheControl::DEFAULT));
 
         rets.push_back(bitcast(load2dOp, unpackType));
       }

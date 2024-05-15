@@ -337,7 +337,8 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
     I32Attr:$tile_height,
     I32Attr:$v_blocks,
     I1Attr:$transpose,
-    I1Attr:$vnni_transform
+    I1Attr:$vnni_transform,
+    TritonGEN_LoadCacheControl:$cache_control
   )> {
 
   let summary = "2D block load";
@@ -355,6 +356,7 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
       $v_blocks - number of tiles to load
       $transpose - transpose the tile in registers (useful for 32 bit element type)
       $vnni_transform - transpose and pack the submatrix in registers (useful for < 32 bit element types)
+      $cache_control - an enumerator that sets the L1 and L3 cache behaviour
 
     Notes:
       - the $transpose and $vnni_transform parameters are mutual exclusive
@@ -366,7 +368,7 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
   let assemblyFormat = [{
     operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,`
     `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,`
-    `vnni_transform` `=` $vnni_transform `}` attr-dict `:` functional-type(operands, results)
+    `vnni_transform` `=` $vnni_transform `,` `cache_control` `=` $cache_control `}` attr-dict `:` functional-type(operands, results)
   }];
 
   let hasVerifier = 1;
@@ -386,6 +388,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
     I32Attr:$v_blocks,
     I1Attr:$transpose,
     I1Attr:$vnni_transform,
+    TritonGEN_StoreCacheControl:$cache_control,
     FixedVectorOf<[TritonGEN_MatrixElemType]>:$stored_val
   )> {
 
@@ -404,6 +407,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
       $v_blocks - number of tiles to store
       $transpose - transpose the tile in registers (useful for 32 bit element types)
       $vnni_transform - transpose and pack the tile in registers (useful for < 32 bit element types)
+      $cache_control - an enumerator that sets the L1 and L3 cache behaviour
       $stored_val - the tile to store
 
     Notes:
@@ -415,7 +419,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
   let assemblyFormat = [{
     operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,`
       `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,`
-      `vnni_transform` `=` $vnni_transform `}` attr-dict `:` `(` type(operands) `)`
+      `vnni_transform` `=` $vnni_transform `,` `cache_control` `=` $cache_control `}` attr-dict `:` `(` type(operands) `)`
   }];
 
   let hasVerifier = 1;
@@ -435,7 +439,7 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
     I32Attr:$v_blocks,
     I1Attr:$transpose,
     I1Attr:$vnni_transform,
-    TritonGEN_PrefetchCacheControl:$cache_control
+    TritonGEN_LoadCacheControl:$cache_control
   )> {
 
   let summary = "2D block prefetch";
