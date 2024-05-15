@@ -12,6 +12,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
@@ -258,6 +259,24 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
   auto call = rewriter.create<LLVM::CallOp>(loc, func, args);
   call.setCConv(func.getCConv());
   return call;
+}
+
+bool hasDeviceArch(Operation *module) {
+  return module->hasAttr(triton::AttrTargetName);
+}
+
+DeviceArch getDeviceArch(Operation *module) {
+  assert(hasDeviceArch(module));
+  StringAttr archAttr =
+      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
+
+  if (archAttr == "xpu:DEVICE_ARCH.PVC") {
+    return DeviceArch::PVC;
+  } else if (archAttr == "xpu:DEVICE_ARCH.ATS") {
+    return DeviceArch::ATS;
+  }
+
+  return DeviceArch::UNKNOWN;
 }
 
 } // namespace mlir::triton::gpu::intel

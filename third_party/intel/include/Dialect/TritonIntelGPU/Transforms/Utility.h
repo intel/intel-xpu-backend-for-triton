@@ -65,6 +65,8 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     LLVM::LLVMFuncOp func, ValueRange args);
 
+bool hasDeviceArch(Operation *module);
+DeviceArch getDeviceArch(Operation *module);
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITONINTELGPU_TRANSFORMS_UTILITY_H

@@ -101,12 +101,10 @@ SmallVector<unsigned> getWarpsPerTile(tt::DotOp dotOp,
 }
 
 class BlockedToDPAS : public mlir::RewritePattern {
-  DeviceArch arch;
 
 public:
-  BlockedToDPAS(mlir::MLIRContext *context, DeviceArch arch)
-      : mlir::RewritePattern(tt::DotOp::getOperationName(), 2, context),
-        arch(arch) {}
+  BlockedToDPAS(mlir::MLIRContext *context)
+      : mlir::RewritePattern(tt::DotOp::getOperationName(), 2, context) {}
 
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op,
@@ -118,12 +116,13 @@ public:
         isa<DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
+    ModuleOp mod = op->getParentOfType<mlir::ModuleOp>();
+    auto arch = ttgi::getDeviceArch(mod);
     if (!supportDPAS(dotOp, arch))
       return failure();
 
     // Create DPAS encoding for the given number of warps
     ArrayRef<int64_t> retShape = oldRetType.getShape();
-    ModuleOp mod = op->getParentOfType<mlir::ModuleOp>();
     unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
 
     // operands
@@ -239,7 +238,7 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<::BlockedToDPAS>(context, deviceArch);
+    patterns.add<::BlockedToDPAS>(context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }

@@ -42,9 +42,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .export_values();
 
   ADD_PASS_WRAPPER_0("add_to_llvmir", intel::createConvertTritonIntelGPUToLLVM);
-  ADD_PASS_WRAPPER_OPT_1("add_accelerate_matmul",
-                         intel::createTritonIntelGPUAccelerateMatmul,
-                         intel::DeviceArch);
+  ADD_PASS_WRAPPER_0("add_accelerate_matmul",
+                     intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
                      intel::createIntelDecomposeUnsupportedConversions);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
@@ -53,9 +52,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                          int, intel::DeviceArch);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      intel::createTritonIntelGPURemoveLayoutConversions);
-  ADD_PASS_WRAPPER_OPT_1("add_rewrite_tensor_pointer",
-                         intel::createTritonIntelGPURewriteTensorPointer,
-                         intel::DeviceArch);
+  ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
+                     intel::createTritonIntelGPURewriteTensorPointer);
   ADD_PASS_WRAPPER_0("add_prefetch_block",
                      intel::createTritonIntelGPUPrefetchBlock);
   ADD_PASS_WRAPPER_0("add_distribute_to_warps",
