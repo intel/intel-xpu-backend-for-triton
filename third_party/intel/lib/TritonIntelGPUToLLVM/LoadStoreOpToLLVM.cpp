@@ -280,23 +280,15 @@ struct LoadOpConversion
                 i32_val(1)),
             /*x*/ trunc(i32_ty, offsetX),
             /*y*/ trunc(i32_ty, offsetY),
-            /*elem_size_in_bits*/
-            getIntAttr(i32_ty, eltTy.getIntOrFloatBitWidth()),
-            /*tile_width*/
-            getIntAttr(i32_ty, elemsPerInstr[1]),
-            /*tile_height*/
-            getIntAttr(i32_ty, elemsPerInstr[0]),
-            /*v_blocks*/
-            getIntAttr(i32_ty, 1),
-            /*transpose*/
-            getIntAttr(i1_ty, 0),
+            /*elem_size_in_bits*/ eltTy.getIntOrFloatBitWidth(),
+            /*tile_width*/ elemsPerInstr[1],
+            /*tile_height*/ elemsPerInstr[0],
+            /*v_blocks*/ 1,
+            /*transpose*/ false,
             /*vnni_transform*/
-            getIntAttr(i1_ty,
-                       (isOperandA || eltTy.getIntOrFloatBitWidth() == 32)
-                           ? /*A vnni=false*/ 0
-                           : /*B vnni=true*/ 1),
-            TritonGEN::LoadCacheControlAttr::get(
-                rewriter.getContext(), TritonGEN::LoadCacheControl::DEFAULT));
+            (isOperandA || eltTy.getIntOrFloatBitWidth() == 32)
+                ? /*A vnni=false*/ 0
+                : /*B vnni=true*/ 1);
 
         rets.push_back(bitcast(load2dOp, unpackType));
       }

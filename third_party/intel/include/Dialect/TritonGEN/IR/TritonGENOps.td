@@ -338,7 +338,7 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
     I32Attr:$v_blocks,
     I1Attr:$transpose,
     I1Attr:$vnni_transform,
-    TritonGEN_LoadCacheControl:$cache_control
+    DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control
   )> {
 
   let summary = "2D block load";
@@ -388,8 +388,8 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
     I32Attr:$v_blocks,
     I1Attr:$transpose,
     I1Attr:$vnni_transform,
-    TritonGEN_StoreCacheControl:$cache_control,
-    FixedVectorOf<[TritonGEN_MatrixElemType]>:$stored_val
+    FixedVectorOf<[TritonGEN_MatrixElemType]>:$stored_val,
+    DefaultValuedAttr<TritonGEN_StoreCacheControl, "::mlir::triton::TritonGEN::StoreCacheControl::DEFAULT">:$cache_control
   )> {
 
   let summary = "2D block store";
@@ -439,7 +439,7 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
     I32Attr:$v_blocks,
     I1Attr:$transpose,
     I1Attr:$vnni_transform,
-    TritonGEN_LoadCacheControl:$cache_control
+    DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control
   )> {
 
   let summary = "2D block prefetch";
