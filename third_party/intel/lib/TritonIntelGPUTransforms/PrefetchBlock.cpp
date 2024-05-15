@@ -46,6 +46,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
@@ -104,7 +105,7 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
   // typical numWarps 4, 8, 16, 32, 64
   // naive way to get warp distribute
   int64_t sizeX = n < 32 ? n : 32; // elementtype
-  int64_t numWarpsX = n / sizeX;
+  int64_t numWarpsX = ceil<int64_t>(n, sizeX);
   // auto root = std::sqrt(numWarps);
   // assert(n >= 16);
   // if (n / 16 <= root)
@@ -116,9 +117,9 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
   // else
   //   numWarpsX = n / 128;
   warpsPerCTA[1] = numWarpsX;
-  warpsPerCTA[0] = numWarps / warpsPerCTA[1];
-  sizePerWarp[1] = n / warpsPerCTA[1];
-  sizePerWarp[0] = m / warpsPerCTA[0];
+  warpsPerCTA[0] = ceil<unsigned>(numWarps, warpsPerCTA[1]);
+  sizePerWarp[1] = ceil<unsigned>(n, warpsPerCTA[1]);
+  sizePerWarp[0] = ceil<unsigned>(m, warpsPerCTA[0]);
   auto ctaLayout =
       ttg::CTALayoutAttr::get(type.getContext(), {1, 1}, {1, 1}, {1, 0});
   auto blockLayout = ttg::BlockedEncodingAttr::get(
