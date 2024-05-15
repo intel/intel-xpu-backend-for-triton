@@ -19,7 +19,7 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
   auto dstTy = op.getType();
   auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
   auto srcLayout = srcTy.getEncoding();
-  auto outOrd = dstTy.getEncoding().cast<SharedEncodingAttr>().getOrder();
+  auto outOrd = cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   assert(srcTy.getShape().size() == 2 ||
          (srcTy.getShape().size() <= 3 && outOrd[2] == 0) &&
              "Unexpected rank of ConvertLayout(blocked->shared)");
@@ -28,7 +28,7 @@ void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   int32_t elemSize = elemTy.getIntOrFloatBitWidth();
-  auto mmaLayout = srcLayout.dyn_cast<DpasEncodingAttr>();
+  auto mmaLayout = dyn_cast<DpasEncodingAttr>(srcLayout);
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
   auto dstStrides =
       LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
@@ -55,10 +55,10 @@ struct LocalAllocOpConversion
     Location loc = op->getLoc();
     Value smemBase =
         LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
-    auto resultTy = op.getType().cast<MemDescType>();
+    auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
-        resultTy.getEncoding().cast<triton::gpu::SharedEncodingAttr>();
+        cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
     auto order = sharedLayout.getOrder();
     // Workaround for 3D tensors
     // TODO: we need to modify the pipeline pass to give a proper shared

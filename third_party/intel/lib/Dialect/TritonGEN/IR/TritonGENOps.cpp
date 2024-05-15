@@ -118,10 +118,10 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
     if (ATy.getNumElements() != getRc() / 2)
       return this->emitOpError("the dimension for the 2nd operand (A) should "
                                "be equal to half of the repeat count");
-    if (!AElemTy.isa<Float32Type>() && !AElemTy.isInteger(32))
+    if (!isa<Float32Type>(AElemTy) && !AElemTy.isInteger(32))
       return this->emitOpError("2nd operand (A) element type should be f32 or "
                                "i32 when the precision type is tf32");
-    if (!BElemTy.isa<Float32Type>() && !BElemTy.isInteger(32))
+    if (!isa<Float32Type>(BElemTy) && !BElemTy.isInteger(32))
       return this->emitOpError("3rd operand (B) element type should be f32 or "
                                "i32 when the precision type is tf32");
     break;

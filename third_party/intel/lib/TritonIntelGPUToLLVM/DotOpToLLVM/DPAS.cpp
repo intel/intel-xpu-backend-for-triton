@@ -117,18 +117,18 @@ public:
     Value loadedA = adaptor.getA(), loadedB = adaptor.getB(),
           loadedC = adaptor.getC();
 
-    auto ATensorTy = A.getType().cast<RankedTensorType>(),
-         BTensorTy = B.getType().cast<RankedTensorType>(),
-         CTensorTy = C.getType().cast<RankedTensorType>(),
-         DTensorTy = D.getType().cast<RankedTensorType>();
+    auto ATensorTy = cast<RankedTensorType>(A.getType()),
+         BTensorTy = cast<RankedTensorType>(B.getType()),
+         CTensorTy = cast<RankedTensorType>(C.getType()),
+         DTensorTy = cast<RankedTensorType>(D.getType());
 
-    auto AEncoding = ATensorTy.getEncoding().cast<DotOperandEncodingAttr>();
-    auto BEncoding = BTensorTy.getEncoding().cast<DotOperandEncodingAttr>();
+    auto AEncoding = cast<DotOperandEncodingAttr>(ATensorTy.getEncoding());
+    auto BEncoding = cast<DotOperandEncodingAttr>(BTensorTy.getEncoding());
 
     auto ADpasEncoding =
-        AEncoding.getParent().cast<triton::gpu::intel::DpasEncodingAttr>();
+        cast<triton::gpu::intel::DpasEncodingAttr>(AEncoding.getParent());
     auto BDpasEncoding =
-        BEncoding.getParent().cast<triton::gpu::intel::DpasEncodingAttr>();
+        cast<triton::gpu::intel::DpasEncodingAttr>(BEncoding.getParent());
 
     auto repA = ADpasEncoding.getDPASRepetitions(ATensorTy.getShape(),
                                                  AEncoding.getOpIdx());
@@ -139,7 +139,7 @@ public:
     unsigned repM = repA[0], repN = repB[1], repK = repA[1];
 
     auto dpasType = getDPASType(op);
-    auto dpasEncoding = DTensorTy.getEncoding().cast<DpasEncodingAttr>();
+    auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
     Type aTy, bTy, cTy, dTy;
     std::tie(dTy, cTy, aTy, bTy) =
         getDPASOperandsType(dpasType, op.getContext(), dpasEncoding);
@@ -231,7 +231,7 @@ private:
     for (int m = 0; m < dim0; ++m)
       for (int k = 0; k < dim1; ++k) {
         auto matVal = vals.at({m, k});
-        auto vecType = matVal.getType().cast<mlir::VectorType>();
+        auto vecType = cast<mlir::VectorType>(matVal.getType());
         auto valTy = vecType.getElementType();
         for (int i = 0; i < vecType.getNumElements(); ++i) {
           auto val = extract_element(valTy, matVal, i32_val(i));
@@ -318,26 +318,23 @@ LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   Value A = op.getA(), B = op.getB(), C = op.getC(), D = op.getResult();
 
-  auto ATensorTy = A.getType().cast<RankedTensorType>(),
-       BTensorTy = B.getType().cast<RankedTensorType>(),
-       CTensorTy = C.getType().cast<RankedTensorType>(),
-       DTensorTy = D.getType().cast<RankedTensorType>();
+  auto ATensorTy = cast<RankedTensorType>(A.getType()),
+       BTensorTy = cast<RankedTensorType>(B.getType()),
+       CTensorTy = cast<RankedTensorType>(C.getType()),
+       DTensorTy = cast<RankedTensorType>(D.getType());
 
-  assert(ATensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
-         BTensorTy.getEncoding().isa<DotOperandEncodingAttr>() &&
+  assert(isa<DotOperandEncodingAttr>(ATensorTy.getEncoding()) &&
+         isa<DotOperandEncodingAttr>(BTensorTy.getEncoding()) &&
          "Both $a and %b should be DotOperand layout.");
-  assert(CTensorTy.getEncoding().isa<DpasEncodingAttr>() &&
-         DTensorTy.getEncoding().isa<DpasEncodingAttr>() &&
+  assert(isa<DpasEncodingAttr>(CTensorTy.getEncoding()) &&
+         isa<DpasEncodingAttr>(DTensorTy.getEncoding()) &&
          "Currently, we only support $c and $d with a dpas layout.");
   assert(CTensorTy.getShape()[0] == DTensorTy.getShape()[0] &&
          CTensorTy.getShape()[1] == DTensorTy.getShape()[1] &&
          "DotOp's $c operand should pass the same number of values as $d");
 
-  auto dpasLayout = op.getResult()
-                        .getType()
-                        .cast<RankedTensorType>()
-                        .getEncoding()
-                        .cast<DpasEncodingAttr>();
+  auto dpasLayout = cast<DpasEncodingAttr>(
+      cast<RankedTensorType>(op.getResult().getType()).getEncoding());
 
   DotOpDPASConversionHelper helper(dpasLayout, rewriter, typeConverter,
                                    op.getLoc());
