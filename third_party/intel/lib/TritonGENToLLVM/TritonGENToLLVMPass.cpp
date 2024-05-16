@@ -262,9 +262,18 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
 
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   Value ptr = op.getPtr();
-  Value baseWidth = op.getBaseWidth();
-  Value baseHeight = op.getBaseHeight();
-  Value basePitch = op.getBasePitch();
+  Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
+
+  auto calculateSurface = [&](Value shape, bool multiplyBytes) {
+    Value truncatedShape = trunc(i32_ty, shape);
+    if (multiplyBytes)
+      truncatedShape = mul(truncatedShape, elemSizeInBytes);
+    return sub(truncatedShape, i32_val(1));
+  };
+
+  Value baseWidth = calculateSurface(op.getBaseWidth(), true);
+  Value baseHeight = calculateSurface(op.getBaseHeight(), false);
+  Value basePitch = calculateSurface(op.getBasePitch(), true);
   Value x = op.getX();
   Value y = op.getY();
 
@@ -331,9 +340,18 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   Location loc = op->getLoc();
 
   Value ptr = op.getPtr();
-  Value baseWidth = op.getBaseWidth();
-  Value baseHeight = op.getBaseHeight();
-  Value basePitch = op.getBasePitch();
+  Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
+
+  auto calculateSurface = [&](Value shape, bool multiplyBytes) {
+    Value truncatedShape = trunc(i32_ty, shape);
+    if (multiplyBytes)
+      truncatedShape = mul(truncatedShape, elemSizeInBytes);
+    return sub(truncatedShape, i32_val(1));
+  };
+  Value baseWidth = calculateSurface(op.getBaseWidth(), true);
+  Value baseHeight = calculateSurface(op.getBaseHeight(), false);
+  Value basePitch = calculateSurface(op.getBasePitch(), true);
+
   Value x = op.getX();
   Value y = op.getY();
   Value storeVal = op.getStoredVal();
@@ -402,9 +420,19 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   Location loc = op->getLoc();
 
   Value ptr = op.getPtr();
-  Value baseWidth = op.getBaseWidth();
-  Value baseHeight = op.getBaseHeight();
-  Value basePitch = op.getBasePitch();
+  Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
+
+  auto calculateSurface = [&](Value shape, bool multiplyBytes) {
+    Value truncatedShape = trunc(i32_ty, shape);
+    if (multiplyBytes)
+      truncatedShape = mul(truncatedShape, elemSizeInBytes);
+    return sub(truncatedShape, i32_val(1));
+  };
+
+  Value baseWidth = calculateSurface(op.getBaseWidth(), true);
+  Value baseHeight = calculateSurface(op.getBaseHeight(), false);
+  Value basePitch = calculateSurface(op.getBasePitch(), true);
+
   Value x = op.getX();
   Value y = op.getY();
 

@@ -140,19 +140,10 @@ public:
     OpBuilder::InsertPoint insertPoint = rewriter.saveInsertionPoint();
     rewriter.setInsertionPointAfter(ptrOp);
     Location loc = op.getLoc();
-    Value bytes =
-        i32_val(tensorType.getElementType().getIntOrFloatBitWidth() / 8);
 
-    auto calculateSurface = [&](Value shape, bool multiplyBytes) {
-      Value truncatedShape = trunc(i32_ty, shape);
-      if (multiplyBytes)
-        truncatedShape = mul(truncatedShape, bytes);
-      return sub(truncatedShape, i32_val(1));
-    };
-
-    Value surfaceW = calculateSurface(ptrOp.getShape()[1], true);
-    Value surfaceH = calculateSurface(ptrOp.getShape()[0], false);
-    Value surfaceP = calculateSurface(ptrOp.getStrides()[0], true);
+    Value surfaceW = ptrOp.getShape()[1];
+    Value surfaceH = ptrOp.getShape()[0];
+    Value surfaceP = ptrOp.getStrides()[0];
     rewriter.restoreInsertionPoint(insertPoint);
 
     Value tensorPtr = adaptor.getPtr();
