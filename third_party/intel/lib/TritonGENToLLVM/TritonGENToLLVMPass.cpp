@@ -266,10 +266,13 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
         op.getY(), i32_val(1));
     SmallVector<Type> argTypes{ptr_ty(context, 1), i32_ty, i32_ty, i32_ty,
                                vecType};
+
+    Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
     auto truncToI32 = [&](Value v) { return trunc(i32_ty, v); };
-    SmallVector<Value> args{op.getPtr(), truncToI32(op.getBaseWidth()),
-                            truncToI32(op.getBaseHeight()),
-                            truncToI32(op.getBasePitch()), byteCoord};
+    SmallVector<Value> args{
+        op.getPtr(), mul(truncToI32(op.getBaseWidth()), elemSizeInBytes),
+        truncToI32(op.getBaseHeight()),
+        mul(truncToI32(op.getBasePitch()), elemSizeInBytes), byteCoord};
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
                                     true /*convergent*/);
   }
