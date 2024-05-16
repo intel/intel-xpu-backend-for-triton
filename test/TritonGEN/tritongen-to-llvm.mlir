@@ -232,7 +232,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   // CHECK-NEXT: [[COORD0:%.*]] = llvm.insertelement %arg4, [[UNDEF]][[[ZERO]] : i32] : vector<2xi32>
   // CHECK-NEXT: [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE]] : i32] : vector<2xi32>
   // CHECK-NEXT: llvm.call @intel_subgroup_block_read_u8_m8k32v2(%arg0, %arg1, %arg2, %arg3, [[COORD1]]) {passthrough = ["convergent"]} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> vector<16xi16>
-  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=2, transpose=false, vnni_transform=false} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<16xi16>
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=2, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<16xi16>
   llvm.return
 }
 
@@ -263,7 +263,7 @@ llvm.func @triton_gen.2Dblockload_to_genisa(%ptr : !llvm.ptr, %base_width : i32,
   // CHECK:  [[CST_TRUE:%.*]] = llvm.mlir.constant(true) : i1
   // CHECK:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v16i32([[PTR]], [[SUB_1]], [[SUB_2]], [[SUB_3]], %arg4, %arg5, [[CST_16a]], [[CST_16b]], [[CST_32]], [[CST_1_d]], [[CST_FALSE]], [[CST_TRUE]], [[ZERO]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<16xi32>
-  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=32, v_blocks=1, transpose=false, vnni_transform=true} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<16xi32>
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=32, v_blocks=1, transpose=false, vnni_transform=true, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<16xi32>
   llvm.return
 }
 
@@ -294,7 +294,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_hei
   // CHECK:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
   // CHECK:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v8f32([[PTR]], [[SUB_1]], [[SUB_2]], [[SUB_3]], %arg4, %arg5, [[CST_32]], [[CST_8_a]], [[CST_8_b]], [[CST_1_d]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
-  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xf32>
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xf32>
   llvm.return
 }
 
@@ -325,7 +325,7 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_he
   // CHECK:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
   // CHECK:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockWrite.v8f32([[PTR]], [[SUB_1]], [[SUB_2]], [[SUB_3]], %arg4, %arg5, [[CST_32]], [[CST_8_a]], [[CST_8_b]], [[CST_1_d]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]], %arg6) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>) -> ()
-  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xf32>)
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xf32>)
   llvm.return
 }
 

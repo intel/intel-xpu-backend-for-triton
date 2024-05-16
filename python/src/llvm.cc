@@ -278,75 +278,83 @@ void init_triton_llvm(py::module &&m) {
       },
       py::keep_alive<0, 2>());
 
-  m.def("optimize_module", [](llvm::Module *mod,
-                              const llvm::OptimizationLevel &opt) {
-    if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
-      return;
-    // Check to see if we are passing a list of flags to disable optimizations.
-    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
-    if (!flagList.empty()) {
-      auto options = llvm::cl::getRegisteredOptions();
-      llvm::SmallVector<StringRef, 3> split;
-      StringRef(flagList.c_str()).split(split, ',');
-      for (auto flag : split) {
-        auto optIt = options.find(flag);
-        if (optIt != options.end()) {
-          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-          *optPtr = true;
+  m.def(
+      "optimize_module",
+      [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
+         const std::string triple) {
+        if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
+          return;
+        // Check to see if we are passing a list of flags to disable
+        // optimizations.
+        auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+        if (!flagList.empty()) {
+          auto options = llvm::cl::getRegisteredOptions();
+          llvm::SmallVector<StringRef, 3> split;
+          StringRef(flagList.c_str()).split(split, ',');
+          for (auto flag : split) {
+            auto optIt = options.find(flag);
+            if (optIt != options.end()) {
+              auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+              *optPtr = true;
+            }
+          }
         }
-      }
-    }
-    using namespace llvm;
-    LoopAnalysisManager lam;
-    FunctionAnalysisManager fam;
-    CGSCCAnalysisManager cgam;
-    ModuleAnalysisManager mam;
+        using namespace llvm;
+        LoopAnalysisManager lam;
+        FunctionAnalysisManager fam;
+        CGSCCAnalysisManager cgam;
+        ModuleAnalysisManager mam;
 
-    PassInstrumentationCallbacks *instrCbPtr = nullptr;
-    PassInstrumentationCallbacks passInstrCb;
-    StandardInstrumentations standardInstr(mod->getContext(),
-                                           /*DebugLogging*/ true);
-    if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-      auto optMap = llvm::cl::getRegisteredOptions();
-      auto optIt = optMap.find("print-after-all");
-      if (optIt != optMap.end()) {
-        auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-        *optPtr = true;
-      }
-      standardInstr.registerCallbacks(passInstrCb, &mam);
-      instrCbPtr = &passInstrCb;
-    }
+        PassInstrumentationCallbacks *instrCbPtr = nullptr;
+        PassInstrumentationCallbacks passInstrCb;
+        StandardInstrumentations standardInstr(mod->getContext(),
+                                               /*DebugLogging*/ true);
+        if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+          auto optMap = llvm::cl::getRegisteredOptions();
+          auto optIt = optMap.find("print-after-all");
+          if (optIt != optMap.end()) {
+            auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+            *optPtr = true;
+          }
+          standardInstr.registerCallbacks(passInstrCb, &mam);
+          instrCbPtr = &passInstrCb;
+        }
 
-    PipelineTuningOptions tuningOptions;
-    tuningOptions.LoopUnrolling = true;
-    tuningOptions.LoopInterleaving = true;
-    tuningOptions.LoopVectorization = true;
-    // SLPVectorizer causes test_core.py::test_dot_mulbroadcasted to fail.
-    // It vectorizes @llvm.fmuladd.f32 with @llvm.fmuladd.v32f32. We can
-    // consider to reenable SLP vectorization when the failure is investigated.
-    tuningOptions.SLPVectorization = false;
+        PipelineTuningOptions tuningOptions;
+        tuningOptions.LoopUnrolling = true;
+        tuningOptions.LoopInterleaving = true;
+        tuningOptions.LoopVectorization = true;
+        // SLPVectorizer causes test_core.py::test_dot_mulbroadcasted to fail.
+        // It vectorizes @llvm.fmuladd.f32 with @llvm.fmuladd.v32f32. We can
+        // consider to reenable SLP vectorization when the failure is
+        // investigated.
+        tuningOptions.SLPVectorization = false;
 
-    PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
-                   instrCbPtr);
+        if (!triple.empty())
+          mod->setTargetTriple(triple.c_str());
 
-    pb.registerModuleAnalyses(mam);
-    pb.registerCGSCCAnalyses(cgam);
-    pb.registerFunctionAnalyses(fam);
-    pb.registerLoopAnalyses(lam);
-    pb.crossRegisterProxies(lam, fam, cgam, mam);
+        PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
+                       instrCbPtr);
 
-    ModulePassManager mpm;
-    pb.registerVectorizerStartEPCallback(
-        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-          // Triton generates large structure of scalars which may pessimise
-          // optimizations, we run a pass to break up phi of struct to make sure
-          // all the struct are removed for the following passes.
-          fpm.addPass(BreakStructPhiNodesPass());
-          fpm.addPass(InstCombinePass());
-        });
-    mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
-    mpm.run(*mod, mam);
-  });
+        pb.registerModuleAnalyses(mam);
+        pb.registerCGSCCAnalyses(cgam);
+        pb.registerFunctionAnalyses(fam);
+        pb.registerLoopAnalyses(lam);
+        pb.crossRegisterProxies(lam, fam, cgam, mam);
+
+        ModulePassManager mpm;
+        pb.registerVectorizerStartEPCallback(
+            [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
+              // Triton generates large structure of scalars which may pessimise
+              // optimizations, we run a pass to break up phi of struct to make
+              // sure all the struct are removed for the following passes.
+              fpm.addPass(BreakStructPhiNodesPass());
+              fpm.addPass(InstCombinePass());
+            });
+        mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
+        mpm.run(*mod, mam);
+      },
+      py::arg("mod"), py::arg("opt"), py::arg("triple") = "");
 
   m.def(
       "translate_to_spirv",
