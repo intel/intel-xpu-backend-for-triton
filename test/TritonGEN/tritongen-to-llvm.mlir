@@ -231,7 +231,10 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
   // CHECK-NEXT: [[COORD0:%.*]] = llvm.insertelement %arg4, [[UNDEF]][[[ZERO]] : i32] : vector<2xi32>
   // CHECK-NEXT: [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE]] : i32] : vector<2xi32>
-  // CHECK-NEXT: llvm.call @intel_subgroup_block_read_u8_m8k32v2(%arg0, %arg1, %arg2, %arg3, [[COORD1]]) {passthrough = ["convergent"]} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> vector<16xi16>
+  // CHECK:  [[WIDTH:%.*]] = llvm.trunc %arg1 : i32 to i32
+  // CHECK:  [[HEIGHT:%.*]] = llvm.trunc %arg2 : i32 to i32
+  // CHECK:  [[PITCH:%.*]] = llvm.trunc %arg3 : i32 to i32
+  // CHECK-NEXT: llvm.call @intel_subgroup_block_read_u8_m8k32v2(%arg0, [[WIDTH]], [[HEIGHT]], [[PITCH]], [[COORD1]]) {passthrough = ["convergent"]} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> vector<16xi16>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=2, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<16xi16>
   llvm.return
 }
