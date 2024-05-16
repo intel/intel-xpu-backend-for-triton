@@ -38,53 +38,68 @@ namespace {
 /// FIXME: maybe set sizePerWarp in the attr directly.
 SmallVector<int64_t> getSizePerWarp(RankedTensorType type, Attribute layout) {
   SmallVector<int64_t> sizePerWarp;
-
-  TypeSwitch<Attribute>(layout)
-      .Case<ttg::BlockedEncodingAttr>([&](auto blockedLayout) {
-        const SmallVector<unsigned> &sizePerThread =
-            blockedLayout.getSizePerThread();
-        const SmallVector<unsigned> &threadsPerWarp =
-            blockedLayout.getThreadsPerWarp();
-        for (auto [lhs, rhs] : llvm::zip(sizePerThread, threadsPerWarp))
-          sizePerWarp.push_back(lhs * rhs);
-      })
-      .Case<ttg::DotOperandEncodingAttr>([&](auto dotLayout) {
-        assert(isa<ttg::BlockedEncodingAttr>(dotLayout.getParent()) &&
-               "at this stage, parent layout should be blocked layout");
-        const SmallVector<int64_t> &parentSizePerWarp = getSizePerWarp(
-            type, cast<ttg::BlockedEncodingAttr>(dotLayout.getParent()));
-        if (dotLayout.getOpIdx() == 0) // dot operand A
-          sizePerWarp.assign({parentSizePerWarp[0], type.getShape()[1]});
-        else // dot operand B
-          sizePerWarp.assign({type.getShape()[0], parentSizePerWarp[1]});
-      })
-      .Default([](auto) {
-        llvm::report_fatal_error(
-            "getSizePerWarp not implemented for this attribute");
-      });
-
+  if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
+    const SmallVector<unsigned> &sizePerThread =
+        blockedLayout.getSizePerThread();
+    const SmallVector<unsigned> &threadsPerWarp =
+        blockedLayout.getThreadsPerWarp();
+    for (auto [lhs, rhs] : llvm::zip(sizePerThread, threadsPerWarp)) {
+      sizePerWarp.push_back(lhs * rhs);
+    }
+  } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+    auto parentLayout =
+        dyn_cast<ttg::BlockedEncodingAttr>(dotLayout.getParent());
+    assert(parentLayout &&
+           "at this stage, parent layout should be blocked layout.");
+    auto parentSizePerWarp = getSizePerWarp(type, parentLayout);
+    if (dotLayout.getOpIdx() == 0) // dot operand A
+      sizePerWarp.assign({parentSizePerWarp[0], type.getShape()[1]});
+    else // dot operand B
+      sizePerWarp.assign({type.getShape()[0], parentSizePerWarp[1]});
+  } else if (auto sLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
+    auto parentLayout = dyn_cast<ttg::BlockedEncodingAttr>(sLayout.getParent());
+    assert(parentLayout &&
+           "at this stage, parent layout should be blocked layout.");
+    unsigned dim = sLayout.getDim();
+    auto parentSizePerWarp = getSizePerWarp(type, parentLayout);
+    parentSizePerWarp.erase(parentSizePerWarp.begin() + dim);
+    return parentSizePerWarp;
+  } else {
+    llvm::report_fatal_error(
+        "getSizePerWarp not implemented for this attribute");
+  }
   return sizePerWarp;
 }
 
 Attribute getWarpLayout(Attribute layout) {
-  return TypeSwitch<Attribute, Attribute>(layout)
-      .Case<ttg::BlockedEncodingAttr>([&](auto blockedLayout) {
-        return ttgi::WarpEncodingAttr::get(
-            layout.getContext(), blockedLayout.getSizePerThread(),
-            blockedLayout.getThreadsPerWarp(), blockedLayout.getOrder());
-      })
-      .Case<ttg::DotOperandEncodingAttr>([&](auto dotLayout) {
-        return ttg::DotOperandEncodingAttr::get(
-            layout.getContext(), dotLayout.getOpIdx(),
-            getWarpLayout(dotLayout.getParent()), dotLayout.getKWidth());
-      })
-      .Default([&](auto) { return layout; });
+  MLIRContext *ctx = layout.getContext();
+  if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
+    auto warpLayout = ttgi::WarpEncodingAttr::get(
+        ctx, blockedLayout.getSizePerThread(),
+        blockedLayout.getThreadsPerWarp(), blockedLayout.getOrder());
+    return warpLayout;
+  } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+    auto parentLayout = getWarpLayout(dotLayout.getParent());
+    auto newDotLayout = ttg::DotOperandEncodingAttr::get(
+        ctx, dotLayout.getOpIdx(), parentLayout, dotLayout.getKWidth());
+    return newDotLayout;
+  } else if (auto sLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
+    auto parentLayout = getWarpLayout(sLayout.getParent());
+    auto newSLayout =
+        ttg::SliceEncodingAttr::get(ctx, sLayout.getDim(), parentLayout);
+    return newSLayout;
+  }
+  return layout;
 }
 
 RankedTensorType convertType(RankedTensorType type) {
   Attribute layout = type.getEncoding();
   SmallVector<int64_t> sizePerWarp = getSizePerWarp(type, layout);
   Attribute warpLayout = getWarpLayout(layout);
+  // hack for expandDimOp which has fixed 1 sized dim
+  for (auto i = 0; i < sizePerWarp.size(); i++) {
+    sizePerWarp[i] = std::min(sizePerWarp[i], type.getShape()[i]);
+  }
   return RankedTensorType::get(sizePerWarp, type.getElementType(), warpLayout);
 }
 
@@ -225,6 +240,41 @@ void distributeMakeTensorPtrOp(tt::MakeTensorPtrOp op, Value warpId) {
   op->erase();
 }
 
+RankedTensorType transformToTypeWithWarpAttr(RankedTensorType type) {
+  auto attr = type.getEncoding();
+  auto ctx = attr.getContext();
+  ttgi::WarpEncodingAttr warpAttr;
+  if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(attr)) {
+    auto idx = dotAttr.getOpIdx();
+    auto parentAttr = cast<ttgi::WarpEncodingAttr>(dotAttr.getParent());
+    SmallVector<unsigned> parentSize(parentAttr.getSizePerThread());
+    SmallVector<unsigned> parentThreads(parentAttr.getThreadsPerWarp());
+    if (idx == 0) {
+      parentSize[1] = type.getShape()[1];
+    } else {
+      parentSize[0] = type.getShape()[0];
+    }
+    warpAttr = ttgi::WarpEncodingAttr::get(ctx, parentSize, parentThreads,
+                                           parentAttr.getOrder());
+  } else if (auto sAttr = dyn_cast<ttg::SliceEncodingAttr>(attr)) {
+    auto dim = sAttr.getDim();
+    auto parentAttr = cast<ttgi::WarpEncodingAttr>(sAttr.getParent());
+    SmallVector<unsigned> parentSize(parentAttr.getSizePerThread());
+    SmallVector<unsigned> parentThreads(parentAttr.getThreadsPerWarp());
+    parentSize.erase(parentSize.begin() + dim);
+    parentThreads.erase(parentThreads.begin() + dim);
+    warpAttr = ttgi::WarpEncodingAttr::get(ctx, parentSize, parentThreads,
+                                           parentAttr.getOrder());
+  } else if (auto wAttr = dyn_cast<ttgi::WarpEncodingAttr>(attr)) {
+    warpAttr = wAttr;
+  } else {
+    assert(0 && "add more support");
+  }
+  auto newType =
+      RankedTensorType::get(type.getShape(), type.getElementType(), warpAttr);
+  return newType;
+}
+
 void distributeConvertLayoutOp(ttg::ConvertLayoutOp op, Value warpId,
                                RankedTensorType oldSrcType) {
   Location loc = op.getLoc();
@@ -234,6 +284,18 @@ void distributeConvertLayoutOp(ttg::ConvertLayoutOp op, Value warpId,
   auto srcPtrType =
       tt::PointerType::get(op.getSrc().getType(),
                            triton::TritonGEN::TritonGENMemorySpace::kWorkgroup);
+
+  // early return
+  {
+    auto srcTy = transformToTypeWithWarpAttr(op.getSrc().getType());
+    auto dstTy = transformToTypeWithWarpAttr(convertedDstType);
+    if (srcTy == dstTy) {
+      // op.replaceAllUsesWith(op.getSrc());
+      // op->erase();
+      op.getResult().setType(convertedDstType);
+      return;
+    }
+  }
 
   // FIXME: allocOp may carry the size info.
   OpBuilder b(op);
@@ -314,11 +376,17 @@ public:
 
       Dialect *arithDialect = getContext().getLoadedDialect("arith");
       Dialect *mathDialect = getContext().getLoadedDialect("math");
+      auto hasTensorType = [](Type type) {
+        if (isa<RankedTensorType>(type))
+          return true;
+        else if (auto ptrType = dyn_cast<tt::PointerType>(type))
+          if (isa<RankedTensorType>(ptrType.getPointeeType()))
+            return true;
+        return false;
+      };
+
       func.walk<WalkOrder::PreOrder>([&](Operation *op) {
-        if (llvm::all_of(op->getResultTypes(), [](Type type) {
-              return !isa<RankedTensorType>(type) &&
-                     !isa<tt::PointerType>(type);
-            }))
+        if (!llvm::any_of(op->getResultTypes(), hasTensorType))
           ;
         else if (auto forOp = dyn_cast<scf::ForOp>(op))
           distributeScfForOp(forOp);
@@ -328,7 +396,8 @@ public:
           distributeArithConstantOp(cstOp);
         else if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op))
           distributeConvertLayoutOp(convertOp, warpId, typeMap[convertOp]);
-        else if (isa<tt::LoadOp, tt::DotOp, tt::AdvanceOp>(op) ||
+        else if (isa<tt::LoadOp, tt::DotOp, tt::AdvanceOp, tt::ReduceOp,
+                     tt::SplatOp, tt::BroadcastOp, tt::ExpandDimsOp>(op) ||
                  op->getDialect() == arithDialect ||
                  op->getDialect() == mathDialect)
           distributeGenericOp(op);
