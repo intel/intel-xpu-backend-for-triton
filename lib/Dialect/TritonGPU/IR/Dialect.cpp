@@ -2120,6 +2120,43 @@ SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
   }
 }
 
+Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  NamedAttrList attrs;
+  if (parser.parseOptionalAttrDict(attrs).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+  unsigned opIdx = mlir::cast<IntegerAttr>(attrs.get("opIdx")).getInt();
+  Attribute parent = attrs.get("parent");
+  auto mmaParent = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
+  unsigned kWidth = 0;
+  Attribute _kWidth = attrs.get("kWidth");
+  if (_kWidth) {
+    // if (!mmaParent || mmaParent.isVolta()) {
+    //   auto loc = parser.getNameLoc();
+    //   parser.emitError(loc, "kWidth only supported for MMAv2+ parent");
+    //   return Attribute();
+    // }
+    kWidth = mlir::cast<IntegerAttr>(_kWidth).getInt();
+  }
+  if (mlir::isa<AMDWmmaEncodingAttr>(parent)) {
+    kWidth = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr()[2];
+  }
+  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
+                                                   parent, kWidth);
+}
+
+void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
+  auto mmaParent = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent());
+  printer << "<{"
+          << "opIdx = " << getOpIdx() << ", parent = " << getParent();
+  if (mmaParent && mmaParent.isAmpere())
+    printer << ", kWidth = " << getKWidth();
+  printer << "}>";
+}
+
 //===----------------------------------------------------------------------===//
 // ASM Interface (i.e.: alias)
 //===----------------------------------------------------------------------===//

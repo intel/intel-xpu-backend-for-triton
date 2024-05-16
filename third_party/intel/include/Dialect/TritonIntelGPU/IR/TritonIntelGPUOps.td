@@ -59,7 +59,7 @@ def TTIG_GlueOp : TTIG_Op<"glue", [Pure]> {
             -> ptr<tensor<16x24xf16>>
       ```
   }];
-  let arguments = (ins Variadic<TT_TensorOrTensorPtr>:$operands);
+  let arguments = (ins Variadic<TT_Type>:$operands);
   let results = (outs TT_TensorOrTensorPtr:$res);
   let assemblyFormat = [{
     operands attr-dict `:` functional-type(operands, results)
@@ -90,7 +90,7 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
         column-major order
   }];
   let arguments = (ins TT_TensorOrTensorPtr:$base, I32Attr:$index);
-  let results = (outs TT_TensorOrTensorPtr:$res);
+  let results = (outs TT_Type:$res);
   let assemblyFormat = [{
     $base `[` $index `]` attr-dict `:` type($base) `->` type($res)
   }];

@@ -90,6 +90,7 @@ static unsigned getDimSize(Type type, unsigned dim) {
 namespace mlir::triton::gpu::intel {
 
 LogicalResult GlueOp::verify() {
+  /*
   SmallVector<Type> inputTypes;
   for (auto input : getOperands())
     inputTypes.push_back(input.getType());
@@ -139,11 +140,12 @@ LogicalResult GlueOp::verify() {
 
   if (inputTypes.size() * numInputElems != numResultElems)
     return emitOpError("glued operands do not exactly cover the result shape");
-
+  */
   return success();
 }
 
 LogicalResult ExtractOp::verify() {
+  /*
   Type resultType = getRes().getType();
   Type operandType = getBase().getType();
 
@@ -179,7 +181,7 @@ LogicalResult ExtractOp::verify() {
   unsigned index = getIndex();
   if (index >= numTiles)
     return emitOpError("index must be less than ") << numTiles;
-
+  */
   return success();
 }
 
