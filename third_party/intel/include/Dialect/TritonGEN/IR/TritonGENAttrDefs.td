@@ -54,21 +54,34 @@ def TritonGEN_PrecisionTypeAttr : I32EnumAttr<"PrecisionType",
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
 
-/// Enum attribute of the different cache control settings for a prefetch operation.
-def TritonGEN_PrefetchCacheControl : I32EnumAttr<"PrefetchCacheControl",
-  "TritonGEN prefetch cache control",
+/// Enum attribute of the different cache control settings for a load operation.
+def TritonGEN_LoadCacheControl : I32EnumAttr<"LoadCacheControl",
+  "TritonGEN load cache control",
   [
     I32EnumAttrCase<"DEFAULT",     0,  "Default">,
-    I32EnumAttrCase<"L1UC_L3UC",   1,  "L1UC_L3UC">,
-    I32EnumAttrCase<"L1UC_L3C",    2,  "L1UC_L3C">,
-    I32EnumAttrCase<"L1C_L3UC",    3,  "L1C_L3UC">,
-    I32EnumAttrCase<"L1C_L3C",     4,  "L1C_L3C">,
-    I32EnumAttrCase<"L1S_L3UC",    5,  "L1S_L3UC">,
-    I32EnumAttrCase<"L1S_L3C",     6,  "L1S_L3C">,
-    I32EnumAttrCase<"L1IAR_L3C",   7,  "L1IAR_L3C">,
-    I32EnumAttrCase<"L1UC_L3CC",   8,  "L1UC_L3CC">,
-    I32EnumAttrCase<"L1C_L3CC",    9,  "L1C_L3CC">,
-    I32EnumAttrCase<"L1IAR_L3IAR", 10, "L1IAR_L3IAR">
+    I32EnumAttrCase<"L1UC_L3UC",   1,  "L1UC_L3UC">, // Override to L1 uncached and L3 uncached
+    I32EnumAttrCase<"L1UC_L3C",    2,  "L1UC_L3C">,  // Override to L1 uncached and L3 cached
+    I32EnumAttrCase<"L1C_L3UC",    3,  "L1C_L3UC">,  // Override to L1 cached and L3 uncached
+    I32EnumAttrCase<"L1C_L3C",     4,  "L1C_L3C">,   // Override to L1 cached and L3 cached
+    I32EnumAttrCase<"L1S_L3UC",    5,  "L1S_L3UC">,  // Override to L1 streaming load and L3 uncached
+    I32EnumAttrCase<"L1S_L3C",     6,  "L1S_L3C">,   // Override to L1 streaming load and L3 cached
+    I32EnumAttrCase<"L1IAR_L3C",   7,  "L1IAR_L3C">  // Override to L1 invalidate-after-read, and L3 cached
+  ]> {
+  let cppNamespace = "::mlir::triton::TritonGEN";
+}
+
+/// Enum attribute of the different cache control settings for a store operation.
+def TritonGEN_StoreCacheControl : I32EnumAttr<"StoreCacheControl",
+  "TritonGEN store cache control",
+  [
+    I32EnumAttrCase<"DEFAULT",     0,  "Default">,
+    I32EnumAttrCase<"L1UC_L3UC",   1,  "L1UC_L3UC">, // Override to L1 uncached and L3 uncached
+    I32EnumAttrCase<"L1UC_L3WB",   2,  "L1UC_L3WB">, // Override to L1 uncached and L3 written back
+    I32EnumAttrCase<"L1WT_L3UC",   3,  "L1WT_L3UC">, // Override to L1 written through and L3 uncached
+    I32EnumAttrCase<"L1WT_L3WB",   4,  "L1WT_L3WB">, // Override to L1 written through and L3 written back
+    I32EnumAttrCase<"L1S_L3UC",    5,  "L1S_L3UC">,  // Override to L1 streaming and L3 uncached
+    I32EnumAttrCase<"L1S_L3WB",    6,  "L1S_L3WB">,  // Override to L1 streaming and L3 written back
+    I32EnumAttrCase<"L1WB_L3WB",   7,  "L1WB_L3WB">  // Override to L1 written through and L3 written back
   ]> {
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
