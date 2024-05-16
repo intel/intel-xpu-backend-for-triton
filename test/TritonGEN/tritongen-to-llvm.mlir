@@ -238,19 +238,62 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v16i32(i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<16xi32>
+
+llvm.func @triton_gen.2Dblockload_to_genisa(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK: llvm.func @triton_gen.2Dblockload_to_genisa(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
+  // CHECK:  [[CST_2:%.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK:  [[TR_1:%.*]] = llvm.trunc %arg1 : i32 to i32
+  // CHECK:  [[MUL_1:%.*]] = llvm.mul [[TR_1]], [[CST_2]] : i32
+  // CHECK:  [[CST_1_a:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_1:%.*]] = llvm.sub [[MUL_1]], [[CST_1_a]] : i32
+  // CHECK:  [[TR_2:%.*]] = llvm.trunc %arg2 : i32 to i32
+  // CHECK:  [[CST_1_b:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_2:%.*]] = llvm.sub [[TR_2]], [[CST_1_b]] : i32
+  // CHECK:  [[TR_3:%.*]] = llvm.trunc %arg3 : i32 to i32
+  // CHECK:  [[MUL_2:%.*]] = llvm.mul [[TR_3]], [[CST_2]] : i32
+  // CHECK:  [[CST_1_c:%.*]]  = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_3:%.*]]  = llvm.sub [[MUL_2]], [[CST_1_c]] : i32
+  // CHECK:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
+  // CHECK:  [[CST_16a:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK:  [[CST_16b:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK:  [[CST_32:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK:  [[CST_1_d:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[CST_FALSE:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:  [[CST_TRUE:%.*]] = llvm.mlir.constant(true) : i1
+  // CHECK:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v16i32([[PTR]], [[SUB_1]], [[SUB_2]], [[SUB_3]], %arg4, %arg5, [[CST_16a]], [[CST_16b]], [[CST_32]], [[CST_1_d]], [[CST_FALSE]], [[CST_TRUE]], [[ZERO]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<16xi32>
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=32, v_blocks=1, transpose=false, vnni_transform=true} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<16xi32>
+  llvm.return
+}
+
+// -----
+
 // CHECK: llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v8f32(i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK-DAG:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
-  // CHECK-DAG:  [[CST_32:%.*]] = llvm.mlir.constant(32 : i32) : i32
-  // CHECK-DAG:  [[CST_8a:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-DAG:  [[CST_8b:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-DAG:  [[CST_1:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-DAG:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
-  // CHECK-DAG:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
-  // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v8f32([[PTR]], %arg1, %arg2, %arg3, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
+  // CHECK:  [[CST_4:%.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK:  [[TR_1:%.*]] = llvm.trunc %arg1 : i32 to i32
+  // CHECK:  [[MUL_1:%.*]] = llvm.mul [[TR_1]], [[CST_4]] : i32
+  // CHECK:  [[CST_1_a:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_1:%.*]] = llvm.sub [[MUL_1]], [[CST_1_a]] : i32
+  // CHECK:  [[TR_2:%.*]] = llvm.trunc %arg2 : i32 to i32
+  // CHECK:  [[CST_1_b:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_2:%.*]] = llvm.sub [[TR_2]], [[CST_1_b]] : i32
+  // CHECK:  [[TR_3:%.*]] = llvm.trunc %arg3 : i32 to i32
+  // CHECK:  [[MUL_2:%.*]] = llvm.mul [[TR_3]], [[CST_4]] : i32
+  // CHECK:  [[CST_1_c:%.*]]  = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_3:%.*]]  = llvm.sub [[MUL_2]], [[CST_1_c]] : i32
+  // CHECK:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
+  // CHECK:  [[CST_32:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK:  [[CST_8_a:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:  [[CST_8_b:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:  [[CST_1_d:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v8f32([[PTR]], [[SUB_1]], [[SUB_2]], [[SUB_3]], %arg4, %arg5, [[CST_32]], [[CST_8_a]], [[CST_8_b]], [[CST_1_d]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xf32>
   llvm.return
 }
@@ -260,16 +303,28 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_hei
 // CHECK:  llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8f32(i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>)
 
 llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xf32>) {
-  // CHECK:     llvm.func @triton_gen.2Dblockstore(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: vector<8xf32>) {
-  // CHECK-DAG:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
-  // CHECK-DAG:  [[CST_32:%.*]] = llvm.mlir.constant(32 : i32) : i32
-  // CHECK-DAG:  [[CST_8a:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-DAG:  [[CST_8b:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-DAG:  [[CST_1:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-DAG:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
-  // CHECK-DAG:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
-  // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockWrite.v8f32([[PTR]], %arg1, %arg2, %arg3, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]], %arg6) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>) -> ()
+  // CHECK:  llvm.func @triton_gen.2Dblockstore(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: vector<8xf32>) {
+  // CHECK:  [[CST_4:%.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK:  [[TR_1:%.*]] = llvm.trunc %arg1 : i32 to i32
+  // CHECK:  [[MUL_1:%.*]] = llvm.mul [[TR_1]], [[CST_4]] : i32
+  // CHECK:  [[CST_1_a:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_1:%.*]] = llvm.sub [[MUL_1]], [[CST_1_a]] : i32
+  // CHECK:  [[TR_2:%.*]] = llvm.trunc %arg2 : i32 to i32
+  // CHECK:  [[CST_1_b:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_2:%.*]] = llvm.sub [[TR_2]], [[CST_1_b]] : i32
+  // CHECK:  [[TR_3:%.*]] = llvm.trunc %arg3 : i32 to i32
+  // CHECK:  [[MUL_2:%.*]] = llvm.mul [[TR_3]], [[CST_4]] : i32
+  // CHECK:  [[CST_1_c:%.*]]  = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_3:%.*]]  = llvm.sub [[MUL_2]], [[CST_1_c]] : i32
+  // CHECK:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
+  // CHECK:  [[CST_32:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK:  [[CST_8_a:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:  [[CST_8_b:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:  [[CST_1_d:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockWrite.v8f32([[PTR]], [[SUB_1]], [[SUB_2]], [[SUB_3]], %arg4, %arg5, [[CST_32]], [[CST_8_a]], [[CST_8_b]], [[CST_1_d]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]], %arg6) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>) -> ()
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xf32>)
   llvm.return
 }
@@ -279,16 +334,28 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_he
 // CHECK:  llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid(i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32)
 
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK:     llvm.func @triton_gen.2Dblockprefetch(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK-DAG:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
-  // CHECK-DAG:  [[CST_32:%.*]] = llvm.mlir.constant(32 : i32) : i32
-  // CHECK-DAG:  [[CST_8a:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-DAG:  [[CST_8b:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-DAG:  [[CST_1:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-DAG:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
-  // CHECK-DAG:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
-  // CHECK-DAG:  [[FOUR:%.*]] = llvm.mlir.constant(4 : i32) : i32
-  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid([[PTR]], %arg1, %arg2, %arg3, %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[FOUR]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
+  // CHECK:  llvm.func @triton_gen.2Dblockprefetch(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
+  // CHECK:  [[CST_4:%.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK:  [[TR_1:%.*]] = llvm.trunc %arg1 : i32 to i32
+  // CHECK:  [[MUL_1:%.*]] = llvm.mul [[TR_1]], [[CST_4]] : i32
+  // CHECK:  [[CST_1_a:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_1:%.*]] = llvm.sub [[MUL_1]], [[CST_1_a]] : i32
+  // CHECK:  [[TR_2:%.*]] = llvm.trunc %arg2 : i32 to i32
+  // CHECK:  [[CST_1_b:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_2:%.*]] = llvm.sub [[TR_2]], [[CST_1_b]] : i32
+  // CHECK:  [[TR_3:%.*]] = llvm.trunc %arg3 : i32 to i32
+  // CHECK:  [[MUL_2:%.*]] = llvm.mul [[TR_3]], [[CST_4]] : i32
+  // CHECK:  [[CST_1_c:%.*]]  = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[SUB_3:%.*]]  = llvm.sub [[MUL_2]], [[CST_1_c]] : i32
+  // CHECK:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
+  // CHECK:  [[CST_32:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK:  [[CST_8_a:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:  [[CST_8_b:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:  [[CST_1_d:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:  [[FOUR:%.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid([[PTR]], [[SUB_1]], [[SUB_2]], [[SUB_3]], %arg4, %arg5, [[CST_32]], [[CST_8_a]], [[CST_8_b]], [[CST_1_d]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[FOUR]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=L1C_L3C} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
 }
