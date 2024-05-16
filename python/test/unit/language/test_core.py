@@ -3665,7 +3665,7 @@ def test_arange(start, num_ctas, device):
                                                                for dtype_str in torch_dtypes
                                                                for size in [128, 512]
                                                                for size_diff in [0, 1, 2, 3, 4]
-                                                               for other in [0, 1]])
+                                                               for other in [None, 0, 1]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):
     dtype = getattr(torch, dtype_str)
@@ -3690,11 +3690,12 @@ def test_masked_load(dtype_str, size, size_diff, other, num_ctas, device):
         output_offsets = tl.arange(0, out_size)
         tl.store(out_ptr + output_offsets, x)
 
-    mask_str = f"mask=in_offsets < in_size, other={other}" if size_diff > 0 else "None"
+    other_str = f", other={other}" if other else ""
+    mask_str = f"mask=in_offsets < in_size{other_str}" if size_diff > 0 else "None"
     kernel = patch_kernel(_kernel, {'GENERATE_TEST_HERE': f"tl.load(in_ptr + in_offsets, {mask_str})"})
     kernel[(1, )](input, output, input_size, output_size, num_ctas=num_ctas)
 
-    reference_out = torch.cat((input, torch.full((size_diff, ), other, dtype=dtype, device=device)))
+    reference_out = torch.cat((input, torch.full((size_diff, ), other if other else 0, dtype=dtype, device=device)))
     torch.testing.assert_close(output, reference_out)
 
 

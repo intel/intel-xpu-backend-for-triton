@@ -401,7 +401,7 @@ struct LoadOpConversion
                        ? vec_ty(IntegerType::get(ctx, width), nWords)
                        : retTys[0];
 
-      Value other_;
+      Value other_ = undef(retTy);
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
           size_t size = width / valueElemNBits;
@@ -431,7 +431,8 @@ struct LoadOpConversion
           }
         }
       } else {
-        other_ = rewriter.create<LLVM::ConstantOp>(loc, retTy, rewriter.getZeroAttr(retTy));
+        other_ = rewriter.create<LLVM::ConstantOp>(loc, retTy,
+                                                   rewriter.getZeroAttr(retTy));
       }
 
       // Create a predicated load operation.
