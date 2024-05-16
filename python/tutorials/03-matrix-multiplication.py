@@ -353,8 +353,7 @@ def matmul(a, b, activation=""):
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
         ACTIVATION=activation,  #
-        threads_per_warp=16
-    )
+        threads_per_warp=16)
     return c
 
 
