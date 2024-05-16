@@ -2002,11 +2002,11 @@ Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned kWidth = 0;
   Attribute _kWidth = attrs.get("kWidth");
   if (_kWidth) {
-    if (!mmaParent || mmaParent.isVolta()) {
-      auto loc = parser.getNameLoc();
-      parser.emitError(loc, "kWidth only supported for MMAv2+ parent");
-      return Attribute();
-    }
+    // if (!mmaParent || mmaParent.isVolta()) {
+    //   auto loc = parser.getNameLoc();
+    //   parser.emitError(loc, "kWidth only supported for MMAv2+ parent");
+    //   return Attribute();
+    // }
     kWidth = mlir::cast<IntegerAttr>(_kWidth).getInt();
   }
   if (mlir::isa<AMDWmmaEncodingAttr>(parent)) {

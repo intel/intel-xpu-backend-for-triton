@@ -221,6 +221,8 @@ def TT_AdvanceOp : TT_Op<"advance",
     let results = (outs TT_TensorPtr:$result);
 
     let assemblyFormat = "$ptr `,` `[` $offsets `]` attr-dict `:` type($result)";
+
+    let hasFolder = 1;
 }
 
 //
@@ -472,8 +474,8 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
-                                         SameOperandsAndResultElementType,
-                                         SameOperandsAndResultEncoding]> {
+                                         SameOperandsAndResultElementType]> {
+                                        //  SameOperandsAndResultEncoding]> {
     let summary = "broadcast a tensor";
 
     let description = [{
