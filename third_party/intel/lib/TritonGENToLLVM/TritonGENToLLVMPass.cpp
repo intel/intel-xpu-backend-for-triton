@@ -234,6 +234,15 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   return true;
 }
 
+static Value calculateSurface(Value shape, Value elemSizeInBytes,
+                              bool multiplyBytes, Location &loc,
+                              ConversionPatternRewriter &rewriter) {
+  Value truncatedShape = trunc(i32_ty, shape);
+  if (multiplyBytes)
+    truncatedShape = mul(truncatedShape, elemSizeInBytes);
+  return sub(truncatedShape, i32_val(1));
+}
+
 static LLVM::CallOp
 createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                         ConversionPatternRewriter &rewriter) {
@@ -254,17 +263,27 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
         op.getY(), i32_val(1));
     SmallVector<Type> argTypes{ptr_ty(context, 1), i32_ty, i32_ty, i32_ty,
                                vecType};
-    SmallVector<Value> args{op.getPtr(), op.getBaseWidth(), op.getBaseHeight(),
-                            op.getBasePitch(), byteCoord};
+
+    Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
+    auto truncToI32 = [&](Value v) { return trunc(i32_ty, v); };
+    SmallVector<Value> args{
+        op.getPtr(), mul(truncToI32(op.getBaseWidth()), elemSizeInBytes),
+        truncToI32(op.getBaseHeight()),
+        mul(truncToI32(op.getBasePitch()), elemSizeInBytes), byteCoord};
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
                                     true /*convergent*/);
   }
 
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   Value ptr = op.getPtr();
-  Value baseWidth = op.getBaseWidth();
-  Value baseHeight = op.getBaseHeight();
-  Value basePitch = op.getBasePitch();
+  Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
+
+  Value baseWidth =
+      calculateSurface(op.getBaseWidth(), elemSizeInBytes, true, loc, rewriter);
+  Value baseHeight = calculateSurface(op.getBaseHeight(), elemSizeInBytes,
+                                      false, loc, rewriter);
+  Value basePitch =
+      calculateSurface(op.getBasePitch(), elemSizeInBytes, true, loc, rewriter);
   Value x = op.getX();
   Value y = op.getY();
 
@@ -331,9 +350,15 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   Location loc = op->getLoc();
 
   Value ptr = op.getPtr();
-  Value baseWidth = op.getBaseWidth();
-  Value baseHeight = op.getBaseHeight();
-  Value basePitch = op.getBasePitch();
+  Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
+
+  Value baseWidth =
+      calculateSurface(op.getBaseWidth(), elemSizeInBytes, true, loc, rewriter);
+  Value baseHeight = calculateSurface(op.getBaseHeight(), elemSizeInBytes,
+                                      false, loc, rewriter);
+  Value basePitch =
+      calculateSurface(op.getBasePitch(), elemSizeInBytes, true, loc, rewriter);
+
   Value x = op.getX();
   Value y = op.getY();
   Value storeVal = op.getStoredVal();
@@ -402,9 +427,15 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   Location loc = op->getLoc();
 
   Value ptr = op.getPtr();
-  Value baseWidth = op.getBaseWidth();
-  Value baseHeight = op.getBaseHeight();
-  Value basePitch = op.getBasePitch();
+  Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
+
+  Value baseWidth =
+      calculateSurface(op.getBaseWidth(), elemSizeInBytes, true, loc, rewriter);
+  Value baseHeight = calculateSurface(op.getBaseHeight(), elemSizeInBytes,
+                                      false, loc, rewriter);
+  Value basePitch =
+      calculateSurface(op.getBasePitch(), elemSizeInBytes, true, loc, rewriter);
+
   Value x = op.getX();
   Value y = op.getY();
 
