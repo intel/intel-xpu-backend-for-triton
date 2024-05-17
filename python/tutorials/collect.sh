@@ -17,6 +17,9 @@ rm -rf result.csv result.txt
 sed -i "s/x_vals=.*/x_vals=[[$M, $K, $N]],/g" 09-experimental-block-pointer.py
 sed -i "s/float M = .*/float M = $M, K = $K, N = $N;/g" ../../third_party/intel/backend/driver.py
 
+rm -rf ./tt_cache
+export TRITON_CACHE_DIR=./tt_cache
+
 TRITON_INTEL_ENABLE_BLOCK_PTR=1 \
 IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
 IGC_ForcePrefetchToL1Cache=1 \
