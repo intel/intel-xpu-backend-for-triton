@@ -713,9 +713,7 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    ttgi::DeviceArch arch = ttgi::hasDeviceArch(mod)
-                                ? ttgi::getDeviceArch(mod)
-                                : ttgi::DeviceArch::UNKNOWN;
+    ttgi::DeviceArch arch = ttgi::getDeviceArch(mod);
 
     auto markTensorPointerForRemoval = [this, arch](Value val) {
       if (tt::isTensorPointerType(val.getType())) {

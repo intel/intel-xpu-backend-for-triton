@@ -261,12 +261,8 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
   return call;
 }
 
-bool hasDeviceArch(Operation *module) {
-  return module->hasAttr(triton::AttrTargetName);
-}
-
 DeviceArch getDeviceArch(Operation *module) {
-  assert(hasDeviceArch(module));
+  assert(module->hasAttr(triton::AttrTargetName));
   StringAttr archAttr =
       cast<StringAttr>(module->getAttr(triton::AttrTargetName));
 
