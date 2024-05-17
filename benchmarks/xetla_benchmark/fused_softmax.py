@@ -16,6 +16,8 @@ import triton.language as tl
 import xetla_benchmark
 import xetla_benchmark.xetla_kernel as xetla_kernel
 
+benchmark_suit = xetla_benchmark  # triton.testing
+
 
 @torch.jit.script
 def naive_softmax(x):
@@ -40,28 +42,14 @@ def naive_softmax(x):
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE': 128}, num_warps=32),
-        triton.Config({'BLOCK_SIZE': 256}, num_warps=32),
-        triton.Config({'BLOCK_SIZE': 512}, num_warps=32),
-        triton.Config({'BLOCK_SIZE': 1024}, num_warps=32),
-        triton.Config({'BLOCK_SIZE': 2048}, num_warps=32),
-        triton.Config({'BLOCK_SIZE': 128}, num_warps=16),
-        triton.Config({'BLOCK_SIZE': 256}, num_warps=16),
-        triton.Config({'BLOCK_SIZE': 512}, num_warps=16),
-        triton.Config({'BLOCK_SIZE': 1024}, num_warps=16),
-        triton.Config({'BLOCK_SIZE': 2048}, num_warps=16),
-        triton.Config({'BLOCK_SIZE': 128}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 256}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 512}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 1024}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 2048}, num_warps=8),
-        triton.Config({'BLOCK_SIZE': 128}, num_warps=4),
-        triton.Config({'BLOCK_SIZE': 256}, num_warps=4),
-        triton.Config({'BLOCK_SIZE': 512}, num_warps=4),
-        triton.Config({'BLOCK_SIZE': 1024}, num_warps=4),
-        triton.Config({'BLOCK_SIZE': 2048}, num_warps=4),
+        triton.Config({}, num_warps=32),
+        triton.Config({}, num_warps=8),
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=32),
+        triton.Config({}, num_warps=8),
+        triton.Config({}, num_warps=4),
     ],
-    key=['n_cols'],
+    key=['n_cols', 'BLOCK_SIZE'],
 )
 @triton.jit
 def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, BLOCK_SIZE: tl.constexpr):
@@ -91,21 +79,16 @@ def softmax(x):
     n_rows, n_cols = x.shape
     # The block size is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
-    # Another trick we can use is to ask the compiler to use more threads per row by
-    # increasing the number of warps (`num_warps`) over which each row is distributed.
-    # You will see in the next tutorial how to auto-tune this value in a more natural
-    # way so you don't have to come up with manual heuristics yourself.
-    num_warps = 32
     # Allocate output
     y = torch.empty_like(x)
     # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row o
     # f the input matrix
-    softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_cols)
+    softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_cols, BLOCK_SIZE=BLOCK_SIZE)
     return y
 
 
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
+@benchmark_suit.perf_report(
+    benchmark_suit.Benchmark(
         x_names=['N'],  # argument names to use as an x-axis for the plot
         x_vals=[256, 1024, 2048, 4096],  # different possible values for `x_name`
         line_arg='provider',  # argument name whose value corresponds to a different line in the plot
@@ -130,16 +113,23 @@ def benchmark(M, N, provider):
     x = torch.randn(M, N, device='xpu', dtype=torch.bfloat16)
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'torch-native':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles, warmup=10,
+        ms, min_ms, max_ms = benchmark_suit.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles, warmup=10,
                                                      rep=10)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: softmax(x), quantiles=quantiles, warmup=10, rep=10)
+        triton_fn = lambda: softmax(x)
+        torch_fn = lambda: torch.softmax(x, axis=-1)
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), err_msg="triton to torch")
+        ms, min_ms, max_ms = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, warmup=10, rep=10)
+
     if provider == 'torch-jit':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: naive_softmax(x), quantiles=quantiles, warmup=10, rep=10)
+        ms, min_ms, max_ms = benchmark_suit.do_bench(lambda: naive_softmax(x), quantiles=quantiles, warmup=10, rep=10)
     if provider == 'xetla':
-        name = "softmax_shape_{}_{}".format(N, N)
+        name = "softmax_shape_{}_{}".format(M, N)
         func = getattr(xetla_kernel, name)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: func(x, 0), quantiles=quantiles, warmup=10, rep=10)
+        xetla_fn = lambda: func(x, 0)
+        torch_fn = lambda: torch.softmax(x, axis=-1)
+        # benchmark_suit.assert_close(xetla_fn(), torch_fn(), err_msg="xetla to torch")
+        ms, min_ms, max_ms = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, warmup=10, rep=10)
     gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 

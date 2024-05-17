@@ -23,11 +23,13 @@ sycl::queue get_current_sycl_queue() {
 template <typename T>
 at::Tensor softmax(const at::Tensor &input, const int64_t dim) {
   CHECK_INPUT(input);
+  RECORD_FUNCTION("xetla softmax", {input});
 
   auto output = at::empty_like(input);
 
   auto queue = get_current_sycl_queue();
-  softmax_forward<T>(input.data_ptr(), output.data_ptr(), queue);
+  auto evt = softmax_forward<T>(input.data_ptr(), output.data_ptr(), queue);
+  xpu::profiler_record("xetla kernel", evt);
   return output;
 }
 
@@ -47,11 +49,11 @@ at::Tensor bgemm(const at::Tensor &a, const at::Tensor &b, const at::Tensor &c,
 }
 
 PYBIND11_MODULE(xetla_kernel, m) {
-  m.def("softmax_shape_256_256", &softmax<mat1_256x256_bf16_cfg0>,
+  m.def("softmax_shape_4096_256", &softmax<mat1_4096x256_bf16_cfg0>,
         "softmax forward (XeTLA)");
-  m.def("softmax_shape_1024_1024", &softmax<mat1_1024x1024_bf16_cfg0>,
+  m.def("softmax_shape_4096_1024", &softmax<mat1_4096x1024_bf16_cfg0>,
         "softmax forward (XeTLA)");
-  m.def("softmax_shape_2048_2048", &softmax<mat1_2048x2048_bf16_cfg0>,
+  m.def("softmax_shape_4096_2048", &softmax<mat1_4096x2048_bf16_cfg0>,
         "softmax forward (XeTLA)");
   m.def("softmax_shape_4096_4096", &softmax<mat1_4096x4096_bf16_cfg0>,
         "softmax forward (XeTLA)");

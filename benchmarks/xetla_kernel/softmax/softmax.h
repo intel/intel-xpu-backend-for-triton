@@ -92,7 +92,8 @@ sycl::event softmax_forward(void *input, void *output, sycl::queue &queue) {
     //                    sycl::info::event_profiling::command_start>()) /
     //               (1000.0f * 1000.0f * 1000.f);
 
-    // printf("M: %d, Data_type_in: %d, Bandwidth: GB/S: %f \n", mat_m,
+    // printf("M: %d, N: %d Data_type_in: %d, Bandwidth: GB/S: %f \n", mat_m,
+    // mat_n,
     //        sizeof(data_type_in),
     //        ((mat_m * mat_n * sizeof(data_type_in) * 2 / 1e9) / time));
     return e_softmax_fwd;
