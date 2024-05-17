@@ -31,8 +31,13 @@ TritonIntelGPUToLLVMTypeConverter::TritonIntelGPUToLLVMTypeConverter(
 
     // tensor type is flattened and divided by 16 (subgroupSize).
     addConversion([&](mlir::RankedTensorType type) -> mlir::Type {
-      return mlir::VectorType::get(type.getNumElements() / 16,
-                                   type.getElementType());
+      unsigned num = type.getNumElements();
+      Type elmTy = type.getElementType();
+      if (!type.getEncoding())
+        num /= 16;
+      if (num == 1)
+        return elmTy;
+      return mlir::VectorType::get(num, elmTy);
     });
   }
 }

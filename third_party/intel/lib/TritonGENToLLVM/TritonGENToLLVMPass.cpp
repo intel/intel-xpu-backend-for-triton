@@ -149,8 +149,12 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   IntegerType int32Ty = rewriter.getIntegerType(32);
 
   TritonGEN::PrecisionType precisionA = op.getPa();
-  Type packedAType =
-      (precisionA == TritonGEN::PrecisionType::TF32) ? int32Ty : int16Ty;
+  Type packedAType;
+  if (precisionA == TritonGEN::PrecisionType::TF32) {
+    packedAType = int32Ty;
+  } else {
+    packedAType = int16Ty;
+  }
 
   Value a = op.getA();
   VectorType aOrigTy = cast<VectorType>(a.getType());
@@ -162,32 +166,13 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
     a = rewriter.create<LLVM::BitcastOp>(loc, aTy, a);
 
   Value b = op.getB();
+
   VectorType bOrigTy = cast<VectorType>(b.getType());
   bitWidth = bOrigTy.getNumElements() *
              bOrigTy.getElementType().getIntOrFloatBitWidth();
   VectorType bTy = VectorType::get(bitWidth / 32, int32Ty);
   if (bOrigTy != bTy)
     b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
-
-  // FIXME: Use the OpenCL API also for TF32.
-  if (precisionA != TritonGEN::PrecisionType::TF32) {
-    std::string fnName =
-        "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
-        stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
-        std::to_string(8 /*systolic depth*/ *
-                       getNumOperandsPerDword(precisionA));
-    std::string bMangledTy = getTypeMangling(bTy);
-    std::string cMangledTy = getTypeMangling(opTypes[0]);
-    if (bMangledTy == cMangledTy)
-      cMangledTy = "S0_";
-    fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             getTypeMangling(aTy) + bMangledTy + cMangledTy;
-    SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
-    SmallVector<Value> args{a, b, op.getC()};
-
-    return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
-                                    true /*convergent*/);
-  }
 
   llvm::LLVMContext llvmContext;
   LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
@@ -214,11 +199,11 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   auto RC = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getRc());
   auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   SmallVector<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
-
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+  return false;
   if (op.getVnniTransform() || op.getTranspose())
     return false;
 
@@ -830,6 +815,37 @@ struct TritonSubGroupShuffleLowering
   }
 };
 
+struct TritonSubgroupReduceLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubgroupReduceOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubgroupReduceOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubgroupReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    MLIRContext *context = rewriter.getContext();
+    Location loc = op->getLoc();
+    Value val = op.getValue();
+    auto kind = op.getKind();
+    const StringLiteral funcName =
+        "llvm.genx.GenISA.WaveAll.f32"; // f32 for now
+    IntegerType i8Ty = rewriter.getIntegerType(8);
+    IntegerType i32Ty = rewriter.getIntegerType(32);
+    SmallVector<Type> argTypes{val.getType(), i8Ty, i32Ty};
+    LLVM::LLVMFuncOp funcOp =
+        LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, val.getType());
+    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    SmallVector<Value> args{val,
+                            rewriter.create<LLVM::ConstantOp>(loc, i8Ty, kind),
+                            rewriter.create<LLVM::ConstantOp>(loc, i32Ty, 0)};
+    LLVM::CallOp callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
@@ -956,9 +972,10 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
       TritonGENSplitBarrierSignalLowering, TritonGENSplitBarrierWaitLowering,
       TritonGENNamedBarrierSignalLowering, TritonGENNamedBarrierWaitLowering,
-      TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
-      TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
-      TritonMatrix2DBlockPrefetchLowering>(converter);
+      TritonSubGroupShuffleLowering, TritonSubgroupReduceLowering,
+      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering>(
+      converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
