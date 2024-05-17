@@ -109,8 +109,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
 
-    fn()
-    synchronize()
+    #fn()
+    #synchronize()
 
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
@@ -121,19 +121,19 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         cache = torch.empty(int(256e6), dtype=torch.int8, device=device)
 
     # Estimate the runtime of the function
-    start_event = torch.xpu.Event(enable_timing=True)
-    end_event = torch.xpu.Event(enable_timing=True)
-    start_event.record()
-    for _ in range(5):
-        cache.zero_()
-        fn()
-    end_event.record()
-    synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
+    #start_event = torch.xpu.Event(enable_timing=True)
+    #end_event = torch.xpu.Event(enable_timing=True)
+    #start_event.record()
+    #for _ in range(5):
+        #cache.zero_()
+        #fn()
+    #end_event.record()
+    #synchronize()
+    #estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
-    n_warmup = max(1, int(warmup / estimate_ms))
-    n_repeat = max(1, int(rep / estimate_ms))
+    n_warmup = 0#max(1, int(warmup / estimate_ms))
+    n_repeat = 20#max(1, int(rep / estimate_ms))
     start_event = [torch.xpu.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [torch.xpu.Event(enable_timing=True) for i in range(n_repeat)]
     # Warm-up

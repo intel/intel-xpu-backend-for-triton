@@ -26,13 +26,13 @@ IGC_DisableLoopUnroll=1 \
 IGC_EnableVISANoSchedule=1 \
 python 09-experimental-block-pointer.py 2>&1 | tee result.txt
 
-Triton_tflops_max=`grep "Triton Peak TFlops" result.txt | awk '{print $NF}' | awk 'BEGIN{max=0} {if ($1>max) max=$1} END{print max}'`
-Triton_tflops_min=`grep "Triton Peak TFlops" result.txt | awk '{print $NF}' | awk 'BEGIN{min=9999} {if ($1<min) min=$1} END{print min}'`
-Triton_tflops_avg=$(grep "Triton Peak TFlops" result.txt | awk '{print $NF}' | awk -v max="$Triton_tflops_max" -v min="$Triton_tflops_min" '{sum+=$1} END{print (sum-max-min)/NR}')
+Triton_tflops_max=`grep "Triton Peak TFlops" result.txt | awk '{print $NF}' |  tail -n10 | awk 'BEGIN{max=0} {if ($1>max) max=$1} END{print max}'`
+Triton_tflops_min=`grep "Triton Peak TFlops" result.txt | awk '{print $NF}'  | tail -n10 | awk 'BEGIN{min=9999} {if ($1<min) min=$1} END{print min}'`
+Triton_tflops_avg=$(grep "Triton Peak TFlops" result.txt | awk '{print $NF}'  | tail -n10 | awk -v max="$Triton_tflops_max" -v min="$Triton_tflops_min" '{sum+=$1} END{print (sum-max-min)/(NR-2)}')
 
-Triton_gbs_max=`grep "Triton Peak HBM" result.txt | awk '{print $NF}' | awk 'BEGIN{max=0} {if ($1>max) max=$1} END{print max}'`
-Triton_gbs_min=`grep "Triton Peak HBM" result.txt | awk '{print $NF}' | awk 'BEGIN{min=9999} {if ($1<min) min=$1} END{print min}'`
-Triton_gbs_avg=$(grep "Triton Peak HBM" result.txt | awk '{print $NF}' | awk -v max="$Triton_gbs_max" -v min="$Triton_gbs_min" '{sum+=$1} END{print (sum-max-min)/NR}')    
+Triton_gbs_max=`grep "Triton Peak HBM" result.txt | awk '{print $NF}'  | tail -n10 | awk 'BEGIN{max=0} {if ($1>max) max=$1} END{print max}'`
+Triton_gbs_min=`grep "Triton Peak HBM" result.txt | awk '{print $NF}'  | tail -n10 | awk 'BEGIN{min=9999} {if ($1<min) min=$1} END{print min}'`
+Triton_gbs_avg=$(grep "Triton Peak HBM" result.txt | awk '{print $NF}'  | tail -n10 | awk -v max="$Triton_gbs_max" -v min="$Triton_gbs_min" '{sum+=$1} END{print (sum-max-min)/(NR-2)}')
 
 echo -e "=================================== Result ========================================"
 echo "M,K,N,avg_tflops,avg_gbs,max_tflops,max_gbs,min_tflops,min_gbs" | tee result.csv
