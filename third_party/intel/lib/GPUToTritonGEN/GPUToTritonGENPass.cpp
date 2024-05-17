@@ -58,6 +58,37 @@ namespace {
 /// Import the GPU Ops to TritonGEN Patterns.
 #include "GPUToTritonGEN.cpp.inc"
 
+struct GPUSubgroupReduceOpLowering
+    : public ConvertOpToLLVMPattern<mlir::gpu::SubgroupReduceOp> {
+  using ConvertOpToLLVMPattern<
+      mlir::gpu::SubgroupReduceOp>::ConvertOpToLLVMPattern;
+  LogicalResult
+
+  matchAndRewrite(mlir::gpu::SubgroupReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!op.getUniform())
+      return rewriter.notifyMatchFailure(
+          op, "cannot be lowered as the op must be run "
+              "uniformly (entire subgroup).");
+
+    unsigned kind = 0;
+    switch (op.getOp()) {
+    case mlir::gpu::AllReduceOperation::ADD:
+      kind = 9;
+      break;
+    case mlir::gpu::AllReduceOperation::MAXNUMF:
+      kind = 12;
+      break;
+    default:
+      return rewriter.notifyMatchFailure(op, "unsupported reduction mode");
+    }
+    auto red = rewriter.create<TritonGEN::SubgroupReduceOp>(
+        op.getLoc(), op.getResult().getType(), op.getValue(), kind);
+    rewriter.replaceOp(op, red);
+    return success();
+  }
+};
+
 // A pass that replaces all occurrences of GPU device operations with their
 // corresponding TritonGEN equivalent.
 //
@@ -154,6 +185,7 @@ static void populateOpPatterns(LLVMTypeConverter &converter,
 void mlir::triton::populateGPUToTritonGENConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
   populateWithGenerated(patterns);
+  patterns.add<GPUSubgroupReduceOpLowering>(converter);
   patterns.add<
       GPUIndexIntrinsicOpLowering<mlir::gpu::ThreadIdOp, TritonGEN::ThreadIdXOp,
                                   TritonGEN::ThreadIdYOp,
