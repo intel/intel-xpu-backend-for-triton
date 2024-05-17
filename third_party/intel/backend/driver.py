@@ -288,7 +288,7 @@ def make_launcher(constants, signature, ids):
     auto gap = float(endTime - startTime) / 1000000.0f;
     float M = 4096, K = 4096, N = 4096;
     float throughput = 2.0 * M * N * K * (1e-12)/(gap * 1e-3);
-    float bandwidth = 2.0 * (M * K + K * N + M * N)* (1e-9) / (gap * 1e-3);
+    float bandwidth = (2.0 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (gap * 1e-3);
     std::cout << "Triton Peak TFlops " << throughput << std::endl;
     std::cout << "Triton Peak HBM " << bandwidth  << std::endl;
   }}
