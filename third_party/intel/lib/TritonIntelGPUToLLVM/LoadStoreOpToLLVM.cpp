@@ -424,6 +424,9 @@ struct LoadOpConversion
             other_ = v;
           }
         }
+      } else {
+        other_ = rewriter.create<LLVM::ConstantOp>(loc, retTy,
+                                                   rewriter.getZeroAttr(retTy));
       }
 
       // Create a predicated load operation.
