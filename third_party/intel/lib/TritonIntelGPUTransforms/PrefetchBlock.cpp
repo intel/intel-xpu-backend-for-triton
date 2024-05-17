@@ -138,18 +138,20 @@ class PrefetchBlockPass
 public:
   /// Groups information for a candidate load.
   struct LoadInfo {
-    LoadInfo(tt::AdvanceOp advance, SmallVector<Value> offsets,
+    LoadInfo(tt::DotOp dot, tt::AdvanceOp advance, SmallVector<Value> offsets,
              tt::MakeTensorPtrOp blockPtr)
-        : advance(advance), offsets(offsets), blockPtr(blockPtr) {}
+        : dot(dot), advance(advance), offsets(offsets), blockPtr(blockPtr) {}
     LoadInfo(const LoadInfo &other)
-        : advance(other.advance), offsets(other.offsets),
+        : dot(other.dot), advance(other.advance), offsets(other.offsets),
           blockPtr(other.blockPtr) {}
 
+    tt::DotOp getDot() const { return dot; }
     tt::AdvanceOp getAdvance() const { return advance; }
     const SmallVector<Value> getOffsets() const { return offsets; }
     tt::MakeTensorPtrOp getBlockPtr() const { return blockPtr; }
 
   private:
+    tt::DotOp dot;                /// DotOp using the blocked pointer
     tt::AdvanceOp advance;        /// AdvanceOp using the blocked pointer
     SmallVector<Value> offsets;   /// Offsets used by the AdvanceOp
     tt::MakeTensorPtrOp blockPtr; /// Operation defining the blocked pointer
@@ -288,6 +290,11 @@ bool PrefetchBlockPass::isCandidateLoad(tt::LoadOp load, scf::ForOp loop) {
 ///   - the 'tt.MakeTensorPtrOp' operation must define the load pointer
 std::optional<PrefetchBlockPass::LoadInfo>
 PrefetchBlockPass::createLoadInfo(tt::LoadOp load, scf::ForOp loop) const {
+  std::optional<tt::DotOp> dot =
+      getFirstUserOfKind<tt::DotOp>(load.getResult());
+  if (!dot.has_value())
+    return std::nullopt;
+
   std::optional<tt::AdvanceOp> advance =
       getFirstUserOfKind<tt::AdvanceOp>(load.getPtr());
   if (!advance.has_value())
@@ -306,7 +313,7 @@ PrefetchBlockPass::createLoadInfo(tt::LoadOp load, scf::ForOp loop) const {
   llvm::transform(rawOffsets, std::back_inserter(offsets),
                   [](OpFoldResult ofr) { return cast<Value>(ofr); });
 
-  LoadInfo loadInfo(*advance, offsets, *blockPtr);
+  LoadInfo loadInfo(*dot, *advance, offsets, *blockPtr);
   return loadInfo;
 }
 
@@ -406,11 +413,13 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
   unsigned i = 0;
   for (tt::LoadOp load : loopLoads.at(loop)) {
     const LoadInfo &loadInfo = loadToLoadInfo.at(load);
-    b.setInsertionPoint(loadInfo.getAdvance());
-    Location loc = loadInfo.getAdvance().getLoc();
-
+    b.setInsertionPoint(loadInfo.getDot());
+    Location loc = loadInfo.getDot().getLoc();
     b.create<ttgi::PrefetchOp>(loc, args[num + 1 + i], load.getCache(),
                                load.getEvict(), load.getIsVolatile());
+
+    b.setInsertionPoint(loadInfo.getAdvance());
+    loc = loadInfo.getAdvance().getLoc();
     auto advance =
         b.create<tt::AdvanceOp>(loc, args[num + 1 + i].getType(),
                                 args[num + 1 + i], loadInfo.getOffsets());
