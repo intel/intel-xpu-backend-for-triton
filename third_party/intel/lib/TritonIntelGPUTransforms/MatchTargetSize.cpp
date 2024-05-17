@@ -475,7 +475,9 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
         (isa<ttgi::WarpEncodingAttr, ttg::DotOperandEncodingAttr>(layout)) ? 32
                                                                            : 0;
     subSize[1] = (shape[1] > colLimit) ? colLimit : shape[1];
-    int64_t max = maxLoadStoreSize * 4 / sizeInBytes / subSize[1];
+    // From gfxspec, max load height is 32 for all datatypes
+    // https://gfxspecs.intel.com/Predator/Home/Index/57329
+    int64_t max = 32;
     subSize[0] = std::min(max, shape[0]);
   } break;
   default:
