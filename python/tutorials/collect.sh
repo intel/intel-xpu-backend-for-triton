@@ -18,12 +18,11 @@ sed -i "s/x_vals=.*/x_vals=[[$M, $K, $N]],/g" 09-experimental-block-pointer.py
 sed -i "s/float M = .*/float M = $M, K = $K, N = $N;/g" ../../third_party/intel/backend/driver.py
 
 TRITON_INTEL_ENABLE_BLOCK_PTR=1 \
-IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
+IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
 IGC_ForcePrefetchToL1Cache=1 \
 IGC_VATemp=1 \
 UR_L0_IN_ORDER_BARRIER_BY_SIGNAL=0 \
 IGC_DisableLoopUnroll=1 \
-IGC_EnableVISANoSchedule=1 \
 python 09-experimental-block-pointer.py 2>&1 | tee result.txt
 
 Triton_tflops_max=`grep "Triton Peak TFlops" result.txt | awk '{print $NF}' |  tail -n10 | awk 'BEGIN{max=0} {if ($1>max) max=$1} END{print max}'`
