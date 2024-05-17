@@ -516,7 +516,7 @@ class _attention(torch.autograd.Function):
             HEAD_DIM=ctx.HEAD_DIM,  #
             num_warps=NUM_WARPS,  #
             num_stages=NUM_STAGES,  #
-            threads_per_warp=16,  #
+            threads_per_warp=16  #
         )
 
         return dq, dk, dv, None, None
