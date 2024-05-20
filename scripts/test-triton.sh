@@ -161,13 +161,6 @@ run_regression_tests() {
   pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
 }
 
-run_tutorial_test() {
-  echo
-  echo "****** Running $1 test ******"
-  echo
-  python $1.py || $TRITON_TEST_IGNORE_ERRORS
-}
-
 run_tutorial_tests() {
   echo "***************************************************"
   echo "**** Running Triton Tutorial tests           ******"
@@ -189,9 +182,7 @@ run_tutorial_tests() {
   run_tutorial_test "07-extern-functions"
   run_tutorial_test "08-grouped-gemm"
   run_tutorial_test "09-experimental-block-pointer"
-  export TRITON_INTEL_ENABLE_BLOCK_PTR=1
-  run_tutorial_test "09-experimental-block-pointer"
-  unset TRITON_INTEL_ENABLE_BLOCK_PTR
+  TRITON_INTEL_ENABLE_BLOCK_PTR=1 run_tutorial_test "09-experimental-block-pointer"
 }
 
 test_triton() {
