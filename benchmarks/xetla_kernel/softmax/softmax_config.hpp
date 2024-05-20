@@ -36,9 +36,9 @@ public:
   static constexpr size_t mat_n = 1024;
   static constexpr size_t mat_m = 4096;
   static constexpr size_t wg_n = mat_n;
-  static constexpr size_t wg_m = 4; // 1 4 8 16
-  static constexpr size_t sg_n = mat_n;
-  static constexpr size_t sg_m = 1;
+  static constexpr size_t wg_m = 1; // 1 4 8 16
+  static constexpr size_t sg_n = wg_n / 8;
+  static constexpr size_t sg_m = wg_m;
   using data_type_in = sycl::ext::oneapi::bfloat16;
   using data_type_out = sycl::ext::oneapi::bfloat16;
   using data_type_acc = float;
@@ -48,10 +48,10 @@ class mat1_4096x2048_bf16_cfg0 {
 public:
   static constexpr size_t mat_n = 2048;
   static constexpr size_t mat_m = 4096;
-  static constexpr size_t wg_n = mat_n / 2;
-  static constexpr size_t wg_m = 4; // 1 4 8 16
-  static constexpr size_t sg_n = mat_n / 2;
-  static constexpr size_t sg_m = 1;
+  static constexpr size_t wg_n = mat_n;
+  static constexpr size_t wg_m = 1; // 1 4 8 16
+  static constexpr size_t sg_n = wg_n / 8;
+  static constexpr size_t sg_m = wg_m;
   using data_type_in = sycl::ext::oneapi::bfloat16;
   using data_type_out = sycl::ext::oneapi::bfloat16;
   using data_type_acc = float;
@@ -61,10 +61,49 @@ class mat1_4096x4096_bf16_cfg0 {
 public:
   static constexpr size_t mat_n = 4096;
   static constexpr size_t mat_m = 4096;
-  static constexpr size_t wg_n = mat_n / 2;
-  static constexpr size_t wg_m = 4; // 1 4 8 16
-  static constexpr size_t sg_n = mat_n / 2;
-  static constexpr size_t sg_m = 1;
+  static constexpr size_t wg_n = mat_n;
+  static constexpr size_t wg_m = 1; // 1 4 8 16
+  static constexpr size_t sg_n = wg_n / 32;
+  static constexpr size_t sg_m = wg_m;
+  using data_type_in = sycl::ext::oneapi::bfloat16;
+  using data_type_out = sycl::ext::oneapi::bfloat16;
+  using data_type_acc = float;
+};
+
+class mat1_4096x8k_bf16_cfg0 {
+public:
+  static constexpr size_t mat_n = 4096 * 2;
+  static constexpr size_t mat_m = 4096;
+  static constexpr size_t wg_n = mat_n;
+  static constexpr size_t wg_m = 1; // 1 4 8 16
+  static constexpr size_t sg_n = wg_n / 32;
+  static constexpr size_t sg_m = wg_m;
+  using data_type_in = sycl::ext::oneapi::bfloat16;
+  using data_type_out = sycl::ext::oneapi::bfloat16;
+  using data_type_acc = float;
+};
+
+class mat1_4096x16k_bf16_cfg0 {
+public:
+  static constexpr size_t mat_n = 4096 * 4;
+  static constexpr size_t mat_m = 4096;
+  static constexpr size_t wg_n = mat_n;
+  static constexpr size_t wg_m = 1; // 1 4 8 16
+  static constexpr size_t sg_n = wg_n / 32;
+  static constexpr size_t sg_m = wg_m;
+  using data_type_in = sycl::ext::oneapi::bfloat16;
+  using data_type_out = sycl::ext::oneapi::bfloat16;
+  using data_type_acc = float;
+};
+
+class mat1_4096x32k_bf16_cfg0 {
+public:
+  static constexpr size_t mat_n = 4096 * 8;
+  static constexpr size_t mat_m = 4096;
+  static constexpr size_t wg_n = mat_n;
+  static constexpr size_t wg_m = 1; // 1 4 8 16
+  static constexpr size_t sg_n = wg_n / 32;
+  static constexpr size_t sg_m = wg_m;
   using data_type_in = sycl::ext::oneapi::bfloat16;
   using data_type_out = sycl::ext::oneapi::bfloat16;
   using data_type_acc = float;
