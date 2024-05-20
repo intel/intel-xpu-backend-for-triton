@@ -1,4 +1,5 @@
 name: Build and test
+run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -15,6 +16,10 @@ on:
         description: Ignore test errors
         type: boolean
         default: false
+      run_name:
+        description: Custom run name
+        type: string
+        default: "Build and test"
   pull_request:
     branches:
       - llvm-target
