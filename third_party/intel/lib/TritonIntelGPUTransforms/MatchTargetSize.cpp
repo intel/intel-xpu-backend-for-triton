@@ -460,7 +460,8 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
 
   // Load/Store operations.
   ArrayRef<int64_t> shape = type.getShape();
-  const unsigned sizeInBytes = type.getElementTypeBitWidth() / 8;
+  const unsigned sizeInBits = type.getElementTypeBitWidth();
+  const unsigned sizeInBytes = sizeInBits / 8;
   unsigned maxLoadStoreSize = nativeSizes.getLoadStoreSize();
 
   SmallVector<int64_t> subSize(shape.size());
@@ -470,14 +471,31 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
     subSize[0] = std::min(max, shape[0]);
   } break;
   case 2: {
-    // 32 = 2 * 16(subgroupSize) which is for large load/store
-    int64_t colLimit =
-        (isa<ttgi::WarpEncodingAttr, ttg::DotOperandEncodingAttr>(layout)) ? 32
-                                                                           : 0;
-    subSize[1] = (shape[1] > colLimit) ? colLimit : shape[1];
-    // FIXME: From gfxspec, max 2d block load height is 32
-    int64_t max = 32;
-    subSize[0] = std::min(max, shape[0]);
+    if (isa<ttgi::WarpEncodingAttr>(layout) ||
+        (isa<triton::gpu::DotOperandEncodingAttr>(layout) &&
+         sizeInBits == 16)) {
+      // 32 = 2 * 16(subgroupSize) which is for large load/store
+      int64_t colLimit = 32;
+      subSize[1] = std::min(colLimit, shape[1]);
+      // FIXME: From gfxspec, max 2d block load height is 32
+      int64_t rowLimit = 32;
+      subSize[0] = std::min(rowLimit, shape[0]);
+    } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout);
+               dotLayout && sizeInBits == 8) {
+      // FIXME: These settings underutilize the memory bandwidth.
+      switch (dotLayout.getOpIdx()) {
+      case 0:
+        subSize[0] = std::min(16L, shape[0]);
+        subSize[1] = std::min(32L, shape[1]);
+        break;
+      case 1:
+        subSize[0] = std::min(32L, shape[0]);
+        subSize[1] = std::min(16L, shape[1]);
+        break;
+      }
+    } else {
+      llvm_unreachable("Unsupported layout");
+    }
   } break;
   default:
     llvm_unreachable("Unsupported shape");

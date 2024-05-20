@@ -225,21 +225,14 @@ def matmul(a, b):
 # Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-for dtype in [torch.float16, torch.bfloat16, torch.int8]:
-    if dtype == torch.int8:
-        # TODO: Triton kernel and torch.matmul handle overflows differently
-        # a = torch.randint(low=-3, high=3, size=(512, 512), device='xpu', dtype=dtype)
-        # b = torch.randint(low=-3, high=3, size=(512, 512), device='xpu', dtype=dtype)
-        #
-        # Just use identity matrices for now:
-        a = torch.eye(512, device='xpu', dtype=torch.int8)
-        b = torch.eye(512, device='xpu', dtype=torch.int8)
-    else:
-        a = torch.randn((512, 512), device='xpu', dtype=dtype)
-        b = torch.randn((512, 512), device='xpu', dtype=dtype)
+
+# Floating-point data
+for dtype in [torch.float16, torch.bfloat16]:
+    a = torch.randn((512, 512), device='xpu', dtype=dtype)
+    b = torch.randn((512, 512), device='xpu', dtype=dtype)
 
     triton_output = matmul(a, b)
-    torch_output = torch.matmul(a, b).to(triton_output.dtype)
+    torch_output = torch.matmul(a,b).to(triton_output.dtype)
     print(f"triton_output={triton_output}")
     print(f"torch_output={torch_output}")
 
@@ -247,6 +240,24 @@ for dtype in [torch.float16, torch.bfloat16, torch.int8]:
     # algorithms so we need to adjust tolerance.
     rtol = 1e-2 if dtype == torch.bfloat16 else 1e-3
     if torch.allclose(triton_output, torch_output, atol=1e-4, rtol=rtol):
+        print("✅ Triton and Torch match")
+    else:
+        exit("❌ Triton and Torch differ")
+
+# Integer data
+for dtype in [torch.int8]:
+    a = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
+    b = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
+
+    triton_output = matmul(a, b)
+    # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
+    torch_output = torch.matmul(
+        a.to(device='cpu', dtype=triton_output.dtype),
+        b.to(device='cpu', dtype=triton_output.dtype)).to(device='xpu')
+    print(f"triton_output={triton_output}")
+    print(f"torch_output={torch_output}")
+
+    if torch.equal(triton_output, torch_output):
         print("✅ Triton and Torch match")
     else:
         exit("❌ Triton and Torch differ")

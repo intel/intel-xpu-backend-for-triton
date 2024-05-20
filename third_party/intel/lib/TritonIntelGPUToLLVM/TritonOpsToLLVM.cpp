@@ -123,8 +123,13 @@ public:
     unsigned dataSize = tensorType.getElementType().getIntOrFloatBitWidth();
     unsigned blockWidth = tensorType.getShape()[1];
     assert(blockWidth == 16 || blockWidth == 32 && "only support 16/32 block");
-    unsigned vBlks = blockWidth == 32 ? 2 : 1;
-    blockWidth = 16;
+    unsigned vBlks = 1;
+    if (dataSize == 16) {
+      // TODO: We can load 16-bit data with vblk=2, unclear if the same is true
+      // for 8-bit data.
+      vBlks = blockWidth / 16;
+      blockWidth = 16;
+    }
     unsigned blockHeight = tensorType.getShape()[0];
     Value ptr = op.getPtr();
     if (auto cast =
