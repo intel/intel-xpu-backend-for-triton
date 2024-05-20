@@ -252,9 +252,8 @@ for dtype in [torch.int8]:
 
     triton_output = matmul(a, b, res_dtype)
     # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
-    torch_output = torch.matmul(
-        a.to(device='cpu', dtype=res_dtype),
-        b.to(device='cpu', dtype=res_dtype)).to(device='xpu')
+    torch_output = torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(device='cpu',
+                                                                          dtype=res_dtype)).to(device='xpu')
     print(f"triton_output={triton_output}")
     print(f"torch_output={torch_output}")
 
