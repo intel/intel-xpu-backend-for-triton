@@ -271,13 +271,9 @@ struct LoadOpConversion
         };
 
         auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
-            loc, load2DGenXType, /*ptr*/ base, /*base_width*/
-            sub(mul(baseWidth, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
-                i32_val(1)),
-            /*base_height*/ sub(baseHeight, i32_val(1)),
-            /*base_pitch*/
-            sub(mul(rowStride, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
-                i32_val(1)),
+            loc, load2DGenXType, /*ptr*/ base, /*base_width*/ baseWidth,
+            /*base_height*/ baseHeight,
+            /*base_pitch*/ rowStride,
             /*x*/ trunc(i32_ty, offsetX),
             /*y*/ trunc(i32_ty, offsetY),
             /*elem_size_in_bits*/ eltTy.getIntOrFloatBitWidth(),
