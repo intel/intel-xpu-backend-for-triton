@@ -96,3 +96,26 @@ target_link_libraries(triton-llvm-opt PRIVATE
   TritonIntelGPUIR
   )
 export_executable_symbols_for_plugins(triton-llvm-opt)
+
+add_llvm_executable(triton-translate
+  triton-translate.cpp
+
+  PARTIAL_SOURCES_INTENDED
+  DEPENDS
+  intrinsics_gen
+  SUPPORT_PLUGINS
+)
+llvm_update_compile_flags(triton-translate)
+target_link_libraries(triton-translate
+  PRIVATE
+  ${dialect_libs}
+  ${translation_libs}
+  MLIRIR
+  MLIRParser
+  MLIRPass
+  MLIRSPIRVDialect
+  MLIRTranslateLib
+  MLIRSupport
+  TritonGENToLLVMIRTranslation
+)
+mlir_check_link_libraries(triton-translate)
