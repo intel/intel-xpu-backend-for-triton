@@ -35,6 +35,10 @@ public:
   amendOperation(Operation *op, ArrayRef<llvm::Instruction *> instructions,
                  NamedAttribute attribute,
                  LLVM::ModuleTranslation &moduleTranslation) const final {
+    // Skip the attribute if it is not a TritonGEN attribute.
+    if (!attribute.getName().getValue().starts_with("triton_gen"))
+      return success();
+
     llvm::LLVMContext &llvmContext = moduleTranslation.getLLVMContext();
     llvm::Function *llvmFunc =
         moduleTranslation.lookupFunction(cast<LLVM::LLVMFuncOp>(op).getName());
@@ -53,6 +57,14 @@ private:
   // The attribute is converted into metadata and added to the function.
   void amendKernel(llvm::LLVMContext &llvmContext, llvm::Function *llvmFunc,
                    NamedAttribute attribute) const {
+    StringRef name = attribute.getName().getValue();
+    assert((name == triton::TritonGEN::TritonGENDialect::
+                        getMaxWorkGroupSizeAttrName() ||
+            name == triton::TritonGEN::TritonGENDialect::
+                        getReqdWorkGroupSizeAttrName() ||
+            name == triton::TritonGEN::TritonGENDialect::
+                        getReqdSubGroupSizeAttrName()) &&
+           "Unexpected attribute");
     SmallVector<llvm::Metadata *, 3> metadata;
     llvm::Type *i64 = llvm::IntegerType::get(llvmContext, 64);
     for (int64_t i :
@@ -61,7 +73,7 @@ private:
       metadata.push_back(llvm::ConstantAsMetadata::get(constant));
     }
     llvm::MDNode *node = llvm::MDNode::get(llvmContext, metadata);
-    llvmFunc->setMetadata(attribute.getName().getValue().drop_front(11), node);
+    llvmFunc->setMetadata(name.drop_front(11), node);
   }
 };
 } // namespace
