@@ -133,6 +133,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # compute number of warmup and repeat
     n_warmup = max(1, int(warmup / estimate_ms))
     n_repeat = max(1, int(rep / estimate_ms))
+    n_warmup = 5
+    n_repeat = 15
     start_times = [datetime for i in range(n_repeat)]
     end_times = [datetime for i in range(n_repeat)]
 

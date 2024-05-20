@@ -280,6 +280,23 @@ def make_launcher(constants, signature, ids):
       }}
       }};
     auto event = stream.submit(cgf);
+    event.wait();
+    auto startTime = event.get_profiling_info<
+        sycl::info::event_profiling::command_start>();
+    auto endTime = event.get_profiling_info<
+        sycl::info::event_profiling::command_end>();
+    auto gap = float(endTime - startTime) / 1000000.0f;
+    //float M = 4096, K = 4096, N = 4096;
+    //float throughput = 2.0 * M * N * K * (1e-12)/(gap * 1e-3);
+    //float bandwidth = (2.0 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (gap * 1e-3);
+    //std::cout << "Triton Peak TFlops " << throughput << std::endl;
+    //std::cout << "Triton Peak HBM " << bandwidth  << std::endl;
+    float Z = 4;
+    float H = 48;
+    float N_CTX = 1024;
+    float D_HEAD = 64;
+    float throughput = 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12)/(gap * 1e-3);
+    std::cout << "Triton Peak TFlops " << throughput << std::endl;
   }}
 // end sycl
     static PyObject* launch(PyObject* self, PyObject* args) {{
