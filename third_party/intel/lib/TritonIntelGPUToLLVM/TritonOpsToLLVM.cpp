@@ -206,6 +206,9 @@ public:
         return TritonGEN::PrecisionType::FP16;
       else if (type == rewriter.getTF32Type())
         return TritonGEN::PrecisionType::TF32;
+      else if (type == i8_ty)
+        // TODO: Assuming signed data; is that ok?
+        return TritonGEN::PrecisionType::S8;
       llvm_unreachable("add more support for PrecisionType");
       return TritonGEN::PrecisionType::UNUSED;
     };

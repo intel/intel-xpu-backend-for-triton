@@ -593,7 +593,10 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   int64_t m = aShape[0];
   int64_t n = bShape[1];
   int64_t k = aShape[1];
-  const auto &dotShape = nativeSizes.getDotShape();
+  auto dotShape = nativeSizes.getDotShape();
+  if (aType.getElementTypeBitWidth() == 8)
+    dotShape.k *= 2;
+
   OpBuilder b(dot);
   Location loc = dot.getLoc();
 
