@@ -35,6 +35,10 @@ jobs:
       - spr
       - cpu
     steps:
+      - name: Print inputs
+        run: |
+          echo "${{ toJSON(github.event.inputs) }}"
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
