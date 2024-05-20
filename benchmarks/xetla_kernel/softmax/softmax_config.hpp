@@ -48,9 +48,9 @@ class mat1_4096x2048_bf16_cfg0 {
 public:
   static constexpr size_t mat_n = 2048;
   static constexpr size_t mat_m = 4096;
-  static constexpr size_t wg_n = mat_n;
+  static constexpr size_t wg_n = mat_n / 2;
   static constexpr size_t wg_m = 4; // 1 4 8 16
-  static constexpr size_t sg_n = mat_n;
+  static constexpr size_t sg_n = mat_n / 2;
   static constexpr size_t sg_m = 1;
   using data_type_in = sycl::ext::oneapi::bfloat16;
   using data_type_out = sycl::ext::oneapi::bfloat16;
