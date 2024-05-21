@@ -164,9 +164,9 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm, device_arch)
         # FIXME: Use a better way to check if prefetch instructions are supported once available.
         # Prefetch instruction is not available in older drivers.
-        if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):        
+        if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
             intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, device_arch)
-        
+
         passes.ttgpuir.add_coalesce(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
