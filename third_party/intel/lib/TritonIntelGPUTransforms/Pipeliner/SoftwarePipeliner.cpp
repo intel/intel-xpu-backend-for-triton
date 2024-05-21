@@ -37,13 +37,14 @@ static bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
-static void pipelineLoop(scf::ForOp forOp, int numStages) {
+static void pipelineLoop(scf::ForOp forOp, int numStages,
+                         bool supportRegularPtr) {
   mlir::scf::PipeliningOption options;
   if (!preCondition(forOp))
     return;
 
-  bool foundSchedule =
-      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, options);
+  bool foundSchedule = ttgi::preProcessLoopAndGetSchedule(
+      forOp, numStages, supportRegularPtr, options);
   if (!foundSchedule)
     return;
 
@@ -71,7 +72,7 @@ struct IntelGPUPipelinePass
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
     for (scf::ForOp forOp : loops) {
-      pipelineLoop(forOp, numStages);
+      pipelineLoop(forOp, numStages, supportRegularPtr);
     }
   }
 };

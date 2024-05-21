@@ -1,3 +1,4 @@
+#include "Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -102,6 +103,41 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   return mask;
 }
 
+/// Holds the values related to a block pointer.
+/// It includes the base pointer, base width and height, row and column
+/// stride, and offset base for X and Y.
+struct BlockPointerValues {
+  Value base;
+  Value baseWidth;
+  Value baseHeight;
+  Value rowStride;
+  Value colStride;
+  Value offsetBaseX;
+  Value offsetBaseY;
+};
+
+// Unpack values as the params to 2DBlockLoad Payload: offsetBaseY,
+// offsetBaseX, baseHeight, baseWidth, rowStride, colStride, base.
+// FIXME: Only supports 2D matrices for now.
+BlockPointerValues
+getValuesFromBlockPointerStruct(Value blockPointerStruct,
+                                ConversionPatternRewriter &rewriter) {
+  const SmallVector<Value> &elems = unpackLLElements(
+      blockPointerStruct.getLoc(), blockPointerStruct, rewriter);
+  assert(elems.size() == 7 &&
+         "unexpected number of values unpacked from a block pointer");
+  BlockPointerValues values{
+      .base = elems[6],
+      .baseWidth = elems[3],
+      .baseHeight = elems[2],
+      .rowStride = elems[4],
+      .colStride = elems[5],
+      .offsetBaseX = elems[1],
+      .offsetBaseY = elems[0],
+  };
+  return values;
+}
+
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const triton::intel::TargetInfo &targetInfo,
@@ -134,6 +170,125 @@ protected:
   const triton::intel::TargetInfo &targetInfo;
 };
 
+struct PrefetchOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>,
+      public LoadStoreConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::intel::PrefetchOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  PrefetchOpConversion(TritonGPUToLLVMTypeConverter &converter,
+                       const triton::intel::TargetInfo &targetInfo,
+                       ModuleAxisInfoAnalysis &axisAnalysisPass,
+                       PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>(
+            converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    Value ptr = op.getPtr();
+    if (isTensorPointerType(ptr.getType()))
+      return rewriteTensorPointerPrefetch(op, adaptor, rewriter);
+
+    assert(false && "Unexpected prefetch operation on 'regular' ptr");
+    return failure();
+  }
+
+  LogicalResult
+  rewriteTensorPointerPrefetch(triton::gpu::intel::PrefetchOp op,
+                               OpAdaptor adaptor,
+                               ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    Value ptr = op.getPtr();
+    auto ptrType = cast<PointerType>(ptr.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+
+    // Only lower prefetchOp with dpas layout encoding.
+    if (!hasDotDpasEncoding(tensorType))
+      return failure();
+
+    DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
+    auto dpasLayout = cast<DpasEncodingAttr>(dotLayout.getParent());
+
+    const unsigned opIdx = dotLayout.getOpIdx();
+    Type eltTy = tensorType.getElementType();
+    const ArrayRef<int64_t> tensorShape = tensorType.getShape();
+    unsigned numElems = getTotalElemsPerThread(tensorType);
+    SmallVector<int64_t> numReps =
+        dpasLayout.getDPASRepetitions(tensorShape, opIdx);
+    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
+
+    Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
+    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
+    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    SmallVector<Value> multiDimWarpId =
+        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+
+    bool isOperandA = (opIdx == 0);
+    SmallVector<unsigned> operandShape =
+        isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
+    SmallVector<int64_t> elemsPerInstr = {operandShape[0], operandShape[1]};
+
+    // Outer dim for A is the M, for B is the N. Inner dim for both is the K.
+    int outerDimWarpNum = std::min<int>(
+        warpsPerCTA[opIdx], ceil(tensorShape[opIdx], elemsPerInstr[opIdx]));
+    Value outerDimWarpId =
+        urem(multiDimWarpId[opIdx], i32_val(outerDimWarpNum));
+
+    auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
+          offsetBaseY] =
+        getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
+
+    int64_t numRepOuter = numReps[opIdx];
+    int64_t numRepK = numReps[!opIdx];
+
+    for (int outer = 0; outer < numRepOuter; ++outer) {
+      for (int k = 0; k < numRepK; ++k) {
+        Value offsetX =
+            isOperandA
+                ? i32_val(k * elemsPerInstr[1])
+                : add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
+                      i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]));
+        Value offsetY =
+            isOperandA
+                ? add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
+                      i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]))
+                : i32_val(k * elemsPerInstr[0]);
+
+        offsetX = add(offsetX, offsetBaseX);
+        offsetY = add(offsetY, offsetBaseY);
+        baseWidth = trunc(i32_ty, baseWidth);
+        baseHeight = trunc(i32_ty, baseHeight);
+        rowStride = trunc(i32_ty, rowStride);
+
+        unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+        Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
+
+        rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
+            loc,
+            /*ptr*/ base,
+            /*base_width*/ mul(baseWidth, elemSizeInBytes),
+            /*base_height*/ baseHeight,
+            /*base_pitch*/ mul(rowStride, elemSizeInBytes),
+            /*x*/ trunc(i32_ty, offsetX),
+            /*y*/ trunc(i32_ty, offsetY),
+            /*elem_size_in_bits*/ elemSizeInBits,
+            /*tile_width*/ elemsPerInstr[1],
+            /*tile_height*/ elemsPerInstr[0],
+            /*v_blocks*/ 1,
+            /*transpose*/ false,
+            /*vnni_transform*/ false,
+            /*cache_control*/ TritonGEN::LoadCacheControl::L1C_L3C);
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct LoadOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>,
       public LoadStoreConversionBase {
@@ -146,41 +301,6 @@ struct LoadOpConversion
                    PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
-
-  /// Holds the values related to a block pointer.
-  /// It includes the base pointer, base width and height, row and column
-  /// stride, and offset base for X and Y.
-  struct BlockPointerValues {
-    Value base;
-    Value baseWidth;
-    Value baseHeight;
-    Value rowStride;
-    Value colStride;
-    Value offsetBaseX;
-    Value offsetBaseY;
-  };
-
-  // Unpack values as the params to 2DBlockLoad Payload: offsetBaseY,
-  // offsetBaseX, baseHeight, baseWidth, rowStride, colStride, base.
-  // FIXME: Only supports 2D matrices for now.
-  BlockPointerValues
-  getValuesFromBlockPointerStruct(Value blockPointerStruct,
-                                  ConversionPatternRewriter &rewriter) const {
-    const SmallVector<Value> &elems = unpackLLElements(
-        blockPointerStruct.getLoc(), blockPointerStruct, rewriter);
-    assert(elems.size() == 7 &&
-           "unexpected number of values unpacked from a block pointer");
-    BlockPointerValues values{
-        .base = elems[6],
-        .baseWidth = elems[3],
-        .baseHeight = elems[2],
-        .rowStride = elems[4],
-        .colStride = elems[5],
-        .offsetBaseX = elems[1],
-        .offsetBaseY = elems[0],
-    };
-    return values;
-  }
 
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
@@ -266,19 +386,18 @@ struct LoadOpConversion
         baseHeight = trunc(i32_ty, baseHeight);
         rowStride = trunc(i32_ty, rowStride);
 
-        auto getIntAttr = [](IntegerType type, unsigned val) {
-          return mlir::IntegerAttr::get(type, val);
-        };
+        unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+        Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
 
         auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
-            loc, load2DGenXType, /*ptr*/ base, /*base_width*/
-            mul(baseWidth, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
+            loc, load2DGenXType,
+            /*ptr*/ base,
+            /*base_width*/ mul(baseWidth, elemSizeInBytes),
             /*base_height*/ baseHeight,
-            /*base_pitch*/
-            mul(rowStride, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
+            /*base_pitch*/ mul(rowStride, elemSizeInBytes),
             /*x*/ trunc(i32_ty, offsetX),
             /*y*/ trunc(i32_ty, offsetY),
-            /*elem_size_in_bits*/ eltTy.getIntOrFloatBitWidth(),
+            /*elem_size_in_bits*/ elemSizeInBits,
             /*tile_width*/ elemsPerInstr[1],
             /*tile_height*/ elemsPerInstr[0],
             /*v_blocks*/ 1,
@@ -963,6 +1082,6 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     const TargetInfo &targetInfo, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-               StoreOpConversion>(typeConverter, targetInfo, axisInfoAnalysis,
-                                  benefit);
+               StoreOpConversion, PrefetchOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, benefit);
 }

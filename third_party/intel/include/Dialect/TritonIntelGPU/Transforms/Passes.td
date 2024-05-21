@@ -115,6 +115,10 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     Option<"numStages", "num-stages",
            "int32_t", /*default*/"3",
            "number of pipeline stages">,
+    Option<"supportRegularPtr", "support-regular-ptr",
+           "bool", /*default*/"false",
+           "Enable support for prefetching non-block pointers">,
+
     Option<"deviceArch", "device-architecture",
             "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
             "device architecture",
