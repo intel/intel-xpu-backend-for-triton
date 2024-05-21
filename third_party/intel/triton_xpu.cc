@@ -7,8 +7,8 @@
 #include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
-#include "triton/Conversion/TritonToTritonGPU/Passes.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
+#include "intel/include/TritonToTritonGPUWarp/Passes.h"
+#include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>

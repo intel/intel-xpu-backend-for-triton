@@ -16,8 +16,9 @@
 /// through def/use chain. Finally, each tensor operation is annotated
 /// with layout attribute describing what each warp should do.
 //===----------------------------------------------------------------------===//
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 
+#include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -38,7 +39,7 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
 #define GEN_PASS_CLASSES
-#include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
+#include "intel/include/TritonToTritonGPUWarp/Passes.h.inc"
 
 #define DEBUG_TYPE "convert-triton-to-tritongpu-warp"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")

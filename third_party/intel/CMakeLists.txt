@@ -11,4 +11,5 @@ add_triton_plugin(TritonXPU
   TritonGENToLLVMIRTranslation
   TritonIntelGPUToLLVM
   TritonIntelGPUTransforms
+  TritonToTritonGPUWarp
 )
