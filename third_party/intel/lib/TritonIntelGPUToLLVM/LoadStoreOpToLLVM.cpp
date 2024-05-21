@@ -282,9 +282,7 @@ struct LoadOpConversion
             /*v_blocks*/ 1,
             /*transpose*/ false,
             /*vnni_transform*/
-            (isOperandA || eltTy.getIntOrFloatBitWidth() == 32)
-                ? /*A vnni=false*/ 0
-                : /*B vnni=true*/ 1);
+            (!isOperandA && eltTy.getIntOrFloatBitWidth() != 32));
 
         rets.push_back(bitcast(load2dOp, unpackType));
       }
