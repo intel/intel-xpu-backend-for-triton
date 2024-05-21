@@ -121,16 +121,19 @@ public:
            "only support 1d/2d load/store/prefetch for now");
 
     unsigned dataSize = tensorType.getElementType().getIntOrFloatBitWidth();
+    unsigned blockHeight = tensorType.getShape()[0];
     unsigned blockWidth = tensorType.getShape()[1];
-    assert(blockWidth == 16 || blockWidth == 32 && "only support 16/32 block");
     unsigned vBlks = 1;
     if (dataSize == 16) {
-      // TODO: We can load 16-bit data with vblk=2, unclear if the same is true
-      // for 8-bit data.
       vBlks = blockWidth / 16;
       blockWidth = 16;
+    } else if (dataSize == 8 && (blockHeight == 16 || blockHeight == 32)) {
+      unsigned blockWidthUnit = blockHeight == 16 ? 32 : 16;
+      vBlks = blockWidth / blockWidthUnit;
+      blockWidth = blockWidthUnit;
     }
-    unsigned blockHeight = tensorType.getShape()[0];
+    assert(vBlks == 1 || vBlks == 2);
+
     Value ptr = op.getPtr();
     if (auto cast =
             dyn_cast<mlir::UnrealizedConversionCastOp>(ptr.getDefiningOp()))

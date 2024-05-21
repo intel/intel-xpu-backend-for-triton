@@ -486,11 +486,11 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
       switch (dotLayout.getOpIdx()) {
       case 0:
         subSize[0] = std::min(16L, shape[0]);
-        subSize[1] = std::min(32L, shape[1]);
+        subSize[1] = std::min(64L, shape[1]); // 2 blocks of 32 cols each
         break;
       case 1:
         subSize[0] = std::min(32L, shape[0]);
-        subSize[1] = std::min(16L, shape[1]);
+        subSize[1] = std::min(32L, shape[1]); // 2 blocks of 16 cols each
         break;
       }
     } else {
