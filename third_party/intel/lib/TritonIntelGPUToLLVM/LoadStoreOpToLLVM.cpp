@@ -18,12 +18,7 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::gpu::intel;
 
 using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::linearize;
-using ::mlir::triton::gpu::getCTALayout;
-using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace {
 
@@ -102,6 +97,41 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   return mask;
 }
 
+/// Holds the values related to a block pointer.
+/// It includes the base pointer, base width and height, row and column
+/// stride, and offset base for X and Y.
+struct BlockPointerValues {
+  Value base;
+  Value baseWidth;
+  Value baseHeight;
+  Value rowStride;
+  Value colStride;
+  Value offsetBaseX;
+  Value offsetBaseY;
+};
+
+// Unpack values as the params to 2DBlockLoad Payload: offsetBaseY,
+// offsetBaseX, baseHeight, baseWidth, rowStride, colStride, base.
+// FIXME: Only supports 2D matrices for now.
+BlockPointerValues
+getValuesFromBlockPointerStruct(Value blockPointerStruct,
+                                ConversionPatternRewriter &rewriter) {
+  const SmallVector<Value> &elems = unpackLLElements(
+      blockPointerStruct.getLoc(), blockPointerStruct, rewriter);
+  assert(elems.size() == 7 &&
+         "unexpected number of values unpacked from a block pointer");
+  BlockPointerValues values{
+      .base = elems[6],
+      .baseWidth = elems[3],
+      .baseHeight = elems[2],
+      .rowStride = elems[4],
+      .colStride = elems[5],
+      .offsetBaseX = elems[1],
+      .offsetBaseY = elems[0],
+  };
+  return values;
+}
+
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const triton::intel::TargetInfo &targetInfo,
@@ -146,41 +176,6 @@ struct LoadOpConversion
                    PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
-
-  /// Holds the values related to a block pointer.
-  /// It includes the base pointer, base width and height, row and column
-  /// stride, and offset base for X and Y.
-  struct BlockPointerValues {
-    Value base;
-    Value baseWidth;
-    Value baseHeight;
-    Value rowStride;
-    Value colStride;
-    Value offsetBaseX;
-    Value offsetBaseY;
-  };
-
-  // Unpack values as the params to 2DBlockLoad Payload: offsetBaseY,
-  // offsetBaseX, baseHeight, baseWidth, rowStride, colStride, base.
-  // FIXME: Only supports 2D matrices for now.
-  BlockPointerValues
-  getValuesFromBlockPointerStruct(Value blockPointerStruct,
-                                  ConversionPatternRewriter &rewriter) const {
-    const SmallVector<Value> &elems = unpackLLElements(
-        blockPointerStruct.getLoc(), blockPointerStruct, rewriter);
-    assert(elems.size() == 7 &&
-           "unexpected number of values unpacked from a block pointer");
-    BlockPointerValues values{
-        .base = elems[6],
-        .baseWidth = elems[3],
-        .baseHeight = elems[2],
-        .rowStride = elems[4],
-        .colStride = elems[5],
-        .offsetBaseX = elems[1],
-        .offsetBaseY = elems[0],
-    };
-    return values;
-  }
 
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
@@ -266,18 +261,12 @@ struct LoadOpConversion
         baseHeight = trunc(i32_ty, baseHeight);
         rowStride = trunc(i32_ty, rowStride);
 
-        auto getIntAttr = [](IntegerType type, unsigned val) {
-          return mlir::IntegerAttr::get(type, val);
-        };
-
         auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
             loc, load2DGenXType, /*ptr*/ base, /*base_width*/
-            sub(mul(baseWidth, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
-                i32_val(1)),
-            /*base_height*/ sub(baseHeight, i32_val(1)),
+            mul(baseWidth, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
+            /*base_height*/ baseHeight,
             /*base_pitch*/
-            sub(mul(rowStride, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
-                i32_val(1)),
+            mul(rowStride, i32_val(eltTy.getIntOrFloatBitWidth() / 8)),
             /*x*/ trunc(i32_ty, offsetX),
             /*y*/ trunc(i32_ty, offsetY),
             /*elem_size_in_bits*/ eltTy.getIntOrFloatBitWidth(),
@@ -286,9 +275,7 @@ struct LoadOpConversion
             /*v_blocks*/ 1,
             /*transpose*/ false,
             /*vnni_transform*/
-            (isOperandA || eltTy.getIntOrFloatBitWidth() == 32)
-                ? /*A vnni=false*/ 0
-                : /*B vnni=true*/ 1);
+            (!isOperandA && eltTy.getIntOrFloatBitWidth() != 32));
 
         rets.push_back(bitcast(load2dOp, unpackType));
       }
@@ -424,6 +411,9 @@ struct LoadOpConversion
             other_ = v;
           }
         }
+      } else {
+        other_ = rewriter.create<LLVM::ConstantOp>(loc, retTy,
+                                                   rewriter.getZeroAttr(retTy));
       }
 
       // Create a predicated load operation.

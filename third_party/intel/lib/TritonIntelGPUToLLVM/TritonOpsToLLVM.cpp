@@ -147,7 +147,7 @@ public:
       Value truncatedShape = trunc(i32_ty, shape);
       if (multiplyBytes)
         truncatedShape = mul(truncatedShape, bytes);
-      return sub(truncatedShape, i32_val(1));
+      return truncatedShape;
     };
 
     Value surfaceW = calculateSurface(ptrOp.getShape()[1], true);

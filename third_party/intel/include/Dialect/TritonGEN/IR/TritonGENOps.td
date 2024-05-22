@@ -363,6 +363,7 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
       - transposing the tile loaded is typically used for the B matrix operand of a `gen.tile` operations
         (D = C + A * B), where A has row-major layout in registers and B should have column-major layout.
       - if the tile loaded contains out of bound elements of the matrix, they are filled with 0.
+      - coordinate is provided in elements, while width and pitch are provided in bytes.
   }];
 
   let assemblyFormat = [{
@@ -414,6 +415,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
       - the $transpose and $vnni_transform parameters are mutual exclusive
       - transposing the tile loaded is typically used for the B matrix operand of a `gen.tile` operations
         (D = C + A * B), where A has row-major layout in registers and B should have column-major layout.
+      - coordinate is provided in elements, while width and pitch are provided in bytes.
   }];
 
   let assemblyFormat = [{
@@ -463,6 +465,7 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
       - the $transpose and $vnni_transform parameters are mutual exclusive
       - transposing the tile loaded is typically used for the B matrix operand of a `gen.tile` operations
         (D = C + A * B), where A has row-major layout in registers and B should have column-major layout.
+      - coordinate is provided in elements, while width and pitch are provided in bytes.
   }];
 
   let assemblyFormat = [{

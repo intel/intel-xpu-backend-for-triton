@@ -1,6 +1,5 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, nvidia
-from triton.backends.nvidia.driver import CudaUtils
 
 from dataclasses import dataclass
 import functools
@@ -74,6 +73,7 @@ class CUDAOptions:
     max_num_imprecise_acc_default: bool = None
     extern_libs: dict = None
     debug: bool = False
+    backend_name: str = 'cuda'
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -170,6 +170,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.common.add_cse(pm)
         if capability // 10 >= 8:
+            passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.num_warps, opt.num_ctas, capability)
         if capability // 10 <= 8:
             passes.ttgpuir.add_prefetch(pm)
@@ -198,6 +199,7 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         nvidia.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
+        passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         passes.ttgpuir.add_allocate_shared_memory(pm)

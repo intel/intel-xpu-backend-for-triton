@@ -26,19 +26,19 @@ def TritonGEN_Dialect : Dialect {
     /// Get the name of the attribute used to annotate max work group size
     /// required for kernels.
     static constexpr ::llvm::StringLiteral getMaxWorkGroupSizeAttrName() {
-      return ::llvm::StringLiteral("gen.max_work_group_size");
+      return ::llvm::StringLiteral("triton_gen.max_work_group_size");
     }
 
     /// Get the name of the attribute used to annotate exact work group size
     /// required for kernels.
     static constexpr ::llvm::StringLiteral getReqdWorkGroupSizeAttrName() {
-      return ::llvm::StringLiteral("gen.reqd_work_group_size");
+      return ::llvm::StringLiteral("triton_gen.reqd_work_group_size");
     }
 
     /// Get the name for the attribute used to annotate the exact sub group
     /// size required for kernels.
     static constexpr ::llvm::StringLiteral getReqdSubGroupSizeAttrName() {
-      return ::llvm::StringLiteral("gen.intel_reqd_sub_group_size");
+      return ::llvm::StringLiteral("triton_gen.intel_reqd_sub_group_size");
     }
   }];
 }
