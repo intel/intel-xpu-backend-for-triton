@@ -6,6 +6,7 @@
 namespace mlir {
 namespace triton {
 
+#define GEN_PASS_DECL
 #define GEN_PASS_REGISTRATION
 #include "intel/include/TritonToTritonGPUWarp/Passes.h.inc"
 

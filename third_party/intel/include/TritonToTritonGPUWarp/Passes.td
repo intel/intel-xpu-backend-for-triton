@@ -11,7 +11,6 @@ def ConvertTritonToTritonGPUWarp: Pass<"convert-triton-to-tritongpu-warp", "mlir
         Afterwards, we can get all other operation’s layout through def/use chain.
         Finally, each tensor operation is annotated with layout attribute describing what each warp should do.
     }];
-    let constructor = "mlir::triton::createConvertTritonToTritonGPUWarpPass()";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",

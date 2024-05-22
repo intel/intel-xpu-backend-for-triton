@@ -23,11 +23,15 @@ using namespace mlir::triton::gpu;
 #define ADD_PASS_WRAPPER_OPT_1(name, builder, ty0)                             \
   m.def(name,                                                                  \
         [](mlir::PassManager &pm, ty0 val0) { pm.addPass(builder({val0})); })
+#define ADD_PASS_WRAPPER_OPT_2(name, builder, ty0, ty1)                        \
+  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
+    pm.addPass(builder({val0, val1}));                                         \
+  })
 
 void init_triton_intel_passes_ttir(py::module &&m) {
-  ADD_PASS_WRAPPER_1("add_convert_to_ttgpuir_warp",
-                     mlir::triton::createConvertTritonToTritonGPUWarpPass,
-                     unsigned);
+  ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
+                         mlir::triton::createConvertTritonToTritonGPUWarp,
+                         unsigned);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
@@ -44,8 +48,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      intel::createIntelDecomposeUnsupportedConversions);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      intel::createIntelAllocateSharedMemory);
-  ADD_PASS_WRAPPER_OPT_1("add_pipeline", intel::createTritonIntelGPUPipeline,
-                         int);
+  ADD_PASS_WRAPPER_OPT_2("add_pipeline", intel::createTritonIntelGPUPipeline,
+                         int, bool);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",

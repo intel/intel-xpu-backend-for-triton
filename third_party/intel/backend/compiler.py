@@ -163,6 +163,10 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
+        # FIXME: Use a better way to check if prefetch instructions are supported once available.
+        # Prefetch instruction is not available in older drivers.
+        if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
+            intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages)
 
         passes.ttgpuir.add_coalesce(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
