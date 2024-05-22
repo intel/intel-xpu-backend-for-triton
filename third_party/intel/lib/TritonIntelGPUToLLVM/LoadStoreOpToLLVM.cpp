@@ -186,7 +186,7 @@ struct PrefetchOpConversion
     if (isTensorPointerType(ptr.getType()))
       return rewriteTensorPointerPrefetch(op, adaptor, rewriter);
 
-    assert(false && "Unexpected prefetch operation on 'regular' ptr");
+    llvm_unreachable("Unexpected prefetch operation on 'regular' ptr");
     return failure();
   }
 
