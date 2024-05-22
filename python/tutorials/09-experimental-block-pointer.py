@@ -224,15 +224,22 @@ def matmul(a, b, res_dtype):
 # Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-
-# Floating-point data
-for dtype in [torch.float16, torch.bfloat16]:
-    a = torch.randn((512, 512), device='xpu', dtype=dtype)
-    b = torch.randn((512, 512), device='xpu', dtype=dtype)
-    res_dtype = torch.float32
+for dtype, res_dtype in [(torch.float16, torch.float32), (torch.bfloat16, torch.float32), (torch.int8, torch.int32)]:
+    if dtype.is_floating_point:
+        a = torch.randn((512, 512), device='xpu', dtype=dtype)
+        b = torch.randn((512, 512), device='xpu', dtype=dtype)
+    else:
+        a = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
+        b = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
 
     triton_output = matmul(a, b, res_dtype)
-    torch_output = torch.matmul(a, b).to(res_dtype)
+    if dtype.is_floating_point:
+        torch_output = torch.matmul(a, b).to(res_dtype)
+    else:
+        # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
+        torch_output = torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(device='cpu',
+                                                                              dtype=res_dtype)).to(device='xpu')
+
     print(f"triton_output={triton_output}")
     print(f"torch_output={torch_output}")
 
@@ -240,24 +247,6 @@ for dtype in [torch.float16, torch.bfloat16]:
     # algorithms so we need to adjust tolerance.
     rtol = 1e-2 if dtype == torch.bfloat16 else 1e-3
     if torch.allclose(triton_output, torch_output, atol=1e-4, rtol=rtol):
-        print("✅ Triton and Torch match")
-    else:
-        exit("❌ Triton and Torch differ")
-
-# Integer data
-for dtype in [torch.int8]:
-    a = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
-    b = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
-    res_dtype = torch.int32
-
-    triton_output = matmul(a, b, res_dtype)
-    # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
-    torch_output = torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(device='cpu',
-                                                                          dtype=res_dtype)).to(device='xpu')
-    print(f"triton_output={triton_output}")
-    print(f"torch_output={torch_output}")
-
-    if torch.equal(triton_output, torch_output):
         print("✅ Triton and Torch match")
     else:
         exit("❌ Triton and Torch differ")
