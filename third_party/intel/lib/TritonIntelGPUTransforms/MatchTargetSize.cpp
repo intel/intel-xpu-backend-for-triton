@@ -82,16 +82,18 @@ public:
   };
 
   TargetArchNativeSizes() = default;
-  TargetArchNativeSizes(DotShape dotShape, unsigned loadStoreSize)
-      : dotShape(dotShape), loadStoreSize(loadStoreSize) {}
 
-  void setDotShape(DotShape shape) { dotShape = shape; }
+  void setDotShape(unsigned bitWidth, DotShape shape) {
+    dotShapes[bitWidth] = shape;
+  }
   void setLoadStoreSize(unsigned size) { loadStoreSize = size; }
-  const DotShape &getDotShape() const { return dotShape; }
+  std::optional<DotShape> getDotShape(unsigned bitWidth) const {
+    return dotShapes.lookup(bitWidth);
+  }
   unsigned getLoadStoreSize() const { return loadStoreSize; }
 
 private:
-  DotShape dotShape;
+  llvm::SmallDenseMap<unsigned, std::optional<DotShape>> dotShapes;
   unsigned loadStoreSize = 0;
 };
 
@@ -389,8 +391,9 @@ void MatchTargetSizePass::initNativeOperationSizes() {
   // FIXME: sets the target dot shape natively supported by the target
   // architecture using the target architecture information when available.
   // These value works for PVC.
-  TargetArchNativeSizes::DotShape shape(8, 16, 16);
-  nativeSizes.setDotShape(shape);
+  nativeSizes.setDotShape(8, {/*m=*/8, /*n=*/16, /*k=*/32});
+  nativeSizes.setDotShape(16, {/*m=*/8, /*n=*/16, /*k=*/16});
+  nativeSizes.setDotShape(32, {/*m=*/8, /*n=*/16, /*k=*/8});
   nativeSizes.setLoadStoreSize(512); // max 512DW;
 }
 
@@ -453,8 +456,9 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
 
   // Dot operation.
   if (dotAttrs.count(layout)) {
-    const auto &dotShape = nativeSizes.getDotShape();
-    SmallVector<int64_t> nativeDotSize{dotShape.m, dotShape.n};
+    auto dotShape = nativeSizes.getDotShape(type.getElementTypeBitWidth());
+    assert(dotShape.has_value() && "Unknown dot shape");
+    SmallVector<int64_t> nativeDotSize{dotShape->m, dotShape->n};
     return nativeDotSize;
   }
 
@@ -611,9 +615,9 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   int64_t m = aShape[0];
   int64_t n = bShape[1];
   int64_t k = aShape[1];
-  auto dotShape = nativeSizes.getDotShape();
-  if (aType.getElementTypeBitWidth() == 8)
-    dotShape.k *= 2;
+  auto dotShapeOrNone = nativeSizes.getDotShape(aType.getElementTypeBitWidth());
+  assert(dotShapeOrNone.has_value() && "Unknown dot shape");
+  const auto &dotShape = *dotShapeOrNone;
 
   OpBuilder b(dot);
   Location loc = dot.getLoc();

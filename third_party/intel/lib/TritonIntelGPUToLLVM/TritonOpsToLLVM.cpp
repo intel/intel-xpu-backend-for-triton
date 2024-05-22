@@ -123,16 +123,19 @@ public:
     unsigned dataSize = tensorType.getElementType().getIntOrFloatBitWidth();
     unsigned blockHeight = tensorType.getShape()[0];
     unsigned blockWidth = tensorType.getShape()[1];
+    assert(blockWidth == 16 || blockWidth == 32 ||
+           blockWidth == 64 && "only support 16/32/64 block");
+    auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
     unsigned vBlks = 1;
     if (dataSize == 16) {
       vBlks = blockWidth / 16;
       blockWidth = 16;
-    } else if (dataSize == 8 && (blockHeight == 16 || blockHeight == 32)) {
-      unsigned blockWidthUnit = blockHeight == 16 ? 32 : 16;
-      vBlks = blockWidth / blockWidthUnit;
+    } else if (dataSize == 8 && idxAttr) {
+      unsigned blockWidthUnit = idxAttr.getInt() == 0 ? 32 : 16;
+      vBlks = llvm::divideCeil(blockWidth, blockWidthUnit);
       blockWidth = blockWidthUnit;
     }
-    assert(vBlks == 1 || vBlks == 2);
+    assert(vBlks == 1 || vBlks == 2 && "only support 1 or 2 blocks");
 
     Value ptr = op.getPtr();
     if (auto cast =
@@ -159,7 +162,7 @@ public:
     Value offsetY = extract_element(tensorPtr, i32_val(1));
 
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
+      assert(idxAttr && "Dot index attribute missing");
       unsigned idx = idxAttr.getInt();
       Type resType =
           this->getTypeConverter()->convertType(op->getResult(0).getType());
@@ -215,7 +218,6 @@ public:
       else if (type == rewriter.getTF32Type())
         return TritonGEN::PrecisionType::TF32;
       else if (type == i8_ty)
-        // TODO: Assuming signed data; is that ok?
         return TritonGEN::PrecisionType::S8;
       llvm_unreachable("add more support for PrecisionType");
       return TritonGEN::PrecisionType::UNUSED;
