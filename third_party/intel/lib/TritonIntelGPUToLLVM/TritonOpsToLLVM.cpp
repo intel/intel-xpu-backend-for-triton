@@ -128,11 +128,11 @@ public:
     auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
     unsigned vBlks = 1;
     if (dataSize == 16) {
-      vBlks = blockWidth / 16;
+      vBlks = ceil(blockWidth, 16U);
       blockWidth = 16;
     } else if (dataSize == 8 && idxAttr) {
       unsigned blockWidthUnit = idxAttr.getInt() == 0 ? 32 : 16;
-      vBlks = llvm::divideCeil(blockWidth, blockWidthUnit);
+      vBlks = ceil(blockWidth, blockWidthUnit);
       blockWidth = blockWidthUnit;
     }
     assert(vBlks == 1 || vBlks == 2 && "only support 1 or 2 blocks");
