@@ -133,6 +133,51 @@ getValuesFromBlockPointerStruct(Value blockPointerStruct,
   return values;
 }
 
+/// Compute the 2D prefetch shape for each warp given an input 2D tensor.
+/// Because a cache line is 64 bytes, and we want to prefetch one cache line a
+/// time (per thread), the maximum number of bytes per column is 64. We know
+/// that the maximum size for each 2D prefetch is 2048 bytes, therefore the
+/// maximum number of rows is given by 2048/64=32.
+SmallVector<unsigned, 2> get2DPrefetchShapePerWarp(RankedTensorType tensorTy) {
+  Type eltTy = tensorTy.getElementType();
+  const ArrayRef<int64_t> tensorShape = tensorTy.getShape();
+  unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+  unsigned elemSizeInBytes = elemSizeInBits / 8;
+  unsigned maxBytesPerCol = 64;
+  unsigned numRows = std::min<unsigned>(tensorShape[0], 32);
+  unsigned numCols = maxBytesPerCol / elemSizeInBytes;
+  return {numRows, numCols};
+}
+
+/// Get the 2D warps per CTA given the tensor shape and the prefetch
+/// shape per warp.
+SmallVector<unsigned, 2>
+getWarpsPerCTA(const ArrayRef<int64_t> tensorShape,
+               const SmallVector<unsigned, 2> &shapePerWarp,
+               unsigned numWarps) {
+  assert(tensorShape.size() == 2 && shapePerWarp.size() == 2 &&
+         "only 2D tensors are supported");
+
+  const unsigned rowColRatio = ceil<unsigned>(shapePerWarp[0], shapePerWarp[1]);
+  const unsigned colRowRatio = ceil<unsigned>(shapePerWarp[1], shapePerWarp[0]);
+
+  SmallVector<unsigned, 2> warpsPerCTA = {1, 1};
+  do {
+    if (warpsPerCTA[0] * warpsPerCTA[1] >= numWarps)
+      break;
+    if (tensorShape[0] / (shapePerWarp[0] * colRowRatio) / warpsPerCTA[0] >=
+        tensorShape[1] / (shapePerWarp[1] * rowColRatio) / warpsPerCTA[1]) {
+      if (warpsPerCTA[0] < tensorShape[0] / shapePerWarp[0])
+        warpsPerCTA[0] *= 2;
+      else
+        warpsPerCTA[1] *= 2;
+    } else
+      warpsPerCTA[1] *= 2;
+  } while (true);
+
+  return warpsPerCTA;
+}
+
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const triton::intel::TargetInfo &targetInfo,
@@ -194,6 +239,108 @@ struct PrefetchOpConversion
   rewriteTensorPointerPrefetch(triton::gpu::intel::PrefetchOp op,
                                OpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter) const {
+    if (triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_PREFETCH_NEW"))
+      return rewriteTensorPointerPrefetchNew(op, adaptor, rewriter);
+    return rewriteTensorPointerPrefetchOld(op, adaptor, rewriter);
+  }
+
+  LogicalResult
+  rewriteTensorPointerPrefetchNew(triton::gpu::intel::PrefetchOp op,
+                                  OpAdaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) const {
+    auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    Location loc = op.getLoc();
+    Value ptr = op.getPtr();
+    auto ptrType = cast<PointerType>(ptr.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    Type eltTy = tensorType.getElementType();
+    const ArrayRef<int64_t> tensorShape = tensorType.getShape();
+
+    unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+
+    SmallVector<unsigned, 2> shapePerWarp =
+        get2DPrefetchShapePerWarp(tensorType);
+    SmallVector<unsigned, 2> warpsPerCTA =
+        getWarpsPerCTA(tensorShape, shapePerWarp, numWarps);
+
+    SmallVector<int64_t> numReps = {
+        mlir::ceil<int64_t>(tensorShape[0], shapePerWarp[0] * warpsPerCTA[0]),
+        mlir::ceil<int64_t>(tensorShape[1], shapePerWarp[1] * warpsPerCTA[1])};
+
+    unsigned bytesPerCol = shapePerWarp[1] * eltTy.getIntOrFloatBitWidth() / 8;
+    unsigned elemSizeInBits = bytesPerCol >= 4 ? 32 : bytesPerCol * 8;
+    unsigned tileWidthInElem =
+        mlir::ceil<unsigned>(bytesPerCol * 8, elemSizeInBits);
+    unsigned tileHeightInElem = shapePerWarp[0];
+
+    Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
+    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
+    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    SmallVector<Value> multiDimWarpId =
+        mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, {1, 0});
+
+    auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
+          offsetBaseY] =
+        getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
+
+    base = gep(base.getType(), eltTy, base, offsetBaseX);
+    offsetBaseY = trunc(i32_ty, offsetBaseY);
+    rowStride = trunc(i32_ty, rowStride);
+    Value rowOffset = mul(offsetBaseY, rowStride);
+    base = gep(base.getType(), eltTy, base, rowOffset);
+
+    baseWidth = trunc(i32_ty, baseWidth);
+    baseWidth = mul(baseWidth, i32_val(eltTy.getIntOrFloatBitWidth() / 8));
+    baseHeight = trunc(i32_ty, baseHeight);
+    rowStride = trunc(i32_ty, rowStride);
+    rowStride = mul(rowStride, i32_val(eltTy.getIntOrFloatBitWidth() / 8));
+
+    multiDimWarpId[1] = trunc(i32_ty, multiDimWarpId[1]);
+    multiDimWarpId[0] = trunc(i32_ty, multiDimWarpId[0]);
+
+    for (int row = 0; row < numReps[0]; ++row) {
+      for (int col = 0; col < numReps[1]; ++col) {
+        Value offsetX, offsetY;
+        offsetX = add(
+            // the offset of this warp.
+            mul(multiDimWarpId[1], i32_val(shapePerWarp[1])),
+            // add the replica offset with a warp stride.
+            i32_val(col * warpsPerCTA[1] * shapePerWarp[1]));
+        // Round the offset into to the tensor shape
+        offsetX = urem(offsetX, i32_val(tensorShape[0]));
+        offsetY = add(
+            // the offset of this warp.
+            mul(multiDimWarpId[0], i32_val(shapePerWarp[0])),
+            // add the replica offset with a warp stride.
+            i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
+        // Round the offset into to the tensor shape
+        offsetY = urem(offsetY, i32_val(tensorShape[0]));
+        rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
+            loc,
+            /*ptr*/ base,
+            /*base_width*/ baseWidth,
+            /*base_height*/ baseHeight,
+            /*base_pitch*/ rowStride,
+            /*x*/ trunc(i32_ty, offsetX),
+            /*y*/ trunc(i32_ty, offsetY),
+            /*elem_size_in_bits*/ elemSizeInBits,
+            /*tile_width*/ tileWidthInElem,
+            /*tile_height*/ tileHeightInElem,
+            /*v_blocks*/ 1,
+            /*transpose*/ false,
+            /*vnni_transform*/ false,
+            /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  LogicalResult
+  rewriteTensorPointerPrefetchOld(triton::gpu::intel::PrefetchOp op,
+                                  OpAdaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
     Value ptr = op.getPtr();
     auto ptrType = cast<PointerType>(ptr.getType());
