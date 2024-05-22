@@ -1,4 +1,5 @@
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -712,10 +713,12 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    auto markTensorPointerForRemoval = [this](Value val) {
+    ttgi::DeviceArch arch = ttgi::getDeviceArch(mod);
+
+    auto markTensorPointerForRemoval = [this, arch](Value val) {
       if (tt::isTensorPointerType(val.getType())) {
         tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
-        if (shouldRemove(makeTensorPtrOp, deviceArch))
+        if (shouldRemove(makeTensorPtrOp, arch))
           valueToRemove.insert(val);
       }
     };

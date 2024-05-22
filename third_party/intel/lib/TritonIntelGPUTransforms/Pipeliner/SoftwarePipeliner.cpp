@@ -6,6 +6,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 using namespace mlir;
 namespace ttgi = mlir::triton::gpu::intel;
@@ -63,6 +64,9 @@ struct IntelGPUPipelinePass
       IntelGPUPipelinePass>::TritonIntelGPUPipelineBase;
 
   void runOnOperation() override {
+    ModuleOp m = getOperation();
+    auto deviceArch = ttgi::getDeviceArch(m);
+
     if (deviceArch != ttgi::DeviceArch::PVC)
       return;
     if (numStages <= 1)
