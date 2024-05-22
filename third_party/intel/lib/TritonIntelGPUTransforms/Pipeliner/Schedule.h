@@ -6,6 +6,7 @@
 namespace mlir::triton::gpu::intel {
 
 bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
+                                  bool supportRegularPtr,
                                   mlir::scf::PipeliningOption &options);
 
 } // namespace mlir::triton::gpu::intel
