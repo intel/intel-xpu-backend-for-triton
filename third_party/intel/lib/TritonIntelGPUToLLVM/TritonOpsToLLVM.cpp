@@ -222,7 +222,7 @@ public:
           return TritonGEN::PrecisionType::U8;
         return TritonGEN::PrecisionType::S8;
       }
-        
+
       llvm_unreachable("add more support for PrecisionType");
       return TritonGEN::PrecisionType::UNUSED;
     };
