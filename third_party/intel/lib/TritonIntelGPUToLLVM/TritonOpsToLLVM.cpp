@@ -500,6 +500,29 @@ public:
   }
 };
 
+class ArithDivFOpLowering
+    : public ConvertTritonGPUOpToLLVMPattern<mlir::arith::DivFOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      mlir::arith::DivFOp>::ConvertTritonGPUOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(mlir::arith::DivFOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto srcType = dyn_cast<ShapedType>(op.getType());
+    Type dstType = getTypeConverter()->convertType(srcType);
+    auto vecType = cast<VectorType>(dstType);
+    auto attr = rewriter.getFloatAttr(vecType.getElementType(), 1.0);
+    auto dstAttr = DenseElementsAttr::get(vecType, attr.getValue());
+    auto one = rewriter.create<LLVM::ConstantOp>(loc, dstType, dstAttr);
+    auto rcp =
+        rewriter.create<LLVM::FDivOp>(loc, dstType, one, adaptor.getRhs());
+    auto res =
+        rewriter.create<LLVM::FMulOp>(loc, dstType, adaptor.getLhs(), rcp);
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
@@ -515,6 +538,7 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<GlueOpConversion>(typeConverter, benefit);
   patterns.add<ExtractOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantOpLowering>(typeConverter, benefit);
+  patterns.add<ArithDivFOpLowering>(typeConverter, benefit);
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<ReduceOpConversion>(typeConverter, benefit);
