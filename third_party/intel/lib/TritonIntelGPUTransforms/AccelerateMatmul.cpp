@@ -237,6 +237,7 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
+    auto deviceArch = ttgi::getDeviceArch(m);
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<::BlockedToDPAS>(context, deviceArch);
