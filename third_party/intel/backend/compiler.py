@@ -71,7 +71,7 @@ class XPUBackend(BaseBackend):
     class Experimental:
 
         @staticmethod
-        def make_ttgir(mod, metadata, opt):
+        def make_ttgir(mod, metadata, opt, device_arch):
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
 
@@ -152,7 +152,7 @@ class XPUBackend(BaseBackend):
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
         if XPUOptions.isBlockPtrEnabled:
-            return XPUBackend.Experimental.make_ttgir(mod, metadata, opt)
+            return XPUBackend.Experimental.make_ttgir(mod, metadata, opt, device_arch)
 
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)

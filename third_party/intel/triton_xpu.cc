@@ -32,6 +32,12 @@ void init_triton_intel_passes_ttir(py::module &&m) {
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
+  py::enum_<intel::DeviceArch>(m, "DEVICE_ARCH", py::module_local())
+      .value("UNKNOWN", intel::DeviceArch::UNKNOWN)
+      .value("ATS", intel::DeviceArch::ATS)
+      .value("PVC", intel::DeviceArch::PVC)
+      .export_values();
+
   ADD_PASS_WRAPPER_0("add_to_llvmir", intel::createConvertTritonIntelGPUToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      intel::createTritonIntelGPUAccelerateMatmul);
