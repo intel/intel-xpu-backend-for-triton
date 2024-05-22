@@ -104,7 +104,10 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
   let options = [
     Option<"numStages", "num-stages",
            "int32_t", /*default*/"3",
-           "number of pipeline stages">
+           "number of pipeline stages">,
+    Option<"supportRegularPtr", "support-regular-ptr",
+           "bool", /*default*/"false",
+           "Enable support for prefetching non-block pointers">,
   ];
 }
 
