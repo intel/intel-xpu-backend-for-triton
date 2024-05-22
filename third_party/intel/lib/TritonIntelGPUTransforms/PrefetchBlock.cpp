@@ -177,7 +177,7 @@ public:
         continue;
 
       // Prefetch candidate loads collected.
-      for (auto loop : func.getOps<scf::ForOp>())
+      for (auto [loop, loads] : loopLoads)
         transformLoop(loop);
     }
   }

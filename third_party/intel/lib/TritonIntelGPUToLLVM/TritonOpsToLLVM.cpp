@@ -187,7 +187,7 @@ public:
       }
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
-          dataSize, blockWidth, blockHeight, vBlks, false /* transpose*/, vnni);
+          dataSize, blockWidth, blockHeight, vBlks, transpose, vnni);
       rewriter.replaceOp(op, bitcast(load, resType));
     } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
       if (ptrOp.getOrder()[0] == 0) {
