@@ -1040,7 +1040,9 @@ LogicalResult DotOperandEncodingAttr::verify(
   }
 
   if (auto parentAttr = mlir::dyn_cast<intel::DpasEncodingAttr>(parent)) {
-    // FIXME: verify for the expected kWidth values.
+    if (kWidth != parentAttr.getOpsPerChannel())
+      return emitError() << "triton_gpu.dot_op kWidth parameter must match the "
+                            "parent's opsPerChannel";
     return success();
   }
 
