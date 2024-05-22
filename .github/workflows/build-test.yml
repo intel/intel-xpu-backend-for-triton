@@ -1,4 +1,5 @@
 name: Build and test
+run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -11,6 +12,14 @@ on:
         description: Upload test reports
         type: boolean
         default: false
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      run_name:
+        description: Custom run name
+        type: string
+        default: "Build and test"
   pull_request:
     branches:
       - llvm-target
@@ -31,6 +40,10 @@ jobs:
       - spr
       - cpu
     steps:
+      - name: Print inputs
+        run: |
+          echo "${{ toJSON(github.event.inputs) }}"
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -127,6 +140,11 @@ jobs:
           echo "TRITON_TEST_WARNING_REPORTS=true" >> $GITHUB_ENV
           echo "TRITON_TEST_REPORTS_DIR=$GITHUB_WORKSPACE/reports" >> $GITHUB_ENV
 
+      - name: Enable ignoring test errors
+        if: inputs.ignore_errors
+        run: |
+          echo "TRITON_TEST_IGNORE_ERRORS=true" >> $GITHUB_ENV
+
       - name: Run core tests
         run: |
           source ./scripts/pytest-utils.sh
@@ -175,17 +193,18 @@ jobs:
 
       - name: Run Tutorials
         run: |
+          source ./scripts/pytest-utils.sh
           cd python/tutorials
-          python3 01-vector-add.py
-          python3 02-fused-softmax.py
-          python3 03-matrix-multiplication.py
-          python3 04-low-memory-dropout.py
-          python3 05-layer-norm.py
-          python3 06-fused-attention.py
-          python3 07-extern-functions.py
-          python3 08-grouped-gemm.py
-          python3 09-experimental-block-pointer.py
-          TRITON_INTEL_ENABLE_BLOCK_PTR=1 python3 09-experimental-block-pointer.py
+          run_tutorial_test "01-vector-add"
+          run_tutorial_test "02-fused-softmax"
+          run_tutorial_test "03-matrix-multiplication"
+          run_tutorial_test "04-low-memory-dropout"
+          run_tutorial_test "05-layer-norm"
+          run_tutorial_test "06-fused-attention"
+          run_tutorial_test "07-extern-functions"
+          run_tutorial_test "08-grouped-gemm"
+          run_tutorial_test "09-experimental-block-pointer"
+          TRITON_INTEL_ENABLE_BLOCK_PTR=1 run_tutorial_test "09-experimental-block-pointer"
 
       - name: Run CXX unittests
         run: |

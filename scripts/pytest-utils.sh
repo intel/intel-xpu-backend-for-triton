@@ -42,3 +42,10 @@ pytest() {
 
     python3 -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
 }
+
+run_tutorial_test() {
+  echo
+  echo "****** Running $1 test ******"
+  echo
+  python3 -u "$1.py" || $TRITON_TEST_IGNORE_ERRORS
+}
