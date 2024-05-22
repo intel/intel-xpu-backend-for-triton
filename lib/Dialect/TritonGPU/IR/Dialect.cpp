@@ -1045,7 +1045,10 @@ LogicalResult DotOperandEncodingAttr::verify(
   }
 
   if (auto parentAttr = mlir::dyn_cast<intel::WarpEncodingAttr>(parent)) {
-    // FIXME: verify for the expected kWidth values.
+    if (kWidth != 0)
+      return emitError()
+             << "triton_gpu.dot_op kWidth parameter is not supported "
+                "when the parent is a warp layout";
     return success();
   }
 
