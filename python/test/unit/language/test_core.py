@@ -1388,8 +1388,6 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     if is_interpreter():
         if dtype_x_str == 'float16':
             pytest.xfail("Only test atomic float16 ops on GPU")
-    else:
-        check_cuda_or_hip(device)
 
     n_programs = 5
 
@@ -4300,10 +4298,8 @@ def test_unary_math(func_str, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm(num_ctas, device):
-    check_cuda_or_hip(device)
-
-    if is_hip():
-        pytest.skip("test_inline_asm is not supported in HIP")
+    if not is_cuda():
+        pytest.skip("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, Z, n: tl.constexpr, BLOCK: tl.constexpr):
@@ -4330,10 +4326,8 @@ def test_inline_asm(num_ctas, device):
 
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm_packed(num_ctas, device):
-    check_cuda_or_hip(device)
-
-    if is_hip():
-        pytest.skip("test_inline_asm is not supported in HIP")
+    if not is_cuda():
+        pytest.skip("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -4359,10 +4353,8 @@ def test_inline_asm_packed(num_ctas, device):
 
 @pytest.mark.parametrize('num_ctas', num_ctas_list)
 def test_inline_asm_with_pointers(num_ctas, device):
-    check_cuda_or_hip(device)
-
-    if is_hip():
-        pytest.skip('test_inline_asm is not supported in HIP')
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -4386,9 +4378,8 @@ def test_inline_asm_with_pointers(num_ctas, device):
 
 
 def test_inline_asm_multiple_outputs(device):
-    check_cuda_or_hip(device)
-    if is_hip():
-        pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -4433,9 +4424,8 @@ def test_inline_asm_multiple_outputs(device):
 
 
 def test_inline_asm_packed_multiple_outputs(device):
-    check_cuda_or_hip(device)
-    if is_hip():
-        pytest.skip('This test uses PTX inline assembly, so is not compatible with AMD')
+    if not is_cuda():
+        pytest.skip('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -5404,3 +5394,38 @@ def test_tl_range(device):
             ptx = pgm.asm['ptx']
             # check that the loop got pipelined with the right number of stages.
             assert 'cp.async.wait_group 0x6' in ptx
+
+
+@triton.jit(noinline=True)
+def maxnreg_noinline1(X):
+    tl.store(X, 0)
+
+
+@triton.jit(noinline=True)
+def maxnreg_noinline2(X):
+    tl.store(X, 0)
+
+
+def test_maxnreg(device):
+    assert not is_interpreter(), "this test won't work with the interpreter"
+    if not is_cuda():
+        pytest.xfail('maxnreg only works on CUDA')
+
+    # triton kernel
+    @triton.jit
+    def kernel(X):
+        maxnreg_noinline1(X)
+        tl.store(X, 0)
+        maxnreg_noinline2(X)
+
+    X = torch.empty(1, dtype=torch.int32, device=device)
+    k = kernel[(1, )](X, maxnreg=42)
+
+    # Ensure that .maxnreg is set on the kernel function (marked with .entry)
+    # and not on either of the noinline functions (marked with .func).
+    try:
+        assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
+        assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
+    except AssertionError:
+        print("Failing ptx:\n", k.asm["ptx"])
+        raise

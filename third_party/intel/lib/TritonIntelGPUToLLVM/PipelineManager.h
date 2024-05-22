@@ -107,8 +107,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     MLIRContext *ctx = funcOp->getContext();
     auto mod = funcOp->getParentOfType<ModuleOp>();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    if (LLVM::isKernel(funcOp))
+    if (LLVM::isKernel(funcOp)) {
       newFuncOp.setCConv(LLVM::CConv::SPIR_KERNEL);
+      newFuncOp.setLinkage(LLVM::Linkage::External);
+    }
 
     NamedAttrList attrs;
     attrs.append(TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
@@ -120,6 +122,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (!LLVM::isKernel(funcOp)) {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
+      newFuncOp.setLinkage(LLVM::Linkage::Internal);
       rewriter.eraseOp(amendedFuncOp);
     }
 
