@@ -543,6 +543,8 @@ def get_packages():
         "triton/compiler",
         "triton/language",
         "triton/language/extra",
+        "triton/language/extra/cuda",
+        "triton/language/extra/hip",
         "triton/language/extra/intel",
         "triton/ops",
         "triton/ops/blocksparse",
