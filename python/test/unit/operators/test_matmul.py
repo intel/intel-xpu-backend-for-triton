@@ -174,8 +174,10 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             return torch.randint(-128, 127, (m, n), device="xpu", dtype=torch.int8)
         # Use small range of values to prevent numerical issues.
         min_exp = -4 if acc_dtype == "float16" else -10
-        exponents = torch.randint(min_exp, 0, size=(m, n))
-        ret = (2.**exponents).to(getattr(torch, dtype)).to("xpu")
+        # exponents = torch.randint(min_exp, 0, size=(m, n))
+        # ret = (2.**exponents).to(getattr(torch, dtype)).to("xpu")
+        ret = torch.arange(m * n) % 32
+        ret = ret.view(m, n).to(getattr(torch, dtype)).to("xpu")
         return ret
 
     if is_hip():
@@ -198,7 +200,11 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             a = triton.reinterpret(a, getattr(tl, ADTYPE))
         if is_fp8(BDTYPE):
             b = triton.reinterpret(b, getattr(tl, BDTYPE))
+        print("a:", a.cpu())
+        print("b:", b.cpu())
         tt_c = triton.ops.matmul(a, b, acc_dtype if ACC_DTYPE else None, INPUT_PRECISION, F8_FASTACCUM, output_dtype)
-        torch.testing.assert_close(th_c, tt_c)
+        print("act:", th_c.cpu())
+        print("result:", tt_c.cpu())
+        torch.testing.assert_close(th_c.cpu(), tt_c.cpu())
     except triton.OutOfResources as e:
         pytest.skip(str(e))
