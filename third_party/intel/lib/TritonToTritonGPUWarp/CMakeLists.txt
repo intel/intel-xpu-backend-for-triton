@@ -1,9 +1,8 @@
-add_triton_library(TritonToTritonGPU
-    TritonGPUConversion.cpp
-    TritonToTritonGPUPass.cpp
+add_triton_library(TritonToTritonGPUWarp
+    TritonToTritonGPUWarpPass.cpp
 
     DEPENDS
-    TritonConversionPassIncGen
+    TritonGPUWarpConversionPassIncGen
 
     LINK_LIBS PUBLIC
     MLIRIR
