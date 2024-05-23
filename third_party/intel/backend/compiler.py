@@ -72,6 +72,7 @@ class XPUBackend(BaseBackend):
 
         @staticmethod
         def make_ttgir(mod, metadata, opt, device_arch):
+            prefetch_distance = int(os.getenv("TRITON_INTEL_PREFETCH_DISTANCE", 2))
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
 
