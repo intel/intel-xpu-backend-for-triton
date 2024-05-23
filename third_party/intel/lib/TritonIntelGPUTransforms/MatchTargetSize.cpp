@@ -87,13 +87,17 @@ public:
     dotShapes[bitWidth] = shape;
   }
   void setLoadStoreSize(unsigned size) { loadStoreSize = size; }
-  std::optional<DotShape> getDotShape(unsigned bitWidth) const {
-    return dotShapes.lookup(bitWidth);
+  const DotShape &getDotShape(unsigned bitWidth) const {
+    assert(dotShapes.contains(bitWidth) &&
+           "No dot shape configured for bit width");
+    return dotShapes.at(bitWidth);
   }
   unsigned getLoadStoreSize() const { return loadStoreSize; }
 
 private:
-  llvm::SmallDenseMap<unsigned, std::optional<DotShape>> dotShapes;
+  /// Stores the natively supported dot shape per bitwidth of the operand data
+  /// type, e.g. 16 -> 8x16x16 (MxKxN) for [b]float16 on PVC.
+  llvm::SmallDenseMap<unsigned, DotShape> dotShapes;
   unsigned loadStoreSize = 0;
 };
 
@@ -456,9 +460,9 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
 
   // Dot operation.
   if (dotAttrs.count(layout)) {
-    auto dotShape = nativeSizes.getDotShape(type.getElementTypeBitWidth());
-    assert(dotShape.has_value() && "Unknown dot shape");
-    SmallVector<int64_t> nativeDotSize{dotShape->m, dotShape->n};
+    const TargetArchNativeSizes::DotShape &dotShape =
+        nativeSizes.getDotShape(type.getElementTypeBitWidth());
+    SmallVector<int64_t> nativeDotSize{dotShape.m, dotShape.n};
     return nativeDotSize;
   }
 
@@ -615,9 +619,8 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   int64_t m = aShape[0];
   int64_t n = bShape[1];
   int64_t k = aShape[1];
-  auto dotShapeOrNone = nativeSizes.getDotShape(aType.getElementTypeBitWidth());
-  assert(dotShapeOrNone.has_value() && "Unknown dot shape");
-  const auto &dotShape = *dotShapeOrNone;
+  const TargetArchNativeSizes::DotShape &dotShape =
+      nativeSizes.getDotShape(aType.getElementTypeBitWidth());
 
   OpBuilder b(dot);
   Location loc = dot.getLoc();
