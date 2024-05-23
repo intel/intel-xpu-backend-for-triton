@@ -239,15 +239,6 @@ struct PrefetchOpConversion
   rewriteTensorPointerPrefetch(triton::gpu::intel::PrefetchOp op,
                                OpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter) const {
-    if (triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_PREFETCH_NEW"))
-      return rewriteTensorPointerPrefetchNew(op, adaptor, rewriter);
-    return rewriteTensorPointerPrefetchOld(op, adaptor, rewriter);
-  }
-
-  LogicalResult
-  rewriteTensorPointerPrefetchNew(triton::gpu::intel::PrefetchOp op,
-                                  OpAdaptor adaptor,
-                                  ConversionPatternRewriter &rewriter) const {
     auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     Location loc = op.getLoc();
     Value ptr = op.getPtr();
@@ -330,99 +321,6 @@ struct PrefetchOpConversion
             /*transpose*/ false,
             /*vnni_transform*/ false,
             /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
-      }
-    }
-
-    rewriter.eraseOp(op);
-    return success();
-  }
-
-  LogicalResult
-  rewriteTensorPointerPrefetchOld(triton::gpu::intel::PrefetchOp op,
-                                  OpAdaptor adaptor,
-                                  ConversionPatternRewriter &rewriter) const {
-    Location loc = op.getLoc();
-    Value ptr = op.getPtr();
-    auto ptrType = cast<PointerType>(ptr.getType());
-    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-
-    // Only lower prefetchOp with dpas layout encoding.
-    if (!hasDotDpasEncoding(tensorType))
-      return failure();
-
-    DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
-    auto dpasLayout = cast<DpasEncodingAttr>(dotLayout.getParent());
-
-    const unsigned opIdx = dotLayout.getOpIdx();
-    Type eltTy = tensorType.getElementType();
-    const ArrayRef<int64_t> tensorShape = tensorType.getShape();
-    unsigned numElems = getTotalElemsPerThread(tensorType);
-    SmallVector<int64_t> numReps =
-        dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
-    SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
-
-    Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
-    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
-    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
-    SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
-
-    bool isOperandA = (opIdx == 0);
-    SmallVector<unsigned> operandShape =
-        isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
-    SmallVector<int64_t> elemsPerInstr = {operandShape[0], operandShape[1]};
-
-    // Outer dim for A is the M, for B is the N. Inner dim for both is the K.
-    int outerDimWarpNum = std::min<int>(
-        warpsPerCTA[opIdx], ceil(tensorShape[opIdx], elemsPerInstr[opIdx]));
-    Value outerDimWarpId =
-        urem(multiDimWarpId[opIdx], i32_val(outerDimWarpNum));
-
-    auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
-          offsetBaseY] =
-        getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
-
-    int64_t numRepOuter = numReps[opIdx];
-    int64_t numRepK = numReps[!opIdx];
-
-    for (int outer = 0; outer < numRepOuter; ++outer) {
-      for (int k = 0; k < numRepK; ++k) {
-        Value offsetX =
-            isOperandA
-                ? i32_val(k * elemsPerInstr[1])
-                : add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
-                      i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]));
-        Value offsetY =
-            isOperandA
-                ? add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
-                      i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]))
-                : i32_val(k * elemsPerInstr[0]);
-
-        offsetX = add(offsetX, offsetBaseX);
-        offsetY = add(offsetY, offsetBaseY);
-        baseWidth = trunc(i32_ty, baseWidth);
-        baseHeight = trunc(i32_ty, baseHeight);
-        rowStride = trunc(i32_ty, rowStride);
-
-        unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-        Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
-
-        rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
-            loc,
-            /*ptr*/ base,
-            /*base_width*/ mul(baseWidth, elemSizeInBytes),
-            /*base_height*/ baseHeight,
-            /*base_pitch*/ mul(rowStride, elemSizeInBytes),
-            /*x*/ trunc(i32_ty, offsetX),
-            /*y*/ trunc(i32_ty, offsetY),
-            /*elem_size_in_bits*/ elemSizeInBits,
-            /*tile_width*/ elemsPerInstr[1],
-            /*tile_height*/ elemsPerInstr[0],
-            /*v_blocks*/ 1,
-            /*transpose*/ false,
-            /*vnni_transform*/ false,
-            /*cache_control*/ TritonGEN::LoadCacheControl::L1C_L3C);
       }
     }
 
