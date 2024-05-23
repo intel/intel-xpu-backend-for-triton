@@ -85,13 +85,14 @@ class XPUBackend(BaseBackend):
 
         @staticmethod
         def make_ttgir(mod, metadata, opt, device_arch):
+            prefetch_distance = int(os.getenv("TRITON_INTEL_PREFETCH_DISTANCE", 2))
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
 
             intel.passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
             # FIXME: Use a better way to check if prefetch instructions are supported once available.
             # Prefetch instruction is not available in older drivers.
-            intel.passes.ttgpuir.add_prefetch_block(pm)
+            intel.passes.ttgpuir.add_prefetch_block(pm, prefetch_distance)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
             intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)

@@ -17,8 +17,11 @@ rm -rf result.csv result.txt
 sed -i "s/x_vals=.*/x_vals=[[$M, $K, $N]],/g" 09-experimental-block-pointer.py
 sed -i "s/float M = .*/float M = $M, K = $K, N = $N;/g" ../../third_party/intel/backend/driver.py
 
+# clean Triton cache
 rm -rf ./tt_cache
 export TRITON_CACHE_DIR=./tt_cache
+# clean IGC cache
+export NEO_CACHE_PERSISTENT=0
 
 TRITON_INTEL_ENABLE_BLOCK_PTR=1 \
 IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
@@ -37,5 +40,5 @@ Triton_gbs_min=`grep "Triton Peak HBM" result.txt | awk '{print $NF}'  | tail -n
 Triton_gbs_avg=$(grep "Triton Peak HBM" result.txt | awk '{print $NF}'  | tail -n10 | awk -v max="$Triton_gbs_max" -v min="$Triton_gbs_min" '{sum+=$1} END{print (sum-max-min)/(NR-2)}')
 
 echo -e "=================================== Result ========================================"
-echo "M,K,N,avg_tflops,avg_gbs,max_tflops,max_gbs,min_tflops,min_gbs" | tee result.csv
-echo $M,$K,$N,$Triton_tflops_avg,$Triton_gbs_avg,$Triton_tflops_max,$Triton_gbs_max,$Triton_tflops_min,$Triton_gbs_min | tee -a result.csv    
+echo "M, K, N, avg_tflops, avg_gbs, max_tflops, max_gbs, min_tflops, min_gbs" | tee result.csv
+echo $M, $K, $N, $Triton_tflops_avg, $Triton_gbs_avg, $Triton_tflops_max, $Triton_gbs_max, $Triton_tflops_min, $Triton_gbs_min | tee -a result.csv    
