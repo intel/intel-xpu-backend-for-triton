@@ -12,6 +12,10 @@ source /opt/intel/oneapi/setvars.sh --force
 # store result
 rm -rf result.csv result.txt
 
+if [ $M  -le 8 ]
+then
+    export TRITON_INTEL_SKIP_PREFETCH_A=1
+fi
 
 # update shape size in driver.py and 09-experimental-block-pointer.py
 sed -i "s/x_vals=.*/x_vals=[[$M, $K, $N]],/g" 09-experimental-block-pointer.py

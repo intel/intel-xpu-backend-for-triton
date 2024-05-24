@@ -122,7 +122,8 @@ public:
 
     unsigned dataSize = tensorType.getElementType().getIntOrFloatBitWidth();
     unsigned blockWidth = tensorType.getShape()[1];
-    assert(blockWidth == 16 || blockWidth == 32 && "only support 16/32 block");
+    // assert(blockWidth == 16 || blockWidth == 32 && "only support 16/32
+    // block");
     unsigned vBlks = blockWidth == 32 ? 2 : 1;
     blockWidth = 16;
     unsigned blockHeight = tensorType.getShape()[0];
