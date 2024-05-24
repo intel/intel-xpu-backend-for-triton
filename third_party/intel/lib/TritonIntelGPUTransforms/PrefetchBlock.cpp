@@ -101,7 +101,11 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
 
   SmallVector<unsigned> sizePerWarp(2), warpsPerCTA(2);
   int64_t m = shape[0], n = shape[1];
-  if (m <= 32) {
+  char *envPrefetch = std::getenv("TRITON_INTEL_SKIP_PREFETCH_A");
+  const bool skipPrefetch = envPrefetch ? (bool)std::atoi(envPrefetch) : false;
+
+  if (skipPrefetch && m <= 8) {
+
     sizePerWarp[0] = m;
     warpsPerCTA[0] = 1;
     warpsPerCTA[1] = numWarps;
@@ -417,8 +421,8 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
 
   SmallVector<Value> advances;
   unsigned i = 0;
-  const bool skipPrefetch =
-      std::atoi(std::getenv("TRITON_INTEL_SKIP_PREFETCH_A")) > 0;
+  char *envPrefetch = std::getenv("TRITON_INTEL_SKIP_PREFETCH_A");
+  const bool skipPrefetch = envPrefetch ? (bool)std::atoi(envPrefetch) : false;
   bool isMatA = false;
   for (tt::LoadOp load : loopLoads.at(loop)) {
     RankedTensorType rtTy = cast<RankedTensorType>(load.getResult().getType());
