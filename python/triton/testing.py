@@ -8,20 +8,23 @@ from . import language as tl
 
 try:
     import intel_extension_for_pytorch
+
     def Event():
         return torch.xpu.Event(enable_timing=True)
 except ImportError:
-    import time 
-    
+    import time
+
     class Event():
+
         def __init__(self, **kwargs):
-            self.record() 
+            self.record()
 
         def record(self):
             self.timestamp = time.time_ns()
-        
+
         def elapsed_time(self, end):
             return end.timestamp - self.timestamp
+
 
 def synchronize():
     import torch
