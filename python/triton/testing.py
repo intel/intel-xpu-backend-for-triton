@@ -14,14 +14,14 @@ except ImportError:
     import time 
     
     class Event():
-        def __init__(self):
+        def __init__(self, **kwargs):
             self.record() 
 
         def record(self):
             self.timestamp = time.time_ns()
         
         def elapsed_time(self, end):
-            return end - self.timestamp
+            return end.timestamp - self.timestamp
 
 def synchronize():
     import torch
