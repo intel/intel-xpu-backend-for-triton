@@ -7,10 +7,11 @@ from typing import Any, Dict, List
 from . import language as tl
 
 try:
+    import torch
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
-    def Event():
-        return torch.xpu.Event(enable_timing=True)
+    def Event(**kwargs):
+        return torch.xpu.Event(**kwargs)
 except ImportError:
     import time
 
