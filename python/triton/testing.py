@@ -6,6 +6,22 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 
+try:
+    import intel_extension_for_pytorch
+    def Event():
+        return torch.xpu.Event(enable_timing=True)
+except ImportError:
+    import time 
+    
+    class Event():
+        def __init__(self):
+            self.record() 
+
+        def record(self):
+            self.timestamp = time.time_ns()
+        
+        def elapsed_time(self, end):
+            return end - self.timestamp
 
 def synchronize():
     import torch
@@ -121,8 +137,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         cache = torch.empty(int(256e6), dtype=torch.int8, device=device)
 
     # Estimate the runtime of the function
-    start_event = torch.xpu.Event(enable_timing=True)
-    end_event = torch.xpu.Event(enable_timing=True)
+    start_event = Event(enable_timing=True)
+    end_event = Event(enable_timing=True)
     start_event.record()
     for _ in range(5):
         cache.zero_()
@@ -134,8 +150,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # compute number of warmup and repeat
     n_warmup = max(1, int(warmup / estimate_ms))
     n_repeat = max(1, int(rep / estimate_ms))
-    start_event = [torch.xpu.Event(enable_timing=True) for i in range(n_repeat)]
-    end_event = [torch.xpu.Event(enable_timing=True) for i in range(n_repeat)]
+    start_event = [Event(enable_timing=True) for i in range(n_repeat)]
+    end_event = [Event(enable_timing=True) for i in range(n_repeat)]
     # Warm-up
     for _ in range(n_warmup):
         fn()
