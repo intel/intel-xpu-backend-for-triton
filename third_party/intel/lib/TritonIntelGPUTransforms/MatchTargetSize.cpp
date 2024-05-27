@@ -427,12 +427,12 @@ void MatchTargetSizePass::initNativeOperationSizes() {
   nativeSizes.setDotShape( 8, {8, 16, 32});
   nativeSizes.setDotShape(16, {8, 16, 16});
   nativeSizes.setDotShape(32, {8, 16,  8});
-  
+
   //                     bitwidth   rA  cA  rB  cB
   nativeSizes.setBlockMemShape( 8, {16, 64, 32, 32});
   nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
   nativeSizes.setBlockMemShape(32, { 8,  8,  8, 16});
-  
+
   nativeSizes.setLoadStoreSize(512); // max 512DW;
   // clang-format on
 }
