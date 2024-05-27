@@ -317,6 +317,16 @@ public:
       }
       rewriter.replaceOp(op, undef);
     } break;
+    case 16: {
+      unsigned num = 16;
+      Value undef = rewriter.create<LLVM::UndefOp>(loc, dstType);
+      for (auto i = 0; i < num; i++) {
+        undef = rewriter.create<LLVM::InsertElementOp>(
+            loc, dstType, undef, operands[i],
+            rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), i));
+      }
+      rewriter.replaceOp(op, undef);
+    } break;
     default:
       llvm_unreachable("add more support for glue op to llvm");
     }
