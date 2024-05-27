@@ -81,10 +81,28 @@ public:
     unsigned k = 0;
   };
 
+  struct BlockMemShape {
+    BlockMemShape() = default;
+    BlockMemShape(unsigned rowsA, unsigned columnsA, unsigned rowsB,
+                  unsigned columnsB)
+        : rowsA(rowsA), columnsA(columnsA), rowsB(rowsB), columnsB(columnsB) {
+      assert(rowsA != 0 && columnsA != 0 && rowsB && columnsB != 0 &&
+             "expecting valid shape");
+    }
+
+    unsigned rowsA = 0;
+    unsigned columnsA = 0;
+    unsigned rowsB = 0;
+    unsigned columnsB = 0;
+  };
+
   TargetArchNativeSizes() = default;
 
   void setDotShape(unsigned bitWidth, DotShape shape) {
     dotShapes[bitWidth] = shape;
+  }
+  void setBlockMemShape(unsigned bitWidth, BlockMemShape shape) {
+    blockMemShapes[bitWidth] = shape;
   }
   void setLoadStoreSize(unsigned size) { loadStoreSize = size; }
   const DotShape &getDotShape(unsigned bitWidth) const {
@@ -92,12 +110,20 @@ public:
            "No dot shape configured for bit width");
     return dotShapes.at(bitWidth);
   }
+  const BlockMemShape &getBlockMemShape(unsigned bitWidth) const {
+    assert(blockMemShapes.contains(bitWidth) &&
+           "No block memory access shape configured for bit width");
+    return blockMemShapes.at(bitWidth);
+  }
   unsigned getLoadStoreSize() const { return loadStoreSize; }
 
 private:
   /// Stores the natively supported dot shape per bitwidth of the operand data
   /// type, e.g. 16 -> 8x16x16 (MxKxN) for [b]float16 on PVC.
   llvm::SmallDenseMap<unsigned, DotShape> dotShapes;
+  /// Stores the natively supported shapes for 2D block reads of dot operands,
+  /// per element type bitwidth.
+  llvm::SmallDenseMap<unsigned, BlockMemShape> blockMemShapes;
   unsigned loadStoreSize = 0;
 };
 
@@ -394,11 +420,21 @@ public:
 void MatchTargetSizePass::initNativeOperationSizes() {
   // FIXME: sets the target dot shape natively supported by the target
   // architecture using the target architecture information when available.
-  // These value works for PVC.
-  nativeSizes.setDotShape(8, {/*m=*/8, /*n=*/16, /*k=*/32});
-  nativeSizes.setDotShape(16, {/*m=*/8, /*n=*/16, /*k=*/16});
-  nativeSizes.setDotShape(32, {/*m=*/8, /*n=*/16, /*k=*/8});
+  // These values works for PVC.
+
+  // clang-format off
+  //                bitwidth   M   N   K
+  nativeSizes.setDotShape( 8, {8, 16, 32});
+  nativeSizes.setDotShape(16, {8, 16, 16});
+  nativeSizes.setDotShape(32, {8, 16,  8});
+  
+  //                     bitwidth   rA  cA  rB  cB
+  nativeSizes.setBlockMemShape( 8, {16, 64, 32, 32});
+  nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
+  nativeSizes.setBlockMemShape(32, { 8,  8,  8, 16});
+  
   nativeSizes.setLoadStoreSize(512); // max 512DW;
+  // clang-format on
 }
 
 bool MatchTargetSizePass::isCandidate(Type type) const {
@@ -479,26 +515,24 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
     subSize[0] = std::min(max, shape[0]);
   } break;
   case 2: {
-    if (isa<ttgi::WarpEncodingAttr>(layout) ||
-        (isa<triton::gpu::DotOperandEncodingAttr>(layout) &&
-         sizeInBits == 16)) {
+    if (isa<ttgi::WarpEncodingAttr>(layout)) {
       // 32 = 2 * 16(subgroupSize) which is for large load/store
-      int64_t colLimit = 32;
-      subSize[1] = std::min(colLimit, shape[1]);
+      subSize[1] = std::min(32L, shape[1]);
       // FIXME: From gfxspec, max 2d block load height is 32
-      int64_t rowLimit = 32;
-      subSize[0] = std::min(rowLimit, shape[0]);
-    } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout);
-               dotLayout && sizeInBits == 8) {
-      // FIXME: These settings underutilize the memory bandwidth.
+      subSize[0] = std::min(32L, shape[0]);
+    } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+      const TargetArchNativeSizes::BlockMemShape &memShape =
+          nativeSizes.getBlockMemShape(sizeInBits);
       switch (dotLayout.getOpIdx()) {
       case 0:
-        subSize[0] = std::min(16L, shape[0]);
-        subSize[1] = std::min(64L, shape[1]); // 2 blocks of 32 cols each
+        subSize[1] =
+            std::min(static_cast<int64_t>(memShape.columnsA), shape[1]);
+        subSize[0] = std::min(static_cast<int64_t>(memShape.rowsA), shape[0]);
         break;
       case 1:
-        subSize[0] = std::min(32L, shape[0]);
-        subSize[1] = std::min(32L, shape[1]); // 2 blocks of 16 cols each
+        subSize[1] =
+            std::min(static_cast<int64_t>(memShape.columnsB), shape[1]);
+        subSize[0] = std::min(static_cast<int64_t>(memShape.rowsB), shape[0]);
         break;
       }
     } else {
