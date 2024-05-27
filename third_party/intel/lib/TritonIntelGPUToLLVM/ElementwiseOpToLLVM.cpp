@@ -1287,7 +1287,7 @@ struct FpToFpOpConversion
                                  const Value &v) {
     auto moduleOp =
         v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
-    constexpr StringLiteral name = "_Z31intel_convert_as_bfloat16_floatt";
+    constexpr StringLiteral name = "_Z27__spirv_ConvertBF16ToFINTELs";
     auto ext_func = triton::gpu::intel::lookupOrCreateSPIRVFn(moduleOp, name,
                                                               i16_ty, f32_ty);
     auto call =
@@ -1308,7 +1308,7 @@ struct FpToFpOpConversion
       auto moduleOp =
           v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
       // Intel SPIR-V extension only supports round-to-nearest-even
-      constexpr StringLiteral name = "_Z32intel_convert_bfloat16_as_ushortf";
+      constexpr StringLiteral name = "_Z27__spirv_ConvertFToBF16INTELf";
       auto trunc_func = triton::gpu::intel::lookupOrCreateSPIRVFn(
           moduleOp, name, f32_ty, i16_ty);
       auto call = triton::gpu::intel::createSPIRVBuiltinCall(loc, rewriter,
