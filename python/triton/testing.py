@@ -12,6 +12,8 @@ try:
 
     def Event(**kwargs):
         return torch.xpu.Event(**kwargs)
+
+    USE_WALL_TIME = False
 except ImportError:
     import time
 
@@ -25,6 +27,8 @@ except ImportError:
 
         def elapsed_time(self, end):
             return end.timestamp - self.timestamp
+
+    USE_WALL_TIME = True
 
 
 def synchronize():
@@ -172,9 +176,12 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         # record time of `fn`
         start_event[i].record()
         fn()
+        if USE_WALL_TIME:
+            synchronize()
         end_event[i].record()
     # Record clocks
-    synchronize()
+    if not USE_WALL_TIME:
+        synchronize()
     times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
