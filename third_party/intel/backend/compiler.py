@@ -47,6 +47,7 @@ class XPUOptions:
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
+    backend_name: str = 'intel'
     isBlockPtrEnabled: bool = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
 
     def __post_init__(self):
@@ -159,9 +160,13 @@ class XPUBackend(BaseBackend):
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
 
         # optimize TTGIR
-        intel.passes.ttgpuir.add_accelerate_matmul(pm, device_arch)
+        intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
-        intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm, device_arch)
+        intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
+        # FIXME: Use a better way to check if prefetch instructions are supported once available.
+        # Prefetch instruction is not available in older drivers.
+        if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
+            intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
 
         passes.ttgpuir.add_coalesce(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
@@ -180,7 +185,7 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_llir(src, metadata, options, device_arch):
+    def make_llir(src, metadata, options):
         # warp-specialization mutates num_warps
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
@@ -228,7 +233,7 @@ class XPUBackend(BaseBackend):
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.device_arch)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.device_arch)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata)
 
     @functools.lru_cache()

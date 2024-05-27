@@ -25,16 +25,6 @@ def TritonIntelGPUAccelerateMatmul
     "mlir::triton::gpu::intel::TritonIntelGPUDialect",
     "mlir::arith::ArithDialect"
   ];
-
-  let options = [
-    Option<"deviceArch", "device-architecture",
-            "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
-            "device architecture",
-            "llvm::cl::values("
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::UNKNOWN, \"UNKNOWN\", \"Unknown arch\"), "
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::ATS, \"ATS\", \"ATS arch\"), "
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::PVC, \"PVC\", \"PVC arch\"))">
-  ];
 }
 
 def TritonIntelGPUDistributeToWarps
@@ -115,13 +105,9 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     Option<"numStages", "num-stages",
            "int32_t", /*default*/"3",
            "number of pipeline stages">,
-    Option<"deviceArch", "device-architecture",
-            "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
-            "device architecture",
-            "llvm::cl::values("
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::UNKNOWN, \"UNKNOWN\", \"Unknown arch\"), "
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::ATS, \"ATS\", \"ATS arch\"), "
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::PVC, \"PVC\", \"PVC arch\"))">
+    Option<"supportRegularPtr", "support-regular-ptr",
+           "bool", /*default*/"false",
+           "Enable support for prefetching non-block pointers">,
   ];
 }
 
@@ -183,16 +169,6 @@ def TritonIntelGPURewriteTensorPointer : Pass<"tritonintelgpu-rewrite-tensor-poi
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
-
-  let options = [
-    Option<"deviceArch", "device-architecture",
-            "mlir::triton::gpu::intel::DeviceArch", /*default*/" mlir::triton::gpu::intel::DeviceArch::PVC",
-            "device architecture",
-            "llvm::cl::values("
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::UNKNOWN, \"UNKNOWN\", \"Unknown arch\"), "
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::ATS, \"ATS\", \"ATS arch\"), "
-            "clEnumValN(mlir::triton::gpu::intel::DeviceArch::PVC, \"PVC\", \"PVC arch\"))">
-  ];
 }
 
 def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::ModuleOp"> {

@@ -82,7 +82,24 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   llvm::legacy::PassManager pm;
   pm.add(llvm::createAlwaysInlinerLegacyPass());
   pm.add(llvm::createVerifierPass());
+
+  const bool enabledTiming =
+      mlir::triton::tools::getBoolEnv("LLVM_ENABLE_TIMING");
+  if (enabledTiming) {
+    llvm::TimePassesIsEnabled = true;
+    llvm::TimePassesPerRun = true;
+  }
+
   pm.run(module);
+
+  SmallString<0> timePassesStr;
+  raw_svector_ostream reportStream(timePassesStr);
+
+  if (enabledTiming) {
+    reportAndResetTimings(&reportStream);
+    llvm::dbgs() << reportStream.str();
+    timePassesStr.clear();
+  }
   // module->print(llvm::outs(), nullptr);
 
   // create machine
@@ -117,6 +134,12 @@ std::string translateLLVMIRToASM(llvm::Module &module,
                              : llvm::CodeGenFileType::AssemblyFile;
     machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
     pass.run(module);
+
+    if (enabledTiming) {
+      reportAndResetTimings(&reportStream);
+      llvm::dbgs() << reportStream.str();
+      timePassesStr.clear();
+    }
   }
   return result;
 }
@@ -133,70 +156,6 @@ static uint32_t findKernels(llvm::Module &M,
       ++numKernels;
     }
   return numKernels;
-}
-
-/// Amend SPIR kernels in the given LLVM module by translating GEN passthrough
-/// attributes into LLVM metadata.
-static void amendLLVMIR(llvm::Module &llvmMod, llvm::LLVMContext &ctx) {
-  // Collect SPIR kernels.
-  std::set<llvm::Function *> kernels;
-  uint32_t numKernels = findKernels(llvmMod, kernels);
-  assert(numKernels == 1 && "Expecting a single SPIR kernel");
-  llvm::Function *kernel = *kernels.begin();
-
-  // Given a string \p str of the form "n1,n2,...", parse it as a
-  // vector of integers (n1,n2,...).
-  auto extractFromString = [](StringRef str) -> SmallVector<int64_t> {
-    auto parseAsInt = [](StringRef str, int64_t &intVal) {
-      bool failed = str.getAsInteger(10, intVal);
-      return !failed;
-    };
-
-    SmallVector<int64_t> result;
-    std::pair<StringRef, StringRef> pair;
-    do {
-      pair = str.split(',');
-      str = pair.second;
-      int64_t intVal;
-      if (!parseAsInt(pair.first, intVal))
-        break;
-
-      result.push_back(intVal);
-    } while (true);
-
-    return result;
-  };
-
-  // Attach metadata to \p func given its name \p attrName and value \p attrVal.
-  auto attachMetadata = [&](StringRef attrName, StringRef attrVal,
-                            llvm::Function *func) {
-    SmallVector<llvm::Metadata *, 3> metadata;
-    llvm::Type *i64 = llvm::IntegerType::get(ctx, 64);
-    for (int64_t val : extractFromString(attrVal))
-      metadata.push_back(
-          llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(i64, val)));
-
-    llvm::MDNode *node = llvm::MDNode::get(ctx, metadata);
-    func->setMetadata(attrName, node);
-  };
-
-  // Attach required metadata to the kernel.
-  using namespace mlir::triton;
-  SmallVector<llvm::StringLiteral> genAttrs{
-      TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
-      TritonGEN::TritonGENDialect::getReqdWorkGroupSizeAttrName(),
-      TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName()};
-
-  for (llvm::StringLiteral genAttr : genAttrs) {
-    if (!kernel->hasFnAttribute(genAttr))
-      continue;
-
-    Attribute fnAttr = kernel->getFnAttribute(genAttr);
-    assert(fnAttr.isStringAttribute() && "Expecting a string attribute");
-    attachMetadata(fnAttr.getKindAsString().split('.').second,
-                   fnAttr.getValueAsString(), kernel);
-    kernel->removeFnAttr(genAttr);
-  }
 }
 
 void init_triton_llvm(py::module &&m) {
@@ -239,6 +198,9 @@ void init_triton_llvm(py::module &&m) {
       .def(
           "get_functions",
           [](llvm::Module *mod) -> llvm::Module::FunctionListType & {
+            // Note: Backends assume that we are compiling exactly one kernel
+            // (i.e. one function that's that's called by the CPU) and that it's
+            // the first function in this list.
             return mod->getFunctionList();
           },
           ret::reference_internal)
@@ -249,14 +211,33 @@ void init_triton_llvm(py::module &&m) {
            });
 
   py::class_<llvm::Function>(m, "function", py::module_local())
+      .def_property_readonly(
+          "name", [](llvm::Function *fn) { return fn->getName().str(); })
       .def("set_calling_conv", &llvm::Function::setCallingConv)
       .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
                              std::string &val) { fn->addFnAttr(name, val); })
-      .def("has_public_visibility",
-           [](llvm::Function *fn) {
-             return fn->getVisibility() == llvm::GlobalValue::DefaultVisibility;
+
+      // Sets the nvvm.maxreg property on the given function.
+      .def("set_nvvm_maxnreg",
+           [](llvm::Function *fn, int maxnreg) {
+             auto op = MDNode::get(
+                 fn->getContext(),
+                 {
+                     ValueAsMetadata::get(fn),
+                     MDString::get(fn->getContext(), "maxnreg"),
+                     ConstantAsMetadata::get(ConstantInt::get(
+                         Type::getInt32Ty(fn->getContext()), maxnreg)),
+                 });
+             fn->getParent()
+                 ->getOrInsertNamedMetadata("nvvm.annotations")
+                 ->addOperand(op);
            })
-      .def("is_declaration", &llvm::Function::isDeclaration);
+      // External functions that are definitions (i.e. not declarations) are
+      // kernel functions.
+      .def("is_declaration", &llvm::Function::isDeclaration)
+      .def("is_external_linkage", [](llvm::Function *fn) {
+        return fn->getLinkage() == llvm::GlobalValue::ExternalLinkage;
+      });
 
   // optimization levels
   py::class_<llvm::OptimizationLevel>(m, "optimization_level",
@@ -271,10 +252,7 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "to_module",
       [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
-        std::unique_ptr<llvm::Module> llvmMod =
-            mlir::translateModuleToLLVMIR(mod, ctx);
-        amendLLVMIR(*llvmMod, ctx);
-        return llvmMod;
+        return mlir::translateModuleToLLVMIR(mod, ctx);
       },
       py::keep_alive<0, 2>());
 
@@ -452,10 +430,30 @@ void init_triton_llvm(py::module &&m) {
       }
       libMod->setTargetTriple(dstMod->getTargetTriple());
       libMod->setDataLayout(dstMod->getDataLayout());
+
+      std::unordered_set<std::string> externalFns;
+      for (llvm::Function &fn : libMod->functions()) {
+        if (!fn.isDeclaration())
+          externalFns.insert(fn.getName().str());
+      }
+
       if (linker.linkInModule(std::move(libMod),
                               llvm::Linker::Flags::LinkOnlyNeeded)) {
         std::string message = "Failed to link library at " + path;
         throw std::invalid_argument(message);
+      }
+
+      // Mark linked-in functions as internal because backends use external
+      // linkage as a signifier of kernel functions.
+      for (llvm::Function &fn : dstMod->functions()) {
+        if (externalFns.count(fn.getName().str())) {
+          // FIXME: Temporary workaround to avoid marking SPIR_FUNC functions
+          // with InternalLinkage, which causes test_subprocess.py::test_assert
+          // to fail.
+          if (fn.getCallingConv() == CallingConv::SPIR_FUNC)
+            continue;
+          fn.setLinkage(llvm::GlobalValue::InternalLinkage);
+        }
       }
     }
   });

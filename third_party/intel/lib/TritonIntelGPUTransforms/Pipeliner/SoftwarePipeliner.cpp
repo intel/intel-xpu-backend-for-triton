@@ -6,6 +6,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 using namespace mlir;
 namespace ttgi = mlir::triton::gpu::intel;
@@ -37,13 +38,14 @@ static bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
-static void pipelineLoop(scf::ForOp forOp, int numStages) {
+static void pipelineLoop(scf::ForOp forOp, int numStages,
+                         bool supportRegularPtr) {
   mlir::scf::PipeliningOption options;
   if (!preCondition(forOp))
     return;
 
-  bool foundSchedule =
-      ttgi::preProcessLoopAndGetSchedule(forOp, numStages, options);
+  bool foundSchedule = ttgi::preProcessLoopAndGetSchedule(
+      forOp, numStages, supportRegularPtr, options);
   if (!foundSchedule)
     return;
 
@@ -62,6 +64,9 @@ struct IntelGPUPipelinePass
       IntelGPUPipelinePass>::TritonIntelGPUPipelineBase;
 
   void runOnOperation() override {
+    ModuleOp m = getOperation();
+    auto deviceArch = ttgi::getDeviceArch(m);
+
     if (deviceArch != ttgi::DeviceArch::PVC)
       return;
     if (numStages <= 1)
@@ -71,7 +76,7 @@ struct IntelGPUPipelinePass
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
     for (scf::ForOp forOp : loops) {
-      pipelineLoop(forOp, numStages);
+      pipelineLoop(forOp, numStages, supportRegularPtr);
     }
   }
 };

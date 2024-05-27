@@ -4,10 +4,11 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
-#include "triton/Conversion/TritonToTritonGPU/Passes.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
+#include "intel/include/TritonToTritonGPUWarp/Passes.h"
+#include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -22,16 +23,15 @@ using namespace mlir::triton::gpu;
 #define ADD_PASS_WRAPPER_OPT_1(name, builder, ty0)                             \
   m.def(name,                                                                  \
         [](mlir::PassManager &pm, ty0 val0) { pm.addPass(builder({val0})); })
-
 #define ADD_PASS_WRAPPER_OPT_2(name, builder, ty0, ty1)                        \
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
     pm.addPass(builder({val0, val1}));                                         \
   })
 
 void init_triton_intel_passes_ttir(py::module &&m) {
-  ADD_PASS_WRAPPER_1("add_convert_to_ttgpuir_warp",
-                     mlir::triton::createConvertTritonToTritonGPUWarpPass,
-                     unsigned);
+  ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
+                         mlir::triton::createConvertTritonToTritonGPUWarp,
+                         unsigned);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
@@ -42,20 +42,18 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .export_values();
 
   ADD_PASS_WRAPPER_0("add_to_llvmir", intel::createConvertTritonIntelGPUToLLVM);
-  ADD_PASS_WRAPPER_OPT_1("add_accelerate_matmul",
-                         intel::createTritonIntelGPUAccelerateMatmul,
-                         intel::DeviceArch);
+  ADD_PASS_WRAPPER_0("add_accelerate_matmul",
+                     intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
                      intel::createIntelDecomposeUnsupportedConversions);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_OPT_2("add_pipeline", intel::createTritonIntelGPUPipeline,
-                         int, intel::DeviceArch);
+                         int, bool);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      intel::createTritonIntelGPURemoveLayoutConversions);
-  ADD_PASS_WRAPPER_OPT_1("add_rewrite_tensor_pointer",
-                         intel::createTritonIntelGPURewriteTensorPointer,
-                         intel::DeviceArch);
+  ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
+                     intel::createTritonIntelGPURewriteTensorPointer);
   ADD_PASS_WRAPPER_0("add_prefetch_block",
                      intel::createTritonIntelGPUPrefetchBlock);
   ADD_PASS_WRAPPER_0("add_distribute_to_warps",
@@ -74,6 +72,7 @@ void init_triton_intel(py::module &&m) {
     mlir::DialectRegistry registry;
     registry
         .insert<TritonGEN::TritonGENDialect, intel::TritonIntelGPUDialect>();
+    mlir::registerTritonGENDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });

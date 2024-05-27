@@ -101,11 +101,10 @@ You will specifically learn about:
 #
 #  .. code-block:: Python
 #
-#    pid = triton.program_id(0);
-#    grid_m = (M + BLOCK_SIZE_M - 1) // BLOCK_SIZE_M;
-#    grid_n = (N + BLOCK_SIZE_N - 1) // BLOCK_SIZE_N;
-#    pid_m = pid / grid_n;
-#    pid_n = pid % grid_n;
+#    pid = tl.program_id(axis=0)
+#    grid_n = tl.cdiv(N, BLOCK_SIZE_N)
+#    pid_m = pid // grid_n
+#    pid_n = pid % grid_n
 #
 # is just not going to cut it.
 #
@@ -171,8 +170,26 @@ def is_xpu():
 
 
 def get_xpu_autotune_config():
-    # FIXME: Add autotune config for XPU.
-    return get_cuda_autotune_config()
+    return [
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
+    ]
 
 
 def get_cuda_autotune_config():

@@ -107,24 +107,22 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     MLIRContext *ctx = funcOp->getContext();
     auto mod = funcOp->getParentOfType<ModuleOp>();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    if (LLVM::isKernel(funcOp))
+    if (LLVM::isKernel(funcOp)) {
       newFuncOp.setCConv(LLVM::CConv::SPIR_KERNEL);
+      newFuncOp.setLinkage(LLVM::Linkage::External);
+    }
 
-    auto maxWorkGroupSizeAttr = rewriter.getArrayAttr(
-        {rewriter.getStringAttr(
-             TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName()),
-         rewriter.getStringAttr(std::to_string(threadsPerWarp * numWarps) +
-                                ",1,1")});
-    auto reqSubGroupSizeAttr = rewriter.getArrayAttr(
-        {rewriter.getStringAttr(
-             TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName()),
-         rewriter.getStringAttr(std::to_string(threadsPerWarp))});
-    newFuncOp.setPassthroughAttr(
-        ArrayAttr::get(ctx, {reqSubGroupSizeAttr, maxWorkGroupSizeAttr}));
+    NamedAttrList attrs;
+    attrs.append(TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
+                 rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
+    attrs.append(TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName(),
+                 rewriter.getI32ArrayAttr({threadsPerWarp}));
+    newFuncOp->setDialectAttrs(attrs);
 
     if (!LLVM::isKernel(funcOp)) {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
+      newFuncOp.setLinkage(LLVM::Linkage::Internal);
       rewriter.eraseOp(amendedFuncOp);
     }
 

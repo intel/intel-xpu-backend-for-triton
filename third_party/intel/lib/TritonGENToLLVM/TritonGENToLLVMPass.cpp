@@ -237,15 +237,6 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   return true;
 }
 
-static Value calculateSurface(Value shape, Value elemSizeInBytes,
-                              bool multiplyBytes, Location &loc,
-                              ConversionPatternRewriter &rewriter) {
-  Value truncatedShape = trunc(i32_ty, shape);
-  if (multiplyBytes)
-    truncatedShape = mul(truncatedShape, elemSizeInBytes);
-  return sub(truncatedShape, i32_val(1));
-}
-
 static LLVM::CallOp
 createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                         ConversionPatternRewriter &rewriter) {
@@ -266,27 +257,17 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
         op.getY(), i32_val(1));
     SmallVector<Type> argTypes{ptr_ty(context, 1), i32_ty, i32_ty, i32_ty,
                                vecType};
-
-    Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
-    auto truncToI32 = [&](Value v) { return trunc(i32_ty, v); };
-    SmallVector<Value> args{
-        op.getPtr(), mul(truncToI32(op.getBaseWidth()), elemSizeInBytes),
-        truncToI32(op.getBaseHeight()),
-        mul(truncToI32(op.getBasePitch()), elemSizeInBytes), byteCoord};
+    SmallVector<Value> args{op.getPtr(), op.getBaseWidth(), op.getBaseHeight(),
+                            op.getBasePitch(), byteCoord};
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
                                     true /*convergent*/);
   }
 
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   Value ptr = op.getPtr();
-  Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
-
-  Value baseWidth =
-      calculateSurface(op.getBaseWidth(), elemSizeInBytes, true, loc, rewriter);
-  Value baseHeight = calculateSurface(op.getBaseHeight(), elemSizeInBytes,
-                                      false, loc, rewriter);
-  Value basePitch =
-      calculateSurface(op.getBasePitch(), elemSizeInBytes, true, loc, rewriter);
+  Value baseWidth = op.getBaseWidth();
+  Value baseHeight = op.getBaseHeight();
+  Value basePitch = op.getBasePitch();
   Value x = op.getX();
   Value y = op.getY();
 
@@ -337,9 +318,19 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   auto cache = rewriter.create<LLVM::ConstantOp>(
       loc, int32Ty, static_cast<int>(op.getCacheControl()));
 
-  SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
-                          x,          y,         elemSize,     tileWidth,
-                          tileHeight, vBlocks,   useTranspose, vnniTransform,
+  Value one = i32_val(1);
+  SmallVector<Value> args{ptr,
+                          sub(baseWidth, one),
+                          sub(baseHeight, one),
+                          sub(basePitch, one),
+                          x,
+                          y,
+                          elemSize,
+                          tileWidth,
+                          tileHeight,
+                          vBlocks,
+                          useTranspose,
+                          vnniTransform,
                           cache};
 
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
@@ -353,15 +344,9 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   Location loc = op->getLoc();
 
   Value ptr = op.getPtr();
-  Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
-
-  Value baseWidth =
-      calculateSurface(op.getBaseWidth(), elemSizeInBytes, true, loc, rewriter);
-  Value baseHeight = calculateSurface(op.getBaseHeight(), elemSizeInBytes,
-                                      false, loc, rewriter);
-  Value basePitch =
-      calculateSurface(op.getBasePitch(), elemSizeInBytes, true, loc, rewriter);
-
+  Value baseWidth = op.getBaseWidth();
+  Value baseHeight = op.getBaseHeight();
+  Value basePitch = op.getBasePitch();
   Value x = op.getX();
   Value y = op.getY();
   Value storeVal = op.getStoredVal();
@@ -414,10 +399,21 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   auto cache = rewriter.create<LLVM::ConstantOp>(
       loc, int32Ty, static_cast<int>(op.getCacheControl()));
 
-  SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
-                          x,          y,         elemSize,     tileWidth,
-                          tileHeight, vBlocks,   useTranspose, vnniTransform,
-                          cache,      storeVal};
+  Value one = i32_val(1);
+  SmallVector<Value> args{ptr,
+                          sub(baseWidth, one),
+                          sub(baseHeight, one),
+                          sub(basePitch, one),
+                          x,
+                          y,
+                          elemSize,
+                          tileWidth,
+                          tileHeight,
+                          vBlocks,
+                          useTranspose,
+                          vnniTransform,
+                          cache,
+                          storeVal};
 
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
 }
@@ -430,15 +426,9 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   Location loc = op->getLoc();
 
   Value ptr = op.getPtr();
-  Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
-
-  Value baseWidth =
-      calculateSurface(op.getBaseWidth(), elemSizeInBytes, true, loc, rewriter);
-  Value baseHeight = calculateSurface(op.getBaseHeight(), elemSizeInBytes,
-                                      false, loc, rewriter);
-  Value basePitch =
-      calculateSurface(op.getBasePitch(), elemSizeInBytes, true, loc, rewriter);
-
+  Value baseWidth = op.getBaseWidth();
+  Value baseHeight = op.getBaseHeight();
+  Value basePitch = op.getBasePitch();
   Value x = op.getX();
   Value y = op.getY();
 
@@ -483,9 +473,19 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   auto cache = rewriter.create<LLVM::ConstantOp>(
       loc, int32Ty, static_cast<int>(op.getCacheControl()));
 
-  SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
-                          x,          y,         elemSize,     tileWidth,
-                          tileHeight, vBlocks,   useTranspose, vnniTransform,
+  Value one = i32_val(1);
+  SmallVector<Value> args{ptr,
+                          sub(baseWidth, one),
+                          sub(baseHeight, one),
+                          sub(basePitch, one),
+                          x,
+                          y,
+                          elemSize,
+                          tileWidth,
+                          tileHeight,
+                          vBlocks,
+                          useTranspose,
+                          vnniTransform,
                           cache};
 
   return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
@@ -665,7 +665,7 @@ struct TritonGENSubgroupIdLowering
                   ConversionPatternRewriter &rewriter) const override {
     auto retType = rewriter.getIntegerType(32);
     LLVM::CallOp callOp = createDeviceFunctionCall(
-        rewriter, "_Z16get_sub_group_idv", retType, {}, {});
+        rewriter, "_Z25__spirv_BuiltInSubgroupIdv", retType, {}, {});
     rewriter.replaceOp(op, callOp);
     return success();
   }
