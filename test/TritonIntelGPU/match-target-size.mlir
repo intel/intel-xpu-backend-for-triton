@@ -167,3 +167,57 @@ tt.func public @simplify_scf_for(%arg0: tensor<16x8xf16>, %arg1: tensor<16x8xf16
   }
   tt.return
 }
+
+// -----
+
+// COM: Test transformation for int8 datatype
+
+// CHECK-LABEL: @matmul_kernel_with_block_pointers
+#warp = #triton_intel_gpu.warp<{sizePerThread = [8, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
+tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg5: i32) {
+  %cst = arith.constant dense<0> : tensor<8x32xi32, #warp>
+  %c0_i32 = arith.constant 0 : i32
+  %c0_i64 = arith.constant 0 : i64
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i32 = arith.constant 64 : i32
+  // CHECK: %[[TPTR_A:.*]] = tt.make_tensor_ptr %arg0,
+  // CHECK: %[[TPTR_B1:.*]] = tt.make_tensor_ptr %arg1,
+  // CHECK: %[[TPTR_B2:.*]] = tt.make_tensor_ptr %arg1,
+  %tptr_a = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%c0_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>>
+  %tptr_b = tt.make_tensor_ptr %arg1, [%c0_i64,%c0_i64], [%c0_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xi8, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>
+  // CHECK: %[[LOOP_RES:.*]]:5 = scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ITER_1:.*]] = %{{.*}}, %[[ITER_2:.*]] = %{{.*}}, %[[TPTR_A_ITER:.*]] = %[[TPTR_A]], %[[TPTR_B1_ITER:.*]] = %[[TPTR_B1]], %[[TPTR_B2_ITER:.*]] = %[[TPTR_B2]])
+  %35:3 = scf.for %arg9 = %c0_i32 to %arg5 step %c64_i32 iter_args(%arg10 = %cst, %arg11 = %tptr_a, %arg12 = %tptr_b) -> (tensor<8x32xi32, #warp>, !tt.ptr<tensor<8x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>>, !tt.ptr<tensor<64x32xi8, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>)  : i32 {
+    // CHECK: %[[LD_A:.*]] = tt.load %[[TPTR_A_ITER]] {DotIdx = 0 : i32, boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x64xi8>>
+    // CHECK: %[[LD_B1:.*]] = tt.load %[[TPTR_B1_ITER]] {DotIdx = 1 : i32, boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x32xi8>>
+    // CHECK: %[[LD_B2:.*]] = tt.load %[[TPTR_B2_ITER]] {DotIdx = 1 : i32, boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x32xi8>>
+    %46 = tt.load %arg11 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>>
+    %47 = tt.load %arg12 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x32xi8, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>
+    // CHECK: %[[EX_A_0:.*]] = triton_intel_gpu.extract %[[LD_A]][0] : tensor<8x64xi8> -> tensor<8x32xi8>
+    // CHECK: %[[EX_B1_0:.*]] = triton_intel_gpu.extract %[[LD_B1]][0] : tensor<32x32xi8> -> tensor<32x16xi8>
+    // CHECK: %[[DOT_1:.*]] = tt.dot %[[EX_A_0]], %[[EX_B1_0]], %[[ITER_1]], inputPrecision = tf32 : tensor<8x32xi8> * tensor<32x16xi8> -> tensor<8x16xi32>
+    // CHECK: %[[EX_A_1:.*]] = triton_intel_gpu.extract %[[LD_A]][1] : tensor<8x64xi8> -> tensor<8x32xi8>
+    // CHECK: %[[EX_B2_0:.*]] = triton_intel_gpu.extract %[[LD_B2]][0] : tensor<32x32xi8> -> tensor<32x16xi8>
+    // CHECK: %[[DOT_2:.*]] = tt.dot %[[EX_A_1]], %[[EX_B2_0]], %[[DOT_1]], inputPrecision = tf32 : tensor<8x32xi8> * tensor<32x16xi8> -> tensor<8x16xi32>
+    // CHECK: %[[EX_A_0:.*]] = triton_intel_gpu.extract %[[LD_A]][0] : tensor<8x64xi8> -> tensor<8x32xi8>
+    // CHECK: %[[EX_B1_1:.*]] = triton_intel_gpu.extract %[[LD_B1]][1] : tensor<32x32xi8> -> tensor<32x16xi8>
+    // CHECK: %[[DOT_3:.*]] = tt.dot %[[EX_A_0]], %[[EX_B1_1]], %[[ITER_2]], inputPrecision = tf32 : tensor<8x32xi8> * tensor<32x16xi8> -> tensor<8x16xi32>
+    // CHECK: %[[EX_A_1:.*]] = triton_intel_gpu.extract %[[LD_A]][1] : tensor<8x64xi8> -> tensor<8x32xi8>
+    // CHECK: %[[EX_B2_1:.*]] = triton_intel_gpu.extract %[[LD_B2]][1] : tensor<32x32xi8> -> tensor<32x16xi8>
+    // CHECK: %[[DOT_4:.*]] = tt.dot %[[EX_A_1]], %[[EX_B2_1]], %[[DOT_3]], inputPrecision = tf32 : tensor<8x32xi8> * tensor<32x16xi8> -> tensor<8x16xi32>
+    %48 = tt.dot %46, %47, %arg10, inputPrecision = tf32 : tensor<8x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>> * tensor<64x32xi8, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<8x32xi32, #warp>
+    // CHECK: %[[ADV_A:.*]] = tt.advance %[[TPTR_A_ITER]],
+    // CHECK: %[[ADV_B1:.*]] = tt.advance %[[TPTR_B1_ITER]],
+    // CHECK: %[[ADV_B2:.*]] = tt.advance %[[TPTR_B2_ITER]],
+    %49 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<8x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>>
+    %50 = tt.advance %arg12, [%c64_i32, %c0_i32] : <tensor<64x32xi8, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>
+    // CHECK: scf.yield %[[DOT_2]], %[[DOT_4]], %[[ADV_A]], %[[ADV_B1]], %[[ADV_B2]]
+    scf.yield %48, %49, %50 : tensor<8x32xi32, #warp>, !tt.ptr<tensor<8x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>>, !tt.ptr<tensor<64x32xi8, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>
+  } {triton_gpu.workload = 3 : i32}
+  // CHECK: %[[TPTR_C1:.*]] = tt.make_tensor_ptr %arg2,
+  // CHECK: %[[TPTR_C2:.*]] = tt.make_tensor_ptr %arg2,
+  %tptr_c = tt.make_tensor_ptr %arg2, [%c0_i64, %c0_i64], [%c0_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x32xi32, #warp>>
+  // CHECK: tt.store %[[TPTR_C1:.*]], %[[LOOP_RES]]#0 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x16xi32>>
+  // CHECK: tt.store %[[TPTR_C2:.*]], %[[LOOP_RES]]#1 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x16xi32>>
+  tt.store %tptr_c, %35#0 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x32xi32, #warp>>
+  tt.return
+}
