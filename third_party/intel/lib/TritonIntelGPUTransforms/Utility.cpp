@@ -139,8 +139,8 @@ bool hasDotDpasEncoding(RankedTensorType tensorType) {
 }
 
 bool hasDpasEncoding(RankedTensorType tensorType) {
-  if (auto Enc = tensorType.getEncoding())
-    return isa<ttgi::DpasEncodingAttr>(Enc);
+  if (auto encoding = tensorType.getEncoding())
+    return isa<ttgi::DpasEncodingAttr>(encoding);
   return false;
 }
 

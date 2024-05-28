@@ -54,7 +54,7 @@ bool isDivisible(Value value, unsigned divisor) {
 /// removed if:
 ///   - the device architecture is not PVC
 ///   - the tensor pointer does not have DotEncoding with DpasEncoding parent
-///   and not have a DpasEncoding
+///   and does not have DpasEncoding
 ///   - the tensor pointer pitch is not divisible by Qword bitwidth
 ///   - the tensor pointer is not contiguous on memory
 bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
@@ -733,12 +733,9 @@ public:
       } else if (llvm::isa<tt::StoreOp>(op)) {
         auto src = op->getOperand(0);
         if (tt::isTensorPointerType(src.getType())) {
-          if (auto makeTensorPtrOp = src.getDefiningOp<tt::MakeTensorPtrOp>()) {
-            if (shouldRemove(makeTensorPtrOp, arch))
-              valueToRemove.insert(src);
-          } else {
+          auto makeTensorPtrOp = src.getDefiningOp<tt::MakeTensorPtrOp>();
+          if (!makeTensorPtrOp || shouldRemove(makeTensorPtrOp, arch))
             valueToRemove.insert(src);
-          }
         }
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         for (auto arg : forOp.getInitArgs())
