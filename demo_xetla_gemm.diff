@@ -33,24 +33,48 @@ index 94c44764..cd67fed4 100644
  
  template <int m, int n, int k,
          kslicing_impl_t kslicing_type = kslicing_impl_t::none>
-diff --git a/tests/integration/gemm/bf16/main.cpp b/tests/integration/gemm/bf16/main.cpp
-index 670fc015..7e15ac60 100644
---- a/tests/integration/gemm/bf16/main.cpp
-+++ b/tests/integration/gemm/bf16/main.cpp
-@@ -34,8 +34,9 @@ TYPED_TEST_P(bf16_gemm_test, esimd) {
- }
- REGISTER_TYPED_TEST_SUITE_P(bf16_gemm_test, esimd);
- // using tests = ::testing::Types<Habana_Batch_Test0,Habana_Batch_Test1,Habana_Batch_Test2,Habana_Batch_Test3,Habana_Batch_Test4>;
--using tests = ::testing::Types<Habana_Test0, Habana_Test1, Habana_Test2,
--        Habana_Test3, Habana_Test4, Habana_Test5, Habana_Test6, Habana_Test7,
--        Habana_Test8, Habana_Test9, Habana_Test10>;
-+// using tests = ::testing::Types<Habana_Test0, Habana_Test1, Habana_Test2,
-+//         Habana_Test3, Habana_Test4, Habana_Test5, Habana_Test6, Habana_Test7,
-+//         Habana_Test8, Habana_Test9, Habana_Test10>;
- // using tests = ::testing::Types<Test1, Test2, Test3, Test4, Test5, Test6, Test7, Test8, Test9, Test10,Test11,Test12,Test13,Test14,Test15>;
-+using tests = ::testing::Types<Test2,Test3,Test6,Test10,Test12>;
- INSTANTIATE_TYPED_TEST_SUITE_P(bf16_gemm_test_suite, bf16_gemm_test, tests);
-\ No newline at end of file
+diff --git a/tests/integration/gemm/bf16/common.hpp b/tests/integration/gemm/bf16/common.hpp
+index 602f2e9a..60e13191 100644
+--- a/tests/integration/gemm/bf16/common.hpp
++++ b/tests/integration/gemm/bf16/common.hpp
+@@ -266,11 +266,11 @@ public:
+     static constexpr size_t mat_m = 1024;
+     static constexpr size_t mat_k = 28672;
+     static constexpr size_t mat_n = 8192;
+-    static constexpr size_t wg_m = 64;
+-    static constexpr size_t wg_n = 512;
++    static constexpr size_t wg_m = 256;
++    static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
+-    static constexpr size_t sg_n = 32;
+-    static constexpr size_t sg_k = 16;
++    static constexpr size_t sg_n = 64;
++    static constexpr size_t sg_k = 32;
+     static constexpr uint32_t local_kslicing = 1;
+     static constexpr uint32_t global_kslicing = 1;
+     static constexpr mem_layout layout_a = mem_layout::row_major;
+diff --git a/tests/integration/gemm/bf16/habana_tests.hpp b/tests/integration/gemm/bf16/habana_tests.hpp
+index b408b5c8..12157bbf 100644
+--- a/tests/integration/gemm/bf16/habana_tests.hpp
++++ b/tests/integration/gemm/bf16/habana_tests.hpp
+@@ -45,7 +45,7 @@ public:
+ class Habana_Test1 : public TestBase {
+ public:
+     static constexpr size_t mat_m = 512;
+-    static constexpr size_t mat_k = 8912;
++    static constexpr size_t mat_k = 8192;
+     static constexpr size_t mat_n = 32768;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+@@ -66,7 +66,7 @@ class Habana_Test2 : public TestBase {
+ public:
+     static constexpr size_t mat_m = 512;
+     static constexpr size_t mat_k = 32768;
+-    static constexpr size_t mat_n = 8912;
++    static constexpr size_t mat_n = 8192;
+     static constexpr size_t wg_m = 256;
+     static constexpr size_t wg_n = 256;
+     static constexpr size_t sg_m = 32;
 diff --git a/tests/integration/gemm/bf16_stream_k/main.cpp b/tests/integration/gemm/bf16_stream_k/main.cpp
 index b9f19201..c164756c 100644
 --- a/tests/integration/gemm/bf16_stream_k/main.cpp
