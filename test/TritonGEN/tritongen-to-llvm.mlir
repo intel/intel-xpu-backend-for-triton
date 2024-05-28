@@ -1,6 +1,6 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
-// CHECK-DAG: llvm.func spir_funccc @_Z16get_sub_group_idv() -> i32
+// CHECK-DAG: llvm.func spir_funccc @_Z25__spirv_BuiltInSubgroupIdv() -> i32
 // CHECK-DAG: llvm.func spir_funccc @_Z14get_num_groupsj(i32) -> i64
 // CHECK-DAG: llvm.func spir_funccc @_Z14get_local_sizej(i32) -> i64
 // CHECK-DAG: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64
@@ -49,7 +49,7 @@ llvm.func @gen_special_regs() -> i32 {
   // CHECK: llvm.call @_Z14get_num_groupsj([[TWO3]]) : (i32) -> i64
   %12 = triton_gen.grid.dim.z : i32
 
-  // CHECK: llvm.call @_Z16get_sub_group_idv() : () -> i32
+  // CHECK: llvm.call @_Z25__spirv_BuiltInSubgroupIdv() : () -> i32
   %13 = triton_gen.subgroup.id : i32
 
   llvm.return %1 : i32
