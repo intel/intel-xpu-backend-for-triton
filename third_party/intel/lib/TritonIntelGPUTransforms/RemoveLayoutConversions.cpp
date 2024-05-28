@@ -521,18 +521,16 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           if (isTensorPointerType(ptr.getType())) {
 
             // 2D block store are preceeded by a MakeTensorPtrOp
-            auto makeTensorPtrOp = dyn_cast<MakeTensorPtrOp>(
-                storeOp->getOperand(0).getDefiningOp());
+            auto makeTensorPtrOp = ptr.getDefiningOp<MakeTensorPtrOp>();
             // DPAS encoding have to be propagate if conversion from DPAS to
             // other has been done before.
             auto convertOp =
-                dyn_cast<ConvertLayoutOp>(storeOp.getValue().getDefiningOp());
+                storeOp.getValue().getDefiningOp<ConvertLayoutOp>();
             if (convertOp && makeTensorPtrOp) {
 
               Attribute convertOpDstEncoding =
                   convertOp.getType().getEncoding();
-              auto convertOpSrcType = dyn_cast<RankedTensorType>(
-                  convertOp->getOperand(0).getType());
+              RankedTensorType convertOpSrcType = convertOp.getSrc().getType();
               if ((convertOpDstEncoding &&
                    !isa<ttgi::DpasEncodingAttr>(convertOpDstEncoding)) &&
                   (convertOpSrcType && isa<ttgi::DpasEncodingAttr>(
