@@ -728,15 +728,8 @@ public:
     mod.walk([&](Operation *op) {
       if (llvm::isa<tt::MakeTensorPtrOp>(op)) {
         markTensorPointerForRemoval(op->getResult(0));
-      } else if (llvm::isa<tt::AdvanceOp, tt::LoadOp>(op)) {
+      } else if (llvm::isa<tt::AdvanceOp, tt::LoadOp, tt::StoreOp>(op)) {
         markTensorPointerForRemoval(op->getOperand(0));
-      } else if (llvm::isa<tt::StoreOp>(op)) {
-        auto src = op->getOperand(0);
-        if (tt::isTensorPointerType(src.getType())) {
-          auto makeTensorPtrOp = src.getDefiningOp<tt::MakeTensorPtrOp>();
-          if (!makeTensorPtrOp || shouldRemove(makeTensorPtrOp, arch))
-            valueToRemove.insert(src);
-        }
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         for (auto arg : forOp.getInitArgs())
           markTensorPointerForRemoval(arg);
