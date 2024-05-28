@@ -7,8 +7,8 @@
 #include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
-#include "triton/Conversion/TritonToTritonGPU/Passes.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
+#include "intel/include/TritonToTritonGPUWarp/Passes.h"
+#include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -20,15 +20,18 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 // Macros to create a pass that takes pass options.
+#define ADD_PASS_WRAPPER_OPT_1(name, builder, ty0)                             \
+  m.def(name,                                                                  \
+        [](mlir::PassManager &pm, ty0 val0) { pm.addPass(builder({val0})); })
 #define ADD_PASS_WRAPPER_OPT_2(name, builder, ty0, ty1)                        \
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
     pm.addPass(builder({val0, val1}));                                         \
   })
 
 void init_triton_intel_passes_ttir(py::module &&m) {
-  ADD_PASS_WRAPPER_1("add_convert_to_ttgpuir_warp",
-                     mlir::triton::createConvertTritonToTritonGPUWarpPass,
-                     unsigned);
+  ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
+                         mlir::triton::createConvertTritonToTritonGPUWarp,
+                         unsigned);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {

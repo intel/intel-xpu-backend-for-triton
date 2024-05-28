@@ -16,8 +16,8 @@
 /// through def/use chain. Finally, each tensor operation is annotated
 /// with layout attribute describing what each warp should do.
 //===----------------------------------------------------------------------===//
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 
+#include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -25,6 +25,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -37,8 +38,11 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
-#define GEN_PASS_CLASSES
-#include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
+namespace mlir::triton {
+#define GEN_PASS_DECL_CONVERTTRITONTOTRITONGPUWARP
+#define GEN_PASS_DEF_CONVERTTRITONTOTRITONGPUWARP
+#include "intel/include/TritonToTritonGPUWarp/Passes.h.inc"
+} // namespace mlir::triton
 
 #define DEBUG_TYPE "convert-triton-to-tritongpu-warp"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -120,9 +124,15 @@ struct LoopDotInfo {
   }
 };
 
+} // namespace
+
+namespace mlir::triton {
 class ConvertTritonToTritonGPUWarp
-    : public ConvertTritonToTritonGPUWarpBase<ConvertTritonToTritonGPUWarp> {
+    : public impl::ConvertTritonToTritonGPUWarpBase<
+          ConvertTritonToTritonGPUWarp> {
 public:
+  using impl::ConvertTritonToTritonGPUWarpBase<
+      ConvertTritonToTritonGPUWarp>::ConvertTritonToTritonGPUWarpBase;
   ConvertTritonToTritonGPUWarp() = default;
   ConvertTritonToTritonGPUWarp(unsigned numWarps) { this->numWarps = numWarps; }
 
@@ -455,14 +465,4 @@ public:
   }
 };
 
-} // namespace
-
-std::unique_ptr<OperationPass<ModuleOp>>
-mlir::triton::createConvertTritonToTritonGPUWarpPass(unsigned numWarps) {
-  return std::make_unique<::ConvertTritonToTritonGPUWarp>(numWarps);
-}
-
-std::unique_ptr<OperationPass<ModuleOp>>
-mlir::triton::createConvertTritonToTritonGPUWarpPass() {
-  return std::make_unique<::ConvertTritonToTritonGPUWarp>();
-}
+} // namespace mlir::triton
