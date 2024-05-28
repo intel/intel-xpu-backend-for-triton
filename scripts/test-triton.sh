@@ -5,6 +5,7 @@ set -euo pipefail
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Select which tests to run.
+TEST_MICRO_BENCHMARKS=false
 TEST_CORE=false
 TEST_TUTORIAL=false
 TEST_UNIT=false
@@ -16,6 +17,10 @@ SKIP_DEPS=false
 ARGS=
 for arg in "$@"; do
   case $arg in
+    --microbench)
+      TEST_MICRO_BENCHMARKS=true
+      shift
+      ;;
     --core)
       TEST_CORE=true
       shift
@@ -49,7 +54,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports | --warning-reports | --ignore-errors]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports | --warning-reports | --ignore-errors | --microbench]"
       exit 1
       ;;
     *)
@@ -59,7 +64,8 @@ for arg in "$@"; do
   esac
 done
 
-if [ "$TEST_CORE" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_UNIT" = false ]; then
+if [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_UNIT" = false ]; then
+  TEST_MICRO_BENCHMARKS=true
   TEST_CORE=true
   TEST_TUTORIAL=true
   TEST_UNIT=true
@@ -93,6 +99,17 @@ then
   echo "****** ERROR: Build Triton first ******"
   exit 1
 fi
+
+run_benchmark_tests() {
+  echo "****************************************************"
+  echo "*****   Running Triton Micro Benchmark tests   *****"
+  echo "****************************************************"
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/micro_benchmarks
+  if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
+    echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
+  fi
+  python ${BENCHMARK_TEST_DIR}/run_benchmarks.py
+}
 
 run_unit_tests() {
   echo "***************************************************"
@@ -186,6 +203,9 @@ run_tutorial_tests() {
 }
 
 test_triton() {
+  if [ "$TEST_MICRO_BENCHMARKS" = true ]; then
+    run_benchmark_tests
+  fi
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
   fi
