@@ -86,6 +86,11 @@ if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
 fi
 
 source $SCRIPTS_DIR/pytest-utils.sh
+# got GPU_TYPE & AGAMA_VERSION, example here
+GPU_TYPE="pvc"
+AGAMA_TYPE="TBD" # real value depends on the other PR
+TRITON_TEST_SKIPLIST_DIR=$SCRIPTS_DIR/skiplist/${GPU_TYPE}_${AGAMA_TYPE}
+
 $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
@@ -190,6 +195,12 @@ test_triton() {
     run_unit_tests
   fi
   if [ "$TEST_CORE" = true ]; then
+    # only pre-run tests to replace when no skiplist dir exist.
+    if [ ! -d "${TRITON_TEST_SKIPLIST_DIR}" ]; then
+      # execute run_core_tests & run_regression_tests with NO skiplist
+      source ${SCRIPTS_DIR}/replace_skipcall_to_skiplist.sh
+    fi
+    # execute run_core_tests & run_regression_tests with skiplist
     run_core_tests
     run_regression_tests
   fi
