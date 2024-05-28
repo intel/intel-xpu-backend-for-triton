@@ -514,8 +514,8 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         rewriteAssertOp(assertOp);
       } else {
         if (auto storeOp = dyn_cast<StoreOp>(&op)) {
-          // If storeOp is a pointer to a tensor, we try to found out if the
-          // data has a initially a DPAS encoding and forward it to the StoreOp
+          // If storeOp is a pointer to a tensor, we try to find out if the
+          // data has initially a DPAS encoding and forward it to the StoreOp
           // to enable 2D block store.
           auto ptr = storeOp.getPtr();
           if (isTensorPointerType(ptr.getType())) {
@@ -555,9 +555,11 @@ void LayoutPropagation::rewriteRegion(Region &region) {
                   storeOp.setOperand(1, newOperand);
 
                   // If the DPAS encoding is forwarded, we do not need the
-                  // convertOp anymore. The convertOp is therefore removed.
-                  convertOp.replaceAllUsesWith(convertOp->getOperand(0));
-                  opToDelete.insert(convertOp);
+                  // convertOp anymore if the convertOp was only used by the
+                  // storeOp. In this case, the convertOp is therefore removed.
+                  if (convertOp->hasOneUse()) {
+                    opToDelete.insert(convertOp);
+                  }
                   continue;
                 }
               }
