@@ -385,8 +385,9 @@ struct LoadOpConversion
     Type unpackType = LLVM::getFixedVectorType(
         typeConverter->convertType(eltTy), elemsPerLane);
 
-    // pack scalar to i16 for operand A, to i32 for operand B.
-    Type elemType = isOperandA ? i16_ty : i32_ty;
+    // pack scalar to i16 for operand A and when element type is not tf32, to
+    // i32 for operand B or when element type is tf32.
+    Type elemType = isOperandA && eltTy != f32_ty ? i16_ty : i32_ty;
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
     elemsPerLane = isOperandA ? elemsPerLane / (opsPerChannel == 4 ? 2 : 1)
                               : elemsPerLane / opsPerChannel;
