@@ -175,14 +175,16 @@ tt.func public @simplify_scf_for(%arg0: tensor<16x8xf16>, %arg1: tensor<16x8xf16
 // CHECK-LABEL: @matmul_kernel_with_block_pointers
 #warp = #triton_intel_gpu.warp<{sizePerThread = [8, 32], threadsPerWarp = [1, 1], order = [1, 0]}>
 tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg5: i32) {
+  // CHECK-DAG: %[[C0:.*]] = arith.constant 0 : i32
+  // CHECK-DAG: %[[C32:.*]] = arith.constant 32 : i32
   %cst = arith.constant dense<0> : tensor<8x32xi32, #warp>
   %c0_i32 = arith.constant 0 : i32
   %c0_i64 = arith.constant 0 : i64
   %c1_i64 = arith.constant 1 : i64
   %c64_i32 = arith.constant 64 : i32
-  // CHECK: %[[TPTR_A:.*]] = tt.make_tensor_ptr %arg0,
-  // CHECK: %[[TPTR_B1:.*]] = tt.make_tensor_ptr %arg1,
-  // CHECK: %[[TPTR_B2:.*]] = tt.make_tensor_ptr %arg1,
+  // CHECK: %[[TPTR_A:.*]] = tt.make_tensor_ptr %arg0, [%{{.*}}, %{{.*}}], [%{{.*}}, %{{.*}}], [%{{.*}}, %[[C0]]]
+  // CHECK: %[[TPTR_B1:.*]] = tt.make_tensor_ptr %arg1, [%{{.*}}, %{{.*}}], [%{{.*}}, %{{.*}}], [%[[C0]], %{{.*}}]
+  // CHECK: %[[TPTR_B2:.*]] = tt.make_tensor_ptr %arg1, [%{{.*}}, %{{.*}}], [%{{.*}}, %{{.*}}], [%[[C32]], %{{.*}}]
   %tptr_a = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%c0_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>>>
   %tptr_b = tt.make_tensor_ptr %arg1, [%c0_i64,%c0_i64], [%c0_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xi8, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>
   // CHECK: %[[LOOP_RES:.*]]:5 = scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ITER_1:.*]] = %{{.*}}, %[[ITER_2:.*]] = %{{.*}}, %[[TPTR_A_ITER:.*]] = %[[TPTR_A]], %[[TPTR_B1_ITER:.*]] = %[[TPTR_B1]], %[[TPTR_B2_ITER:.*]] = %[[TPTR_B2]])

@@ -71,38 +71,39 @@ namespace {
 class TargetArchNativeSizes {
 public:
   struct DotShape {
-    DotShape() = default;
     DotShape(unsigned m, unsigned n, unsigned k) : m(m), n(n), k(k) {
       assert(m != 0 && n != 0 && k != 0 && "expecting valid shape");
     }
 
-    unsigned m = 0;
-    unsigned n = 0;
-    unsigned k = 0;
+    const unsigned m;
+    const unsigned n;
+    const unsigned k;
   };
 
   struct BlockMemShape {
-    BlockMemShape() = default;
     BlockMemShape(unsigned rowsA, unsigned columnsA, unsigned rowsB,
                   unsigned columnsB)
         : rowsA(rowsA), columnsA(columnsA), rowsB(rowsB), columnsB(columnsB) {
-      assert(rowsA != 0 && columnsA != 0 && rowsB && columnsB != 0 &&
+      assert(rowsA != 0 && columnsA != 0 && rowsB != 0 && columnsB != 0 &&
              "expecting valid shape");
     }
 
-    unsigned rowsA = 0;
-    unsigned columnsA = 0;
-    unsigned rowsB = 0;
-    unsigned columnsB = 0;
+    const unsigned rowsA;
+    const unsigned columnsA;
+    const unsigned rowsB;
+    const unsigned columnsB;
   };
 
   TargetArchNativeSizes() = default;
 
-  void setDotShape(unsigned bitWidth, DotShape shape) {
-    dotShapes[bitWidth] = shape;
+  void setDotShape(unsigned bitWidth, DotShape &&shape) {
+    assert(!dotShapes.contains(bitWidth) && "Dot shape already set");
+    dotShapes.try_emplace(bitWidth, std::move(shape));
   }
-  void setBlockMemShape(unsigned bitWidth, BlockMemShape shape) {
-    blockMemShapes[bitWidth] = shape;
+  void setBlockMemShape(unsigned bitWidth, BlockMemShape &&shape) {
+    assert(!blockMemShapes.contains(bitWidth) &&
+           "Block memory access shape already set");
+    blockMemShapes.try_emplace(bitWidth, std::move(shape));
   }
   void setLoadStoreSize(unsigned size) { loadStoreSize = size; }
   const DotShape &getDotShape(unsigned bitWidth) const {
@@ -422,19 +423,15 @@ void MatchTargetSizePass::initNativeOperationSizes() {
   // architecture using the target architecture information when available.
   // These values works for PVC.
 
-  // clang-format off
-  //                bitwidth   M   N   K
-  nativeSizes.setDotShape( 8, {8, 16, 32});
+  nativeSizes.setDotShape(8, {8, 16, 32});
   nativeSizes.setDotShape(16, {8, 16, 16});
-  nativeSizes.setDotShape(32, {8, 16,  8});
+  nativeSizes.setDotShape(32, {8, 16, 8});
 
-  //                     bitwidth   rA  cA  rB  cB
-  nativeSizes.setBlockMemShape( 8, {16, 64, 32, 32});
+  nativeSizes.setBlockMemShape(8, {16, 64, 32, 32});
   nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
-  nativeSizes.setBlockMemShape(32, { 8,  8,  8, 16});
+  nativeSizes.setBlockMemShape(32, {8, 8, 8, 16});
 
   nativeSizes.setLoadStoreSize(512); // max 512DW;
-  // clang-format on
 }
 
 bool MatchTargetSizePass::isCandidate(Type type) const {
