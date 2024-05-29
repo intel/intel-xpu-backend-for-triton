@@ -251,10 +251,9 @@ def get_hip_autotune_config():
 
 
 def get_autotune_config():
-    target = triton.runtime.driver.active.get_current_target()
-    if target.backend == 'xpu':
+    if is_xpu():
         return get_xpu_autotune_config()
-    elif target.backend == 'cuda':
+    elif is_cuda():
         return get_cuda_autotune_config()
     else:
         return get_hip_autotune_config()
@@ -347,10 +346,9 @@ def matmul_kernel(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `_matmul`.
+# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `matmul_kernel`.
 @triton.jit
 def leaky_relu(x):
-    x = x + 1
     return tl.where(x >= 0, x, 0.01 * x)
 
 
