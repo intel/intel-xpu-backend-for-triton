@@ -270,6 +270,43 @@ def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
 def TritonGEN_CacheControls
     : TritonGEN_Op<"cache_controls",
                    [AllTypesMatch<["ptr", "decorated_ptr"]>, Pure]> {
+  let summary = "Operation implementing SPIR-V cache control decorations";
+  let description = [{
+    This operation implements an MLIR representation of SPIR-V cache controls.
+    `triton_gen.cache_controls` can be translated directly to LLVM IR. User
+    instructions in the resulting translation will present metadata representing
+    cache controls as specified in
+    https://github.com/KhronosGroup/SPIRV-Registry/blob/main/extensions/INTEL/SPV_INTEL_cache_controls.asciidoc.
+    This way, the following MLIR code:
+
+    ```mlir
+    llvm.func @triton_gen.cache_controls(%arg0: !llvm.ptr) {
+      %0 = triton_gen.cache_controls %arg0, [#triton_gen.store_cache_control<0, WriteBack>, #triton_gen.store_cache_control<1, Streaming>, #triton_gen.load_cache_control<0, Streaming>, #triton_gen.load_cache_control<1, InvalidateAfterRead>, #triton_gen.load_cache_control<2, ConstCached>] : !llvm.ptr
+      %1 = llvm.load %0 : !llvm.ptr -> i32
+      llvm.return
+    }
+    ```
+
+    Will be translated to the following LLVM IR:
+
+    ```llvm
+    define void @triton_gen.cache_controls(ptr %0) {
+      %2 = load i32, ptr %0, align 4, !spirv.DecorationCacheControlINTEL !1
+      ret void
+    }
+
+    !1 = !{!2, !3, !4, !5, !6}
+    !2 = !{i32 6443, i32 0, i32 2, i32 0}
+    !3 = !{i32 6443, i32 1, i32 3, i32 0}
+    !4 = !{i32 6442, i32 0, i32 2, i32 0}
+    !5 = !{i32 6442, i32 1, i32 3, i32 0}
+    !6 = !{i32 6442, i32 2, i32 4, i32 0}
+    ```
+
+    $cache_controls must be a non-empty list of cache controls attributes
+    and two attributes of the same nature (load or store) in the list cannot be
+    applied to the same cache level, as per the SPIR-V validation rules.
+  }];
   let arguments = (ins LLVM_AnyPointer:$ptr,
                        CacheControlsArray:$cache_controls);
   let results = (outs LLVM_AnyPointer:$decorated_ptr);
