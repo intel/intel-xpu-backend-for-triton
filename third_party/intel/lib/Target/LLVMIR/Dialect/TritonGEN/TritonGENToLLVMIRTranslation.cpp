@@ -31,7 +31,6 @@ class TritonGENDialectLLVMIRTranslationInterface
 public:
   using LLVMTranslationDialectInterface::LLVMTranslationDialectInterface;
 
-  constexpr static std::size_t decorationCacheControlArity = 4;
   constexpr static llvm::StringLiteral decorationCacheControlAttrName =
       "triton_gen.DecorationCacheControlINTEL";
 
@@ -121,6 +120,8 @@ private:
     llvm::LLVMContext &ctx = inst->getContext();
     llvm::transform(
         attrs, std::back_inserter(decorations), [&ctx](Attribute attr) {
+          constexpr std::size_t decorationCacheControlArity = 4;
+
           auto arrayAttr = cast<DenseI32ArrayAttr>(attr);
           ArrayRef<int> attrs = arrayAttr.asArrayRef();
           assert(attrs.size() == decorationCacheControlArity &&
@@ -133,7 +134,7 @@ private:
           });
           return llvm::MDNode::get(ctx, metadata);
         });
-    constexpr static llvm::StringLiteral decorationCacheControlMDName =
+    constexpr llvm::StringLiteral decorationCacheControlMDName =
         "spirv.DecorationCacheControlINTEL";
     inst->setMetadata(decorationCacheControlMDName,
                       llvm::MDNode::get(ctx, decorations));
