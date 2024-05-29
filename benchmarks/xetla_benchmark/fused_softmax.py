@@ -45,9 +45,6 @@ def naive_softmax(x):
         triton.Config({}, num_warps=32),
         triton.Config({}, num_warps=8),
         triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=32),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=4),
     ],
     key=['n_cols', 'BLOCK_SIZE'],
 )
