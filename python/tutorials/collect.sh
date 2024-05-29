@@ -21,6 +21,38 @@ fi
 sed -i "s/x_vals=.*/x_vals=[[$M, $K, $N]],/g" 09-experimental-block-pointer.py
 sed -i "s/float M = .*/float M = $M, K = $K, N = $N;/g" ../../third_party/intel/backend/driver.py
 
+# default
+BLOCK_SIZE_M=256
+BLOCK_SIZE_N=256
+BLOCK_SIZE_K=32
+GROUP_SIZE_M=4
+num_stages=4
+num_warps=32
+
+# Small M
+if [ $M  -le 8 ]
+then
+    BLOCK_SIZE_M=8
+    BLOCK_SIZE_N=512
+    BLOCK_SIZE_K=64
+    GROUP_SIZE_M=1
+    num_stages=4
+    num_warps=32
+fi
+
+if [ $M  = 4096 ] && [ $K = 4096 ]	&& [ $N = 128 ]
+then
+    BLOCK_SIZE_M=64
+    BLOCK_SIZE_N=128
+    BLOCK_SIZE_K=32
+    GROUP_SIZE_M=4
+    num_stages=4
+    num_warps=32
+fi
+
+echo "===Using: BLOCK_SIZE_M: $BLOCK_SIZE_M, BLOCK_SIZE_N: $BLOCK_SIZE_N, BLOCK_SIZE_K: $BLOCK_SIZE_K, GROUP_SIZE_M: $GROUP_SIZE_M, num_stages: $num_stages, num_warps: $num_warps====="
+sed -i "s/triton.Config({'BLOCK_SIZE_M'.*/triton.Config({'BLOCK_SIZE_M': $BLOCK_SIZE_M, 'BLOCK_SIZE_N': $BLOCK_SIZE_N, 'BLOCK_SIZE_K': $BLOCK_SIZE_K, 'GROUP_SIZE_M': $GROUP_SIZE_M}, num_stages=$num_stages, num_warps=$num_warps),/g" 09-experimental-block-pointer.py
+
 # clean Triton cache
 rm -rf ./tt_cache
 export TRITON_CACHE_DIR=./tt_cache
