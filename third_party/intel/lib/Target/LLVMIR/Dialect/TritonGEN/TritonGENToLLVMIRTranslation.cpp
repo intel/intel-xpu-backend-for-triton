@@ -40,8 +40,9 @@ public:
                  LLVM::ModuleTranslation &moduleTranslation) const final {
     StringRef attrName = attribute.getName().getValue();
     if (attrName == decorationCacheControlAttrName) {
-      assert(instructions.size() == 1 && "Expecting a single instruction");
-      return handleDecorationCacheControl(instructions.front(), attribute,
+      if (instructions.size() != 1)
+        return op->emitOpError("Expecting a single instruction");
+      return handleDecorationCacheControl(op, instructions.front(), attribute,
                                           moduleTranslation);
     }
     if (attrName.starts_with("triton_gen"))
@@ -64,7 +65,7 @@ public:
           return success();
         })
         .Default([](Operation *op) {
-          return op->emitError("unsupported TritonGEN operation: ")
+          return op->emitOpError("unsupported TritonGEN operation: ")
                  << op->getName();
         });
   }
@@ -109,31 +110,33 @@ private:
   }
 
   static LogicalResult
-  handleDecorationCacheControl(llvm::Instruction *inst,
+  handleDecorationCacheControl(Operation *op, llvm::Instruction *inst,
                                NamedAttribute attribute,
                                LLVM::ModuleTranslation &moduleTranslation) {
     assert(attribute.getName() == decorationCacheControlAttrName &&
            "Expecting decoration cache key");
-    auto arrayAttr = cast<ArrayAttr>(attribute.getValue());
+    auto arrayAttr = dyn_cast<ArrayAttr>(attribute.getValue());
+    if (!arrayAttr)
+      return op->emitOpError("unexpected attribute type");
     ArrayRef<Attribute> attrs = arrayAttr.getValue();
     SmallVector<llvm::Metadata *> decorations;
     llvm::LLVMContext &ctx = inst->getContext();
-    llvm::transform(
-        attrs, std::back_inserter(decorations), [&ctx](Attribute attr) {
-          constexpr std::size_t decorationCacheControlArity = 4;
+    for (Attribute attr : attrs) {
+      constexpr std::size_t decorationCacheControlArity = 4;
 
-          auto arrayAttr = cast<DenseI32ArrayAttr>(attr);
-          ArrayRef<int> attrs = arrayAttr.asArrayRef();
-          assert(attrs.size() == decorationCacheControlArity &&
-                 "Invalid decoration cache attribute arity");
-          constexpr unsigned numBits = 32;
-          llvm::Type *type = llvm::IntegerType::get(ctx, numBits);
-          std::array<llvm::Metadata *, decorationCacheControlArity> metadata;
-          llvm::transform(attrs, metadata.begin(), [type](int val) {
-            return getConstantIntMD(type, val);
-          });
-          return llvm::MDNode::get(ctx, metadata);
-        });
+      auto arrayAttr = dyn_cast<DenseI32ArrayAttr>(attr);
+      if (!arrayAttr)
+        return op->emitOpError("unexpected attribute type");
+      ArrayRef<int> attrs = arrayAttr.asArrayRef();
+      if (attrs.size() != decorationCacheControlArity)
+        return op->emitOpError("Invalid decoration cache attribute arity");
+      constexpr unsigned numBits = 32;
+      llvm::Type *type = llvm::IntegerType::get(ctx, numBits);
+      std::array<llvm::Metadata *, decorationCacheControlArity> metadata;
+      llvm::transform(attrs, metadata.begin(),
+                      [type](int val) { return getConstantIntMD(type, val); });
+      decorations.push_back(llvm::MDNode::get(ctx, metadata));
+    }
     constexpr llvm::StringLiteral decorationCacheControlMDName =
         "spirv.DecorationCacheControlINTEL";
     inst->setMetadata(decorationCacheControlMDName,
