@@ -6,15 +6,14 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 
-try:
+if "intel_extension_for_pytorch" in sys.modules:
     import torch
-    import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
     def Event(**kwargs):
         return torch.xpu.Event(**kwargs)
 
     USE_WALL_TIME = False
-except ImportError:
+else:
     import time
 
     class Event():
