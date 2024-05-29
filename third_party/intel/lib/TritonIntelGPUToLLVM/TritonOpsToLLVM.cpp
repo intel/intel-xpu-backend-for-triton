@@ -123,8 +123,8 @@ public:
     unsigned dataSize = tensorType.getElementType().getIntOrFloatBitWidth();
     unsigned blockHeight = tensorType.getShape()[0];
     unsigned blockWidth = tensorType.getShape()[1];
-    assert(blockWidth == 16 || blockWidth == 32 ||
-           blockWidth == 64 && "only support 16/32/64 block");
+    assert((blockWidth == 16 || blockWidth == 32 || blockWidth == 64) &&
+           "only support 16/32/64 block");
     auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
     unsigned vBlks = 1;
     if (dataSize == 16) {
@@ -135,7 +135,7 @@ public:
       vBlks = ceil(blockWidth, blockWidthUnit);
       blockWidth = blockWidthUnit;
     }
-    assert(vBlks == 1 || vBlks == 2 && "only support 1 or 2 blocks");
+    assert((vBlks == 1 || vBlks == 2) && "only support 1 or 2 blocks");
 
     Value ptr = op.getPtr();
     if (auto cast =
