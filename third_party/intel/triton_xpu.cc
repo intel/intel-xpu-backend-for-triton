@@ -62,6 +62,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      intel::createTritonIntelGPUDistributeToWarps);
   ADD_PASS_WRAPPER_0("add_match_target_size",
                      intel::createTritonIntelGPUMatchTargetSize);
+  ADD_PASS_WRAPPER_0("add_schedule_load",
+                     intel::createTritonIntelGPUScheduleLoad);
 }
 
 void init_triton_intel(py::module &&m) {

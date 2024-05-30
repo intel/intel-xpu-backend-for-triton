@@ -267,4 +267,17 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 }
 
+def TritonIntelGPUScheduleLoad : Pass<"tritonintelgpu-schedule-load", "mlir::ModuleOp"> {
+  let summary = "naive ra-aware instr scheduler";
+
+  let description = [{
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
+
+
 #endif // TRITON_INTEL_GPU_PASSES

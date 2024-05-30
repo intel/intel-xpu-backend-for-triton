@@ -524,10 +524,15 @@ class ArithDivFOpLowering
     auto attr = rewriter.getFloatAttr(vecType.getElementType(), 1.0);
     auto dstAttr = DenseElementsAttr::get(vecType, attr.getValue());
     auto one = rewriter.create<LLVM::ConstantOp>(loc, dstType, dstAttr);
-    auto rcp =
-        rewriter.create<LLVM::FDivOp>(loc, dstType, one, adaptor.getRhs());
-    auto res =
-        rewriter.create<LLVM::FMulOp>(loc, dstType, adaptor.getLhs(), rcp);
+    auto rcp = rewriter.create<LLVM::FDivOp>(
+        loc, dstType, one, adaptor.getRhs(),
+        LLVM::FastmathFlagsAttr::get(rewriter.getContext(),
+                                     LLVM::FastmathFlags::fast));
+    auto res = rewriter.create<LLVM::FMulOp>(
+        loc, dstType, adaptor.getLhs(), rcp,
+        LLVM::FastmathFlagsAttr::get(rewriter.getContext(),
+                                     LLVM::FastmathFlags::fast));
+
     rewriter.replaceOp(op, res);
     return success();
   }
