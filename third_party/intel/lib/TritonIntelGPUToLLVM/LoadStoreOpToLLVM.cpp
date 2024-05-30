@@ -705,15 +705,14 @@ struct StoreOpConversion
     Value base_pitch = sub(mul(rowStride, elemSizeInBytes), i32_val(1));
     Value dimWarpId0 = mul(multiDimWarpId[0], i32_val(elemsPerInstr[0]));
     Value dimWarpId1 = mul(multiDimWarpId[1], i32_val(elemsPerInstr[1]));
+    Value warpId0Offset = add(dimWarpId0, offsetBaseY);
+    Value warpId1Offset = add(dimWarpId1, offsetBaseX);
     for (int m = 0; m < numReps[0]; ++m) {
+      Value offsetY =
+          add(warpId0Offset, i32_val(m * numReps[0] * elemsPerInstr[0]));
       for (int n = 0; n < numReps[1]; ++n) {
-        Value offsetX, offsetY;
-        offsetX =
-            add(add(dimWarpId1, i32_val(n * numReps[1] * elemsPerInstr[1])),
-                offsetBaseX);
-        offsetY =
-            add(add(dimWarpId0, i32_val(m * numReps[0] * elemsPerInstr[0])),
-                offsetBaseY);
+        Value offsetX =
+            add(warpId1Offset, i32_val(n * numReps[1] * elemsPerInstr[1]));
 
         rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
             loc,
