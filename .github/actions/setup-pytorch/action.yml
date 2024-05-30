@@ -29,6 +29,13 @@ runs:
         echo "PYTORCH_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
         echo "PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID" >> "$GITHUB_ENV"
 
+    - name: Identify commit id
+      if: ${{ inputs.commit_id != '' }}
+      shell: bash
+      run: |
+        echo "PYTORCH_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
+        echo "PYTORCH_COMMIT_ID=${{ inputs.commit_id }}" >> "$GITHUB_ENV"
+
     - name: Identify Python version
       shell: bash
       run: |
@@ -56,7 +63,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: "4-ptdb"
+        CACHE_NUMBER: "5"
       with:
         path: pytorch
         key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID-$CACHE_NUMBER
@@ -65,7 +72,7 @@ runs:
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
       uses: actions/checkout@v4
       with:
-        repository: ${{ inputs.repository }}
+        repository: ${{ env.PYTORCH_REPO }}
         ref: ${{ env.PYTORCH_COMMIT_ID }}
         submodules: recursive
         path: pytorch
@@ -85,7 +92,7 @@ runs:
         # Pytorch requirements installed here include everything that is needed to run apply_torch_pr.py script
         pip install -r requirements.txt
         wget https://raw.githubusercontent.com/intel/torch-xpu-ops/main/.github/scripts/apply_torch_pr.py
-        python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/127348
+        python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/127348 --pr-list https://github.com/pytorch/pytorch/pull/126516
 
     - name: Build PyTorch
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
