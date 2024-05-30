@@ -24,6 +24,7 @@ add_triton_library(TritonIntelGPUToLLVM
     TypeConverter.cpp
     Utility.cpp
     ViewOpToLLVM.cpp
+    GenIntrinsicHelper.cpp
 
     DEPENDS
     TritonIntelGPUConversionPassIncGen
@@ -33,4 +34,5 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonGENIR
     TritonGENToLLVM
     TritonIntelGPUIR
+    MLIRTargetLLVMIRImport
 )

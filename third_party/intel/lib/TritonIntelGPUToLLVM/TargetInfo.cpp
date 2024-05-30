@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "TargetInfo.h"
+#include "GenIntrinsicHelper.h"
 #include "Utility.h"
 
 using namespace mlir;
@@ -85,8 +86,49 @@ Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce) const {
-  assert("TODO: implement warpReduce on XPU");
-  return false;
+  // Check if it is a simple reduce operation supported by Wave Op.
+  if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+    return false;
+  auto &combineOp = op.getCombineOp();
+  if (combineOp.getBlocks().size() > 1)
+    return false;
+  Block &block = *combineOp.begin();
+  Operation *yield = block.getTerminator();
+  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
+      reduceOp->getNumResults() != 1)
+    return false;
+  if (reduceOp->getOperand(0) != block.getArgument(0) ||
+      reduceOp->getOperand(1) != block.getArgument(1))
+    return false;
+
+  GenISA_WaveAll::WaveOps waveOp = GenISA_WaveAll::WaveOps::UNDEF;
+  if (isa<arith::AddFOp>(reduceOp))
+    waveOp = GenISA_WaveAll::WaveOps::SUM;
+  if (isa<arith::MaxNumFOp>(reduceOp))
+    waveOp = GenISA_WaveAll::WaveOps::FMAX;
+  if (waveOp == GenISA_WaveAll::WaveOps::UNDEF)
+    return false;
+
+  auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+  unsigned threadsPerWarp =
+      triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
+  if (threadsPerWarp > numLaneToReduce) {
+    GenISA_WaveCluster waveClusterOp(rewriter,
+                                     reduceOp->getResult(0).getType());
+    acc[0] = waveClusterOp(rewriter, op->getLoc(), acc[0],
+                           int_val(8, (unsigned)waveOp),
+                           i32_val(numLaneToReduce), i32_val(0));
+  } else if (threadsPerWarp == numLaneToReduce) {
+    GenISA_WaveAll waveAllOp(rewriter, reduceOp->getResult(0).getType());
+    acc[0] = waveAllOp(rewriter, op->getLoc(), acc[0],
+                       int_val(8, (unsigned)waveOp), i32_val(0));
+  } else {
+    llvm_unreachable("it is ilegal to reduce the lane number > warp size");
+  }
+
+  return true;
 }
 
 bool TargetInfo::processReplicaUsingStMatrix(
