@@ -190,7 +190,7 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
                            "mlir::gpu::GPUDialect"];
   let options = [
     Option<"numAdvancePrefetches", "num-advance-prefetches",
-           "int32_t", /*default*/"2",
+           "int32_t", /*default*/"3",
            "Number of loop iteration to prefetch in advance of the loop">,
     Option<"injectSplitBarriers", "inject-split-barriers",
            "bool", /*default*/"true",

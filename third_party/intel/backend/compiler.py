@@ -48,7 +48,9 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
-    isBlockPtrEnabled: bool = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+    is_block_ptr_enabled: bool = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+    prefetch_distance: int = 2
+    inject_split_barrier: bool = os.getenv("TRITON_INTEL_SPLIT_BARRIER", "0") == "1"
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -72,7 +74,6 @@ class XPUBackend(BaseBackend):
 
         @staticmethod
         def make_ttgir(mod, metadata, opt, device_arch):
-            prefetch_distance = int(os.getenv("TRITON_INTEL_PREFETCH_DISTANCE", 2))
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
 
@@ -80,8 +81,7 @@ class XPUBackend(BaseBackend):
             # FIXME: Use a better way to check if prefetch instructions are supported once available.
             # Prefetch instruction is not available in older drivers.
             if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
-                inject_split_barriers = False
-                intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
+                intel.passes.ttgpuir.add_prefetch_block(pm, opt.prefetch_distance, opt.inject_split_barrier)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
             intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)
@@ -123,6 +123,8 @@ class XPUBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = True
+        # Use num_stages to represent prefetch distance to make it tunable.
+        args["prefetch_distance"] = opts["num_stages"]
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -153,7 +155,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
-        if XPUOptions.isBlockPtrEnabled:
+        if XPUOptions.is_block_ptr_enabled:
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt, device_arch)
 
         # TTIR -> TTGIR
