@@ -65,7 +65,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: "5"
+        CACHE_NUMBER: "6"
       with:
         path: pytorch
         key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID-$CACHE_NUMBER
@@ -86,7 +86,7 @@ runs:
         cd pytorch/third_party
         echo ${{ inputs.torch_xpu_ops_commit }} > xpu.txt
 
-    - name: Apply PR pytorch/pytorch/pull/127348
+    - name: Apply additional PR patches
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.repository == 'pytorch/pytorch' }}
       shell: bash
       run: |
@@ -94,7 +94,7 @@ runs:
         # Pytorch requirements installed here include everything that is needed to run apply_torch_pr.py script
         pip install -r requirements.txt
         wget https://raw.githubusercontent.com/intel/torch-xpu-ops/main/.github/scripts/apply_torch_pr.py
-        python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/127348
+        python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/127348 --pr-list https://github.com/pytorch/pytorch/pull/124147 --pr-list https://github.com/pytorch/pytorch/pull/126516
 
     - name: Build PyTorch
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
