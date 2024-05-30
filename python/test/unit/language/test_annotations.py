@@ -1,6 +1,9 @@
 from __future__ import annotations
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
+try
+    import intel_extension_for_pytorch  # type: ignore # noqa: F401
+except ImportError:
+    pass
 
 import triton
 import triton.language as tl

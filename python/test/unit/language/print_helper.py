@@ -2,7 +2,10 @@ import sys
 import uuid
 
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
+try
+    import intel_extension_for_pytorch  # type: ignore # noqa: F401
+except ImportError:
+    pass
 from torch.testing import assert_close
 
 import triton
