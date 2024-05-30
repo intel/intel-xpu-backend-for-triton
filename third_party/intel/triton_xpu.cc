@@ -56,8 +56,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_OPT_1("add_rewrite_tensor_pointer",
                          intel::createTritonIntelGPURewriteTensorPointer,
                          intel::DeviceArch);
-  ADD_PASS_WRAPPER_OPT_1("add_prefetch_block",
-                     intel::createTritonIntelGPUPrefetchBlock, int);
+  ADD_PASS_WRAPPER_OPT_2("add_prefetch_block",
+                     intel::createTritonIntelGPUPrefetchBlock, int, bool);
   ADD_PASS_WRAPPER_0("add_distribute_to_warps",
                      intel::createTritonIntelGPUDistributeToWarps);
   ADD_PASS_WRAPPER_0("add_match_target_size",

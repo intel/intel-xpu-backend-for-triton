@@ -60,6 +60,8 @@ export TRITON_CACHE_DIR=./tt_cache
 export NEO_CACHE_PERSISTENT=0
 
 TRITON_INTEL_ENABLE_BLOCK_PTR=1 \
+TRITON_INTEL_PREFETCH_DISTANCE=2 \
+TRITON_INTEL_SPLIT_BARRIER=1 \
 IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
 IGC_ForcePrefetchToL1Cache=1 \
 IGC_VATemp=1 \

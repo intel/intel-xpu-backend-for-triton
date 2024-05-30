@@ -142,7 +142,6 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # Benchmark
     for i in range(n_repeat):
         # garantee there is no kernel running on gpu threads before each iteration
-        synchronize()
         # we don't want `fn` to accumulate gradient values
         # if it contains a backward pass. So we clear the
         # provided gradients

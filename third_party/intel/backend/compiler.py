@@ -47,7 +47,9 @@ class XPUOptions:
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
-    isBlockPtrEnabled: bool = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+    is_block_ptr_enabled: bool = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+    prefetch_distance = int(os.getenv("TRITON_INTEL_PREFETCH_DISTANCE", 2))
+    split_barrier = os.getenv("TRITON_INTEL_SPLIT_BARRIER", "1") == "1"
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -85,14 +87,13 @@ class XPUBackend(BaseBackend):
 
         @staticmethod
         def make_ttgir(mod, metadata, opt, device_arch):
-            prefetch_distance = int(os.getenv("TRITON_INTEL_PREFETCH_DISTANCE", 2))
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
 
             intel.passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
             # FIXME: Use a better way to check if prefetch instructions are supported once available.
             # Prefetch instruction is not available in older drivers.
-            intel.passes.ttgpuir.add_prefetch_block(pm, prefetch_distance)
+            intel.passes.ttgpuir.add_prefetch_block(pm, opt.prefetch_distance, opt.split_barrier)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
             intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)
@@ -150,7 +151,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
-        if XPUOptions.isBlockPtrEnabled:
+        if XPUOptions.is_block_ptr_enabled:
             return XPUBackend.Experimental.make_ttir(mod, metadata, opt)
 
         pm = ir.pass_manager(mod.context)
@@ -168,7 +169,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
-        if XPUOptions.isBlockPtrEnabled:
+        if XPUOptions.is_block_ptr_enabled:
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt, device_arch)
 
         # TTIR -> TTGIR
