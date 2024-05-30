@@ -46,6 +46,9 @@ bool isExpensiveLoadOrStore(Operation *op);
 // Returns true if the tensor type has a dot dpas encoding.
 bool hasDotDpasEncoding(RankedTensorType tensorType);
 
+// Returns true if the tensor type has a dpas encoding.
+bool hasDpasEncoding(RankedTensorType tensorType);
+
 // Returns the dot encoding of the tensor type or std::nullopt.
 std::optional<DotOperandEncodingAttr>
 getDotEncoding(RankedTensorType tensorType);

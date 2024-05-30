@@ -639,10 +639,115 @@ struct StoreOpConversion
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
+  rewriteTensorPointerStore(triton::StoreOp op, OpAdaptor adaptor,
+                            ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    Value ptr = op.getPtr();
+    Type resultType = op.getValue().getType();
+    auto tensorType = cast<RankedTensorType>(resultType);
+
+    // Only lower loadOp with dpas layout encoding.
+    if (!hasDpasEncoding(tensorType))
+      return failure();
+
+    auto dpasLayout = dyn_cast<DpasEncodingAttr>(tensorType.getEncoding());
+    auto typeConverter = getTypeConverter();
+    auto *ctx = rewriter.getContext();
+
+    Type eltTy = tensorType.getElementType();
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
+    const ArrayRef<int64_t> tensorShape = tensorType.getShape();
+    unsigned numElems = getTotalElemsPerThread(tensorType);
+    auto elemsPerInstr = dpasLayout.getShapeC();
+    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    SmallVector<int64_t> numReps =
+        dpasLayout.getDPASRepetitions(tensorShape, 3);
+    SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
+    int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+
+    Value warpSize = i32_val(threadsPerWarp);
+    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
+    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    SmallVector<Value> multiDimWarpId =
+        mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+
+    int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
+    Type store2DGenXType =
+        LLVM::getFixedVectorType(IntegerType::get(ctx, elemSizeInBits),
+                                 elemsPerLane); // make it opaque type.
+
+    Value blockPtr = adaptor.getPtr();
+    auto [base, width, height, rowStride, colStride, offsetBaseX, offsetBaseY] =
+        getValuesFromBlockPointerStruct(blockPtr, rewriter);
+
+    auto vals = unpackLLElements(loc, adaptor.getValue(), rewriter);
+    assert(vals.size() == numElems);
+
+    SmallVector<Value> storededVals;
+    for (auto &val : vals) {
+      Value stored = rewriter.create<LLVM::UndefOp>(
+          loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
+                                        elemsPerLane));
+      for (size_t i = 0; i < elemsPerLane; ++i) {
+        stored = insert_element(stored, val, i32_val(i));
+      }
+      storededVals.push_back(bitcast(stored, store2DGenXType));
+    }
+
+    width = trunc(i32_ty, width);
+    height = trunc(i32_ty, height);
+    rowStride = trunc(i32_ty, rowStride);
+    // encoded as bytes size - 1.
+    Value base_width = sub(mul(width, elemSizeInBytes), i32_val(1));
+    // encoded as rows size - 1.
+    Value base_height = sub(height, i32_val(1));
+    // encoded as bytes size - 1.
+    Value base_pitch = sub(mul(rowStride, elemSizeInBytes), i32_val(1));
+    for (int m = 0; m < numReps[0]; ++m) {
+      for (int n = 0; n < numReps[1]; ++n) {
+        Value offsetX, offsetY;
+        offsetY = add(mul(multiDimWarpId[0], i32_val(elemsPerInstr[0])),
+                      i32_val(m * numReps[0] * elemsPerInstr[0]));
+        offsetX = add(mul(multiDimWarpId[1], i32_val(elemsPerInstr[1])),
+                      i32_val(n * numReps[1] * elemsPerInstr[1]));
+
+        offsetX = add(offsetX, offsetBaseX);
+        offsetY = add(offsetY, offsetBaseY);
+
+        rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
+            op.getLoc(),
+            /*ptr*/ base,
+            /*base_width*/ base_width,
+            /*base_height*/ base_height,
+            /*base_pitch*/ base_pitch,
+            /*x*/ trunc(i32_ty, offsetX),
+            /*y*/ trunc(i32_ty, offsetY),
+            /*elem_size_in_bits*/ elemSizeInBits,
+            /*tile_width*/ elemsPerInstr[1],
+            /*tile_height*/ elemsPerInstr[0],
+            /*v_blocks*/ 1,
+            /*transpose*/ false,
+            /*vnni_transform*/ false,
+            /*stored_val*/ storededVals[m * numReps[1] + n]);
+      }
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Value ptr = op.getPtr();
     Value value = op.getValue();
+
+    if (isTensorPointerType(ptr.getType()))
+      return rewriteTensorPointerStore(op, adaptor, rewriter);
+
+    assert(!isTensorPointerType(ptr.getType()) &&
+           "Cannot convert store with a tensor pointer into LLVM; "
+           "this case should be transformed to normal store before lowering");
 
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();

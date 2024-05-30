@@ -138,6 +138,10 @@ bool hasDotDpasEncoding(RankedTensorType tensorType) {
   return isa<ttgi::DpasEncodingAttr>(dotLayout.getParent());
 }
 
+bool hasDpasEncoding(RankedTensorType tensorType) {
+  return isa_and_nonnull<ttgi::DpasEncodingAttr>(tensorType.getEncoding());
+}
+
 std::optional<DotOperandEncodingAttr>
 getDotEncoding(RankedTensorType tensorType) {
   if (!tensorType.getEncoding())
