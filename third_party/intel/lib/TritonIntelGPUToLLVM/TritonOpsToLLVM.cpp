@@ -261,11 +261,21 @@ public:
     VectorType typeB =
         getVectorType(cast<RankedTensorType>(op.getB().getType()), i32_ty);
     Value castB = bitcast(adaptor.getB(), typeB);
+
+    Value valC = adaptor.getC();
+    VectorType typeC = cast<VectorType>(valC.getType());
+    if (typeC.getElementType().isBF16()) {
+      // Override type for bfloat16 to get correct GenISA intrinsic
+      typeC = VectorType::get(typeC.getShape(), i16_ty);
+      valC = bitcast(valC, typeC);
+    }
     auto rc = IntegerAttr::get(i32_ty, 8);
     // sd dpasW fixed in genx.dpas lowering.
-    rewriter.replaceOpWithNewOp<TritonGEN::MatrixDPASOp>(
-        op, adaptor.getC().getType(), adaptor.getC(), castA, castB, precA,
-        precB, rc);
+    Value dpas = rewriter.create<TritonGEN::MatrixDPASOp>(
+        loc, typeC, valC, castA, castB, precA, precB, rc);
+    Value valD = bitcast(dpas, adaptor.getC().getType());
+    rewriter.replaceOp(op, valD);
+
     return success();
   }
 };

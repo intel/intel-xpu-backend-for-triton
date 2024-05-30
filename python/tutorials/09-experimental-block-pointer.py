@@ -222,13 +222,18 @@ def matmul(a, b, res_dtype):
 
 torch.manual_seed(0)
 for dtype, res_dtype in [(torch.float16, torch.float32), (torch.bfloat16, torch.float32), (torch.int8, torch.int32),
-                         (torch.float32, torch.float32), (torch.float16, torch.float16)]:
+                         (torch.float32, torch.float32), (torch.float16, torch.float16),
+                         (torch.bfloat16, torch.bfloat16)]:
     if dtype.is_floating_point:
         if res_dtype in [torch.float16]:
             # We observed high relative errors on small numbers when only using 16 bit for accumulation;
             # hence, use a more restricted input set here.
             a = torch.randint(low=-8, high=8, size=(512, 512), device='xpu', dtype=dtype) / 16
             b = torch.randint(low=-8, high=8, size=(512, 512), device='xpu', dtype=dtype) / 16
+        elif res_dtype in [torch.bfloat16]:
+            # FIXME: ... it's even worse for bfloat16 accumulation
+            a = torch.ones((512, 512), device='xpu', dtype=dtype)
+            b = torch.ones((512, 512), device='xpu', dtype=dtype)
         else:
             a = torch.randn((512, 512), device='xpu', dtype=dtype)
             b = torch.randn((512, 512), device='xpu', dtype=dtype)
