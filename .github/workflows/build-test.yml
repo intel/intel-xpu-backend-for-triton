@@ -4,6 +4,10 @@ run-name: ${{ inputs.run_name }}
 on:
   workflow_dispatch:
     inputs:
+      install_ipex:
+        description: Install Intel PyTorch Extension
+        type: boolean
+        default: true
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -116,8 +120,13 @@ jobs:
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
+        with:
+          repository: pytorch/pytorch
+          commid_id: 6c503f1dbbf9ef1bf99f19f0048c287f419df600
+          torch_xpu_ops_commit: 39522db63ce045f52c9d61a286018c266cd00479
 
       - name: Setup IPEX
+        if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-ipex
 
       - name: Build Triton

@@ -12,10 +12,17 @@ inputs:
   repository:
     description: Repository name with owner
     default: Stonepia/pytorch
+  commid_id:
+    description: Commit id of PyTorch repository
+    default: ""
+  torch_xpu_ops_commit:
+    description: Commit id of third_party/xpu_ops repository
+    default: ""
 runs:
   using: "composite"
   steps:
     - name: Identify commit id
+      if: ${{ inputs.commit_id == "" }}
       shell: bash
       run: |
         PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
@@ -62,6 +69,20 @@ runs:
         ref: ${{ env.PYTORCH_COMMIT_ID }}
         submodules: recursive
         path: pytorch
+
+    - name: Update third_party/xpu_ops
+      if: ${{ inputs.torch_xpu_ops_commit != "" }}
+      shell: bash
+      run: |
+        cd pytorch/third_party
+        echo ${{ inputs.torch_xpu_ops_commit }} > xpu.txt
+
+    - name: Apply PR pytorch/pytorch/pull/127348
+      if: ${{ inputs.repository == 'pytorch/pytorch' }}
+      run: |
+        cd pytorch
+        wget https://raw.githubusercontent.com/intel/torch-xpu-ops/main/.github/scripts/apply_torch_pr.py
+        python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/127348
 
     - name: Build PyTorch
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
