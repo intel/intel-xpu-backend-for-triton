@@ -19,9 +19,6 @@ namespace mlir::triton::TritonGEN {
 LogicalResult TritonGEN::DecorationCacheControlAttr::verify(
     llvm::function_ref<InFlightDiagnostic()> emitError,
     ArrayRef<Attribute> decorations) {
-  if (decorations.empty())
-    return emitError() << "'triton_gen.decoration_cache_controls' expecting at "
-                          "least one cache control decoration";
   llvm::SmallSet<uint32_t, 3> loadCacheLevels;
   llvm::SmallSet<uint32_t, 3> storeCacheLevels;
   for (Attribute attr : decorations) {
