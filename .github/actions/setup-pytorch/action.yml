@@ -22,7 +22,7 @@ runs:
   using: "composite"
   steps:
     - name: Identify commit id
-      if: ${{ inputs.commit_id == "" }}
+      if: ${{ inputs.commit_id == '' }}
       shell: bash
       run: |
         PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
@@ -71,7 +71,7 @@ runs:
         path: pytorch
 
     - name: Update third_party/xpu_ops
-      if: ${{ inputs.torch_xpu_ops_commit != "" }}
+      if: ${{ inputs.torch_xpu_ops_commit != '' }}
       shell: bash
       run: |
         cd pytorch/third_party
