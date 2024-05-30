@@ -821,6 +821,10 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
         subDotC = b.create<tt::DotOp>(loc, subDotA, subDotB, subDotC,
                                       dot.getInputPrecisionAttr(),
                                       dot.getMaxNumImpreciseAccAttr());
+        // hack for attention
+        subDotC.getDefiningOp()->setAttr(
+            "schedule-group",
+            b.getIntegerAttr(b.getI32Type(), nn / dotShape.n));
       }
       subCs.push_back(subDotC);
     }
