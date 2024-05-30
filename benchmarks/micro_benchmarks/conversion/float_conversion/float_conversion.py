@@ -22,7 +22,7 @@ def float_trunc_kernel(
     as_target = x.to(target_type)
     as_f32 = as_target.to(tl.float32)
     for _ in range(100):
-        as_f32 += 1  # plus one ensures that there are no redunant conversions that can be removed
+        as_f32 += 1  # plus one ensures that there are no redundant conversions that can be removed
         as_target = as_f32.to(target_type)
         as_f32 = as_target.to(tl.float32)
 
