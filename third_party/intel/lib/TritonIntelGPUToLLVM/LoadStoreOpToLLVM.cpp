@@ -642,7 +642,6 @@ struct StoreOpConversion
   rewriteTensorPointerStore(triton::StoreOp op, OpAdaptor adaptor,
                             ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
-    Value ptr = op.getPtr();
     Type resultType = op.getValue().getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
@@ -650,7 +649,7 @@ struct StoreOpConversion
     if (!hasDpasEncoding(tensorType))
       return failure();
 
-    auto dpasLayout = dyn_cast<DpasEncodingAttr>(tensorType.getEncoding());
+    auto dpasLayout = cast<DpasEncodingAttr>(tensorType.getEncoding());
     auto typeConverter = getTypeConverter();
     auto *ctx = rewriter.getContext();
 
@@ -704,19 +703,20 @@ struct StoreOpConversion
     Value base_height = sub(height, i32_val(1));
     // encoded as bytes size - 1.
     Value base_pitch = sub(mul(rowStride, elemSizeInBytes), i32_val(1));
+    Value dimWarpId0 = mul(multiDimWarpId[0], i32_val(elemsPerInstr[0]));
+    Value dimWarpId1 = mul(multiDimWarpId[1], i32_val(elemsPerInstr[1]));
     for (int m = 0; m < numReps[0]; ++m) {
       for (int n = 0; n < numReps[1]; ++n) {
         Value offsetX, offsetY;
-        offsetY = add(mul(multiDimWarpId[0], i32_val(elemsPerInstr[0])),
-                      i32_val(m * numReps[0] * elemsPerInstr[0]));
-        offsetX = add(mul(multiDimWarpId[1], i32_val(elemsPerInstr[1])),
-                      i32_val(n * numReps[1] * elemsPerInstr[1]));
-
-        offsetX = add(offsetX, offsetBaseX);
-        offsetY = add(offsetY, offsetBaseY);
+        offsetX =
+            add(add(dimWarpId1, i32_val(n * numReps[1] * elemsPerInstr[1])),
+                offsetBaseX);
+        offsetY =
+            add(add(dimWarpId0, i32_val(m * numReps[0] * elemsPerInstr[0])),
+                offsetBaseY);
 
         rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
-            op.getLoc(),
+            loc,
             /*ptr*/ base,
             /*base_width*/ base_width,
             /*base_height*/ base_height,
@@ -744,10 +744,6 @@ struct StoreOpConversion
 
     if (isTensorPointerType(ptr.getType()))
       return rewriteTensorPointerStore(op, adaptor, rewriter);
-
-    assert(!isTensorPointerType(ptr.getType()) &&
-           "Cannot convert store with a tensor pointer into LLVM; "
-           "this case should be transformed to normal store before lowering");
 
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
