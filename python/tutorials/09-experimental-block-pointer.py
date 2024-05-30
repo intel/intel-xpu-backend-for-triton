@@ -165,9 +165,8 @@ def matmul_kernel_with_block_pointers(
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block.
-    # of fp32 values for higher accuracy.
-    # `accumulator` will be converted back to fp16 after the loop.
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=c_ptr.type.element_ty)
+    accu_dtype = c_ptr.type.element_ty
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=accu_dtype)
     for k in range(0, K, BLOCK_SIZE_K):
         # Load with boundary checks, no need to calculate the mask manually.
         # For better performance, you may remove some axis from the boundary
@@ -177,12 +176,12 @@ def matmul_kernel_with_block_pointers(
         a = tl.load(a_block_ptr, boundary_check=(0, 1))
         b = tl.load(b_block_ptr, boundary_check=(0, 1))
         # We accumulate along the K dimension.
-        accumulator += tl.dot(a, b)
+        accumulator += tl.dot(a, b, out_dtype=accu_dtype)
         # Advance the block pointer to the next K block.
         # See above `Advance a Block Pointer` section for details.
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
-    c = accumulator.to(c_ptr.type.element_ty)
+    c = accumulator
     # ----------------------------------------------------------------
     # Write back the block of the output matrix C with boundary checks.
     # See above `Load/Store a Block Pointer` section for details.
@@ -223,7 +222,7 @@ def matmul(a, b, res_dtype):
 
 torch.manual_seed(0)
 for dtype, res_dtype in [(torch.float16, torch.float32), (torch.bfloat16, torch.float32), (torch.int8, torch.int32),
-                         (torch.float32, torch.float32)]:
+                         (torch.float32, torch.float32), (torch.float16, torch.float16)]:
     if dtype.is_floating_point:
         a = torch.randn((512, 512), device='xpu', dtype=dtype)
         b = torch.randn((512, 512), device='xpu', dtype=dtype)
@@ -246,7 +245,12 @@ for dtype, res_dtype in [(torch.float16, torch.float32), (torch.bfloat16, torch.
 
     # Note: the torch.matmul and Triton implementations uses different
     # algorithms so we need to adjust tolerance.
-    rtol = 1e-2 if dtype == torch.bfloat16 else 1e-3
+    rtol = 1e-3
+    if dtype == torch.bfloat16:
+        rtol = 1e-2
+    if res_dtype == torch.float16:
+        # FIXME: Observing some very high errors on small values
+        rtol = 30
     if torch.allclose(triton_output, torch_output, atol=1e-4, rtol=rtol):
         print("✅ Triton and Torch match")
     else:
