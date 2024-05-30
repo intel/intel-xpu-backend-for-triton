@@ -8,10 +8,7 @@ import gc
 import tracemalloc
 
 import torch
-try:
-    import intel_extension_for_pytorch  # type: ignore # noqa: F401
-except ImportError:
-    pass
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
