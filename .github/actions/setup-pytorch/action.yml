@@ -33,6 +33,7 @@ runs:
       if: ${{ inputs.commit_id != '' }}
       shell: bash
       run: |
+        PYTORCH_COMMIT_ID="${{ inputs.commit_id }}"
         echo "PYTORCH_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
         echo "PYTORCH_COMMIT_ID=${{ inputs.commit_id }}" >> "$GITHUB_ENV"
 
