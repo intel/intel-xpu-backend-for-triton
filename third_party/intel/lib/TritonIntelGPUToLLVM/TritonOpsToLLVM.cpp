@@ -195,8 +195,9 @@ public:
           TritonGEN::LoadCacheControl::L1C_L3C);
       rewriter.eraseOp(op);
     } else {
-      VectorType vectorType = getVectorType(
-          cast<RankedTensorType>(op.getValue().getType()), i32_ty);
+      VectorType vectorType =
+          getVectorType(cast<RankedTensorType>(op.getValue().getType()),
+                        rewriter.getIntegerType(dataSize));
       rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, false /*transpose*/, false /*vnni*/,
