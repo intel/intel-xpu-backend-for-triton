@@ -352,13 +352,15 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
                                i32_ty, i32_ty, i32_ty, i32_ty};
     Value zero = i32_val(0);
     Value one = i32_val(1);
-    SmallVector<Value> args{
-        ptrtoint(i64_ty, op.getPtr()), sub(op.getBaseWidth(), one),
-        sub(op.getBaseHeight(), one), sub(op.getBasePitch(), one),
-        // op.getX(),
-        //        op.getY(),
-        zero, zero, i32_val(op.getTileWidth()), i32_val(op.getTileHeight()),
-        i32_val(op.getVBlocks())};
+    SmallVector<Value> args{ptrtoint(i64_ty, op.getPtr()),
+                            sub(op.getBaseWidth(), one),
+                            sub(op.getBaseHeight(), one),
+                            sub(op.getBasePitch(), one),
+                            zero,
+                            zero,
+                            i32_val(op.getTileWidth()),
+                            i32_val(op.getTileHeight()),
+                            i32_val(op.getVBlocks())};
     LLVM::CallOp callOp = createDeviceFunctionCall(
         rewriter, "__builtin_IB_subgroup_createBlock2DAddressPayload",
         ptr_ty(context), argTypes, args, true /*convergent*/);
@@ -384,20 +386,13 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     assert(isa<LLVM::LLVMPointerType>(ptr.getType()) &&
            "Expecting a pointer type");
 
-    std::string fnName;
+    std::string fnName = "__builtin_IB_subgroup_block_read_ap_";
     if (op.getVnniTransform())
-      fnName = "__builtin_IB_subgroup_block_read_ap_transform_u" +
-               std::to_string(op.getElemSizeInBits()) + "_m" +
-               std::to_string(op.getTileHeight()) + "k" +
-               std::to_string(op.getTileWidth()) + "v" +
-               std::to_string(op.getVBlocks());
-    else
-      fnName = "__builtin_IB_subgroup_block_read_ap_u" +
-               std::to_string(op.getElemSizeInBits()) + "_m" +
-               std::to_string(op.getTileHeight()) + "k" +
-               std::to_string(op.getTileWidth()) + "v" +
-               std::to_string(op.getVBlocks());
-
+      fnName += "transform_";
+    fnName += "u" + std::to_string(op.getElemSizeInBits()) + "_m" +
+              std::to_string(op.getTileHeight()) + "k" +
+              std::to_string(op.getTileWidth()) + "v" +
+              std::to_string(op.getVBlocks());
     Value zero = i32_val(0);
     SmallVector<Type> argTypes{ptr.getType(), i32_ty, i32_ty, i32_ty};
     SmallVector<Value> args{ptr, zero, zero, zero};
