@@ -71,17 +71,19 @@ runs:
         path: pytorch
 
     - name: Update third_party/xpu_ops
-      if: ${{ inputs.torch_xpu_ops_commit != '' }}
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.torch_xpu_ops_commit != '' }}
       shell: bash
       run: |
         cd pytorch/third_party
         echo ${{ inputs.torch_xpu_ops_commit }} > xpu.txt
 
     - name: Apply PR pytorch/pytorch/pull/127348
-      if: ${{ inputs.repository == 'pytorch/pytorch' }}
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.repository == 'pytorch/pytorch' }}
       shell: bash
       run: |
         cd pytorch
+        # Pytorch requirements installed here include everything that is needed to run apply_torch_pr.py script
+        pip install -r requirements.txt
         wget https://raw.githubusercontent.com/intel/torch-xpu-ops/main/.github/scripts/apply_torch_pr.py
         python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/127348
 
