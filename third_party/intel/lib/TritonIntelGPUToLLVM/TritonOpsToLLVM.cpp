@@ -121,11 +121,22 @@ public:
            "only support 1d/2d load/store/prefetch for now");
 
     unsigned dataSize = tensorType.getElementType().getIntOrFloatBitWidth();
-    unsigned blockWidth = tensorType.getShape()[1];
-    assert(blockWidth == 16 || blockWidth == 32 && "only support 16/32 block");
-    unsigned vBlks = blockWidth == 32 ? 2 : 1;
-    blockWidth = 16;
     unsigned blockHeight = tensorType.getShape()[0];
+    unsigned blockWidth = tensorType.getShape()[1];
+    assert((blockWidth == 16 || blockWidth == 32 || blockWidth == 64) &&
+           "only support 16/32/64 block");
+    auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
+    unsigned vBlks = 1;
+    if (dataSize == 16) {
+      vBlks = ceil(blockWidth, 16U);
+      blockWidth = 16;
+    } else if (dataSize == 8 && idxAttr) {
+      unsigned blockWidthUnit = idxAttr.getInt() == 0 ? 32 : 16;
+      vBlks = ceil(blockWidth, blockWidthUnit);
+      blockWidth = blockWidthUnit;
+    }
+    assert((vBlks == 1 || vBlks == 2) && "only support 1 or 2 blocks");
+
     Value ptr = op.getPtr();
     if (auto cast =
             dyn_cast<mlir::UnrealizedConversionCastOp>(ptr.getDefiningOp()))
@@ -160,7 +171,7 @@ public:
     Value offsetY = extract_element(tensorPtr, i32_val(1));
 
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
+      assert(idxAttr && "Dot index attribute missing");
       unsigned idx = idxAttr.getInt();
       Type resType =
           this->getTypeConverter()->convertType(op->getResult(0).getType());
@@ -215,6 +226,12 @@ public:
         return TritonGEN::PrecisionType::FP16;
       else if (type == rewriter.getTF32Type())
         return TritonGEN::PrecisionType::TF32;
+      else if (type.isInteger(8)) {
+        if (type.isUnsignedInteger())
+          return TritonGEN::PrecisionType::U8;
+        return TritonGEN::PrecisionType::S8;
+      }
+
       llvm_unreachable("add more support for PrecisionType");
       return TritonGEN::PrecisionType::UNUSED;
     };
