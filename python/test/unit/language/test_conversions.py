@@ -4,10 +4,7 @@
 import os
 import numpy as np
 import torch
-try
-    import intel_extension_for_pytorch  # type: ignore # noqa: F401
-except ImportError:
-    pass
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import pytest
 import triton
 import triton.language as tl
