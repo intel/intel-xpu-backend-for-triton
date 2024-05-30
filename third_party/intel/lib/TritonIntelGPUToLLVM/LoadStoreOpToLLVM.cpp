@@ -662,7 +662,7 @@ struct StoreOpConversion
     auto elemsPerInstr = dpasLayout.getShapeC();
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<int64_t> numReps =
-        dpasLayout.getDPASRepetitions(tensorShape, 3);
+        dpasLayout.getDPASRepetitions(tensorShape, 2);
     SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
     int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 

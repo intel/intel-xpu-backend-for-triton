@@ -159,12 +159,12 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const {
     return {std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0])),
             std::max<int64_t>(1, shape[1] / shapePerWarp[1])};
   } else if (opIdx == 1) {
-    assert(opIdx == 1);
     auto shapePerWarp = getShapeB();
     return {
         std::max<int64_t>(1, shape[0] / shapePerWarp[0]),
         std::max<int64_t>(1, shape[1] / (shapePerWarp[1] * warpsPerCTA[1]))};
   } else {
+    assert(opIdx == 2);
     auto shapePerWarp = getShapeC();
     return {
         std::max<int64_t>(1, mlir::ceil<unsigned>(
