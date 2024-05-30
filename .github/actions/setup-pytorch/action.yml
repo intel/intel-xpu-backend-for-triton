@@ -79,6 +79,7 @@ runs:
 
     - name: Apply PR pytorch/pytorch/pull/127348
       if: ${{ inputs.repository == 'pytorch/pytorch' }}
+      shell: bash
       run: |
         cd pytorch
         wget https://raw.githubusercontent.com/intel/torch-xpu-ops/main/.github/scripts/apply_torch_pr.py
