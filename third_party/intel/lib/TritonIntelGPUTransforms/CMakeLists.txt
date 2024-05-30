@@ -7,6 +7,7 @@ add_triton_library(TritonIntelGPUTransforms
   PrefetchBlock.cpp
   RemoveLayoutConversions.cpp
   RewriteTensorPointer.cpp
+  ScheduleLoad.cpp
   Utility.cpp
 
   DEPENDS
