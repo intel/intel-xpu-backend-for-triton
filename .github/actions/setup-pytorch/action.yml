@@ -12,7 +12,7 @@ inputs:
   repository:
     description: Repository name with owner
     default: Stonepia/pytorch
-  commid_id:
+  commit_id:
     description: Commit id of PyTorch repository
     default: ""
   torch_xpu_ops_commit:
