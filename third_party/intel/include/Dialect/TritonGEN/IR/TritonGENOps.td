@@ -237,6 +237,30 @@ def TritonGEN_NamedBarrierWaitOp : TritonGEN_Op<"named_barrier_wait">,
 
 def IntegerOrFloatType : AnyTypeOf<[AnyInteger, AnyFloat]>;
 
+def TritonGEN_SubGroupReduceOp : TritonGEN_Op<"sub_group_reduce", [
+      TypesMatchWith<"result and value have the same type",
+                     "res", "value", "$_self">]>,
+  Results<(outs IntegerOrFloatType:$res)>,
+  Arguments<(ins IntegerOrFloatType:$value,
+                 TritonGEN_ReduceKindAttr:$kind,
+                 I32Attr:$size)> {
+  let summary = "Subgroup reduce";
+
+  string baseDescription = [{
+    The `gen.sub_group_reduce` operation is invoked by all work items in a
+    subgroup, each of them providing a $value. The $size argument is used to
+    form groups of $size consecutive work items called clusters. Each cluster
+    performs the reduction operation identified by $kind. The result of the
+    cluster reduction is propagated to the work items belonging to that cluster.
+  }];
+
+  let assemblyFormat = [{
+    $kind $value ` ` `{` `size` `=` $size `}` attr-dict `:` type($value) `->` type($res)
+  }];
+
+  let hasVerifier = 1;
+}
+
 def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
       TypesMatchWith<"result and value have the same type",
                      "res", "value", "$_self">]>,
