@@ -12,7 +12,7 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <cstdint>
 
@@ -158,8 +158,8 @@ LogicalResult TritonGEN::CacheControls::verify() {
   ArrayRef<Attribute> cacheControls = getCacheControls().getValue();
   if (cacheControls.empty())
     return emitOpError("expecting at least one cache control decoration");
-  llvm::SmallSetVector<uint32_t, 3> loadCacheLevels;
-  llvm::SmallSetVector<uint32_t, 3> storeCacheLevels;
+  llvm::SmallSet<uint32_t, 3> loadCacheLevels;
+  llvm::SmallSet<uint32_t, 3> storeCacheLevels;
   for (Attribute attr : cacheControls) {
     LogicalResult res =
         TypeSwitch<Attribute, LogicalResult>(attr)
@@ -168,14 +168,14 @@ LogicalResult TritonGEN::CacheControls::verify() {
                                                     &storeCacheLevels](
                                                        auto attr)
                                                        -> LogicalResult {
-              llvm::SmallSetVector<uint32_t, 3> &cacheLevels =
+              llvm::SmallSet<uint32_t, 3> &cacheLevels =
                   std::is_same_v<decltype(attr), LoadCacheControlDecorationAttr>
                       ? loadCacheLevels
                       : storeCacheLevels;
-              if (!cacheLevels.insert(attr.getCacheLevel()))
+              if (!cacheLevels.insert(attr.getCacheLevel()).second)
                 return emitOpError(
-                    "cannot specify more than one cache control "
-                    "decoration of the same nature for the same cache level");
+                    "cannot specify more than one cache control decoration of "
+                    "the same nature for the same cache level");
               return success();
             });
     if (failed(res))
