@@ -4,7 +4,7 @@
 import os
 import numpy as np
 import torch
-try:
+try
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
 except ImportError:
     pass
