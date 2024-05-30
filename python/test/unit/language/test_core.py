@@ -12,7 +12,7 @@ import pytest
 import torch
 try:
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
-except ImportError
+except ImportError:
     pass
 import os
 import inspect
