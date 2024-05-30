@@ -167,7 +167,7 @@ def matmul_kernel_with_block_pointers(
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block.
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=c_ptr.type.element_ty)
     for k in range(0, K, BLOCK_SIZE_K):
         # Load with boundary checks, no need to calculate the mask manually.
         # For better performance, you may remove some axis from the boundary
@@ -182,7 +182,7 @@ def matmul_kernel_with_block_pointers(
         # See above `Advance a Block Pointer` section for details.
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
-    c = accumulator.to(tl.float32)
+    c = accumulator.to(c_ptr.type.element_ty)
     # ----------------------------------------------------------------
     # Write back the block of the output matrix C with boundary checks.
     # See above `Load/Store a Block Pointer` section for details.
@@ -194,7 +194,7 @@ def matmul_kernel_with_block_pointers(
 
 # We can now create a convenience wrapper function that only takes two input tensors,
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
-def matmul(a, b):
+def matmul(a, b, res_dtype):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -202,7 +202,7 @@ def matmul(a, b):
     M, K = a.shape
     K, N = b.shape
     # Allocates output.
-    c = torch.empty((M, N), device=a.device, dtype=torch.float32)
+    c = torch.empty((M, N), device=a.device, dtype=res_dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
     matmul_kernel_with_block_pointers[grid](
@@ -222,11 +222,22 @@ def matmul(a, b):
 # Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-for dtype in [torch.float16, torch.bfloat16]:
-    a = torch.randn((512, 512), device='xpu', dtype=dtype)
-    b = torch.randn((512, 512), device='xpu', dtype=dtype)
-    triton_output = matmul(a, b)
-    torch_output = torch.matmul(a, b).to(torch.float32)
+for dtype, res_dtype in [(torch.float16, torch.float32), (torch.bfloat16, torch.float32), (torch.int8, torch.int32)]:
+    if dtype.is_floating_point:
+        a = torch.randn((512, 512), device='xpu', dtype=dtype)
+        b = torch.randn((512, 512), device='xpu', dtype=dtype)
+    else:
+        a = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
+        b = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
+
+    triton_output = matmul(a, b, res_dtype)
+    if dtype.is_floating_point:
+        torch_output = torch.matmul(a, b).to(res_dtype)
+    else:
+        # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
+        torch_output = torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(device='cpu',
+                                                                              dtype=res_dtype)).to(device='xpu')
+
     print(f"triton_output={triton_output}")
     print(f"torch_output={torch_output}")
 
