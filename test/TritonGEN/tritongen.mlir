@@ -105,18 +105,16 @@ llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8
   llvm.return
 }
 
+llvm.func @foo(%arg0: !llvm.ptr, %arg1: !llvm.ptr)
+
 llvm.func @triton_gen.cache_controls(%arg0: !llvm.ptr) {
-  // CHECK-LABEL:   llvm.func @triton_gen.cache_controls(
-  // CHECK-SAME:                                         %[[VAL_0:.*]]: !llvm.ptr) {
-  // CHECK:           %[[VAL_1:.*]] = triton_gen.cache_controls %[[VAL_0]], [#triton_gen.store_cache_control<0, Uncached>, #triton_gen.store_cache_control<1, WriteThrough>, #triton_gen.load_cache_control<0, Cached>, #triton_gen.load_cache_control<1, Uncached>] : !llvm.ptr
-  // CHECK:           %[[VAL_2:.*]] = triton_gen.cache_controls %[[VAL_0]], [#triton_gen.store_cache_control<0, WriteBack>, #triton_gen.store_cache_control<1, Streaming>, #triton_gen.load_cache_control<0, Streaming>, #triton_gen.load_cache_control<1, InvalidateAfterRead>, #triton_gen.load_cache_control<2, ConstCached>] : !llvm.ptr
-  // CHECK:           %[[VAL_3:.*]] = llvm.load %[[VAL_1]] : !llvm.ptr -> i32
-  // CHECK:           llvm.store %[[VAL_3]], %[[VAL_2]] : i32, !llvm.ptr
-  // CHECK:           llvm.return
-  %0 = triton_gen.cache_controls %arg0, [#triton_gen.store_cache_control<0, Uncached>, #triton_gen.store_cache_control<1, WriteThrough>, #triton_gen.load_cache_control<0, Cached>, #triton_gen.load_cache_control<1, Uncached>] : !llvm.ptr
-  %1 = triton_gen.cache_controls %arg0, [#triton_gen.store_cache_control<0, WriteBack>, #triton_gen.store_cache_control<1, Streaming>, #triton_gen.load_cache_control<0, Streaming>, #triton_gen.load_cache_control<1, InvalidateAfterRead>, #triton_gen.load_cache_control<2, ConstCached>] : !llvm.ptr
-  %2 = llvm.load %0 : !llvm.ptr -> i32
-  llvm.store %2, %1 : i32, !llvm.ptr
+  // CHECK: llvm.func @triton_gen.cache_controls(%arg0: !llvm.ptr)
+  // CHECK-NEXT: %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 0>, #triton_gen.store_cache_control<1, WriteThrough, 0>, #triton_gen.load_cache_control<0, Cached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>} : !llvm.ptr -> i32
+  %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 0>, #triton_gen.store_cache_control<1, WriteThrough, 0>, #triton_gen.load_cache_control<0, Cached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>} : !llvm.ptr -> i32
+  // CHECK-NEXT: llvm.store %0, %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, WriteBack, 1>, #triton_gen.store_cache_control<1, Streaming, 1>, #triton_gen.load_cache_control<0, Streaming, 1>, #triton_gen.load_cache_control<1, InvalidateAfterRead, 1>, #triton_gen.load_cache_control<2, ConstCached, 1>>} : i32, !llvm.ptr
+  llvm.store %0, %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, WriteBack, 1>, #triton_gen.store_cache_control<1, Streaming, 1>, #triton_gen.load_cache_control<0, Streaming, 1>, #triton_gen.load_cache_control<1, InvalidateAfterRead, 1>, #triton_gen.load_cache_control<2, ConstCached, 1>>} : i32, !llvm.ptr
+  // CHECK-NEXT: llvm.call @foo(%arg0, %arg0) {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<0, Cached, 1>>} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.call @foo(%arg0, %arg0) {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<0, Cached, 1>>} : (!llvm.ptr, !llvm.ptr) -> ()
   llvm.return
 }
 

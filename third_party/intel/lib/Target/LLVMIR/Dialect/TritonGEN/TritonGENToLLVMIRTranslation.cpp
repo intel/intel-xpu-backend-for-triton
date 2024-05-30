@@ -31,43 +31,27 @@ class TritonGENDialectLLVMIRTranslationInterface
 public:
   using LLVMTranslationDialectInterface::LLVMTranslationDialectInterface;
 
-  constexpr static llvm::StringLiteral decorationCacheControlAttrName =
-      "triton_gen.DecorationCacheControlINTEL";
-
   LogicalResult
   amendOperation(Operation *op, ArrayRef<llvm::Instruction *> instructions,
                  NamedAttribute attribute,
                  LLVM::ModuleTranslation &moduleTranslation) const final {
     StringRef attrName = attribute.getName().getValue();
-    if (attrName == decorationCacheControlAttrName) {
+    if (attrName ==
+        triton::TritonGEN::TritonGENDialect::getCacheControlsAttrName()) {
+      auto decorationAttr =
+          dyn_cast<triton::TritonGEN::DecorationCacheControlAttr>(
+              attribute.getValue());
+      if (!decorationAttr)
+        return op->emitOpError(
+            "Expecting triton_gen.decoration_cache_control attribute");
       if (instructions.size() != 1)
         return op->emitOpError("Expecting a single instruction");
-      return handleDecorationCacheControl(op, instructions.front(), attribute,
-                                          moduleTranslation);
+      return handleDecorationCacheControl(op, instructions.front(),
+                                          decorationAttr);
     }
     if (attrName.starts_with("triton_gen"))
       return handleTritonGenAttr(op, attribute, moduleTranslation);
     return success();
-  }
-
-  LogicalResult
-  convertOperation(Operation *operation, llvm::IRBuilderBase &builder,
-                   LLVM::ModuleTranslation &moduleTranslation) const final {
-    return TypeSwitch<Operation *, LogicalResult>(operation)
-        .Case([&moduleTranslation](triton::TritonGEN::CacheControls op) {
-          llvm::Value *ptr = moduleTranslation.lookupValue(op.getPtr());
-          moduleTranslation.mapValue(op, ptr);
-          Builder mlirBuilder(op);
-          for (OpOperand &use : op->getUses())
-            appendDecoration(mlirBuilder, decorationCacheControlAttrName,
-                             use.getOwner(), op.getCacheControls(),
-                             use.getOperandNumber());
-          return success();
-        })
-        .Default([](Operation *op) {
-          return op->emitOpError("unsupported TritonGEN operation: ")
-                 << op->getName();
-        });
   }
 
 private:
@@ -76,67 +60,42 @@ private:
     return llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(type, val));
   }
 
-  static void appendDecoration(Builder &mlirBuilder, llvm::StringRef mdKey,
-                               Operation *op, ArrayAttr newAttrs,
-                               unsigned operandNumber) {
-    auto attr = op->getAttrOfType<ArrayAttr>(mdKey);
-    SmallVector<Attribute> attrs = attr
-                                       ? SmallVector<Attribute>{attr.getValue()}
-                                       : SmallVector<Attribute>{};
+  static LogicalResult handleDecorationCacheControl(
+      Operation *op, llvm::Instruction *inst,
+      triton::TritonGEN::DecorationCacheControlAttr attribute) {
+    ArrayRef<Attribute> attrs = attribute.getDecorations();
+    SmallVector<llvm::Metadata *> decorations;
+    llvm::LLVMContext &ctx = inst->getContext();
+    llvm::Type *i32Ty = llvm::IntegerType::getInt32Ty(ctx);
     llvm::transform(
-        newAttrs.getValue(), std::back_inserter(attrs),
-        [&mlirBuilder, operandNumber](Attribute attr) -> Attribute {
-          return TypeSwitch<Attribute, Attribute>(attr)
+        attrs, std::back_inserter(decorations),
+        [&ctx, i32Ty](Attribute attr) -> llvm::Metadata * {
+          return TypeSwitch<Attribute, llvm::Metadata *>(attr)
               .Case<triton::TritonGEN::LoadCacheControlDecorationAttr,
                     triton::TritonGEN::StoreCacheControlDecorationAttr>(
-                  [&mlirBuilder, operandNumber](auto attr) {
-                    constexpr int32_t loadCacheControlKey = 6442;
-                    constexpr int32_t storeCacheControlKey = 6443;
-                    constexpr int32_t key =
+                  [&ctx, i32Ty](auto attr) {
+                    constexpr size_t decorationCacheControlArity = 4;
+                    constexpr uint32_t loadCacheControlKey = 6442;
+                    constexpr uint32_t storeCacheControlKey = 6443;
+                    constexpr uint32_t decorationKey =
                         std::is_same_v<
                             decltype(attr),
                             triton::TritonGEN::LoadCacheControlDecorationAttr>
                             ? loadCacheControlKey
                             : storeCacheControlKey;
-                    int32_t cacheLevel = attr.getCacheLevel();
-                    int32_t cacheControl =
-                        static_cast<int32_t>(attr.getCacheControl());
-                    return mlirBuilder.getDenseI32ArrayAttr(
-                        {key, cacheLevel, cacheControl,
-                         static_cast<int32_t>(operandNumber)});
+                    std::array<uint32_t, decorationCacheControlArity> values{
+                        decorationKey, attr.getCacheLevel(),
+                        static_cast<uint32_t>(attr.getCacheControl()),
+                        attr.getOperandNumber()};
+                    std::array<llvm::Metadata *, decorationCacheControlArity>
+                        metadata;
+                    llvm::transform(values, metadata.begin(),
+                                    [i32Ty](uint32_t value) {
+                                      return getConstantIntMD(i32Ty, value);
+                                    });
+                    return llvm::MDNode::get(ctx, metadata);
                   });
         });
-    op->setAttr(mdKey, mlirBuilder.getArrayAttr(attrs));
-  }
-
-  static LogicalResult
-  handleDecorationCacheControl(Operation *op, llvm::Instruction *inst,
-                               NamedAttribute attribute,
-                               LLVM::ModuleTranslation &moduleTranslation) {
-    assert(attribute.getName() == decorationCacheControlAttrName &&
-           "Expecting decoration cache key");
-    auto arrayAttr = dyn_cast<ArrayAttr>(attribute.getValue());
-    if (!arrayAttr)
-      return op->emitOpError("unexpected attribute type");
-    ArrayRef<Attribute> attrs = arrayAttr.getValue();
-    SmallVector<llvm::Metadata *> decorations;
-    llvm::LLVMContext &ctx = inst->getContext();
-    for (Attribute attr : attrs) {
-      constexpr std::size_t decorationCacheControlArity = 4;
-
-      auto arrayAttr = dyn_cast<DenseI32ArrayAttr>(attr);
-      if (!arrayAttr)
-        return op->emitOpError("unexpected attribute type");
-      ArrayRef<int> attrs = arrayAttr.asArrayRef();
-      if (attrs.size() != decorationCacheControlArity)
-        return op->emitOpError("Invalid decoration cache attribute arity");
-      constexpr unsigned numBits = 32;
-      llvm::Type *type = llvm::IntegerType::get(ctx, numBits);
-      std::array<llvm::Metadata *, decorationCacheControlArity> metadata;
-      llvm::transform(attrs, metadata.begin(),
-                      [type](int val) { return getConstantIntMD(type, val); });
-      decorations.push_back(llvm::MDNode::get(ctx, metadata));
-    }
     constexpr llvm::StringLiteral decorationCacheControlMDName =
         "spirv.DecorationCacheControlINTEL";
     inst->setMetadata(decorationCacheControlMDName,

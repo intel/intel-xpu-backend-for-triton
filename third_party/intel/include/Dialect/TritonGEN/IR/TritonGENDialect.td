@@ -41,6 +41,12 @@ def TritonGEN_Dialect : Dialect {
     static constexpr ::llvm::StringLiteral getReqdSubGroupSizeAttrName() {
       return ::llvm::StringLiteral("triton_gen.intel_reqd_sub_group_size");
     }
+
+    /// Get the name for the attribute used to specify cache control
+    /// decorations.
+    static constexpr ::llvm::StringRef getCacheControlsAttrName() {
+      return ::llvm::StringLiteral("triton_gen.DecorationCacheControlINTEL");
+    }
   }];
 }
 

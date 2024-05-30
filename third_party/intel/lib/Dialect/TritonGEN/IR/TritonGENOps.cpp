@@ -12,8 +12,6 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallSet.h"
-#include "llvm/ADT/TypeSwitch.h"
 #include <cstdint>
 
 using namespace mlir;
@@ -146,40 +144,6 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
   default:
     return this->emitOpError(
         "expecting precision type to be tf32, bf16, fp16, u8, or s8");
-  }
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
-// triton_gen.cache_controls
-//===----------------------------------------------------------------------===//
-
-LogicalResult TritonGEN::CacheControls::verify() {
-  ArrayRef<Attribute> cacheControls = getCacheControls().getValue();
-  if (cacheControls.empty())
-    return emitOpError("expecting at least one cache control decoration");
-  llvm::SmallSet<uint32_t, 3> loadCacheLevels;
-  llvm::SmallSet<uint32_t, 3> storeCacheLevels;
-  for (Attribute attr : cacheControls) {
-    LogicalResult res =
-        TypeSwitch<Attribute, LogicalResult>(attr)
-            .Case<LoadCacheControlDecorationAttr,
-                  StoreCacheControlDecorationAttr>([this, &loadCacheLevels,
-                                                    &storeCacheLevels](
-                                                       auto attr)
-                                                       -> LogicalResult {
-              llvm::SmallSet<uint32_t, 3> &cacheLevels =
-                  std::is_same_v<decltype(attr), LoadCacheControlDecorationAttr>
-                      ? loadCacheLevels
-                      : storeCacheLevels;
-              if (!cacheLevels.insert(attr.getCacheLevel()).second)
-                return emitOpError(
-                    "cannot specify more than one cache control decoration of "
-                    "the same nature for the same cache level");
-              return success();
-            });
-    if (failed(res))
-      return res;
   }
   return success();
 }

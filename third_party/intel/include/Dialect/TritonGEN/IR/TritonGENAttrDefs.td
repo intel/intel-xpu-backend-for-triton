@@ -118,6 +118,25 @@ def TritonGEN_MemScope : I32EnumAttr<"MemScope",
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
 
+class TritonGEN_LoadStoreCacheControlDecoration<string loadOrStore>
+    : TritonGEN_Attr<loadOrStore # "CacheControlDecoration", !tolower(loadOrStore) # "_cache_control"> {
+  let summary = "An attribute specifying " # !tolower(loadOrStore) # " cache control";
+  let description = [{
+    A }] # !tolower(loadOrStore) # [{ cache control attribute has a one-to-one
+    correspondance with the SPIR-V decoration shown in
+    https://github.com/KhronosGroup/SPIRV-Registry/blob/main/extensions/INTEL/SPV_INTEL_cache_controls.asciidoc#decorations. The
+    only differences are there is no need to add the SPIR-V decoration key, as
+    that will be inferred from the attribute type, and an additional
+    `operand_number` parameter is needed, as this is applied to pointer user
+    operations, following
+    https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/2587 design.
+  }];
+  let parameters = (ins "uint32_t":$cache_level,
+                        loadOrStore # "CacheControlDecorationEnum":$cache_control,
+                        "uint32_t":$operand_number);
+  let assemblyFormat = "`<` $cache_level `,` $cache_control `,` $operand_number `>`";
+}
+
 /// Enum attribute for load cache controls.
 ///
 /// See
@@ -131,21 +150,6 @@ def TritonGEN_LoadCacheControlDecorationEnum : I32EnumAttr<"LoadCacheControlDeco
     I32EnumAttrCase<"ConstCached",         4, "ConstCached">
   ]> {
   let cppNamespace = "::mlir::triton::TritonGEN";
-}
-
-class TritonGEN_LoadStoreCacheControlDecoration<string loadOrStore>
-    : TritonGEN_Attr<loadOrStore # "CacheControlDecoration", !tolower(loadOrStore) # "_cache_control"> {
-  let summary = "An attribute specifying " # !tolower(loadOrStore) # " cache control";
-  let description = [{
-    A }] # !tolower(loadOrStore) # [{ cache control attribute has a one-to-one correspondance with the SPIR-V
-    decoration shown in
-    https://github.com/KhronosGroup/SPIRV-Registry/blob/main/extensions/INTEL/SPV_INTEL_cache_controls.asciidoc#decorations. The
-    only difference is there is no need to add the SPIR-V decoration key as that
-    will be inferred from the value.
-  }];
-  let parameters = (ins "uint32_t":$cache_level,
-                        loadOrStore # "CacheControlDecorationEnum":$cache_control);
-  let assemblyFormat = "`<` $cache_level `,` $cache_control `>`";
 }
 
 def TritonGEN_LoadCacheControlDecoration
@@ -168,11 +172,48 @@ def TritonGEN_StoreCacheControlDecorationEnum : I32EnumAttr<"StoreCacheControlDe
 def TritonGEN_StoreCacheControlDecoration
     : TritonGEN_LoadStoreCacheControlDecoration<"Store">;
 
-def CacheControls
-    : AnyAttrOf<[TritonGEN_LoadCacheControlDecoration,
-                 TritonGEN_StoreCacheControlDecoration]>;
+def TritonGEN_CacheControlsDecoration
+    : TritonGEN_Attr<"DecorationCacheControl", "decoration_cache_control"> {
+  let summary = "An attribute specifying an operation cache controls";
+  let description = [{
+    Attribute corresponding to `!spirv.DecorationCacheControlINTEL` metadata
+    described in
+    https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/2587. This
+    metadata is a list of `LoadCacheControlDecoration` and
+    `StoreCacheControlDecoration` attributes specifying cache control
+    information.
 
-def CacheControlsArray
-    : TypedArrayAttrBase<CacheControls, "Array of cache control attributes">;
+    The following MLIR code using this attribute:
+
+    ```mlir
+    llvm.func @triton_gen.cache_controls(%arg0: !llvm.ptr) {
+      %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 0>, #triton_gen.store_cache_control<1, WriteThrough, 0>, #triton_gen.load_cache_control<0, Cached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>} : !llvm.ptr -> i32
+      llvm.return
+    }
+    ```
+
+    Will be translated to the following LLVM IR:
+
+    ```llvm
+    define void @triton_gen.cache_controls(ptr %0) {
+      %1 = load i32, ptr %0, align 4, !spirv.DecorationCacheControlINTEL !1
+      ret void
+    }
+
+    !1 = !{!2, !3, !4, !5}
+    !2 = !{i32 6443, i32 0, i32 0, i32 0}
+    !3 = !{i32 6443, i32 1, i32 1, i32 0}
+    !4 = !{i32 6442, i32 0, i32 1, i32 0}
+    !5 = !{i32 6442, i32 1, i32 0, i32 0}
+    ```
+
+    $decorations must be a non-empty list of cache controls attributes and two
+    attributes of the same nature (load or store) in the list cannot be applied
+    to the same cache level, as per the SPIR-V validation rules.
+  }];
+  let parameters = (ins ArrayRefParameter<"::mlir::Attribute">:$decorations);
+  let assemblyFormat = "`<` $decorations `>`";
+  let genVerifyDecl = 1;
+}
 
 #endif // TRITONGEN_ATTRDEFS
