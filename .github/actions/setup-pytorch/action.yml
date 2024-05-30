@@ -92,7 +92,7 @@ runs:
         # Pytorch requirements installed here include everything that is needed to run apply_torch_pr.py script
         pip install -r requirements.txt
         wget https://raw.githubusercontent.com/intel/torch-xpu-ops/main/.github/scripts/apply_torch_pr.py
-        python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/127348 --pr-list https://github.com/pytorch/pytorch/pull/126516
+        python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/127348
 
     - name: Build PyTorch
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
