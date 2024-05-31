@@ -9,17 +9,17 @@ runs:
         mkdir intel-extension-for-pytorch
         cd intel-extension-for-pytorch
         cat > setup.py <<EOF
-from setuptools import setup
+        from setuptools import setup
 
-name = "intel-extension-for-pytorch"
-version = "0.1+FAKE"
+        name = "intel-extension-for-pytorch"
+        version = "0.1+FAKE"
 
-setup(
-    name=name,
-    version=version,
-    description="FAKE Intel Extension for PyTorch"
-)
-EOF
+        setup(
+            name=name,
+            version=version,
+            description="FAKE Intel Extension for PyTorch"
+        )
+        EOF
         mkdir intel_extension_for_pytorch
         echo '__version__ = "0.1+FAKE"' > intel_extension_for_pytorch/__init__.py
         pip install -e .
