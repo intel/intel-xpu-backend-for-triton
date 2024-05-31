@@ -684,13 +684,16 @@ struct StoreOpConversion
     assert(vals.size() == numElems);
 
     SmallVector<Value> storededVals;
+    Type vectorTy = LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
+                                             elemsPerLane);
+    SmallVector<int32_t> zeros(elemsPerLane);
+    std::fill(zeros.begin(), zeros.end(), 0);
+    DenseI32ArrayAttr attrZeros = rewriter.getDenseI32ArrayAttr(zeros);
     for (auto &val : vals) {
-      Value stored = rewriter.create<LLVM::UndefOp>(
-          loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
-                                        elemsPerLane));
-      for (size_t i = 0; i < elemsPerLane; ++i) {
-        stored = insert_element(stored, val, i32_val(i));
-      }
+      Value poison = rewriter.create<LLVM::PoisonOp>(loc, vectorTy);
+      Value vectInit = insert_element(vectorTy, poison, val, i32_val(0));
+      Value stored = rewriter.create<LLVM::ShuffleVectorOp>(
+          loc, poison, vectInit, attrZeros);
       storededVals.push_back(bitcast(stored, store2DGenXType));
     }
 
