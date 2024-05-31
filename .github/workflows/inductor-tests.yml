@@ -109,13 +109,13 @@ jobs:
         run: |
           cd pytorch
           pip install -r .ci/docker/requirements-ci.txt
-          
+
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
-          
+
           test_cmd="python test/run_test.py --include "
           if [[ "${{ github.event.inputs.suite }}" == "all" ]]; then
             for test in $(ls test/inductor | grep test);
-            do 
+            do
               test_cmd="${test_cmd} inductor/$test";
             done
           else
