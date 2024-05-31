@@ -85,7 +85,14 @@ Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce) const {
+                            unsigned numLaneToReduce,
+                            unsigned interleave) const {
+  // No horizontal reduce required.
+  if (numLaneToReduce == 1)
+    return false;
+  // horizontal reduce with interleave stride not support.
+  if (interleave > 1)
+    return false;
   // Check if it is a simple reduce operation supported by Wave Op.
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
     return false;
@@ -117,13 +124,17 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
   if (threadsPerWarp > numLaneToReduce) {
     GenISA_WaveCluster waveClusterOp(rewriter,
                                      reduceOp->getResult(0).getType());
-    acc[0] = waveClusterOp(rewriter, op->getLoc(), acc[0],
-                           int_val(8, (unsigned)waveOp),
-                           i32_val(numLaneToReduce), i32_val(0));
+    for (unsigned i = 0; i < acc.size(); ++i) {
+      acc[i] = waveClusterOp(rewriter, op->getLoc(), acc[i],
+                             int_val(8, (unsigned)waveOp),
+                             i32_val(numLaneToReduce), i32_val(0));
+    }
   } else if (threadsPerWarp == numLaneToReduce) {
     GenISA_WaveAll waveAllOp(rewriter, reduceOp->getResult(0).getType());
-    acc[0] = waveAllOp(rewriter, op->getLoc(), acc[0],
-                       int_val(8, (unsigned)waveOp), i32_val(0));
+    for (unsigned i = 0; i < acc.size(); ++i) {
+      acc[i] = waveAllOp(rewriter, op->getLoc(), acc[i],
+                         int_val(8, (unsigned)waveOp), i32_val(0));
+    }
   } else {
     llvm_unreachable("it is ilegal to reduce the lane number > warp size");
   }

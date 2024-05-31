@@ -170,13 +170,13 @@ private:
     }
   }
 
-  // Apply warp reduction across the given number of contiguous lanes using op
-  // region and the accumulator values as source.
+  // Apply warp reduction across the given number of the lanes and the
+  // interleave using op region and the accumulator values as source.
   void warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                   SmallVector<Value> &acc, triton::ReduceOp op,
                   unsigned numLaneToReduce, unsigned interleave) const {
-    auto success =
-        targetInfo.warpReduce(rewriter, loc, acc, op, numLaneToReduce);
+    auto success = targetInfo.warpReduce(rewriter, loc, acc, op,
+                                         numLaneToReduce, interleave);
     if (success)
       return;
     for (unsigned N = numLaneToReduce / 2; N > 0; N >>= 1) {
