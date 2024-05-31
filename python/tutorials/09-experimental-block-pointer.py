@@ -224,8 +224,14 @@ torch.manual_seed(0)
 for dtype, res_dtype in [(torch.float16, torch.float32), (torch.bfloat16, torch.float32), (torch.int8, torch.int32),
                          (torch.float32, torch.float32), (torch.float16, torch.float16)]:
     if dtype.is_floating_point:
-        a = torch.randn((512, 512), device='xpu', dtype=dtype)
-        b = torch.randn((512, 512), device='xpu', dtype=dtype)
+        if res_dtype in [torch.float16]:
+            # We observed high relative errors on small numbers when only using 16 bit for accumulation;
+            # hence, use a more restricted input set here.
+            a = torch.randint(low=-8, high=8, size=(512, 512), device='xpu', dtype=dtype) / 16
+            b = torch.randint(low=-8, high=8, size=(512, 512), device='xpu', dtype=dtype) / 16
+        else:
+            a = torch.randn((512, 512), device='xpu', dtype=dtype)
+            b = torch.randn((512, 512), device='xpu', dtype=dtype)
     else:
         a = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
         b = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
@@ -245,12 +251,7 @@ for dtype, res_dtype in [(torch.float16, torch.float32), (torch.bfloat16, torch.
 
     # Note: the torch.matmul and Triton implementations uses different
     # algorithms so we need to adjust tolerance.
-    rtol = 1e-3
-    if dtype == torch.bfloat16:
-        rtol = 1e-2
-    if res_dtype == torch.float16:
-        # FIXME: Observing some very high errors on small values
-        rtol = 30
+    rtol = 1e-2 if dtype == torch.bfloat16 or res_dtype in [torch.float16] else 1e-3
     if torch.allclose(triton_output, torch_output, atol=1e-4, rtol=rtol):
         print("✅ Triton and Torch match")
     else:
