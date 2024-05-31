@@ -12,7 +12,7 @@ source /opt/intel/oneapi/setvars.sh --force
 # store result
 rm -rf result.csv result.txt
 
-if [ $M  -le 8 ]
+if [ $M  -le 8 ] && [ $K != 16384 ] && [ $N != 128 ]
 then
     export TRITON_INTEL_SKIP_PREFETCH_A=1
 fi
@@ -38,7 +38,14 @@ then
     GROUP_SIZE_M=1
     num_stages=4
     num_warps=32
+    if [ $K = 16384 ] && [ $N = 128 ]
+    then
+        BLOCK_SIZE_N=128
+        BLOCK_SIZE_K=64
+        num_warps=4
+    fi
 fi
+
 
 if [ $M  = 4096 ] && [ $K = 4096 ]	&& [ $N = 128 ]
 then
