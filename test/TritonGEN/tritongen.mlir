@@ -66,6 +66,39 @@ llvm.func @triton_gen.named_barrier_wait(%barrier_id : i32) {
   llvm.return
 }
 
+llvm.func @triton_gen.sub_group_reduce() {
+  // CHECK-LABEL: triton_gen.sub_group_reduce
+  %0 = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: triton_gen.sub_group_reduce sum %0 {size = 16} : i32
+  %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : i32
+  // CHECK: triton_gen.sub_group_reduce prod %0 {size = 16} : i32
+  %2 = triton_gen.sub_group_reduce prod %0 {size = 16} : i32
+  // CHECK: triton_gen.sub_group_reduce umin %0 {size = 16} : i32
+  %3 = triton_gen.sub_group_reduce umin %0 {size = 16} : i32
+  // CHECK: triton_gen.sub_group_reduce umax %0 {size = 16} : i32
+  %4 = triton_gen.sub_group_reduce umax %0 {size = 16} : i32
+  // CHECK: triton_gen.sub_group_reduce imin %0 {size = 16} : i32
+  %5 = triton_gen.sub_group_reduce imin %0 {size = 16} : i32
+  // CHECK: triton_gen.sub_group_reduce imax %0 {size = 16} : i32
+  %6 = triton_gen.sub_group_reduce imax %0 {size = 16} : i32
+  // CHECK: triton_gen.sub_group_reduce or %0 {size = 16} : i32
+  %7 = triton_gen.sub_group_reduce or %0 {size = 16} : i32
+  // CHECK: triton_gen.sub_group_reduce xor %0 {size = 16} : i32
+  %8 = triton_gen.sub_group_reduce xor %0 {size = 16} : i32
+  // CHECK: triton_gen.sub_group_reduce and %0 {size = 16} : i32
+  %9 = triton_gen.sub_group_reduce and %0 {size = 16} : i32
+  %10 = llvm.mlir.constant(0.0 : f32) : f32
+  // CHECK: triton_gen.sub_group_reduce fsum %10 {size = 16} : f32
+  %11 = triton_gen.sub_group_reduce fsum %10 {size = 16} : f32
+  // CHECK: triton_gen.sub_group_reduce fprod %10 {size = 16} : f32
+  %12 = triton_gen.sub_group_reduce fprod %10 {size = 16} : f32
+  // CHECK: triton_gen.sub_group_reduce fmin %10 {size = 16} : f32
+  %13 = triton_gen.sub_group_reduce fmin %10 {size = 16} : f32
+  // CHECK: triton_gen.sub_group_reduce fmax %10 {size = 16} : f32
+  %14 = triton_gen.sub_group_reduce fmax %10 {size = 16} : f32
+  llvm.return
+}
+
 llvm.func @triton_gen.sub_group_shuffle() {
   // CHECK-LABEL: triton_gen.sub_group_shuffle
   %0 = llvm.mlir.constant(0 : i32) : i32

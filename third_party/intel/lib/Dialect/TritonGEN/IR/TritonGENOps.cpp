@@ -71,6 +71,15 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
 }
 
 //===----------------------------------------------------------------------===//
+// gen.sub_group_reduce
+//===----------------------------------------------------------------------===//
+
+LogicalResult TritonGEN::SubGroupReduceOp::verify() {
+  // TODO: Add verification for SubGroupReduceOp.
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // gen.matrix.dpas
 //===----------------------------------------------------------------------===//
 
