@@ -97,11 +97,11 @@ static std::string getTypeMangling(Type ty) {
       });
 }
 
-/// Get the subgroup size from the target or return a default.
+/// Get the subgroup size from the target.
 static int getSubgroupSize(Operation *op) {
-  return spirv::lookupTargetEnvOrDefault(op)
-      .getResourceLimits()
-      .getSubgroupSize();
+  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(op);
+  assert(attr && "Expecting valid target env attribute");
+  return attr.getResourceLimits().getSubgroupSize();
 }
 
 static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
