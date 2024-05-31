@@ -233,6 +233,8 @@ for dtype, res_dtype in [(torch.float16, torch.float32), (torch.bfloat16, torch.
 
     triton_output = matmul(a, b, res_dtype)
     if dtype.is_floating_point:
+        torch.xpu.set_fp32_math_mode(torch.xpu.utils.FP32MathMode.TF32 if dtype ==
+                                     torch.float32 else torch.xpu.utils.FP32MathMode.FP32)
         torch_output = torch.matmul(a, b).to(res_dtype)
     else:
         # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
@@ -244,9 +246,8 @@ for dtype, res_dtype in [(torch.float16, torch.float32), (torch.bfloat16, torch.
 
     # Note: the torch.matmul and Triton implementations uses different
     # algorithms so we need to adjust tolerance.
-    atol = 4e-2 if dtype == torch.float32 else 1e-4
     rtol = 1e-2 if dtype == torch.bfloat16 else 1e-3
-    if torch.allclose(triton_output, torch_output, atol=atol, rtol=rtol):
+    if torch.allclose(triton_output, torch_output, atol=1e-4, rtol=rtol):
         print("✅ Triton and Torch match")
     else:
         exit("❌ Triton and Torch differ")
