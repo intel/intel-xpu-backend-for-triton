@@ -2,7 +2,7 @@
 
 llvm.func @triton_gen.duplicated_cache_controls(%arg0: !llvm.ptr) {
   // expected-error @+1 {{'triton_gen.decoration_cache_controls' cannot specify more than one cache control decoration of the same nature for the same cache level}}
-  %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 0>, #triton_gen.store_cache_control<0, Streaming, 0>>} : !llvm.ptr -> i32
+  %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<0, Cached, 0>>} : !llvm.ptr -> i32
   llvm.return
 }
 
@@ -10,7 +10,7 @@ llvm.func @triton_gen.duplicated_cache_controls(%arg0: !llvm.ptr) {
 
 llvm.func @triton_gen.illegal_cache_controls_attr(%arg0: !llvm.ptr) {
   // expected-error @+1 {{'triton_gen.decoration_cache_controls' only accepts LoadCacheControlDecorationAttr and StoreCacheControlDecorationAttr attributes}}
-  %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL =#triton_gen.decoration_cache_control<1 : i32>} : !llvm.ptr -> i32
+  %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<1 : i32>} : !llvm.ptr -> i32
   llvm.return
 }
 
