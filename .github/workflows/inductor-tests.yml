@@ -122,7 +122,7 @@ jobs:
             test_cmd="${test_cmd} '${{ github.event.inputs.suite }}'"
           fi
           eval $test_cmd
-        
+
       - name: Report environment details
         run: |
           mkdir -p inductor_log
