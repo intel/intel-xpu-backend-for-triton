@@ -19,6 +19,8 @@
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -93,6 +95,13 @@ static std::string getTypeMangling(Type ty) {
           llvm_unreachable("unhandled integer type");
         }
       });
+}
+
+/// Get the subgroup size from the target.
+static int getSubgroupSize(Operation *op) {
+  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(op);
+  assert(attr && "Expecting valid target env attribute");
+  return attr.getResourceLimits().getSubgroupSize();
 }
 
 static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
@@ -903,6 +912,51 @@ struct TritonGENNamedBarrierWaitLowering
   }
 };
 
+struct TritonSubGroupReduceLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupReduceOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubGroupReduceOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubGroupReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value val = op.getValue();
+    Type val_ty = val.getType();
+    llvm::LLVMContext llvmContext;
+    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    auto kind = rewriter.create<LLVM::ConstantOp>(
+        loc, i8_ty, static_cast<int>(op.getKind()));
+
+    std::string funcName;
+    SmallVector<Type> argTypes;
+    SmallVector<Value> args;
+    if (getSubgroupSize(op) == op.getSize()) {
+      funcName = llvm::GenISAIntrinsic::getName(
+          llvm::GenISAIntrinsic::GenISA_WaveAll,
+          {typeTranslator.translateType(val_ty)});
+      argTypes = {val_ty, i8_ty, i32_ty};
+      args = {val, kind, i32_val(0)};
+    } else {
+      funcName = llvm::GenISAIntrinsic::getName(
+          llvm::GenISAIntrinsic::GenISA_WaveClustered,
+          {typeTranslator.translateType(val_ty)});
+      argTypes = {val_ty, i8_ty, i32_ty, i32_ty};
+      auto size = rewriter.create<LLVM::ConstantOp>(
+          loc, i32_ty, static_cast<int>(op.getSize()));
+      args = {val, kind, size, i32_val(0)};
+    }
+
+    LLVM::LLVMFuncOp funcOp =
+        LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, val_ty);
+    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+    rewriter.replaceOp(op, rewriter.create<LLVM::CallOp>(loc, funcOp, args));
+    return success();
+  }
+};
+
 struct TritonSubGroupShuffleLowering
     : public ConvertOpToLLVMPattern<TritonGEN::SubGroupShuffleOp> {
   using ConvertOpToLLVMPattern<
@@ -1066,9 +1120,10 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
       TritonGENSplitBarrierSignalLowering, TritonGENSplitBarrierWaitLowering,
       TritonGENNamedBarrierSignalLowering, TritonGENNamedBarrierWaitLowering,
-      TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
-      TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
-      TritonMatrix2DBlockPrefetchLowering>(converter);
+      TritonSubGroupReduceLowering, TritonSubGroupShuffleLowering,
+      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering>(
+      converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {

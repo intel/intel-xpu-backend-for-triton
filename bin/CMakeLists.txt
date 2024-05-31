@@ -25,6 +25,7 @@ target_link_libraries(triton-opt PRIVATE
   MLIROptLib
   MLIRPass
   MLIRTransforms
+  MLIRSPIRVDialect
 )
 
 mlir_check_all_link_libraries(triton-opt)
