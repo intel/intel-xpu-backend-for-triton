@@ -1,4 +1,4 @@
-name: E2E
+name: Pytorch inductor tests
 
 on:
   workflow_dispatch:
