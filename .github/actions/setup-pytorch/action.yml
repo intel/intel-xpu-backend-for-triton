@@ -25,7 +25,6 @@ runs:
       if: ${{ inputs.commit_id == '' }}
       shell: bash
       run: |
-        echo 11 inputs.commit_id = ${{ inputs.commit_id }}
         PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
         echo "PYTORCH_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
         echo "PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID" >> "$GITHUB_ENV"
@@ -34,7 +33,6 @@ runs:
       if: ${{ inputs.commit_id != '' }}
       shell: bash
       run: |
-        echo 22 inputs.commit_id = ${{ inputs.commit_id }}
         echo "PYTORCH_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
         echo "PYTORCH_COMMIT_ID=${{ inputs.commit_id }}" >> "$GITHUB_ENV"
 
