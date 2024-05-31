@@ -11,6 +11,26 @@
 
 include "mlir/IR/EnumAttr.td"
 
+/// Enum attribute of the different reduce kinds.
+def TritonGEN_ReduceKindAttr : I32EnumAttr<"ReduceKind", "TritonGEN reduce kind",
+  [
+    I32EnumAttrCase<"SUM",  0, "sum">,
+    I32EnumAttrCase<"PROD",   1, "prod">,
+    I32EnumAttrCase<"UMIN", 2, "umin">,
+    I32EnumAttrCase<"UMAX",  3, "umax">,
+    I32EnumAttrCase<"IMIN",  4, "imin">,
+    I32EnumAttrCase<"IMAX",  5, "imax">,
+    I32EnumAttrCase<"OR",  6, "or">,
+    I32EnumAttrCase<"XOR",  7, "xor">,
+    I32EnumAttrCase<"AND",  8, "and">,
+    I32EnumAttrCase<"FSUM",  9, "fsum">,
+    I32EnumAttrCase<"FPROD",  10, "fprod">,
+    I32EnumAttrCase<"FMIN",  11, "fmin">,
+    I32EnumAttrCase<"FMAX",  12, "fmax">
+  ]> {
+  let cppNamespace = "::mlir::triton::TritonGEN";
+}
+
 /// Enum attribute of the different shuffle kinds.
 def TritonGEN_ShflKindAttr : I32EnumAttr<"ShflKind", "TritonGEN shuffle kind",
   [

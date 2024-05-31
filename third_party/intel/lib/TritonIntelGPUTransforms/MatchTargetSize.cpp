@@ -71,27 +71,60 @@ namespace {
 class TargetArchNativeSizes {
 public:
   struct DotShape {
-    DotShape() = default;
     DotShape(unsigned m, unsigned n, unsigned k) : m(m), n(n), k(k) {
       assert(m != 0 && n != 0 && k != 0 && "expecting valid shape");
     }
 
-    unsigned m = 0;
-    unsigned n = 0;
-    unsigned k = 0;
+    const unsigned m;
+    const unsigned n;
+    const unsigned k;
+  };
+
+  struct BlockMemShape {
+    BlockMemShape(unsigned rowsA, unsigned columnsA, unsigned rowsB,
+                  unsigned columnsB)
+        : rowsA(rowsA), columnsA(columnsA), rowsB(rowsB), columnsB(columnsB) {
+      assert(rowsA != 0 && columnsA != 0 && rowsB != 0 && columnsB != 0 &&
+             "expecting valid shape");
+    }
+
+    const unsigned rowsA;
+    const unsigned columnsA;
+    const unsigned rowsB;
+    const unsigned columnsB;
   };
 
   TargetArchNativeSizes() = default;
-  TargetArchNativeSizes(DotShape dotShape, unsigned loadStoreSize)
-      : dotShape(dotShape), loadStoreSize(loadStoreSize) {}
 
-  void setDotShape(DotShape shape) { dotShape = shape; }
+  void setDotShape(unsigned bitWidth, DotShape &&shape) {
+    assert(!dotShapes.contains(bitWidth) && "Dot shape already set");
+    dotShapes.try_emplace(bitWidth, std::move(shape));
+  }
+  void setBlockMemShape(unsigned bitWidth, BlockMemShape &&shape) {
+    assert(!blockMemShapes.contains(bitWidth) &&
+           "Block memory access shape already set");
+    blockMemShapes.try_emplace(bitWidth, std::move(shape));
+  }
   void setLoadStoreSize(unsigned size) { loadStoreSize = size; }
-  const DotShape &getDotShape() const { return dotShape; }
+  const DotShape &getDotShape(unsigned bitWidth) const {
+    assert(dotShapes.contains(bitWidth) &&
+           "No dot shape configured for bit width");
+    return dotShapes.at(bitWidth);
+  }
+  const BlockMemShape &getBlockMemShape(unsigned bitWidth) const {
+    assert(blockMemShapes.contains(bitWidth) &&
+           "No block memory access shape configured for bit width");
+    return blockMemShapes.at(bitWidth);
+  }
   unsigned getLoadStoreSize() const { return loadStoreSize; }
 
 private:
-  DotShape dotShape;
+  /// Stores the natively supported dot shape per bitwidth of the operand data
+  /// type, e.g. 16 -> 8x16x16 (MxKxN) for [b]float16 on PVC.
+  llvm::SmallDenseMap<unsigned, DotShape> dotShapes;
+  /// Stores the natively supported shapes for 2D block reads of dot operands,
+  /// per element type bitwidth.
+  llvm::SmallDenseMap<unsigned, BlockMemShape> blockMemShapes;
   unsigned loadStoreSize = 0;
 };
 
@@ -388,9 +421,16 @@ public:
 void MatchTargetSizePass::initNativeOperationSizes() {
   // FIXME: sets the target dot shape natively supported by the target
   // architecture using the target architecture information when available.
-  // These value works for PVC.
-  TargetArchNativeSizes::DotShape shape(8, 16, 16);
-  nativeSizes.setDotShape(shape);
+  // These values works for PVC.
+
+  nativeSizes.setDotShape(8, {8, 16, 32});
+  nativeSizes.setDotShape(16, {8, 16, 16});
+  nativeSizes.setDotShape(32, {8, 16, 8});
+
+  nativeSizes.setBlockMemShape(8, {16, 64, 32, 32});
+  nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
+  nativeSizes.setBlockMemShape(32, {8, 8, 8, 16});
+
   nativeSizes.setLoadStoreSize(512); // max 512DW;
 }
 
@@ -453,14 +493,16 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
 
   // Dot operation.
   if (dotAttrs.count(layout)) {
-    const auto &dotShape = nativeSizes.getDotShape();
+    const TargetArchNativeSizes::DotShape &dotShape =
+        nativeSizes.getDotShape(type.getElementTypeBitWidth());
     SmallVector<int64_t> nativeDotSize{dotShape.m, dotShape.n};
     return nativeDotSize;
   }
 
   // Load/Store operations.
   ArrayRef<int64_t> shape = type.getShape();
-  const unsigned sizeInBytes = type.getElementTypeBitWidth() / 8;
+  const unsigned sizeInBits = type.getElementTypeBitWidth();
+  const unsigned sizeInBytes = sizeInBits / 8;
   unsigned maxLoadStoreSize = nativeSizes.getLoadStoreSize();
 
   SmallVector<int64_t> subSize(shape.size());
@@ -470,14 +512,29 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
     subSize[0] = std::min(max, shape[0]);
   } break;
   case 2: {
-    // 32 = 2 * 16(subgroupSize) which is for large load/store
-    int64_t colLimit =
-        (isa<ttgi::WarpEncodingAttr, ttg::DotOperandEncodingAttr>(layout)) ? 32
-                                                                           : 0;
-    subSize[1] = (shape[1] > colLimit) ? colLimit : shape[1];
-    // FIXME: From gfxspec, max 2d block load height is 32
-    int64_t max = 32;
-    subSize[0] = std::min(max, shape[0]);
+    if (isa<ttgi::WarpEncodingAttr>(layout)) {
+      // 32 = 2 * 16(subgroupSize) which is for large load/store
+      subSize[1] = std::min(32L, shape[1]);
+      // FIXME: From gfxspec, max 2d block load height is 32
+      subSize[0] = std::min(32L, shape[0]);
+    } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+      const TargetArchNativeSizes::BlockMemShape &memShape =
+          nativeSizes.getBlockMemShape(sizeInBits);
+      switch (dotLayout.getOpIdx()) {
+      case 0:
+        subSize[1] =
+            std::min(static_cast<int64_t>(memShape.columnsA), shape[1]);
+        subSize[0] = std::min(static_cast<int64_t>(memShape.rowsA), shape[0]);
+        break;
+      case 1:
+        subSize[1] =
+            std::min(static_cast<int64_t>(memShape.columnsB), shape[1]);
+        subSize[0] = std::min(static_cast<int64_t>(memShape.rowsB), shape[0]);
+        break;
+      }
+    } else {
+      llvm_unreachable("Unsupported layout");
+    }
   } break;
   default:
     llvm_unreachable("Unsupported shape");
@@ -593,7 +650,9 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   int64_t m = aShape[0];
   int64_t n = bShape[1];
   int64_t k = aShape[1];
-  const auto &dotShape = nativeSizes.getDotShape();
+  const TargetArchNativeSizes::DotShape &dotShape =
+      nativeSizes.getDotShape(aType.getElementTypeBitWidth());
+
   OpBuilder b(dot);
   Location loc = dot.getLoc();
 

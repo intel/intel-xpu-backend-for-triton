@@ -57,6 +57,12 @@ PYBIND11_MODULE(xetla_kernel, m) {
         "softmax forward (XeTLA)");
   m.def("softmax_shape_4096_4096", &softmax<mat1_4096x4096_bf16_cfg0>,
         "softmax forward (XeTLA)");
+  m.def("softmax_shape_4096_8192", &softmax<mat1_4096x8k_bf16_cfg0>,
+        "softmax forward (XeTLA)");
+  m.def("softmax_shape_4096_16384", &softmax<mat1_4096x16k_bf16_cfg0>,
+        "softmax forward (XeTLA)");
+  m.def("softmax_shape_4096_32768", &softmax<mat1_4096x32k_bf16_cfg0>,
+        "softmax forward (XeTLA)");
   // bgemm: M=N=K [256, 512 ... 4096]
   m.def("bgemm_shape_256_256_256", &bgemm<Test_256x256x256_row_row>,
         "bgemm (XeTLA)");

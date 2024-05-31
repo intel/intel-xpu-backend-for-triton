@@ -29,6 +29,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "USE_TTGIR_LOC",
     "NVPTX_ENABLE_DUMP",
     "TRITON_INTEL_ENABLE_BLOCK_PTR",
+    "TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT",
     // clang-format on
 };
 
