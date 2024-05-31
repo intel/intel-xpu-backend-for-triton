@@ -118,7 +118,12 @@ jobs:
           LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
           echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
-      - name: Setup PyTorch
+      - name: Setup PyTorch with IPEX
+        if: ${{ inputs.install_ipex }}
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Setup PyTorch without IPEX
+        if: ${{ !inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
