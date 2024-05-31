@@ -129,6 +129,10 @@ jobs:
         if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-ipex
 
+      - name: Setup fake IPEX
+        if: ${{ !inputs.install_ipex }}
+        uses: ./.github/actions/setup-fake-ipex
+
       - name: Build Triton
         run: |
           export DEBUG=1
