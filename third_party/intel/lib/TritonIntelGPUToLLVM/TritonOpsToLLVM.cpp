@@ -12,9 +12,11 @@ using namespace mlir::triton::gpu::intel;
 namespace {
 
 VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
-  unsigned ratio =
-      elemType.getIntOrFloatBitWidth() / tensorType.getElementTypeBitWidth();
-  unsigned num = (tensorType.getNumElements() / 16) / ratio;
+  // Determine a vector type of the given `elemType` that covers 1/16 of
+  // `tensorType`, i.e. the amout of data a single subgroup lane will work on.
+  size_t tensorSize =
+      tensorType.getNumElements() * tensorType.getElementTypeBitWidth();
+  size_t num = (tensorSize / 16) / elemType.getIntOrFloatBitWidth();
   return vec_ty(elemType, num);
 };
 
@@ -120,11 +122,13 @@ public:
     assert(tensorType.getRank() <= 2 &&
            "only support 1d/2d load/store/prefetch for now");
 
-    unsigned dataSize = tensorType.getElementType().getIntOrFloatBitWidth();
+    Type elemType = tensorType.getElementType();
+    unsigned dataSize = elemType.getIntOrFloatBitWidth();
     unsigned blockHeight = tensorType.getShape()[0];
     unsigned blockWidth = tensorType.getShape()[1];
-    assert((blockWidth == 16 || blockWidth == 32 || blockWidth == 64) &&
-           "only support 16/32/64 block");
+    assert((blockWidth == 8 || blockWidth == 16 || blockWidth == 32 ||
+            blockWidth == 64) &&
+           "only support 8/16/32/64 block");
     auto idxAttr = op->template getAttrOfType<mlir::IntegerAttr>("DotIdx");
     unsigned vBlks = 1;
     if (dataSize == 16) {
@@ -175,10 +179,11 @@ public:
       unsigned idx = idxAttr.getInt();
       Type resType =
           this->getTypeConverter()->convertType(op->getResult(0).getType());
+      bool isDword = idx == 1 || elemType == f32_ty;
       Type vectorType =
           getVectorType(cast<RankedTensorType>(op.getResult().getType()),
-                        idx == 0 ? i16_ty : i32_ty);
-      bool vnni = (idx == 1) && dataSize <= 32;
+                        isDword ? i32_ty : i16_ty);
+      bool vnni = (idx == 1) && dataSize < 32;
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
           dataSize, blockWidth, blockHeight, vBlks, false /*transpose*/, vnni);
@@ -219,12 +224,14 @@ public:
   LogicalResult
   matchAndRewrite(DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto encodePrecision = [&](Type type) -> TritonGEN::PrecisionType {
+    auto encodePrecision =
+        [&](Type type, InputPrecisionAttr attr) -> TritonGEN::PrecisionType {
       if (type == bf16_ty)
         return TritonGEN::PrecisionType::BF16;
       else if (type == f16_ty)
         return TritonGEN::PrecisionType::FP16;
-      else if (type == rewriter.getTF32Type())
+      else if (type == f32_ty && attr &&
+               attr.getValue() == InputPrecision::TF32)
         return TritonGEN::PrecisionType::TF32;
       else if (type.isInteger(8)) {
         if (type.isUnsignedInteger())
@@ -236,18 +243,19 @@ public:
       return TritonGEN::PrecisionType::UNUSED;
     };
 
-    TritonGEN::PrecisionType precATy =
-        encodePrecision(op.getA().getType().getElementType());
-    TritonGEN::PrecisionType precBTy =
-        encodePrecision(op.getB().getType().getElementType());
+    TritonGEN::PrecisionType precATy = encodePrecision(
+        op.getA().getType().getElementType(), op.getInputPrecisionAttr());
+    TritonGEN::PrecisionType precBTy = encodePrecision(
+        op.getB().getType().getElementType(), op.getInputPrecisionAttr());
     auto precA =
         TritonGEN::PrecisionTypeAttr::get(rewriter.getContext(), precATy);
     auto precB =
         TritonGEN::PrecisionTypeAttr::get(rewriter.getContext(), precBTy);
 
     Location loc = op.getLoc();
-    Type typeA =
-        getVectorType(cast<RankedTensorType>(op.getA().getType()), i16_ty);
+    Type typeA = getVectorType(
+        cast<RankedTensorType>(op.getA().getType()),
+        precATy == TritonGEN::PrecisionType::TF32 ? i32_ty : i16_ty);
     Value castA = bitcast(adaptor.getA(), typeA);
     VectorType typeB =
         getVectorType(cast<RankedTensorType>(op.getB().getType()), i32_ty);
