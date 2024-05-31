@@ -111,69 +111,69 @@ module attributes {
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : i32 -> i32
+    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(1 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
-    %2 = triton_gen.sub_group_reduce prod %0 {size = 16} : i32 -> i32
+    %2 = triton_gen.sub_group_reduce prod %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(2 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
-    %3 = triton_gen.sub_group_reduce umin %0 {size = 16} : i32 -> i32
+    %3 = triton_gen.sub_group_reduce umin %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(3 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
-    %4 = triton_gen.sub_group_reduce umax %0 {size = 16} : i32 -> i32
+    %4 = triton_gen.sub_group_reduce umax %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(4 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
-    %5 = triton_gen.sub_group_reduce imin %0 {size = 16} : i32 -> i32
+    %5 = triton_gen.sub_group_reduce imin %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(5 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
-    %6 = triton_gen.sub_group_reduce imax %0 {size = 16} : i32 -> i32
+    %6 = triton_gen.sub_group_reduce imax %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(6 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
-    %7 = triton_gen.sub_group_reduce or %0 {size = 16} : i32 -> i32
+    %7 = triton_gen.sub_group_reduce or %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(7 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
-    %8 = triton_gen.sub_group_reduce xor %0 {size = 16} : i32 -> i32
+    %8 = triton_gen.sub_group_reduce xor %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(8 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
-    %9 = triton_gen.sub_group_reduce and %0 {size = 16} : i32 -> i32
+    %9 = triton_gen.sub_group_reduce and %0 {size = 16} : i32
     %10 = llvm.mlir.constant(0.0 : f32) : f32
     // CHECK: [[VAL:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(9 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.f32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (f32, i8, i32, i32) -> f32
-    %11 = triton_gen.sub_group_reduce fsum %10 {size = 16} : f32 -> f32
+    %11 = triton_gen.sub_group_reduce fsum %10 {size = 16} : f32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(10 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.f32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (f32, i8, i32, i32) -> f32
-    %12 = triton_gen.sub_group_reduce fprod %10 {size = 16} : f32 -> f32
+    %12 = triton_gen.sub_group_reduce fprod %10 {size = 16} : f32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(11 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.f32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (f32, i8, i32, i32) -> f32
-    %13 = triton_gen.sub_group_reduce fmin %10 {size = 16} : f32 -> f32
+    %13 = triton_gen.sub_group_reduce fmin %10 {size = 16} : f32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(12 : i8) : i8
     // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveClustered.f32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (f32, i8, i32, i32) -> f32
-    %14 = triton_gen.sub_group_reduce fmax %10 {size = 16} : f32 -> f32
+    %14 = triton_gen.sub_group_reduce fmax %10 {size = 16} : f32
     llvm.return
   }
 }
@@ -189,57 +189,57 @@ module attributes {
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(0 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : i32 -> i32
+    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(1 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
-    %2 = triton_gen.sub_group_reduce prod %0 {size = 16} : i32 -> i32
+    %2 = triton_gen.sub_group_reduce prod %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(2 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
-    %3 = triton_gen.sub_group_reduce umin %0 {size = 16} : i32 -> i32
+    %3 = triton_gen.sub_group_reduce umin %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(3 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
-    %4 = triton_gen.sub_group_reduce umax %0 {size = 16} : i32 -> i32
+    %4 = triton_gen.sub_group_reduce umax %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(4 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
-    %5 = triton_gen.sub_group_reduce imin %0 {size = 16} : i32 -> i32
+    %5 = triton_gen.sub_group_reduce imin %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(5 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
-    %6 = triton_gen.sub_group_reduce imax %0 {size = 16} : i32 -> i32
+    %6 = triton_gen.sub_group_reduce imax %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(6 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
-    %7 = triton_gen.sub_group_reduce or %0 {size = 16} : i32 -> i32
+    %7 = triton_gen.sub_group_reduce or %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(7 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
-    %8 = triton_gen.sub_group_reduce xor %0 {size = 16} : i32 -> i32
+    %8 = triton_gen.sub_group_reduce xor %0 {size = 16} : i32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(8 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
-    %9 = triton_gen.sub_group_reduce and %0 {size = 16} : i32 -> i32
+    %9 = triton_gen.sub_group_reduce and %0 {size = 16} : i32
     %10 = llvm.mlir.constant(0.0 : f32) : f32
     // CHECK: [[VAL:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(9 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.f32([[VAL]], [[KIND]], [[ZERO]]) : (f32, i8, i32) -> f32
-    %11 = triton_gen.sub_group_reduce fsum %10 {size = 16} : f32 -> f32
+    %11 = triton_gen.sub_group_reduce fsum %10 {size = 16} : f32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(10 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.f32([[VAL]], [[KIND]], [[ZERO]]) : (f32, i8, i32) -> f32
-    %12 = triton_gen.sub_group_reduce fprod %10 {size = 16} : f32 -> f32
+    %12 = triton_gen.sub_group_reduce fprod %10 {size = 16} : f32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(11 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.f32([[VAL]], [[KIND]], [[ZERO]]) : (f32, i8, i32) -> f32
-    %13 = triton_gen.sub_group_reduce fmin %10 {size = 16} : f32 -> f32
+    %13 = triton_gen.sub_group_reduce fmin %10 {size = 16} : f32
     // CHECK: [[KIND:%.*]] = llvm.mlir.constant(12 : i8) : i8
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.call @llvm.genx.GenISA.WaveAll.f32([[VAL]], [[KIND]], [[ZERO]]) : (f32, i8, i32) -> f32
-    %14 = triton_gen.sub_group_reduce fmax %10 {size = 16} : f32 -> f32
+    %14 = triton_gen.sub_group_reduce fmax %10 {size = 16} : f32
     llvm.return
   }
 }

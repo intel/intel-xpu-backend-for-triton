@@ -925,8 +925,7 @@ struct TritonSubGroupReduceLowering
     Type val_ty = val.getType();
     llvm::LLVMContext llvmContext;
     LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    auto moduleOp = op->getParentOfType<ModuleOp>();
     auto kind = rewriter.create<LLVM::ConstantOp>(
         loc, i8_ty, static_cast<int>(op.getKind()));
 
