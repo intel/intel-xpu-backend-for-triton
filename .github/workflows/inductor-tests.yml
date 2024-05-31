@@ -23,16 +23,11 @@ env:
 jobs:
   print_inputs:
     name: Print inputs
-    needs: setup
     runs-on: Linux
     steps:
       - name: Print inputs
         run: |
           echo "${{ toJSON(github.event.inputs) }}"
-
-      - name: Print setup outputs
-        run: |
-          echo "${{ toJSON(needs.setup.outputs) }}"
 
   build:
     name: Test
