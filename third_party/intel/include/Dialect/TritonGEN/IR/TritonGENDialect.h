@@ -15,6 +15,7 @@
 #define TRITON_DIALECT_TRITONGENDIALECT_H
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpDefinition.h"
 
@@ -39,6 +40,13 @@ enum TritonGENMemorySpace {
   kWorkgroup = 3,       // OpenCL Local memory
   kGeneric = 4          // OpenCL Generic memory
 };
+
+/// Get the subgroup size from the target.
+inline int getSubgroupSize(Operation *op) {
+  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(op);
+  assert(attr && "Expecting valid target env attribute");
+  return attr.getResourceLimits().getSubgroupSize();
+}
 
 } // namespace mlir::triton::TritonGEN
 

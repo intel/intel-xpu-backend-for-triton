@@ -75,7 +75,26 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::SubGroupReduceOp::verify() {
-  // TODO: Add verification for SubGroupReduceOp.
+  Type ty = getValue().getType();
+  switch (getKind()) {
+  case TritonGEN::ReduceKind::FSUM:
+  case TritonGEN::ReduceKind::FPROD:
+  case TritonGEN::ReduceKind::FMIN:
+  case TritonGEN::ReduceKind::FMAX:
+    if (!isa<FloatType>(ty))
+      return this->emitOpError(
+          "expecting floating point type for floating point reduction");
+    break;
+  default:
+    if (!isa<IntegerType>(ty))
+      return this->emitOpError("expecting integer type for integer reduction");
+  }
+
+  if (getSize() < 1 || getSize() > TritonGEN::getSubgroupSize(*this) ||
+      !llvm::isPowerOf2_32(getSize()))
+    return this->emitOpError(
+        "expecting size to be a power of 2 between 1 and subgroup size");
+
   return success();
 }
 
