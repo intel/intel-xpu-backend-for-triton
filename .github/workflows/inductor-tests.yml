@@ -144,17 +144,12 @@ jobs:
           AGAMA_VERSION=$AGAMA_VERSION
           EOF
 
-      - name: Copy reports
-        run: |
-          if [[ -d torch_compile_debug ]]; then
-            cp -rT torch_compile_debug inductor_log
-          fi
-
       - name: Upload test logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ join(matrix.*, '-') }}
-          path: inductor_log
+          name: logs-${{ env.PYTHON_VERSION }}
+          path: test/test-reports
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
