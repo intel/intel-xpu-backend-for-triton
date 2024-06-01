@@ -47,7 +47,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     %14 = tt.make_tensor_ptr %arg0, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%13, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x32xf16>, 1>
 
     // CHECK: [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<1> to i64
-    // CHECK: llvm.call @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid([[PTR]], {{.*}})
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid([[PTR]], {{.*}})
     triton_intel_gpu.prefetch %14 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<8x32xf16>, 1>
     %18 = arith.divsi %1, %c4_i32 : i32
     %19 = arith.andi %18, %c7_i32 : i32
@@ -67,22 +67,22 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     cf.cond_br %62, ^bb2, ^bb3
   ^bb2:
     // CHECK: [[A_PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<1> to i64
-    // CHECK: [[A:%.*]] = llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v64i16([[A_PTR]], {{.*}} -> vector<64xi16>
+    // CHECK: [[A:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v64i16([[A_PTR]], {{.*}} -> vector<64xi16>
     // CHECK-NEXT: [[castA:%.*]] = llvm.bitcast [[A]] : vector<64xi16> to vector<64xf16>
     // CHECK: [[B_PTR:%.*]] = llvm.ptrtoint %arg1 : !llvm.ptr<1> to i64
-    // CHECK: [[B0:%.*]] = llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v32i32([[B_PTR]], {{.*}} -> vector<32xi32>
+    // CHECK: [[B0:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v32i32([[B_PTR]], {{.*}} -> vector<32xi32>
     // CHECK-NEXT: [[castB:%.*]] = llvm.bitcast [[B0]] : vector<32xi32> to vector<64xf16>
-    // CHECK: [[B1:%.*]] = llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v32i32({{.*}} -> vector<32xi32>
+    // CHECK: [[B1:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v32i32({{.*}} -> vector<32xi32>
     // CHECK: [[subA1:%.*]] = llvm.shufflevector [[castA]], [[castA]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<64xf16>
     // CHECK: [[subB1:%.*]] = llvm.shufflevector [[castB]], [[castB]] [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] : vector<64xf16>
     // CHECK-NEXT: [[castDotA1:%.*]] = llvm.bitcast [[subA1]] : vector<8xf16> to vector<8xi16>
     // CHECK-NEXT: [[castDotB1:%.*]] = llvm.bitcast [[subB1]] : vector<16xf16> to vector<8xi32>
-    // CHECK: llvm.call @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f([[castDotA1]], [[castDotB1]], {{.*}} -> vector<8xf32>
+    // CHECK: llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f([[castDotA1]], [[castDotB1]], {{.*}} -> vector<8xf32>
     // CHECK: [[subA2:%.*]] = llvm.shufflevector [[castA]], [[castA]] [32, 33, 34, 35, 36, 37, 38, 39] : vector<64xf16>
     // CHECK: [[subB2:%.*]] = llvm.shufflevector [[castB]], [[castB]] [16, 17, 18, 19, 20, 21, 22,  23, 24, 25, 26, 27, 28, 29, 30, 31] : vector<64xf16>
     // CHECK-NEXT: [[castDotA2:%.*]] = llvm.bitcast [[subA2]] : vector<8xf16> to vector<8xi16>
     // CHECK-NEXT: [[castDotB2:%.*]] = llvm.bitcast [[subB2]] : vector<16xf16> to vector<8xi32>
-    // CHECK: llvm.call @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f([[castDotA2]], [[castDotB2]], {{.*}} -> vector<8xf32>
+    // CHECK: llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f([[castDotA2]], [[castDotB2]], {{.*}} -> vector<8xf32>
     %63 = tt.load %57 {DotIdx = 0 : i32, boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16>, 1>
     %64 = tt.load %58 {DotIdx = 1 : i32, boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16>, 1>
     %65 = tt.load %59 {DotIdx = 1 : i32, boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<32x32xf16>, 1>
@@ -103,7 +103,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
   ^bb3:
     %120 = tt.make_tensor_ptr %arg2, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%21, %36] {order = array<i32: 1, 0>} : <tensor<8x16xf32>, 1>
     // CHECK: [[RES_PTR:%.*]] = llvm.ptrtoint %arg2 : !llvm.ptr<1> to i64
-    // CHECK: llvm.call @llvm.genx.GenISA.LSC2DBlockWrite.v8i32([[RES_PTR]], {{.*}}
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i32([[RES_PTR]], {{.*}}
     tt.store %120, %41 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<8x16xf32>, 1>
     tt.return
   }
@@ -127,7 +127,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // CHECK: [[NUM_BLOCKS:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK: [[TRANSPOSE:%.*]] = llvm.mlir.constant(false) : i1
     // CHECK: [[VNNI:%.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: {{%.*}} = llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v4i32({{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, [[ELEM_SIZE]], [[TILE_WIDTH]], [[TILE_HEIGHT]], [[NUM_BLOCKS]], [[TRANSPOSE]], [[VNNI]], {{%.*}}) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<4xi32>
+    // CHECK: {{%.*}} = llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v4i32({{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, [[ELEM_SIZE]], [[TILE_WIDTH]], [[TILE_HEIGHT]], [[NUM_BLOCKS]], [[TRANSPOSE]], [[VNNI]], {{%.*}}) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<4xi32>
     %2 = tt.load %0 {DotIdx = 0 : i32, boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x8xf32>>
     // CHECK: [[ELEM_SIZE:%.*]] = llvm.mlir.constant(32 : i32) : i32
     // CHECK: [[TILE_WIDTH:%.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -135,7 +135,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // CHECK: [[NUM_BLOCKS:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK: [[TRANSPOSE:%.*]] = llvm.mlir.constant(false) : i1
     // CHECK: [[VNNI:%.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: [[VAL_60:%.*]] = llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v8i32({{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, [[ELEM_SIZE]], [[TILE_WIDTH]], [[TILE_HEIGHT]], [[NUM_BLOCKS]], [[TRANSPOSE]], [[VNNI]], {{%.*}}) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xi32>
+    // CHECK: [[VAL_60:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v8i32({{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, [[ELEM_SIZE]], [[TILE_WIDTH]], [[TILE_HEIGHT]], [[NUM_BLOCKS]], [[TRANSPOSE]], [[VNNI]], {{%.*}}) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xi32>
     %3 = tt.load %1 {DotIdx = 1 : i32, boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x16xf32>>
     tt.return
   }
