@@ -297,16 +297,19 @@ llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vect
 
 // -----
 
-// CHECK: llvm.func spir_funccc @intel_subgroup_block_read_u8_m8k32v2(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) -> vector<16xi16> attributes {passthrough = ["nounwind"]}
+// CHECK: llvm.func spir_funccc @_Z40intel_sub_group_2d_block_read_8b_8r32x2cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>, !llvm.ptr) attributes {passthrough = ["nounwind"]}
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
+  // CHECK:  [[SIXTY:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[SIXTY]] x i16 : (i32) -> !llvm.ptr
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
   // CHECK-NEXT: [[COORD0:%.*]] = llvm.insertelement %arg4, [[UNDEF]][[[ZERO]] : i32] : vector<2xi32>
   // CHECK-NEXT: [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE]] : i32] : vector<2xi32>
-  // CHECK-NEXT: llvm.call spir_funccc @intel_subgroup_block_read_u8_m8k32v2(%arg0, %arg1, %arg2, %arg3, [[COORD1]]) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> vector<16xi16>
+  // CHECK-NEXT: llvm.call spir_funccc @_Z40intel_sub_group_2d_block_read_8b_8r32x2cPU3AS1viiiDv2_iPt(%arg0, %arg1, %arg2, %arg3, [[COORD1]], [[DEST]]) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>, !llvm.ptr) -> ()
+  // CHECK-NEXT: llvm.load [[DEST]] : !llvm.ptr -> vector<16xi16>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=2, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<16xi16>
   llvm.return
 }
