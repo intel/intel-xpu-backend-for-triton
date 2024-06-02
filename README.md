@@ -1,28 +1,19 @@
-<div align="center">
-  <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
-</div>
-
 [![Build and test](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/build-test.yml/badge.svg?branch=llvm-target)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/build-test.yml)
 [![Triton wheels](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml/badge.svg)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml)
 [![Conda test](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/conda-build-test.yml/badge.svg)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/conda-build-test.yml)
 
-# Triton
+# Intel® XPU Backend for Triton\* 
 
-This is the development repository of Triton, a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs.
+This is the development repository of Intel® XPU Backend for Triton\*, a new [Triton](https://github.com/triton-lang/triton/) backend for Intel GPUs. Intel® XPU Backend for Triton\* is a a out of tree backend module for [Triton](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) used to provide best-in-class performance and productivity on any Intel GPUs for [PyTorch](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) and standalone usage.
 
-The foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing this work if you use Triton!
-
-The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.  See also these third-party [Triton puzzles](https://github.com/srush/Triton-Puzzles), which can all be run using the Triton interpreter -- no GPU required.
-
-<!-- @cond -->
 # Compatibility
 
   |Category|Requirement|Installation|
   |-|-|-|
   |OS|Ubuntu [22.04](http://releases.ubuntu.com/22.04/)| [Install Ubuntu](https://ubuntu.com/tutorials)|
-  |GPU Card | Intel® Data Center GPU Max Series |N/A|
-  |GPU Driver | [Stable 775.20](https://dgpu-docs.intel.com/releases/stable_775_20_20231219.html) or later|[Install Intel GPU driver](https://dgpu-docs.intel.com/installation-guides/index.html#intel-data-center-gpu-max-series)|
-  |Toolchain |Intel® oneAPI Base Toolkit [2024.1.0](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html) or later|[Install Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html)|
+  |GPU Card | Intel® Data Center GPU Max, Flex Series or Intel Arc A770 |[Max](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/max-series.html), [Flex](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/flex-series.html), [Arc](https://www.intel.com/content/www/us/en/products/sku/229151/intel-arc-a770-graphics-16gb/specifications.html)|
+  |GPU Driver | [Stable 812.26](https://dgpu-docs.intel.com/releases/stable_821_36_20240430.html) or [later](https://dgpu-docs.intel.com/driver/release-streams.html#ubuntu-rolling-stable)|[Install Intel GPU driver](https://dgpu-docs.intel.com/driver/installation.html)|
+  |Toolchain |Intel® oneAPI Toolkit [2024.1.1](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html#collapseCollapsible1714409902509) or later|[Install Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html#collapseCollapsible1714409902509)|
 
 <!-- @endcond -->
 
@@ -68,9 +59,7 @@ arbitrary LLVM version.
        $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
        $ ninja
 
-4. Grab a snack, this will take a while.
-
-5. Build Triton as above, but set the following environment variables.
+4. Build Triton as above, but set the following environment variables.
 
        # Modify as appropriate to point to your LLVM build.
        $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
@@ -92,7 +81,7 @@ arbitrary LLVM version.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
 
-- vscode intellisense has some difficulty figuring out how to build Triton's C++
+- VSCcode IntelliSense has some difficulty figuring out how to build Triton's C++
   (probably because, in our build, users don't invoke cmake directly, but
   instead use setup.py).  Teach vscode how to compile Triton as follows.
 
@@ -176,12 +165,121 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 
+# Usage Guide
+
+## Code Modifications
+Intel® XPU Backend for Triton\* doesn't require any modifications and will work with PyTorch 2.4 release out of the box.
+
+1. Add `import torch` for xpu support.
+2. Put the tensor and models to XPU by calling `to('xpu')`. 
+
+The following examples show modifications for the user code.
+
+### Example 1 : Triton Kernel
+
+This Example is a modified version of [Vector Add](https://triton-lang.org/main/getting-started/tutorials/01-vector-add.html#vector-addition) triton kernel. Please refer to [Vector Add](https://triton-lang.org/main/getting-started/tutorials/01-vector-add.html#vector-addition) for detailed comments and illustration about the code semantics.
+
+Comparing to the original code, the following code modifies:
+
+```Python
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def add_kernel(
+    x_ptr,
+    y_ptr,
+    output_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
+    output = x + y
+    tl.store(output_ptr + offsets, output, mask=mask)
+
+def add(x: torch.Tensor, y: torch.Tensor):
+    # Put the tensor to xpu
+    output = torch.empty_like(x).xpu()
+    assert x.is_xpu and y.is_xpu and output.is_xpu
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+
+    return output
+
+# For manual_seed, needs to use API for XPU
+torch.xpu.manual_seed(0)
+size = 512
+# For tensors, needs to be put on XPU
+x = torch.rand(size, device='xpu')
+y = torch.rand(size, device='xpu')
+output_torch = x + y
+output_triton = add(x, y)
+print(output_torch)
+print(output_triton)
+print(
+    f'The maximum difference between torch and triton is '
+    f'{torch.max(torch.abs(output_torch - output_triton))}'
+)
+```
+
+
+### Example 2 : End-to-End Model
+Triton is transparent for end-to-end models. One could easily use `torch.compile` with `inductor` as backend by default. It will automatically generates triton kernel and gets benefit from it.
+
+
+```Python
+import torch
+from torch._dynamo.testing import rand_strided
+
+from torch.nn import *
+class simpleModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # tensors inside model should be on xpu
+        self.y = rand_strided((32, 8), (8, 1), device='xpu:0', dtype=torch.float32)
+
+    def forward(self, x):
+        z = x + self.y
+        return z
+
+# tensors passed to the model should be on xpu
+x = rand_strided((32, 8), (8, 1), device='xpu:0', dtype=torch.float32)
+xpu_model = simpleModel()
+# Call torch.compile for optimization
+optimized_mod = torch.compile(xpu_model)
+
+graph_result = optimized_mod(x)
+```
+
+## More Examples on Tests
+If you wish to take a look at more examples, please refer to the [Unit Tests](docs/test_docs/unit_tests.md) and [End-to-End Benchmark Tests](docs/test_docs/end_to_end_tests.md).
+
+
+## Performance Analysis Guide
+
+There are several ways of doing performance analysis. We recommend using `torch.profiler` for end-to-end performance analysis and using Intel® VTune™ Profiler for more detailed kernel analysis. We provide a comprehensive guide for those two:
+1. [end_to_end_tests#profiling settings](docs/test_docs/end_to_end_tests.md#profiling-settings) section for using `torch.profiler`.
+2. [VTune Profiling Guide](docs/VTune_Profiling.md) for kernel analysis.
+
+Note that the user needs to explicitly set `TRITON_XPU_PROFILE=1` when the user needs to enable kernel profiling.
+
+```Bash
+export TRITON_XPU_PROFILE=1
+```
+
 # Changelog
 
-Version 2.0 is out! New features include:
+Version 2.2 is out! New features include:
 - Many, many bug fixes
-- Performance improvements
-- Backend rewritten to use MLIR
+- Performance improvements for Intel GPU Max series
 - Support for kernels that contain back-to-back matmuls (e.g., flash attention)
 
 # Contributing
@@ -192,7 +290,21 @@ Community contributions are more than welcome, whether it be to fix bugs or to a
 # Compatibility
 
 Supported Platforms:
-  * Linux
+  * Linux or WSL2
 
 Supported Hardware:
-  * Under developement: Intel PVC GPU
+  * Intel GPU Max Series 1100/1550, Intel Flex Series, Intel Arc A770
+  * Coming soon: MeteorLake and later laptop GPU support. Stay tuned!
+
+## License
+
+_MIT License_. As found in [LICENSE](https://github.com/intel/intel-xpu-backend-for-triton/blob/llvm-target/LICENSE) file.
+
+
+## Security
+
+See Intel's [Security Center](https://www.intel.com/content/www/us/en/security-center/default.html)
+for information on how to report a potential security issue or vulnerability.
+
+See also: [Security Policy](security.md)
+
