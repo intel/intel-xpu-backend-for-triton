@@ -975,12 +975,16 @@ struct TritonSubGroupShuffleLowering
       if (!orig_type.isInteger())
         val = bitcast(val, int_ty(bits));
       val = zext(i8_ty, val);
+    } else if (isa<BFloat16Type>(orig_type)) {
+      val = bitcast(val, i16_ty);
     }
     Value result = createSubGroupShuffle(rewriter, val, mask, kind).getResult();
     if (bits < 8) {
       result = trunc(int_ty(bits), result);
       if (!orig_type.isInteger())
         result = bitcast(result, orig_type);
+    } else if (isa<BFloat16Type>(orig_type)) {
+      result = bitcast(result, orig_type);
     }
     rewriter.replaceOp(op, result);
     return success();
