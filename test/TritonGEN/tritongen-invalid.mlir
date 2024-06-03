@@ -29,9 +29,9 @@ module attributes {
   spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
 } {
   llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting floating point type for floating point reduction}}
-    %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce fsum %0 {size = 16} : i32
+    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting integer type for integer reduction}}
+    %0 = llvm.mlir.constant(0.0 : f32) : f32
+    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : f32
     llvm.return
   }
 }
@@ -42,9 +42,9 @@ module attributes {
   spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
 } {
   llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting integer type for integer reduction}}
-    %0 = llvm.mlir.constant(0.0 : f32) : f32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : f32
+    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting floating point type for floating point reduction}}
+    %0 = llvm.mlir.constant(0 : i32) : i32
+    %1 = triton_gen.sub_group_reduce fsum %0 {size = 16} : i32
     llvm.return
   }
 }

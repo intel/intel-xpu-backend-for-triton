@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/OpDefinition.h"
 
@@ -75,12 +76,23 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::SubGroupReduceOp::verify() {
-  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(op);
+  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(*this);
   if (!attr)
     return this->emitOpError("expecting valid target env attribute");
 
   Type ty = getValue().getType();
   switch (getKind()) {
+  case TritonGEN::ReduceKind::SUM:
+  case TritonGEN::ReduceKind::PROD:
+  case TritonGEN::ReduceKind::UMIN:
+  case TritonGEN::ReduceKind::UMAX:
+  case TritonGEN::ReduceKind::IMIN:
+  case TritonGEN::ReduceKind::IMAX:
+  case TritonGEN::ReduceKind::OR:
+  case TritonGEN::ReduceKind::XOR:
+  case TritonGEN::ReduceKind::AND:
+    if (!isa<IntegerType>(ty))
+      return this->emitOpError("expecting integer type for integer reduction");
   case TritonGEN::ReduceKind::FSUM:
   case TritonGEN::ReduceKind::FPROD:
   case TritonGEN::ReduceKind::FMIN:
@@ -90,8 +102,7 @@ LogicalResult TritonGEN::SubGroupReduceOp::verify() {
           "expecting floating point type for floating point reduction");
     break;
   default:
-    if (!isa<IntegerType>(ty))
-      return this->emitOpError("expecting integer type for integer reduction");
+    llvm_unreachable("unexpected ReduceKind");
   }
 
   if (getSize() < 1 || getSize() > TritonGEN::getSubgroupSize(*this) ||
