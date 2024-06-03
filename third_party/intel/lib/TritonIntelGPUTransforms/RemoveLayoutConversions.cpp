@@ -232,12 +232,16 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
         if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstEncoding))
           return (mmaLayout.getVersionMajor() > 1) ? true
                                                    : mmaLayout == encoding;
+        if (isa<ttgi::DpasEncodingAttr>(dstEncoding))
+          return true;
         if (isa<triton::gpu::AMDMfmaEncodingAttr,
                 triton::gpu::AMDWmmaEncodingAttr>(dstEncoding))
           return true;
         if (isa<triton::gpu::DotOperandEncodingAttr>(dstEncoding)) {
           if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
             return mmaLayout.getVersionMajor() > 1;
+          } else if (isa<ttgi::DpasEncodingAttr>(encoding)) {
+            return true;
           } else {
             assert((mlir::isa<triton::gpu::AMDMfmaEncodingAttr,
                               triton::gpu::AMDWmmaEncodingAttr>(encoding)));
@@ -1093,6 +1097,12 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
 void LayoutRematerialization::backwardRematerialization(
     ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
+  // We don't backward propagate the dot layout with blocked layout as parent.
+  // It introduces a lot of duplicated values in multiple-threads.
+  if (auto dotLayout =
+          dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding()))
+    if (isa<BlockedEncodingAttr>(dotLayout.getParent()))
+      return;
   Value oldV = convertOp->getOperand(0);
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());

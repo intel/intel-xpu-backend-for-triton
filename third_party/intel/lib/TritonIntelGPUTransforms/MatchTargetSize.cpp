@@ -564,7 +564,7 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
   Location loc = op.getLoc();
 
   auto value = cast<DenseElementsAttr>(op.getValue());
-  value = value.resizeSplat(subType.cast<ShapedType>());
+  value = value.resizeSplat(cast<ShapedType>(subType));
   SmallVector<Value> subOps;
 
   for (unsigned i = 0; i < shape[dim - 1]; i += subSize[dim - 1]) {
@@ -586,9 +586,9 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
 }
 
 void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
-  auto aType = dot.getA().getType().cast<RankedTensorType>();
-  auto bType = dot.getB().getType().cast<RankedTensorType>();
-  auto cType = dot.getC().getType().cast<RankedTensorType>();
+  auto aType = cast<RankedTensorType>(dot.getA().getType());
+  auto bType = cast<RankedTensorType>(dot.getB().getType());
+  auto cType = cast<RankedTensorType>(dot.getC().getType());
   ArrayRef<int64_t> aShape = aType.getShape();
   ArrayRef<int64_t> bShape = bType.getShape();
   int64_t m = aShape[0];
@@ -605,8 +605,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
         (kk / subSize[1]) * (shape[0] / subSize[0]) + mm / subSize[0];
     Value subVal = b.create<ttgi::ExtractOp>(loc, subType, val, subIdx);
     auto subDotType = RankedTensorType::get(
-        {mStep, kStep},
-        val.getType().cast<RankedTensorType>().getElementType());
+        {mStep, kStep}, cast<RankedTensorType>(val.getType()).getElementType());
     unsigned subDotIdx = ((kk % subSize[1]) / kStep) * (subSize[0] / mStep) +
                          (mm % subSize[0]) / mStep;
     return b.create<ttgi::ExtractOp>(loc, subDotType, subVal, subDotIdx);

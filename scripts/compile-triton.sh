@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+
 # Select what to build.
 BUILD_LLVM=false
 BUILD_TRITON=false
@@ -52,7 +54,6 @@ if [ ! -v BASE ]; then
 fi
 
 export PACKAGES_DIR=$BASE/packages
-export SPIRV_TOOLS=$PACKAGES_DIR/spirv-tools
 export LLVM_PROJ=$BASE/llvm
 export LLVM_PROJ_BUILD=$LLVM_PROJ/build
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
@@ -78,20 +79,6 @@ if [ ! -d "$PACKAGES_DIR" ]; then
 fi
 if [ $BASE != $HOME ]; then
   ln -sfT $PACKAGES_DIR $HOME/packages
-fi
-
-############################################################################
-# Download the Kronos SPIRV-Tools.
-
-if [ ! -d "$SPIRV_TOOLS" ]; then
-  cd $PACKAGES_DIR
-  wget https://storage.googleapis.com/spirv-tools/artifacts/prod/graphics_shader_compiler/spirv-tools/linux-clang-release/continuous/2129/20230718-114856/install.tgz
-  tar -xvf install.tgz
-  mv install spirv-tools
-  rm install.tgz
-  # Fix up the prefix path.
-  sed -i s#prefix=/tmpfs/src/install#prefix=$SPIRV_TOOLS# spirv-tools/lib/pkgconfig/SPIRV-Tools.pc
-  sed -i s#prefix=/tmpfs/src/install#prefix=$SPIRV_TOOLS# spirv-tools/lib/pkgconfig/SPIRV-Tools-shared.pc
 fi
 
 ############################################################################

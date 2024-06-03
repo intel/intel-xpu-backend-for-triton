@@ -4,6 +4,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
+#include "llvm/Support/Debug.h"
+
 #include <stack>
 
 using namespace mlir;
@@ -15,6 +17,8 @@ namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREWRITETENSORPOINTER
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
+
+#define DEBUG_TYPE "tritonintelgpu-rewrite-tensor-pointer"
 
 namespace {
 
@@ -72,14 +76,14 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   // TODO: support column-major tensor
   // HW 2D block read instruction has restriction on pitch divisibility
   if (strides.size() == 2) {
-    auto pitch = strides[order[1]];
+    auto pitch = strides[0];
     // PVC requires pitch to be a multiple of QWord(64 bits).
     if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
       return true;
   }
 
   // HW 2D block read instruction only supports contiguous accessing.
-  auto fastChangeStride = strides[order[0]];
+  auto fastChangeStride = strides[1];
   if (auto stride =
           dyn_cast<arith::ConstantOp>(fastChangeStride.getDefiningOp())) {
     if (auto strideInt = dyn_cast<IntegerAttr>(stride.getValue()))
@@ -346,6 +350,7 @@ public:
                                     std::stack<Operation *> &eraser) {
     if (!valueToRemove.count(op.getResult()))
       return nullptr;
+
     // Save info for later use
     auto ptrType = cast<tt::PointerType>(op.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
@@ -731,6 +736,16 @@ public:
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         for (auto operand : yieldOp.getOperands())
           markTensorPointerForRemoval(operand);
+      }
+    });
+
+    LLVM_DEBUG({
+      if (valueToRemove.empty())
+        llvm::dbgs() << "No tensor pointer to remove\n";
+      else {
+        llvm::dbgs() << "Values to remove: \n";
+        for (auto val : valueToRemove)
+          llvm::dbgs() << val << "\n";
       }
     });
 

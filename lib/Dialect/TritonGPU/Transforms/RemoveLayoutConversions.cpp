@@ -249,7 +249,7 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
       bool isMMAV3 =
           isa<NvidiaMmaEncodingAttr>(encoding) &&
           cast<NvidiaMmaEncodingAttr>(encoding).getVersionMajor() == 3;
-      if (isMMAV3 && isa<LocalAllocOp>(op))
+      if (isMMAV3 && (isa<LocalAllocOp>(op) || isa<LocalStoreOp>(op)))
         return true;
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
@@ -303,8 +303,7 @@ void LayoutPropagation::initAnchorLayout() {
       // back to mma further down to avoid generating reduction with MMA
       // layout that may have lower performance.
       // This can be improved with more aggressive backward propagation.
-      // FIXME: Change back NvidiaMmaEncodingAttr to MmaEncodingTrait.
-      if (isa<NvidiaMmaEncodingAttr>(tensorType.getEncoding()) &&
+      if (isa<MmaEncodingTrait>(tensorType.getEncoding()) &&
           v.getDefiningOp() &&
           !hasConvertToMMATransisitiveUse(v.getDefiningOp(),
                                           tensorType.getEncoding())) {

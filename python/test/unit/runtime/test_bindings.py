@@ -1,7 +1,6 @@
 import triton
 import triton.language as tl
 
-import pytest
 import torch
 
 
@@ -33,8 +32,6 @@ def test_module_walk():
     Test the MLIR bindings exposed for the out-ot-tree walk.
     """
 
-    pytest.skip("FIXME: Incorrect results on XPU")
-
     def walk_fn(op):
         name = op.get_name()
         for i in range(op.get_num_results()):
@@ -55,10 +52,10 @@ def test_module_walk():
 
     kernel = add_kernel
     args = [
-        torch.empty((32, 32), device="cuda"),  # in_ptr0
-        torch.empty((32, 32), device="cuda"),  # in_ptr1
+        torch.empty((32, 32), device="xpu"),  # in_ptr0
+        torch.empty((32, 32), device="xpu"),  # in_ptr1
         1024,  # n_elements
-        torch.empty((32, 32), device="cuda"),  # out_ptr
+        torch.empty((32, 32), device="xpu"),  # out_ptr
         16,  # BLOCK_SIZE
     ]
     src = triton.compiler.compiler.ASTSource(

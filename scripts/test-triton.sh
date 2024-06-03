@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+
 # Select which tests to run.
 TEST_CORE=false
 TEST_TUTORIAL=false
@@ -9,6 +11,7 @@ TEST_UNIT=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
+TRITON_TEST_IGNORE_ERRORS=false
 SKIP_DEPS=false
 ARGS=
 for arg in "$@"; do
@@ -41,8 +44,12 @@ for arg in "$@"; do
       TRITON_TEST_WARNING_REPORTS=true
       shift
       ;;
+    --ignore-errors)
+      TRITON_TEST_IGNORE_ERRORS=true
+      shift
+      ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports | --warning-reports]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports | --warning-reports | --ignore-errors]"
       exit 1
       ;;
     *)
@@ -158,7 +165,7 @@ run_tutorial_test() {
   echo
   echo "****** Running $1 test ******"
   echo
-  python $1.py
+  python $1.py || $TRITON_TEST_IGNORE_ERRORS
 }
 
 run_tutorial_tests() {

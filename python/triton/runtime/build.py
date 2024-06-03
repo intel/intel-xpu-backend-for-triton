@@ -8,7 +8,7 @@ import subprocess
 import setuptools
 
 
-def is_spirv():
+def is_xpu():
     import torch
     return torch.xpu.is_available()
 
@@ -47,7 +47,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
     include_dirs = include_dirs + [srcdir, py_include_dir]
 
-    if is_spirv():
+    if is_xpu():
         icpx = None
         cxx = os.environ.get("CXX")
         if cxx is None:

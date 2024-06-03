@@ -53,6 +53,7 @@ public:
         loc, op.getDescPtr(), op.getIndices(), barrierAlloc, alloc, pred);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
+    rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
     rewriter.replaceOpWithNewOp<LocalLoadOp>(op, op.getType(), alloc);
     return success();
   }
@@ -83,6 +84,7 @@ public:
     rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
         loc, op.getDescPtr(), op.getIndices(), alloc);
+    rewriter.create<triton::nvidia_gpu::TMAStoreWait>(loc, 0);
     rewriter.eraseOp(op);
     return success();
   }

@@ -205,19 +205,21 @@ def matmul(a, b):
 # Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
 
 # torch.manual_seed(0)
-# a = torch.randn((512, 512), device='xpu', dtype=torch.float16)
-# b = torch.randn((512, 512), device='xpu', dtype=torch.float16)
-# triton_output = matmul(a, b)
-# torch_output = torch.matmul(a, b).to(torch.float32)
-# print(f"triton_output={triton_output}")
-# print(f"torch_output={torch_output}")
+# for dtype in [torch.float16, torch.bfloat16]:
+#     a = torch.randn((512, 512), device='xpu', dtype=dtype)
+#     b = torch.randn((512, 512), device='xpu', dtype=dtype)
+#     triton_output = matmul(a, b)
+#     torch_output = torch.matmul(a, b).to(torch.float32)
+#     print(f"triton_output={triton_output}")
+#     print(f"torch_output={torch_output}")
 
-# # Note: the torch.matmul and Triton implementations uses different
-# # algorithms so we need to adjust tolerance.
-# if torch.allclose(triton_output, torch_output, atol=1e-4, rtol=1e-3):
-#     print("✅ Triton and Torch match")
-# else:
-#     exit("❌ Triton and Torch differ")
+#     # Note: the torch.matmul and Triton implementations uses different
+#     # algorithms so we need to adjust tolerance.
+#     rtol = 1e-2 if dtype == torch.bfloat16 else 1e-3
+#     if torch.allclose(triton_output, torch_output, atol=1e-4, rtol=rtol):
+#         print("✅ Triton and Torch match")
+#     else:
+#         exit("❌ Triton and Torch differ")
 
 
 #### Benchmark Performance

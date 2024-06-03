@@ -12,8 +12,8 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -2333,7 +2333,7 @@ struct TritonGPUInferLayoutInterface
         return emitOptionalError(loc,
                                  "Cannot do a non-reordering reshape given "
                                  "this src encoding order.  Dimensions [",
-                                 join(srcDims, ","),
+                                 join(srcDims),
                                  "] must be physically consecutive.");
       }
     }
@@ -2641,6 +2641,23 @@ struct CanonicalizeConvertFromAlloc
   }
 };
 
+// local_store(cvt) -> local_store
+struct CanonicalizeConvertFromLocalStore
+    : public mlir::OpRewritePattern<triton::gpu::LocalStoreOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::gpu::LocalStoreOp op,
+                  PatternRewriter &rewriter) const override {
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert)
+      return failure();
+    rewriter.replaceOpWithNewOp<triton::gpu::LocalStoreOp>(op, convert.getSrc(),
+                                                           op.getResult());
+    return mlir::success();
+  }
+};
+
 struct CanonicalizeConvertFromConvert
     : public OpRewritePattern<ConvertLayoutOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -2767,6 +2784,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   patterns.add<CanonicalizeConvertFromReshape>(context);
   patterns.add<CanonicalizeConvertFromHistogram>(context);
   patterns.add<CanonicalizeConvertFromAlloc>(context);
+  patterns.add<CanonicalizeConvertFromLocalStore>(context);
 }
 
 // LocalAllocOp

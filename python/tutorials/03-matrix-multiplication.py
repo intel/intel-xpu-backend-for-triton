@@ -377,7 +377,7 @@ rtol = 1e-2 if is_hip_mi200() else 1e-3 if is_xpu() else 0
 if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):
     print("✅ Triton and Torch match")
 else:
-    print("❌ Triton and Torch differ")
+    exit("❌ Triton and Torch differ")
 
 TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
 if TORCH_HAS_FP8 and is_cuda():
@@ -395,7 +395,7 @@ if TORCH_HAS_FP8 and is_cuda():
     if torch.allclose(triton_output, torch_output, atol=0.125, rtol=0):
         print("✅ Triton and Torch match")
     else:
-        print("❌ Triton and Torch differ")
+        exit("❌ Triton and Torch differ")
 
 # %%
 # Benchmark

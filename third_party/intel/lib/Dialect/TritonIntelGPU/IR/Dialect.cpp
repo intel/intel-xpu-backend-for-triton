@@ -24,7 +24,7 @@ using namespace mlir::triton::gpu::intel;
 
 static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
                                        unsigned &value, StringRef desc) {
-  auto intAttr = attr.dyn_cast<IntegerAttr>();
+  auto intAttr = dyn_cast<IntegerAttr>(attr);
   if (!intAttr) {
     parser.emitError(parser.getNameLoc(), "expected an integer type in ")
         << desc;
@@ -59,7 +59,7 @@ static LogicalResult parseIntArrayAttr(AsmParser &parser,
                                        const NamedAttribute &attr,
                                        SmallVector<unsigned> &res,
                                        StringRef desc) {
-  auto arrayAttr = attr.getValue().dyn_cast<ArrayAttr>();
+  auto arrayAttr = dyn_cast<ArrayAttr>(attr.getValue());
   if (!arrayAttr) {
     parser.emitError(parser.getNameLoc(), "expected an array for ") << desc;
     return failure();
@@ -476,15 +476,15 @@ struct TritonIntelGPUInferLayoutInterface
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,
                      std::optional<Location> location) const override {
-    auto mmaRetEncoding = retEncoding.dyn_cast<DpasEncodingAttr>();
+    auto mmaRetEncoding = dyn_cast<DpasEncodingAttr>(retEncoding);
     if (mmaRetEncoding) {
-      auto dotOpEnc = operandEncoding.dyn_cast<DotOperandEncodingAttr>();
+      auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(operandEncoding);
       if (!(dotOpEnc && dotOpEnc.getOpIdx() == opIdx &&
-            dotOpEnc.getParent().isa<DpasEncodingAttr>()))
+            isa<DpasEncodingAttr>(dotOpEnc.getParent())))
         return emitOptionalError(location,
                                  "unexpected operand layout for DPAS");
     } else if (auto dotOpEnc =
-                   operandEncoding.dyn_cast<DotOperandEncodingAttr>()) {
+                   dyn_cast<DotOperandEncodingAttr>(operandEncoding)) {
       if (opIdx != dotOpEnc.getOpIdx())
         return emitOptionalError(location, "Wrong opIdx");
       if (retEncoding != dotOpEnc.getParent())
@@ -499,9 +499,9 @@ struct TritonIntelGPUInferLayoutInterface
   verifyDotOpEncodingCompatibility(Operation *op, Attribute operandEncodingA,
                                    Attribute operandEncodingB) const override {
     auto aEncoding =
-        operandEncodingA.dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+        dyn_cast<triton::gpu::DotOperandEncodingAttr>(operandEncodingA);
     auto bEncoding =
-        operandEncodingB.dyn_cast<triton::gpu::DotOperandEncodingAttr>();
+        dyn_cast<triton::gpu::DotOperandEncodingAttr>(operandEncodingB);
     if (!aEncoding && !bEncoding)
       return mlir::success();
     // Verify that the encodings are valid.

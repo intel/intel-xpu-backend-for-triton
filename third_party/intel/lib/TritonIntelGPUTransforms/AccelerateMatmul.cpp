@@ -113,9 +113,9 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     DotOp dotOp = cast<DotOp>(op);
     RankedTensorType oldRetType =
-        dotOp.getResult().getType().cast<RankedTensorType>();
+        cast<RankedTensorType>(dotOp.getResult().getType());
     if (!oldRetType.getEncoding() ||
-        oldRetType.getEncoding().isa<DpasEncodingAttr>())
+        isa<DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
     if (!supportDPAS(dotOp, arch))
@@ -129,8 +129,8 @@ public:
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
-    RankedTensorType oldAType = a.getType().cast<RankedTensorType>();
-    RankedTensorType oldBType = b.getType().cast<RankedTensorType>();
+    RankedTensorType oldAType = cast<RankedTensorType>(a.getType());
+    RankedTensorType oldBType = cast<RankedTensorType>(b.getType());
 
     IntelDPASCapability dpasCap = getDPASCapability(arch);
     unsigned dpasElemBitWidths =
@@ -178,9 +178,8 @@ public:
 
 static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                             Type promotedType) {
-  auto tensorPromotedType =
-      operand.getType().cast<RankedTensorType>().cloneWith(std::nullopt,
-                                                           promotedType);
+  auto tensorPromotedType = cast<RankedTensorType>(operand.getType())
+                                .cloneWith(std::nullopt, promotedType);
   Type elemType = tensorPromotedType.getElementType();
   return llvm::TypeSwitch<Type, Value>(elemType)
       .Case<FloatType>([&](auto) {
@@ -188,8 +187,7 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
       })
       .Case<IntegerType>([&](auto) {
         unsigned tgtBitWidth = elemType.getIntOrFloatBitWidth(),
-                 valBitWidth = operand.getType()
-                                   .cast<RankedTensorType>()
+                 valBitWidth = cast<RankedTensorType>(operand.getType())
                                    .getElementTypeBitWidth();
         Operation *castOp = (valBitWidth <= tgtBitWidth)
                                 ? builder.create<arith::ExtSIOp>(
@@ -209,7 +207,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     Type AElType = dotOp.getA().getType().getElementType();
     Type promoteType;
     DpasEncodingAttr dpasLayout =
-        D.getType().getEncoding().dyn_cast<DpasEncodingAttr>();
+        dyn_cast<DpasEncodingAttr>(D.getType().getEncoding());
     if (dpasLayout) {
       // No operands promotion because of DPAS using different layout
       // to pack the dot operands for different scalar type.
