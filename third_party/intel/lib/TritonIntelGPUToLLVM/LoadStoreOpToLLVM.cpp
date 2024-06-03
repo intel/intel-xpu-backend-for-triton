@@ -692,20 +692,18 @@ struct StoreOpConversion
     for (auto &val : vals) {
       Value poison = rewriter.create<LLVM::PoisonOp>(loc, vectorTy);
       Value vectInit = insert_element(vectorTy, poison, val, i32_val(0));
-      Value stored = rewriter.create<LLVM::ShuffleVectorOp>(
-          loc, poison, vectInit, attrZeros);
+      Value stored = rewriter.create<LLVM::ShuffleVectorOp>(loc, vectInit,
+                                                            poison, attrZeros);
       storededVals.push_back(bitcast(stored, store2DGenXType));
     }
 
     width = trunc(i32_ty, width);
     height = trunc(i32_ty, height);
     rowStride = trunc(i32_ty, rowStride);
-    // encoded as bytes size - 1.
-    Value base_width = sub(mul(width, elemSizeInBytes), i32_val(1));
-    // encoded as rows size - 1.
-    Value base_height = sub(height, i32_val(1));
-    // encoded as bytes size - 1.
-    Value base_pitch = sub(mul(rowStride, elemSizeInBytes), i32_val(1));
+    // encoded as bytes.
+    Value baseWidth = mul(width, elemSizeInBytes);
+    // encoded as bytes.
+    Value basePitch = mul(rowStride, elemSizeInBytes);
     Value dimWarpId0 = mul(multiDimWarpId[0], i32_val(elemsPerInstr[0]));
     Value dimWarpId1 = mul(multiDimWarpId[1], i32_val(elemsPerInstr[1]));
     Value warpId0Offset = add(dimWarpId0, offsetBaseY);
@@ -720,9 +718,9 @@ struct StoreOpConversion
         rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
             loc,
             /*ptr*/ base,
-            /*base_width*/ base_width,
-            /*base_height*/ base_height,
-            /*base_pitch*/ base_pitch,
+            /*base_width*/ baseWidth,
+            /*base_height*/ height,
+            /*base_pitch*/ basePitch,
             /*x*/ trunc(i32_ty, offsetX),
             /*y*/ trunc(i32_ty, offsetY),
             /*elem_size_in_bits*/ elemSizeInBits,
