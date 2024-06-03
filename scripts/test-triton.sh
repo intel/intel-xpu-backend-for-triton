@@ -54,7 +54,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports | --warning-reports | --ignore-errors | --microbench]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --venv | --reports | --warning-reports | --ignore-errors]"
       exit 1
       ;;
     *)
@@ -203,9 +203,6 @@ run_tutorial_tests() {
 }
 
 test_triton() {
-  if [ "$TEST_MICRO_BENCHMARKS" = true ]; then
-    run_benchmark_tests
-  fi
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
   fi
@@ -215,6 +212,9 @@ test_triton() {
   fi
   if [ "$TEST_TUTORIAL" = true ]; then
     run_tutorial_tests
+  fi
+  if [ "$TEST_MICRO_BENCHMARKS" = true ]; then
+    run_benchmark_tests
   fi
 }
 
