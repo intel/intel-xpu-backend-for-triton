@@ -35,6 +35,7 @@ permissions: read-all
 
 env:
   TRITON_DISABLE_LINE_INFO: 1
+  INSTALL_IPEX: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   pre-commit:
@@ -119,11 +120,11 @@ jobs:
           echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
       - name: Setup PyTorch with IPEX
-        if: ${{ inputs.install_ipex }}
+        if: ${{ env.INSTALL_IPEX }}
         uses: ./.github/actions/setup-pytorch
 
       - name: Setup PyTorch without IPEX
-        if: ${{ !inputs.install_ipex }}
+        if: ${{ !env.INSTALL_IPEX }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
@@ -131,11 +132,11 @@ jobs:
           torch_xpu_ops_commit: "39522db63ce045f52c9d61a286018c266cd00479"
 
       - name: Setup IPEX
-        if: ${{ inputs.install_ipex }}
+        if: ${{ env.INSTALL_IPEX }}
         uses: ./.github/actions/setup-ipex
 
       - name: Setup fake IPEX
-        if: ${{ !inputs.install_ipex }}
+        if: ${{ !env.INSTALL_IPEX }}
         uses: ./.github/actions/setup-fake-ipex
 
       - name: Build Triton
