@@ -75,6 +75,10 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::SubGroupReduceOp::verify() {
+  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(op);
+  if (!attr)
+    return this->emitOpError("expecting valid target env attribute");
+
   Type ty = getValue().getType();
   switch (getKind()) {
   case TritonGEN::ReduceKind::FSUM:

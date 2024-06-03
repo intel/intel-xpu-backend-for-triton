@@ -42,11 +42,7 @@ enum TritonGENMemorySpace {
 };
 
 /// Get the subgroup size from the target.
-inline int getSubgroupSize(Operation *op) {
-  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(op);
-  assert(attr && "Expecting valid target env attribute");
-  return attr.getResourceLimits().getSubgroupSize();
-}
+int getSubgroupSize(Operation *op);
 
 } // namespace mlir::triton::TritonGEN
 

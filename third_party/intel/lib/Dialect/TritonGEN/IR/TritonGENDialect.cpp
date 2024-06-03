@@ -38,6 +38,12 @@ void TritonGENDialect::initialize() {
   allowUnknownOperations();
 }
 
+int getSubgroupSize(Operation *op) {
+  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(op);
+  assert(attr && "Expecting valid target env attribute");
+  return attr.getResourceLimits().getSubgroupSize();
+}
+
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.cpp.inc"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENOpsEnums.cpp.inc"
 #define GET_ATTRDEF_CLASSES
