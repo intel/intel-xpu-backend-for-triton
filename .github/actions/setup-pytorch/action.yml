@@ -12,15 +12,29 @@ inputs:
   repository:
     description: Repository name with owner
     default: Stonepia/pytorch
+  commit_id:
+    description: Commit id of PyTorch repository
+    default: ""
+  torch_xpu_ops_commit:
+    description: Commit id of third_party/xpu_ops repository
+    default: ""
 runs:
   using: "composite"
   steps:
     - name: Identify commit id
+      if: ${{ inputs.commit_id == '' }}
       shell: bash
       run: |
         PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
         echo "PYTORCH_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
         echo "PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID" >> "$GITHUB_ENV"
+
+    - name: Identify commit id
+      if: ${{ inputs.commit_id != '' }}
+      shell: bash
+      run: |
+        echo "PYTORCH_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
+        echo "PYTORCH_COMMIT_ID=${{ inputs.commit_id }}" >> "$GITHUB_ENV"
 
     - name: Identify Python version
       shell: bash
@@ -49,7 +63,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: "4-ptdb"
+        CACHE_NUMBER: "6"
       with:
         path: pytorch
         key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID-$CACHE_NUMBER
@@ -58,10 +72,27 @@ runs:
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
       uses: actions/checkout@v4
       with:
-        repository: ${{ inputs.repository }}
+        repository: ${{ env.PYTORCH_REPO }}
         ref: ${{ env.PYTORCH_COMMIT_ID }}
         submodules: recursive
         path: pytorch
+
+    - name: Update third_party/xpu_ops
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.torch_xpu_ops_commit != '' }}
+      shell: bash
+      run: |
+        cd pytorch/third_party
+        echo ${{ inputs.torch_xpu_ops_commit }} > xpu.txt
+
+    - name: Apply additional PR patches
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.repository == 'pytorch/pytorch' }}
+      shell: bash
+      run: |
+        cd pytorch
+        # Pytorch requirements installed here include everything that is needed to run apply_torch_pr.py script
+        pip install -r requirements.txt
+        wget https://raw.githubusercontent.com/intel/torch-xpu-ops/main/.github/scripts/apply_torch_pr.py
+        python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/127348 --pr-list https://github.com/pytorch/pytorch/pull/124147 --pr-list https://github.com/pytorch/pytorch/pull/126516
 
     - name: Build PyTorch
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}

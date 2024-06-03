@@ -23,16 +23,11 @@ env:
 jobs:
   print_inputs:
     name: Print inputs
-    needs: setup
     runs-on: Linux
     steps:
       - name: Print inputs
         run: |
           echo "${{ toJSON(github.event.inputs) }}"
-
-      - name: Print setup outputs
-        run: |
-          echo "${{ toJSON(needs.setup.outputs) }}"
 
   build:
     name: Test
@@ -124,14 +119,14 @@ jobs:
           eval $test_cmd
 
       - name: Report environment details
+        if: always()
         run: |
-          mkdir -p inductor_log
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
           echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
 
           source ./scripts/capture-hw-details.sh --quiet
 
-          cat <<EOF | tee inductor_log/.env
+          cat <<EOF | tee path: pytorch/test/test-reports/.env
           TIMESTAMP=$TIMESTAMP
           JOB_NAME=${{ join(matrix.*, '-') }}
           GITHUB_RUN_ID=$GITHUB_RUN_ID
@@ -149,17 +144,12 @@ jobs:
           AGAMA_VERSION=$AGAMA_VERSION
           EOF
 
-      - name: Copy reports
-        run: |
-          if [[ -d torch_compile_debug ]]; then
-            cp -rT torch_compile_debug inductor_log
-          fi
-
       - name: Upload test logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ join(matrix.*, '-') }}
-          path: inductor_log
+          name: logs-${{ env.PYTHON_VERSION }}
+          path: pytorch/test/test-reports
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
