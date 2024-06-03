@@ -2,7 +2,7 @@
 [![Triton wheels](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml/badge.svg)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml)
 [![Conda test](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/conda-build-test.yml/badge.svg)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/conda-build-test.yml)
 
-# Intel® XPU Backend for Triton\* 
+# Intel® XPU Backend for Triton\*
 
 This is the development repository of Intel® XPU Backend for Triton\*, a new [Triton](https://github.com/triton-lang/triton/) backend for Intel GPUs. Intel® XPU Backend for Triton\* is a out of tree backend module for [Triton](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) used to provide best-in-class performance and productivity on any Intel GPUs for [PyTorch](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) and standalone usage.
 
@@ -171,7 +171,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 Intel® XPU Backend for Triton\* doesn't require any modifications and will work with PyTorch 2.4 release out of the box.
 
 1. Add `import torch` for xpu support.
-2. Put the tensor and models to XPU by calling `to('xpu')`. 
+2. Put the tensor and models to XPU by calling `to('xpu')`.
 
 The following examples show modifications for the user code.
 
@@ -307,4 +307,3 @@ See Intel's [Security Center](https://www.intel.com/content/www/us/en/security-c
 for information on how to report a potential security issue or vulnerability.
 
 See also: [Security Policy](security.md)
-
