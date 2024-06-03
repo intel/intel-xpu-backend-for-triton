@@ -66,6 +66,7 @@ static LLVM::CallOp createDeviceFunctionCall(
     funcOp.setPassthroughAttr(convergentAttr);
 
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
   if (convergent)
     callOp->setAttr("passthrough", convergentAttr);
 
@@ -226,7 +227,9 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   SmallVector<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
 
-  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return callOp;
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
@@ -344,7 +347,9 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                           vnniTransform,
                           cache};
 
-  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return callOp;
 }
 
 // FIXME: This is a temporary solution. Remove once IGC can update the address
@@ -493,7 +498,9 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                           cache,
                           storeVal};
 
-  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return callOp;
 }
 
 static LLVM::CallOp
@@ -566,7 +573,9 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                           vnniTransform,
                           cache};
 
-  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return callOp;
 }
 
 namespace {
@@ -866,6 +875,7 @@ struct TritonGENNamedBarrierSignalLowering
 
     SmallVector<Value> args{barrierId, threadGroupCount};
     auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
     callOp->setAttr("passthrough", convergentAttr);
     rewriter.replaceOp(op, callOp);
 
@@ -905,6 +915,7 @@ struct TritonGENNamedBarrierWaitLowering
 
     SmallVector<Value> args{barrierId};
     auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
     callOp->setAttr("passthrough", convergentAttr);
     rewriter.replaceOp(op, callOp);
 
@@ -952,7 +963,9 @@ struct TritonSubGroupReduceLowering
         LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, val_ty);
     funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
-    rewriter.replaceOp(op, rewriter.create<LLVM::CallOp>(loc, funcOp, args));
+    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    rewriter.replaceOp(op, callOp);
     return success();
   }
 };
