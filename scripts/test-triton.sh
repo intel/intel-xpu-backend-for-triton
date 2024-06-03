@@ -88,7 +88,7 @@ export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
 python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select
 
 if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
-    python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.0
+    python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
 fi
 
 source $SCRIPTS_DIR/pytest-utils.sh
