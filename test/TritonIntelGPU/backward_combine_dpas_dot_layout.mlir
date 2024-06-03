@@ -77,7 +77,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 
 // -----
 
-// COM: Case 1:
+// COM: Case 2:
 // COM: Checks that DPAS encoding has been forwarded to the store op
 // COM: and the triton_gpu.convert_layout operation has been removed
 // CHECK: #[[DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], A = [8, 16], B = [16, 16], C = [8, 16]}>
