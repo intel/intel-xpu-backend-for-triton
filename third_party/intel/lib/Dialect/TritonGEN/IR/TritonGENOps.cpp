@@ -93,6 +93,7 @@ LogicalResult TritonGEN::SubGroupReduceOp::verify() {
   case TritonGEN::ReduceKind::AND:
     if (!isa<IntegerType>(ty))
       return this->emitOpError("expecting integer type for integer reduction");
+    break;
   case TritonGEN::ReduceKind::FSUM:
   case TritonGEN::ReduceKind::FPROD:
   case TritonGEN::ReduceKind::FMIN:
