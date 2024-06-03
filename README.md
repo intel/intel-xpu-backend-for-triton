@@ -4,7 +4,7 @@
 
 # Intel® XPU Backend for Triton\* 
 
-This is the development repository of Intel® XPU Backend for Triton\*, a new [Triton](https://github.com/triton-lang/triton/) backend for Intel GPUs. Intel® XPU Backend for Triton\* is a a out of tree backend module for [Triton](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) used to provide best-in-class performance and productivity on any Intel GPUs for [PyTorch](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) and standalone usage.
+This is the development repository of Intel® XPU Backend for Triton\*, a new [Triton](https://github.com/triton-lang/triton/) backend for Intel GPUs. Intel® XPU Backend for Triton\* is a out of tree backend module for [Triton](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) used to provide best-in-class performance and productivity on any Intel GPUs for [PyTorch](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) and standalone usage.
 
 # Compatibility
 
