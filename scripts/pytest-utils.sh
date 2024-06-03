@@ -25,8 +25,8 @@ pytest() {
     if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_WARNING_REPORTS = true ]]; then
         mkdir -p "$TRITON_TEST_REPORTS_DIR"
         pytest_extra_args+=(
-            "--warnings-output-file"
-            "$TRITON_TEST_REPORTS_DIR/${TRITON_TEST_SUITE}-warnings.txt"
+            "--warnings-json-output-file"
+            "$TRITON_TEST_REPORTS_DIR/${TRITON_TEST_SUITE}-warnings.json"
         )
     fi
 
