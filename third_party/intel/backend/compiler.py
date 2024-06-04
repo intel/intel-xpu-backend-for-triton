@@ -124,7 +124,7 @@ class XPUBackend(BaseBackend):
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = True
         # Use num_stages to represent prefetch distance to make it tunable.
-        args["prefetch_distance"] = opts["num_stages"]
+        args["prefetch_distance"] = opts.get("num_stages", 2)
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
