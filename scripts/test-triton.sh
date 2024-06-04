@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
-set -vx
 
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
@@ -87,7 +86,6 @@ export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
 
 python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select setuptools==69.5.1
-pip list
 
 if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
     python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.0
