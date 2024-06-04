@@ -14,7 +14,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     // CHECK-COUNT-2: llvm.call @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid{{.*}} -> ()
     // CHECK-COUNT-1: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v8i16{{.*}} -> vector<8xi16>
     // CHECK-COUNT-1: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v8i32{{.*}} -> vector<8xi32>
-    // CHECK-COUNT-1: llvm.call @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f({{.*}}) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+    // CHECK-COUNT-1: llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f({{.*}}) {{.*}} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
     %C = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
