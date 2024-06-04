@@ -92,6 +92,10 @@ if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
 fi
 
 source $SCRIPTS_DIR/pytest-utils.sh
+if [ "$TRITON_TEST_REPORTS" == true ]; then
+    capture_runtime_env
+fi
+
 $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
