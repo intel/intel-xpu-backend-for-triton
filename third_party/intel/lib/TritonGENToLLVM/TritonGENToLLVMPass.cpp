@@ -425,8 +425,6 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     // Function and parameters attributes.
     intel::AttrBuilder funcAttrBuilder(*ctx), paramAttrBuilder(*ctx);
     funcAttrBuilder.addPassThroughAttribute(llvm::Attribute::NoUnwind);
-    //        .addPassThroughAttribute(llvm::Attribute::Memory,
-    //                               (uint64_t)llvm::MemoryEffects::readOnly);
     paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
     SmallVector<NamedAttrList> paramAttrs(argTypes.size());
     paramAttrs[0] = paramAttrBuilder.getAttributes();
