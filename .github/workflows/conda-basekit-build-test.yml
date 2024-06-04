@@ -17,7 +17,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.13
+      - runner-0.0.14
     strategy:
       matrix:
         python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
@@ -30,16 +30,16 @@ jobs:
 
       - name: Calculate env
         run: |
-          echo $HOME/miniconda3/bin >>$GITHUB_PATH
-          echo LD_LIBRARY_PATH=$HOME/miniconda3/envs/triton/lib:$LD_LIBRARY_PATH >>$GITHUB_ENV
+          echo $HOME/miniforge3/bin >>$GITHUB_PATH
+          echo LD_LIBRARY_PATH=$HOME/miniforge3/envs/triton/lib:$LD_LIBRARY_PATH >>$GITHUB_ENV
 
       - name: Load conda cache
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 5
+          CACHE_NUMBER: 6
         with:
-          path: $HOME/miniconda3/envs/triton
+          path: $HOME/miniforge3/envs/triton
           key: conda-basekit-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
 
       - name: Update conda env
@@ -48,8 +48,8 @@ jobs:
           conda create -n triton --override-channels -c conda-forge python=${{ matrix.python }}.*
           conda env update -f scripts/triton.yml
           conda env update -f scripts/basekit.yml
-          ln -snf /usr/include/level_zero $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
-          find /usr -name libze_\* -exec cp -n {} $HOME/miniconda3/envs/triton/lib \;
+          ln -snf /usr/include/level_zero $HOME/miniforge3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
+          find /usr -name libze_\* -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
 
       - name: Add conda info to log
         run: |
@@ -83,9 +83,9 @@ jobs:
           ' scripts/test-triton.sh
 
           conda create -y -n dpcpp -c intel -c conda-forge dpcpp_linux-64=2024.1.*
-          ln -snf $HOME/miniconda3/envs/dpcpp/lib/clang/18/include/CL $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
-          ln -snf $HOME/miniconda3/envs/dpcpp/include/sycl $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
-          export PATH=$PATH:$HOME/miniconda3/envs/dpcpp/bin
+          ln -snf $HOME/miniforge3/envs/dpcpp/lib/clang/18/include/CL $HOME/miniforge3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
+          ln -snf $HOME/miniforge3/envs/dpcpp/include/sycl $HOME/miniforge3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
+          export PATH=$PATH:$HOME/miniforge3/envs/dpcpp/bin
 
           export TRITON_TEST_REPORTS=true
           export TRITON_TEST_REPORTS_DIR=$HOME/reports

@@ -13,6 +13,8 @@
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/MLIRContext.h"
@@ -248,7 +250,9 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   SmallVector<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
 
-  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return callOp;
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
@@ -372,7 +376,9 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                           vnniTransform,
                           cache};
 
-  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return callOp;
 }
 
 // FIXME: This is a temporary solution. Remove once IGC can update the address
@@ -545,7 +551,9 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                           cache,
                           storeVal};
 
-  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return callOp;
 }
 
 static LLVM::CallOp
@@ -618,7 +626,9 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                           vnniTransform,
                           cache};
 
-  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return callOp;
 }
 
 namespace {
@@ -932,6 +942,7 @@ struct TritonGENNamedBarrierSignalLowering
 
     SmallVector<Value> args{barrierId, threadGroupCount};
     auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
     callOp->setAttr("passthrough", convergentAttr);
     rewriter.replaceOp(op, callOp);
 
@@ -971,9 +982,57 @@ struct TritonGENNamedBarrierWaitLowering
 
     SmallVector<Value> args{barrierId};
     auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
     callOp->setAttr("passthrough", convergentAttr);
     rewriter.replaceOp(op, callOp);
 
+    return success();
+  }
+};
+
+struct TritonSubGroupReduceLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupReduceOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubGroupReduceOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubGroupReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value val = op.getValue();
+    Type val_ty = val.getType();
+    llvm::LLVMContext llvmContext;
+    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    auto kind = rewriter.create<LLVM::ConstantOp>(
+        loc, i8_ty, static_cast<int>(op.getKind()));
+
+    std::string funcName;
+    SmallVector<Type> argTypes;
+    SmallVector<Value> args;
+    if (getSubgroupSize(op) == op.getSize()) {
+      funcName = llvm::GenISAIntrinsic::getName(
+          llvm::GenISAIntrinsic::GenISA_WaveAll,
+          {typeTranslator.translateType(val_ty)});
+      argTypes = {val_ty, i8_ty, i32_ty};
+      args = {val, kind, i32_val(0)};
+    } else {
+      funcName = llvm::GenISAIntrinsic::getName(
+          llvm::GenISAIntrinsic::GenISA_WaveClustered,
+          {typeTranslator.translateType(val_ty)});
+      argTypes = {val_ty, i8_ty, i32_ty, i32_ty};
+      auto size = rewriter.create<LLVM::ConstantOp>(
+          loc, i32_ty, static_cast<int>(op.getSize()));
+      args = {val, kind, size, i32_val(0)};
+    }
+
+    LLVM::LLVMFuncOp funcOp =
+        LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, val_ty);
+    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    rewriter.replaceOp(op, callOp);
     return success();
   }
 };
@@ -996,12 +1055,16 @@ struct TritonSubGroupShuffleLowering
       if (!orig_type.isInteger())
         val = bitcast(val, int_ty(bits));
       val = zext(i8_ty, val);
+    } else if (isa<BFloat16Type>(orig_type)) {
+      val = bitcast(val, i16_ty);
     }
     Value result = createSubGroupShuffle(rewriter, val, mask, kind).getResult();
     if (bits < 8) {
       result = trunc(int_ty(bits), result);
       if (!orig_type.isInteger())
         result = bitcast(result, orig_type);
+    } else if (isa<BFloat16Type>(orig_type)) {
+      result = bitcast(result, orig_type);
     }
     rewriter.replaceOp(op, result);
     return success();
@@ -1141,9 +1204,10 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
       TritonGENSplitBarrierSignalLowering, TritonGENSplitBarrierWaitLowering,
       TritonGENNamedBarrierSignalLowering, TritonGENNamedBarrierWaitLowering,
-      TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
-      TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
-      TritonMatrix2DBlockPrefetchLowering>(converter);
+      TritonSubGroupReduceLowering, TritonSubGroupShuffleLowering,
+      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering>(
+      converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {

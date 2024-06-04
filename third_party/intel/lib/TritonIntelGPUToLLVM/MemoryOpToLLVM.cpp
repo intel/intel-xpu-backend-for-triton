@@ -52,6 +52,8 @@ struct LocalAllocOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::LocalAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!op.isSharedMemoryAlloc())
+      return failure();
     Location loc = op->getLoc();
     Value smemBase =
         LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
