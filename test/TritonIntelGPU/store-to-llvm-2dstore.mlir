@@ -28,7 +28,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // COM: The number of shufflevector equals the number of elements per thread.
     // COM: Most of the time, this number can be calculated as follow: numbers of elements / numbers of threads
     // CHECK-COUNT-32: llvm.shufflevector {{.*}}, {{.*}} [0, 0, 0, 0, 0, 0, 0, 0] : vector<8xf16>
-    // CHECK-COUNT-4: llvm.call @llvm.genx.GenISA.LSC2DBlockWrite.v8i16{{.*}}
+    // CHECK-COUNT-4: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i16{{.*}}
     tt.store %13, %12 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x64xf16, #dpas>>
     tt.return
   }
