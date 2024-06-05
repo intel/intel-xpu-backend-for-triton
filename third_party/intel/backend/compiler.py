@@ -48,6 +48,8 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
+    prefetch_distance: int = 2
+    inject_split_barriers: bool = False
     isBlockPtrEnabled: bool = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
 
     def __post_init__(self):
@@ -79,8 +81,7 @@ class XPUBackend(BaseBackend):
             # FIXME: Use a better way to check if prefetch instructions are supported once available.
             # Prefetch instruction is not available in older drivers.
             if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
-                inject_split_barriers = False
-                intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
+                intel.passes.ttgpuir.add_prefetch_block(pm, opt.prefetch_distance, opt.inject_split_barriers)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
             intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)

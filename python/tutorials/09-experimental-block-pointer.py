@@ -99,23 +99,27 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=2,
-                      num_warps=32),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=2,
-                      num_warps=32),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=2,
-                      num_warps=32),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=2,
-                      num_warps=32),
+        triton.Config(
+            {
+                'prefetch_distance': 2, 'inject_split_barriers': False, 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4
+            }, num_warps=32),
+        triton.Config(
+            {
+                'prefetch_distance': 3, 'inject_split_barriers': False, 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4
+            }, num_warps=32),
+        triton.Config(
+            {
+                'prefetch_distance': 2, 'inject_split_barriers': True, 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4
+            }, num_warps=32),
+        triton.Config(
+            {
+                'prefetch_distance': 3, 'inject_split_barriers': True, 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4
+            }, num_warps=32),
         triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=2,
-                      num_warps=32),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=2,
-                      num_warps=32),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=2,
-                      num_warps=32),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=2,
-                      num_warps=32),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=2,
                       num_warps=32),
     ],
     key=['M', 'N', 'K'],
