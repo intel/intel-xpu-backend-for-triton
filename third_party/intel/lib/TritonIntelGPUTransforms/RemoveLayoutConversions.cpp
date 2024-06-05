@@ -128,6 +128,9 @@ public:
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
   void rewriteAssertOp(AssertOp assertOp);
+  // Rewrite a StoreOp with the forwarded DPAS layout if applicable.
+  // return true if the StoreOp has been rewritten.
+  bool rewriteStoreOp(StoreOp storeOp);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   // Map the original value to the rewritten one.
@@ -513,6 +516,11 @@ void LayoutPropagation::rewriteRegion(Region &region) {
       } else if (auto assertOp = dyn_cast<AssertOp>(&op)) {
         rewriteAssertOp(assertOp);
       } else {
+        if (auto storeOp = dyn_cast<StoreOp>(&op)) {
+          if (rewriteStoreOp(storeOp))
+            continue;
+        }
+
         // If we don't need to rewrite the op we still need to remap the
         // operands.
         for (OpOperand &operand : op.getOpOperands()) {
@@ -783,6 +791,66 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
   srcEncoding = it->second.encodings[0];
   Value newOperand = getValueAs(operand, srcEncoding);
   assertOp->setOperand(0, newOperand);
+}
+
+bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
+  // If storeOp is a pointer to a tensor, we try to find out if the
+  // data has initially a DPAS encoding and forward it to the StoreOp
+  // to enable 2D block store.
+  Value ptr = storeOp.getPtr();
+  if (!isTensorPointerType(ptr.getType()))
+    return false;
+
+  // 2D block store are preceeded by a MakeTensorPtrOp
+  auto makeTensorPtrOp = ptr.getDefiningOp<MakeTensorPtrOp>();
+  // DPAS encoding have to be propagate if conversion from DPAS to
+  // other has been done before.
+  auto convertOp = storeOp.getValue().getDefiningOp<ConvertLayoutOp>();
+  if (!convertOp || !makeTensorPtrOp)
+    return false;
+
+  Attribute convertOpDstEncoding = convertOp.getType().getEncoding();
+  RankedTensorType convertOpSrcType = convertOp.getSrc().getType();
+  if ((convertOpDstEncoding &&
+       !isa<ttgi::DpasEncodingAttr>(convertOpDstEncoding)) &&
+      (convertOpSrcType &&
+       isa<ttgi::DpasEncodingAttr>(convertOpSrcType.getEncoding()))) {
+    auto ptrType = cast<PointerType>(makeTensorPtrOp.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    // If the output type of the MakeTensorPtrOp already has a
+    // DPAS encoding, we do not forward the previous DPAS encoding.
+    if (isa<ttgi::DpasEncodingAttr>(tensorType.getEncoding()))
+      return false;
+
+    auto newPtrType =
+        PointerType::get(convertOpSrcType, ptrType.getAddressSpace());
+
+    // We create a new MakeTensorPtrOp with the new data type.
+    OpBuilder rewriter(makeTensorPtrOp);
+    Value newStorePtr = rewriter.create<MakeTensorPtrOp>(
+        makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
+        makeTensorPtrOp.getShape(), makeTensorPtrOp.getStrides(),
+        makeTensorPtrOp.getOffsets(), rewriter.getDenseI32ArrayAttr({1, 0}));
+
+    // The encoding of the StoreOp is updated with the new
+    // operands:
+    // - the Ptr created by the MakeTensorPtrOp with the new data
+    // type
+    // - the forwarded DPAS encoding.
+    Value newOperand =
+        getValueAs(convertOp.getSrc(), convertOpSrcType.getEncoding());
+    storeOp.setOperand(0, newStorePtr);
+    storeOp.setOperand(1, newOperand);
+
+    // If the DPAS encoding is forwarded, we do not need the
+    // convertOp anymore if the convertOp was only used by the
+    // storeOp. Same for the initial MakeTensorPtrOp, if it was
+    // only used by the storeOp. If this is the case, these
+    // instructions are removed by the clean-up step performed at
+    // the end of this pass (step 4).
+    return true;
+  }
+  return false;
 }
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {
