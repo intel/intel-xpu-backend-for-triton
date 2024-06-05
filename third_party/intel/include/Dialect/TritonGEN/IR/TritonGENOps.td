@@ -17,7 +17,7 @@ include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.td"
 include "intel/include/Dialect/TritonGEN/IR/TritonGENAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
-include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
+include "mlir/Dialect/LLVMIR/LLVMTypes.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/IR/OpAsmInterface.td"
 
@@ -26,8 +26,7 @@ include "mlir/IR/OpAsmInterface.td"
 //===----------------------------------------------------------------------===//
 
 class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
-  LLVM_OpBase<TritonGEN_Dialect, mnemonic, traits> {
-}
+  Op<TritonGEN_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
 // Thread and Block index

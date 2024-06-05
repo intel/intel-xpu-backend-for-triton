@@ -19,6 +19,7 @@ class ReportStats:
     failed: int = 0
     skipped: int = 0
     xfailed: int = 0
+    fixme: int = 0
     total: int = 0
 
 
@@ -55,6 +56,7 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
     stats = ReportStats(name=report_path.stem)
     root = ET.parse(report_path).getroot()
     for testsuite in root:
+        testsuite_fixme_tests = set()
         stats.total += int(testsuite.get('tests'))
         for skipped in testsuite.iter('skipped'):
             if skipped.get('type') == 'pytest.skip':
@@ -65,6 +67,15 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
             stats.failed += 1
         for _ in testsuite.iter('error'):
             stats.failed += 1
+        try:
+            with open(f"{report_path.parent}/{report_path.stem}-warnings.json") as testsuite_warnings_file:
+                testsuite_warnings = json.load(testsuite_warnings_file)
+                for w in testsuite_warnings:
+                    if "FIXME" in list(w.values())[0]:
+                        testsuite_fixme_tests.add(list(w.keys())[0])
+        except FileNotFoundError:
+            pass
+        stats.fixme += len(testsuite_fixme_tests)
     deselected = get_deselected(report_path)
     stats.skipped += deselected
     stats.total += deselected
@@ -81,6 +92,7 @@ def overall_stats(stats: List[ReportStats]) -> ReportStats:
         overall.skipped += item.skipped
         overall.xfailed += item.xfailed
         overall.total += item.total
+        overall.fixme += item.fixme
     return overall
 
 
@@ -98,6 +110,7 @@ def print_stats(stats: ReportStats):
         f' skipped: {stats.skipped},'
         f' xfailed: {stats.xfailed},'
         f' total: {stats.total},'
+        f' fixme: {stats.fixme}'
         f' pass rate (w/o xfailed): {round(100 * stats.passed / (stats.total - stats.xfailed), 2)}%'
     )  # yapf: disable
 
@@ -123,6 +136,7 @@ def print_json_stats(stats: List[ReportStats]):
         'skipped': overall.skipped,
         'xfailed': overall.xfailed,
         'total': overall.total,
+        'fixme': overall.fixme,
         'pass_rate_1': round(100 * overall.passed / overall.total, 2),
         'pass_rate_2': round(100 * overall.passed / (overall.total - overall.xfailed), 2)
     }  # yapf: disable

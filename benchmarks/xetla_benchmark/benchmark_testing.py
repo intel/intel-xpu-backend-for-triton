@@ -1,3 +1,4 @@
+import argparse
 import functools
 import os
 import subprocess
@@ -297,6 +298,7 @@ class Mark:
         return df
 
     def run(self, show_plots=False, print_data=False, save_path='', return_df=False, **kwargs):
+        save_path = save_path_from_args(save_path)
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
@@ -329,6 +331,21 @@ def perf_report(benchmarks):
     """
     wrapper = lambda fn: Mark(fn, benchmarks)
     return wrapper
+
+
+def save_path_from_args(save_path: str):
+    """Returns a save path that is specified as an argument or via --reports comman line option."""
+    if save_path:
+        return save_path
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--reports',
+        type=str,
+        default='',
+        help='directory to save reports',
+    )
+    args = parser.parse_args()
+    return args.reports
 
 
 # create decorator that wraps test function into
