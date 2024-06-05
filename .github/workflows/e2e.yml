@@ -99,10 +99,21 @@ jobs:
       - name: Print inputs
         run: |
           echo "${{ toJSON(github.event.inputs) }}"
+          echo INSTALL_IPEX = ${{ env.INSTALL_IPEX }}
 
       - name: Print setup outputs
         run: |
           echo "${{ toJSON(needs.setup.outputs) }}"
+
+      - name: debug1
+        if: ${{ env.INSTALL_IPEX }}
+        run: |
+          echo "Installing IPEX"
+
+      - name: debug2
+        if: ${{ !env.INSTALL_IPEX }}
+        run: |
+          echo "NOT installing IPEX"
 
   build:
     name: Test
