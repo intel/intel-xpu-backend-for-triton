@@ -1,4 +1,4 @@
-name: Triton-benchmarks
+name: Triton benchmarks
 
 on:
   workflow_dispatch:
@@ -97,6 +97,11 @@ jobs:
           sudo apt update
           sudo apt-get install -y intel-basekit=2024.1.0-589
 
+      - name: Create reports dir
+        run: |
+          mkdir reports
+          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
+
       - name: Install xetla benchmark
         run: |
           source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
@@ -107,13 +112,13 @@ jobs:
         run: |
           source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           cd benchmarks/xetla_benchmark
-          python fused_softmax.py
+          python fused_softmax.py --reports $REPORTS
 
       - name: Run micro benchmark
         run: |
           source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           cd benchmarks/micro_benchmarks
-          python run_benchmarks.py
+          python run_benchmarks.py --reports $REPORTS
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
@@ -121,3 +126,9 @@ jobs:
         with:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Upload benchmark reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-reports
+          path: reports

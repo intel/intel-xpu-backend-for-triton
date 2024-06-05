@@ -40,6 +40,9 @@ enum TritonGENMemorySpace {
   kGeneric = 4          // OpenCL Generic memory
 };
 
+/// Get the subgroup size from the target.
+int getSubgroupSize(Operation *op);
+
 } // namespace mlir::triton::TritonGEN
 
 #endif // TRITON_DIALECT_TRITONGENDIALECT_H
