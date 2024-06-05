@@ -3,6 +3,10 @@ name: E2E
 on:
   workflow_dispatch:
     inputs:
+      install_ipex:
+        description: Install Intel PyTorch Extension
+        type: boolean
+        default: true
       suite:
         description: Test suite
         type: choice
@@ -48,6 +52,9 @@ env:
   PYTHON_VERSION: "3.10"
   BENCHMARK_REPO: weishi-deng/benchmark.git
   BENCHMARK_BRANCH: main
+  INSTALL_IPEX: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
+  PYTORCH_COMMIT_ID: 6c503f1dbbf9ef1bf99f19f0048c287f419df600
+  TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
   setup:
@@ -145,8 +152,17 @@ jobs:
         run: |
           pip install wheel
 
-      - name: Setup PyTorch
+      - name: Setup PyTorch with IPEX
+        if: ${{ env.INSTALL_IPEX }}
         uses: ./.github/actions/setup-pytorch
+
+      - name: Setup PyTorch without IPEX
+        if: ${{ !env.INSTALL_IPEX }}
+        uses: ./.github/actions/setup-pytorch
+        with:
+          repository: pytorch/pytorch
+          commit_id: ${{ env.PYTORCH_COMMIT_ID }}
+          torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
 
       - name: Identify pinned versions
         run: |
@@ -168,7 +184,12 @@ jobs:
           pip install $(curl -sSL https://raw.githubusercontent.com/huggingface/pytorch-image-models/$TIMM_COMMIT_ID/requirements.txt | grep -vE torch)
 
       - name: Setup IPEX
+        if: ${{ env.INSTALL_IPEX }}
         uses: ./.github/actions/setup-ipex
+
+      - name: Setup fake IPEX
+        if: ${{ !env.INSTALL_IPEX }}
+        uses: ./.github/actions/setup-fake-ipex
 
       - name: Generate Triton cache key
         id: triton-key

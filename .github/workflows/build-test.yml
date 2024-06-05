@@ -36,6 +36,8 @@ permissions: read-all
 env:
   TRITON_DISABLE_LINE_INFO: 1
   INSTALL_IPEX: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
+  PYTORCH_COMMIT_ID: 6c503f1dbbf9ef1bf99f19f0048c287f419df600
+  TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
   pre-commit:
@@ -128,8 +130,8 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
-          commit_id: "6c503f1dbbf9ef1bf99f19f0048c287f419df600"
-          torch_xpu_ops_commit: "39522db63ce045f52c9d61a286018c266cd00479"
+          commit_id: ${{ env.PYTORCH_COMMIT_ID }}
+          torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
 
       - name: Setup IPEX
         if: ${{ env.INSTALL_IPEX }}
