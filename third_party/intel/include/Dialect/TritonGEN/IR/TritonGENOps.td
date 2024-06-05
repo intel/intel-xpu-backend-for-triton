@@ -17,7 +17,7 @@ include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.td"
 include "intel/include/Dialect/TritonGEN/IR/TritonGENAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
-include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
+include "mlir/Dialect/LLVMIR/LLVMTypes.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/IR/OpAsmInterface.td"
 
@@ -26,8 +26,7 @@ include "mlir/IR/OpAsmInterface.td"
 //===----------------------------------------------------------------------===//
 
 class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
-  LLVM_OpBase<TritonGEN_Dialect, mnemonic, traits> {
-}
+  Op<TritonGEN_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
 // Thread and Block index
@@ -133,9 +132,9 @@ def TritonGEN_GridDimZOp : TritonGEN_Op<"grid.dim.z", [Pure]> {
 
 def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
   let summary = "Subgroup Index";
-  string baseDescription = [{
-    The `gen.subgroup.id` operation returns the subgroup ID which is a number
-    from 0 to the number of subgroups minus one.
+  let description = [{
+    The `triton_gen.subgroup.id` operation returns the subgroup ID which is a
+    number from 0 to the number of subgroups minus one.
   }];
   let arguments = (ins);
   let results = (outs I32:$res);
@@ -150,9 +149,9 @@ def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
 
 def TritonGEN_BarrierOp : TritonGEN_Op<"barrier"> {
   let summary = "Workgroup barrier";
-  string baseDescription = [{
-    The `gen.barrier` operation performs a workgroup barrier and ensures all
-    outstanding memory transaction using local or global memory are complete.
+  let description = [{
+    The `triton_gen.barrier` operation performs a workgroup barrier and ensures
+    all outstanding memory transaction using local or global memory are complete.
   }];
   let arguments = (ins);
   let results = (outs);
@@ -161,11 +160,12 @@ def TritonGEN_BarrierOp : TritonGEN_Op<"barrier"> {
 
 def TritonGEN_SplitBarrierSignalOp : TritonGEN_Op<"split_barrier_signal"> {
   let summary = "Split barrier signal";
-  string baseDescription = [{
-    The `gen.split_barrier_signal` operation signals the arrival of a workgroup
-    thread at the current program point; the issuing thread continue execution.
+  let description = [{
+    The `triton_gen.split_barrier_signal` operation signals the arrival of a
+    workgroup thread at the current program point; the issuing thread continue
+    execution.
     Once all threads in a workgroup have signaled their arrival, any other thread
-    waiting at the `gen.split_barrier_wait` operation can exit it.
+    waiting at the `triton_gen.split_barrier_wait` operation can exit it.
     The '$mem_fence' attribute is a bitfield that specifies the memory address
     spaces to apply the memory ordering constraints. The '$mem_scope' attribute
     describes the work-items to apply the memory ordering constraints.
@@ -187,11 +187,12 @@ def TritonGEN_SplitBarrierSignalOp : TritonGEN_Op<"split_barrier_signal"> {
 
 def TritonGEN_SplitBarrierWaitOp : TritonGEN_Op<"split_barrier_wait"> {
   let summary = "Split barrier wait";
-  string baseDescription = [{
-    The `gen.split_barrier_wait` operation blocks the issuing workgroup thread
-    until all other threads arrive at the corresponding `gen.split_barrier_arrive`
-    operation. Please refer to the `gen.split_barrier_signal` documentation for the
-    description of the attributes and the constrains on the operation.
+  let description = [{
+    The `triton_gen.split_barrier_wait` operation blocks the issuing workgroup
+    thread until all other threads arrive at the corresponding
+    `triton_gen.split_barrier_arrive` operation. Please refer to the
+    `triton_gen.split_barrier_signal` documentation for the description of the
+    attributes and the constrains on the operation.
   }];
   let arguments = (ins TritonGEN_MemFence:$mem_fence, TritonGEN_MemScope:$mem_scope);
   let results = (outs);
@@ -204,14 +205,14 @@ def TritonGEN_NamedBarrierSignalOp : TritonGEN_Op<"named_barrier_signal">,
   Arguments<(ins I32:$barrier_id, I32:$thread_group_count)> {
   let summary = "Named barrier signal";
 
-  string baseDescription = [{
-    The `gen.named_barrier_signal` operation signals the arrival of a thread at
-    the current program point. The '$barrier_id' parameter is an integer value
-    which identifies the named barrier. The '$thread_group_count' parameter
-    specifies the number of threads participating in the barrier. Once all
-    participating threads have signaled their arrival, any other participating
-    thread waiting at the `gen.named_barrier_wait` operation associated with the
-    same '$barrier_id' can exit the wait operation.
+  let description = [{
+    The `triton_gen.named_barrier_signal` operation signals the arrival of a
+    thread at the current program point. The '$barrier_id' parameter is an
+    integer value which identifies the named barrier. The '$thread_group_count'
+    parameter specifies the number of threads participating in the barrier. Once
+    all participating threads have signaled their arrival, any other participating
+    thread waiting at the `triton_gen.named_barrier_wait` operation associated
+    with the same '$barrier_id' can exit the wait operation.
   }];
 
   let assemblyFormat = [{
@@ -223,11 +224,11 @@ def TritonGEN_NamedBarrierWaitOp : TritonGEN_Op<"named_barrier_wait">,
   Arguments<(ins I32:$barrier_id)> {
   let summary = "Named barrier wait";
 
-  string baseDescription = [{
-    The `gen.named_barrier_wait` operation blocks threads participating in the
-    named barrier operation identified by '$barrier_id' until all participating
-    threads have reached the `gen.named_barrier_signal` operation associated with
-    the same '$barrier_id'.
+  let description = [{
+    The `triton_gen.named_barrier_wait` operation blocks threads participating in
+    the named barrier operation identified by '$barrier_id' until all
+    participating threads have reached the `triton_gen.named_barrier_signal`
+    operation associated with the same '$barrier_id'.
   }];
 
   let assemblyFormat = [{
@@ -237,20 +238,42 @@ def TritonGEN_NamedBarrierWaitOp : TritonGEN_Op<"named_barrier_wait">,
 
 def IntegerOrFloatType : AnyTypeOf<[AnyInteger, AnyFloat]>;
 
+def TritonGEN_SubGroupReduceOp : TritonGEN_Op<"sub_group_reduce", [
+      AllTypesMatch<["res", "value"]>]>,
+  Results<(outs IntegerOrFloatType:$res)>,
+  Arguments<(ins IntegerOrFloatType:$value,
+                 TritonGEN_ReduceKindAttr:$kind,
+                 I32Attr:$size)> {
+  let summary = "Subgroup reduce";
+
+  let description = [{
+    The `triton_gen.sub_group_reduce` operation is invoked by all work items in
+    a subgroup, each of them providing a $value. The $size argument is used to
+    form groups of $size consecutive work items called clusters. Each cluster
+    performs the reduction operation identified by $kind. The result of the
+    cluster reduction is propagated to the work items belonging to that cluster.
+  }];
+
+  let assemblyFormat = [{
+    $kind $value ` ` `{` `size` `=` $size `}` attr-dict `:` type($value)
+  }];
+
+  let hasVerifier = 1;
+}
+
 def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
-      TypesMatchWith<"result and value have the same type",
-                     "res", "value", "$_self">]>,
+      AllTypesMatch<["res", "value"]>]>,
   Results<(outs IntegerOrFloatType:$res)>,
   Arguments<(ins IntegerOrFloatType:$value,
                  I32:$mask,
                  TritonGEN_ShflKindAttr:$kind)> {
   let summary = "Subgroup shuffle";
 
-  string baseDescription = [{
-    The `gen.sub_group_shuffle` operation is invoked by different work items
-    with different values, given by $value. Different work items have different
-    subgroup local IDs. The shuffle kind, $kind, is given to determine how to
-    calculate the associated subgroup local ID. It returns the associated
+  let description = [{
+    The `triton_gen.sub_group_shuffle` operation is invoked by different work
+    items with different values, given by $value. Different work items have
+    different subgroup local IDs. The shuffle kind, $kind, is given to determine
+    how to calculate the associated subgroup local ID. It returns the associated
     $value for the work item with subgroup local ID equal to:
     - $kind == xor, the current invocation’s subgroup local ID xor’ed with $mask.
     - $kind == up, the current invocation’s subgroup local ID - $mask.
@@ -259,7 +282,7 @@ def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
   }];
 
   let assemblyFormat = [{
-    $kind $value `,` $mask attr-dict `:` type($value) `->` type($res)
+    $kind $value `,` $mask attr-dict `:` type($value)
   }];
 }
 
@@ -289,8 +312,8 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
 
   let summary = "Matrix multiply-add";
 
-  string baseDescription = [{
-    The `gen.dpas` operation is a matrix multiplication plus accumulation:
+  let description = [{
+    The `triton_gen.dpas` operation is a matrix multiplication plus accumulation:
 
       D = C + A x B
 
@@ -343,9 +366,9 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
 
   let summary = "2D block load";
 
-  string baseDescription = [{
-    The `gen.2Dblockload` operation loads a two dimensional matrix tile from a larger matrix residing
-    in memory. The parameters are:
+  let description = [{
+    The `triton_gen.2Dblockload` operation loads a two dimensional matrix tile
+    from a larger matrix residing in memory. The parameters are:
       $ptr - the base address of the matrix containing the tile to load
       $base_width, $base_height, $base_pitch - the shape of matrix
       $x, $y, $tile_width, $tile_height - the starting offsets and shape of the tile to load
@@ -395,9 +418,9 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
 
   let summary = "2D block store";
 
-  string baseDescription = [{
-    The `gen.2Dblockstore` operation stores a two dimensional tile into a larger matrix residing
-    in memory. The parameters are:
+  let description = [{
+    The `triton_gen.2Dblockstore` operation stores a two dimensional tile into a
+    larger matrix residing in memory. The parameters are:
       $ptr - the base address of the matrix where to store the tile
       $base_width, $base_height, $base_pitch - the shape of the matrix
       $x, $y, $tile_width, $tile_height - the starting offsets and shape of the tile to store
@@ -446,9 +469,9 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
 
   let summary = "2D block prefetch";
 
-  string baseDescription = [{
-    The `gen.2Dblockprefetch` operation prefetches a two dimensional tile from a larger matrix residing
-    in memory. The parameters are:
+  let description = [{
+    The `triton_gen.2Dblockprefetch` operation prefetches a two dimensional tile
+    from a larger matrix residing in memory. The parameters are:
       $ptr - the base address of the matrix containing the tile to prefetch
       $base_width, $base_height, $base_pitch - the shape of the matrix
     $x, $y, $tile_width, $tile_height - the starting offsets and shape of tile to prefetch

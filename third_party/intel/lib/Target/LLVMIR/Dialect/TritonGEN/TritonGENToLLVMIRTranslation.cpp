@@ -35,10 +35,77 @@ public:
   amendOperation(Operation *op, ArrayRef<llvm::Instruction *> instructions,
                  NamedAttribute attribute,
                  LLVM::ModuleTranslation &moduleTranslation) const final {
-    // Skip the attribute if it is not a TritonGEN attribute.
-    if (!attribute.getName().getValue().starts_with("triton_gen"))
-      return success();
+    StringRef attrName = attribute.getName().getValue();
+    if (attrName ==
+        triton::TritonGEN::TritonGENDialect::getCacheControlsAttrName()) {
+      auto decorationAttr =
+          dyn_cast<triton::TritonGEN::DecorationCacheControlAttr>(
+              attribute.getValue());
+      if (!decorationAttr)
+        return op->emitOpError(
+            "Expecting triton_gen.decoration_cache_control attribute");
+      if (instructions.size() != 1)
+        return op->emitOpError("Expecting a single instruction");
+      return handleDecorationCacheControl(op, instructions.front(),
+                                          decorationAttr);
+    }
+    if (attrName.starts_with("triton_gen"))
+      return handleTritonGenAttr(op, attribute, moduleTranslation);
+    return success();
+  }
 
+private:
+  template <typename IntTy>
+  static llvm::Metadata *getConstantIntMD(llvm::Type *type, IntTy val) {
+    return llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(type, val));
+  }
+
+  static LogicalResult handleDecorationCacheControl(
+      Operation *op, llvm::Instruction *inst,
+      triton::TritonGEN::DecorationCacheControlAttr attribute) {
+    ArrayRef<Attribute> attrs = attribute.getDecorations();
+    SmallVector<llvm::Metadata *> decorations;
+    llvm::LLVMContext &ctx = inst->getContext();
+    llvm::Type *i32Ty = llvm::IntegerType::getInt32Ty(ctx);
+    llvm::transform(
+        attrs, std::back_inserter(decorations),
+        [&ctx, i32Ty](Attribute attr) -> llvm::Metadata * {
+          return TypeSwitch<Attribute, llvm::Metadata *>(attr)
+              .Case<triton::TritonGEN::LoadCacheControlDecorationAttr,
+                    triton::TritonGEN::StoreCacheControlDecorationAttr>(
+                  [&ctx, i32Ty](auto attr) {
+                    constexpr size_t decorationCacheControlArity = 4;
+                    constexpr uint32_t loadCacheControlKey = 6442;
+                    constexpr uint32_t storeCacheControlKey = 6443;
+                    constexpr uint32_t decorationKey =
+                        std::is_same_v<
+                            decltype(attr),
+                            triton::TritonGEN::LoadCacheControlDecorationAttr>
+                            ? loadCacheControlKey
+                            : storeCacheControlKey;
+                    std::array<uint32_t, decorationCacheControlArity> values{
+                        decorationKey, attr.getCacheLevel(),
+                        static_cast<uint32_t>(attr.getCacheControl()),
+                        attr.getOperandNumber()};
+                    std::array<llvm::Metadata *, decorationCacheControlArity>
+                        metadata;
+                    llvm::transform(values, metadata.begin(),
+                                    [i32Ty](uint32_t value) {
+                                      return getConstantIntMD(i32Ty, value);
+                                    });
+                    return llvm::MDNode::get(ctx, metadata);
+                  });
+        });
+    constexpr llvm::StringLiteral decorationCacheControlMDName =
+        "spirv.DecorationCacheControlINTEL";
+    inst->setMetadata(decorationCacheControlMDName,
+                      llvm::MDNode::get(ctx, decorations));
+    return success();
+  }
+
+  LogicalResult
+  handleTritonGenAttr(Operation *op, NamedAttribute attribute,
+                      LLVM::ModuleTranslation &moduleTranslation) const {
     llvm::LLVMContext &llvmContext = moduleTranslation.getLLVMContext();
     llvm::Function *llvmFunc =
         moduleTranslation.lookupFunction(cast<LLVM::LLVMFuncOp>(op).getName());
@@ -47,7 +114,6 @@ public:
     return success();
   }
 
-private:
   // Checks if the given operation is a kernel function.
   bool isKernel(Operation *op) const {
     auto fn = dyn_cast<LLVM::LLVMFuncOp>(op);

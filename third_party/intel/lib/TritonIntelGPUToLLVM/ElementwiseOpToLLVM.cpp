@@ -170,22 +170,22 @@ Fp8E5M2_to_Bf16_func(Location loc, ConversionPatternRewriter &rewriter,
   Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
   Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
 
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = or_(i32_ty, sign0, f0);
   Value bf16x2Vec1 = or_(i32_ty, sign1, f1);
   bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
   bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
 
-  return {extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
-          extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
-          extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
-          extract_element(i16_ty, bf16x2Vec1, i32_val(1))};
+  return {extract_element(bf16_ty, bf16x2Vec0, i32_val(0)),
+          extract_element(bf16_ty, bf16x2Vec0, i32_val(1)),
+          extract_element(bf16_ty, bf16x2Vec1, i32_val(0)),
+          extract_element(bf16_ty, bf16x2Vec1, i32_val(1))};
 }
 
 static SmallVector<Value>
 Bf16_to_Fp8E5M2_func(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = undef(bf16x2VecTy);
   Value bf16x2Vec1 = undef(bf16x2VecTy);
   bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
@@ -726,22 +726,22 @@ Fp8E4M3Nv_to_Bf16_func(Location loc, ConversionPatternRewriter &rewriter,
   Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
   Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
 
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = or_(i32_ty, sign0, f0);
   Value bf16x2Vec1 = or_(i32_ty, sign1, f1);
   bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
   bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
 
-  return {extract_element(i16_ty, bf16x2Vec0, i32_val(0)),
-          extract_element(i16_ty, bf16x2Vec0, i32_val(1)),
-          extract_element(i16_ty, bf16x2Vec1, i32_val(0)),
-          extract_element(i16_ty, bf16x2Vec1, i32_val(1))};
+  return {extract_element(bf16_ty, bf16x2Vec0, i32_val(0)),
+          extract_element(bf16_ty, bf16x2Vec0, i32_val(1)),
+          extract_element(bf16_ty, bf16x2Vec1, i32_val(0)),
+          extract_element(bf16_ty, bf16x2Vec1, i32_val(1))};
 }
 
 static SmallVector<Value>
 Bf16_to_Fp8E4M3Nv_func(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = undef(bf16x2VecTy);
   Value bf16x2Vec1 = undef(bf16x2VecTy);
   bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
@@ -875,7 +875,7 @@ Bf16_to_Fp8E4M3Nv_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
 static SmallVector<Value> Bf16_to_Fp16_func(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
-  auto bf16x2VecTy = vec_ty(i16_ty, 2);
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
 
   Value bf16x2Vec = undef(bf16x2VecTy);
   bf16x2Vec = insert_element(bf16x2VecTy, bf16x2Vec, v[0], i32_val(0));
@@ -1287,11 +1287,11 @@ struct FpToFpOpConversion
                                  const Value &v) {
     auto moduleOp =
         v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
-    constexpr StringLiteral name = "_Z31intel_convert_as_bfloat16_floatt";
+    constexpr StringLiteral name = "_Z27__spirv_ConvertBF16ToFINTELs";
     auto ext_func = triton::gpu::intel::lookupOrCreateSPIRVFn(moduleOp, name,
                                                               i16_ty, f32_ty);
-    auto call =
-        triton::gpu::intel::createSPIRVBuiltinCall(loc, rewriter, ext_func, v);
+    auto call = triton::gpu::intel::createSPIRVBuiltinCall(
+        loc, rewriter, ext_func, bitcast(v, i16_ty).getResult());
     return call.getResult();
   }
 
@@ -1308,12 +1308,12 @@ struct FpToFpOpConversion
       auto moduleOp =
           v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
       // Intel SPIR-V extension only supports round-to-nearest-even
-      constexpr StringLiteral name = "_Z32intel_convert_bfloat16_as_ushortf";
+      constexpr StringLiteral name = "_Z27__spirv_ConvertFToBF16INTELf";
       auto trunc_func = triton::gpu::intel::lookupOrCreateSPIRVFn(
           moduleOp, name, f32_ty, i16_ty);
       auto call = triton::gpu::intel::createSPIRVBuiltinCall(loc, rewriter,
                                                              trunc_func, v);
-      return call.getResult();
+      return bitcast(call.getResult(), bf16_ty);
     }
 
     auto as_uint32 = bitcast(v, i32_ty);
@@ -1332,7 +1332,7 @@ struct FpToFpOpConversion
 
     auto shifted = lshr(i32_ty, res, i32_val(16));
     auto truncated = trunc(i16_ty, shifted);
-    return truncated;
+    return bitcast(truncated, bf16_ty);
   }
 
   static LLVM::RoundingMode
@@ -2065,6 +2065,14 @@ struct AbsFOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+    // FIXME: Remove bitcast to and from i16 once SPIRV-LLVM-Translator supports
+    // LLVM::FAbsOp with bf16.
+    Value v = operands[0][0];
+    Type orig_type = elemTy;
+    if (llvm::isa<BFloat16Type>(orig_type)) {
+      v = bitcast(v, i16_ty);
+      elemTy = i16_ty;
+    }
     if (llvm::isa<IntegerType>(elemTy)) {
       // Mask out the sign bit
       auto num_bits =
@@ -2073,10 +2081,13 @@ struct AbsFOpConversion
       auto mask = (1u << (num_bits - 1u)) - 1u;
       auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
       auto maskConst = rewriter.create<LLVM::ConstantOp>(loc, maskAttr);
-      return {and_(operands[0][0], maskConst)};
+      Value res = and_(v, maskConst);
+      if (llvm::isa<BFloat16Type>(orig_type))
+        res = bitcast(res, orig_type);
+      return {res};
     }
 
-    return {rewriter.create<LLVM::FAbsOp>(loc, elemTy, operands[0][0])};
+    return {rewriter.create<LLVM::FAbsOp>(loc, elemTy, v)};
   }
 };
 

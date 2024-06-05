@@ -1,3 +1,4 @@
+import argparse
 import functools
 import os
 import subprocess
@@ -16,7 +17,7 @@ def synchronize():
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-             device='xpu'):
+             device='xpu', sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -78,6 +79,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
                     x.grad = None
             # we clear the L2 cache before each run
             cache.zero_()
+            if sync_submitting:
+                synchronize()
             # record time of `fn`
             with record_function("__profile_kernel_of_func"):
                 fn()
@@ -288,13 +291,14 @@ class Mark:
 
         if print_data:
             print(bench.plot_name + ':')
-            print(df)
+            print(df.to_string())
         if save_path:
             df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format=f"%.{save_precision}f",
                       index=False)
         return df
 
     def run(self, show_plots=False, print_data=False, save_path='', return_df=False, **kwargs):
+        save_path = save_path_from_args(save_path)
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
@@ -327,6 +331,21 @@ def perf_report(benchmarks):
     """
     wrapper = lambda fn: Mark(fn, benchmarks)
     return wrapper
+
+
+def save_path_from_args(save_path: str):
+    """Returns a save path that is specified as an argument or via --reports comman line option."""
+    if save_path:
+        return save_path
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--reports',
+        type=str,
+        default='',
+        help='directory to save reports',
+    )
+    args = parser.parse_args()
+    return args.reports
 
 
 # create decorator that wraps test function into
