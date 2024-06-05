@@ -84,7 +84,8 @@ Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce) const {
+                            unsigned numLaneToReduce,
+                            unsigned interleave) const {
   assert("TODO: implement warpReduce on XPU");
   return false;
 }

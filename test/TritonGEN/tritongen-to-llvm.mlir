@@ -9,47 +9,47 @@
 llvm.func @gen_special_regs() -> i32 {
   // CHECK-LABEL: gen_special_regs
   // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: [[CI:%.*]] = llvm.call @_Z12get_local_idj([[ZERO]]) : (i32) -> i64
+  // CHECK: [[CI:%.*]] = llvm.call spir_funccc @_Z12get_local_idj([[ZERO]]) : (i32) -> i64
   // CHECK-NEXT: llvm.trunc [[CI]] : i64 to i32
   %1 = triton_gen.workitem.id.x : i32
   // CHECK: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call @_Z12get_local_idj([[ONE]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z12get_local_idj([[ONE]]) : (i32) -> i64
   %2 = triton_gen.workitem.id.y : i32
   // CHECK: [[TWO:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: llvm.call @_Z12get_local_idj([[TWO]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z12get_local_idj([[TWO]]) : (i32) -> i64
   %3 = triton_gen.workitem.id.z : i64
 
   // CHECK: [[ZERO1:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: llvm.call @_Z12get_group_idj([[ZERO1]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z12get_group_idj([[ZERO1]]) : (i32) -> i64
   %4 = triton_gen.workgroup.id.x : i32
   // CHECK: [[ONE1:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call @_Z12get_group_idj([[ONE1]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z12get_group_idj([[ONE1]]) : (i32) -> i64
   %5 = triton_gen.workgroup.id.y : i64
   // CHECK: [[TWO1:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: llvm.call @_Z12get_group_idj([[TWO1]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z12get_group_idj([[TWO1]]) : (i32) -> i64
   %6 = triton_gen.workgroup.id.z : i32
 
   // CHECK: [[ZERO2:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: llvm.call @_Z14get_local_sizej([[ZERO2]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z14get_local_sizej([[ZERO2]]) : (i32) -> i64
   %7 = triton_gen.workgroup.dim.x : i32
   // CHECK: [[ONE2:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call @_Z14get_local_sizej([[ONE2]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z14get_local_sizej([[ONE2]]) : (i32) -> i64
   %8 = triton_gen.workgroup.dim.y : i64
   // CHECK: [[TWO2:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: llvm.call @_Z14get_local_sizej([[TWO2]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z14get_local_sizej([[TWO2]]) : (i32) -> i64
   %9 = triton_gen.workgroup.dim.z : i32
 
   // CHECK: [[ZERO3:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: llvm.call @_Z14get_num_groupsj([[ZERO3]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z14get_num_groupsj([[ZERO3]]) : (i32) -> i64
   %10 = triton_gen.grid.dim.x : i32
   // CHECK: [[ONE3:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call @_Z14get_num_groupsj([[ONE3]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z14get_num_groupsj([[ONE3]]) : (i32) -> i64
   %11 = triton_gen.grid.dim.y : i64
   // CHECK: [[TWO3:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: llvm.call @_Z14get_num_groupsj([[TWO3]]) : (i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z14get_num_groupsj([[TWO3]]) : (i32) -> i64
   %12 = triton_gen.grid.dim.z : i32
 
-  // CHECK: llvm.call @_Z25__spirv_BuiltInSubgroupIdv() : () -> i32
+  // CHECK: llvm.call spir_funccc @_Z25__spirv_BuiltInSubgroupIdv() : () -> i32
   %13 = triton_gen.subgroup.id : i32
 
   llvm.return %1 : i32
@@ -62,7 +62,7 @@ llvm.func @gen_special_regs() -> i32 {
 llvm.func @triton_gen.barrier() {
   // CHECK-LABEL: triton_gen.barrier
   // CHECK: [[CST:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call @_Z7barrierj([[CST]]) {passthrough = ["convergent"]} : (i32) -> ()
+  // CHECK: llvm.call spir_funccc @_Z7barrierj([[CST]]) {passthrough = ["convergent"]} : (i32) -> ()
   triton_gen.barrier
   llvm.return
 }
@@ -76,10 +76,10 @@ llvm.func @triton_gen.split_barrier() {
   // CHECK-LABEL: triton_gen.split_barrier() {
   // CHECK-DAG: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK:     llvm.call @_Z31intel_work_group_barrier_arriveii([[ZERO]], [[ONE]]) {passthrough = ["convergent"]} : (i32, i32) -> ()
+  // CHECK:     llvm.call spir_funccc @_Z31intel_work_group_barrier_arriveii([[ZERO]], [[ONE]]) {passthrough = ["convergent"]} : (i32, i32) -> ()
   // CHECK-DAG: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK:     llvm.call @_Z29intel_work_group_barrier_waitii([[ZERO]], [[ONE]]) {passthrough = ["convergent"]} : (i32, i32) -> ()
+  // CHECK:     llvm.call spir_funccc @_Z29intel_work_group_barrier_waitii([[ZERO]], [[ONE]]) {passthrough = ["convergent"]} : (i32, i32) -> ()
   triton_gen.split_barrier_signal {mem_fence=None, mem_scope=WorkGroup}
   triton_gen.split_barrier_wait {mem_fence=None, mem_scope=WorkGroup}
   llvm.return
@@ -92,11 +92,156 @@ llvm.func @triton_gen.split_barrier() {
 
 llvm.func @triton_gen.named_barrier(%barrier_id : i32, %thread_group_count : i32) {
   // CHECK-LABEL: triton_gen.named_barrier(%arg0: i32, %arg1: i32) {
-  // CHECK:       llvm.call @llvm.genx.GenISA.threadgroupnamedbarriers.signal.i32.i32(%arg0, %arg1) {passthrough = ["convergent"]} : (i32, i32) -> ()
-  // CHECK-NEXT:  llvm.call @llvm.genx.GenISA.threadgroupnamedbarriers.wait.i32(%arg0) {passthrough = ["convergent"]} : (i32) -> ()
+  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.signal.i32.i32(%arg0, %arg1) {passthrough = ["convergent"]} : (i32, i32) -> ()
+  // CHECK-NEXT:  llvm.call spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.wait.i32(%arg0) {passthrough = ["convergent"]} : (i32) -> ()
   triton_gen.named_barrier_signal %barrier_id, %thread_group_count : (i32, i32)
   triton_gen.named_barrier_wait %barrier_id : i32
   llvm.return
+}
+
+// -----
+
+module attributes {
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
+} {
+  llvm.func @triton_gen.sub_group_reduce() {
+    %0 = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[VAL:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(0 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
+    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(1 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
+    %2 = triton_gen.sub_group_reduce prod %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(2 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
+    %3 = triton_gen.sub_group_reduce umin %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(3 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
+    %4 = triton_gen.sub_group_reduce umax %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(4 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
+    %5 = triton_gen.sub_group_reduce imin %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(5 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
+    %6 = triton_gen.sub_group_reduce imax %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(6 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
+    %7 = triton_gen.sub_group_reduce or %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(7 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
+    %8 = triton_gen.sub_group_reduce xor %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(8 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.i32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (i32, i8, i32, i32) -> i32
+    %9 = triton_gen.sub_group_reduce and %0 {size = 16} : i32
+    %10 = llvm.mlir.constant(0.0 : f32) : f32
+    // CHECK: [[VAL:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(9 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.f32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (f32, i8, i32, i32) -> f32
+    %11 = triton_gen.sub_group_reduce fsum %10 {size = 16} : f32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(10 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.f32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (f32, i8, i32, i32) -> f32
+    %12 = triton_gen.sub_group_reduce fprod %10 {size = 16} : f32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(11 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.f32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (f32, i8, i32, i32) -> f32
+    %13 = triton_gen.sub_group_reduce fmin %10 {size = 16} : f32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(12 : i8) : i8
+    // CHECK: [[SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveClustered.f32([[VAL]], [[KIND]], [[SIZE]], [[ZERO]]) : (f32, i8, i32, i32) -> f32
+    %14 = triton_gen.sub_group_reduce fmax %10 {size = 16} : f32
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
+} {
+  llvm.func @triton_gen.sub_group_reduce() {
+    %0 = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[VAL:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(0 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
+    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(1 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
+    %2 = triton_gen.sub_group_reduce prod %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(2 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
+    %3 = triton_gen.sub_group_reduce umin %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(3 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
+    %4 = triton_gen.sub_group_reduce umax %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(4 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
+    %5 = triton_gen.sub_group_reduce imin %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(5 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
+    %6 = triton_gen.sub_group_reduce imax %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(6 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
+    %7 = triton_gen.sub_group_reduce or %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(7 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
+    %8 = triton_gen.sub_group_reduce xor %0 {size = 16} : i32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(8 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) : (i32, i8, i32) -> i32
+    %9 = triton_gen.sub_group_reduce and %0 {size = 16} : i32
+    %10 = llvm.mlir.constant(0.0 : f32) : f32
+    // CHECK: [[VAL:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(9 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.f32([[VAL]], [[KIND]], [[ZERO]]) : (f32, i8, i32) -> f32
+    %11 = triton_gen.sub_group_reduce fsum %10 {size = 16} : f32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(10 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.f32([[VAL]], [[KIND]], [[ZERO]]) : (f32, i8, i32) -> f32
+    %12 = triton_gen.sub_group_reduce fprod %10 {size = 16} : f32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(11 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.f32([[VAL]], [[KIND]], [[ZERO]]) : (f32, i8, i32) -> f32
+    %13 = triton_gen.sub_group_reduce fmin %10 {size = 16} : f32
+    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(12 : i8) : i8
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.f32([[VAL]], [[KIND]], [[ZERO]]) : (f32, i8, i32) -> f32
+    %14 = triton_gen.sub_group_reduce fmax %10 {size = 16} : f32
+    llvm.return
+  }
 }
 
 // -----
@@ -116,44 +261,44 @@ llvm.func @triton_gen.sub_group_shuffle() {
   // CHECK-LABEL: triton_gen.sub_group_shuffle
   %0 = llvm.mlir.constant(0 : i32) : i32
   // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: llvm.call @_Z21sub_group_shuffle_xorij([[ZERO]], [[ZERO]]) {passthrough = ["convergent"]} : (i32, i32) -> i32
-  // CHECK: llvm.call @_Z20sub_group_shuffle_upij([[ZERO]], [[ZERO]]) {passthrough = ["convergent"]} : (i32, i32) -> i32
-  // CHECK: llvm.call @_Z22sub_group_shuffle_downij([[ZERO]], [[ZERO]]) {passthrough = ["convergent"]} : (i32, i32) -> i32
-  // CHECK: llvm.call @_Z17sub_group_shuffleij([[ZERO]], [[ZERO]]) {passthrough = ["convergent"]} : (i32, i32) -> i32
-  %1 = triton_gen.sub_group_shuffle xor %0, %0 : i32 -> i32
-  %2 = triton_gen.sub_group_shuffle up %0, %0 : i32 -> i32
-  %3 = triton_gen.sub_group_shuffle down %0, %0 : i32 -> i32
-  %4 = triton_gen.sub_group_shuffle idx %0, %0 : i32 -> i32
+  // CHECK: llvm.call spir_funccc @_Z21sub_group_shuffle_xorij([[ZERO]], [[ZERO]]) {passthrough = ["convergent"]} : (i32, i32) -> i32
+  // CHECK: llvm.call spir_funccc @_Z20sub_group_shuffle_upij([[ZERO]], [[ZERO]]) {passthrough = ["convergent"]} : (i32, i32) -> i32
+  // CHECK: llvm.call spir_funccc @_Z22sub_group_shuffle_downij([[ZERO]], [[ZERO]]) {passthrough = ["convergent"]} : (i32, i32) -> i32
+  // CHECK: llvm.call spir_funccc @_Z17sub_group_shuffleij([[ZERO]], [[ZERO]]) {passthrough = ["convergent"]} : (i32, i32) -> i32
+  %1 = triton_gen.sub_group_shuffle xor %0, %0 : i32
+  %2 = triton_gen.sub_group_shuffle up %0, %0 : i32
+  %3 = triton_gen.sub_group_shuffle down %0, %0 : i32
+  %4 = triton_gen.sub_group_shuffle idx %0, %0 : i32
 
   // CHECK: [[ZERO1:%.*]] = llvm.mlir.constant(0 : i8) : i8
-  // CHECK: llvm.call @_Z21sub_group_shuffle_xorcj([[ZERO1]], [[ZERO]]) {passthrough = ["convergent"]} : (i8, i32) -> i8
+  // CHECK: llvm.call spir_funccc @_Z21sub_group_shuffle_xorcj([[ZERO1]], [[ZERO]]) {passthrough = ["convergent"]} : (i8, i32) -> i8
   %5 = llvm.mlir.constant(0 : i8) : i8
-  %6 = triton_gen.sub_group_shuffle xor %5, %0 : i8 -> i8
+  %6 = triton_gen.sub_group_shuffle xor %5, %0 : i8
 
   // CHECK: [[ZERO2:%.*]] = llvm.mlir.constant(0 : i16) : i16
-  // CHECK: llvm.call @_Z21sub_group_shuffle_xorsj([[ZERO2]], [[ZERO]]) {passthrough = ["convergent"]} : (i16, i32) -> i16
+  // CHECK: llvm.call spir_funccc @_Z21sub_group_shuffle_xorsj([[ZERO2]], [[ZERO]]) {passthrough = ["convergent"]} : (i16, i32) -> i16
   %7 = llvm.mlir.constant(0 : i16) : i16
-  %8 = triton_gen.sub_group_shuffle xor %7, %0 : i16 -> i16
+  %8 = triton_gen.sub_group_shuffle xor %7, %0 : i16
 
   // CHECK: [[ZERO3:%.*]] = llvm.mlir.constant(0 : i64) : i64
-  // CHECK: llvm.call @_Z21sub_group_shuffle_xorlj([[ZERO3]], [[ZERO]]) {passthrough = ["convergent"]} : (i64, i32) -> i64
+  // CHECK: llvm.call spir_funccc @_Z21sub_group_shuffle_xorlj([[ZERO3]], [[ZERO]]) {passthrough = ["convergent"]} : (i64, i32) -> i64
   %9 = llvm.mlir.constant(0 : i64) : i64
-  %10 = triton_gen.sub_group_shuffle xor %9, %0 : i64 -> i64
+  %10 = triton_gen.sub_group_shuffle xor %9, %0 : i64
 
   // CHECK: [[ZERO4:%.*]] = llvm.mlir.constant(0.000000e+00 : f16) : f16
-  // CHECK: llvm.call @_Z21sub_group_shuffle_xorDhj([[ZERO4]], [[ZERO]]) {passthrough = ["convergent"]} : (f16, i32) -> f16
+  // CHECK: llvm.call spir_funccc @_Z21sub_group_shuffle_xorDhj([[ZERO4]], [[ZERO]]) {passthrough = ["convergent"]} : (f16, i32) -> f16
   %11 = llvm.mlir.constant(0.0 : f16) : f16
-  %12 = triton_gen.sub_group_shuffle xor %11, %0 : f16 -> f16
+  %12 = triton_gen.sub_group_shuffle xor %11, %0 : f16
 
   // CHECK: [[ZERO5:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
-  // CHECK: llvm.call @_Z21sub_group_shuffle_xorfj([[ZERO5]], [[ZERO]]) {passthrough = ["convergent"]} : (f32, i32) -> f32
+  // CHECK: llvm.call spir_funccc @_Z21sub_group_shuffle_xorfj([[ZERO5]], [[ZERO]]) {passthrough = ["convergent"]} : (f32, i32) -> f32
   %13 = llvm.mlir.constant(0.0 : f32) : f32
-  %14 = triton_gen.sub_group_shuffle xor %13, %0 : f32 -> f32
+  %14 = triton_gen.sub_group_shuffle xor %13, %0 : f32
 
   // CHECK: [[ZERO6:%.*]] = llvm.mlir.constant(0.000000e+00 : f64) : f64
-  // CHECK: llvm.call @_Z21sub_group_shuffle_xordj([[ZERO6]], [[ZERO]]) {passthrough = ["convergent"]} : (f64, i32) -> f64
+  // CHECK: llvm.call spir_funccc @_Z21sub_group_shuffle_xordj([[ZERO6]], [[ZERO]]) {passthrough = ["convergent"]} : (f64, i32) -> f64
   %15 = llvm.mlir.constant(0.0 : f64) : f64
-  %16 = triton_gen.sub_group_shuffle xor %15, %0 : f64 -> f64
+  %16 = triton_gen.sub_group_shuffle xor %15, %0 : f64
   llvm.return
 }
 
@@ -163,7 +308,7 @@ llvm.func @triton_gen.sub_group_shuffle() {
 
 llvm.func @triton_gen.dpas.i8(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:     llvm.func @triton_gen.dpas.i8(%arg0: vector<8xi32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
-  // CHECK-NEXT: llvm.call @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iS0_(%arg1, %arg2, %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32>
+  // CHECK-NEXT: llvm.call spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iS0_(%arg1, %arg2, %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32>
   %0 = triton_gen.dpas %c, %a, %b {pa = i8, pb = i8, rc = 8} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>
   llvm.return
 }
@@ -174,7 +319,7 @@ llvm.func @triton_gen.dpas.i8(%c : vector<8xi32>, %a : vector<8xi16>, %b : vecto
 
 llvm.func @triton_gen.dpas.u8(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:     llvm.func @triton_gen.dpas.u8(%arg0: vector<8xi32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
-  // CHECK-NEXT: llvm.call @_Z36intel_sub_group_u8_u8_matrix_mad_k32Dv8_sDv8_iS0_(%arg1, %arg2, %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32>
+  // CHECK-NEXT: llvm.call spir_funccc @_Z36intel_sub_group_u8_u8_matrix_mad_k32Dv8_sDv8_iS0_(%arg1, %arg2, %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32>
   %0 = triton_gen.dpas %c, %a, %b {pa = u8, pb = u8, rc = 8} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>
   llvm.return
 }
@@ -185,7 +330,7 @@ llvm.func @triton_gen.dpas.u8(%c : vector<8xi32>, %a : vector<8xi16>, %b : vecto
 
 llvm.func @triton_gen.dpas.bf16(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:     llvm.func @triton_gen.dpas.bf16(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
-  // CHECK-NEXT: llvm.call @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iDv8_f(%arg1, %arg2, %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+  // CHECK-NEXT: llvm.call spir_funccc @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iDv8_f(%arg1, %arg2, %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
   %0 = triton_gen.dpas %c, %a, %b {pa = bf16, pb = bf16, rc = 8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>) -> vector<8xf32>
   llvm.return
 }
@@ -196,7 +341,7 @@ llvm.func @triton_gen.dpas.bf16(%c : vector<8xf32>, %a : vector<8xi16>, %b : vec
 
 llvm.func @triton_gen.dpas.f16(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:     llvm.func @triton_gen.dpas.f16(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
-  // CHECK-NEXT: llvm.call @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%arg1, %arg2, %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+  // CHECK-NEXT: llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%arg1, %arg2, %arg0) {passthrough = ["convergent"]} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
   %0 = triton_gen.dpas %c, %a, %b {pa = f16, pb = f16, rc = 8} : (vector<8xf32>, vector<8xi16>, vector<8xi32>) -> vector<8xf32>
   llvm.return
 }
@@ -214,7 +359,7 @@ llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vect
   // CHECK-DAG:  [[CST_8c:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK-DAG:  [[CST_8d:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK-DAG:  [[CST_FALSE:%.*]] = llvm.mlir.constant(false) : i1
-  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v4i32.v8i32
+  // CHECK-NEXT: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.dpas.v8f32.v8f32.v4i32.v8i32
   // CHEC-SAME:    (%arg0, [[A]], [[B]], [[CST_8a]], [[CST_8b]], [[CST_8c]], [[CST_8d]], [[CST_FALSE]]) : (vector<8xf32>, vector<4xi32>, vector<8xi32>, i32, i32, i32, i32, i1) -> vector<8xf32>
   %0 = triton_gen.dpas %c, %a, %b {pa = tf32, pb = tf32, rc = 8} : (vector<8xf32>, vector<4xf32>, vector<8xf32>) -> vector<8xf32>
   llvm.return
@@ -231,7 +376,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
   // CHECK-NEXT: [[COORD0:%.*]] = llvm.insertelement %arg4, [[UNDEF]][[[ZERO]] : i32] : vector<2xi32>
   // CHECK-NEXT: [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE]] : i32] : vector<2xi32>
-  // CHECK-NEXT: llvm.call @intel_subgroup_block_read_u8_m8k32v2(%arg0, %arg1, %arg2, %arg3, [[COORD1]]) {passthrough = ["convergent"]} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> vector<16xi16>
+  // CHECK-NEXT: llvm.call spir_funccc @intel_subgroup_block_read_u8_m8k32v2(%arg0, %arg1, %arg2, %arg3, [[COORD1]]) {passthrough = ["convergent"]} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> vector<16xi16>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=2, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<16xi16>
   llvm.return
 }
@@ -254,7 +399,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_hei
   // CHECK-DAG:  [[WIDTH:%.*]] = llvm.sub %arg1, [[ONE]] : i32
   // CHECK-DAG:  [[HEIGHT:%.*]] = llvm.sub %arg2, [[ONE]] : i32
   // CHECK-DAG:  [[PITCH:%.*]] = llvm.sub %arg3, [[ONE]] : i32
-  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockRead.v8f32([[PTR]], [[WIDTH]], [[HEIGHT]], [[PITCH]], %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
+  // CHECK-NEXT: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v8f32([[PTR]], [[WIDTH]], [[HEIGHT]], [[PITCH]], %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xf32>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xf32>
   llvm.return
 }
@@ -277,7 +422,7 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_he
   // CHECK-DAG:  [[WIDTH:%.*]] = llvm.sub %arg1, [[ONE]] : i32
   // CHECK-DAG:  [[HEIGHT:%.*]] = llvm.sub %arg2, [[ONE]] : i32
   // CHECK-DAG:  [[PITCH:%.*]] = llvm.sub %arg3, [[ONE]] : i32
-  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockWrite.v8f32([[PTR]], [[WIDTH]], [[HEIGHT]], [[PITCH]], %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]], %arg6) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>) -> ()
+  // CHECK-NEXT: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8f32([[PTR]], [[WIDTH]], [[HEIGHT]], [[PITCH]], %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]], %arg6) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>) -> ()
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xf32>)
   llvm.return
 }
@@ -300,7 +445,7 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base
   // CHECK-DAG:  [[WIDTH:%.*]] = llvm.sub %arg1, [[ONE]] : i32
   // CHECK-DAG:  [[HEIGHT:%.*]] = llvm.sub %arg2, [[ONE]] : i32
   // CHECK-DAG:  [[PITCH:%.*]] = llvm.sub %arg3, [[ONE]] : i32
-  // CHECK-NEXT: llvm.call @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid([[PTR]], [[WIDTH]], [[HEIGHT]], [[PITCH]], %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[FOUR]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
+  // CHECK-NEXT: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid([[PTR]], [[WIDTH]], [[HEIGHT]], [[PITCH]], %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[FOUR]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=L1C_L3C} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
 }

@@ -1,5 +1,95 @@
 // RUN: triton-opt -split-input-file -verify-diagnostics %s
 
+llvm.func @triton_gen.duplicated_cache_controls(%arg0: !llvm.ptr) {
+  // expected-error @+1 {{'triton_gen.decoration_cache_controls' cannot specify more than one cache control decoration of the same nature for the same cache level}}
+  %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<0, Cached, 0>>} : !llvm.ptr -> i32
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.illegal_cache_controls_attr(%arg0: !llvm.ptr) {
+  // expected-error @+1 {{'triton_gen.decoration_cache_controls' only accepts LoadCacheControlDecorationAttr and StoreCacheControlDecorationAttr attributes}}
+  %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<1 : i32>} : !llvm.ptr -> i32
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.sub_group_reduce() {
+  // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting valid target env attribute}}
+  %0 = llvm.mlir.constant(0 : i32) : i32
+  %1 = triton_gen.sub_group_reduce fsum %0 {size = 16} : i32
+  llvm.return
+}
+
+// -----
+
+module attributes {
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
+} {
+  llvm.func @triton_gen.sub_group_reduce() {
+    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting integer type for integer reduction}}
+    %0 = llvm.mlir.constant(0.0 : f32) : f32
+    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : f32
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
+} {
+  llvm.func @triton_gen.sub_group_reduce() {
+    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting floating point type for floating point reduction}}
+    %0 = llvm.mlir.constant(0 : i32) : i32
+    %1 = triton_gen.sub_group_reduce fsum %0 {size = 16} : i32
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
+} {
+  llvm.func @triton_gen.sub_group_reduce() {
+    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
+    %0 = llvm.mlir.constant(0 : i32) : i32
+    %1 = triton_gen.sub_group_reduce sum %0 {size = 0} : i32
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
+} {
+  llvm.func @triton_gen.sub_group_reduce() {
+    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
+    %0 = llvm.mlir.constant(0 : i32) : i32
+    %1 = triton_gen.sub_group_reduce sum %0 {size = 32} : i32
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
+} {
+  llvm.func @triton_gen.sub_group_reduce() {
+    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
+    %0 = llvm.mlir.constant(0 : i32) : i32
+    %1 = triton_gen.sub_group_reduce sum %0 {size = 6} : i32
+    llvm.return
+  }
+}
+
+// -----
+
 llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // expected-error @+1 {{'triton_gen.dpas' op expecting repeat count to be 1, 2, 4, or 8}}
   %0 = triton_gen.dpas %c, %a, %b {pa=i8, pb=i8, rc=16} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>

@@ -12,4 +12,6 @@ add_triton_library(TritonGENToLLVM
 
   LINK_LIBS PUBLIC
   GenISAIntrinsics
+  MLIRLLVMDialect
+  MLIRSPIRVDialect
 )

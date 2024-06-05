@@ -66,35 +66,76 @@ llvm.func @triton_gen.named_barrier_wait(%barrier_id : i32) {
   llvm.return
 }
 
+// -----
+
+module attributes {
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
+} {
+  llvm.func @triton_gen.sub_group_reduce() {
+    // CHECK-LABEL: triton_gen.sub_group_reduce
+    %0 = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: triton_gen.sub_group_reduce sum %0 {size = 16} : i32
+    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : i32
+    // CHECK: triton_gen.sub_group_reduce prod %0 {size = 16} : i32
+    %2 = triton_gen.sub_group_reduce prod %0 {size = 16} : i32
+    // CHECK: triton_gen.sub_group_reduce umin %0 {size = 16} : i32
+    %3 = triton_gen.sub_group_reduce umin %0 {size = 16} : i32
+    // CHECK: triton_gen.sub_group_reduce umax %0 {size = 16} : i32
+    %4 = triton_gen.sub_group_reduce umax %0 {size = 16} : i32
+    // CHECK: triton_gen.sub_group_reduce imin %0 {size = 16} : i32
+    %5 = triton_gen.sub_group_reduce imin %0 {size = 16} : i32
+    // CHECK: triton_gen.sub_group_reduce imax %0 {size = 16} : i32
+    %6 = triton_gen.sub_group_reduce imax %0 {size = 16} : i32
+    // CHECK: triton_gen.sub_group_reduce or %0 {size = 16} : i32
+    %7 = triton_gen.sub_group_reduce or %0 {size = 16} : i32
+    // CHECK: triton_gen.sub_group_reduce xor %0 {size = 16} : i32
+    %8 = triton_gen.sub_group_reduce xor %0 {size = 16} : i32
+    // CHECK: triton_gen.sub_group_reduce and %0 {size = 16} : i32
+    %9 = triton_gen.sub_group_reduce and %0 {size = 16} : i32
+    %10 = llvm.mlir.constant(0.0 : f32) : f32
+    // CHECK: triton_gen.sub_group_reduce fsum %10 {size = 16} : f32
+    %11 = triton_gen.sub_group_reduce fsum %10 {size = 16} : f32
+    // CHECK: triton_gen.sub_group_reduce fprod %10 {size = 16} : f32
+    %12 = triton_gen.sub_group_reduce fprod %10 {size = 16} : f32
+    // CHECK: triton_gen.sub_group_reduce fmin %10 {size = 16} : f32
+    %13 = triton_gen.sub_group_reduce fmin %10 {size = 16} : f32
+    // CHECK: triton_gen.sub_group_reduce fmax %10 {size = 16} : f32
+    %14 = triton_gen.sub_group_reduce fmax %10 {size = 16} : f32
+    llvm.return
+  }
+}
+
+// -----
+
 llvm.func @triton_gen.sub_group_shuffle() {
   // CHECK-LABEL: triton_gen.sub_group_shuffle
   %0 = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %1 = triton_gen.sub_group_shuffle xor %0, %0 : i32 -> i32
-  %1 = triton_gen.sub_group_shuffle xor %0, %0 : i32 -> i32
-  // CHECK: %2 = triton_gen.sub_group_shuffle up %0, %0 : i32 -> i32
-  %2 = triton_gen.sub_group_shuffle up %0, %0 : i32 -> i32
-  // CHECK: %3 = triton_gen.sub_group_shuffle down %0, %0 : i32 -> i32
-  %3 = triton_gen.sub_group_shuffle down %0, %0 : i32 -> i32
-  // CHECK: %4 = triton_gen.sub_group_shuffle idx %0, %0 : i32 -> i32
-  %4 = triton_gen.sub_group_shuffle idx %0, %0 : i32 -> i32
+  // CHECK: %1 = triton_gen.sub_group_shuffle xor %0, %0 : i32
+  %1 = triton_gen.sub_group_shuffle xor %0, %0 : i32
+  // CHECK: %2 = triton_gen.sub_group_shuffle up %0, %0 : i32
+  %2 = triton_gen.sub_group_shuffle up %0, %0 : i32
+  // CHECK: %3 = triton_gen.sub_group_shuffle down %0, %0 : i32
+  %3 = triton_gen.sub_group_shuffle down %0, %0 : i32
+  // CHECK: %4 = triton_gen.sub_group_shuffle idx %0, %0 : i32
+  %4 = triton_gen.sub_group_shuffle idx %0, %0 : i32
   %5 = llvm.mlir.constant(0 : i8) : i8
-  // CHECK: %6 = triton_gen.sub_group_shuffle xor %5, %0 : i8 -> i8
-  %6 = triton_gen.sub_group_shuffle xor %5, %0 : i8 -> i8
+  // CHECK: %6 = triton_gen.sub_group_shuffle xor %5, %0 : i8
+  %6 = triton_gen.sub_group_shuffle xor %5, %0 : i8
   %7 = llvm.mlir.constant(0 : i16) : i16
-  // CHECK: %8 = triton_gen.sub_group_shuffle xor %7, %0 : i16 -> i16
-  %8 = triton_gen.sub_group_shuffle xor %7, %0 : i16 -> i16
+  // CHECK: %8 = triton_gen.sub_group_shuffle xor %7, %0 : i16
+  %8 = triton_gen.sub_group_shuffle xor %7, %0 : i16
   %9 = llvm.mlir.constant(0 : i64) : i64
-  // CHECK: %10 = triton_gen.sub_group_shuffle xor %9, %0 : i64 -> i64
-  %10 = triton_gen.sub_group_shuffle xor %9, %0 : i64 -> i64
+  // CHECK: %10 = triton_gen.sub_group_shuffle xor %9, %0 : i64
+  %10 = triton_gen.sub_group_shuffle xor %9, %0 : i64
   %11 = llvm.mlir.constant(0.0 : f16) : f16
-  // CHECK: %12 = triton_gen.sub_group_shuffle xor %11, %0 : f16 -> f16
-  %12 = triton_gen.sub_group_shuffle xor %11, %0 : f16 -> f16
+  // CHECK: %12 = triton_gen.sub_group_shuffle xor %11, %0 : f16
+  %12 = triton_gen.sub_group_shuffle xor %11, %0 : f16
   %13 = llvm.mlir.constant(0.0 : f32) : f32
-  // CHECK: %14 = triton_gen.sub_group_shuffle xor %13, %0 : f32 -> f32
-  %14 = triton_gen.sub_group_shuffle xor %13, %0 : f32 -> f32
+  // CHECK: %14 = triton_gen.sub_group_shuffle xor %13, %0 : f32
+  %14 = triton_gen.sub_group_shuffle xor %13, %0 : f32
   %15 = llvm.mlir.constant(0.0 : f64) : f64
-  // CHECK: %16 = triton_gen.sub_group_shuffle xor %15, %0 : f64 -> f64
-  %16 = triton_gen.sub_group_shuffle xor %15, %0 : f64 -> f64
+  // CHECK: %16 = triton_gen.sub_group_shuffle xor %15, %0 : f64
+  %16 = triton_gen.sub_group_shuffle xor %15, %0 : f64
   llvm.return
 }
 
@@ -102,6 +143,19 @@ llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8
   // CHECK:      llvm.func @triton_gen.dpas(%arg0: vector<8xi32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
   // CHECK-NEXT:   %0 = triton_gen.dpas %arg0, %arg1, %arg2 {pa = i8, pb = i8, rc = 8} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>
   %0 = triton_gen.dpas %c, %a, %b {pa=i8, pb=i8, rc=8} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>
+  llvm.return
+}
+
+llvm.func @foo(%arg0: !llvm.ptr, %arg1: !llvm.ptr)
+
+llvm.func @triton_gen.cache_controls(%arg0: !llvm.ptr) {
+  // CHECK: llvm.func @triton_gen.cache_controls(%arg0: !llvm.ptr)
+  // CHECK-NEXT: %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Cached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>} : !llvm.ptr -> i32
+  %0 = llvm.load %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Cached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>} : !llvm.ptr -> i32
+  // CHECK-NEXT: llvm.store %0, %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, WriteBack, 1>, #triton_gen.store_cache_control<1, Streaming, 1>>} : i32, !llvm.ptr
+  llvm.store %0, %arg0 {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, WriteBack, 1>, #triton_gen.store_cache_control<1, Streaming, 1>>} : i32, !llvm.ptr
+  // CHECK-NEXT: llvm.call @foo(%arg0, %arg0) {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<0, Cached, 1>>} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.call @foo(%arg0, %arg0) {triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<0, Cached, 1>>} : (!llvm.ptr, !llvm.ptr) -> ()
   llvm.return
 }
 
