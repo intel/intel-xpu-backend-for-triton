@@ -3,43 +3,26 @@
 // COM: Tests reduction when threads_per_warp < num_warps.
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [64], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 64 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 64 : i32,
+    spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
+} {
   // CHECK-LABEL: reduce_problem_size_64_threads_per_warp_32
   tt.func @reduce_problem_size_64_threads_per_warp_32(%f : tensor<2048xi32, #blocked>) {
 
   // 1st round intra-warp reduce
-  // CHECK: [[SHUFFLE_0_0:%.*]] = llvm.mlir.constant(16 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_0_0]]) {{.*}} : (i32, i32) -> i32
-  // CHECK: [[SHUFFLE_0_1:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_0_1]]) {{.*}} : (i32, i32) -> i32
-  // CHECK: [[SHUFFLE_0_2:%.*]] = llvm.mlir.constant(4 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_0_2]]) {{.*}} : (i32, i32) -> i32
-  // CHECK: [[SHUFFLE_0_3:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_0_3]]) {{.*}} : (i32, i32) -> i32
-  // CHECK: [[SHUFFLE_0_4:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_0_4]]) {{.*}} : (i32, i32) -> i32
+  // CHECK: @_Z20sub_group_reduce_addi
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 2nd round inter-warp reduce with problem size 64 with threads_per_warp 32
   // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
   // CHECK: [[PARTIAL_REDUCE_0:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
-  // CHECK: [[SHUFFLE_1_0:%.*]] = llvm.mlir.constant(16 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_1_0]]) {{.*}} : (i32, i32) -> i32
-  // CHECK: [[SHUFFLE_1_1:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_1_1]]) {{.*}} : (i32, i32) -> i32
-  // CHECK: [[SHUFFLE_1_2:%.*]] = llvm.mlir.constant(4 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_1_2]]) {{.*}} : (i32, i32) -> i32
-  // CHECK: [[SHUFFLE_1_3:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_1_3]]) {{.*}} : (i32, i32) -> i32
-  // CHECK: [[SHUFFLE_1_4:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_1_4]]) {{.*}} : (i32, i32) -> i32
+  // CHECK: @_Z20sub_group_reduce_addi
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 3rd round inter-warp reduce with problem size 2 with threads_per_warp 32
   // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
   // CHECK: [[PARTIAL_REDUCE_1:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
-  // CHECK: [[SHUFFLE_2_0:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT:  %{{.*}} = llvm.call spir_funccc @_Z21sub_group_shuffle_xorij({{.*}}, [[SHUFFLE_2_0]]) {{.*}} : (i32, i32) -> i32
+  // CHECK: @_Z30sub_group_clustered_reduce_addij
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // get final result

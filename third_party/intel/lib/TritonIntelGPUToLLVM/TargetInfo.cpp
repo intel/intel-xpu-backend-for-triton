@@ -8,6 +8,7 @@
 
 #include "TargetInfo.h"
 #include "Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 
@@ -86,8 +87,55 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
-  assert("TODO: implement warpReduce on XPU");
-  return false;
+  // No horizontal reduce required.
+  if (numLaneToReduce == 1)
+    return false;
+  // Horizontal reduce with interleave stride not support.
+  if (interleave > 1)
+    return false;
+  // Check if it is a simple reduce operation supported by Wave Op.
+  if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+    return false;
+  auto &combineOp = op.getCombineOp();
+  if (combineOp.getBlocks().size() > 1)
+    return false;
+  Block &block = *combineOp.begin();
+  Operation *yield = block.getTerminator();
+  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
+      reduceOp->getNumResults() != 1)
+    return false;
+  if (reduceOp->getOperand(0) != block.getArgument(0) ||
+      reduceOp->getOperand(1) != block.getArgument(1))
+    return false;
+
+  std::optional<TritonGEN::ReduceKind> reduceKind = std::nullopt;
+
+  llvm::TypeSwitch<mlir::Operation *>(reduceOp)
+      .Case<arith::AddFOp, arith::AddIOp>(
+          [&](auto) { reduceKind = TritonGEN::ReduceKind::ADD; })
+      .Case<arith::MulFOp, arith::MulIOp>(
+          [&](auto) { reduceKind = TritonGEN::ReduceKind::MUL; })
+      .Case<arith::MaxNumFOp, arith::MaxSIOp, arith::MaxUIOp>(
+          [&](auto) { reduceKind = TritonGEN::ReduceKind::MAX; })
+      .Case<arith::MinNumFOp, arith::MinSIOp, arith::MinUIOp>(
+          [&](auto) { reduceKind = TritonGEN::ReduceKind::MIN; })
+      .Case<arith::AndIOp>(
+          [&](auto) { reduceKind = TritonGEN::ReduceKind::AND; })
+      .Case<arith::OrIOp>([&](auto) { reduceKind = TritonGEN::ReduceKind::OR; })
+      .Case<arith::XOrIOp>(
+          [&](auto) { reduceKind = TritonGEN::ReduceKind::XOR; });
+
+  if (reduceKind == std::nullopt)
+    return false;
+
+  for (unsigned i = 0; i < acc.size(); ++i) {
+    acc[i] = rewriter.create<TritonGEN::SubGroupReduceOp>(
+        loc, reduceOp->getResult(0).getType(), acc[i], *reduceKind,
+        numLaneToReduce);
+  }
+
+  return true;
 }
 
 bool TargetInfo::processReplicaUsingStMatrix(
