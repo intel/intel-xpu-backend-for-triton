@@ -145,7 +145,7 @@ jobs:
           cd python
           pip install wheel pytest pytest-xdist pytest-rerunfailures pytest-select
           pip install --no-build-isolation '.[build,tests,tutorials]'
-          pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.1
+          pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
 
       - name: Run lit tests
         run: |
