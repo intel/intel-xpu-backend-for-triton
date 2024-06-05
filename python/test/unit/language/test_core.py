@@ -192,6 +192,15 @@ class MfmaLayout:
         return f"#{GPU_DIALECT}.amd_mfma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA = {self.warps_per_cta}, instrShape={self.instr_shape}, isTransposed = {str(self.is_transposed).lower()}}}>"
 
 
+class WmmaLayout:
+
+    def __init__(self, warps_per_cta):
+        self.warps_per_cta = warps_per_cta
+
+    def __str__(self):
+        return f"#{GPU_DIALECT}.amd_wmma<{{warpsPerCTA = {self.warps_per_cta}}}>"
+
+
 class MmaLayout:
 
     def __init__(self, version, warps_per_cta, ctas_per_cga, cta_split_num, cta_order, instr_shape):
@@ -250,13 +259,28 @@ class SharedLayout:
         return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
-def filter_layouts(layouts):
-    if is_cuda():
-        return [l for l in layouts if not isinstance(l, MfmaLayout)]
+def is_layout_applicable(layout) -> bool:
+    common_layouts = [BlockedLayout, SharedLayout]
+    if layout in common_layouts:
+        return True
+    elif is_cuda():
+        return isinstance(layout, MmaLayout)
     elif is_hip():
-        return [l for l in layouts if not isinstance(l, MmaLayout)]
+        target_arch = triton.runtime.driver.active.get_current_target().arch
+        if "gfx11" in target_arch:
+            # RDNA 3
+            return isinstance(layout, WmmaLayout)
+        elif any(arch for arch in ["gfx8", "gfx9"] if arch in target_arch):
+            # CDNA 1, 2, 3
+            return isinstance(layout, MfmaLayout)
+        else:
+            return False
     else:
-        return layouts
+        return True
+
+
+def filter_layouts(layouts):
+    return [l for l in layouts if is_layout_applicable(l)]
 
 
 @pytest.mark.interpreter
@@ -1108,6 +1132,9 @@ def test_shapes_as_params(device):
         tl.static_assert(a.shape == [tl.constexpr(32), tl.constexpr(32)])
 
         a = tl.arange(0, 32).reshape(4, 8).permute(1, 0)
+        tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4)])
+
+        a = tl.arange(0, 32).reshape(4, 8).trans()
         tl.static_assert(a.shape == [tl.constexpr(8), tl.constexpr(4)])
 
         a = tl.arange(0, 32).reshape(4, 8).reshape(32)
@@ -2577,9 +2604,9 @@ layouts = [
 @pytest.mark.parametrize("dtype_str", ["int32", "float32", "float16"])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce_op, device):
-    if is_hip() and isinstance(src_layout, MfmaLayout) and (M < src_layout.instr_shape[0]
-                                                            or N < src_layout.instr_shape[1]):
-        pytest.skip("Skipping because tensor shape is smaller than MfmaLayout isntr_shape")
+    if isinstance(src_layout,
+                  (MfmaLayout, MmaLayout)) and (M < src_layout.instr_shape[0] or N < src_layout.instr_shape[1]):
+        pytest.skip("Skipping because tensor shape is smaller than M(f)maLayout instr_shape")
     if is_hip() and isinstance(src_layout, MfmaLayout) and ((M, N) == (128, 128)):
         pytest.skip("Skipping test because it runs out of shared memory")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
@@ -2587,6 +2614,9 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     if epilogue_kind == 'expand_reduce2d' and isinstance(src_layout, MmaLayout):
         pytest.skip(
             "Currently MmaLayout combined with slice encoding and reduce op trigger device illegal memory access")
+
+    if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
+        src_layout[2] = 16 if dtype_str == "float16" else 8
 
     ty = {"int32": "i32", "float32": "f32", "float16": "f16"}[dtype_str]
     arith_op = {
@@ -2598,6 +2628,9 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     store_range = "%7" if axis == 0 else "%1"
     blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
+    num_warps = src_layout.warps_per_cta[0] * src_layout.warps_per_cta[1]
+    if num_warps == 8:
+        blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 2], [0, 1], [1, 1], [1, 1], [0, 1])
     one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [4], [0], [1], [1], [0])
 
     expanded_shape = f"1x{N}" if axis == 0 else f"{M}x1"
@@ -2645,7 +2678,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     #blocked = {blocked}
     #src = {src_layout}
     #one_d_layout = {one_d_layout}
-    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+    module attributes {{"triton_gpu.num-warps" = {num_warps} : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %arg1: i32 {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>>
         %1 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
@@ -3297,6 +3330,11 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
         input_precision = "ieee"
+        if "gfx11" in triton.runtime.driver.active.get_current_target().arch:
+            if in_dtype_str == "float32":
+                pytest.skip(f"{in_dtype_str} is not supported in WMMA dot, FMA does not support dot3d")
+            if out_dtype_str == "float16":
+                pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
         input_precision = "tf32" if in_dtype_str == 'float32' else "ieee"
 
@@ -4904,10 +4942,10 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     %12 = triton_gpu.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
     %13 = triton_gpu.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
     """ if interm_layout is None else f"""
-    %15 = triton_gpu.local_alloc %9 : (tensor<{M}x{N}xi32, #src>) -> !tt.memdesc<{M}x{N}xi32, #interm>
-    %16 = triton_gpu.local_load %15 : !tt.memdesc<{M}x{N}xi32, #interm> -> tensor<{M}x{N}xi32, #src>
-    %17 = triton_gpu.local_alloc %11 : (tensor<{M}x{N}xf16, #src>) -> !tt.memdesc<{M}x{N}xf16, #interm>
-    %18 = triton_gpu.local_load %17 : !tt.memdesc<{M}x{N}xf16, #interm> -> tensor<{M}x{N}xf16, #src>
+    %15 = triton_gpu.local_alloc %9 : (tensor<{M}x{N}xi32, #src>) -> !tt.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory>
+    %16 = triton_gpu.local_load %15 : !tt.memdesc<{M}x{N}xi32, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xi32, #src>
+    %17 = triton_gpu.local_alloc %11 : (tensor<{M}x{N}xf16, #src>) -> !tt.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory>
+    %18 = triton_gpu.local_load %17 : !tt.memdesc<{M}x{N}xf16, #interm, #triton_gpu.shared_memory> -> tensor<{M}x{N}xf16, #src>
 
     %12 = triton_gpu.convert_layout %16 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
     %13 = triton_gpu.convert_layout %18 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
@@ -5429,3 +5467,37 @@ def test_maxnreg(device):
     except AssertionError:
         print("Failing ptx:\n", k.asm["ptx"])
         raise
+
+
+@pytest.mark.interpreter
+def test_temp_var_in_loop(device):
+
+    @triton.jit
+    def temp_in_loop(Z, N: tl.constexpr, BLOCK: tl.constexpr):
+        acc = tl.full((BLOCK, ), 0, dtype=tl.int32)
+        for i in range(N):
+            if i == 0:
+                temp = tl.full((BLOCK, ), 2, dtype=tl.int32)
+                acc = temp
+            else:
+                acc += tl.full((BLOCK, ), 1, dtype=tl.int32)
+            # re-use the temp variable and make sure to check that it isn't creating incorrect IR.
+            temp = tl.full((BLOCK, ), 1, dtype=tl.int32)
+            acc += temp
+        z = Z + tl.arange(0, BLOCK)
+        tl.store(z, acc)
+
+    N = 10
+    BLOCK = 32
+    out = torch.empty((BLOCK, ), dtype=torch.int32, device=device)
+    temp_in_loop[(1, )](out, N, BLOCK)
+    acc = torch.full((BLOCK, ), 0, dtype=torch.int32, device=device)
+    for i in range(N):
+        if i == 0:
+            temp = torch.full((BLOCK, ), 2, dtype=torch.int32, device=device)
+            acc = temp
+        else:
+            acc += torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
+        temp = torch.full((BLOCK, ), 1, dtype=torch.int32, device=device)
+        acc += temp
+    assert (acc == out).all()

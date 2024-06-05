@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-distribute-to-warps --cse | FileCheck %s
+// RUN: triton-opt %s -tritonintelgpu-distribute-to-warps | FileCheck %s
 
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [32, 32], threadsPerWarp = [1, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
@@ -11,16 +11,16 @@
 // COM: In the loop body:
 // COM:   - thread block works on: 128x128xf32 = 128x32xf16 * 32x128xf16
 // COM:   - each warp works on:    64x64xf32   =  64x32xf16 * 32x64xf16
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
   tt.func public @matmul_kernel_with_block_pointers_with_convertlayout(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg7: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}, %arg8: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32}) attributes {noinline = false} {
     // CHECK: @matmul_kernel_with_block_pointers_with_convertlayout
     // CHECK:      [[SUB_GROUP_ID:%.*]] = gpu.subgroup_id : index
     // CHECK:      [[WARP_ID:%.*]] = arith.index_cast [[SUB_GROUP_ID]] : index to i32
     // CHECK:      [[CST:%.*]] = arith.constant dense<0.000000e+00> : tensor<64x64xf32, [[WARP1]]>
-    // CHECK:      [[CST32:%.*]] = arith.constant 32 : i32
     // CHECK-DAG:  [[ARG3_EXT:%.*]] = arith.extsi %arg3 : i32 to i64
     // CHECK-DAG:  [[ARG5_EXT:%.*]] = arith.extsi %arg5 : i32 to i64
     // CHECK-DAG:  [[ARG6_EXT:%.*]] = arith.extsi %arg6 : i32 to i64
+    // CHECK:      [[CST32:%.*]] = arith.constant 32 : i32
     // CHECK:      [[MUL:%.*]] = arith.muli [[WARP_ID]], [[CST32]] : i32
     // CHECK-NEXT: [[ADD:%.*]] = arith.addi [[MUL]], {{.*}} : i32
     // CHECK:      [[TPTR1:%.*]] = tt.make_tensor_ptr %arg0, [[[ARG3_EXT]], [[ARG5_EXT]]], [[[ARG6_EXT]], {{.*}}], [[[ADD]], {{.*}}]
@@ -88,10 +88,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
       %34 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x128xf16, #blocked2>, 1>
       scf.yield %32, %33, %34 : tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blocked1>, 1>, !tt.ptr<tensor<32x128xf16, #blocked2>, 1>
     }
-    %24 = arith.truncf %23#0 : tensor<128x128xf32, #blockedC> to tensor<128x128xf16, #blockedC>
-    %25 = arith.extsi %arg8 : i32 to i64
-    %26 = tt.make_tensor_ptr %arg2, [%15, %20], [%25, %c1_i64], [%14, %19] {order = array<i32: 1, 0>} : <tensor<128x128xf16, #blockedC>, 1>
-    tt.store %26, %24 : !tt.ptr<tensor<128x128xf16, #blockedC>, 1>
     tt.return
   }
 
@@ -101,12 +97,12 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK:      [[WARP_ID:%.*]] = arith.index_cast [[SUB_GROUP_ID]] : index to i32
     // CHECK:      [[CST:%.*]] = arith.constant dense<0.000000e+00> : tensor<64x64xf32, [[WARP1]]>
     // CHECK:      [[CST32:%.*]] = arith.constant 32 : i32
-    // CHECK-DAG:  [[ARG3_EXT:%.*]] = arith.extsi %arg3 : i32 to i64
     // CHECK-DAG:  [[ARG5_EXT:%.*]] = arith.extsi %arg5 : i32 to i64
     // CHECK-DAG:  [[ARG6_EXT:%.*]] = arith.extsi %arg6 : i32 to i64
     // CHECK:      [[CST2:%.*]] = arith.constant 2 : i32
     // CHECK:      [[DIV:%.*]] = arith.divsi [[WARP_ID]], [[CST2]] : i32
-    // CHECK:      [[REM:%.*]] = arith.remsi [[DIV]], [[CST2]] : i32
+    // CHECK:      [[CST2_1:%.*]] = arith.constant 2 : i32
+    // CHECK:      [[REM:%.*]] = arith.remsi [[DIV]], [[CST2_1]] : i32
     // CHECK:      [[CST64:%.*]] = arith.constant 64 : i32
     // CHECK:      [[MUL:%.*]] = arith.muli [[REM]], [[CST64]] : i32
     // CHECK-NEXT: [[ADD:%.*]] = arith.addi [[MUL]], {{.*}} : i32
@@ -161,10 +157,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
       %34 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x128xf16, #blockedB>, 1>
       scf.yield %32, %33, %34 : tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blockedA>, 1>, !tt.ptr<tensor<32x128xf16, #blockedB>, 1>
     }
-    %24 = arith.truncf %23#0 : tensor<128x128xf32, #blockedC> to tensor<128x128xf16, #blockedC>
-    %25 = arith.extsi %arg8 : i32 to i64
-    %26 = tt.make_tensor_ptr %arg2, [%15, %20], [%25, %c1_i64], [%14, %19] {order = array<i32: 1, 0>} : <tensor<128x128xf16, #blockedC>, 1>
-    tt.store %26, %24 : !tt.ptr<tensor<128x128xf16, #blockedC>, 1>
     tt.return
   }
 }

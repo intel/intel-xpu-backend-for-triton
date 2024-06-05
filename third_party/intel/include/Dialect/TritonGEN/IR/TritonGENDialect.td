@@ -15,6 +15,7 @@ def TritonGEN_Dialect : Dialect {
   let name = "triton_gen";
   let cppNamespace = "::mlir::triton::TritonGEN";
   let summary = "The TritonGEN dialect in Triton.";
+  let useDefaultAttributePrinterParser = 1;
 
   let description = [{
     TritonGEN is a dialect for representing operations on Intel GPUs.
@@ -39,6 +40,12 @@ def TritonGEN_Dialect : Dialect {
     /// size required for kernels.
     static constexpr ::llvm::StringLiteral getReqdSubGroupSizeAttrName() {
       return ::llvm::StringLiteral("triton_gen.intel_reqd_sub_group_size");
+    }
+
+    /// Get the name for the attribute used to specify cache control
+    /// decorations.
+    static constexpr ::llvm::StringRef getCacheControlsAttrName() {
+      return ::llvm::StringLiteral("triton_gen.DecorationCacheControlINTEL");
     }
   }];
 }

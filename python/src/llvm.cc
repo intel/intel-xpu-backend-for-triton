@@ -1,7 +1,6 @@
-﻿#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
+﻿#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
+#include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
-#include "triton/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LLVMContext.h"
@@ -50,17 +49,17 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     assert(shortPtr);
     shortPtr->setValue(true);
   }
-  if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+  if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
     auto optIt = options.find("print-after-all");
     if (optIt != options.end()) {
       auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
       *optPtr = true;
     }
   }
-  bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
+  bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
     // Check to see if we are passing a list of flags to disable optimizations.
-    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    auto flagList = triton::tools::getStrEnv("DISABLE_LLVM_OPT");
     if (!flagList.empty()) {
       llvm::SmallVector<StringRef, 3> split;
       StringRef(flagList.c_str()).split(split, ',');
@@ -83,8 +82,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   pm.add(llvm::createAlwaysInlinerLegacyPass());
   pm.add(llvm::createVerifierPass());
 
-  const bool enabledTiming =
-      mlir::triton::tools::getBoolEnv("LLVM_ENABLE_TIMING");
+  const bool enabledTiming = triton::tools::getBoolEnv("LLVM_ENABLE_TIMING");
   if (enabledTiming) {
     llvm::TimePassesIsEnabled = true;
     llvm::TimePassesPerRun = true;
@@ -145,18 +143,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
 }
 
 using ret = py::return_value_policy;
-
-static uint32_t findKernels(llvm::Module &M,
-                            std::set<llvm::Function *> &functions) {
-  assert(functions.empty() && "Expecting an empty set");
-  uint32_t numKernels = 0;
-  for (llvm::Function &function : M.functions())
-    if (function.getCallingConv() == CallingConv::SPIR_KERNEL) {
-      functions.insert(&function);
-      ++numKernels;
-    }
-  return numKernels;
-}
 
 void init_triton_llvm(py::module &&m) {
 
@@ -335,36 +321,6 @@ void init_triton_llvm(py::module &&m) {
       py::arg("mod"), py::arg("opt"), py::arg("triple") = "");
 
   m.def(
-      "translate_to_spirv",
-      [](const std::string llvmIR) -> std::tuple<py::object, std::string> {
-        std::string name;
-        std::string spirvBitcode;
-        {
-          py::gil_scoped_release allow_threads;
-          // create LLVM module from C++
-          llvm::LLVMContext context;
-          std::unique_ptr<llvm::MemoryBuffer> buffer =
-              llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-          llvm::SMDiagnostic error;
-          std::unique_ptr<llvm::Module> module =
-              llvm::parseIR(buffer->getMemBufferRef(), error, context);
-          if (!module) {
-            llvm::report_fatal_error(
-                "failed to parse IR: " + error.getMessage() +
-                "lineno: " + std::to_string(error.getLineNo()));
-          }
-          // Get name of kernel in the module
-          std::set<llvm::Function *> kernels;
-          uint32_t numKernels = findKernels(*module, kernels);
-          assert(numKernels == 1 && "Expecting a single SPIR kernel");
-          name = (*kernels.begin())->getName().str();
-          spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
-        }
-        return std::make_tuple(py::bytes(spirvBitcode), name);
-      },
-      ret::take_ownership);
-
-  m.def(
       "translate_to_asm",
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
@@ -394,14 +350,6 @@ void init_triton_llvm(py::module &&m) {
           return py::str(obj);
       },
       ret::take_ownership);
-
-  m.def("set_spv_target_triple", [](llvm::Module *mod) {
-    std::string triple = "spir64-unknown-unknown";
-    std::string layout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:"
-                         "256-v256:256-v512:512-v1024:1024-n8:16:32:64";
-    mod->setTargetTriple(triple);
-    mod->setDataLayout(layout);
-  });
 
   m.def("init_targets", []() {
     static std::once_flag init_flag;

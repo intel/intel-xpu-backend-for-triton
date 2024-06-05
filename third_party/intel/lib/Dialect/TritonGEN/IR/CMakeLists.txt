@@ -1,4 +1,5 @@
 add_triton_library(TritonGENIR
+  TritonGENAttrs.cpp
   TritonGENDialect.cpp
   TritonGENOps.cpp
 

@@ -4,6 +4,10 @@ run-name: ${{ inputs.run_name }}
 on:
   workflow_dispatch:
     inputs:
+      install_ipex:
+        description: Install Intel PyTorch Extension
+        type: boolean
+        default: true
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -31,6 +35,7 @@ permissions: read-all
 
 env:
   TRITON_DISABLE_LINE_INFO: 1
+  INSTALL_IPEX: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   pre-commit:
@@ -114,11 +119,25 @@ jobs:
           LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
           echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
-      - name: Setup PyTorch
+      - name: Setup PyTorch with IPEX
+        if: ${{ env.INSTALL_IPEX }}
         uses: ./.github/actions/setup-pytorch
 
+      - name: Setup PyTorch without IPEX
+        if: ${{ !env.INSTALL_IPEX }}
+        uses: ./.github/actions/setup-pytorch
+        with:
+          repository: pytorch/pytorch
+          commit_id: "6c503f1dbbf9ef1bf99f19f0048c287f419df600"
+          torch_xpu_ops_commit: "39522db63ce045f52c9d61a286018c266cd00479"
+
       - name: Setup IPEX
+        if: ${{ env.INSTALL_IPEX }}
         uses: ./.github/actions/setup-ipex
+
+      - name: Setup fake IPEX
+        if: ${{ !env.INSTALL_IPEX }}
+        uses: ./.github/actions/setup-fake-ipex
 
       - name: Build Triton
         run: |
@@ -126,7 +145,7 @@ jobs:
           cd python
           pip install wheel pytest pytest-xdist pytest-rerunfailures pytest-select
           pip install --no-build-isolation '.[build,tests,tutorials]'
-          pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.1
+          pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
 
       - name: Run lit tests
         run: |

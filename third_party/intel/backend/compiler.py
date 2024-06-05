@@ -79,7 +79,8 @@ class XPUBackend(BaseBackend):
             # FIXME: Use a better way to check if prefetch instructions are supported once available.
             # Prefetch instruction is not available in older drivers.
             if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
-                intel.passes.ttgpuir.add_prefetch_block(pm)
+                inject_split_barriers = False
+                intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
             intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)
@@ -212,7 +213,7 @@ class XPUBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        llvm.set_spv_target_triple(llvm_mod)
+        intel.set_spv_target_triple(llvm_mod)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
@@ -226,7 +227,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_spv(src, metadata):
-        ret, name = llvm.translate_to_spirv(src)
+        ret, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         return ret
 

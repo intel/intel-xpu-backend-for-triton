@@ -5,6 +5,7 @@ set -euo pipefail
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Select which tests to run.
+TEST_MICRO_BENCHMARKS=false
 TEST_CORE=false
 TEST_TUTORIAL=false
 TEST_UNIT=false
@@ -16,6 +17,10 @@ SKIP_DEPS=false
 ARGS=
 for arg in "$@"; do
   case $arg in
+    --microbench)
+      TEST_MICRO_BENCHMARKS=true
+      shift
+      ;;
     --core)
       TEST_CORE=true
       shift
@@ -49,7 +54,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --venv | --reports | --warning-reports | --ignore-errors]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --venv | --reports | --warning-reports | --ignore-errors]"
       exit 1
       ;;
     *)
@@ -59,7 +64,8 @@ for arg in "$@"; do
   esac
 done
 
-if [ "$TEST_CORE" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_UNIT" = false ]; then
+if [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_UNIT" = false ]; then
+  TEST_MICRO_BENCHMARKS=true
   TEST_CORE=true
   TEST_TUTORIAL=true
   TEST_UNIT=true
@@ -79,13 +85,17 @@ export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
 
-python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select
+python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select setuptools==69.5.1
 
 if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
-    python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.0
+    python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
 fi
 
 source $SCRIPTS_DIR/pytest-utils.sh
+if [ "$TRITON_TEST_REPORTS" == true ]; then
+    capture_runtime_env
+fi
+
 $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
@@ -93,6 +103,17 @@ then
   echo "****** ERROR: Build Triton first ******"
   exit 1
 fi
+
+run_benchmark_tests() {
+  echo "****************************************************"
+  echo "*****   Running Triton Micro Benchmark tests   *****"
+  echo "****************************************************"
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/micro_benchmarks
+  if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
+    echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
+  fi
+  python ${BENCHMARK_TEST_DIR}/run_benchmarks.py
+}
 
 run_unit_tests() {
   echo "***************************************************"
@@ -195,6 +216,9 @@ test_triton() {
   fi
   if [ "$TEST_TUTORIAL" = true ]; then
     run_tutorial_tests
+  fi
+  if [ "$TEST_MICRO_BENCHMARKS" = true ]; then
+    run_benchmark_tests
   fi
 }
 
