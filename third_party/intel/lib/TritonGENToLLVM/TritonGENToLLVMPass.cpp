@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Attributes.h"
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -13,7 +14,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -34,7 +34,6 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "intel/include/TritonGENToLLVM/Attributes.h"
 #include "intel/include/TritonGENToLLVM/GenIntrinsicEnum.h"
 #include "intel/include/TritonGENToLLVM/GenIntrinsics.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
@@ -53,13 +52,11 @@ using namespace mlir::triton::gpu;
 
 static intel::AttributeList
 getAttrList(const intel::AttrBuilder &funcAttrBuilder,
-            std::optional<ArrayRef<NamedAttrList>> paramAttrs = std::nullopt) {
+            ArrayRef<NamedAttrList> paramAttrs = {}) {
   intel::AttributeList attrs;
-  attrs.addFnAttrs(funcAttrBuilder);
-  if (paramAttrs.has_value()) {
-    assert(!paramAttrs->empty() && "Expecting non-empty paramAttrs");
-    attrs.addParamAttributes(paramAttrs.value());
-  }
+  attrs.addFnAttributes(funcAttrBuilder);
+  if (!paramAttrs.empty())
+    attrs.addParamAttributes(paramAttrs);
   return attrs;
 }
 
@@ -77,11 +74,9 @@ createDeviceFunctionCall(ConversionPatternRewriter &rewriter,
   funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
   funcOp->setAttrs(attrs.getFnAttributes().getDictionary(ctx));
 
-  for (unsigned idx : llvm::seq<unsigned>(0, funcOp.getNumArguments())) {
-    ArrayRef<NamedAttrList> paramAttrs = attrs.getParamAttributes();
-    if (idx >= paramAttrs.size())
-      continue;
-    for (NamedAttribute attr : paramAttrs[idx])
+  for (auto pair : llvm::enumerate(attrs.getParamAttributes())) {
+    auto &[idx, attrList] = pair;
+    for (NamedAttribute attr : attrList)
       funcOp.setArgAttr(idx, attr.getName(), attr.getValue());
   }
 
@@ -143,7 +138,7 @@ static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
   MLIRContext *ctx = rewriter.getContext();
 
   intel::AttrBuilder funcAttrBuilder(*ctx);
-  funcAttrBuilder.addPassThroughAttribute(llvm::Attribute::Convergent);
+  funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
   intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
   return createDeviceFunctionCall(rewriter, fnName, value.getType(),
@@ -217,7 +212,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
 
     MLIRContext *ctx = rewriter.getContext();
     intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassThroughAttribute(llvm::Attribute::Convergent);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
     intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
@@ -299,7 +294,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
 
     MLIRContext *ctx = rewriter.getContext();
     intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassThroughAttribute(llvm::Attribute::Convergent);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
     intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
@@ -407,7 +402,7 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
 
     // Function attributes.
     intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassThroughAttribute(llvm::Attribute::NoUnwind);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
     intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
     LLVM::CallOp callOp = createDeviceFunctionCall(
@@ -424,7 +419,7 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
 
     // Function and parameters attributes.
     intel::AttrBuilder funcAttrBuilder(*ctx), paramAttrBuilder(*ctx);
-    funcAttrBuilder.addPassThroughAttribute(llvm::Attribute::NoUnwind);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
     paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
     SmallVector<NamedAttrList> paramAttrs(argTypes.size());
     paramAttrs[0] = paramAttrBuilder.getAttributes();
@@ -454,8 +449,9 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     SmallVector<Value> args{ptr, zero, zero, zero};
 
     // Function and parameters attributes.
-    intel::AttrBuilder funcAttrBuilder(*ctx), paramAttrBuilder(*ctx);
-    funcAttrBuilder.addPassThroughAttribute(llvm::Attribute::NoUnwind);
+    intel::AttrBuilder funcAttrBuilder(*ctx);
+    intel::AttrBuilder paramAttrBuilder(*ctx);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
     paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
     SmallVector<NamedAttrList> paramAttrs(argTypes.size());
     paramAttrs[0] = paramAttrBuilder.getAttributes();
@@ -835,7 +831,7 @@ struct TritonGENBarrierLowering
     auto arg = LLVM::createConstantI32(op->getLoc(), rewriter, MemFence::Local);
 
     intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassThroughAttribute(llvm::Attribute::Convergent);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
     intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
     LLVM::CallOp callOp = createDeviceFunctionCall(
@@ -868,7 +864,7 @@ protected:
 
     MLIRContext *ctx = rewriter.getContext();
     intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassThroughAttribute(llvm::Attribute::Convergent);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
     intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
     LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, funcName, retType,
