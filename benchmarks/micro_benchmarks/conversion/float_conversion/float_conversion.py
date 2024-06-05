@@ -46,7 +46,7 @@ def launch_conversion(x: torch.Tensor, target_type: type):
         line_names=['BF16', 'FP16'],
         styles=[('blue', '-'), ('green', '-'), ('orange', '-')],
         ylabel='GB/s',
-        plot_name='type-conversion in GB/s',
+        plot_name='float-conversion',
         args={},
     ))
 def benchmark(N, target_type):
