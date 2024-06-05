@@ -227,9 +227,9 @@ loadCacheControlToDecoration(Builder &builder, uint32_t operandNum,
                                   TritonGEN::LoadCacheControlDecorationEnum l3)
       -> SmallVector<Attribute> {
     return {builder.getAttr<TritonGEN::LoadCacheControlDecorationAttr>(
-                1, l1, operandNum),
+                0, l1, operandNum),
             builder.getAttr<TritonGEN::LoadCacheControlDecorationAttr>(
-                3, l3, operandNum)};
+                1, l3, operandNum)};
   };
   switch (orig) {
   case TritonGEN::LoadCacheControl::DEFAULT:
