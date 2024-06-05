@@ -164,7 +164,7 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const {
         std::max<int64_t>(1, shape[0] / shapePerWarp[0]),
         std::max<int64_t>(1, shape[1] / (shapePerWarp[1] * warpsPerCTA[1]))};
   } else {
-    assert(opIdx == 2);
+    assert(opIdx == 2 && "Unexpected operand id (valid ids are 0, 1 or 2)");
     auto shapePerWarp = getShapeC();
     return {
         std::max<int64_t>(1, mlir::ceil<unsigned>(

@@ -645,13 +645,13 @@ struct StoreOpConversion
     Type resultType = op.getValue().getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
-    // Only lower loadOp with dpas layout encoding.
+    // Only lower StoreOp with dpas layout encoding.
     if (!hasDpasEncoding(tensorType))
       return failure();
 
     auto dpasLayout = cast<DpasEncodingAttr>(tensorType.getEncoding());
-    auto typeConverter = getTypeConverter();
-    auto *ctx = rewriter.getContext();
+    TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
+    MLIRContext *ctx = rewriter.getContext();
 
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
