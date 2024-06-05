@@ -74,8 +74,7 @@ createDeviceFunctionCall(ConversionPatternRewriter &rewriter,
   funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
   funcOp->setAttrs(attrs.getFnAttributes().getDictionary(ctx));
 
-  for (auto pair : llvm::enumerate(attrs.getParamAttributes())) {
-    auto &[idx, attrList] = pair;
+  for (auto [idx, attrList] : llvm::enumerate(attrs.getParamAttributes())) {
     for (NamedAttribute attr : attrList)
       funcOp.setArgAttr(idx, attr.getName(), attr.getValue());
   }
@@ -418,10 +417,11 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     SmallVector<Type> argTypes{ptr.getType(), i32_ty};
 
     // Function and parameters attributes.
-    intel::AttrBuilder funcAttrBuilder(*ctx), paramAttrBuilder(*ctx);
+    intel::AttrBuilder funcAttrBuilder(*ctx);
+    intel::AttrBuilder paramAttrBuilder(*ctx);
     funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
     paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
-    SmallVector<NamedAttrList> paramAttrs(argTypes.size());
+    std::vector<NamedAttrList> paramAttrs(argTypes.size());
     paramAttrs[0] = paramAttrBuilder.getAttributes();
     intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
 

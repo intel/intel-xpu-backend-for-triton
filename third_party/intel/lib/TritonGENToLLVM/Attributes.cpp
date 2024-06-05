@@ -154,8 +154,7 @@ AttributeList::addRetAttributes(const mlir::NamedAttrList &Attributes,
 
 AttributeList &AttributeList::addParamAttributes(
     llvm::ArrayRef<mlir::NamedAttrList> Attributes) {
-  ParamAttributes.reserve(Attributes.size());
-  llvm::append_range(ParamAttributes, Attributes);
+  ParamAttributes.append(Attributes.begin(), Attributes.end());
   return *this;
 }
 
@@ -272,18 +271,11 @@ AttrBuilder &AttrBuilder::addAttributeImpl(llvm::Attribute::AttrKind Kind,
                                            std::optional<StringLiteral> Dialect,
                                            AddAttrFuncPtr AddAttrPtr) {
   assert(AddAttrPtr && "'AddAttrPtr' should be a valid function pointer");
-
-  // TODO: Replace with std::invoke once C++17 headers are available.
-  auto Invoke = [this](AddAttrFuncPtr AddAttrPtr,
-                       auto... Args) -> AttrBuilder & {
-    return (this->*AddAttrPtr)(Args...);
-  };
-
   OpBuilder Builder(&Ctx);
   StringRef AttrName = llvm::Attribute::getNameFromAttrKind(Kind);
   NamedAttribute NamedAttr(createStringAttribute(AttrName, Dialect, Ctx),
                            Builder.getUnitAttr());
-  return Invoke(AddAttrPtr, NamedAttr);
+  return std::invoke(AddAttrPtr, this, NamedAttr);
 }
 
 AttrBuilder &AttrBuilder::addAttributeImpl(llvm::Attribute::AttrKind Kind,
@@ -291,18 +283,11 @@ AttrBuilder &AttrBuilder::addAttributeImpl(llvm::Attribute::AttrKind Kind,
                                            std::optional<StringLiteral> Dialect,
                                            AddAttrFuncPtr AddAttrPtr) {
   assert(AddAttrPtr && "'AddAttrPtr' should be a valid function pointer");
-
-  // TODO: Replace with std::invoke once C++17 headers are available.
-  auto Invoke = [this](AddAttrFuncPtr AddAttrPtr,
-                       auto... Args) -> AttrBuilder & {
-    return (this->*AddAttrPtr)(Args...);
-  };
-
   OpBuilder Builder(&Ctx);
   StringRef AttrName = llvm::Attribute::getNameFromAttrKind(Kind);
   NamedAttribute NamedAttr(createStringAttribute(AttrName, Dialect, Ctx),
                            mlir::TypeAttr::get(Ty));
-  return Invoke(AddAttrPtr, NamedAttr);
+  return std::invoke(AddAttrPtr, this, NamedAttr);
 }
 
 AttrBuilder &
@@ -311,26 +296,20 @@ AttrBuilder::addAttributeImpl(llvm::Attribute::AttrKind Kind, uint64_t Val,
   assert(AddRawIntAttrPtr &&
          "'AddRawIntAttrPtr' should be a valid function pointer");
 
-  // TODO: Replace with std::invoke once C++17 headers are available.
-  auto Invoke = [this](AddRawIntAttrFuncPtr AddRawIntAttrPtr,
-                       auto... Args) -> AttrBuilder & {
-    return (this->*AddRawIntAttrPtr)(Args...);
-  };
-
   switch (Kind) {
   case llvm::Attribute::AttrKind::Memory:
     // Val can be zero for memory(none).
-    return Invoke(AddRawIntAttrPtr, Kind, Val);
+    return std::invoke(AddRawIntAttrPtr, this, Kind, Val);
   case llvm::Attribute::AttrKind::Alignment:
     assert(Val <= llvm::Value::MaximumAlignment && "Alignment too large");
-    return (!Val) ? *this : Invoke(AddRawIntAttrPtr, Kind, Val);
+    return (!Val) ? *this : std::invoke(AddRawIntAttrPtr, this, Kind, Val);
   case llvm::Attribute::AttrKind::StackAlignment:
     assert(Val <= 0x100 && "Alignment too large.");
     LLVM_FALLTHROUGH;
   case llvm::Attribute::AttrKind::Dereferenceable:
   case llvm::Attribute::AttrKind::DereferenceableOrNull:
   case llvm::Attribute::AttrKind::UWTable:
-    return (!Val) ? *this : Invoke(AddRawIntAttrPtr, Kind, Val);
+    return (!Val) ? *this : std::invoke(AddRawIntAttrPtr, this, Kind, Val);
 
   default:
     llvm_unreachable("Unexpected attribute kind");
@@ -342,15 +321,8 @@ AttrBuilder::addAttributeImpl(llvm::Attribute::AttrKind Kind, uint64_t Val,
 AttrBuilder &AttrBuilder::addAttributeImpl(Twine AttrName, mlir::Attribute Attr,
                                            AddAttrFuncPtr AddAttrPtr) {
   assert(AddAttrPtr && "'AddAttrPtr' should be a valid function pointer");
-
-  // TODO: Replace with std::invoke once C++17 headers are available.
-  auto Invoke = [this](AddAttrFuncPtr AddAttrPtr,
-                       auto... Args) -> AttrBuilder & {
-    return (this->*AddAttrPtr)(Args...);
-  };
-
   NamedAttribute NamedAttr(StringAttr::get(&Ctx, AttrName), Attr);
-  return Invoke(AddAttrPtr, NamedAttr);
+  return std::invoke(AddAttrPtr, this, NamedAttr);
 }
 
 AttrBuilder &AttrBuilder::addAttributeImpl(mlir::NamedAttribute Attr) {

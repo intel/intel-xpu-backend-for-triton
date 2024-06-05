@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef TRITON_ATTRIBUTES_H
-#define TRITON_ATTRIBUTES_H
+#ifndef INTEL_TRITONGENTOLLVM_ATTRIBUTES_H
+#define INTEL_TRITONGENTOLLVM_ATTRIBUTES_H
 
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/OperationSupport.h"
@@ -215,4 +215,4 @@ private:
 
 } // namespace mlir::triton::gpu::intel
 
-#endif // TRITON_ATTRIBUTES_H
+#endif // INTEL_TRITONGENTOLLVM_ATTRIBUTES_H
