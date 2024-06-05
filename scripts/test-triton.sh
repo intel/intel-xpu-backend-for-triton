@@ -85,13 +85,17 @@ export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
 
-python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select
+python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select setuptools==69.5.1
 
 if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
     python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
 fi
 
 source $SCRIPTS_DIR/pytest-utils.sh
+if [ "$TRITON_TEST_REPORTS" == true ]; then
+    capture_runtime_env
+fi
+
 $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]

@@ -19,12 +19,10 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.13
+      - runner-0.0.14
     strategy:
       matrix:
-        python:
-          - "3.9"
-          - "3.10"
+        python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -34,15 +32,15 @@ jobs:
 
       - name: Calculate env
         run: |
-          echo $HOME/miniconda3/bin >>$GITHUB_PATH
+          echo $HOME/miniforge3/bin >>$GITHUB_PATH
 
       - name: Load conda cache
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 4
+          CACHE_NUMBER: 5
         with:
-          path: $HOME/miniconda3/envs/triton
+          path: $HOME/miniforge3/envs/triton
           key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
 
       - name: Update conda env
@@ -50,9 +48,9 @@ jobs:
         run: |
           conda create -n triton --override-channels -c conda-forge python=${{ matrix.python }}.*
           conda env update -f scripts/triton.yml
-          find /home/runner/intel/oneapi/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniconda3/envs/triton/lib \;
-          ln -snf /usr/include/level_zero $HOME/miniconda3/envs/triton/bin/../x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
-          find /usr -name libze_\* -exec cp -n {} $HOME/miniconda3/envs/triton/lib \;
+          find /home/runner/intel/oneapi/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
+          ln -snf /usr/include/level_zero $HOME/miniforge3/envs/triton/bin/../x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
+          find /usr -name libze_\* -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
 
       - name: Add conda info to log
         run: |

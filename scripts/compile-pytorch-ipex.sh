@@ -4,7 +4,9 @@ set -euo pipefail
 
 # Select what to build.
 BUILD_PYTORCH=false
+UPSTREAM_PYTORCH=false
 BUILD_IPEX=false
+FAKE_IPEX=false
 BUILD_PINNED=false
 BUILD_FROM_SOURCE=false
 CLEAN=false
@@ -15,8 +17,16 @@ for arg in "$@"; do
       BUILD_PYTORCH=true
       shift
       ;;
+    --upstream-pytorch)
+      UPSTREAM_PYTORCH=true
+      shift
+      ;;
     --ipex)
       BUILD_IPEX=true
+      shift
+      ;;
+    --fake-ipex)
+      FAKE_IPEX=true
       shift
       ;;
     --pinned)
@@ -37,7 +47,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./compile-pytorch-ipex.sh [--pytorch | --ipex | --pinned | --source | --clean | --venv]"
+      echo "Example usage: ./compile-pytorch-ipex.sh [--pytorch | --upstream-pytorch | --ipex | --fake-ipex | --pinned | --source | --clean | --venv]"
       exit 1
       ;;
     *)
@@ -149,7 +159,15 @@ build_pytorch() {
   if [ ! -d "$PYTORCH_PROJ" ]; then
     echo "**** Cloning $PYTORCH_PROJ ****"
     cd $BASE
-    git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git
+    if [ "$UPSTREAM_PYTORCH" = true ]; then
+      git clone --single-branch -b main --recurse-submodules https://github.com/pytorch/pytorch.git
+      pushd $PYTORCH_PROJ
+      curl -Ls https://github.com/pytorch/pytorch/pull/124147.diff | git apply -
+      curl -Ls https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
+      popd
+    else
+      git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git
+    fi
   fi
   echo "****** Building $PYTORCH_PROJ ******"
   cd $PYTORCH_PROJ
@@ -177,7 +195,28 @@ build_ipex() {
   if [ ! -d "$IPEX_PROJ" ]; then
     echo "**** Cloning $IPEX_PROJ ****"
     cd $BASE
-    git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/intel/intel-extension-for-pytorch.git
+    if [ "$FAKE_IPEX" = true ]; then
+      mkdir intel-extension-for-pytorch
+      cd intel-extension-for-pytorch
+      cat > setup.py <<EOF
+from setuptools import setup
+
+name = "intel-extension-for-pytorch"
+version = "0.1+FAKE"
+
+setup(
+    name=name,
+    version=version,
+    description="FAKE Intel Extension for PyTorch"
+)
+EOF
+
+      mkdir intel_extension_for_pytorch
+      echo '__version__ = "0.1+FAKE"' > intel_extension_for_pytorch/__init__.py
+      touch requirements.txt
+    else
+      git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/intel/intel-extension-for-pytorch.git
+    fi
   fi
   echo "****** Building $IPEX_PROJ ******"
   cd $IPEX_PROJ
