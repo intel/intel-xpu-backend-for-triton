@@ -76,9 +76,10 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::SubGroupReduceOp::verify() {
-  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(*this);
-  if (!attr)
-    return this->emitOpError("expecting valid target env attribute");
+  // FIXME: Add back when `spirv.target_env` is added in Triton pipeline.
+  // spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(*this);
+  // if (!attr)
+  //  return this->emitOpError("expecting valid target env attribute");
 
   Type ty = getValue().getType();
   switch (getKind()) {

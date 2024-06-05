@@ -40,9 +40,17 @@ void TritonGENDialect::initialize() {
 }
 
 int triton::TritonGEN::getSubgroupSize(Operation *op) {
-  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(op);
-  assert(attr && "Expecting valid target env attribute");
-  return attr.getResourceLimits().getSubgroupSize();
+  spirv::TargetEnvAttr spvEnvattr = spirv::lookupTargetEnv(op);
+  if (spvEnvattr)
+    return spvEnvattr.getResourceLimits().getSubgroupSize();
+  // FIXME: Remove the fallback code when `spirv.target_env` is added in Triton
+  // pipeline.
+  auto moduleOp = op->getParentOfType<ModuleOp>();
+  Attribute threadsPerWarp =
+      moduleOp->getDiscardableAttr("triton_gpu.threads-per-warp");
+  assert(threadsPerWarp && "Expecting sub group size from spirv target env or "
+                           "triton_gpu.threads-per-warp attribute");
+  return cast<IntegerAttr>(threadsPerWarp).getInt();
 }
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.cpp.inc"
