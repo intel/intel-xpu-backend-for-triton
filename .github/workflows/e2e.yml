@@ -105,16 +105,6 @@ jobs:
         run: |
           echo "${{ toJSON(needs.setup.outputs) }}"
 
-      - name: debug1
-        if: ${{ env.INSTALL_IPEX == 'true' }}
-        run: |
-          echo "Installing IPEX"
-
-      - name: debug2
-        if: ${{ env.INSTALL_IPEX == 'false' }}
-        run: |
-          echo "NOT installing IPEX"
-
   build:
     name: Test
     needs: setup
@@ -164,11 +154,11 @@ jobs:
           pip install wheel
 
       - name: Setup PyTorch with IPEX
-        if: ${{ env.INSTALL_IPEX }}
+        if: ${{ env.INSTALL_IPEX == 'true' }}
         uses: ./.github/actions/setup-pytorch
 
       - name: Setup PyTorch without IPEX
-        if: ${{ !env.INSTALL_IPEX }}
+        if: ${{ env.INSTALL_IPEX == 'false' }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
@@ -195,11 +185,11 @@ jobs:
           pip install $(curl -sSL https://raw.githubusercontent.com/huggingface/pytorch-image-models/$TIMM_COMMIT_ID/requirements.txt | grep -vE torch)
 
       - name: Setup IPEX
-        if: ${{ env.INSTALL_IPEX }}
+        if: ${{ env.INSTALL_IPEX == 'true' }}
         uses: ./.github/actions/setup-ipex
 
       - name: Setup fake IPEX
-        if: ${{ !env.INSTALL_IPEX }}
+        if: ${{ env.INSTALL_IPEX == 'false' }}
         uses: ./.github/actions/setup-fake-ipex
 
       - name: Generate Triton cache key
