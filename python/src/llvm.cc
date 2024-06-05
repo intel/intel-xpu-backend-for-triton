@@ -1,9 +1,22 @@
-﻿#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
+﻿#include "mlir/Support/LLVM.h"
+// #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/BasicAliasAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/LoopIterator.h"
+#include "llvm/Analysis/MemorySSA.h"
+#include "llvm/Analysis/MemorySSAUpdater.h"
+#include "llvm/Analysis/ScopedNoAliasAA.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/TypeBasedAliasAnalysis.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -158,8 +171,251 @@ static uint32_t findKernels(llvm::Module &M,
   return numKernels;
 }
 
-void init_triton_llvm(py::module &&m) {
+class LICMPass : public PassInfoMixin<LICMPass> {
+public:
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    auto &LI = AM.getResult<LoopAnalysis>(F);
+    auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+    auto &AA = AM.getResult<AAManager>(F);
+    auto &MSSA = AM.getResult<MemorySSAAnalysis>(F).getMSSA();
 
+    auto inSubLoop = [](BasicBlock *BB, Loop *L, LoopInfo &LI) {
+      return LI.getLoopFor(BB) != L;
+    };
+
+    for (auto *L : LI) {
+      llvm::errs() << "Perform LICM on Loop with header at block "
+                   << L->getHeader()->getNameOrAsOperand() << "\n";
+      llvm::errs() << "Loop: " << L->getName() << "\n";
+      L->dump();
+
+      LoopBlocksRPO workList(L);
+      workList.perform(&LI);
+
+      BasicBlock *Preheader = L->getLoopPreheader();
+      assert(Preheader && "Loop does not have a preheader");
+
+      for (BasicBlock *BB : workList) {
+        for (Instruction &I : llvm::make_early_inc_range(*BB)) {
+          if (inSubLoop(BB, L, LI))
+            continue;
+
+          if (L->hasLoopInvariantOperands(&I))
+            llvm::errs() << "operands are loop invariant: " << I << "\n";
+
+          if (L->hasLoopInvariantOperands(&I) && canHoist(I, AA, DT, MSSA, L)) {
+            llvm::errs() << "Hoisting: " << I << "\n";
+          }
+        }
+      }
+    }
+
+    return PreservedAnalyses::all();
+  }
+
+private:
+  bool isHoistable(Instruction &I) const {
+    // Only these instructions are hoistable/sinkable.
+    return (isa<CallInst>(I) || isa<CastInst>(I) || isa<UnaryOperator>(I) ||
+            isa<BinaryOperator>(I) || isa<SelectInst>(I) ||
+            isa<GetElementPtrInst>(I) || isa<CmpInst>(I) ||
+            isa<InsertElementInst>(I) || isa<ExtractElementInst>(I) ||
+            isa<ShuffleVectorInst>(I) || isa<ExtractValueInst>(I) ||
+            isa<InsertValueInst>(I) || isa<FreezeInst>(I));
+  }
+
+  // Return true if LI is invariant within scope of the loop. LI is invariant if
+  // the loop is dominated by an invariant.start representing the same memory
+  // location and size as the memory location LI loads from, and also the
+  // invariant.start has no uses.
+  bool isLoadInvariantInLoop(LoadInst *LI, DominatorTree &DT, Loop *L) const {
+    Value *Addr = LI->getPointerOperand();
+    const DataLayout &DL = LI->getModule()->getDataLayout();
+    const TypeSize LocSizeInBits = DL.getTypeSizeInBits(LI->getType());
+
+    // It is not currently possible for clang to generate an invariant.start
+    // intrinsic with scalable vector types because we don't support thread
+    // local sizeless types and we don't permit sizeless types in structs or
+    // classes. Furthermore, even if support is added for this in future the
+    // intrinsic itself is defined to have a size of -1 for variable sized
+    // objects. This makes it impossible to verify if the intrinsic envelops our
+    // region of interest. For example, both <vscale x 32 x i8> and <vscale x 16
+    // x i8> types would have a -1 parameter, but the former is clearly double
+    // the size of the latter.
+    if (LocSizeInBits.isScalable())
+      return false;
+
+    // If we've ended up at a global/constant, bail. We shouldn't be looking at
+    // use lists for non-local Values in a loop pass.
+    if (isa<Constant>(Addr))
+      return false;
+
+    unsigned UsesVisited = 0;
+    // Traverse all uses of the load operand value, to see if invariant.start is
+    // one of the uses, and whether it dominates the load instruction.
+    for (auto *U : Addr->users()) {
+      IntrinsicInst *II = dyn_cast<IntrinsicInst>(U);
+      // If there are escaping uses of invariant.start instruction, the load
+      // maybe non-invariant.
+      if (!II || II->getIntrinsicID() != Intrinsic::invariant_start ||
+          !II->use_empty())
+        continue;
+      ConstantInt *InvariantSize = cast<ConstantInt>(II->getArgOperand(0));
+      // The intrinsic supports having a -1 argument for variable sized objects
+      // so we should check for that here.
+      if (InvariantSize->isNegative())
+        continue;
+      uint64_t InvariantSizeInBits = InvariantSize->getSExtValue() * 8;
+      // Confirm the invariant.start location size contains the load operand
+      // size in bits. Also, the invariant.start should dominate the load, and
+      // we should not hoist the load out of a loop that contains this
+      // dominating invariant.start.
+      if (LocSizeInBits.getFixedValue() <= InvariantSizeInBits &&
+          DT.properlyDominates(II->getParent(), L->getHeader()))
+        return true;
+    }
+    return false;
+  }
+
+  bool canHoist(Instruction &I, AAResults &AA, DominatorTree &DT,
+                MemorySSA &MSSA, Loop *L) {
+    if (!isHoistable(I))
+      return false;
+
+    // Return true if MSSA knows there are no MemoryDefs in the loop.
+    auto isReadOnly = [](MemorySSA &MSSA, const Loop *L) {
+      for (auto *BB : L->getBlocks())
+        if (MSSA.getBlockDefs(BB))
+          return false;
+      return true;
+    };
+
+    auto pointerInvalidatedByLoop = [&](MemorySSA &MSSA, MemoryUse *MU, Loop *L,
+                                        Instruction *I) {
+      BatchAAResults BAA(MSSA.getAA());
+      auto getClobberingMemoryAccess = [](MemorySSA &MSSA, BatchAAResults &BAA,
+                                          MemoryUseOrDef *MA) {
+        return MSSA.getSkipSelfWalker()->getClobberingMemoryAccess(MA, BAA);
+      };
+      MemoryAccess *Source = getClobberingMemoryAccess(MSSA, BAA, MU);
+      return !MSSA.isLiveOnEntryDef(Source) && L->contains(Source->getBlock());
+    };
+
+#if 0
+    // Loads have extra constraints we have to verify before we can hoist them.
+    if (LoadInst *LI = dyn_cast<LoadInst>(&I)) {
+      if (!LI->isUnordered())
+        return false; // Don't sink/hoist volatile or ordered atomic loads!
+
+      // Loads from constant memory are always safe to move, even if they end up
+      // in the same alias set as something that ends up being modified.
+      if (!isModSet(AA.getModRefInfoMask(LI->getOperand(0))))
+        return true;
+      if (LI->hasMetadata(LLVMContext::MD_invariant_load))
+        return true;
+
+      // This checks for an invariant.start dominating the load.
+      //      if (isLoadInvariantInLoop(LI, DT, L))
+      //      return true;
+
+      //    auto MU = cast<MemoryUse>(MSSA->getMemoryAccess(LI));
+
+      bool InvariantGroup = LI->hasMetadata(LLVMContext::MD_invariant_group);
+    } else
+#endif
+
+    if (CallInst *CI = dyn_cast<CallInst>(&I)) {
+      // Only allow hoisting builtin calls.
+      if (!CI->getCalledFunction()->getName().starts_with(
+              "__builtin_IB_subgroup"))
+        return false;
+
+      if (CI->mayThrow()) {
+        llvm::errs() << "CallInst may throw: " << *CI << "\n";
+        return false;
+      }
+      if (CI->isConvergent()) {
+        llvm::errs() << "CallInst is convergent: " << *CI << "\n";
+        return false;
+      }
+
+      MemoryEffects Behavior = AA.getMemoryEffects(CI);
+      llvm::errs() << "Behavior: " << Behavior << "\n";
+
+      if (Behavior.doesNotAccessMemory())
+        return true;
+      if (Behavior.onlyReadsMemory()) {
+        llvm::errs() << "only reads memory: " << *CI << "\n";
+        // A readonly argmemonly function only reads from memory pointed to by
+        // it's arguments with arbitrary offsets.  If we can prove there are no
+        // writes to this memory in the loop, we can hoist it.
+        if (Behavior.onlyAccessesArgPointees()) {
+          llvm::errs() << "onlyAccessesArgPointees: " << *CI << "\n";
+          // TODO: expand to writeable arguments
+          for (Value *Op : CI->args())
+            if (Op->getType()->isPointerTy() &&
+                pointerInvalidatedByLoop(
+                    MSSA, cast<MemoryUse>(MSSA.getMemoryAccess(CI)), L, &I))
+              return false;
+          return true;
+        }
+
+        // If this call only reads from memory and there are no writes to
+        // memory in the loop, we can hoist or sink the call as appropriate.
+        if (isReadOnly(MSSA, L))
+          return true;
+      }
+      llvm::errs() << "not hoistable, at line: " << __LINE__ << "\n";
+      return false;
+    }
+
+    assert(!I.mayReadOrWriteMemory() && "unhandled aliasing");
+
+    return true;
+  }
+};
+
+/// Attempt to hoist loop invariant calls (for address payloads)
+/// FIXME: This is a temporary workaround (should be done by IGC). We should
+/// remove it once that feature is implemented.
+static void hostInvariantCalls(llvm::Module &llvmMod) {
+  std::set<llvm::Function *> kernels;
+  uint32_t numKernels = findKernels(llvmMod, kernels);
+  assert(numKernels == 1 && "Expecting a single SPIR kernel");
+  llvm::Function *kernel = *kernels.begin();
+
+  llvm::errs() << "llvmMod: " << llvmMod << "\n";
+  llvm::errs() << "Found kernel: " << kernel->getName() << "\n";
+
+  PassBuilder PB;
+  FunctionAnalysisManager FAM;
+
+  FAM.registerPass([&] { return AssumptionAnalysis(); });
+  FAM.registerPass([&] { return PassInstrumentationAnalysis(); });
+  FAM.registerPass([&] { return DominatorTreeAnalysis(); });
+  FAM.registerPass([&] { return LoopAnalysis(); });
+  FAM.registerPass([&] { return TargetLibraryAnalysis(); });
+  FAM.registerPass([&] { return TargetIRAnalysis(); });
+  FAM.registerPass([&] { return BasicAA(); });
+  FAM.registerPass([&] { return ScopedNoAliasAA(); });
+  FAM.registerPass([&] { return TypeBasedAA(); });
+  FAM.registerPass([&] { return MemorySSAAnalysis(); });
+  FAM.registerPass([&] {
+    AAManager AA;
+    AA.registerFunctionAnalysis<BasicAA>();
+    AA.registerFunctionAnalysis<ScopedNoAliasAA>();
+    AA.registerFunctionAnalysis<TypeBasedAA>();
+    return AA;
+  });
+
+  FunctionPassManager FPM;
+  FPM.addPass(LICMPass());
+  FPM.run(*kernel, FAM);
+
+  llvm::errs() << "kernel: " << *kernel << "\n";
+}
+
+void init_triton_llvm(py::module &&m) {
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
       .def(py::init<>());
 
@@ -199,8 +455,8 @@ void init_triton_llvm(py::module &&m) {
           "get_functions",
           [](llvm::Module *mod) -> llvm::Module::FunctionListType & {
             // Note: Backends assume that we are compiling exactly one kernel
-            // (i.e. one function that's that's called by the CPU) and that it's
-            // the first function in this list.
+            // (i.e. one function that's that's called by the CPU) and that
+            // it's the first function in this list.
             return mod->getFunctionList();
           },
           ret::reference_internal)
@@ -252,7 +508,9 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "to_module",
       [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
-        return mlir::translateModuleToLLVMIR(mod, ctx);
+        std::unique_ptr<llvm::Module> llvmMod =
+            mlir::translateModuleToLLVMIR(mod, ctx);
+        return llvmMod;
       },
       py::keep_alive<0, 2>());
 
@@ -323,14 +581,17 @@ void init_triton_llvm(py::module &&m) {
         ModulePassManager mpm;
         pb.registerVectorizerStartEPCallback(
             [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-              // Triton generates large structure of scalars which may pessimise
-              // optimizations, we run a pass to break up phi of struct to make
-              // sure all the struct are removed for the following passes.
+              // Triton generates large structure of scalars which may
+              // pessimise optimizations, we run a pass to break up phi of
+              // struct to make sure all the struct are removed for the
+              // following passes.
               fpm.addPass(BreakStructPhiNodesPass());
               fpm.addPass(InstCombinePass());
             });
         mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
         mpm.run(*mod, mam);
+
+        hostInvariantCalls(*mod);
       },
       py::arg("mod"), py::arg("opt"), py::arg("triple") = "");
 
@@ -445,13 +706,13 @@ void init_triton_llvm(py::module &&m) {
         throw std::invalid_argument(message);
       }
 
-      // Mark linked-in functions as internal because backends use external
-      // linkage as a signifier of kernel functions.
+      // Mark linked-in functions as internal because backends use
+      // external linkage as a signifier of kernel functions.
       for (llvm::Function &fn : dstMod->functions()) {
         if (externalFns.count(fn.getName().str())) {
-          // FIXME: Temporary workaround to avoid marking SPIR_FUNC functions
-          // with InternalLinkage, which causes test_subprocess.py::test_assert
-          // to fail.
+          // FIXME: Temporary workaround to avoid marking SPIR_FUNC
+          // functions with InternalLinkage, which causes
+          // test_subprocess.py::test_assert to fail.
           if (fn.getCallingConv() == CallingConv::SPIR_FUNC)
             continue;
           fn.setLinkage(llvm::GlobalValue::InternalLinkage);
