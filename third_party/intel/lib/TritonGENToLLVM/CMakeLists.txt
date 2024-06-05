@@ -6,6 +6,7 @@ set_target_properties(GenISAIntrinsics
 add_triton_library(TritonGENToLLVM
   Attributes.cpp
   TritonGENToLLVMPass.cpp
+  GenIntrinsicHelper.cpp
 
   DEPENDS
   TritonGENToLLVMConversionPassIncGen
@@ -16,4 +17,5 @@ add_triton_library(TritonGENToLLVM
   MLIRLLVMDialect
   MLIRSPIRVDialect
   TritonIntelUtils
+  MLIRTargetLLVMIRImport
 )
