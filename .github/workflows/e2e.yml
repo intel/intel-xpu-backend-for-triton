@@ -52,7 +52,7 @@ env:
   PYTHON_VERSION: "3.10"
   BENCHMARK_REPO: weishi-deng/benchmark.git
   BENCHMARK_BRANCH: main
-  INSTALL_IPEX: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
+  INSTALL_IPEX: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' || 'false' }}
   PYTORCH_COMMIT_ID: 6c503f1dbbf9ef1bf99f19f0048c287f419df600
   TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
@@ -106,12 +106,12 @@ jobs:
           echo "${{ toJSON(needs.setup.outputs) }}"
 
       - name: debug1
-        if: ${{ env.INSTALL_IPEX }}
+        if: ${{ env.INSTALL_IPEX == 'true' }}
         run: |
           echo "Installing IPEX"
 
       - name: debug2
-        if: ${{ !env.INSTALL_IPEX }}
+        if: ${{ env.INSTALL_IPEX == 'false' }}
         run: |
           echo "NOT installing IPEX"
 
