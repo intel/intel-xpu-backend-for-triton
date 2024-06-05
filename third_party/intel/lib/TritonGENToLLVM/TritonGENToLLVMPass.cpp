@@ -29,6 +29,7 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/ModRef.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -401,7 +402,11 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
 
     // Function attributes.
     intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+        .addPassthroughAttribute(
+            llvm::Attribute::Memory,
+            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
+                .toIntValue());
     intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
     LLVM::CallOp callOp = createDeviceFunctionCall(
@@ -419,7 +424,11 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     // Function and parameters attributes.
     intel::AttrBuilder funcAttrBuilder(*ctx);
     intel::AttrBuilder paramAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+        .addPassthroughAttribute(
+            llvm::Attribute::Memory,
+            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Mod)
+                .toIntValue());
     paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
     std::vector<NamedAttrList> paramAttrs(argTypes.size());
     paramAttrs[0] = paramAttrBuilder.getAttributes();
@@ -451,7 +460,11 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     // Function and parameters attributes.
     intel::AttrBuilder funcAttrBuilder(*ctx);
     intel::AttrBuilder paramAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+        .addPassthroughAttribute(
+            llvm::Attribute::Memory,
+            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
+                .toIntValue());
     paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
     SmallVector<NamedAttrList> paramAttrs(argTypes.size());
     paramAttrs[0] = paramAttrBuilder.getAttributes();
