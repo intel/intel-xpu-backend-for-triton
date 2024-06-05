@@ -216,7 +216,7 @@ class XPUBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        llvm.set_spv_target_triple(llvm_mod)
+        intel.set_spv_target_triple(llvm_mod)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
@@ -230,7 +230,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_spv(src, metadata):
-        ret, name = llvm.translate_to_spirv(src)
+        ret, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         return ret
 
