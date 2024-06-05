@@ -100,7 +100,7 @@ jobs:
       - name: Create reports dir
         run: |
           mkdir reports
-          echo "REPORTS=$PWD/reports" >> $GITHUB_OUTPUT
+          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
       - name: Install xetla benchmark
         run: |
