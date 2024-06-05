@@ -569,8 +569,8 @@ void init_triton_llvm(py::module &&m) {
           "get_functions",
           [](llvm::Module *mod) -> llvm::Module::FunctionListType & {
             // Note: Backends assume that we are compiling exactly one kernel
-            // (i.e. one function that's that's called by the CPU) and that
-            // it's the first function in this list.
+            // (i.e. one function that's that's called by the CPU) and that it's
+            // the first function in this list.
             return mod->getFunctionList();
           },
           ret::reference_internal)
@@ -622,9 +622,7 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "to_module",
       [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
-        std::unique_ptr<llvm::Module> llvmMod =
-            mlir::translateModuleToLLVMIR(mod, ctx);
-        return llvmMod;
+        return mlir::translateModuleToLLVMIR(mod, ctx);
       },
       py::keep_alive<0, 2>());
 
@@ -695,10 +693,9 @@ void init_triton_llvm(py::module &&m) {
         ModulePassManager mpm;
         pb.registerVectorizerStartEPCallback(
             [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-              // Triton generates large structure of scalars which may
-              // pessimise optimizations, we run a pass to break up phi of
-              // struct to make sure all the struct are removed for the
-              // following passes.
+              // Triton generates large structure of scalars which may pessimise
+              // optimizations, we run a pass to break up phi of struct to make
+              // sure all the struct are removed for the following passes.
               fpm.addPass(BreakStructPhiNodesPass());
               fpm.addPass(InstCombinePass());
             });
@@ -780,13 +777,13 @@ void init_triton_llvm(py::module &&m) {
         throw std::invalid_argument(message);
       }
 
-      // Mark linked-in functions as internal because backends use
-      // external linkage as a signifier of kernel functions.
+      // Mark linked-in functions as internal because backends use external
+      // linkage as a signifier of kernel functions.
       for (llvm::Function &fn : dstMod->functions()) {
         if (externalFns.count(fn.getName().str())) {
-          // FIXME: Temporary workaround to avoid marking SPIR_FUNC
-          // functions with InternalLinkage, which causes
-          // test_subprocess.py::test_assert to fail.
+          // FIXME: Temporary workaround to avoid marking SPIR_FUNC functions
+          // with InternalLinkage, which causes test_subprocess.py::test_assert
+          // to fail.
           if (fn.getCallingConv() == CallingConv::SPIR_FUNC)
             continue;
           fn.setLinkage(llvm::GlobalValue::InternalLinkage);
