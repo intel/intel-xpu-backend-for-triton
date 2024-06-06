@@ -9,9 +9,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
-#include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 
 #include "triton/Target/SPIRV/SPIRVTranslation.h"
 
@@ -22,7 +20,6 @@
 namespace py = pybind11;
 
 using namespace mlir::triton;
-using namespace mlir::triton::gpu;
 using ret = py::return_value_policy;
 
 // Macros to create a pass that takes pass options.
@@ -47,37 +44,39 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
-  ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
-                         mlir::triton::createConvertTritonToTritonGPUWarp,
-                         unsigned);
+  ADD_PASS_WRAPPER_OPT_1(
+      "add_convert_to_ttgpuir_warp",
+      mlir::triton::intel::createConvertTritonToTritonGPUWarp, unsigned);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  py::enum_<intel::DeviceArch>(m, "DEVICE_ARCH", py::module_local())
-      .value("UNKNOWN", intel::DeviceArch::UNKNOWN)
-      .value("ATS", intel::DeviceArch::ATS)
-      .value("PVC", intel::DeviceArch::PVC)
+  py::enum_<gpu::intel::DeviceArch>(m, "DEVICE_ARCH", py::module_local())
+      .value("UNKNOWN", gpu::intel::DeviceArch::UNKNOWN)
+      .value("ATS", gpu::intel::DeviceArch::ATS)
+      .value("PVC", gpu::intel::DeviceArch::PVC)
       .export_values();
 
-  ADD_PASS_WRAPPER_0("add_to_llvmir", intel::createConvertTritonIntelGPUToLLVM);
+  ADD_PASS_WRAPPER_0("add_to_llvmir",
+                     gpu::intel::createConvertTritonIntelGPUToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
-                     intel::createTritonIntelGPUAccelerateMatmul);
+                     gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
-                     intel::createIntelDecomposeUnsupportedConversions);
+                     gpu::intel::createIntelDecomposeUnsupportedConversions);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
-                     intel::createIntelAllocateSharedMemory);
-  ADD_PASS_WRAPPER_OPT_2("add_pipeline", intel::createTritonIntelGPUPipeline,
-                         int, bool);
+                     gpu::intel::createIntelAllocateSharedMemory);
+  ADD_PASS_WRAPPER_OPT_2("add_pipeline",
+                         gpu::intel::createTritonIntelGPUPipeline, int, bool);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
-                     intel::createTritonIntelGPURemoveLayoutConversions);
+                     gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
-                     intel::createTritonIntelGPURewriteTensorPointer);
+                     gpu::intel::createTritonIntelGPURewriteTensorPointer);
   ADD_PASS_WRAPPER_OPT_2("add_prefetch_block",
-                         intel::createTritonIntelGPUPrefetchBlock, int, bool);
+                         gpu::intel::createTritonIntelGPUPrefetchBlock, int,
+                         bool);
   ADD_PASS_WRAPPER_0("add_distribute_to_warps",
-                     intel::createTritonIntelGPUDistributeToWarps);
+                     gpu::intel::createTritonIntelGPUDistributeToWarps);
   ADD_PASS_WRAPPER_0("add_match_target_size",
-                     intel::createTritonIntelGPUMatchTargetSize);
+                     gpu::intel::createTritonIntelGPUMatchTargetSize);
 }
 
 void init_triton_intel(py::module &&m) {
@@ -88,8 +87,8 @@ void init_triton_intel(py::module &&m) {
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
-    registry
-        .insert<TritonGEN::TritonGENDialect, intel::TritonIntelGPUDialect>();
+    registry.insert<TritonGEN::TritonGENDialect,
+                    gpu::intel::TritonIntelGPUDialect>();
     mlir::registerTritonGENDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
