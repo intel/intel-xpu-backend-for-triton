@@ -28,6 +28,7 @@ runs:
       id: commit_id
       shell: bash
       run: |
+        set +e
         for ((retry=0; retry<${{ inputs.retries }}; retry++)); do
           echo 1
           commit_id="$(git ls-remote --exit-code https://github.com/${{ inputs.repository }} refs/heads/${{ inputs.branch }} | cut -f1; exit ${PIPESTATUS[0]})"
