@@ -208,8 +208,10 @@ public:
     using namespace mlir;
     using namespace mlir::triton;
 
-    // should run before other patterns need the SPIRV-ENV attr
-    patterns.add<AddSPIRVEnvPattern>(&typeConverter.getContext(), benefit);
+    // should run before other patterns that need the SPIRV-ENV attr
+    // (e.g. patterns that output triton_gen.sub_group_reduce)
+    patterns.add<AddSPIRVEnvPattern>(&typeConverter.getContext(),
+                                     patternBenefitAddSPIRVEnv);
 
     if (blockPtrPathIsEnabled) {
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
