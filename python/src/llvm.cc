@@ -1,9 +1,8 @@
-﻿#include "mlir/IR/BuiltinOps.h"
+﻿#include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -50,17 +49,17 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     assert(shortPtr);
     shortPtr->setValue(true);
   }
-  if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
+  if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
     auto optIt = options.find("print-after-all");
     if (optIt != options.end()) {
       auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
       *optPtr = true;
     }
   }
-  bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
+  bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
     // Check to see if we are passing a list of flags to disable optimizations.
-    auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    auto flagList = triton::tools::getStrEnv("DISABLE_LLVM_OPT");
     if (!flagList.empty()) {
       llvm::SmallVector<StringRef, 3> split;
       StringRef(flagList.c_str()).split(split, ',');
@@ -83,8 +82,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   pm.add(llvm::createAlwaysInlinerLegacyPass());
   pm.add(llvm::createVerifierPass());
 
-  const bool enabledTiming =
-      mlir::triton::tools::getBoolEnv("LLVM_ENABLE_TIMING");
+  const bool enabledTiming = triton::tools::getBoolEnv("LLVM_ENABLE_TIMING");
   if (enabledTiming) {
     llvm::TimePassesIsEnabled = true;
     llvm::TimePassesPerRun = true;
@@ -145,18 +143,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
 }
 
 using ret = py::return_value_policy;
-
-static uint32_t findKernels(llvm::Module &M,
-                            std::set<llvm::Function *> &functions) {
-  assert(functions.empty() && "Expecting an empty set");
-  uint32_t numKernels = 0;
-  for (llvm::Function &function : M.functions())
-    if (function.getCallingConv() == CallingConv::SPIR_KERNEL) {
-      functions.insert(&function);
-      ++numKernels;
-    }
-  return numKernels;
-}
 
 void init_triton_llvm(py::module &&m) {
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
