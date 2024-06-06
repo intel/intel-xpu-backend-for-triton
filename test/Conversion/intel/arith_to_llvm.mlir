@@ -39,13 +39,13 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // CHECK:           %[[VAL_4:.*]] = llvm.extractvalue %[[VAL_0]][2] : !llvm.struct<(bf16, bf16, bf16, bf16)>
 // CHECK:           %[[VAL_5:.*]] = llvm.extractvalue %[[VAL_0]][3] : !llvm.struct<(bf16, bf16, bf16, bf16)>
 // CHECK:           %[[BITCAST_2:.*]] = llvm.bitcast %[[VAL_2]] : bf16 to i16
-// CHECK:           %[[VAL_6:.*]] = llvm.call spir_funccc @_Z31intel_convert_as_bfloat16_floats(%[[BITCAST_2]]) : (i16) -> f32
+// CHECK:           %[[VAL_6:.*]] = llvm.call spir_funccc @_Z31intel_convert_as_bfloat16_floatt(%[[BITCAST_2]]) : (i16) -> f32
 // CHECK:           %[[BITCAST_3:.*]] = llvm.bitcast %[[VAL_3]] : bf16 to i16
-// CHECK:           %[[VAL_7:.*]] = llvm.call spir_funccc @_Z31intel_convert_as_bfloat16_floats(%[[BITCAST_3]]) : (i16) -> f32
+// CHECK:           %[[VAL_7:.*]] = llvm.call spir_funccc @_Z31intel_convert_as_bfloat16_floatt(%[[BITCAST_3]]) : (i16) -> f32
 // CHECK:           %[[BITCAST_4:.*]] = llvm.bitcast %[[VAL_4]] : bf16 to i16
-// CHECK:           %[[VAL_8:.*]] = llvm.call spir_funccc @_Z31intel_convert_as_bfloat16_floats(%[[BITCAST_4]]) : (i16) -> f32
+// CHECK:           %[[VAL_8:.*]] = llvm.call spir_funccc @_Z31intel_convert_as_bfloat16_floatt(%[[BITCAST_4]]) : (i16) -> f32
 // CHECK:           %[[BITCAST_5:.*]] = llvm.bitcast %[[VAL_5]] : bf16 to i16
-// CHECK:           %[[VAL_9:.*]] = llvm.call spir_funccc @_Z31intel_convert_as_bfloat16_floats(%[[BITCAST_5]]) : (i16) -> f32
+// CHECK:           %[[VAL_9:.*]] = llvm.call spir_funccc @_Z31intel_convert_as_bfloat16_floatt(%[[BITCAST_5]]) : (i16) -> f32
 // CHECK:           %[[VAL_10:.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32, f32, f32)>
 // CHECK:           %[[VAL_11:.*]] = llvm.insertvalue %[[VAL_6]], %[[VAL_10]][0] : !llvm.struct<(f32, f32, f32, f32)>
 // CHECK:           %[[VAL_12:.*]] = llvm.insertvalue %[[VAL_7]], %[[VAL_11]][1] : !llvm.struct<(f32, f32, f32, f32)>
