@@ -236,12 +236,10 @@ def TritonGEN_NamedBarrierWaitOp : TritonGEN_Op<"named_barrier_wait">,
   }];
 }
 
-def IntegerOrFloatType : AnyTypeOf<[AnyInteger, AnyFloat]>;
-
 def TritonGEN_SubGroupReduceOp : TritonGEN_Op<"sub_group_reduce", [
       AllTypesMatch<["res", "value"]>]>,
-  Results<(outs IntegerOrFloatType:$res)>,
-  Arguments<(ins IntegerOrFloatType:$value,
+  Results<(outs SignlessIntegerOrFloatLike:$res)>,
+  Arguments<(ins SignlessIntegerOrFloatLike:$value,
                  TritonGEN_ReduceKindAttr:$kind,
                  I32Attr:$size)> {
   let summary = "Subgroup reduce";
@@ -263,8 +261,8 @@ def TritonGEN_SubGroupReduceOp : TritonGEN_Op<"sub_group_reduce", [
 
 def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
       AllTypesMatch<["res", "value"]>]>,
-  Results<(outs IntegerOrFloatType:$res)>,
-  Arguments<(ins IntegerOrFloatType:$value,
+  Results<(outs SignlessIntegerOrFloatLike:$res)>,
+  Arguments<(ins SignlessIntegerOrFloatLike:$value,
                  I32:$mask,
                  TritonGEN_ShflKindAttr:$kind)> {
   let summary = "Subgroup shuffle";
