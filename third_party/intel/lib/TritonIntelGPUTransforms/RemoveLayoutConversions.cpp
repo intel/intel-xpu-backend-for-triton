@@ -952,10 +952,12 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     auto layoutIt = layout.find(v);
     assert(layoutIt != layout.end());
     // If we already have a remat value for this value, use it.
+  #if 0 // FIXME: Fails on LTS driver 
     if (hasRematValue(v, layoutIt->second)) {
       mapping.map(v, getRematValue(v, layoutIt->second));
       continue;
     }
+  #endif 
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
       if (auto ifOp = v.getDefiningOp<scf::IfOp>()) {
