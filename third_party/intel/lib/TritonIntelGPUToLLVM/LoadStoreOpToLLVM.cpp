@@ -365,9 +365,9 @@ struct LoadOpConversion
     Type eltTy = tensorType.getElementType();
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
+    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
     int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
@@ -378,25 +378,35 @@ struct LoadOpConversion
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
     bool isOperandA = (opIdx == 0);
-    SmallVector<unsigned> operandShape =
-        isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
-    SmallVector<int64_t> elemsPerInstr = {operandShape[0], operandShape[1]};
-    int64_t elemsPerLane = product<int64_t>(elemsPerInstr) /
-                           product<unsigned>(getThreadsPerWarp(dpasLayout));
+    SmallVector<unsigned> dpasOperandShape =
+        isOperandA ? dpasLayout.getDPASInstShapeA()
+                   : dpasLayout.getDPASInstShapeB();
+    SmallVector<int64_t> elemsPerDPASInst = {dpasOperandShape[0],
+                                             dpasOperandShape[1]};
+    int64_t elemsPerLanePerDPASInst =
+        product<int64_t>(elemsPerDPASInst) / threadsPerWarp;
     TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
-    Type unpackType = LLVM::getFixedVectorType(
-        typeConverter->convertType(eltTy), elemsPerLane);
+    Type unpackedDPASOperandType = LLVM::getFixedVectorType(
+        typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
 
     // pack scalars for operand A and B.
     Type elemType = (isOperandA && eltTy != f32_ty) ? i16_ty : i32_ty;
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
-    int64_t packedElemsPerLane = isOperandA ? elemsPerLane / (opsPerChannel == 4 ? 2 : 1)
-                              : elemsPerLane / opsPerChannel;
-    Type packedType = LLVM::getFixedVectorType(elemType, packedElemsPerLane);
+    int64_t packedElemsPerLanePerDPASInst =
+        isOperandA ? elemsPerLanePerDPASInst / (opsPerChannel == 4 ? 2 : 1)
+                   : elemsPerLanePerDPASInst / opsPerChannel;
+    Type packedDPASOperandType =
+        LLVM::getFixedVectorType(elemType, packedElemsPerLanePerDPASInst);
 
-    // Outer dim for A is the M, for B is the N. Inner dim for both is the K.
-    int outerDimWarpNum = std::min<int>(
-        warpsPerCTA[opIdx], ceil(tensorShape[opIdx], elemsPerInstr[opIdx]));
+    // Outer dim: Dim M or N. Inner dim: Dim K.
+    // Round the warp id fit into the tensor shape.
+    auto repCluster = dpasLayout.getRepCluster();
+    SmallVector<unsigned> repClusterShape =
+        isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
+    unsigned outerDimRequiredWarpNum =
+        mlir::ceil<unsigned>(tensorShape[opIdx], repClusterShape[opIdx]);
+    int outerDimWarpNum =
+        std::min<int>(warpsPerCTA[opIdx], outerDimRequiredWarpNum);
     Value outerDimWarpId =
         urem(multiDimWarpId[opIdx], i32_val(outerDimWarpNum));
 
@@ -408,10 +418,32 @@ struct LoadOpConversion
     int64_t numRepOuter = numReps[opIdx];
     int64_t numRepK = numReps[!opIdx];
     unsigned tileHeight;
-    unsigned vBlocks = 1;
-    unsigned composedOuterDimPerLoad = 1;
+    unsigned vBlocks;
     unsigned composedKDimPerLoad = 1;
     unsigned numValuesPerLargeLoad;
+    if (isOperandA) {
+      // use the tileHeight to load multiple operand A in one time.
+      tileHeight = repClusterShape[0];
+      if (numRepK >= 2) {
+        // The number of row bytes PVC A operand are always 32.
+        // Double the block array length 2 to load operand A.
+        vBlocks = 2;
+        composedKDimPerLoad = 2;
+      } else {
+        vBlocks = 1;
+      }
+      numValuesPerLargeLoad =
+          packedElemsPerLanePerDPASInst * repCluster[0] * composedKDimPerLoad;
+    } else {
+      vBlocks = repCluster[1];
+
+      // PVC 2D load supports 32 rows at most.
+      composedKDimPerLoad = std::min(numRepK, 32 / elemsPerDPASInst[0]);
+      tileHeight = elemsPerDPASInst[0] * composedKDimPerLoad;
+      numValuesPerLargeLoad =
+          packedElemsPerLanePerDPASInst * repCluster[1] * composedKDimPerLoad;
+    }
+#if 0
     if (isOperandA) {
       // The 2D load maximum row number is 32.
       unsigned maxPackedOuterDimPerLoad = 32 / elemsPerInstr[0];
@@ -447,18 +479,20 @@ struct LoadOpConversion
       numValuesPerLargeLoad =
           packedElemsPerLane * composedOuterDimPerLoad * composedKDimPerLoad;
     }
+#endif
+    Type load2DGenXType =
+        LLVM::getFixedVectorType(elemType, numValuesPerLargeLoad);
 
-    Type load2DGenXType = LLVM::getFixedVectorType(elemType, numValuesPerLargeLoad);
+    // The stride for the replicates.
+    unsigned repOuterStride = repClusterShape[opIdx] * outerDimWarpNum;
+    unsigned warpOuterStride = repClusterShape[opIdx];
+    unsigned repKStride = elemsPerDPASInst[opIdx == 0 ? 1 : 0];
 
-    // A dense stride for the replicates.
-    unsigned repOuterStride = elemsPerInstr[opIdx];
-    unsigned warpOuterStride = elemsPerInstr[opIdx] * numRepOuter;
-    unsigned repKStride = elemsPerInstr[opIdx == 0 ? 1 : 0];
-
-    Value programId = targetInfo.programId(rewriter, loc, op->getParentOfType<ModuleOp>(), 0);
+    Value programId =
+        targetInfo.programId(rewriter, loc, op->getParentOfType<ModuleOp>(), 0);
 
     ValueTable loadVals;
-    for (int outer = 0; outer < numRepOuter; outer += composedOuterDimPerLoad) {
+    for (int outer = 0; outer < numRepOuter; outer += 1) {
       for (int k = 0; k < numRepK; k += composedKDimPerLoad) {
         Value offsetX, offsetY;
         if (opIdx == 0) {
@@ -491,7 +525,7 @@ struct LoadOpConversion
             /*x*/ trunc(i32_ty, offsetX),
             /*y*/ trunc(i32_ty, offsetY),
             /*elem_size_in_bits*/ elemSizeInBits,
-            /*tile_width*/ elemsPerInstr[1],
+            /*tile_width*/ elemsPerDPASInst[1],
             /*tile_height*/ tileHeight,
             /*v_blocks*/ vBlocks,
             /*transpose*/ false,
@@ -499,34 +533,47 @@ struct LoadOpConversion
             (!isOperandA && eltTy.getIntOrFloatBitWidth() != 32));
 
         unsigned packedRowNum =
-            opIdx == 0 ? composedOuterDimPerLoad : composedKDimPerLoad;
+            opIdx == 0 ? repCluster[0] : composedKDimPerLoad;
         unsigned packedColNum =
-            opIdx == 0 ? composedKDimPerLoad : composedOuterDimPerLoad;
+            opIdx == 0 ? composedKDimPerLoad : repCluster[1];
         unsigned offset = 0;
         // The register value returned by 2D load is contiguous on the row.
         for (int col = 0; col < packedColNum; col++) {
           for (int row = 0; row < packedRowNum; row++) {
 
-            Value loadVal = undef(packedType);
-            for (int elemIdx = 0; elemIdx < packedElemsPerLane; elemIdx++) {
+            Value loadVal = undef(packedDPASOperandType);
+            for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
+                 elemIdx++) {
               Value loaded = extract_element(load2dOp, i32_val(offset++));
               loadVal = insert_element(loadVal, loaded, i32_val(elemIdx));
             }
 
             // Save the unpacked vals to the map;
             if (opIdx == 0) {
-              Value vals =  bitcast(loadVal, unpackType);
-//              LLVM::intel::llPrintf(rewriter, "A pid=%d sgid=%d, tid=%d, base=%p, baseWidth=%d, baseHeight=%d, offsetX=%d, offsetY=%d, tileHeight=%d",
-//                                    ValueRange{programId, warpId, laneId, base,
-//                                               baseWidth, baseHeight,
-//                                               offsetX, offsetY, i32_val(tileHeight)});
-//              LLVM::intel::llPrintf(rewriter, "A pid=%d sgid=%d, tid=%d, base=%p, outer=%d, k=%d, packedRow=%d, packedCol=%d, val=%f",
-//                                    ValueRange{programId, warpId, laneId, base,
-//                                               i32_val(outer), i32_val(k),
-//                                               i32_val(row), i32_val(col), vals});
+              Value vals = bitcast(loadVal, unpackedDPASOperandType);
+              //              LLVM::intel::llPrintf(rewriter, "A pid=%d sgid=%d,
+              //              tid=%d, base=%p, baseWidth=%d, baseHeight=%d,
+              //              offsetX=%d, offsetY=%d, tileHeight=%d",
+              //                                    ValueRange{programId,
+              //                                    warpId, laneId, base,
+              //                                               baseWidth,
+              //                                               baseHeight,
+              //                                               offsetX, offsetY,
+              //                                               i32_val(tileHeight)});
+              //              LLVM::intel::llPrintf(rewriter, "A pid=%d sgid=%d,
+              //              tid=%d, base=%p, outer=%d, k=%d, packedRow=%d,
+              //              packedCol=%d, val=%f",
+              //                                    ValueRange{programId,
+              //                                    warpId, laneId, base,
+              //                                               i32_val(outer),
+              //                                               i32_val(k),
+              //                                               i32_val(row),
+              //                                               i32_val(col),
+              //                                               vals});
               loadVals[{outer + row, k + col}] = vals;
             } else {
-              loadVals[{outer + col, k + row}] = bitcast(loadVal, unpackType);
+              loadVals[{outer + col, k + row}] =
+                  bitcast(loadVal, unpackedDPASOperandType);
             }
           }
         }

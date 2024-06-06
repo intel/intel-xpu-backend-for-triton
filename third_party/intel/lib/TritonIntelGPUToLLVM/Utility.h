@@ -150,18 +150,61 @@ static void
 emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
                               SmallVector<SmallVector<unsigned>> &offsets,
                               unsigned ctaOffsetX, unsigned ctaOffsetY) {
+  // clang-format off
+  // For C operand the layout illustration.
+  //                      sub-group size 16
+  //               execution size = 16
+  // <------------------------------------------------------------->
+  // t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15       ^
+  // .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .         | repeat count = 8
+  // .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .         |
+  // t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15       v
+  // Then sizePerThreads = [8, 1], and coordinate offset for each element per lane should be:
+  // [0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0]
+  // clang-format on
+  SmallVector<unsigned> instShapeC = dpasLayout.getDPASInstShapeC();
   SmallVector<unsigned> sizePerThreads = getSizePerThread(dpasLayout);
-  uint32_t elemsPerThreadPerGroup = product<unsigned>(sizePerThreads);
-  uint32_t rowsPerWarp =
-      dpasLayout.getSubGroupSize() / dpasLayout.getExecutionSize();
-  SmallVector<unsigned> shapePerCTA =
-      triton::gpu::getShapePerCTATile(dpasLayout);
+  ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+  SmallVector<unsigned> sizePerDPASInst = {sizePerThreads[0] / repCluster[0],
+                                           sizePerThreads[1] / repCluster[1]};
 
-  for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
-    uint32_t elemRowIndex = (elem / sizePerThreads[1]) * rowsPerWarp;
-    uint32_t elemColIndex = elem % sizePerThreads[1];
-    offsets.push_back({ctaOffsetX + elemRowIndex, ctaOffsetY + elemColIndex});
+  unsigned rowsPerElem = dpasLayout.getSubGroupSize() / instShapeC[1];
+  unsigned colsPerElem = 1;
+
+  unsigned repNumber = product<unsigned>(repCluster);
+  unsigned elemNumberPerRep = product<unsigned>(sizePerDPASInst);
+  for (unsigned repId = 0; repId < repNumber; repId++) {
+    for (unsigned elemId = 0; elemId < elemNumberPerRep; elemId++) {
+      // Follows the C++ order for the dpas layout.
+      SmallVector<unsigned> repOffset = {
+          (repId / repCluster[1]) * instShapeC[0],
+          (repId % repCluster[1]) * instShapeC[1]};
+
+      SmallVector<unsigned> elemOffset = {
+          (elemId / sizePerDPASInst[1]) * rowsPerElem,
+          (elemId % sizePerDPASInst[1]) * colsPerElem};
+
+      offsets.push_back({repOffset[0] + elemOffset[0] + ctaOffsetX,
+                         repOffset[1] + elemOffset[1] + ctaOffsetY});
+    }
   }
+
+//  llvm::outs() << "johnlu the emitOffsetForDpasLayoutPerCTA: " << dpasLayout
+//               << "\n";
+//  llvm::outs().flush();
+//  llvm::outs() << "johnlu the ctaOffsetX:" << ctaOffsetX << "\n";
+//  llvm::outs().flush();
+//  llvm::outs() << "johnlu the ctaOffsetY:" << ctaOffsetY << "\n";
+//  llvm::outs().flush();
+//  llvm::outs() << "johnlu the offsets:\n";
+//  llvm::outs().flush();
+//  for (auto offset : offsets) {
+//    for (auto size : offset) {
+//      llvm::outs() << size << ", ";
+//    }
+//    llvm::outs() << "\n";
+//  }
+//  llvm::outs().flush();
 }
 
 static SmallVector<SmallVector<unsigned>>

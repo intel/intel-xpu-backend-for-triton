@@ -280,6 +280,7 @@ def make_launcher(constants, signature, ids):
       }}
       }};
     auto event = stream.submit(cgf);
+    event.wait();
   }}
 // end sycl
     static PyObject* launch(PyObject* self, PyObject* args) {{
