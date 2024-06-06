@@ -36,7 +36,7 @@ runs:
       id: cache-load
       uses: ./.github/actions/load
       with:
-        path: ${{ inputs.ref }}
+        path: ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}
         key: ${{ inputs.package }}-$PYTHON_VERSION-${{ steps.commit-id.outputs.commit_id }}
 
     - name: Clone pytorch benchmark
