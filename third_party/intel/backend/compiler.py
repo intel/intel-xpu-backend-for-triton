@@ -162,7 +162,7 @@ class XPUBackend(BaseBackend):
 
         # optimize TTGIR
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
-        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        #intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
         # FIXME: Use a better way to check if prefetch instructions are supported once available.
         # Prefetch instruction is not available in older drivers.
@@ -170,13 +170,13 @@ class XPUBackend(BaseBackend):
             intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
 
         passes.ttgpuir.add_coalesce(pm)
-        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        #intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        #intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
