@@ -1287,7 +1287,7 @@ struct FpToFpOpConversion
                                  const Value &v) {
     auto moduleOp =
         v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
-    constexpr StringLiteral name = "_Z31intel_convert_as_bfloat16_floats";
+    constexpr StringLiteral name = "_Z31intel_convert_as_bfloat16_floatt";
     auto ext_func = triton::gpu::intel::lookupOrCreateSPIRVFn(moduleOp, name,
                                                               i16_ty, f32_ty);
     auto call = triton::gpu::intel::createSPIRVBuiltinCall(
