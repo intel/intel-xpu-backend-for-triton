@@ -47,7 +47,8 @@ runs:
               exit 0
             fi
           elif [[ $EXIT_CODE -eq 2 ]]; then
-            echo "commit_id=${{ inputs.branch }} >> "$GITHUB_OUTPUT"
+            # Here it means that ${{ inputs.branch }} is already a commit id, not a branch name or tag name 
+            echo "commit_id=${{ inputs.branch }}" >> "$GITHUB_OUTPUT"
           fi
 
           sleep ${{ inputs.delay }}
