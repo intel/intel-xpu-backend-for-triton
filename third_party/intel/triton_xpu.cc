@@ -44,9 +44,8 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
-  ADD_PASS_WRAPPER_OPT_1(
-      "add_convert_to_ttgpuir_warp",
-      mlir::triton::intel::createConvertTritonToTritonGPUWarp, unsigned);
+  ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
+                         intel::createConvertTritonToTritonGPUWarp, unsigned);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
