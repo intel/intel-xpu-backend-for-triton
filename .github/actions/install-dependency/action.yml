@@ -50,11 +50,13 @@ runs:
 
     - name: Build package wheels
       if: ${{ steps.cache-load.outputs.status == 'miss' }}
+      shell: bash
       run: |
         cd ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}
         python setup.py bdist_wheel
 
     - name: Install package wheels
+      shell: bash
       run: |
         pip install ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}/dist/*.whl
         python -c "import package; print(package.__version__)"
