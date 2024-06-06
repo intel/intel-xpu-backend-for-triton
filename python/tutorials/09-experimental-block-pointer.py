@@ -250,9 +250,8 @@ for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float
         a = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
         b = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
         # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
-        torch_output = torch_output = torch.matmul(a.to(device='cpu', dtype=accum_dtype),
-                                                   b.to(device='cpu',
-                                                        dtype=accum_dtype)).to(device='xpu', dtype=res_dtype)
+        torch_output = torch.matmul(a.to(device='cpu', dtype=accum_dtype),
+                                    b.to(device='cpu', dtype=accum_dtype)).to(device='xpu', dtype=res_dtype)
 
     triton_output = matmul(a, b, accum_dtype, res_dtype)
 
