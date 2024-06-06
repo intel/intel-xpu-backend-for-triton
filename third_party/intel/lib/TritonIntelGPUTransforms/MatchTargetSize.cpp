@@ -105,6 +105,68 @@ public:
     MLIRContext *ctx = &getContext();
     ModuleOp m = getOperation();
 
+    // this is ad-hoc for Q SLM
+    {
+      tmpSet.clear();
+      tt::LoadOp load;
+      m.walk([&](tt::LoadOp op) {
+        load = op;
+        return WalkResult::interrupt();
+      });
+      auto dot = cast<tt::DotOp>(*load->getUsers().begin());
+      auto type = cast<RankedTensorType>(load.getType());
+      unsigned bytes =
+          type.getNumElements() * type.getElementTypeBitWidth() / 8;
+      unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(m);
+      unsigned slmSize = numWarps * bytes;
+      m->setAttr(
+          "triton_gpu.shared",
+          mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32), slmSize));
+      auto func = load->getParentOfType<FunctionOpInterface>();
+      auto slmTy = tt::PointerType::get(type.getElementType(), 3);
+      func.insertArgument(func.getNumArguments(), slmTy, {}, func.getLoc());
+      Location loc = load.getLoc();
+      OpBuilder b(load);
+      b.setInsertionPointAfter(load);
+      auto subgroupId = b.create<gpu::SubgroupIdOp>(loc);
+      auto warpId =
+          b.create<arith::IndexCastOp>(loc, b.getI32Type(), subgroupId);
+      auto warpSize = b.create<arith::ConstantIntOp>(loc, bytes, 32);
+      auto offset = b.create<arith::MulIOp>(loc, warpId, warpSize);
+      // auto arg = func.getArgument(func.getNumArguments() - 1);
+      auto block = load->getBlock();
+      auto arg = block->getArgument(block->getNumArguments() - 1);
+      auto base = b.create<tt::AddPtrOp>(loc, slmTy, arg, offset);
+      SmallVector<Value> shape;
+      shape.push_back(
+          b.create<arith::ConstantIntOp>(loc, type.getShape()[0], 64));
+      shape.push_back(
+          b.create<arith::ConstantIntOp>(loc, type.getShape()[1], 64));
+      SmallVector<Value> strides;
+      strides.push_back(
+          b.create<arith::ConstantIntOp>(loc, type.getShape()[1], 64));
+      strides.push_back(b.create<arith::ConstantIntOp>(loc, 1, 64));
+      SmallVector<Value> offsets;
+      offsets.push_back(b.create<arith::ConstantIntOp>(loc, 0, 32));
+      offsets.push_back(b.create<arith::ConstantIntOp>(loc, 0, 32));
+      auto loadPtrTy = cast<tt::PointerType>(load.getPtr().getType());
+      auto ptrTy = tt::PointerType::get(loadPtrTy.getPointeeType(), 3);
+      auto ptr = b.create<tt::MakeTensorPtrOp>(loc, ptrTy, base, shape, strides,
+                                               offsets,
+                                               b.getDenseI32ArrayAttr({1, 0}));
+      auto store = b.create<tt::StoreOp>(
+          loc, ptr, load, tt::CacheModifier::NONE, tt::EvictionPolicy::NORMAL);
+
+      //
+      b.setInsertionPoint(dot);
+      auto newLoad =
+          b.create<tt::LoadOp>(dot.getLoc(), ptr, tt::CacheModifier::NONE,
+                               tt::EvictionPolicy::NORMAL, false);
+      Value res = load.getResult();
+      tmpSet.insert(dot);
+      res.replaceAllUsesExcept(newLoad, store);
+    }
+
     // Collect the result layout of "interesting" `tt.dot` operations.
     // A candidate 'tt.dot' operation yields a tensor with a warp layout.
     m.walk([&](tt::DotOp dot) {
@@ -174,6 +236,7 @@ public:
   }
 
 private:
+  DenseSet<Value> tmpSet;
   /// Initialize the native operation sizes supported by the target
   /// architecture.
   void initNativeOperationSizes();
@@ -188,7 +251,7 @@ private:
   void recordRootSubSize(Type type);
   SmallVector<int64_t> getSubOpSize(RankedTensorType type) const;
   std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
-  getSubTypeAndShape(Type type) const;
+  getSubTypeAndShape(Type type, bool hack = false) const;
   Value getSubVal(Operation *op, Value val, ArrayRef<int64_t> srcOffset,
                   ArrayRef<int64_t> dstSize);
 
@@ -598,12 +661,18 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
 /// FIXME: add a map for look up
 /// return [shape, subType, subSize] for a tensor (or pointer to tensor)
 std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
-MatchTargetSizePass::getSubTypeAndShape(Type type) const {
+MatchTargetSizePass::getSubTypeAndShape(Type type, bool hack) const {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Attribute layout = tensorType.getEncoding();
     assert(layout && "Expecting a valid layout");
     SmallVector<int64_t> shape = to_vector(tensorType.getShape());
     SmallVector<int64_t> subSize = sizePerAttrMap.at(layout);
+    // hack for attn
+    if (hack) {
+      subSize[0] = 8;
+      subSize[1] = 16;
+    }
+
     auto subType = RankedTensorType::get(
         subSize, tensorType.getElementType() /*no encoding*/);
     return {shape, subType, subSize};
@@ -611,7 +680,7 @@ MatchTargetSizePass::getSubTypeAndShape(Type type) const {
 
   if (auto ptrType = dyn_cast<tt::PointerType>(type)) {
     Type pointeeType = ptrType.getPointeeType();
-    auto [shape, subType, subSize] = getSubTypeAndShape(pointeeType);
+    auto [shape, subType, subSize] = getSubTypeAndShape(pointeeType, hack);
     auto newType = tt::PointerType::get(subType, ptrType.getAddressSpace());
     return {shape, newType, subSize};
   }
@@ -708,7 +777,11 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
 
 void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
   Type resultType = op.getResult().getType();
-  auto [shape, subType, subSize] = getSubTypeAndShape(resultType);
+  bool hack = false;
+  if (cast<tt::PointerType>(resultType).getAddressSpace() == 3) {
+    hack = true;
+  }
+  auto [shape, subType, subSize] = getSubTypeAndShape(resultType, hack);
   unsigned dim = shape.size();
   OpBuilder b(op);
   Location loc = op.getLoc();
@@ -736,9 +809,10 @@ void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
         for (int64_t sub : subSize)
           subShape.push_back(sub);
 
-        auto subOp = b.create<tt::MakeTensorPtrOp>(
+        Value subOp = b.create<tt::MakeTensorPtrOp>(
             loc, op.getBase(), op.getShape(), op.getStrides(), newOffsets,
             subShape, op.getOrder());
+        subOp.setType(subType);
         subOps.push_back(subOp);
       }
     } break;
@@ -795,8 +869,8 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   Location loc = dot.getLoc();
 
   auto getSubDotVal = [&](Value val, int64_t mm, int64_t kk, int64_t mStep,
-                          int64_t kStep) {
-    auto [shape, subType, subSize] = getSubTypeAndShape(val.getType());
+                          int64_t kStep, bool hack = false) {
+    auto [shape, subType, subSize] = getSubTypeAndShape(val.getType(), hack);
     unsigned subIdx =
         (kk / subSize[1]) * (shape[0] / subSize[0]) + mm / subSize[0];
     Value subVal = b.create<ttgi::ExtractOp>(loc, subType, val, subIdx);
@@ -814,8 +888,8 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
     for (unsigned mm = 0; mm < m; mm += dotShape.m) {
       Value subDotC = getSubDotVal(dot.getC(), mm, nn, dotShape.m, dotShape.n);
       for (unsigned kk = 0; kk < k; kk += dotShape.k) {
-        Value subDotA =
-            getSubDotVal(dot.getA(), mm, kk, dotShape.m, dotShape.k);
+        Value subDotA = getSubDotVal(dot.getA(), mm, kk, dotShape.m, dotShape.k,
+                                     tmpSet.count(dot));
         Value subDotB =
             getSubDotVal(dot.getB(), kk, nn, dotShape.k, dotShape.n);
         subDotC = b.create<tt::DotOp>(loc, subDotA, subDotB, subDotC,
@@ -893,7 +967,22 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
     llvm_unreachable("Unexpected operation");
   }
 
-  auto [shape, subType, subSize] = getSubTypeAndShape(type);
+  // hack for attn
+  bool hack = false;
+  if (auto store = dyn_cast<tt::StoreOp>(op)) {
+    auto ptrTy = store.getPtr().getType();
+    if (cast<tt::PointerType>(ptrTy).getAddressSpace() == 3) {
+      hack = true;
+    }
+  }
+  if (auto load = dyn_cast<tt::LoadOp>(op)) {
+    auto ptrTy = load.getPtr().getType();
+    if (cast<tt::PointerType>(ptrTy).getAddressSpace() == 3) {
+      hack = true;
+    }
+  }
+  auto [shape, subType, subSize] = getSubTypeAndShape(type, hack);
+
   unsigned dim = shape.size();
   OpBuilder b(op);
   Location loc = op->getLoc();
@@ -912,7 +1001,7 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
               if (isa<tt::BroadcastOp>(op))
                 return operand;
               else if (isa<tt::PointerType, RankedTensorType>(type)) {
-                Type subOpndType = std::get<1>(getSubTypeAndShape(type));
+                Type subOpndType = std::get<1>(getSubTypeAndShape(type, hack));
                 Value newOp =
                     b.create<ttgi::ExtractOp>(loc, subOpndType, operand, idx);
                 return newOp;
