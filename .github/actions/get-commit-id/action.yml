@@ -35,7 +35,6 @@ runs:
           echo inputs.try-tag-prefix = ${{ inputs.try-tag-prefix }}
           echo 1
           commit_id="$(git ls-remote --exit-code https://github.com/${{ inputs.repository }} refs/heads/${{ inputs.branch }} | cut -f1; exit ${PIPESTATUS[0]})"
-          echo 2
           EXIT_CODE=$?
           echo 3
           echo EXIT_CODE = $EXIT_CODE
@@ -43,7 +42,6 @@ runs:
           if [[ $EXIT_CODE -eq 2 && "${{ inputs.try-tag-prefix }}" ]]; then
             echo 4
             commit_id="$(git ls-remote --exit-code https://github.com/${{ inputs.repository }} refs/tags/${{ inputs.try-tag-prefix }}${{ inputs.branch }} | cut -f1; exit ${PIPESTATUS[0]})"
-            echo 5
             EXIT_CODE=$?
             echo 6
             echo EXIT_CODE = $EXIT_CODE
