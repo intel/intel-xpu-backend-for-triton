@@ -29,16 +29,24 @@ runs:
       shell: bash
       run: |
         for ((retry=0; retry<${{ inputs.retries }}; retry++)); do
+          echo 1
           commit_id="$(git ls-remote --exit-code https://github.com/${{ inputs.repository }} refs/heads/${{ inputs.branch }} | cut -f1; exit ${PIPESTATUS[0]})"
+          echo 2
           EXIT_CODE=$?
+          echo 3
 
           if [[ $EXIT_CODE -eq 2 && "${{ inputs.try-tag-prefix }}" ]]; then
+            echo 4
             commit_id="$(git ls-remote --exit-code https://github.com/${{ inputs.repository }} refs/tags/${{ inputs.try-tag-prefix }}${{ inputs.branch }} | cut -f1; exit ${PIPESTATUS[0]})"
+            echo 5
             EXIT_CODE=$?
+            echo 6
           fi
 
           if [[ $EXIT_CODE -eq 0 ]]; then
+            echo 7
             if [[ $commit_id ]]; then
+              echo 8
               echo "${{ inputs.repository }} ${{ inputs.branch }}: $commit_id"
               echo "commit_id=$commit_id" >> "$GITHUB_OUTPUT"
               if [[ "${{ inputs.variable }}" ]]; then
@@ -47,9 +55,12 @@ runs:
               exit 0
             fi
           elif [[ $EXIT_CODE -eq 2 ]]; then
+            echo 9
             # Here it means that ${{ inputs.branch }} is already a commit id, not a branch name or tag name 
             echo "commit_id=${{ inputs.branch }}" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo 10
 
           sleep ${{ inputs.delay }}
         done
