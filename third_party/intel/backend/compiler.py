@@ -48,14 +48,14 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
-    is_block_ptr_enabled: bool = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+    is_block_ptr_enabled: bool = os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
-            extern_libs['libdevice'] = os.environ.get("TRITON_LIBDEVICE_PATH",
-                                                      str(default_libdir / 'libsycl-spir64-unknown-unknown.bc'))
+            extern_libs['libdevice'] = os.getenv("TRITON_LIBDEVICE_PATH",
+                                                 str(default_libdir / 'libsycl-spir64-unknown-unknown.bc'))
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
             "num_warps must be a power of 2"
