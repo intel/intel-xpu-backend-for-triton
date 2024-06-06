@@ -59,7 +59,7 @@ runs:
       shell: bash
       run: |
         pip install ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}/dist/*.whl
-        python -c "import package; print(package.__version__)"
+        python -c "import ${{ inputs.package }}; print(${{ inputs.package }}.__version__)"
 
     - name: Save package to a cache
       if: ${{ steps.cache-load.outputs.status == 'miss' }}
