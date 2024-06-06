@@ -145,6 +145,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
 using ret = py::return_value_policy;
 
 void init_triton_llvm(py::module &&m) {
+
   py::class_<llvm::LLVMContext>(m, "context", py::module_local())
       .def(py::init<>());
 

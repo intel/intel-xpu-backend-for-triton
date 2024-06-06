@@ -31,8 +31,6 @@ public:
       ICFLoopSafetyInfo SafetyInfo;
       SafetyInfo.computeLoopSafetyInfo(L);
 
-      //      SmallVector<Instruction *, 16> HoistedInstructions;
-
       LoopBlocksRPO workList(L);
       workList.perform(&LI);
 
@@ -46,7 +44,6 @@ public:
 
           if (L->hasLoopInvariantOperands(&I) && canHoist(I, AA, DT, MSSA, L)) {
             hoist(I, DT, L, L->getLoopPreheader(), SafetyInfo, MSSAU, SE);
-            //          HoistedInstructions.push_back(&I);
             continue;
           }
         }
@@ -176,9 +173,7 @@ void mlir::triton::intel::LICM(llvm::Module &mod) {
   assert(numKernels == 1 && "Expecting a single SPIR kernel");
   llvm::Function *kernel = *kernels.begin();
 
-  PassBuilder PB;
   FunctionAnalysisManager FAM;
-
   FAM.registerPass([&] { return AssumptionAnalysis(); });
   FAM.registerPass([&] { return DominatorTreeAnalysis(); });
   FAM.registerPass([&] { return LoopAnalysis(); });
