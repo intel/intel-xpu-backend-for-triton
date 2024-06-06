@@ -851,7 +851,7 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
                                 SameVariadicOperandSize,
                                 TypesMatchWith<"infer pointer type from the result type",
                                                "result", "base",
-                                               "getPointerType(getElementTypeOfTensorPointerType($_self), getAddrspace($_self))">]> {
+                                               "getPointerType(getElementTypeOfTensorPointerType($_self))">]> {
   let summary = "Make a tensor pointer type with meta information of the parent tensor and the block specified";
 
   let description = [{
