@@ -19,32 +19,19 @@ llvm.func @triton_gen.illegal_cache_controls_attr(%arg0: !llvm.ptr) {
 llvm.func @triton_gen.sub_group_reduce() {
   // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting valid target env attribute}}
   %0 = llvm.mlir.constant(0 : i32) : i32
-  %1 = triton_gen.sub_group_reduce fsum %0 {size = 16} : i32
+  %1 = triton_gen.sub_group_reduce add %0 {size = 16} : i32
   llvm.return
 }
 
 // -----
 
 module attributes {
-  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
 } {
   llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting integer type for integer reduction}}
-    %0 = llvm.mlir.constant(0.0 : f32) : f32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : f32
-    llvm.return
-  }
-}
-
-// -----
-
-module attributes {
-  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
-} {
-  llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting floating point type for floating point reduction}}
+    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
     %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce fsum %0 {size = 16} : i32
+    %1 = triton_gen.sub_group_reduce add %0 {size = 0} : i32
     llvm.return
   }
 }
@@ -57,7 +44,7 @@ module attributes {
   llvm.func @triton_gen.sub_group_reduce() {
     // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
     %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 0} : i32
+    %1 = triton_gen.sub_group_reduce add %0 {size = 32} : i32
     llvm.return
   }
 }
@@ -70,20 +57,7 @@ module attributes {
   llvm.func @triton_gen.sub_group_reduce() {
     // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
     %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 32} : i32
-    llvm.return
-  }
-}
-
-// -----
-
-module attributes {
-  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
-} {
-  llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
-    %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 6} : i32
+    %1 = triton_gen.sub_group_reduce add %0 {size = 6} : i32
     llvm.return
   }
 }
