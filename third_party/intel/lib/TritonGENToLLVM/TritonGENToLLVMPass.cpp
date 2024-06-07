@@ -295,7 +295,11 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
     MLIRContext *ctx = rewriter.getContext();
     intel::AttrBuilder funcAttrBuilder(*ctx);
     intel::AttrBuilder paramAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+        .addPassthroughAttribute(
+            llvm::Attribute::Memory,
+            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
+                .toIntValue());
     paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
     std::vector<NamedAttrList> paramAttrs(argTypes.size());
     paramAttrs[0] = paramAttrBuilder.getAttributes();
