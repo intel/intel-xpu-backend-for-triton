@@ -48,7 +48,7 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
-    isBlockPtrEnabled: bool = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+    is_block_ptr_enabled: bool = os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -152,7 +152,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
-        if XPUOptions.isBlockPtrEnabled:
+        if XPUOptions.is_block_ptr_enabled:
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt, device_arch)
 
         # TTIR -> TTGIR
