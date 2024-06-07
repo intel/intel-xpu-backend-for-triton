@@ -297,12 +297,12 @@ llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vect
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z40intel_sub_group_2d_block_read_8b_8r32x2cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>, !llvm.ptr) attributes {passthrough = ["nounwind"]}
+// CHECK: llvm.func spir_funccc @_Z40intel_sub_group_2d_block_read_8b_8r32x2cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>, !llvm.ptr) attributes {passthrough = ["nounwind", ["memory", "3"]]}
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK:  [[SIXTY:%.*]] = llvm.mlir.constant(16 : i32) : i32
-  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[SIXTY]] x i16 : (i32) -> !llvm.ptr
+  // CHECK:  [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[C16]] x i16 : (i32) -> !llvm.ptr
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
