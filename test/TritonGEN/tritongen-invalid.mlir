@@ -19,32 +19,19 @@ llvm.func @triton_gen.illegal_cache_controls_attr(%arg0: !llvm.ptr) {
 llvm.func @triton_gen.sub_group_reduce() {
   // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting valid target env attribute}}
   %0 = llvm.mlir.constant(0 : i32) : i32
-  %1 = triton_gen.sub_group_reduce fsum %0 {size = 16} : i32
+  %1 = triton_gen.sub_group_reduce add %0 {size = 16} : i32
   llvm.return
 }
 
 // -----
 
 module attributes {
-  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
 } {
   llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting integer type for integer reduction}}
-    %0 = llvm.mlir.constant(0.0 : f32) : f32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 16} : f32
-    llvm.return
-  }
-}
-
-// -----
-
-module attributes {
-  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
-} {
-  llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting floating point type for floating point reduction}}
+    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
     %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce fsum %0 {size = 16} : i32
+    %1 = triton_gen.sub_group_reduce add %0 {size = 0} : i32
     llvm.return
   }
 }
@@ -57,7 +44,7 @@ module attributes {
   llvm.func @triton_gen.sub_group_reduce() {
     // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
     %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 0} : i32
+    %1 = triton_gen.sub_group_reduce add %0 {size = 32} : i32
     llvm.return
   }
 }
@@ -70,20 +57,7 @@ module attributes {
   llvm.func @triton_gen.sub_group_reduce() {
     // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
     %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 32} : i32
-    llvm.return
-  }
-}
-
-// -----
-
-module attributes {
-  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
-} {
-  llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
-    %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce sum %0 {size = 6} : i32
+    %1 = triton_gen.sub_group_reduce add %0 {size = 6} : i32
     llvm.return
   }
 }
@@ -230,7 +204,7 @@ llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_height : i32, %x : i32, %y
 // -----
 
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // expected-error @+1 {{'triton_gen.2Dblockload' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements}}
+  // expected-error @+1 {{'triton_gen.2Dblockload' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements, for matrix A or subgroup size, i.e., 16 elements, for matrix B}}
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=5, tile_height=1, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<5xf32>
   llvm.return
 }
@@ -288,7 +262,7 @@ llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_height : i32, %x : i32, %
 // -----
 
 llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<4xf32>) {
-  // expected-error @+1 {{'triton_gen.2Dblockstore' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements}}
+  // expected-error @+1 {{'triton_gen.2Dblockstore' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements, for matrix A or subgroup size, i.e., 16 elements, for matrix B}}
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=4, tile_height=1, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<4xf32>)
   llvm.return
 }
@@ -346,7 +320,7 @@ llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_height : i32, %x : i32
 // -----
 
 llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements}}
+  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements, for matrix A or subgroup size, i.e., 16 elements, for matrix B}}
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=5, tile_height=1, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
 }

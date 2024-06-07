@@ -23,19 +23,13 @@ class TritonGEN_Attr<string name, string attrMnemonic, list<Trait> traits = []>
 /// Enum attribute of the different reduce kinds.
 def TritonGEN_ReduceKindAttr : I32EnumAttr<"ReduceKind", "TritonGEN reduce kind",
   [
-    I32EnumAttrCase<"SUM",  0, "sum">,
-    I32EnumAttrCase<"PROD",   1, "prod">,
-    I32EnumAttrCase<"UMIN", 2, "umin">,
-    I32EnumAttrCase<"UMAX",  3, "umax">,
-    I32EnumAttrCase<"IMIN",  4, "imin">,
-    I32EnumAttrCase<"IMAX",  5, "imax">,
-    I32EnumAttrCase<"OR",  6, "or">,
-    I32EnumAttrCase<"XOR",  7, "xor">,
-    I32EnumAttrCase<"AND",  8, "and">,
-    I32EnumAttrCase<"FSUM",  9, "fsum">,
-    I32EnumAttrCase<"FPROD",  10, "fprod">,
-    I32EnumAttrCase<"FMIN",  11, "fmin">,
-    I32EnumAttrCase<"FMAX",  12, "fmax">
+    I32EnumAttrCase<"ADD",  0, "add">,
+    I32EnumAttrCase<"MUL",  1, "mul">,
+    I32EnumAttrCase<"MIN",  2, "min">,
+    I32EnumAttrCase<"MAX",  3, "max">,
+    I32EnumAttrCase<"AND",  4, "and">,
+    I32EnumAttrCase<"OR",   5, "or">,
+    I32EnumAttrCase<"XOR",  6, "xor">
   ]> {
   let cppNamespace = "::mlir::triton::TritonGEN";
 }

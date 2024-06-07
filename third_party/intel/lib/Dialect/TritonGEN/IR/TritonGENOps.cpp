@@ -50,9 +50,11 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
   uint32_t TileWidth = op.getTileWidth();
   switch (op.getElemSizeInBits()) {
   case 32:
-    if (TileWidth != 8)
-      return op->emitOpError("tile_width for 32 bit elements should be equal "
-                             "to systolic depth, i.e., 8 elements");
+    if (TileWidth != 8 && TileWidth != 16)
+      return op->emitOpError(
+          "tile_width for 32 bit elements should be equal "
+          "to systolic depth, i.e., 8 elements, for matrix A or subgroup size, "
+          "i.e., 16 elements, for matrix B");
     break;
   case 16:
     if (TileWidth != 16)
@@ -79,32 +81,6 @@ LogicalResult TritonGEN::SubGroupReduceOp::verify() {
   spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(*this);
   if (!attr)
     return this->emitOpError("expecting valid target env attribute");
-
-  Type ty = getValue().getType();
-  switch (getKind()) {
-  case TritonGEN::ReduceKind::SUM:
-  case TritonGEN::ReduceKind::PROD:
-  case TritonGEN::ReduceKind::UMIN:
-  case TritonGEN::ReduceKind::UMAX:
-  case TritonGEN::ReduceKind::IMIN:
-  case TritonGEN::ReduceKind::IMAX:
-  case TritonGEN::ReduceKind::OR:
-  case TritonGEN::ReduceKind::XOR:
-  case TritonGEN::ReduceKind::AND:
-    if (!isa<IntegerType>(ty))
-      return this->emitOpError("expecting integer type for integer reduction");
-    break;
-  case TritonGEN::ReduceKind::FSUM:
-  case TritonGEN::ReduceKind::FPROD:
-  case TritonGEN::ReduceKind::FMIN:
-  case TritonGEN::ReduceKind::FMAX:
-    if (!isa<FloatType>(ty))
-      return this->emitOpError(
-          "expecting floating point type for floating point reduction");
-    break;
-  default:
-    llvm_unreachable("unexpected ReduceKind");
-  }
 
   if (getSize() < 1 || getSize() > TritonGEN::getSubgroupSize(*this) ||
       !llvm::isPowerOf2_32(getSize()))
