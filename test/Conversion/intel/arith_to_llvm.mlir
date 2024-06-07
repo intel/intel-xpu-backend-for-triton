@@ -3,6 +3,12 @@
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 
+// CHECK-SCALAR-DAG:   llvm.func spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(i16) -> f32
+// CHECK-SCALAR-DAG:   llvm.func spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(f32) -> i16
+
+// CHECK-VECTOR-DAG:  llvm.func spir_funccc @_Z27__spirv_ConvertBF16ToFINTELDv32_s(vector<32xi16>) -> vector<32xf32>
+// CHECK-VECTOR-DAG:  llvm.func spir_funccc @_Z27__spirv_ConvertFToBF16INTELDv32_f(vector<32xf32>) -> vector<32xi16>
+
 // CHECK-LABEL:   llvm.func spir_kernelcc @float_to_bfloat_conversion(
 // CHECK-SCALAR:                                             %[[VAL_0:.*]]: !llvm.struct<(f32, f32, f32, f32)>) -> !llvm.struct<(bf16, bf16, bf16, bf16)>
 // CHECK-VECTOR:                                             %[[VAL_0:.*]]: vector<32xf32>) -> vector<32xbf16>

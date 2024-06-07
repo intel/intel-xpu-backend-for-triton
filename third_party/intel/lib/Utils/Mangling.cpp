@@ -6,12 +6,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/raw_ostream.h"
 
-using namespace mlir;
-
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
+namespace mlir::triton::gpu::intel {
 std::string getTypeMangling(Type ty) {
   return TypeSwitch<Type, std::string>(ty)
       .Case([](VectorType ty) -> std::string {
@@ -45,7 +40,4 @@ std::string mangle(StringRef baseName, ArrayRef<Type> types) {
     os << getTypeMangling(type);
   return os.str();
 }
-} // namespace intel
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
