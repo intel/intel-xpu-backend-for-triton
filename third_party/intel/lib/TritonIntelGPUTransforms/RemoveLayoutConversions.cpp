@@ -1290,7 +1290,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   mapping.map(extOrBroadcatOp->getResult(0), newExtOrBroadcast->getResult(0));
   slice.remove(extOrBroadcatOp->getResult(0));
   // 3. Rewrite the slice.
-  rewriteSlice(slice, layout, convertOp, mapping, /*enableRematCache=*/false);
+  rewriteSlice(slice, layout, convertOp, mapping, /*enableRematCache=*/true);
 }
 
 void backwardRematerialization(ModuleOp module, bool enableRematCache) {
