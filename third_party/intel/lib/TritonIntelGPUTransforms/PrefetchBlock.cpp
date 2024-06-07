@@ -101,25 +101,34 @@ Type annotatePrefetchType(Type type, unsigned numWarps) {
 
   SmallVector<unsigned> sizePerWarp(2), warpsPerCTA(2);
   int64_t m = shape[0], n = shape[1];
+  char *envPrefetch = std::getenv("TRITON_INTEL_SKIP_PREFETCH_A");
+  const bool skipPrefetch = envPrefetch ? (bool)std::atoi(envPrefetch) : false;
 
-  // typical numWarps 4, 8, 16, 32, 64
-  // naive way to get warp distribute
-  int64_t sizeX = n < 32 ? n : 32; // elementtype
-  int64_t numWarpsX = ceil<int64_t>(n, sizeX);
-  // auto root = std::sqrt(numWarps);
-  // assert(n >= 16);
-  // if (n / 16 <= root)
-  //   numWarpsX = n / 16;
-  // else if (n / 32 <= root)
-  //   numWarpsX = n / 32;
-  // else if (n / 64 <= root)
-  //   numWarpsX = n / 64;
-  // else
-  //   numWarpsX = n / 128;
-  warpsPerCTA[1] = numWarpsX;
-  warpsPerCTA[0] = ceil<unsigned>(numWarps, warpsPerCTA[1]);
-  sizePerWarp[1] = ceil<unsigned>(n, warpsPerCTA[1]);
-  sizePerWarp[0] = ceil<unsigned>(m, warpsPerCTA[0]);
+  if (skipPrefetch && m <= 8) {
+    sizePerWarp[0] = m;
+    warpsPerCTA[0] = 1;
+    warpsPerCTA[1] = numWarps;
+    sizePerWarp[1] = std::max((unsigned)32, ceil<unsigned>(n, warpsPerCTA[1]));
+  } else {
+    // typical numWarps 4, 8, 16, 32, 64
+    // naive way to get warp distribute
+    int64_t sizeX = n < 32 ? n : 32; // elementtype
+    int64_t numWarpsX = ceil<int64_t>(n, sizeX);
+    // auto root = std::sqrt(numWarps);
+    // assert(n >= 16);
+    // if (n / 16 <= root)
+    //   numWarpsX = n / 16;
+    // else if (n / 32 <= root)
+    //   numWarpsX = n / 32;
+    // else if (n / 64 <= root)
+    //   numWarpsX = n / 64;
+    // else
+    //   numWarpsX = n / 128;
+    warpsPerCTA[1] = numWarpsX;
+    warpsPerCTA[0] = ceil<unsigned>(numWarps, warpsPerCTA[1]);
+    sizePerWarp[1] = ceil<unsigned>(n, warpsPerCTA[1]);
+    sizePerWarp[0] = ceil<unsigned>(m, warpsPerCTA[0]);
+  }
   auto ctaLayout =
       ttg::CTALayoutAttr::get(type.getContext(), {1, 1}, {1, 1}, {1, 0});
   auto blockLayout = ttg::BlockedEncodingAttr::get(
@@ -404,14 +413,25 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
 
   SmallVector<Value> advances;
   unsigned i = 0;
+  char *envPrefetch = std::getenv("TRITON_INTEL_SKIP_PREFETCH_A");
+  const bool skipPrefetch = envPrefetch ? (bool)std::atoi(envPrefetch) : false;
+  bool isMatA = false;
   Operation *prefetchInsertPoint = loopLoads.at(loop).back();
   for (tt::LoadOp load : loopLoads.at(loop)) {
+    RankedTensorType rtTy = cast<RankedTensorType>(load.getResult().getType());
+    if (dyn_cast<ttg::DotOperandEncodingAttr>(rtTy.getEncoding()).getOpIdx() ==
+        0)
+      isMatA = true;
     b.setInsertionPointAfter(prefetchInsertPoint);
     Location loc = load.getLoc();
-    auto prefetch =
-        b.create<ttgi::PrefetchOp>(loc, args[num + 1 + i], load.getCache(),
-                                   load.getEvict(), load.getIsVolatile());
-    prefetchInsertPoint = prefetch;
+    if (!(skipPrefetch && isMatA)) {
+      auto prefetch =
+          b.create<ttgi::PrefetchOp>(loc, args[num + 1 + i], load.getCache(),
+                                     load.getEvict(), load.getIsVolatile());
+      prefetchInsertPoint = prefetch;
+    } else {
+      prefetchInsertPoint = load;
+    }
 
     const LoadInfo &loadInfo = loadToLoadInfo.at(load);
     b.setInsertionPoint(loadInfo.getAdvance());
