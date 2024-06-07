@@ -146,8 +146,7 @@ struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
       return failure();
     }
 
-    int subgroupSize =
-        ::mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(op);
+    int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(op);
 
     auto resourceLimit = spirv::getDefaultResourceLimits(rewriter.getContext());
     auto newResourceLimit = rewriter.getAttr<spirv::ResourceLimitsAttr>(

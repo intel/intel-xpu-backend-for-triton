@@ -1011,8 +1011,11 @@ struct TritonSubGroupReduceLowering
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value val = op.getValue();
-    Type val_ty = val.getType();
+    Type orig_ty = val.getType();
+    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
+      val = zext(i8_ty, val);
 
+    Type val_ty = val.getType();
     SmallVector<Type> argTypes{val_ty};
     SmallVector<Value> args{val};
     bool useCluster = (getSubgroupSize(op) != op.getSize());
@@ -1035,9 +1038,12 @@ struct TritonSubGroupReduceLowering
     funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
     intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
-    LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, fnName, val_ty,
-                                                   argTypes, args, attrs);
-    rewriter.replaceOp(op, callOp);
+    Value result = createDeviceFunctionCall(rewriter, fnName, val_ty, argTypes,
+                                            args, attrs)
+                       .getResult();
+    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
+      result = trunc(orig_ty, result);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
