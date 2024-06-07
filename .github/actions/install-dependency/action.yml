@@ -52,12 +52,14 @@ runs:
       if: ${{ steps.cache-load.outputs.status == 'miss' }}
       shell: bash
       run: |
+        source /home/runner/intel/oneapi/setvars.sh
         cd ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}
         python setup.py bdist_wheel
 
     - name: Install package wheels
       shell: bash
       run: |
+        source /home/runner/intel/oneapi/setvars.sh
         pip install ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}/dist/*.whl
         python -c "import ${{ inputs.package }}; print(${{ inputs.package }}.__version__)"
 
