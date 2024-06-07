@@ -998,8 +998,8 @@ struct TritonSubGroupReduceLowering
     if (useCluster)
       fnName += "clustered_";
     fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
-    fnName =
-        "_Z" + std::to_string(fnName.size()) + fnName + getTypeMangling(val_ty);
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName +
+             intel::getTypeMangling(val_ty);
     if (useCluster) {
       fnName += "j";
       argTypes.push_back(i32_ty);
