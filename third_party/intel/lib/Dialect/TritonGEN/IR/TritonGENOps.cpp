@@ -80,32 +80,6 @@ LogicalResult TritonGEN::SubGroupReduceOp::verify() {
   if (!attr)
     return this->emitOpError("expecting valid target env attribute");
 
-  Type ty = getValue().getType();
-  switch (getKind()) {
-  case TritonGEN::ReduceKind::SUM:
-  case TritonGEN::ReduceKind::PROD:
-  case TritonGEN::ReduceKind::UMIN:
-  case TritonGEN::ReduceKind::UMAX:
-  case TritonGEN::ReduceKind::IMIN:
-  case TritonGEN::ReduceKind::IMAX:
-  case TritonGEN::ReduceKind::OR:
-  case TritonGEN::ReduceKind::XOR:
-  case TritonGEN::ReduceKind::AND:
-    if (!isa<IntegerType>(ty))
-      return this->emitOpError("expecting integer type for integer reduction");
-    break;
-  case TritonGEN::ReduceKind::FSUM:
-  case TritonGEN::ReduceKind::FPROD:
-  case TritonGEN::ReduceKind::FMIN:
-  case TritonGEN::ReduceKind::FMAX:
-    if (!isa<FloatType>(ty))
-      return this->emitOpError(
-          "expecting floating point type for floating point reduction");
-    break;
-  default:
-    llvm_unreachable("unexpected ReduceKind");
-  }
-
   if (getSize() < 1 || getSize() > TritonGEN::getSubgroupSize(*this) ||
       !llvm::isPowerOf2_32(getSize()))
     return this->emitOpError(
