@@ -40,13 +40,13 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
 
   if (op.getTranspose() && op.getVnniTransform())
     return op->emitOpError(
-        "transpose and vnni transform are mutually exclusive");
+        "transpose and vnni_transform are mutually exclusive");
 
   if (op.getTranspose() && op.getElemSizeInBits() != 32)
     return op->emitOpError("transpose is only supported for 32 bit elements");
 
   if (op.getVnniTransform() && op.getElemSizeInBits() == 32)
-    return op->emitOpError("vnni transform is only supported for 8 and 16 bit "
+    return op->emitOpError("vnni_transform is only supported for 8 and 16 bit "
                            "elements");
 
   uint32_t tileHeight = op.getTileHeight();
@@ -59,6 +59,14 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
     return op->emitOpError("expecting v_blocks to be 1, 2, 4, or 8");
 
   uint32_t tileWidth = op.getTileWidth();
+  if (op.getVnniTransform()) {
+    if (tileWidth != 16)
+      return op->emitOpError(
+          "tile_width when vnni_transform is true should be equal "
+          "to subgroup size (16 elements)");
+    return success();
+  }
+
   switch (op.getElemSizeInBits()) {
   case 16:
     if (tileWidth != 16)
@@ -81,18 +89,10 @@ template <typename Op> static LogicalResult verifyMatrixReadInput(Op op) {
                 "Unexpected template parameter");
 
   uint32_t tileWidth = op.getTileWidth();
-  if (op.getVnniTransform()) {
-    if (tileWidth != 16)
-      return op->emitOpError("tile_width for vnni transform should be equal "
-                             "to subgroup size, i.e., 16 elements");
-    return success();
-  }
-
-  // When reading matrix B of 32 bit elements, it does not need to be vnni transformed.
   if (op.getElemSizeInBits() == 32 && tileWidth != 8 && tileWidth != 16)
-    return op->emitOpError("tile_width for 32 bit elements should be equal "
-                           "to systolic depth, i.e., 8 elements, for matrix A or "
-                           "subgroup size, i.e., 16 elements, for matrix B");
+    return op->emitOpError("tile_width for 32 bit elements should be equal to "
+                           "systolic depth (8 elements) for matrix A and the "
+                           "subgroup size (16 elements) for matrix B");
 
   return success();
 }
@@ -203,10 +203,13 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   VectorType resTy = getRes().getType();
   unsigned resSize =
       resTy.getNumElements() * resTy.getElementType().getIntOrFloatBitWidth();
-  unsigned subgroupSize = TritonGEN::getSubgroupSize(*this);
-  if (resSize * subgroupSize !=
-      getElemSizeInBits() * getTileHeight() * getTileWidth() * getVBlocks())
-    return emitOpError("result size does not match the expected size");
+  constexpr unsigned subgroupSize = 16;
+  unsigned expectedSize = getElemSizeInBits() * getTileHeight() *
+                          getTileWidth() * getVBlocks() / subgroupSize;
+  if (resSize != expectedSize)
+    return emitOpError() << "result size of " << resSize
+                         << " bits does not match the expected size of "
+                         << expectedSize << " bits";
 
   return verifyMatrixReadInput(*this);
 }
