@@ -27,6 +27,10 @@ public:
     };
 
     for (auto *L : LI) {
+      BasicBlock *preHeader = L->getLoopPreheader();
+      if (!preHeader)
+        continue;
+
       MemorySSAUpdater MSSAU(&MSSA);
       ICFLoopSafetyInfo SafetyInfo;
       SafetyInfo.computeLoopSafetyInfo(L);
@@ -34,16 +38,13 @@ public:
       LoopBlocksRPO workList(L);
       workList.perform(&LI);
 
-      BasicBlock *Preheader = L->getLoopPreheader();
-      assert(Preheader && "Loop does not have a preheader");
-
       for (BasicBlock *BB : workList) {
         for (Instruction &I : llvm::make_early_inc_range(*BB)) {
           if (inSubLoop(BB, L, LI))
             continue;
 
           if (L->hasLoopInvariantOperands(&I) && canHoist(I, AA, DT, MSSA, L)) {
-            hoist(I, DT, L, L->getLoopPreheader(), SafetyInfo, MSSAU, SE);
+            hoist(I, DT, L, preHeader, SafetyInfo, MSSAU, SE);
             continue;
           }
         }
@@ -83,8 +84,8 @@ private:
                                           MemoryUseOrDef *MA) {
         return MSSA.getSkipSelfWalker()->getClobberingMemoryAccess(MA, BAA);
       };
-      MemoryAccess *Source = getClobberingMemoryAccess(MSSA, BAA, MU);
-      return !MSSA.isLiveOnEntryDef(Source) && L->contains(Source->getBlock());
+      MemoryAccess *src = getClobberingMemoryAccess(MSSA, BAA, MU);
+      return !MSSA.isLiveOnEntryDef(src) && L->contains(src->getBlock());
     };
 
     if (CallInst *CI = dyn_cast<CallInst>(&I)) {
