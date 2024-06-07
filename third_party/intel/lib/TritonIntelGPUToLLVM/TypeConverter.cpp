@@ -15,7 +15,7 @@ TritonIntelGPUToLLVMTypeConverter::TritonIntelGPUToLLVMTypeConverter(
     : TritonGPUToLLVMTypeConverter(ctx, option, analysis) {
   // Augment/overwrite type conversions required for the Intel conversion
   // passes.
-  if (!isLTSDriver && 
+  if (!isLTSDriver &&
       mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {
     // tt::pointer to v2i32.
     addConversion([&](PointerType type) -> std::optional<Type> {
