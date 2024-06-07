@@ -116,9 +116,9 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
               [&](auto) { return TritonGEN::ReduceKind::ADD; })
           .Case<arith::MulFOp, arith::MulIOp>(
               [&](auto) { return TritonGEN::ReduceKind::MUL; })
-          .Case<arith::MaxNumFOp, arith::MaxSIOp, arith::MaxUIOp>(
+          .Case<arith::MaxNumFOp>(
               [&](auto) { return TritonGEN::ReduceKind::MAX; })
-          .Case<arith::MinNumFOp, arith::MinSIOp, arith::MinUIOp>(
+          .Case<arith::MinNumFOp>(
               [&](auto) { return TritonGEN::ReduceKind::MIN; })
           .Case<arith::AndIOp>([&](auto) { return TritonGEN::ReduceKind::AND; })
           .Case<arith::OrIOp>([&](auto) { return TritonGEN::ReduceKind::OR; })
