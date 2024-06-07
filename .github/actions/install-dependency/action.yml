@@ -39,7 +39,7 @@ runs:
         path: ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}
         key: ${{ inputs.package }}-$PYTHON_VERSION-${{ steps.commit-id.outputs.commit_id }}
 
-    - name: Clone pytorch benchmark
+    - name: Clone package repo
       if: ${{ steps.cache-load.outputs.status == 'miss' }}
       uses: actions/checkout@v4
       with:
