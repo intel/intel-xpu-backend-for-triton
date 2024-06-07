@@ -34,6 +34,10 @@ void populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit);
 
+void populateBF16CastsLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                   RewritePatternSet &patterns,
+                                   PatternBenefit benefit);
+
 void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        const TargetInfoBase &targetInfo,

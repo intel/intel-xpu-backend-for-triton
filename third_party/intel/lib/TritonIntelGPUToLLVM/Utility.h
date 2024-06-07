@@ -822,6 +822,11 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
   }
 }
 
+Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
+                        Value v);
+Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
+                        Value v, RoundingMode rounding);
+
 } // namespace mlir::triton::intel
 
 #endif

@@ -15,4 +15,5 @@ add_triton_library(TritonGENToLLVM
   GenISAIntrinsics
   MLIRLLVMDialect
   MLIRSPIRVDialect
+  TritonIntelUtils
 )

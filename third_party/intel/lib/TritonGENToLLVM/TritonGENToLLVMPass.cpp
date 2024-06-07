@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Attributes.h"
+#include "Utils/Mangling.h"
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -25,7 +26,6 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/TypeToLLVM.h"
 
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -86,31 +86,6 @@ createDeviceFunctionCall(ConversionPatternRewriter &rewriter,
   return callOp;
 }
 
-static std::string getTypeMangling(Type ty) {
-  return TypeSwitch<Type, std::string>(ty)
-      .Case<VectorType>([](auto ty) {
-        return "Dv" + std::to_string(ty.getNumElements()) + "_" +
-               getTypeMangling(ty.getElementType());
-      })
-      .Case<Float16Type>([](auto) { return "Dh"; })
-      .Case<Float32Type>([](auto) { return "f"; })
-      .Case<Float64Type>([](auto) { return "d"; })
-      .Case<IntegerType>([](auto ty) {
-        switch (ty.getWidth()) {
-        case 8:
-          return "c";
-        case 16:
-          return "s";
-        case 32:
-          return "i";
-        case 64:
-          return "l";
-        default:
-          llvm_unreachable("unhandled integer type");
-        }
-      });
-}
-
 static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
                                           Value value, Value mask,
                                           TritonGEN::ShflKind kind) {
@@ -133,7 +108,7 @@ static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
     fnName = "_Z17sub_group_shuffle";
     break;
   }
-  fnName += getTypeMangling(value.getType()) + "j";
+  fnName += intel::getTypeMangling(value.getType()) + "j";
 
   MLIRContext *ctx = rewriter.getContext();
 
@@ -201,12 +176,12 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
         stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
         std::to_string(8 /*systolic depth*/ *
                        getNumOperandsPerDword(precisionA));
-    std::string bMangledTy = getTypeMangling(bTy);
-    std::string cMangledTy = getTypeMangling(opTypes[0]);
+    std::string bMangledTy = intel::getTypeMangling(bTy);
+    std::string cMangledTy = intel::getTypeMangling(opTypes[0]);
     if (bMangledTy == cMangledTy)
       cMangledTy = "S0_";
     fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             getTypeMangling(aTy) + bMangledTy + cMangledTy;
+             intel::getTypeMangling(aTy) + bMangledTy + cMangledTy;
     SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
     SmallVector<Value> args{a, b, op.getC()};
 
