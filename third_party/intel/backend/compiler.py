@@ -161,7 +161,7 @@ class XPUBackend(BaseBackend):
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
 
         is_lts_driver = Version(metadata["target"].arch['driver_version']) == Version("1.3.27642")
-        enable_remat_cache = False # not is_lts_driver
+        enable_remat_cache = not is_lts_driver
 
         # optimize TTGIR
         intel.passes.ttgpuir.add_accelerate_matmul(pm)

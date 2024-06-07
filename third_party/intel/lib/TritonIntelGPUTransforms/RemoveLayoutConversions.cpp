@@ -166,11 +166,13 @@ public:
   }
   void cleanup();
   void backwardRematerialization(bool enableRematCache);
-  void backwardRematerialization(ConvertLayoutOp convertOp, bool enableRematCache);
+  void backwardRematerialization(ConvertLayoutOp convertOp,
+                                 bool enableRematCache);
   void hoistConvertOnTopOfExtOrBroadcast();
   void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                    ConvertLayoutOp convertOp, IRMapping &mapping, bool enableRematCache);
+                    ConvertLayoutOp convertOp, IRMapping &mapping,
+                    bool enableRematCache);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
                     ConvertLayoutOp convertOp, bool enableRematCache);
 
@@ -944,7 +946,8 @@ void LayoutRematerialization::updateRematMapping(
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ConvertLayoutOp convertOp,
-                                           IRMapping &mapping, bool enableRematCache) {
+                                           IRMapping &mapping,
+                                           bool enableRematCache) {
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
@@ -952,12 +955,10 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     auto layoutIt = layout.find(v);
     assert(layoutIt != layout.end());
     // If we already have a remat value for this value, use it.
-#if 0
-    if (false && hasRematValue(v, layoutIt->second)) {
+    if (enableRematCache && hasRematValue(v, layoutIt->second)) {
       mapping.map(v, getRematValue(v, layoutIt->second));
       continue;
     }
-#endif 
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
       if (auto ifOp = v.getDefiningOp<scf::IfOp>()) {
@@ -1120,7 +1121,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
-                                           ConvertLayoutOp convertOp, bool enableRematCache) {
+                                           ConvertLayoutOp convertOp,
+                                           bool enableRematCache) {
   IRMapping mapping;
   rewriteSlice(slice, layout, convertOp, mapping, enableRematCache);
 }
@@ -1312,7 +1314,8 @@ class TritonIntelGPURemoveLayoutConversionsPass
     : public intel::impl::TritonIntelGPURemoveLayoutConversionsBase<
           TritonIntelGPURemoveLayoutConversionsPass> {
 public:
-  using TritonIntelGPURemoveLayoutConversionsBase::TritonIntelGPURemoveLayoutConversionsBase;
+  using TritonIntelGPURemoveLayoutConversionsBase::
+      TritonIntelGPURemoveLayoutConversionsBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
