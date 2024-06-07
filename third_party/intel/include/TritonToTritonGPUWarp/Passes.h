@@ -3,14 +3,12 @@
 
 #include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton::intel {
 
 #define GEN_PASS_DECL
 #define GEN_PASS_REGISTRATION
 #include "intel/include/TritonToTritonGPUWarp/Passes.h.inc"
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::intel
 
 #endif

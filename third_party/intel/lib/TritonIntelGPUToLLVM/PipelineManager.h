@@ -17,6 +17,7 @@
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/PatternMatch.h"
 
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
@@ -135,6 +136,44 @@ private:
   int numWarps{0};
 };
 
+struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
+
+  using mlir::OpRewritePattern<ModuleOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ModuleOp op,
+                                PatternRewriter &rewriter) const override {
+    if (spirv::lookupTargetEnv(op)) {
+      return failure();
+    }
+
+    int subgroupSize =
+        ::mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(op);
+
+    auto resourceLimit = spirv::getDefaultResourceLimits(rewriter.getContext());
+    auto newResourceLimit = rewriter.getAttr<spirv::ResourceLimitsAttr>(
+        resourceLimit.getMaxComputeSharedMemorySize(),
+        resourceLimit.getMaxComputeWorkgroupInvocations(),
+        resourceLimit.getMaxComputeWorkgroupSize(), subgroupSize,
+        resourceLimit.getMinSubgroupSize(), resourceLimit.getMaxSubgroupSize(),
+        resourceLimit.getCooperativeMatrixPropertiesKhr(),
+        resourceLimit.getCooperativeMatrixPropertiesNv());
+    auto triple = spirv::VerCapExtAttr::get(
+        spirv::Version::V_1_2,
+        {spirv::Capability::GroupNonUniform, spirv::Capability::Addresses,
+         spirv::Capability::Float16Buffer, spirv::Capability::Int64,
+         spirv::Capability::Int16, spirv::Capability::Int8,
+         spirv::Capability::Kernel, spirv::Capability::Linkage,
+         spirv::Capability::Vector16, spirv::Capability::GenericPointer,
+         spirv::Capability::Groups, spirv::Capability::Float64},
+        {}, rewriter.getContext());
+    auto newTargetEnv = spirv::TargetEnvAttr::get(triple, newResourceLimit);
+    rewriter.modifyOpInPlace(op, [op, newTargetEnv] {
+      op->setAttr(spirv::getTargetEnvAttrName(), newTargetEnv);
+    });
+    return success();
+  }
+};
+
 /// Manages TritonIntelGPU --> LLVM the conversion pipeline.
 /// Currently the conversion pipeline depends on whether the kernel contains
 /// block pointers or not.
@@ -168,6 +207,11 @@ public:
                              TargetInfo &targetInfo, int benefit) const {
     using namespace mlir;
     using namespace mlir::triton;
+
+    // should run before other patterns that need the SPIRV-ENV attr
+    // (e.g. patterns that output triton_gen.sub_group_reduce)
+    patterns.add<AddSPIRVEnvPattern>(&typeConverter.getContext(),
+                                     patternBenefitAddSPIRVEnv);
 
     if (blockPtrPathIsEnabled) {
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);

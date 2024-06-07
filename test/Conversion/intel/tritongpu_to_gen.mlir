@@ -1370,6 +1370,156 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 // -----
 
+// CHECK-LABEL: reduce_all
+#blocked = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#slice = #triton_gpu.slice<{dim = 0, parent = #blocked}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_all(%arg: tensor<256x1xi32, #blocked>, %arg_0: tensor<256x1xf32, #blocked>) {
+
+    // CHECK: @_Z20sub_group_reduce_addf
+    %0 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: f32, %arg5: f32):
+      %48 = arith.addf %arg4, %arg5 : f32
+      tt.reduce.return %48 : f32
+    }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
+
+    // CHECK: @_Z20sub_group_reduce_addi
+    %1 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i32, %arg5: i32):
+      %48 = arith.addi %arg4, %arg5 : i32
+      tt.reduce.return %48 : i32
+    }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    // CHECK: @_Z20sub_group_reduce_mulf
+    %2 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: f32, %arg5: f32):
+      %48 = arith.mulf %arg4, %arg5 : f32
+      tt.reduce.return %48 : f32
+    }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
+
+    // CHECK: @_Z20sub_group_reduce_muli
+    %3 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i32, %arg5: i32):
+      %48 = arith.muli %arg4, %arg5 : i32
+      tt.reduce.return %48 : i32
+    }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    // CHECK: @_Z20sub_group_reduce_maxf
+    %4 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: f32, %arg5: f32):
+      %48 = arith.maxnumf %arg4, %arg5 : f32
+      tt.reduce.return %48 : f32
+    }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
+
+    // CHECK: @_Z20sub_group_reduce_minf
+    %5 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: f32, %arg5: f32):
+      %48 = arith.minnumf %arg4, %arg5 : f32
+      tt.reduce.return %48 : f32
+    }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
+
+    // CHECK: @_Z20sub_group_reduce_andi
+    %6 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i32, %arg5: i32):
+      %48 = arith.andi %arg4, %arg5 : i32
+      tt.reduce.return %48 : i32
+    }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    // CHECK: @_Z19sub_group_reduce_ori
+    %7 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i32, %arg5: i32):
+      %48 = arith.ori %arg4, %arg5 : i32
+      tt.reduce.return %48 : i32
+    }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    // CHECK: @_Z20sub_group_reduce_xori
+    %8 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i32, %arg5: i32):
+      %48 = arith.xori %arg4, %arg5 : i32
+      tt.reduce.return %48 : i32
+    }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: reduce_cluster
+#blocked = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#slice = #triton_gpu.slice<{dim = 0, parent = #blocked}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_cluster(%arg: tensor<256x1xi32, #blocked>, %arg_0: tensor<256x1xf32, #blocked>) {
+
+    // CHECK: @_Z30sub_group_clustered_reduce_addfj
+    %0 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: f32, %arg5: f32):
+      %48 = arith.addf %arg4, %arg5 : f32
+      tt.reduce.return %48 : f32
+    }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
+
+    // CHECK: @_Z30sub_group_clustered_reduce_addij
+    %1 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i32, %arg5: i32):
+      %48 = arith.addi %arg4, %arg5 : i32
+      tt.reduce.return %48 : i32
+    }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    // CHECK: @_Z30sub_group_clustered_reduce_mulfj
+    %2 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: f32, %arg5: f32):
+      %48 = arith.mulf %arg4, %arg5 : f32
+      tt.reduce.return %48 : f32
+    }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
+
+    // CHECK: @_Z30sub_group_clustered_reduce_mulij
+    %3 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i32, %arg5: i32):
+      %48 = arith.muli %arg4, %arg5 : i32
+      tt.reduce.return %48 : i32
+    }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    // CHECK: @_Z30sub_group_clustered_reduce_maxfj
+    %4 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: f32, %arg5: f32):
+      %48 = arith.maxnumf %arg4, %arg5 : f32
+      tt.reduce.return %48 : f32
+    }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
+
+    // CHECK: @_Z30sub_group_clustered_reduce_minfj
+    %5 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: f32, %arg5: f32):
+      %48 = arith.minnumf %arg4, %arg5 : f32
+      tt.reduce.return %48 : f32
+    }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
+
+    // CHECK: @_Z30sub_group_clustered_reduce_andij
+    %6 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i32, %arg5: i32):
+      %48 = arith.andi %arg4, %arg5 : i32
+      tt.reduce.return %48 : i32
+    }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    // CHECK: @_Z29sub_group_clustered_reduce_orij
+    %7 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i32, %arg5: i32):
+      %48 = arith.ori %arg4, %arg5 : i32
+      tt.reduce.return %48 : i32
+    }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    // CHECK: @_Z30sub_group_clustered_reduce_xorij
+    %8 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i32, %arg5: i32):
+      %48 = arith.xori %arg4, %arg5 : i32
+      tt.reduce.return %48 : i32
+    }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: sum_reduction
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
@@ -1403,7 +1553,7 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
 // -----
 #blocked = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #slice = #triton_gpu.slice<{dim = 1, parent = #blocked}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: reduce_bools
   tt.func public @reduce_bools(%arg: tensor<256x2xi1, #blocked>) {
 

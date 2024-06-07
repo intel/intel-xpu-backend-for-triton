@@ -38,11 +38,11 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
-namespace mlir::triton {
+namespace mlir::triton::intel {
 #define GEN_PASS_DECL_CONVERTTRITONTOTRITONGPUWARP
 #define GEN_PASS_DEF_CONVERTTRITONTOTRITONGPUWARP
 #include "intel/include/TritonToTritonGPUWarp/Passes.h.inc"
-} // namespace mlir::triton
+} // namespace mlir::triton::intel
 
 #define DEBUG_TYPE "convert-triton-to-tritongpu-warp"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -126,7 +126,7 @@ struct LoopDotInfo {
 
 } // namespace
 
-namespace mlir::triton {
+namespace mlir::triton::intel {
 class ConvertTritonToTritonGPUWarp
     : public impl::ConvertTritonToTritonGPUWarpBase<
           ConvertTritonToTritonGPUWarp> {
@@ -465,4 +465,4 @@ public:
   }
 };
 
-} // namespace mlir::triton
+} // namespace mlir::triton::intel
