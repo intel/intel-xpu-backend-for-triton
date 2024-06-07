@@ -201,8 +201,15 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
     return failure();
 
   VectorType resTy = getRes().getType();
-  unsigned resSize =
-      resTy.getNumElements() * resTy.getElementType().getIntOrFloatBitWidth();
+  unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
+  if (getElemSizeInBits() == 32 || getVnniTransform()) {
+    if (resElemTySize != 32)
+      return emitOpError() << "expecting result element type to be 32 bits";
+  } else if (resElemTySize != 16) {
+    return emitOpError() << "expecting result element type to be 16 bits";
+  }
+
+  unsigned resSize = resTy.getNumElements() * resElemTySize;
   constexpr unsigned subgroupSize = 16;
   unsigned expectedSize = getElemSizeInBits() * getTileHeight() *
                           getTileWidth() * getVBlocks() / subgroupSize;
