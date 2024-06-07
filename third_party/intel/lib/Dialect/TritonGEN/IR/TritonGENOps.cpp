@@ -50,9 +50,11 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
   uint32_t TileWidth = op.getTileWidth();
   switch (op.getElemSizeInBits()) {
   case 32:
-    if (TileWidth != 8)
-      return op->emitOpError("tile_width for 32 bit elements should be equal "
-                             "to systolic depth, i.e., 8 elements");
+    if (TileWidth != 8 && TileWidth != 16)
+      return op->emitOpError(
+          "tile_width for 32 bit elements should be equal "
+          "to systolic depth, i.e., 8 elements, for matrix A or subgroup size, "
+          "i.e., 16 elements, for matrix B");
     break;
   case 16:
     if (TileWidth != 16)
