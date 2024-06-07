@@ -683,20 +683,6 @@ struct StoreOpConversion
     auto vals = unpackLLElements(loc, adaptor.getValue(), rewriter);
     assert(vals.size() == numElems);
 
-    SmallVector<Value> storededVals;
-    Type vectorTy = LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
-                                             elemsPerLane);
-    SmallVector<int32_t> zeros(elemsPerLane);
-    std::fill(zeros.begin(), zeros.end(), 0);
-    DenseI32ArrayAttr attrZeros = rewriter.getDenseI32ArrayAttr(zeros);
-    for (auto &val : vals) {
-      Value poison = rewriter.create<LLVM::PoisonOp>(loc, vectorTy);
-      Value vectInit = insert_element(vectorTy, poison, val, i32_val(0));
-      Value stored = rewriter.create<LLVM::ShuffleVectorOp>(loc, vectInit,
-                                                            poison, attrZeros);
-      storededVals.push_back(bitcast(stored, store2DGenXType));
-    }
-
     width = trunc(i32_ty, width);
     height = trunc(i32_ty, height);
     rowStride = trunc(i32_ty, rowStride);
@@ -704,16 +690,30 @@ struct StoreOpConversion
     Value baseWidth = mul(width, elemSizeInBytes);
     // encoded as bytes.
     Value basePitch = mul(rowStride, elemSizeInBytes);
-    Value dimWarpId0 = mul(multiDimWarpId[0], i32_val(elemsPerInstr[0]));
-    Value dimWarpId1 = mul(multiDimWarpId[1], i32_val(elemsPerInstr[1]));
+
+    // A dense stride for the replicates.
+    SmallVector<unsigned, 2> replicaStride = {(unsigned)(elemsPerInstr[0]),
+                                              (unsigned)(elemsPerInstr[1])};
+    SmallVector<unsigned, 2> warpStride = {
+        (unsigned)(numReps[0] * elemsPerInstr[0]),
+        (unsigned)(numReps[1] * elemsPerInstr[1])};
+
+    Value dimWarpId0 = mul(multiDimWarpId[0], i32_val(warpStride[0]));
+    Value dimWarpId1 = mul(multiDimWarpId[1], i32_val(warpStride[1]));
     Value warpId0Offset = add(dimWarpId0, offsetBaseY);
     Value warpId1Offset = add(dimWarpId1, offsetBaseX);
+    unsigned valOffset = 0;
     for (int m = 0; m < numReps[0]; ++m) {
-      Value offsetY =
-          add(warpId0Offset, i32_val(m * numReps[0] * elemsPerInstr[0]));
+      Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0]));
       for (int n = 0; n < numReps[1]; ++n) {
-        Value offsetX =
-            add(warpId1Offset, i32_val(n * numReps[1] * elemsPerInstr[1]));
+        Value offsetX = add(warpId1Offset, i32_val(n * replicaStride[1]));
+
+        Value storeVal = rewriter.create<LLVM::UndefOp>(
+            loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
+                                          elemsPerLane));
+        for (size_t i = 0; i < elemsPerLane; ++i) {
+          storeVal = insert_element(storeVal, vals[valOffset++], i32_val(i));
+        }
 
         rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
             loc,
@@ -729,7 +729,7 @@ struct StoreOpConversion
             /*v_blocks*/ 1,
             /*transpose*/ false,
             /*vnni_transform*/ false,
-            /*stored_val*/ storededVals[m * numReps[1] + n]);
+            /*stored_val*/ bitcast(storeVal, store2DGenXType));
       }
     }
     rewriter.eraseOp(op);
