@@ -11,15 +11,16 @@
 using namespace mlir;
 
 namespace {
-static bool isBF16OrVectorOf(Type type) {
+static bool isBF16OrTensorOf(Type type) {
   return TypeSwitch<Type, bool>(type)
-      .Case([](VectorType type) { return type.getElementType().isBF16(); })
+      .Case(
+          [](RankedTensorType type) { return type.getElementType().isBF16(); })
       .Default([](Type type) { return type.isBF16(); });
 }
 
-static bool isF32OrVectorOf(Type type) {
+static bool isF32OrTensorOf(Type type) {
   return TypeSwitch<Type, bool>(type)
-      .Case([](VectorType type) { return type.getElementType().isF32(); })
+      .Case([](RankedTensorType type) { return type.getElementType().isF32(); })
       .Default([](Type type) { return type.isF32(); });
 }
 
@@ -36,10 +37,8 @@ struct ExtBF16 : ConvertOpToLLVMPattern<arith::ExtFOp> {
   using ConvertOpToLLVMPattern<arith::ExtFOp>::ConvertOpToLLVMPattern;
 
   LogicalResult match(arith::ExtFOp op) const final {
-    return success(isBF16OrVectorOf(
-                       getTypeConverter()->convertType(op.getIn().getType())) &&
-                   isF32OrVectorOf(
-                       getTypeConverter()->convertType(op.getOut().getType())));
+    return success(isBF16OrTensorOf(op.getIn().getType()) &&
+                   isF32OrTensorOf(op.getOut().getType()));
   }
 
   void rewrite(arith::ExtFOp op, OpAdaptor adaptor,
@@ -58,10 +57,8 @@ struct TruncBF16 : ConvertOpToLLVMPattern<arith::TruncFOp> {
   LogicalResult match(arith::TruncFOp op) const final {
     std::optional<arith::RoundingMode> roundingMode = op.getRoundingmode();
     return success((!roundingMode || *roundingMode == validRoundingMode) &&
-                   isF32OrVectorOf(
-                       getTypeConverter()->convertType(op.getIn().getType())) &&
-                   isBF16OrVectorOf(
-                       getTypeConverter()->convertType(op.getOut().getType())));
+                   isF32OrTensorOf(op.getIn().getType()) &&
+                   isBF16OrTensorOf(op.getOut().getType()));
   }
 
   void rewrite(arith::TruncFOp op, OpAdaptor adaptor,
