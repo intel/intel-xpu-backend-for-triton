@@ -109,23 +109,21 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
       reduceOp->getOperand(1) != block.getArgument(1))
     return false;
 
-  std::optional<TritonGEN::ReduceKind> reduceKind = std::nullopt;
-
-  llvm::TypeSwitch<mlir::Operation *>(reduceOp)
-      .Case<arith::AddFOp, arith::AddIOp>(
-          [&](auto) { reduceKind = TritonGEN::ReduceKind::ADD; })
-      .Case<arith::MulFOp, arith::MulIOp>(
-          [&](auto) { reduceKind = TritonGEN::ReduceKind::MUL; })
-      .Case<arith::MaxNumFOp, arith::MaxSIOp, arith::MaxUIOp>(
-          [&](auto) { reduceKind = TritonGEN::ReduceKind::MAX; })
-      .Case<arith::MinNumFOp, arith::MinSIOp, arith::MinUIOp>(
-          [&](auto) { reduceKind = TritonGEN::ReduceKind::MIN; })
-      .Case<arith::AndIOp>(
-          [&](auto) { reduceKind = TritonGEN::ReduceKind::AND; })
-      .Case<arith::OrIOp>([&](auto) { reduceKind = TritonGEN::ReduceKind::OR; })
-      .Case<arith::XOrIOp>(
-          [&](auto) { reduceKind = TritonGEN::ReduceKind::XOR; });
-
+  auto reduceKind =
+      llvm::TypeSwitch<mlir::Operation *, std::optional<TritonGEN::ReduceKind>>(
+          reduceOp)
+          .Case<arith::AddFOp, arith::AddIOp>(
+              [&](auto) { return TritonGEN::ReduceKind::ADD; })
+          .Case<arith::MulFOp, arith::MulIOp>(
+              [&](auto) { return TritonGEN::ReduceKind::MUL; })
+          .Case<arith::MaxNumFOp, arith::MaxSIOp, arith::MaxUIOp>(
+              [&](auto) { return TritonGEN::ReduceKind::MAX; })
+          .Case<arith::MinNumFOp, arith::MinSIOp, arith::MinUIOp>(
+              [&](auto) { return TritonGEN::ReduceKind::MIN; })
+          .Case<arith::AndIOp>([&](auto) { return TritonGEN::ReduceKind::AND; })
+          .Case<arith::OrIOp>([&](auto) { return TritonGEN::ReduceKind::OR; })
+          .Case<arith::XOrIOp>([&](auto) { return TritonGEN::ReduceKind::XOR; })
+          .Default([](auto) { return std::nullopt; });
   if (reduceKind == std::nullopt)
     return false;
 
