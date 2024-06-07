@@ -204,7 +204,7 @@ llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_height : i32, %x : i32, %y
 // -----
 
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // expected-error @+1 {{'triton_gen.2Dblockload' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements}}
+  // expected-error @+1 {{'triton_gen.2Dblockload' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements, for matrix A or subgroup size, i.e., 16 elements, for matrix B}}
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=5, tile_height=1, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<5xf32>
   llvm.return
 }
@@ -262,7 +262,7 @@ llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_height : i32, %x : i32, %
 // -----
 
 llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<4xf32>) {
-  // expected-error @+1 {{'triton_gen.2Dblockstore' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements}}
+  // expected-error @+1 {{'triton_gen.2Dblockstore' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements, for matrix A or subgroup size, i.e., 16 elements, for matrix B}}
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=4, tile_height=1, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<4xf32>)
   llvm.return
 }
@@ -320,7 +320,7 @@ llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_height : i32, %x : i32
 // -----
 
 llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements}}
+  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op tile_width for 32 bit elements should be equal to systolic depth, i.e., 8 elements, for matrix A or subgroup size, i.e., 16 elements, for matrix B}}
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=5, tile_height=1, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
 }
