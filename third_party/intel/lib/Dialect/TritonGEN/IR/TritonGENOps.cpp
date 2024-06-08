@@ -90,9 +90,8 @@ template <typename Op> static LogicalResult verifyMatrixReadInput(Op op) {
 
   uint32_t tileWidth = op.getTileWidth();
   if (op.getElemSizeInBits() == 32 && tileWidth != 8 && tileWidth != 16)
-    return op->emitOpError("tile_width for 32 bit elements should be equal to "
-                           "systolic depth (8 elements) for matrix A and the "
-                           "subgroup size (16 elements) for matrix B");
+    return op->emitOpError(
+        "tile_width for 32 bit elements should be equal to either be 8 or 16");
 
   return success();
 }
