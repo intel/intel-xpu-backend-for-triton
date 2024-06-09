@@ -234,11 +234,14 @@ class Mark:
 
         import matplotlib.pyplot as plt
         import pandas as pd
-        y_mean = bench.line_names
-        y_min = [f'{x}-min' for x in bench.line_names]
-        y_max = [f'{x}-max' for x in bench.line_names]
+        y_vals = []
+        for label in bench.ylabel:
+            y_mean = [f'{x}-{label}' for x in bench.line_names]
+            y_min = [f'{x}-{label}-min' for x in bench.line_names]
+            y_max = [f'{x}-{label}-max' for x in bench.line_names]
+            y_vals += y_mean + y_min + y_max
         x_names = list(bench.x_names)
-        df = pd.DataFrame(columns=x_names + y_mean + y_min + y_max)
+        df = pd.DataFrame(columns=x_names + y_vals)
         for x in bench.x_vals:
             # x can be a single value or a sequence of values.
             if not isinstance(x, (list, tuple)):
@@ -248,32 +251,42 @@ class Mark:
                 raise ValueError(f"Expected {len(x_names)} values, got {x}")
             x_args = dict(zip(x_names, x))
 
-            row_mean, row_min, row_max = [], [], []
+            row_vals = {}
+            for label in bench.ylabel:
+                row_vals[label] = ([], [], [])
             for y in bench.line_vals:
                 ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwrags)
-                try:
-                    y_mean, y_min, y_max = ret
-                except TypeError:
-                    y_mean, y_min, y_max = ret, None, None
-                row_mean += [y_mean]
-                row_min += [y_min]
-                row_max += [y_max]
-            df.loc[len(df)] = list(x) + row_mean + row_min + row_max
+                for id, label in enumerate(bench.ylabel):
+                    try:
+                        y_mean, y_min, y_max = ret[id]
+                    except TypeError:
+                        y_mean, y_min, y_max = ret[id], None, None
+                    row_vals[label][0].append(y_mean)
+                    row_vals[label][1].append(y_min)
+                    row_vals[label][2].append(y_max)
+            rows = []
+            for label in bench.ylabel:
+                rows += row_vals[label][0]
+                rows += row_vals[label][1]
+                rows += row_vals[label][2]
+            df.loc[len(df)] = list(x) + rows
 
         if bench.plot_name:
             plt.figure()
             ax = plt.subplot()
             # Plot first x value on x axis if there are multiple.
             first_x = x_names[0]
-            for i, y in enumerate(bench.line_names):
-                y_min, y_max = df[y + '-min'], df[y + '-max']
-                col = bench.styles[i][0] if bench.styles else None
-                sty = bench.styles[i][1] if bench.styles else None
-                ax.plot(df[first_x], df[y], label=y, color=col, ls=sty)
-                if not y_min.isnull().all() and not y_max.isnull().all():
-                    y_min = y_min.astype(float)
-                    y_max = y_max.astype(float)
-                    ax.fill_between(df[first_x], y_min, y_max, alpha=0.15, color=col)
+            for label in bench.ylabel:
+                for i, y in enumerate(bench.line_names):
+                    y = f'{y}-{label}'
+                    y_min, y_max = df[y + '-min'], df[y + '-max']
+                    col = bench.styles[i][0] if bench.styles else None
+                    sty = bench.styles[i][1] if bench.styles else None
+                    ax.plot(df[first_x], df[y], label=y, color=col, ls=sty)
+                    if not y_min.isnull().all() and not y_max.isnull().all():
+                        y_min = y_min.astype(float)
+                        y_max = y_max.astype(float)
+                        ax.fill_between(df[first_x], y_min, y_max, alpha=0.15, color=col)
             ax.legend()
             ax.set_xlabel(bench.xlabel or first_x)
             ax.set_ylabel(bench.ylabel)
