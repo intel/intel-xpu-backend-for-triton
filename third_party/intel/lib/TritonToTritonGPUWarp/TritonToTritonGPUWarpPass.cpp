@@ -342,8 +342,8 @@ public:
 
     // assume llvm dot size is 8x16
     //((n % 16) == 0 && (m % 8) == 0)
-    auto root = std::sqrt(numWarps);
-    auto numWarpsX = 1;
+    int root = std::sqrt(numWarps);
+    int numWarpsX = 1;
     if (n / 16 <= root)
       numWarpsX = n / 16;
     else if (n / 32 <= root)
@@ -366,7 +366,7 @@ public:
     return {sizePerWarp, warpsPerCTA};
   }
 
-  Workload matchLoopWorkload(scf::ForOp loop, LoopDotInfo loopDotInfo) {
+  Workload matchLoopWorkload(scf::ForOp loop, LoopDotInfo &loopDotInfo) {
     // match gemm pattern
     //  scf.for idx
     //    %a = tt.load %ptrA
