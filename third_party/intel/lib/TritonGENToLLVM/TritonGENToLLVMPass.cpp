@@ -226,16 +226,23 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  if (op.getVnniTransform() || op.getTranspose())
+  // intel_sub_group_2d_block_read_32b_8r8x1c is expected to be lowered to
+  // llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is incorrectly lowered to
+  // llvm.genx.GenISA.LSC2DBlockRead.v8i32.
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
     return false;
 
-  if (op.getElemSizeInBits() == 32)
+  // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
+  // intel_sub_group_2d_block_read_32b_16r16x1c.
+  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 16 &&
+      op.getVBlocks() == 1)
     return false;
 
-  if (op.getTileHeight() > 8)
-    return false;
-
-  if (op.getVBlocks() != 2)
+  // Missing intel_sub_group_2d_block_read_8b_16r32x1c and
+  // intel_sub_group_2d_block_read_8b_32r32x1c.
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() > 8 &&
+      op.getTileWidth() == 32 && op.getVBlocks() == 1)
     return false;
 
   if (op.getCacheControl() != TritonGEN::LoadCacheControl::DEFAULT)
@@ -244,44 +251,56 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   return true;
 }
 
-static LLVM::CallOp
-createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
-                        ConversionPatternRewriter &rewriter) {
+static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
+                                     ConversionPatternRewriter &rewriter) {
   MLIRContext *context = rewriter.getContext();
-  Type resType = op->getResultTypes()[0];
+  VectorType resType = op.getRes().getType();
   Location loc = op->getLoc();
 
   // FIXME: Use the OpenCL API also for all other variants.
   if (isOCLBuiltinAvailable(op)) {
-    std::string fnName = "intel_subgroup_block_read_u" +
-                         std::to_string(op.getElemSizeInBits()) + "_m" +
-                         std::to_string(op.getTileHeight()) + "k" +
-                         std::to_string(op.getTileWidth()) + "v" +
-                         std::to_string(op.getVBlocks());
+    auto dest = rewriter.create<LLVM::AllocaOp>(
+        loc, ptr_ty(context), resType.getElementType(),
+        i32_val(resType.getNumElements()));
+    std::string fnName = "intel_sub_group_2d_block_read_";
+    if (op.getVnniTransform())
+      fnName += "transform_";
+    else if (op.getTranspose())
+      fnName += "transpose_";
+    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
+              std::to_string(op.getTileHeight()) + "r" +
+              std::to_string(op.getTileWidth()) + "x" +
+              std::to_string(op.getVBlocks()) + "c";
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iP";
+    fnName +=
+        (resType.getElementType().getIntOrFloatBitWidth() == 32) ? "j" : "t";
     VectorType vecType = vec_ty(i32_ty, 2);
     Value byteCoord = insert_element(
         vecType, insert_element(vecType, undef(vecType), op.getX(), i32_val(0)),
         op.getY(), i32_val(1));
-    SmallVector<Type> argTypes{ptr_ty(context, 1), i32_ty, i32_ty, i32_ty,
-                               vecType};
-    SmallVector<Value> args{op.getPtr(), op.getBaseWidth(), op.getBaseHeight(),
-                            op.getBasePitch(), byteCoord};
+    SmallVector<Type> argTypes{
+        ptr_ty(context, 1), i32_ty, i32_ty, i32_ty, vecType, ptr_ty(context)};
+    SmallVector<Value> args{op.getPtr(),        op.getBaseWidth(),
+                            op.getBaseHeight(), op.getBasePitch(),
+                            byteCoord,          dest};
 
     MLIRContext *ctx = rewriter.getContext();
     intel::AttrBuilder funcAttrBuilder(*ctx);
-    intel::AttrBuilder paramAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
-        .addPassthroughAttribute(
-            llvm::Attribute::Memory,
-            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
-                .toIntValue());
-    paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    intel::AttrBuilder param0AttrBuilder(*ctx);
+    intel::AttrBuilder param5AttrBuilder(*ctx);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
+    param0AttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    param0AttrBuilder.addAttribute(llvm::Attribute::ReadOnly);
+    param5AttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    param5AttrBuilder.addAttribute(llvm::Attribute::WriteOnly);
     std::vector<NamedAttrList> paramAttrs(argTypes.size());
-    paramAttrs[0] = paramAttrBuilder.getAttributes();
+    paramAttrs[0] = param0AttrBuilder.getAttributes();
+    paramAttrs[5] = param5AttrBuilder.getAttributes();
     intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
 
-    return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
-                                    attrs);
+    createDeviceFunctionCall(rewriter, fnName, void_ty(context), argTypes, args,
+                             attrs);
+    return rewriter.create<LLVM::LoadOp>(loc, resType, dest);
   }
 
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -356,7 +375,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
 
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
   callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-  return callOp;
+  return callOp.getResult();
 }
 
 // FIXME: This is a temporary solution. Remove once IGC can update the address
@@ -1093,8 +1112,7 @@ struct TritonMatrix2DBlockLoadLowering
       return success();
     }
 
-    LLVM::CallOp callOp = createGenISA2DBlockRead(op, rewriter);
-    rewriter.replaceOp(op, callOp);
+    rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
     return success();
   }
 };
