@@ -313,8 +313,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK:  [[SIXTY:%.*]] = llvm.mlir.constant(16 : i32) : i32
-  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[SIXTY]] x i16 : (i32) -> !llvm.ptr
+  // CHECK:  [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[C16]] x i16 : (i32) -> !llvm.ptr
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
@@ -332,8 +332,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK:  [[SIXTY:%.*]] = llvm.mlir.constant(16 : i32) : i32
-  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[SIXTY]] x i16 : (i32) -> !llvm.ptr
+  // CHECK:  [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[C16]] x i16 : (i32) -> !llvm.ptr
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
@@ -351,8 +351,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK:  [[SIXTY:%.*]] = llvm.mlir.constant(16 : i32) : i32
-  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[SIXTY]] x i16 : (i32) -> !llvm.ptr
+  // CHECK:  [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[C16]] x i16 : (i32) -> !llvm.ptr
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
@@ -370,8 +370,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK:  [[SIXTY:%.*]] = llvm.mlir.constant(16 : i32) : i32
-  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[SIXTY]] x i16 : (i32) -> !llvm.ptr
+  // CHECK:  [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[C16]] x i16 : (i32) -> !llvm.ptr
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
@@ -389,8 +389,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK:  [[SIXTY:%.*]] = llvm.mlir.constant(16 : i32) : i32
-  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[SIXTY]] x i16 : (i32) -> !llvm.ptr
+  // CHECK:  [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[C16]] x i16 : (i32) -> !llvm.ptr
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
@@ -408,8 +408,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK:  [[SIXTY:%.*]] = llvm.mlir.constant(16 : i32) : i32
-  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[SIXTY]] x i16 : (i32) -> !llvm.ptr
+  // CHECK:  [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[C16]] x i16 : (i32) -> !llvm.ptr
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
@@ -427,8 +427,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK:  [[SIXTY:%.*]] = llvm.mlir.constant(16 : i32) : i32
-  // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[SIXTY]] x i16 : (i32) -> !llvm.ptr
+  // CHECK:      [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT: [[DEST:%.*]] = llvm.alloca [[C16]] x i16 : (i32) -> !llvm.ptr
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
