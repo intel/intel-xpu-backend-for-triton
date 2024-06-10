@@ -1637,7 +1637,7 @@ struct ElementwiseInlineAsmOpConversion
 
     // Pack elems smaller than 32 bits into 32-bit registers.
     SmallVector<Value> packedOperands =
-        packOperands(op, operands, rewriter, loc);
+        packOperands(op, std::move(operands), rewriter, loc);
 
     // Types returned by the LLVM asm op.  If there's more than one, they'll be
     // wrapped in a struct.
