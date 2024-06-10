@@ -692,11 +692,12 @@ struct StoreOpConversion
     Value basePitch = mul(rowStride, elemSizeInBytes);
 
     // A dense stride for the replicates.
-    SmallVector<unsigned, 2> replicaStride = {(unsigned)(elemsPerInstr[0]),
-                                              (unsigned)(elemsPerInstr[1])};
-    SmallVector<unsigned, 2> warpStride = {
-        (unsigned)(numReps[0] * elemsPerInstr[0]),
-        (unsigned)(numReps[1] * elemsPerInstr[1])};
+    std::array<unsigned, 2> replicaStride = {
+        static_cast<unsigned>(elemsPerInstr[0]),
+        static_cast<unsigned>(elemsPerInstr[1])};
+    std::array<unsigned, 2> warpStride = {
+        static_cast<unsigned>(numReps[0] * elemsPerInstr[0]),
+        static_cast<unsigned>(numReps[1] * elemsPerInstr[1])};
 
     Value dimWarpId0 = mul(multiDimWarpId[0], i32_val(warpStride[0]));
     Value dimWarpId1 = mul(multiDimWarpId[1], i32_val(warpStride[1]));
