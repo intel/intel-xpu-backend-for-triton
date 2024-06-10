@@ -818,43 +818,40 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
     // We try then to find the layout in the map of the processed layouts.
     value = storeOp.getValue();
     auto it = layouts.find(value);
-    if (it != layouts.end()) {
-      encoding = *(it->second.encodings.begin());
-
-      if (!isa<ttgi::DpasEncodingAttr>(encoding))
-        return false;
-
-      auto ptrType = cast<PointerType>(makeTensorPtrOp.getType());
-      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-
-      auto tmpType = RankedTensorType::get(
-          tensorType.getShape(), tensorType.getElementType(), encoding);
-      newPtrType = PointerType::get(tmpType, ptrType.getAddressSpace());
-    } else {
+    if (it == layouts.end())
       return false;
-    }
+
+    encoding = *(it->second.encodings.begin());
+
+    if (!isa<ttgi::DpasEncodingAttr>(encoding))
+      return false;
+
+    auto ptrType = cast<PointerType>(makeTensorPtrOp.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+
+    auto tmpType = RankedTensorType::get(tensorType.getShape(),
+                                         tensorType.getElementType(), encoding);
+    newPtrType = PointerType::get(tmpType, ptrType.getAddressSpace());
   } else {
     Attribute convertOpDstEncoding = convertOp.getType().getEncoding();
     RankedTensorType convertOpSrcType = convertOp.getSrc().getType();
-    if ((convertOpDstEncoding &&
-         !isa<ttgi::DpasEncodingAttr>(convertOpDstEncoding)) &&
-        (convertOpSrcType &&
-         isa<ttgi::DpasEncodingAttr>(convertOpSrcType.getEncoding()))) {
-      auto ptrType = cast<PointerType>(makeTensorPtrOp.getType());
-      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-      // If the output type of the MakeTensorPtrOp already has a
-      // DPAS encoding, we do not forward the previous DPAS encoding.
-      if (isa<ttgi::DpasEncodingAttr>(tensorType.getEncoding()))
-        return false;
-
-      newPtrType =
-          PointerType::get(convertOpSrcType, ptrType.getAddressSpace());
-
-      value = convertOp.getSrc();
-      encoding = convertOpSrcType.getEncoding();
-    } else {
+    if (((!convertOpDstEncoding) ||
+         isa<ttgi::DpasEncodingAttr>(convertOpDstEncoding)) ||
+        (!convertOpSrcType ||
+         !isa<ttgi::DpasEncodingAttr>(convertOpSrcType.getEncoding())))
       return false;
-    }
+
+    auto ptrType = cast<PointerType>(makeTensorPtrOp.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    // If the output type of the MakeTensorPtrOp already has a
+    // DPAS encoding, we do not forward the previous DPAS encoding.
+    if (isa<ttgi::DpasEncodingAttr>(tensorType.getEncoding()))
+      return false;
+
+    newPtrType = PointerType::get(convertOpSrcType, ptrType.getAddressSpace());
+
+    value = convertOp.getSrc();
+    encoding = convertOpSrcType.getEncoding();
   }
 
   // We create a new MakeTensorPtrOp with the new data type.
