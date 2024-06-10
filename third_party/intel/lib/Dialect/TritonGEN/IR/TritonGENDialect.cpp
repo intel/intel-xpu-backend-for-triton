@@ -34,9 +34,6 @@ void TritonGENDialect::initialize() {
 #define GET_ATTRDEF_LIST
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENOpsAttrDefs.cpp.inc"
       >();
-
-  // Support unknown operations because not all GEN operations are registered.
-  allowUnknownOperations();
 }
 
 int triton::TritonGEN::getSubgroupSize(Operation *op) {
