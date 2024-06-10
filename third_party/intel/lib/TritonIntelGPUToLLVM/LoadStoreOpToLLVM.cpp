@@ -713,7 +713,8 @@ struct StoreOpConversion
             loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
                                           elemsPerLane));
         for (size_t i = 0; i < elemsPerLane; ++i) {
-          storeVal = insert_element(storeVal, vals[valOffset++], i32_val(i));
+          storeVal = insert_element(storeVal, vals[valOffset], i32_val(i));
+          ++valOffset;
         }
 
         rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
