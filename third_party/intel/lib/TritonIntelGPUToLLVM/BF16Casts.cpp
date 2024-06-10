@@ -24,7 +24,7 @@ static bool isF32OrTensorOf(Type type) {
       .Default([](Type type) { return type.isF32(); });
 }
 
-static Type getVectorTypeWithSameShape(Type type, Type elementType) {
+static Type getTypeWithSameShape(Type type, Type elementType) {
   return TypeSwitch<Type, Type>(type)
       .Case([elementType](VectorType type) {
         return VectorType::get(type.getShape(), elementType,
@@ -75,8 +75,8 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v) {
   auto moduleOp = v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
   constexpr StringLiteral baseName = "__spirv_ConvertBF16ToFINTEL";
-  Type inTy = getVectorTypeWithSameShape(v.getType(), i16_ty);
-  Type outTy = getVectorTypeWithSameShape(inTy, f32_ty);
+  Type inTy = getTypeWithSameShape(v.getType(), i16_ty);
+  Type outTy = getTypeWithSameShape(inTy, f32_ty);
   std::string name = mlir::triton::gpu::intel::mangle(baseName, inTy);
   auto ext_func =
       triton::gpu::intel::lookupOrCreateSPIRVFn(moduleOp, name, inTy, outTy);
@@ -93,8 +93,8 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
     // Intel SPIR-V extension only supports round-to-nearest-even
     constexpr StringLiteral baseName = "__spirv_ConvertFToBF16INTEL";
     Type inTy = v.getType();
-    Type funcOutTy = getVectorTypeWithSameShape(inTy, i16_ty);
-    Type outTy = getVectorTypeWithSameShape(inTy, bf16_ty);
+    Type funcOutTy = getTypeWithSameShape(inTy, i16_ty);
+    Type outTy = getTypeWithSameShape(inTy, bf16_ty);
     std::string name = mlir::triton::gpu::intel::mangle(baseName, inTy);
     auto trunc_func = triton::gpu::intel::lookupOrCreateSPIRVFn(
         moduleOp, name, inTy, funcOutTy);
