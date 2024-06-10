@@ -56,8 +56,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .value("PVC", gpu::intel::DeviceArch::PVC)
       .export_values();
 
-  ADD_PASS_WRAPPER_0("add_to_llvmir",
-                     gpu::intel::createConvertTritonIntelGPUToLLVM);
+  ADD_PASS_WRAPPER_OPT_1("add_to_llvmir",
+                         gpu::intel::createConvertTritonIntelGPUToLLVM, bool);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
