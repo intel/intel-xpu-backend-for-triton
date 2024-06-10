@@ -645,7 +645,7 @@ public:
 
       assert(rewritedInfo.count(newOperands[i]) &&
              "Expecting YieldOp operands in rewritedInfo");
-      auto info = rewritedInfo[newOperands[i]];
+      const auto &info = rewritedInfo[newOperands[i]];
       newOperands = generateNewOperands(newOperands, i, info.getOffsets());
       i += info.length() - 1;
       size += info.length() - 1;
