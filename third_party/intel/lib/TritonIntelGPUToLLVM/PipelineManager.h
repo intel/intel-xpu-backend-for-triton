@@ -216,6 +216,7 @@ public:
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
+      intel::populateBF16CastsLLVMPatterns(typeConverter, patterns, benefit);
     } else {
       intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                    patterns, benefit);
