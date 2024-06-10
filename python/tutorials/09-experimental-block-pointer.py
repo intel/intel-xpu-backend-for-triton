@@ -218,6 +218,7 @@ for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float
                                       (torch.float16, torch.float32, torch.float16),
                                       (torch.float16, torch.float32, torch.float32),
                                       (torch.bfloat16, torch.float32, torch.float32),
+                                      (torch.bfloat16, torch.float32, torch.bfloat16),
                                       (torch.float32, torch.float32, torch.float32),
                                       (torch.int8, torch.int32, torch.int32)]:
     if dtype.is_floating_point:
