@@ -122,7 +122,7 @@ def softmax(x):
             "XeTLA",
         ],  # label name for the lines
         styles=[('blue', '-'), ('green', '-'), ('green', '--'), ('black', ':')],  # line styles
-        ylabel="GB/s",  # label name for the y-axis
+        ylabel=["GB/s", "TFlops"],  # label name for the y-axis
         plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
         args={'M': 4096},  # values for function arguments not in `x_names` and `y_name`
     ))
@@ -150,7 +150,8 @@ def benchmark(M, N, provider):
         ms, min_ms, max_ms = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, warmup=10, rep=10)
 
     gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
-    return gbps(ms), gbps(max_ms), gbps(min_ms)
+    tflops = lambda ms: 4 * x.nelement() * 1e-12 / (ms * 1e-3)  # reduce-max, reduce-sum, elem-wise sub, elem-wise div
+    return (gbps(ms), gbps(max_ms), gbps(min_ms)), (tflops(ms), tflops(max_ms), tflops(min_ms))
 
 
 if __name__ == "__main__":
