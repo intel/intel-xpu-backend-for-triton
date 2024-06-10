@@ -302,9 +302,23 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
     SmallVector<Value> args{op.getPtr(),        op.getBaseWidth(),
                             op.getBaseHeight(), op.getBasePitch(),
                             byteCoord,          dest};
-    LLVM::CallOp call =
-        createDeviceFunctionCall(rewriter, fnName, void_ty(context), argTypes,
-                                 args, true /*convergent*/);
+
+    MLIRContext *ctx = rewriter.getContext();
+    intel::AttrBuilder funcAttrBuilder(*ctx);
+    intel::AttrBuilder param0AttrBuilder(*ctx);
+    intel::AttrBuilder param5AttrBuilder(*ctx);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
+    param0AttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    param0AttrBuilder.addAttribute(llvm::Attribute::ReadOnly);
+    param5AttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    param5AttrBuilder.addAttribute(llvm::Attribute::WriteOnly);
+    std::vector<NamedAttrList> paramAttrs(argTypes.size());
+    paramAttrs[0] = param0AttrBuilder.getAttributes();
+    paramAttrs[5] = param5AttrBuilder.getAttributes();
+    intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
+
+    LLVM::CallOp call = createDeviceFunctionCall(
+        rewriter, fnName, void_ty(context), argTypes, args, attrs);
     constexpr uint32_t ptrOperandIndex = 0;
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
             loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
