@@ -138,19 +138,21 @@ static unsigned getNumOperandsPerDword(TritonGEN::PrecisionType pTy) {
 
 static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
                                      ConversionPatternRewriter &rewriter) {
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  MLIRContext *context = rewriter.getContext();
   Type resType = op->getResultTypes()[0];
   TypeRange opTypes = op->getOperandTypes();
   Location loc = op->getLoc();
 
-  IntegerType int1Ty = rewriter.getIntegerType(1);
+  FloatType fp32Ty = rewriter.getF32Type();
   IntegerType int16Ty = rewriter.getIntegerType(16);
   IntegerType int32Ty = rewriter.getIntegerType(32);
 
   TritonGEN::PrecisionType precisionA = op.getPa();
-  Type packedAType =
-      (precisionA == TritonGEN::PrecisionType::TF32) ? int32Ty : int16Ty;
+  Type packedAType = (precisionA == TritonGEN::PrecisionType::TF32)
+                         ? cast<Type>(fp32Ty)
+                         : int16Ty;
+  Type packedBType = (precisionA == TritonGEN::PrecisionType::TF32)
+                         ? cast<Type>(fp32Ty)
+                         : int32Ty;
 
   Value a = op.getA();
   VectorType aOrigTy = cast<VectorType>(a.getType());
@@ -165,64 +167,33 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   VectorType bOrigTy = cast<VectorType>(b.getType());
   bitWidth = bOrigTy.getNumElements() *
              bOrigTy.getElementType().getIntOrFloatBitWidth();
-  VectorType bTy = VectorType::get(bitWidth / 32, int32Ty);
+  VectorType bTy = VectorType::get(
+      bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
   if (bOrigTy != bTy)
     b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
 
-  // FIXME: Use the OpenCL API also for TF32.
-  if (precisionA != TritonGEN::PrecisionType::TF32) {
-    std::string fnName =
-        "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
-        stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
-        std::to_string(8 /*systolic depth*/ *
-                       getNumOperandsPerDword(precisionA));
-    std::string bMangledTy = intel::getTypeMangling(bTy);
-    std::string cMangledTy = intel::getTypeMangling(opTypes[0]);
-    if (bMangledTy == cMangledTy)
-      cMangledTy = "S0_";
-    fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             intel::getTypeMangling(aTy) + bMangledTy + cMangledTy;
-    SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
-    SmallVector<Value> args{a, b, op.getC()};
+  std::string fnName =
+      "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
+      stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
+      std::to_string(8 /*systolic depth*/ * getNumOperandsPerDword(precisionA));
+  if (precisionA == TritonGEN::PrecisionType::TF32)
+    fnName += "_f32";
+  std::string bMangledTy = intel::getTypeMangling(bTy);
+  std::string cMangledTy = intel::getTypeMangling(opTypes[0]);
+  if (bMangledTy == cMangledTy)
+    cMangledTy = "S0_";
+  fnName = "_Z" + std::to_string(fnName.size()) + fnName +
+           intel::getTypeMangling(aTy) + bMangledTy + cMangledTy;
+  SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
+  SmallVector<Value> args{a, b, op.getC()};
 
-    MLIRContext *ctx = rewriter.getContext();
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+  MLIRContext *ctx = rewriter.getContext();
+  intel::AttrBuilder funcAttrBuilder(*ctx);
+  funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
+  intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
-    return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
-                                    attrs);
-  }
-
-  llvm::LLVMContext llvmContext;
-  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-  auto llvmResTy = typeTranslator.translateType(resType);
-  auto llvmCTy = typeTranslator.translateType(opTypes[0]);
-  auto llvmATy = typeTranslator.translateType(aTy);
-  auto llvmBTy = typeTranslator.translateType(bTy);
-  SmallVector<llvm::Type *> llvmTypes{llvmResTy, llvmCTy, llvmATy, llvmBTy};
-  std::string funcName = llvm::GenISAIntrinsic::getName(
-      llvm::GenISAIntrinsic::GenISA_sub_group_dpas, llvmTypes);
-
-  SmallVector<Type> argTypes{opTypes[0], aTy,     bTy,     int32Ty,
-                             int32Ty,    int32Ty, int32Ty, int1Ty};
-  LLVM::LLVMFuncOp funcOp =
-      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, resType);
-  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-
-  auto precA = rewriter.create<LLVM::ConstantOp>(loc, int32Ty,
-                                                 static_cast<int>(op.getPa()));
-  auto precB = rewriter.create<LLVM::ConstantOp>(loc, int32Ty,
-                                                 static_cast<int>(op.getPa()));
-  auto sysDepth =
-      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 8 /* systolic depth */);
-  auto RC = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getRc());
-  auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
-  SmallVector<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
-
-  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-  return callOp;
+  return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
+                                  attrs);
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
