@@ -22,19 +22,11 @@ using namespace mlir::triton;
 // Utility functions
 //===----------------------------------------------------------------------===//
 
-template <typename Op> static LogicalResult verifyInput(Op op) {
+template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
   static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
                                 TritonGEN::Matrix2DBlockStoreOp,
                                 TritonGEN::Matrix2DBlockPrefetchOp>::value,
                 "Unexpected template parameter");
-
-  if (op.getElemSizeInBits() != 8 && op.getElemSizeInBits() != 16 &&
-      op.getElemSizeInBits() != 32)
-    return op->emitOpError("expecting 'elem_size_in_bits' to be 8, 16, or 32");
-
-  if (op.getTranspose() && op.getVnniTransform())
-    return op->emitOpError(
-        "transpose and vnni transform are mutually exclusive");
 
   std::optional<int64_t> width = getConstantIntValue(op.getBaseWidth());
   std::optional<int64_t> pitch = getConstantIntValue(op.getBasePitch());
@@ -42,31 +34,64 @@ template <typename Op> static LogicalResult verifyInput(Op op) {
     return op->emitOpError(
         "4th operand (base pitch) should be >= 2nd operand (base width)");
 
-  uint32_t TileHeight = op.getTileHeight();
-  if (TileHeight != 1 && TileHeight != 2 && TileHeight != 4 &&
-      TileHeight != 8 && TileHeight != 16 && TileHeight != 32)
+  if (op.getElemSizeInBits() != 8 && op.getElemSizeInBits() != 16 &&
+      op.getElemSizeInBits() != 32)
+    return op->emitOpError("expecting 'elem_size_in_bits' to be 8, 16, or 32");
+
+  if (op.getTranspose() && op.getVnniTransform())
+    return op->emitOpError(
+        "transpose and vnni_transform are mutually exclusive");
+
+  if (op.getTranspose() && op.getElemSizeInBits() != 32)
+    return op->emitOpError("transpose is only supported for 32 bit elements");
+
+  if (op.getVnniTransform() && op.getElemSizeInBits() == 32)
+    return op->emitOpError("vnni_transform is only supported for 8 and 16 bit "
+                           "elements");
+
+  uint32_t tileHeight = op.getTileHeight();
+  if (tileHeight != 1 && tileHeight != 2 && tileHeight != 4 &&
+      tileHeight != 8 && tileHeight != 16 && tileHeight != 32)
     return op->emitOpError("expecting tile_height to be 1, 2, 4, 8, 16, or 32");
 
-  uint32_t TileWidth = op.getTileWidth();
+  uint32_t vBlocks = op.getVBlocks();
+  if (vBlocks != 1 && vBlocks != 2 && vBlocks != 4 && vBlocks != 8)
+    return op->emitOpError("expecting v_blocks to be 1, 2, 4, or 8");
+
+  uint32_t tileWidth = op.getTileWidth();
+  if (op.getVnniTransform()) {
+    if (tileWidth != 16)
+      return op->emitOpError(
+          "tile_width when vnni_transform is true should be equal "
+          "to subgroup size (16 elements)");
+    return success();
+  }
+
   switch (op.getElemSizeInBits()) {
-  case 32:
-    if (TileWidth != 8)
-      return op->emitOpError("tile_width for 32 bit elements should be equal "
-                             "to systolic depth, i.e., 8 elements");
-    break;
   case 16:
-    if (TileWidth != 16)
+    if (tileWidth != 16)
       return op->emitOpError("tile_width for 16 bit elements should be equal "
                              "to systolic depth times 2, i.e., 16 elements");
     break;
   case 8:
-    if (TileWidth != 32)
+    if (tileWidth != 32)
       return op->emitOpError("tile_width for 8 bit elements should be equal "
                              "to systolic depth times 4, i.e., 32 elements");
     break;
-  default:
-    return op->emitOpError("element size should be 8, 16 or 32 bits");
   }
+
+  return success();
+}
+
+template <typename Op> static LogicalResult verifyMatrixReadInput(Op op) {
+  static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
+                                TritonGEN::Matrix2DBlockPrefetchOp>::value,
+                "Unexpected template parameter");
+
+  uint32_t tileWidth = op.getTileWidth();
+  if (op.getElemSizeInBits() == 32 && tileWidth != 8 && tileWidth != 16)
+    return op->emitOpError(
+        "tile_width for 32 bit elements should be equal to either be 8 or 16");
 
   return success();
 }
@@ -79,32 +104,6 @@ LogicalResult TritonGEN::SubGroupReduceOp::verify() {
   spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(*this);
   if (!attr)
     return this->emitOpError("expecting valid target env attribute");
-
-  Type ty = getValue().getType();
-  switch (getKind()) {
-  case TritonGEN::ReduceKind::SUM:
-  case TritonGEN::ReduceKind::PROD:
-  case TritonGEN::ReduceKind::UMIN:
-  case TritonGEN::ReduceKind::UMAX:
-  case TritonGEN::ReduceKind::IMIN:
-  case TritonGEN::ReduceKind::IMAX:
-  case TritonGEN::ReduceKind::OR:
-  case TritonGEN::ReduceKind::XOR:
-  case TritonGEN::ReduceKind::AND:
-    if (!isa<IntegerType>(ty))
-      return this->emitOpError("expecting integer type for integer reduction");
-    break;
-  case TritonGEN::ReduceKind::FSUM:
-  case TritonGEN::ReduceKind::FPROD:
-  case TritonGEN::ReduceKind::FMIN:
-  case TritonGEN::ReduceKind::FMAX:
-    if (!isa<FloatType>(ty))
-      return this->emitOpError(
-          "expecting floating point type for floating point reduction");
-    break;
-  default:
-    llvm_unreachable("unexpected ReduceKind");
-  }
 
   if (getSize() < 1 || getSize() > TritonGEN::getSubgroupSize(*this) ||
       !llvm::isPowerOf2_32(getSize()))
@@ -197,7 +196,28 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
-  return verifyInput(*this);
+  if (verifyMatrixInput(*this).failed())
+    return failure();
+
+  VectorType resTy = getRes().getType();
+  unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
+  if (getElemSizeInBits() == 32 || getVnniTransform()) {
+    if (resElemTySize != 32)
+      return emitOpError() << "expecting result element type to be 32 bits";
+  } else if (resElemTySize != 16) {
+    return emitOpError() << "expecting result element type to be 16 bits";
+  }
+
+  unsigned resSize = resTy.getNumElements() * resElemTySize;
+  constexpr unsigned subgroupSize = 16;
+  unsigned expectedSize = getElemSizeInBits() * getTileHeight() *
+                          getTileWidth() * getVBlocks() / subgroupSize;
+  if (resSize != expectedSize)
+    return emitOpError() << "result size of " << resSize
+                         << " bits does not match the expected size of "
+                         << expectedSize << " bits";
+
+  return verifyMatrixReadInput(*this);
 }
 
 //===----------------------------------------------------------------------===//
@@ -205,7 +225,14 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
-  return verifyInput(*this);
+  if (verifyMatrixInput(*this).failed())
+    return failure();
+
+  if (getElemSizeInBits() == 32 && getTileWidth() != 8)
+    return emitOpError("tile_width for 32 bit elements should be equal "
+                       "to systolic depth, i.e., 8 elements");
+
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -213,5 +240,8 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
-  return verifyInput(*this);
+  if (verifyMatrixInput(*this).failed())
+    return failure();
+
+  return verifyMatrixReadInput(*this);
 }

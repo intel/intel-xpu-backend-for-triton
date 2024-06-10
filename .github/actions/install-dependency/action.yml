@@ -1,0 +1,71 @@
+name: install-dependency
+description: Build and install a dependency python package from git repo
+inputs:
+  package:
+    description: Package name
+    required: true
+  repository:
+    description: Repository name with owner
+    required: true
+  ref:
+    description: Commit id or branch name in package repository
+    default: ""
+  try-tag-prefix:
+    description: Try to use a tag with this prefix if commit/branch specified in `ref` doesn't exist
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - name: Get package commit id
+      id: commit-id
+      uses: ./.github/actions/get-commit-id
+      with:
+        repository: ${{ inputs.repository }}
+        branch: ${{ inputs.ref }}
+        try-tag-prefix: ${{ inputs.try-tag-prefix }}
+
+    - name: Identify Python version
+      shell: bash
+      run: |
+        if [[ -z "$PYTHON_VERSION" ]]; then
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" >> "$GITHUB_ENV"
+        fi
+
+    - name: Try to load package from a cache
+      id: cache-load
+      uses: ./.github/actions/load
+      with:
+        path: ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}
+        key: ${{ inputs.package }}-$PYTHON_VERSION-${{ steps.commit-id.outputs.commit_id }}
+
+    - name: Clone package repo
+      if: ${{ steps.cache-load.outputs.status == 'miss' }}
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ steps.commit-id.outputs.commit_id }}
+        submodules: recursive
+        path: ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}
+
+    - name: Build package wheels
+      if: ${{ steps.cache-load.outputs.status == 'miss' }}
+      shell: bash
+      run: |
+        source /home/runner/intel/oneapi/setvars.sh
+        cd ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}
+        python setup.py bdist_wheel
+
+    - name: Install package wheels
+      shell: bash
+      run: |
+        source /home/runner/intel/oneapi/setvars.sh
+        pip install ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}/dist/*.whl
+        python -c "import ${{ inputs.package }}; print(${{ inputs.package }}.__version__)"
+
+    - name: Save package to a cache
+      if: ${{ steps.cache-load.outputs.status == 'miss' }}
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.cache-load.outputs.path }}
+        dest: ${{ steps.cache-load.outputs.dest }}

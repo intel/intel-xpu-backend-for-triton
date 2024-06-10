@@ -294,8 +294,16 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
 
     MLIRContext *ctx = rewriter.getContext();
     intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+    intel::AttrBuilder paramAttrBuilder(*ctx);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+        .addPassthroughAttribute(
+            llvm::Attribute::Memory,
+            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
+                .toIntValue());
+    paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    std::vector<NamedAttrList> paramAttrs(argTypes.size());
+    paramAttrs[0] = paramAttrBuilder.getAttributes();
+    intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
 
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
                                     attrs);
@@ -1007,39 +1015,39 @@ struct TritonSubGroupReduceLowering
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value val = op.getValue();
-    Type val_ty = val.getType();
-    llvm::LLVMContext llvmContext;
-    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    auto kind = rewriter.create<LLVM::ConstantOp>(
-        loc, i8_ty, static_cast<int>(op.getKind()));
+    Type orig_ty = val.getType();
+    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
+      val = zext(i8_ty, val);
 
-    std::string funcName;
-    SmallVector<Type> argTypes;
-    SmallVector<Value> args;
-    if (getSubgroupSize(op) == op.getSize()) {
-      funcName = llvm::GenISAIntrinsic::getName(
-          llvm::GenISAIntrinsic::GenISA_WaveAll,
-          {typeTranslator.translateType(val_ty)});
-      argTypes = {val_ty, i8_ty, i32_ty};
-      args = {val, kind, i32_val(0)};
-    } else {
-      funcName = llvm::GenISAIntrinsic::getName(
-          llvm::GenISAIntrinsic::GenISA_WaveClustered,
-          {typeTranslator.translateType(val_ty)});
-      argTypes = {val_ty, i8_ty, i32_ty, i32_ty};
+    Type val_ty = val.getType();
+    SmallVector<Type> argTypes{val_ty};
+    SmallVector<Value> args{val};
+    bool useCluster = (getSubgroupSize(op) != op.getSize());
+    std::string fnName = "sub_group_";
+    if (useCluster)
+      fnName += "clustered_";
+    fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
+    fnName =
+        "_Z" + std::to_string(fnName.size()) + fnName + getTypeMangling(val_ty);
+    if (useCluster) {
+      fnName += "j";
+      argTypes.push_back(i32_ty);
       auto size = rewriter.create<LLVM::ConstantOp>(
           loc, i32_ty, static_cast<int>(op.getSize()));
-      args = {val, kind, size, i32_val(0)};
+      args.push_back(size);
     }
 
-    LLVM::LLVMFuncOp funcOp =
-        LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, val_ty);
-    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    MLIRContext *ctx = rewriter.getContext();
+    intel::AttrBuilder funcAttrBuilder(*ctx);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
+    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
-    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    rewriter.replaceOp(op, callOp);
+    Value result = createDeviceFunctionCall(rewriter, fnName, val_ty, argTypes,
+                                            args, attrs)
+                       .getResult();
+    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
+      result = trunc(orig_ty, result);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };

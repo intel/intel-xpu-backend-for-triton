@@ -48,7 +48,7 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
-    isBlockPtrEnabled: bool = os.environ.get("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
+    is_block_ptr_enabled: bool = os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -152,7 +152,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
-        if XPUOptions.isBlockPtrEnabled:
+        if XPUOptions.is_block_ptr_enabled:
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt, device_arch)
 
         # TTIR -> TTGIR
@@ -160,9 +160,12 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
 
+        is_lts_driver = Version(metadata["target"].arch['driver_version']) == Version("1.3.27642")
+        enable_remat_cache = not is_lts_driver
+
         # optimize TTGIR
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
-        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm, enable_remat_cache)
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
         # FIXME: Use a better way to check if prefetch instructions are supported once available.
         # Prefetch instruction is not available in older drivers.
@@ -170,13 +173,13 @@ class XPUBackend(BaseBackend):
             intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
 
         passes.ttgpuir.add_coalesce(pm)
-        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm, enable_remat_cache)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm, enable_remat_cache)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
