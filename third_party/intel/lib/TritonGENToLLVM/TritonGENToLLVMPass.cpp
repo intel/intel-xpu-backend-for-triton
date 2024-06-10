@@ -219,16 +219,24 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  if (op.getVnniTransform() || op.getTranspose())
+  return false;
+  // intel_sub_group_2d_block_read_32b_8r8x1c is expected to be lowered to
+  // llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is incorrectly lowered to
+  // llvm.genx.GenISA.LSC2DBlockRead.v8i32.
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
     return false;
 
-  if (op.getElemSizeInBits() == 32)
+  // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
+  // intel_sub_group_2d_block_read_32b_16r16x1c.
+  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 16 &&
+      op.getVBlocks() == 1)
     return false;
 
-  if (op.getTileHeight() > 8)
-    return false;
-
-  if (op.getVBlocks() != 2)
+  // Missing intel_sub_group_2d_block_read_8b_16r32x1c and
+  // intel_sub_group_2d_block_read_8b_32r32x1c.
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() > 8 &&
+      op.getTileWidth() == 32 && op.getVBlocks() == 1)
     return false;
 
   return true;
@@ -243,35 +251,46 @@ static Value calculateSurface(Value shape, Value elemSizeInBytes,
   return sub(truncatedShape, i32_val(1));
 }
 
-static LLVM::CallOp
+static Value
 createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                         ConversionPatternRewriter &rewriter) {
   MLIRContext *context = rewriter.getContext();
-  Type resType = op->getResultTypes()[0];
+  VectorType resType = op.getRes().getType();
   Location loc = op->getLoc();
 
   // FIXME: Use the OpenCL API also for all other variants.
   if (isOCLBuiltinAvailable(op)) {
-    std::string fnName = "intel_subgroup_block_read_u" +
-                         std::to_string(op.getElemSizeInBits()) + "_m" +
-                         std::to_string(op.getTileHeight()) + "k" +
-                         std::to_string(op.getTileWidth()) + "v" +
-                         std::to_string(op.getVBlocks());
+    auto dest = rewriter.create<LLVM::AllocaOp>(
+        loc, ptr_ty(context), resType.getElementType(),
+        i32_val(resType.getNumElements()));
+    std::string fnName = "intel_sub_group_2d_block_read_";
+    if (op.getVnniTransform())
+      fnName += "transform_";
+    else if (op.getTranspose())
+      fnName += "transpose_";
+    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
+              std::to_string(op.getTileHeight()) + "r" +
+              std::to_string(op.getTileWidth()) + "x" +
+              std::to_string(op.getVBlocks()) + "c";
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iP";
+    fnName +=
+        (resType.getElementType().getIntOrFloatBitWidth() == 32) ? "j" : "t";
     VectorType vecType = vec_ty(i32_ty, 2);
     Value byteCoord = insert_element(
         vecType, insert_element(vecType, undef(vecType), op.getX(), i32_val(0)),
         op.getY(), i32_val(1));
-    SmallVector<Type> argTypes{ptr_ty(context, 1), i32_ty, i32_ty, i32_ty,
-                               vecType};
+    SmallVector<Type> argTypes{
+        ptr_ty(context, 1), i32_ty, i32_ty, i32_ty, vecType, ptr_ty(context)};
 
     Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
     auto truncToI32 = [&](Value v) { return trunc(i32_ty, v); };
     SmallVector<Value> args{
         op.getPtr(), mul(truncToI32(op.getBaseWidth()), elemSizeInBytes),
         truncToI32(op.getBaseHeight()),
-        mul(truncToI32(op.getBasePitch()), elemSizeInBytes), byteCoord};
-    return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
-                                    true /*convergent*/);
+        mul(truncToI32(op.getBasePitch()), elemSizeInBytes), byteCoord, dest};
+    createDeviceFunctionCall(rewriter, fnName, void_ty(context), argTypes, args,
+                             true /*convergent*/);
+    return rewriter.create<LLVM::LoadOp>(loc, resType, dest);
   }
 
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -339,7 +358,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                           tileHeight, vBlocks,   useTranspose, vnniTransform,
                           cache};
 
-  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  return rewriter.create<LLVM::CallOp>(loc, funcOp, args).getResult();
 }
 
 static LLVM::CallOp
@@ -886,8 +905,7 @@ struct TritonMatrix2DBlockLoadLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    LLVM::CallOp callOp = createGenISA2DBlockRead(op, rewriter);
-    rewriter.replaceOp(op, callOp);
+    rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
     return success();
   }
 };
