@@ -12,9 +12,9 @@ RUN set -ex; \
     apt-get install -y --no-install-recommends --fix-missing \
       intel-opencl-icd \
       clinfo \
-      intel-level-zero-gpu \
-      level-zero \
-      level-zero-dev libigc-dev intel-igc-cm libigdfcl-dev libigfxcmrt-dev \
+      intel-opencl-icd intel-level-zero-gpu level-zero \
+      intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 libigdgmm12 \
+      libigc-dev intel-igc-cm libigdfcl-dev libigfxcmrt-dev level-zero-dev \
       \
       build-essential \
       zlib1g-dev \
@@ -24,10 +24,8 @@ RUN set -ex; \
       pkg-config \
       \
       libpng-dev libjpeg-dev libsndfile1-dev libxml2-dev libxslt1-dev \
-      libgl1-mesa-glx  \
       fontconfig libfontconfig1-dev \
       libpango-1.0-0 libpangoft2-1.0-0 \
-      libsdl2-dev libsdl2-2.0-0 \
       \
       gh \
     ; \

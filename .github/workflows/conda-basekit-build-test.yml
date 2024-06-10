@@ -17,7 +17,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.14
+      - runner-0.0.15
     strategy:
       matrix:
         python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
