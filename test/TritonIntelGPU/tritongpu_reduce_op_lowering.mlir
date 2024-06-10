@@ -2,6 +2,9 @@
 
 // COM: Tests reduction when threads_per_warp < num_warps.
 
+// CHECK-DAG: llvm.func spir_funccc @_Z20sub_group_reduce_addi(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_addij(i32, i32) -> i32 attributes {passthrough = ["convergent"]}
+
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [64], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 64 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: reduce_problem_size_64_threads_per_warp_32
