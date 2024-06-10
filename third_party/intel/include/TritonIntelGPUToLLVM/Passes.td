@@ -26,6 +26,12 @@ def ConvertTritonIntelGPUToLLVM
                            "mlir::triton::TritonDialect",
                            "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonGEN::TritonGENDialect"];
+
+  let options = [
+    Option<"isLTSDriver", "is-lts-driver",
+           "bool", /*default*/"false",
+           "Target is LTS driver or not">,
+  ];
 }
 
 #endif // TRITONINTELGPU_CONVERSION_PASSES

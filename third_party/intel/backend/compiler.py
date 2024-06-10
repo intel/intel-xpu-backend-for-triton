@@ -48,7 +48,6 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
-    is_block_ptr_enabled: bool = os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -71,7 +70,7 @@ class XPUBackend(BaseBackend):
     class Experimental:
 
         @staticmethod
-        def make_ttgir(mod, metadata, opt, device_arch):
+        def make_ttgir(mod, metadata, opt):
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
 
@@ -152,8 +151,9 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
-        if XPUOptions.is_block_ptr_enabled:
-            return XPUBackend.Experimental.make_ttgir(mod, metadata, opt, device_arch)
+        is_lts = Version(metadata["target"].arch['driver_version']) == Version("1.3.27642")
+        if (not is_lts and os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"):
+            return XPUBackend.Experimental.make_ttgir(mod, metadata, opt)
 
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
@@ -190,6 +190,8 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options):
+        is_lts = Version(metadata["target"].arch['driver_version']) == Version("1.3.27642")
+
         # warp-specialization mutates num_warps
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
@@ -204,7 +206,7 @@ class XPUBackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm)
+        intel.passes.ttgpuir.add_to_llvmir(pm, is_lts)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
