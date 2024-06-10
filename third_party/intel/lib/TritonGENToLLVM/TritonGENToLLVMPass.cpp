@@ -226,16 +226,23 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  if (op.getVnniTransform() || op.getTranspose())
+  // intel_sub_group_2d_block_read_32b_8r8x1c is expected to be lowered to
+  // llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is incorrectly lowered to
+  // llvm.genx.GenISA.LSC2DBlockRead.v8i32.
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
     return false;
 
-  if (op.getElemSizeInBits() == 32)
+  // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
+  // intel_sub_group_2d_block_read_32b_16r16x1c.
+  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 16 &&
+      op.getVBlocks() == 1)
     return false;
 
-  if (op.getTileHeight() > 8)
-    return false;
-
-  if (op.getVBlocks() != 2)
+  // Missing intel_sub_group_2d_block_read_8b_16r32x1c and
+  // intel_sub_group_2d_block_read_8b_32r32x1c.
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() > 8 &&
+      op.getTileWidth() == 32 && op.getVBlocks() == 1)
     return false;
 
   if (op.getCacheControl() != TritonGEN::LoadCacheControl::DEFAULT)
@@ -255,13 +262,18 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
     auto dest = rewriter.create<LLVM::AllocaOp>(
         loc, ptr_ty(context), resType.getElementType(),
         i32_val(resType.getNumElements()));
-    std::string fnName = "intel_sub_group_2d_block_read_" +
-                         std::to_string(op.getElemSizeInBits()) + "b_" +
-                         std::to_string(op.getTileHeight()) + "r" +
-                         std::to_string(op.getTileWidth()) + "x" +
-                         std::to_string(op.getVBlocks()) + "c";
-    fnName =
-        "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iPt";
+    std::string fnName = "intel_sub_group_2d_block_read_";
+    if (op.getVnniTransform())
+      fnName += "transform_";
+    else if (op.getTranspose())
+      fnName += "transpose_";
+    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
+              std::to_string(op.getTileHeight()) + "r" +
+              std::to_string(op.getTileWidth()) + "x" +
+              std::to_string(op.getVBlocks()) + "c";
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iP";
+    fnName +=
+        (resType.getElementType().getIntOrFloatBitWidth() == 32) ? "j" : "t";
     VectorType vecType = vec_ty(i32_ty, 2);
     Value byteCoord = insert_element(
         vecType, insert_element(vecType, undef(vecType), op.getX(), i32_val(0)),
