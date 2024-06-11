@@ -1,6 +1,9 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/TritonGENToLLVM/GenIntrinsics.h"
+#include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
+#include "mlir/Target/LLVMIR/TypeToLLVM.h"
 
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -117,6 +120,10 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto ptrType = cast<PointerType>(op.getPtr().getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    auto addrSpace = ptrType.getAddressSpace();
+    const bool isLocalSpace = (addrSpace == 3);
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     assert(tensorType.getRank() <= 2 &&
            "only support 1d/2d load/store/prefetch for now");
 
@@ -145,6 +152,159 @@ public:
     bool transpose = ptrOp.getOrder()[0] == 0;
     Value bytes =
         i32_val(tensorType.getElementType().getIntOrFloatBitWidth() / 8);
+    if (isLocalSpace) {
+      // Value ptr = op.getPtr();
+      //if (auto cast =
+      //        dyn_cast<mlir::UnrealizedConversionCastOp>(ptr.getDefiningOp()))
+      //  ptr = cast.getInputs()[0];
+      //MakeTensorPtrOp ptrOp = getMakeTensorPtrOp(ptr);
+      //Value base = ptrOp.getBase();
+      //if (auto cast =
+      //        dyn_cast<mlir::UnrealizedConversionCastOp>(base.getDefiningOp()))
+      //  base = cast.getInputs()[0];
+      Value threadId = getThreadId(rewriter, loc);
+      Value landId = urem(threadId, i32_val(16));
+
+      if constexpr (std::is_same_v<OpType, LoadOp>) {
+        // TODO: we have sg_size = 16 now. So max size is 16x64 bits
+
+        auto oriResTy = VectorType::get(1, i64_ty);
+        auto v4i16Ty = VectorType::get(4, i16_ty);
+        auto v8i16Ty = VectorType::get(8, i16_ty);
+        auto vecf16ResTy = VectorType::get(8, f16_ty);
+        //auto ptrTy = ptr.getType();
+        //llvm::LLVMContext llvmContext;
+        //LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+
+        //auto llvmResTy = typeTranslator.translateType(vecResTy);
+        //auto i32llTy = typeTranslator.translateType(i32_ty);
+        Value llPtr = adaptor.getPtr();
+
+        //auto llPtrTy = llvm::PointerType::get(llvmContext, 3);
+        auto iPtrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+        //SmallVector<llvm::Type *> llvmTypes{llPtrTy, i32llTy}; 
+        std::string funcName = llvm::GenISAIntrinsic::getName(
+            llvm::GenISAIntrinsic::GenISA_LSCLoad);
+
+        SmallVector<Type> argTypes{iPtrTy, i32_ty, i32_ty, i32_ty,
+                                   i32_ty};
+        LLVM::LLVMFuncOp funcOp =
+            LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, oriResTy);
+        funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+        rewriter.restoreInsertionPoint(insertPoint);
+        Value offsetX = extract_element(llPtr, i32_val(0));
+        Value offsetY = extract_element(llPtr, i32_val(1));
+
+        Value blkId = add(mul(offsetY, i32_val(4)), udiv(offsetX, i32_val(16)));
+
+        // FIXME: fixed 8x16xsizeof(2 bytes) now
+        Value offset = i32_val(0); 
+
+      Value index = mul(blkId, i32_val(128));
+
+        base = gep(ptr_ty(rewriter.getContext(), 3), i16_ty, base, index);
+
+               // laneoffset
+       // for first store, each lane 8bytes = 4 i16
+       base = gep(ptr_ty(rewriter.getContext(), 3), i64_ty, base, landId);
+
+
+        // LSC_DATA_SIZE_32b in visa_igc_common_header.h
+        Value dataSize = i32_val(4);
+        // vectorSize = 4 LSC_DATA_ELEMS_4 in visa_igc_common_header.h
+        Value vSize = i32_val(1);
+        // LSC_L1DEF_L3DEF
+        Value cacheOpt = i32_val(0);
+        SmallVector<Value> args{base, offset, dataSize, vSize, cacheOpt};
+
+        auto localLoadHead = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+        base = gep(ptr_ty(rewriter.getContext(), 3), i64_ty, base, i32_val(16));
+
+        SmallVector<Value> tailArgs{base, offset, dataSize, vSize, cacheOpt};
+
+        auto localLoadTail = rewriter.create<LLVM::CallOp>(loc, funcOp, tailArgs);
+
+    SmallVector<int32_t> indices(8);
+    std::iota(indices.begin(), indices.end(), 0);
+    DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
+
+      auto concatVec = rewriter.create<LLVM::ShuffleVectorOp>(
+          loc, v8i16Ty, bitcast(localLoadHead.getResult(), v4i16Ty), bitcast(localLoadTail.getResult(), v4i16Ty), attr);
+        rewriter.replaceOp(op, bitcast(concatVec, vecf16ResTy));
+
+        return success();
+      }
+      if constexpr (std::is_same_v<OpType, StoreOp>) {
+        auto voidTy = LLVM::LLVMVoidType::get(rewriter.getContext());
+        //auto ptrTy = ptr.getType();
+
+        llvm::LLVMContext llvmContext;
+        LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+        auto v2Ty = VectorType::get(2, i64_ty);
+        auto v1Ty = VectorType::get(1, i64_ty);
+        auto iPtrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+        Value llPtr = adaptor.getPtr();
+
+        //auto vecllTy = typeTranslator.translateType(vecTy);
+        //auto i32llTy = typeTranslator.translateType(i32_ty);
+        //auto llPtrTy = llvm::PointerType::get(llvmContext, 3);
+        //SmallVector<llvm::Type *> llvmTypes{llPtrTy,
+        //                                    i32llTy};
+        std::string funcName = llvm::GenISAIntrinsic::getName(
+            llvm::GenISAIntrinsic::GenISA_LSCStore);
+        rewriter.restoreInsertionPoint(insertPoint);
+        Value val = adaptor.getValue();
+
+        SmallVector<Type> argTypes{iPtrTy, i32_ty, i64_ty,
+                                   i32_ty, i32_ty, i32_ty};
+        LLVM::LLVMFuncOp funcOp =
+            LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, voidTy);
+        funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+        Value offsetX = extract_element(llPtr, i32_val(0));
+        Value offsetY = extract_element(llPtr, i32_val(1));
+        // FIXME: fixed 8x16xsizeof(2 bytes) now
+        Value offset = i32_val(0);
+        // each block 2x64xhf = 256bytes = 16x 8 (64bits) x2
+        // total 8 blks
+
+        Value blkId = add(mul(offsetY, i32_val(4)), udiv(offsetX, i32_val(16)));
+       //Value index = add(landId, add(mul(offsetY, i32_val(64)), offsetX));
+       Value index = mul(blkId, i32_val(128));
+
+        base = gep(ptr_ty(rewriter.getContext(), 3), i16_ty, base, index);
+       // laneoffset
+       // for first store, each lane 8bytes = 4 i16
+       base = gep(ptr_ty(rewriter.getContext(), 3), i64_ty, base, landId);
+
+        // LSC_DATA_SIZE_32b in visa_igc_common_header.h
+        Value dataSize = i32_val(4);
+        // vectorSize = 4 LSC_DATA_ELEMS_4 in visa_igc_common_header.h
+        Value vSize = i32_val(1);
+
+        // LSC_L1DEF_L3DEF
+        Value cacheOpt = i32_val(0);
+        Value v2Val = bitcast(val, v2Ty);
+        val = extract_element(v2Val, i32_val(0));
+
+
+        SmallVector<Value> args{base, offset, val, dataSize, vSize, cacheOpt};
+
+        auto localStore = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+        Value val1 = extract_element(v2Val, i32_val(1));
+
+        // one i64
+        // laneoffset
+       // for second store, next line, 16(sg) x 8bytes
+        base = gep(ptr_ty(rewriter.getContext(), 3), i64_ty, base, i32_val(16));
+
+        SmallVector<Value> args1{base, offset, val1, dataSize, vSize, cacheOpt};
+        auto localStore1 = rewriter.create<LLVM::CallOp>(loc, funcOp, args1);
+
+
+        rewriter.eraseOp(op);
+        return success();
+      }
+    } // isLocalSpace
 
     auto calculateSurface = [&](Value shape, bool multiplyBytes) {
       Value truncatedShape = trunc(i32_ty, shape);
