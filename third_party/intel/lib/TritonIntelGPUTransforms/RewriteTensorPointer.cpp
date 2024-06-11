@@ -57,7 +57,8 @@ bool isDivisible(Value value, unsigned divisor) {
 ///   and does not have DpasEncoding
 ///   - the tensor pointer pitch is not divisible by Qword bitwidth
 ///   - the tensor pointer is not contiguous on memory
-bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
+bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch,
+                  bool isUsedByStoreOp) {
   // Non-PVC device should always remove the tensor pointer
   if (deviceArch != ttgi::DeviceArch::PVC)
     return true;
@@ -66,7 +67,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
   if (!ttgi::hasDotDpasEncoding(tensorType) &&
-      !ttgi::hasDpasEncoding(tensorType))
+      !(isUsedByStoreOp && ttgi::hasDpasEncoding(tensorType)))
     return true;
 
   TypedValue<triton::PointerType> base = op.getBase();
@@ -717,19 +718,32 @@ public:
 
     ttgi::DeviceArch arch = ttgi::getDeviceArch(mod);
 
-    auto markTensorPointerForRemoval = [this, arch](Value val) {
-      if (tt::isTensorPointerType(val.getType())) {
-        tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
-        if (shouldRemove(makeTensorPtrOp, arch))
-          valueToRemove.insert(val);
+    auto usedByStoreOp = [](Value val) {
+      for (Operation *user : val.getUsers()) {
+        if (llvm::isa<tt::StoreOp>(user))
+          return true;
       }
+      return false;
     };
+
+    auto markTensorPointerForRemoval =
+        [this, arch](Value val, bool isUsedByStoreOp = false) {
+          if (tt::isTensorPointerType(val.getType())) {
+            tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
+            if (shouldRemove(makeTensorPtrOp, arch, isUsedByStoreOp))
+              valueToRemove.insert(val);
+          }
+        };
 
     mod.walk([&](Operation *op) {
       if (llvm::isa<tt::MakeTensorPtrOp>(op)) {
-        markTensorPointerForRemoval(op->getResult(0));
+        Value result = op->getResult(0);
+        markTensorPointerForRemoval(result, usedByStoreOp(result));
       } else if (llvm::isa<tt::AdvanceOp, tt::LoadOp, tt::StoreOp>(op)) {
-        markTensorPointerForRemoval(op->getOperand(0));
+        // llvm::raw_ostream &output = llvm::outs();
+        // op->print(output);
+        markTensorPointerForRemoval(op->getOperand(0),
+                                    llvm::isa<tt::StoreOp>(op));
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         for (auto arg : forOp.getInitArgs())
           markTensorPointerForRemoval(arg);
