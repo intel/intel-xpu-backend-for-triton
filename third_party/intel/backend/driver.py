@@ -291,7 +291,7 @@ def make_launcher(constants, signature, ids):
     //float bandwidth = (2.0 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (gap * 1e-3);
     //std::cout << "Triton Peak TFlops " << throughput << std::endl;
     //std::cout << "Triton Peak HBM " << bandwidth  << std::endl;
-    float Z=16, H = 32, N_CTX=1024, D_HEAD=64;
+    float Z = 2, H = 32, N_CTX = 8192, D_HEAD = 64;
     float throughput = 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12)/(gap * 1e-3);
     std::cout << "Triton Peak TFlops " << throughput << std::endl;
   }}

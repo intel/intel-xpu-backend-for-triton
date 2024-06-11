@@ -298,7 +298,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   auto vnniTransform =
       rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getVnniTransform());
   // FIXME: Add argument to control cache.
-  auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 0);
+  auto cache = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 4);
 
   SmallVector<Value> args{ptr,        baseWidth, baseHeight,   basePitch,
                           x,          y,         elemSize,     tileWidth,
