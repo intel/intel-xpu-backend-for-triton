@@ -65,9 +65,11 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
   auto ptrType = cast<tt::PointerType>(op.getType());
   auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
-  if (!ttgi::hasDotDpasEncoding(tensorType) &&
-      !ttgi::hasDpasEncoding(tensorType))
+  if (!ttgi::hasDotDpasEncoding(tensorType)) {
+    //&&
+    //  !ttgi::hasDpasEncoding(tensorType))
     return true;
+  }
 
   TypedValue<triton::PointerType> base = op.getBase();
   Operation::operand_range shape = op.getShape();
