@@ -1,5 +1,6 @@
 add_subdirectory(Dialect)
 add_subdirectory(GPUToTritonGEN)
+add_subdirectory(Target)
 add_subdirectory(TritonGENToLLVM)
 add_subdirectory(TritonIntelGPUToLLVM)
 add_subdirectory(TritonIntelGPUTransforms)
