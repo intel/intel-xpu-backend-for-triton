@@ -67,18 +67,9 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
     return success();
   }
 
-  switch (op.getElemSizeInBits()) {
-  case 16:
-    if (tileWidth != 16)
-      return op->emitOpError("tile_width for 16 bit elements should be equal "
-                             "to systolic depth times 2, i.e., 16 elements");
-    break;
-  case 8:
-    if (tileWidth != 32)
-      return op->emitOpError("tile_width for 8 bit elements should be equal "
-                             "to systolic depth times 4, i.e., 32 elements");
-    break;
-  }
+  if (op.getElemSizeInBits() == 16 && tileWidth != 16)
+    return op->emitOpError("tile_width for 16 bit elements should be equal "
+                           "to systolic depth times 2, i.e., 16 elements");
 
   return success();
 }
@@ -217,6 +208,11 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
                          << " bits does not match the expected size of "
                          << expectedSize << " bits";
 
+  if (getElemSizeInBits() == 8 && !getVnniTransform())
+    if (getTileWidth() != 32)
+      return emitOpError("tile_width for 8 bit elements should be equal "
+                         "to systolic depth times 4, i.e., 32 elements");
+
   return verifyMatrixReadInput(*this);
 }
 
@@ -227,6 +223,11 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
   if (verifyMatrixInput(*this).failed())
     return failure();
+
+  if (getElemSizeInBits() == 8 && !getVnniTransform())
+    if (getTileWidth() != 32)
+      return emitOpError("tile_width for 8 bit elements should be equal "
+                         "to systolic depth times 4, i.e., 32 elements");
 
   if (getElemSizeInBits() == 32 && getTileWidth() != 8)
     return emitOpError("tile_width for 32 bit elements should be equal "
@@ -242,6 +243,12 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
 LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
   if (verifyMatrixInput(*this).failed())
     return failure();
+
+  uint32_t tileWidth = getTileWidth();
+  if (getElemSizeInBits() == 8)
+    if (tileWidth != 16 && tileWidth != 32)
+      return emitOpError("tile_width for 8 bit elements should be equal to "
+                         "either be 16 or 32");
 
   return verifyMatrixReadInput(*this);
 }
