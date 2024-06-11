@@ -1,14 +1,10 @@
-//===- GenIntrinsicEnum.h - IGC generated intrinsic declaration--*- C++ -*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-// This provides GenISAIntrinsic Enum definitions for GEN dialect use
-//
-//===----------------------------------------------------------------------===//
+/*========================== begin_copyright_notice ============================
+
+Copyright (C) 2023 Intel Corporation
+
+SPDX-License-Identifier: MIT
+
+============================= end_copyright_notice ===========================*/
 #pragma once
 
 #include "llvm/IR/Intrinsics.h"
@@ -68,7 +64,6 @@ enum ID : uint32_t {
   GenISA_OUTPUTGS,
   GenISA_OuterScalarTessFactors,
   GenISA_OutputTessControlPoint,
-  GenISA_OutputTessFactors,
   GenISA_PHASE_INPUT,
   GenISA_PHASE_INPUTVEC,
   GenISA_PHASE_OUTPUT,
@@ -83,11 +78,14 @@ enum ID : uint32_t {
   GenISA_ROUNDNE,
   GenISA_RTDualBlendSource,
   GenISA_RTWrite,
+  GenISA_ReadFromReservedArgSpace,
   GenISA_RenderTargetRead,
   GenISA_RenderTargetReadSampleFreq,
   GenISA_RuntimeValue,
   GenISA_SampleOffsetX,
   GenISA_SampleOffsetY,
+  GenISA_SaveInReservedArgSpace,
+  GenISA_SetStackCallsBaseAddress,
   GenISA_SetImplicitBufferPtr,
   GenISA_SetDebugReg,
   GenISA_SetLocalIdBufferPtr,
@@ -164,6 +162,33 @@ enum ID : uint32_t {
   GenISA_ftoui_rte,
   GenISA_ftoui_rtn,
   GenISA_ftoui_rtp,
+  GenISA_sampleMlodptr,
+  GenISA_sampleCMlodptr,
+  GenISA_sampleBCMlodptr,
+  GenISA_sampleDCMlodptr,
+  GenISA_samplePOptr,
+  GenISA_samplePOBptr,
+  GenISA_samplePOLptr,
+  GenISA_samplePOCptr,
+  GenISA_samplePODptr,
+  GenISA_gather4Iptr,
+  GenISA_gather4Bptr,
+  GenISA_gather4Lptr,
+  GenISA_samplePOLCptr,
+  GenISA_gather4ICptr,
+  GenISA_gather4LCptr,
+  GenISA_gather4POPackedptr,
+  GenISA_gather4POPackedLptr,
+  GenISA_gather4POPackedBptr,
+  GenISA_gather4POPackedIptr,
+  GenISA_gather4POPackedICptr,
+  GenISA_gather4POPackedLCptr,
+  GenISA_gather4POPackedCptr,
+  GenISA_gather4IPOptr,
+  GenISA_gather4BPOptr,
+  GenISA_gather4LPOptr,
+  GenISA_gather4ICPOptr,
+  GenISA_gather4LCPOptr,
   GenISA_gather4Cptr,
   GenISA_gather4POCptr,
   GenISA_gather4POptr,
@@ -214,6 +239,7 @@ enum ID : uint32_t {
   GenISA_ldmsptr,
   GenISA_ldmsptr16bit,
   GenISA_ldptr,
+  GenISA_ldlptr,
   GenISA_ldraw_indexed,
   GenISA_ldrawvector_indexed,
   GenISA_ldstructured,
@@ -274,6 +300,7 @@ enum ID : uint32_t {
   GenISA_sub_group_dpas,
   GenISA_sub_pair,
   GenISA_subslice_id,
+  GenISA_logical_subslice_id,
   GenISA_dual_subslice_id,
   GenISA_threadgroupbarrier,
   GenISA_threadgroupbarrier_signal,
@@ -313,15 +340,18 @@ enum ID : uint32_t {
   GenISA_HDCCCSFastClear,
   GenISA_LSC2DBlockRead,
   GenISA_LSC2DBlockWrite,
+  GenISA_LSC2DBlockPrefetch,
   GenISA_LSCAtomicFP32,
   GenISA_LSCAtomicFP64,
   GenISA_LSCAtomicInts,
   GenISA_LSCFence,
   GenISA_LSCLoad,
+  GenISA_LSCLoadCmask,
   GenISA_LSCLoadBlock,
   GenISA_LSCLoadStatus,
   GenISA_LSCPrefetch,
   GenISA_LSCStore,
+  GenISA_LSCStoreCmask,
   GenISA_LSCStoreBlock,
   GenISA_bf8tohf,
   GenISA_tf32tof,
@@ -361,6 +391,10 @@ enum ID : uint32_t {
   GenISA_LocalBufferPointer,
   GenISA_LocalRootSignatureValue,
   GenISA_PayloadPtr,
+  GenISA_PreemptionEnable,
+  GenISA_PreemptionDisable,
+  GenISA_RayQueryCheck,
+  GenISA_RayQueryRelease,
   GenISA_ContinuationSignpost,
   GenISA_RTStatefulBTIAndOffset,
   GenISA_RayInfo,
@@ -391,6 +425,7 @@ enum ID : uint32_t {
   GenISA_rt_swstack_offset,
   GenISA_FPBinaryOperator,
   GenISA_bitcastfromstruct,
+  GenISA_bitcasttostruct,
   num_genisa_intrinsics
 };
 
