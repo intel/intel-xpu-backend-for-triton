@@ -7,10 +7,13 @@
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
+#include "llvm/IR/Analysis.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/Debug.h"
 
 using namespace llvm;
 
+#define DEBUG_TYPE "triton-licm"
 namespace {
 
 class LICMPass : public PassInfoMixin<LICMPass> {
@@ -22,39 +25,53 @@ public:
     auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
     auto &MSSA = AM.getResult<MemorySSAAnalysis>(F).getMSSA();
 
-    auto inSubLoop = [](BasicBlock *BB, Loop *L, LoopInfo &LI) {
-      return LI.getLoopFor(BB) != L;
-    };
-
-    for (auto *L : LI) {
+    bool changed = false;
+    for (Loop *L : LI) {
       BasicBlock *preHeader = L->getLoopPreheader();
       if (!preHeader)
         continue;
 
-      MemorySSAUpdater MSSAU(&MSSA);
-      ICFLoopSafetyInfo SafetyInfo;
-      SafetyInfo.computeLoopSafetyInfo(L);
+      changed = runOnLoop(*L, LI, AA, DT, MSSA, SE);
+    }
 
-      LoopBlocksRPO workList(L);
-      workList.perform(&LI);
+    return changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  }
 
-      for (BasicBlock *BB : workList) {
-        for (Instruction &I : llvm::make_early_inc_range(*BB)) {
-          if (inSubLoop(BB, L, LI))
-            continue;
+private:
+  bool runOnLoop(Loop &L, LoopInfo &LI, AAResults &AA, DominatorTree &DT,
+                 MemorySSA &MSSA, ScalarEvolution &SE) {
+    assert(L.getLoopPreheader() && "Loop doesn't have a preheader!");
 
-          if (L->hasLoopInvariantOperands(&I) && canHoist(I, AA, DT, MSSA, L)) {
-            hoist(I, DT, L, preHeader, SafetyInfo, MSSAU, SE);
-            continue;
-          }
+    auto inSubLoop = [](BasicBlock *BB, Loop &L, LoopInfo &LI) {
+      return LI.getLoopFor(BB) != &L;
+    };
+
+    MemorySSAUpdater MSSAU(&MSSA);
+    ICFLoopSafetyInfo SafetyInfo;
+    SafetyInfo.computeLoopSafetyInfo(&L);
+
+    LoopBlocksRPO workList(&L);
+    workList.perform(&LI);
+
+    bool changed = false;
+    for (BasicBlock *BB : workList) {
+      for (Instruction &I : llvm::make_early_inc_range(*BB)) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "Loop: " << L.getHeader()->getName() << "\n");
+
+        if (inSubLoop(BB, L, LI))
+          continue;
+
+        if (L.hasLoopInvariantOperands(&I) && canHoist(I, AA, DT, MSSA, &L)) {
+          hoist(I, DT, L, SafetyInfo, MSSAU, SE);
+          changed = true;
         }
       }
     }
 
-    return PreservedAnalyses::all();
+    return changed;
   }
 
-private:
   bool isHoistable(Instruction &I) const {
     return (isa<CallInst>(I) || isa<CastInst>(I) || isa<UnaryOperator>(I) ||
             isa<BinaryOperator>(I) || isa<SelectInst>(I) ||
@@ -62,6 +79,15 @@ private:
             isa<InsertElementInst>(I) || isa<ExtractElementInst>(I) ||
             isa<ShuffleVectorInst>(I) || isa<ExtractValueInst>(I) ||
             isa<InsertValueInst>(I) || isa<FreezeInst>(I));
+  }
+
+  bool isCandidateForHoisting(CallInst *CI, Loop *L) const {
+    if (CI->getCalledFunction()->getName().starts_with("__builtin_IB_subgroup"))
+      return true;
+    if (CI->getCalledFunction()->getName().starts_with("_Z12get_local_id"))
+      return true;
+
+    return false;
   }
 
   bool canHoist(Instruction &I, AAResults &AA, DominatorTree &DT,
@@ -89,11 +115,8 @@ private:
     };
 
     if (CallInst *CI = dyn_cast<CallInst>(&I)) {
-      // Only allow hoisting builtin calls.
-      if (!CI->getCalledFunction()->getName().starts_with(
-              "__builtin_IB_subgroup"))
+      if (!isCandidateForHoisting(CI, L))
         return false;
-
       if (CI->mayThrow() || CI->isConvergent())
         return false;
 
@@ -127,9 +150,12 @@ private:
     return true;
   }
 
-  static void hoist(Instruction &I, const DominatorTree &DT, const Loop *L,
-                    BasicBlock *Dest, ICFLoopSafetyInfo &SafetyInfo,
-                    MemorySSAUpdater &MSSAU, ScalarEvolution &SE) {
+  static void hoist(Instruction &I, const DominatorTree &DT, const Loop &L,
+                    ICFLoopSafetyInfo &SafetyInfo, MemorySSAUpdater &MSSAU,
+                    ScalarEvolution &SE) {
+    BasicBlock *preHeader = L.getLoopPreheader();
+    assert(preHeader && "Loop doesn't have a preheader!");
+
     auto moveInstructionBefore = [](Instruction &I, BasicBlock::iterator Dest,
                                     ICFLoopSafetyInfo &SafetyInfo,
                                     MemorySSAUpdater &MSSAU,
@@ -144,18 +170,20 @@ private:
       SE.forgetBlockAndLoopDispositions(&I);
     };
 
-    if (isa<CallInst>(I) && !SafetyInfo.isGuaranteedToExecute(I, &DT, L))
+    if (isa<CallInst>(I) && !SafetyInfo.isGuaranteedToExecute(I, &DT, &L))
       I.dropUBImplyingAttrsAndMetadata();
 
     if (isa<PHINode>(I))
       // Move the new node to the end of the phi list in the destination block.
-      moveInstructionBefore(I, Dest->getFirstNonPHIIt(), SafetyInfo, MSSAU, SE);
+      moveInstructionBefore(I, preHeader->getFirstNonPHIIt(), SafetyInfo, MSSAU,
+                            SE);
     else
       // Move the new node to the destination block, before its terminator.
-      moveInstructionBefore(I, Dest->getTerminator()->getIterator(), SafetyInfo,
-                            MSSAU, SE);
+      moveInstructionBefore(I, preHeader->getTerminator()->getIterator(),
+                            SafetyInfo, MSSAU, SE);
 
     I.updateLocationAfterHoist();
+    LLVM_DEBUG(llvm::dbgs() << "Hoisted: " << I << "\n");
   }
 };
 } // namespace
