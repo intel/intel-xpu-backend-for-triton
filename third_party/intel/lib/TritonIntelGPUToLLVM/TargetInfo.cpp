@@ -90,13 +90,14 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
   // No horizontal reduce required.
   if (numLaneToReduce == 1)
     return false;
-  // Horizontal reduce with interleave stride not support.
+  // Horizontal reduce with interleave stride not supported.
   if (interleave > 1)
     return false;
-  // Check if it is a simple reduce operation supported by Wave Op.
+  // Check if it is a simple reduce operation supported by
+  // TritonGEN::SubGroupReduceOp.
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
     return false;
-  auto &combineOp = op.getCombineOp();
+  Region &combineOp = op.getCombineOp();
   if (combineOp.getBlocks().size() > 1)
     return false;
   Block &block = *combineOp.begin();

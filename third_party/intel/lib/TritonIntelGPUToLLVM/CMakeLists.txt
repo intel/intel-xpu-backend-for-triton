@@ -1,5 +1,6 @@
 add_triton_library(TritonIntelGPUToLLVM
     AllocateSharedMemory.cpp
+    BF16Casts.cpp
     ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandDPAS.cpp
     ConvertLayoutOpToLLVM.cpp
@@ -33,4 +34,5 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonGENIR
     TritonGENToLLVM
     TritonIntelGPUIR
+    TritonIntelUtils
 )

@@ -398,7 +398,7 @@ public:
 
     // Save info for later use
     info.setOffsets(newOffsets);
-    rewritedInfo[op.getResult()] = info;
+    rewritedInfo[op.getResult()] = std::move(info);
 
     // Erase the original operation
     eraser.push(op);
@@ -532,7 +532,7 @@ public:
         for (unsigned j = 0; j < info.length(); ++j) {
           info.setOffset(j, newOp->getResult(newResIdx++));
         }
-        rewritedInfo[op.getResult(oldResIdx)] = info;
+        rewritedInfo[op.getResult(oldResIdx)] = std::move(info);
         oldResIdx++;
       }
     }
@@ -556,7 +556,7 @@ public:
       // Expand the tensor pointer into offsets
       assert(rewritedInfo.count(newIterOperands[i]) &&
              "Expecting ForOp operands in rewritedInfo");
-      auto info = rewritedInfo[newIterOperands[i]];
+      const RewritedInfo &info = rewritedInfo[newIterOperands[i]];
       newIterOperands =
           generateNewOperands(newIterOperands, i, info.getOffsets());
       i += info.length() - 1;
@@ -622,7 +622,7 @@ public:
         for (unsigned j = 0; j < info.length(); ++j)
           info.setOffset(j, newForOp.getResult(i + j));
         i += info.length() - 1;
-        rewritedInfo[oldResult] = info;
+        rewritedInfo[oldResult] = std::move(info);
       } else {
         oldResult.replaceAllUsesWith(newForOp.getResult(i));
       }
@@ -645,7 +645,7 @@ public:
 
       assert(rewritedInfo.count(newOperands[i]) &&
              "Expecting YieldOp operands in rewritedInfo");
-      auto info = rewritedInfo[newOperands[i]];
+      const RewritedInfo &info = rewritedInfo[newOperands[i]];
       newOperands = generateNewOperands(newOperands, i, info.getOffsets());
       i += info.length() - 1;
       size += info.length() - 1;

@@ -76,10 +76,12 @@ struct ConvertTritonGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    intel::TritonGPUToLLVMPipelineManager pipelineManager(mod, context);
+    intel::TritonGPUToLLVMPipelineManager pipelineManager(mod, context,
+                                                          isLTSDriver);
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
-    TritonIntelGPUToLLVMTypeConverter typeConverter(context, option);
+    TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
+                                                    isLTSDriver);
     TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
@@ -95,7 +97,8 @@ struct ConvertTritonGPUToLLVM
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
-      TritonIntelGPUToLLVMTypeConverter typeConverter(context, option);
+      TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
+                                                      isLTSDriver);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       pipelineManager.populateFunctionConversionPatterns(
