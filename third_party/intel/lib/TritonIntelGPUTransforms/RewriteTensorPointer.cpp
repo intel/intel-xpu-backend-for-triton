@@ -740,8 +740,6 @@ public:
         Value result = op->getResult(0);
         markTensorPointerForRemoval(result, usedByStoreOp(result));
       } else if (llvm::isa<tt::AdvanceOp, tt::LoadOp, tt::StoreOp>(op)) {
-        // llvm::raw_ostream &output = llvm::outs();
-        // op->print(output);
         markTensorPointerForRemoval(op->getOperand(0),
                                     llvm::isa<tt::StoreOp>(op));
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
