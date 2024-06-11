@@ -171,11 +171,13 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
       bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
   if (bOrigTy != bTy)
     b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
-
+#if 0
+  // FIXME: Use the OpenCL API also for TF32.
   std::string fnName =
       "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
       stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
-      std::to_string(8 /*systolic depth*/ * getNumOperandsPerDword(precisionA));
+      std::to_string(8 /*systolic depth*/ *
+                     getNumOperandsPerDword(precisionA));
   if (precisionA == TritonGEN::PrecisionType::TF32)
     fnName += "_f32";
   std::string bMangledTy = intel::getTypeMangling(bTy);
@@ -194,6 +196,39 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
 
   return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
                                   attrs);
+#endif
+
+  IntegerType int1Ty = rewriter.getIntegerType(1);
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  llvm::LLVMContext llvmContext;
+  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+  auto llvmResTy = typeTranslator.translateType(resType);
+  auto llvmCTy = typeTranslator.translateType(opTypes[0]);
+  auto llvmATy = typeTranslator.translateType(aTy);
+  auto llvmBTy = typeTranslator.translateType(bTy);
+  SmallVector<llvm::Type *> llvmTypes{llvmResTy, llvmCTy, llvmATy, llvmBTy};
+  std::string funcName = llvm::GenISAIntrinsic::getName(
+      llvm::GenISAIntrinsic::GenISA_sub_group_dpas, llvmTypes);
+
+  SmallVector<Type> argTypes{opTypes[0], aTy,     bTy,     int32Ty,
+                             int32Ty,    int32Ty, int32Ty, int1Ty};
+  LLVM::LLVMFuncOp funcOp =
+      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, resType);
+  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+  auto precA = rewriter.create<LLVM::ConstantOp>(loc, int32Ty,
+                                                 static_cast<int>(op.getPa()));
+  auto precB = rewriter.create<LLVM::ConstantOp>(loc, int32Ty,
+                                                 static_cast<int>(op.getPa()));
+  auto sysDepth =
+      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, 8 /* systolic depth */);
+  auto RC = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getRc());
+  auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
+  SmallVector<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
+
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return callOp;
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
@@ -228,6 +263,7 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   VectorType resType = op.getRes().getType();
   Location loc = op->getLoc();
 
+#if 0
   // FIXME: Use the OpenCL API also for all other variants.
   if (isOCLBuiltinAvailable(op)) {
     auto dest = rewriter.create<LLVM::AllocaOp>(
@@ -273,6 +309,7 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                              attrs);
     return rewriter.create<LLVM::LoadOp>(loc, resType, dest);
   }
+#endif
 
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   Value ptr = op.getPtr();
