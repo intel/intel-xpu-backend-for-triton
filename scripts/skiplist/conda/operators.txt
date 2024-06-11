@@ -1,0 +1,3 @@
+test/unit/operators/test_matmul.py::test_op[128-256-64-1-8-3-256-512-160-True-False-float32-float32-None-True-None-None]
+test/unit/operators/test_matmul.py::test_op[128-256-64-1-8-3-256-512-160-False-False-float32-float32-None-True-None-None]
+test/unit/operators/test_matmul.py::test_op[128-256-64-1-8-3-256-512-160-True-True-float32-float32-None-True-None-None]

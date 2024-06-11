@@ -109,13 +109,11 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<DotOperandEncodingAttr>(dstLayout)) {
+    if (isa<DotOperandEncodingAttr>(dstLayout))
       return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
-    }
-    if (isa<SharedEncodingAttr>(srcLayout) && isaDistributedLayout(dstLayout)) {
+    if (isa<SharedEncodingAttr>(srcLayout) && isaDistributedLayout(dstLayout))
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
-    }
     return failure();
   }
 

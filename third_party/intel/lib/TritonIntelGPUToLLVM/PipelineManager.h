@@ -178,9 +178,11 @@ struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
 /// block pointers or not.
 class TritonGPUToLLVMPipelineManager {
 public:
-  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx)
+  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx,
+                                 bool isLTSDriver)
       : mod(mod), ctx(ctx),
         blockPtrPathIsEnabled(
+            !isLTSDriver &&
             mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
@@ -216,6 +218,7 @@ public:
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
+      intel::populateBF16CastsLLVMPatterns(typeConverter, patterns, benefit);
     } else {
       intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                    patterns, benefit);

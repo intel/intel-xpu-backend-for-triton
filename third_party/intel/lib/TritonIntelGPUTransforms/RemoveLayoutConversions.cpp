@@ -417,7 +417,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
 
 void LayoutPropagation::propagateLayout() {
   SmallVector<Value> queue;
-  for (auto it : layouts) {
+  for (const auto &it : layouts) {
     queue.push_back(it.first);
   }
   while (!queue.empty()) {
@@ -1132,7 +1132,7 @@ LogicalResult getRematerializableSlice(
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation = nullptr) {
   LogicalResult result = ttgi::getConvertBackwardSlice(
-      root, slice, rootEncoding, layout, stopPropagation);
+      root, slice, rootEncoding, layout, std::move(stopPropagation));
   if (result.failed() || slice.empty())
     return failure();
 

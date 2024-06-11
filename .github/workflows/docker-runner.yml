@@ -2,16 +2,12 @@ name: Build self-hosted runner image
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - .github/workflows/docker-runner.yml
-      - .github/dockerfiles/runner-base/Dockerfile
 
 permissions: read-all
 
 env:
   REGISTRY: docker-registry.docker-registry.svc.cluster.local:5000
-  TAG: triton-runner-base:0.0.14
+  TAG: triton-runner-base:0.0.15
 
 jobs:
   build:

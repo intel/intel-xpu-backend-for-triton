@@ -1282,57 +1282,10 @@ struct FpToFpOpConversion
                               PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit) {}
 
-  static Value convertBf16ToFp32(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v) {
-    auto moduleOp =
-        v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
-    constexpr StringLiteral name = "_Z27__spirv_ConvertBF16ToFINTELs";
-    auto ext_func = triton::gpu::intel::lookupOrCreateSPIRVFn(moduleOp, name,
-                                                              i16_ty, f32_ty);
-    auto call = triton::gpu::intel::createSPIRVBuiltinCall(
-        loc, rewriter, ext_func, bitcast(v, i16_ty).getResult());
-    return call.getResult();
-  }
-
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
-  }
-
-  static Value convertFp32ToBf16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v, const RoundingMode rounding) {
-    if (rounding == RoundingMode::RTNE) {
-      auto moduleOp =
-          v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
-      // Intel SPIR-V extension only supports round-to-nearest-even
-      constexpr StringLiteral name = "_Z27__spirv_ConvertFToBF16INTELf";
-      auto trunc_func = triton::gpu::intel::lookupOrCreateSPIRVFn(
-          moduleOp, name, f32_ty, i16_ty);
-      auto call = triton::gpu::intel::createSPIRVBuiltinCall(loc, rewriter,
-                                                             trunc_func, v);
-      return bitcast(call.getResult(), bf16_ty);
-    }
-
-    auto as_uint32 = bitcast(v, i32_ty);
-    auto check_exponent =
-        and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)),
-             i32_val(0x7f800000));
-    auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0));
-    auto exponent_all1s = icmp_eq(check_exponent, i32_val(0));
-    Value rounded = as_uint32;
-
-    auto preserve_nan =
-        and_(i1_ty, exponent_all1s,
-             icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)));
-    auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
-    Value res = select(preserve_nan, nan, rounded);
-
-    auto shifted = lshr(i32_ty, res, i32_val(16));
-    auto truncated = trunc(i16_ty, shifted);
-    return bitcast(truncated, bf16_ty);
   }
 
   static LLVM::RoundingMode
@@ -1478,7 +1431,7 @@ struct FpToFpOpConversion
       SmallVector<Value> outVals;
       for (Value v : operands[0]) {
         outVals.push_back(
-            convertFp32ToBf16(loc, rewriter, v, roundingMode.value()));
+            intel::convertFp32ToBf16(loc, rewriter, v, roundingMode.value()));
       }
       return outVals;
     }
@@ -1512,14 +1465,11 @@ template <typename OP>
 Value EmitDualBF16ElementwiseOp(Location loc,
                                 ConversionPatternRewriter &rewriter,
                                 MultipleOperandsRange operands) {
-  auto v0 =
-      FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][0]);
-  auto v1 =
-      FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][1]);
+  auto v0 = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
+  auto v1 = intel::convertBf16ToFp32(loc, rewriter, operands[0][1]);
   auto result = rewriter.create<OP>(loc, f32_ty, v0, v1);
   auto undefRounding = static_cast<RoundingMode>(-1);
-  return FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, result,
-                                               undefRounding);
+  return intel::convertFp32ToBf16(loc, rewriter, result, undefRounding);
 }
 
 struct CmpIOpConversion
@@ -1687,7 +1637,7 @@ struct ElementwiseInlineAsmOpConversion
 
     // Pack elems smaller than 32 bits into 32-bit registers.
     SmallVector<Value> packedOperands =
-        packOperands(op, operands, rewriter, loc);
+        packOperands(op, std::move(operands), rewriter, loc);
 
     // Types returned by the LLVM asm op.  If there's more than one, they'll be
     // wrapped in a struct.
@@ -1936,13 +1886,13 @@ struct SIToFPOpConversion
     if (outElemTy.isBF16() && inElemTy.isInteger(8) && operands.size() >= 4) {
       SmallVector<Value> outVals;
       auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
-      return {FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, value,
-                                                    RoundingMode::RTNE)};
+      return {
+          intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
       llvm_unreachable("");
     } else if (outElemTy.isBF16()) {
       auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
-      return {FpToFpOpConversion::convertFp32ToBf16(loc, rewriter, value,
-                                                    RoundingMode::RTNE)};
+      return {
+          intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
     } else {
       return {rewriter.create<LLVM::SIToFPOp>(loc, elemTy, operands[0][0])};
     }
@@ -1961,8 +1911,7 @@ struct FPToSIOpConversion
                                    Location loc) const {
     auto inElemTy = getElementType(op.getIn());
     if (inElemTy.isBF16()) {
-      auto value =
-          FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][0]);
+      auto value = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
       return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, value)};
     } else {
       return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0][0])};
@@ -1984,8 +1933,7 @@ struct ExtFOpConversion
     if (inElemTy.isBF16()) {
       auto outElemTy = getElementType(op.getOut());
       assert(outElemTy.isF32() && "unsupported conversion");
-      return {
-          FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][0])};
+      return {intel::convertBf16ToFp32(loc, rewriter, operands[0][0])};
     } else {
       return {rewriter.create<LLVM::FPExtOp>(loc, elemTy, operands[0][0])};
     }
@@ -2007,8 +1955,8 @@ struct TruncFOpConversion
       auto inElemTy = getElementType(op.getIn());
       assert(inElemTy.isF32() && "unsupported conversion");
       return {// Trunc uses the default rounding mode: RTNE
-              FpToFpOpConversion::convertFp32ToBf16(
-                  loc, rewriter, operands[0][0], RoundingMode::RTNE)};
+              intel::convertFp32ToBf16(loc, rewriter, operands[0][0],
+                                       RoundingMode::RTNE)};
     } else {
       return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
     }
