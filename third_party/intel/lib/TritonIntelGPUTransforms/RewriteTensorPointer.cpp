@@ -66,8 +66,8 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch,
   auto ptrType = cast<tt::PointerType>(op.getType());
   auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
-  if (!ttgi::hasDotDpasEncoding(tensorType) ||
-      (isStoreOp && (!ttgi::hasDpasEncoding(tensorType)))) {
+  if (!ttgi::hasDotDpasEncoding(tensorType) &&
+      !(isStoreOp && ttgi::hasDpasEncoding(tensorType))) {
     return true;
   }
 
@@ -719,6 +719,14 @@ public:
 
     ttgi::DeviceArch arch = ttgi::getDeviceArch(mod);
 
+    auto usedByStoreOp = [](Value val) {
+      for (Operation *user : val.getUsers()) {
+	if(llvm::isa<tt::StoreOp>(user))
+	  return true;
+      }
+      return false;
+    };
+    
     auto markTensorPointerForRemoval = [this, arch](Value val,
                                                     bool isStoreOp = false) {
       if (tt::isTensorPointerType(val.getType())) {
@@ -730,7 +738,8 @@ public:
 
     mod.walk([&](Operation *op) {
       if (llvm::isa<tt::MakeTensorPtrOp>(op)) {
-        markTensorPointerForRemoval(op->getResult(0));
+	Value result = op->getResult(0);
+        markTensorPointerForRemoval(result, usedByStoreOp(result));
       } else if (llvm::isa<tt::AdvanceOp, tt::LoadOp>(op)) {
         markTensorPointerForRemoval(op->getOperand(0));
       } else if (llvm::isa<tt::StoreOp>(op)) {
