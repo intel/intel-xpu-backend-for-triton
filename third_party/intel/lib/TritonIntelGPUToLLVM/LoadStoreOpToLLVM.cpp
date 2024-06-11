@@ -705,9 +705,15 @@ struct StoreOpConversion
     Value warpId1Offset = add(dimWarpId1, offsetBaseX);
     unsigned valOffset = 0;
     for (int m = 0; m < numReps[0]; ++m) {
-      Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0]));
+      //Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0]));
       for (int n = 0; n < numReps[1]; ++n) {
-        Value offsetX = add(warpId1Offset, i32_val(n * replicaStride[1]));
+	Value offsetX, offsetY;
+	offsetY = add(mul(multiDimWarpId[0], i32_val(warpStride[0])),
+		      i32_val(m * replicaStride[0]));
+	offsetX = add(mul(multiDimWarpId[1], i32_val(warpStride[1])),
+		      i32_val(n * replicaStride[1]));
+	    
+        //Value offsetX = add(warpId1Offset, i32_val(n * replicaStride[1]));
 
         Value storeVal = rewriter.create<LLVM::UndefOp>(
             loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
@@ -716,6 +722,9 @@ struct StoreOpConversion
           storeVal = insert_element(storeVal, vals[valOffset], i32_val(i));
           ++valOffset;
         }
+
+	offsetX = add(offsetX, offsetBaseX);
+	offsetY = add(offsetY, offsetBaseY);
 
         rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
             loc,

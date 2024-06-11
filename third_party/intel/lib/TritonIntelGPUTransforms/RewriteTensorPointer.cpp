@@ -721,12 +721,12 @@ public:
 
     auto usedByStoreOp = [](Value val) {
       for (Operation *user : val.getUsers()) {
-	if(llvm::isa<tt::StoreOp>(user))
-	  return true;
+        if (llvm::isa<tt::StoreOp>(user))
+          return true;
       }
       return false;
     };
-    
+
     auto markTensorPointerForRemoval = [this, arch](Value val,
                                                     bool isStoreOp = false) {
       if (tt::isTensorPointerType(val.getType())) {
@@ -738,7 +738,7 @@ public:
 
     mod.walk([&](Operation *op) {
       if (llvm::isa<tt::MakeTensorPtrOp>(op)) {
-	Value result = op->getResult(0);
+        Value result = op->getResult(0);
         markTensorPointerForRemoval(result, usedByStoreOp(result));
       } else if (llvm::isa<tt::AdvanceOp, tt::LoadOp>(op)) {
         markTensorPointerForRemoval(op->getOperand(0));
