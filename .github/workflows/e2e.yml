@@ -1,4 +1,4 @@
-name: E2E
+name: E2E accuracy
 
 on:
   workflow_dispatch:
