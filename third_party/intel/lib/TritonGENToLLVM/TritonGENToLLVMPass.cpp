@@ -615,13 +615,20 @@ namespace {
 
 struct FuncCallLowering {
 protected:
-  Value rewrite(Operation *op, StringRef funcName, unsigned dim,
-                ConversionPatternRewriter &rewriter) const {
+  static Value rewrite(Operation *op, StringRef funcName, unsigned dim,
+                       ConversionPatternRewriter &rewriter) {
+    MLIRContext *ctx = rewriter.getContext();
     auto retType = rewriter.getIntegerType(64);
     auto argType = rewriter.getIntegerType(32);
     auto arg = LLVM::createConstantI32(op->getLoc(), rewriter, dim);
 
-    intel::AttributeList attrs;
+    intel::AttrBuilder funcAttrBuilder(*ctx);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+        .addPassthroughAttribute(llvm::Attribute::WillReturn)
+        .addPassthroughAttribute(llvm::Attribute::Memory,
+                                 llvm::MemoryEffects::none().toIntValue());
+
+    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
     LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, funcName, retType,
                                                    {argType}, {arg}, attrs);
 

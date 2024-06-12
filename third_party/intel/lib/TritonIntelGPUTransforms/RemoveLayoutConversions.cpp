@@ -165,16 +165,14 @@ public:
     return it->second;
   }
   void cleanup();
-  void backwardRematerialization(bool enableRematCache);
-  void backwardRematerialization(ConvertLayoutOp convertOp,
-                                 bool enableRematCache);
+  void backwardRematerialization();
+  void backwardRematerialization(ConvertLayoutOp convertOp);
   void hoistConvertOnTopOfExtOrBroadcast();
   void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                    ConvertLayoutOp convertOp, IRMapping &mapping,
-                    bool enableRematCache);
+                    ConvertLayoutOp convertOp, IRMapping &mapping);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                    ConvertLayoutOp convertOp, bool enableRematCache);
+                    ConvertLayoutOp convertOp);
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
@@ -796,6 +794,10 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
 }
 
 bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
+  // Disable 2D block store on LTS.
+  if (storeOp->getParentOfType<ModuleOp>()->hasAttr("triton_gpu.is_lts"))
+    return false;
+
   // If storeOp is a pointer to a tensor, we try to find out if the
   // data has initially a DPAS encoding and forward it to the StoreOp
   // to enable 2D block store.
@@ -805,18 +807,44 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
 
   // 2D block store are preceeded by a MakeTensorPtrOp
   auto makeTensorPtrOp = ptr.getDefiningOp<MakeTensorPtrOp>();
+  if (!makeTensorPtrOp)
+    return false;
+
   // DPAS encoding have to be propagate if conversion from DPAS to
   // other has been done before.
   auto convertOp = storeOp.getValue().getDefiningOp<ConvertLayoutOp>();
-  if (!convertOp || !makeTensorPtrOp)
-    return false;
+  PointerType newPtrType;
+  Attribute encoding;
+  Value value;
+  if (!convertOp) {
+    // If the Defining op is not a ConvertLayoutOp that means that conversion
+    // has not been hoisted out of the loop yet.
+    // We try then to find the layout in the map of the processed layouts.
+    value = storeOp.getValue();
+    auto it = layouts.find(value);
+    if (it == layouts.end())
+      return false;
 
-  Attribute convertOpDstEncoding = convertOp.getType().getEncoding();
-  RankedTensorType convertOpSrcType = convertOp.getSrc().getType();
-  if ((convertOpDstEncoding &&
-       !isa<ttgi::DpasEncodingAttr>(convertOpDstEncoding)) &&
-      (convertOpSrcType &&
-       isa<ttgi::DpasEncodingAttr>(convertOpSrcType.getEncoding()))) {
+    encoding = *(it->second.encodings.begin());
+
+    if (!isa<ttgi::DpasEncodingAttr>(encoding))
+      return false;
+
+    auto ptrType = cast<PointerType>(makeTensorPtrOp.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+
+    auto tmpType = RankedTensorType::get(tensorType.getShape(),
+                                         tensorType.getElementType(), encoding);
+    newPtrType = PointerType::get(tmpType, ptrType.getAddressSpace());
+  } else {
+    Attribute convertOpDstEncoding = convertOp.getType().getEncoding();
+    RankedTensorType convertOpSrcType = convertOp.getSrc().getType();
+    if (((!convertOpDstEncoding) ||
+         isa<ttgi::DpasEncodingAttr>(convertOpDstEncoding)) ||
+        (!convertOpSrcType ||
+         !isa<ttgi::DpasEncodingAttr>(convertOpSrcType.getEncoding())))
+      return false;
+
     auto ptrType = cast<PointerType>(makeTensorPtrOp.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
     // If the output type of the MakeTensorPtrOp already has a
@@ -824,35 +852,35 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
     if (isa<ttgi::DpasEncodingAttr>(tensorType.getEncoding()))
       return false;
 
-    auto newPtrType =
-        PointerType::get(convertOpSrcType, ptrType.getAddressSpace());
+    newPtrType = PointerType::get(convertOpSrcType, ptrType.getAddressSpace());
 
-    // We create a new MakeTensorPtrOp with the new data type.
-    OpBuilder rewriter(makeTensorPtrOp);
-    Value newStorePtr = rewriter.create<MakeTensorPtrOp>(
-        makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
-        makeTensorPtrOp.getShape(), makeTensorPtrOp.getStrides(),
-        makeTensorPtrOp.getOffsets(), rewriter.getDenseI32ArrayAttr({1, 0}));
-
-    // The encoding of the StoreOp is updated with the new
-    // operands:
-    // - the Ptr created by the MakeTensorPtrOp with the new data
-    // type
-    // - the forwarded DPAS encoding.
-    Value newOperand =
-        getValueAs(convertOp.getSrc(), convertOpSrcType.getEncoding());
-    storeOp.setOperand(0, newStorePtr);
-    storeOp.setOperand(1, newOperand);
-
-    // If the DPAS encoding is forwarded, we do not need the
-    // convertOp anymore if the convertOp was only used by the
-    // storeOp. Same for the initial MakeTensorPtrOp, if it was
-    // only used by the storeOp. If this is the case, these
-    // instructions are removed by the clean-up step performed at
-    // the end of this pass (step 4).
-    return true;
+    value = convertOp.getSrc();
+    encoding = convertOpSrcType.getEncoding();
   }
-  return false;
+
+  // We create a new MakeTensorPtrOp with the new data type.
+  OpBuilder rewriter(makeTensorPtrOp);
+  Value newStorePtr = rewriter.create<MakeTensorPtrOp>(
+      makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
+      makeTensorPtrOp.getShape(), makeTensorPtrOp.getStrides(),
+      makeTensorPtrOp.getOffsets(), rewriter.getDenseI32ArrayAttr({1, 0}));
+
+  // The encoding of the StoreOp is updated with the new
+  // operands:
+  // - the Ptr created by the MakeTensorPtrOp with the new data
+  // type
+  // - the forwarded DPAS encoding.
+  Value newOperand = getValueAs(value, encoding);
+  storeOp.setOperand(0, newStorePtr);
+  storeOp.setOperand(1, newOperand);
+
+  // If the DPAS encoding is forwarded, we do not need the
+  // convertOp anymore if the convertOp was only used by the
+  // storeOp. Same for the initial MakeTensorPtrOp, if it was
+  // only used by the storeOp. If this is the case, these
+  // instructions are removed by the clean-up step performed at
+  // the end of this pass (step 4).
+  return true;
 }
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {
@@ -946,16 +974,17 @@ void LayoutRematerialization::updateRematMapping(
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ConvertLayoutOp convertOp,
-                                           IRMapping &mapping,
-                                           bool enableRematCache) {
+                                           IRMapping &mapping) {
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
+  bool isLTS =
+      convertOp->getParentOfType<ModuleOp>()->hasAttr("triton_gpu.is_lts");
   for (Value v : slice) {
     auto layoutIt = layout.find(v);
     assert(layoutIt != layout.end());
     // If we already have a remat value for this value, use it.
-    if (enableRematCache && hasRematValue(v, layoutIt->second)) {
+    if (!isLTS && hasRematValue(v, layoutIt->second)) {
       mapping.map(v, getRematValue(v, layoutIt->second));
       continue;
     }
@@ -1121,10 +1150,9 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
-                                           ConvertLayoutOp convertOp,
-                                           bool enableRematCache) {
+                                           ConvertLayoutOp convertOp) {
   IRMapping mapping;
-  rewriteSlice(slice, layout, convertOp, mapping, enableRematCache);
+  rewriteSlice(slice, layout, convertOp, mapping);
 }
 
 LogicalResult getRematerializableSlice(
@@ -1146,13 +1174,13 @@ LogicalResult getRematerializableSlice(
   return success();
 }
 
-void LayoutRematerialization::backwardRematerialization(bool enableRematCache) {
+void LayoutRematerialization::backwardRematerialization() {
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    backwardRematerialization(convertOp, enableRematCache);
+    backwardRematerialization(convertOp);
   }
 }
 
@@ -1167,7 +1195,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
 }
 
 void LayoutRematerialization::backwardRematerialization(
-    ConvertLayoutOp convertOp, bool enableRematCache) {
+    ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
   // We don't backward propagate the dot layout with blocked layout as parent.
   // It introduces a lot of duplicated values in multiple-threads.
@@ -1206,7 +1234,7 @@ void LayoutRematerialization::backwardRematerialization(
       DBGS() << "    " << v << '\n';
   });
   // 2. Rewrite the slice.
-  rewriteSlice(slice, layout, convertOp, enableRematCache);
+  rewriteSlice(slice, layout, convertOp);
 }
 
 // For convert left we try to hoist them above type extension to reduce the cost
@@ -1290,13 +1318,13 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   mapping.map(extOrBroadcatOp->getResult(0), newExtOrBroadcast->getResult(0));
   slice.remove(extOrBroadcatOp->getResult(0));
   // 3. Rewrite the slice.
-  rewriteSlice(slice, layout, convertOp, mapping, /*enableRematCache=*/true);
+  rewriteSlice(slice, layout, convertOp, mapping);
 }
 
-void backwardRematerialization(ModuleOp module, bool enableRematCache) {
-  module.walk([enableRematCache](FuncOp funcOp) {
+void backwardRematerialization(ModuleOp module) {
+  module.walk([](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
-    layoutRemat.backwardRematerialization(enableRematCache);
+    layoutRemat.backwardRematerialization();
     layoutRemat.cleanup();
   });
 }
@@ -1314,9 +1342,6 @@ class TritonIntelGPURemoveLayoutConversionsPass
     : public intel::impl::TritonIntelGPURemoveLayoutConversionsBase<
           TritonIntelGPURemoveLayoutConversionsPass> {
 public:
-  using TritonIntelGPURemoveLayoutConversionsBase::
-      TritonIntelGPURemoveLayoutConversionsBase;
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -1348,7 +1373,7 @@ public:
 
     // 2. For remaining convert ops, try to rematerialize the slice of producer
     // operation to avoid having to convert.
-    backwardRematerialization(m, enableRematCache);
+    backwardRematerialization(m);
     LLVM_DEBUG({
       DBGS() << "Module after backward remat:\n";
       m.dump();

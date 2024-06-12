@@ -3269,6 +3269,13 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         z_ref = num / denom
     if epilogue == 'chain-dot':
         if 'float8' in in_dtype:
+            if in_dtype == 'float8e4nv':
+                z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e4m3fn)
+            elif in_dtype == 'float8e5':
+                z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e5m2)
+            else:
+                assert "Unsupported float8 dtype"
+            z_ref = to_numpy(z_fp8.to(torch.float32))
             w = to_numpy(convert_fp8_to_fp32(w, device, in_dtype))
         z_ref = np.matmul(z_ref, w)
     # compare
@@ -4938,12 +4945,6 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
-    if is_xpu():
-        if (M == 1 or N == 1) and interm_layout:
-            # TODO(jlebar): These OOB accesses don't even hit an assert in the
-            # compiler, and some of them return the wrong result instead of
-            # crashing!
-            pytest.skip("FIXME: Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.xfail("Do not convert same layout")
     if is_hip() or is_xpu():
