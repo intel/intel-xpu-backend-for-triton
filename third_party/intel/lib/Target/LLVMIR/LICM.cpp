@@ -84,9 +84,6 @@ private:
   bool isCandidateForHoisting(CallInst *CI, Loop *L) const {
     if (CI->getCalledFunction()->getName().starts_with("__builtin_IB_subgroup"))
       return true;
-    if (CI->getCalledFunction()->getName().starts_with("_Z12get_local_id"))
-      return true;
-
     return false;
   }
 
