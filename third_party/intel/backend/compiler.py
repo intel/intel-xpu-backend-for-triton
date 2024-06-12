@@ -75,11 +75,8 @@ class XPUBackend(BaseBackend):
             pm.enable_debug()
 
             intel.passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
-            # FIXME: Use a better way to check if prefetch instructions are supported once available.
-            # Prefetch instruction is not available in older drivers.
-            if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
-                inject_split_barriers = False
-                intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
+            inject_split_barriers = False
+            intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
             intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)
@@ -159,15 +156,14 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
+        is_lts_driver = Version(metadata["target"].arch['driver_version']) == Version("1.3.27642")
+        intel.set_device_properties(mod, is_lts_driver)
 
         # optimize TTGIR
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
-        # FIXME: Use a better way to check if prefetch instructions are supported once available.
-        # Prefetch instruction is not available in older drivers.
-        if Version(metadata["target"].arch['driver_version']) > Version("1.3.28202"):
-            intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
 
         passes.ttgpuir.add_coalesce(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
@@ -187,8 +183,6 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options):
-        is_lts = Version(metadata["target"].arch['driver_version']) == Version("1.3.27642")
-
         # warp-specialization mutates num_warps
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
@@ -203,7 +197,7 @@ class XPUBackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm, is_lts)
+        intel.passes.ttgpuir.add_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
