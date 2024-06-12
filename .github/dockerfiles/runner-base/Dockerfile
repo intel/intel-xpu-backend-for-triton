@@ -22,6 +22,7 @@ RUN set -ex; \
       ninja-build \
       ncurses-term \
       pkg-config \
+      wget \
       \
       libpng-dev libjpeg-dev libsndfile1-dev libxml2-dev libxslt1-dev \
       fontconfig libfontconfig1-dev \
