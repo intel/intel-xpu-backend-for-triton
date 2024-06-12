@@ -165,16 +165,14 @@ public:
     return it->second;
   }
   void cleanup();
-  void backwardRematerialization(bool enableRematCache);
-  void backwardRematerialization(ConvertLayoutOp convertOp,
-                                 bool enableRematCache);
+  void backwardRematerialization();
+  void backwardRematerialization(ConvertLayoutOp convertOp);
   void hoistConvertOnTopOfExtOrBroadcast();
   void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                    ConvertLayoutOp convertOp, IRMapping &mapping,
-                    bool enableRematCache);
+                    ConvertLayoutOp convertOp, IRMapping &mapping);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                    ConvertLayoutOp convertOp, bool enableRematCache);
+                    ConvertLayoutOp convertOp);
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
@@ -972,8 +970,7 @@ void LayoutRematerialization::updateRematMapping(
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
                                            ConvertLayoutOp convertOp,
-                                           IRMapping &mapping,
-                                           bool enableRematCache) {
+                                           IRMapping &mapping) {
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
@@ -981,7 +978,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     auto layoutIt = layout.find(v);
     assert(layoutIt != layout.end());
     // If we already have a remat value for this value, use it.
-    if (enableRematCache && hasRematValue(v, layoutIt->second)) {
+    if (hasRematValue(v, layoutIt->second)) {
       mapping.map(v, getRematValue(v, layoutIt->second));
       continue;
     }
@@ -1147,10 +1144,9 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
                                            DenseMap<Value, Attribute> &layout,
-                                           ConvertLayoutOp convertOp,
-                                           bool enableRematCache) {
+                                           ConvertLayoutOp convertOp) {
   IRMapping mapping;
-  rewriteSlice(slice, layout, convertOp, mapping, enableRematCache);
+  rewriteSlice(slice, layout, convertOp, mapping);
 }
 
 LogicalResult getRematerializableSlice(
@@ -1172,13 +1168,13 @@ LogicalResult getRematerializableSlice(
   return success();
 }
 
-void LayoutRematerialization::backwardRematerialization(bool enableRematCache) {
+void LayoutRematerialization::backwardRematerialization() {
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    backwardRematerialization(convertOp, enableRematCache);
+    backwardRematerialization(convertOp);
   }
 }
 
@@ -1193,7 +1189,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
 }
 
 void LayoutRematerialization::backwardRematerialization(
-    ConvertLayoutOp convertOp, bool enableRematCache) {
+    ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
   // We don't backward propagate the dot layout with blocked layout as parent.
   // It introduces a lot of duplicated values in multiple-threads.
@@ -1232,7 +1228,7 @@ void LayoutRematerialization::backwardRematerialization(
       DBGS() << "    " << v << '\n';
   });
   // 2. Rewrite the slice.
-  rewriteSlice(slice, layout, convertOp, enableRematCache);
+  rewriteSlice(slice, layout, convertOp);
 }
 
 // For convert left we try to hoist them above type extension to reduce the cost
@@ -1316,13 +1312,13 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   mapping.map(extOrBroadcatOp->getResult(0), newExtOrBroadcast->getResult(0));
   slice.remove(extOrBroadcatOp->getResult(0));
   // 3. Rewrite the slice.
-  rewriteSlice(slice, layout, convertOp, mapping, /*enableRematCache=*/true);
+  rewriteSlice(slice, layout, convertOp, mapping);
 }
 
-void backwardRematerialization(ModuleOp module, bool enableRematCache) {
-  module.walk([enableRematCache](FuncOp funcOp) {
+void backwardRematerialization(ModuleOp module) {
+  module.walk([](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
-    layoutRemat.backwardRematerialization(enableRematCache);
+    layoutRemat.backwardRematerialization();
     layoutRemat.cleanup();
   });
 }
@@ -1340,9 +1336,6 @@ class TritonIntelGPURemoveLayoutConversionsPass
     : public intel::impl::TritonIntelGPURemoveLayoutConversionsBase<
           TritonIntelGPURemoveLayoutConversionsPass> {
 public:
-  using TritonIntelGPURemoveLayoutConversionsBase::
-      TritonIntelGPURemoveLayoutConversionsBase;
-
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -1374,7 +1367,7 @@ public:
 
     // 2. For remaining convert ops, try to rematerialize the slice of producer
     // operation to avoid having to convert.
-    backwardRematerialization(m, enableRematCache);
+    backwardRematerialization(m);
     LLVM_DEBUG({
       DBGS() << "Module after backward remat:\n";
       m.dump();

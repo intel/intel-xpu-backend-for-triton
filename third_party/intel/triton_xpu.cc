@@ -1,4 +1,4 @@
-﻿#include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassManager.h"
 #include "passes.h"
 
 #include "llvm/IRReader/IRReader.h"
@@ -66,9 +66,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_OPT_2("add_pipeline",
                          gpu::intel::createTritonIntelGPUPipeline, int, bool);
-  ADD_PASS_WRAPPER_OPT_1(
-      "add_remove_layout_conversions",
-      gpu::intel::createTritonIntelGPURemoveLayoutConversions, bool);
+  ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
+                     gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
                      gpu::intel::createTritonIntelGPURewriteTensorPointer);
   ADD_PASS_WRAPPER_OPT_2("add_prefetch_block",
