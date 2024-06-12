@@ -29,6 +29,9 @@ RUN set -ex; \
       \
       gh \
     ; \
+    apt-get install -y --no-install-recommends --fix-missing \
+      libgl1 \
+    ; \
     rm -rf /var/lib/apt/lists/*
 
 USER runner
