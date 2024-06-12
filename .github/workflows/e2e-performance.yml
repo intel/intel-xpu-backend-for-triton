@@ -182,14 +182,14 @@ jobs:
           commit_id: ${{ env.PYTORCH_COMMIT_ID }}
           torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
 
-      - name: Install latest nightly wheels
+      - name: Install latest nightly wheels including IPEX
         if: ${{ env.INSTALL_IPEX == 'true' }}
         uses: ./.github/actions/install-wheels
         with:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           python_version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install latest nightly wheels
+      - name: Install latest nightly wheels excluding IPEX
         if: ${{ env.INSTALL_IPEX == 'false' }}
         uses: ./.github/actions/install-wheels
         with:
@@ -251,7 +251,16 @@ jobs:
 
       - name: Install python test dependencies
         run: |
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+
+      - name: Install transformers package
+        if: ${{ matrix.suite == 'huggingface' }}
+        uses: ./.github/actions/install-dependency
+        with:
+          package: transformers
+          repository: huggingface/transformers
+          ref: ${{ env.TRANSFORMERS_VERSION }}
+          try-tag-prefix: v
 
       - name: Clone pytorch benchmark
         if: ${{ matrix.suite == 'torchbench' }}
