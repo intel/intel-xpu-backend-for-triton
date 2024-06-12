@@ -72,6 +72,7 @@ jobs:
 
       - name: Run pre-commit checks
         run: |
+          set -x
           pip install --upgrade pre-commit
 
           # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
