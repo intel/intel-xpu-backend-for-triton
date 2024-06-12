@@ -719,11 +719,9 @@ public:
     ttgi::DeviceArch arch = ttgi::getDeviceArch(mod);
 
     auto usedByStoreOp = [](Value val) {
-      for (Operation *user : val.getUsers()) {
-        if (llvm::isa<tt::StoreOp>(user))
-          return true;
-      }
-      return false;
+      return llvm::any_of(val.getUsers(), [](Operation *user) {
+        return llvm::isa<tt::StoreOp>(user);
+      });
     };
 
     auto markTensorPointerForRemoval =
