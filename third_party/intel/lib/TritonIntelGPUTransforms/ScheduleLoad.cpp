@@ -43,6 +43,26 @@ class ScheduleLoadPass
     : public triton::gpu::intel::impl::TritonIntelGPUScheduleLoadBase<
           ScheduleLoadPass> {
 public:
+  SmallVector<Value> getNotVisitedUsesA(SmallVector<tt::DotOp> dots) {
+    SmallVector<Value> notVisited;
+    for (auto &dot : dots) {
+      auto val = dot.getA();
+      if (visited.count(val) != 0)
+        continue;
+      auto def = val.getDefiningOp();
+      if (auto extract = dyn_cast<ttgi::ExtractOp>(def)) {
+        auto base = extract.getBase();
+        if (visited.count(base) == 0) {
+          notVisited.push_back(base);
+          visited.insert(base);
+        }
+      }
+      notVisited.push_back(val);
+      visited.insert(val);
+    }
+    return notVisited;
+  }
+
   // hack!!! only trace dotB, only back 1 level
   SmallVector<Value> getNotVisitedUses(SmallVector<tt::DotOp> dots) {
     SmallVector<Value> notVisited;
@@ -82,21 +102,35 @@ public:
         }
         if (currGroup == 0)
           getNotVisitedUses({dot});
-        // markAllUsesAsVisited(dot);
-        else
-          dots.push_back(dot);
+        dots.push_back(dot);
         group = currGroup;
       }
       assert(!dots.empty());
       dotsGroup.push_back(dots);
 
+      unsigned i = 0;
+      Operation *start = &loop.getBody()->front();
       for (auto dots : dotsGroup) {
         auto notVisited = getNotVisitedUses(dots);
+        if (i == 0)
+          notVisited.append(getNotVisitedUsesA(dots));
         for (auto val : notVisited) {
           auto op = val.getDefiningOp();
-          op->moveBefore(dots.begin()->getOperation());
+          if (i == 0)
+            op->moveBefore(start);
+          else
+            op->moveBefore(dots.begin()->getOperation());
         }
+        i++;
+        if (i == 4)
+          i = 0;
       }
+    });
+
+    //
+    m.walk([&](arith::TruncFOp op) {
+      auto def = op.getIn().getDefiningOp();
+      op->moveAfter(def);
     });
 
     // HoHo, add fastmath for all

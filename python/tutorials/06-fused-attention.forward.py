@@ -154,7 +154,7 @@ def forward(q, k, v, causal, sm_scale):
     BLOCK_M = 128
     BLOCK_N = 64 if Lk <= 64 else 32
     num_stages = 4 if Lk <= 64 else 3
-    num_warps = 8
+    num_warps = 8 if Lq == 64 else 16
     causal = False
     stage = 3 if causal else 1
     grid = (q.shape[0],  q.shape[1],triton.cdiv(q.shape[2], BLOCK_M))
@@ -211,7 +211,7 @@ def forward(q, k, v, causal, sm_scale):
     triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD'],
-        x_vals=[[2, 32, 8192, 64]],
+        x_vals=[[4, 48, 1024, 64]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``

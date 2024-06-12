@@ -26,6 +26,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "USE_TTGIR_LOC",
     "NVPTX_ENABLE_DUMP",
     "TRITON_INTEL_ENABLE_BLOCK_PTR",
+    "ENABLE_SLM",
 };
 
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {

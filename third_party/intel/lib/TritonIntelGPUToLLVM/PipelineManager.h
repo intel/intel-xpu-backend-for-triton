@@ -149,8 +149,9 @@ public:
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
-  bool skipSharedMemoryAllocation() const { return false; }
-
+  bool skipSharedMemoryAllocation() const {
+    return !mlir::triton::tools::getBoolEnv("ENABLE_SLM");
+  }
   /// Populate the conversion pipeline for function operations.
   void populateFunctionConversionPatterns(
       RewritePatternSet &funcPatterns,

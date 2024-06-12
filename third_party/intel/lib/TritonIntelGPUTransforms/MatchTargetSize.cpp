@@ -52,6 +52,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUMATCHTARGETSIZE
@@ -106,7 +107,7 @@ public:
     ModuleOp m = getOperation();
 
     // this is ad-hoc for Q SLM
-    {
+    if (mlir::triton::tools::getBoolEnv("ENABLE_SLM")) {
       tmpSet.clear();
       tt::LoadOp load;
       m.walk([&](tt::LoadOp op) {
