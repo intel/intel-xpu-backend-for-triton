@@ -2,7 +2,7 @@
 Gemm benchmark
 ============================
 
-This benchmark is come from the Triton tutorial 09-experimental-block-pointer.py
+This benchmark is come from the Triton tutorial 10-experimental-block-pointer.py
 To compare the performance to XeTLA kernel.
 
 """

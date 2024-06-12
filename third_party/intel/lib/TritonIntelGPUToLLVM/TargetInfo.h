@@ -60,6 +60,8 @@ public:
                   StringRef message, StringRef file, StringRef func,
                   int line) const override;
 
+  bool enableLinearLayout() const override { return false; }
+
 private:
 };
 } // namespace mlir::triton::intel
