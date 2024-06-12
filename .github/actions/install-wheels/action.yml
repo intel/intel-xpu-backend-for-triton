@@ -10,7 +10,8 @@ inputs:
     default: intel/intel-xpu-backend-for-triton
   wheels_pattern:
     # Example of specifying only some packages to install: '{intel_extension_for_pytorch-*,torch-*}'
-    # Extended globbing is enabled for this pattern
+    # Extended globbing is enabled for this pattern so for example to exclude intel_extension_for_pytorch use pattern
+    # !(intel_extension_for_pytorch-*).whl
     description: Pattern to match the wheel files to download
     default: '*'
   gh_token:
