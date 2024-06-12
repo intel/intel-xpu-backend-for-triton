@@ -131,7 +131,8 @@ public:
       auto subgroupId = b.create<gpu::SubgroupIdOp>(loc);
       auto warpId =
           b.create<arith::IndexCastOp>(loc, b.getI32Type(), subgroupId);
-      auto warpSize = b.create<arith::ConstantIntOp>(loc, bytes, 32);
+      // hardcode: we use i16ptr here, so bytes / 2
+      auto warpSize = b.create<arith::ConstantIntOp>(loc, bytes / 2, 32);
       auto offset = b.create<arith::MulIOp>(loc, warpId, warpSize);
       // auto arg = func.getArgument(func.getNumArguments() - 1);
       auto block = load->getBlock();

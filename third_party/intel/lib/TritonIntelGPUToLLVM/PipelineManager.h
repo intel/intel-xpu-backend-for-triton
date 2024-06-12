@@ -149,7 +149,7 @@ public:
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
-  bool skipSharedMemoryAllocation() const { return blockPtrPathIsEnabled; }
+  bool skipSharedMemoryAllocation() const { return false; }
 
   /// Populate the conversion pipeline for function operations.
   void populateFunctionConversionPatterns(

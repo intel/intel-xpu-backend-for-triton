@@ -249,6 +249,8 @@ private:
   void getScratchValueSize(Operation *op) {
     const size_t scratchAlignment = 128;
     if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
+      // TODO: FIXME
+      return;
       ReduceOpHelper helper(reduceOp);
       unsigned bytes = helper.getScratchSizeInBytes();
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
