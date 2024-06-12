@@ -195,7 +195,7 @@ jobs:
         with:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           python_version: ${{ env.PYTHON_VERSION }}
-          wheels_pattern: "!(intel_extension_for_pytorch-2.1.10+gitfd4fce2-cp310-cp310-linux_x86_64).whl"
+          wheels_pattern: "!(intel_extension_for_pytorch-*).whl"
 
       - name: Setup fake IPEX
         if: ${{ env.INSTALL_IPEX == 'false' }}
