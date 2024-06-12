@@ -28,7 +28,7 @@ runs:
         if [[ "${{ inputs.repository }}" == "Stonepia/pytorch" ]]; then
           PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
         else
-          PYTORCH_COMMIT_ID="6c503f1dbbf9ef1bf99f19f0048c287f419df600"
+          PYTORCH_COMMIT_ID="$(<.github/pins/pytorch-upstream.txt)"
         fi
         echo "PYTORCH_REPO=${{ inputs.repository }}" | tee -a "$GITHUB_ENV"
         echo "PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID" | tee -a "$GITHUB_ENV"
