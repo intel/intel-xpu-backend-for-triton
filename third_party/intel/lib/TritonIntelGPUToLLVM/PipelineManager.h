@@ -178,11 +178,10 @@ struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
 /// block pointers or not.
 class TritonGPUToLLVMPipelineManager {
 public:
-  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx,
-                                 bool isLTSDriver)
+  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx)
       : mod(mod), ctx(ctx),
         blockPtrPathIsEnabled(
-            !isLTSDriver &&
+            !mod->hasAttr("triton_gpu.is_lts") &&
             mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling

@@ -156,10 +156,6 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
 
-  let options = [
-    Option<"enableRematCache", "enable-remat-cache", "bool", /*default*/"true", "Whether to enable the rematerialization cache (currently causing problems with the LTS driver).">,
-  ];
-
 }
 
 def TritonIntelGPURewriteTensorPointer : Pass<"tritonintelgpu-rewrite-tensor-pointer", "mlir::ModuleOp"> {

@@ -76,10 +76,10 @@ struct ConvertTritonGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    intel::TritonGPUToLLVMPipelineManager pipelineManager(mod, context,
-                                                          isLTSDriver);
+    intel::TritonGPUToLLVMPipelineManager pipelineManager(mod, context);
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
+    bool isLTSDriver = mod->hasAttr("triton_gpu.is_lts");
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
                                                     isLTSDriver);
     TritonLLVMConversionTarget convTarget(*context);

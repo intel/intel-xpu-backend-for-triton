@@ -57,6 +57,9 @@ bool isDivisible(Value value, unsigned divisor) {
 ///   - the tensor pointer pitch is not divisible by Qword bitwidth
 ///   - the tensor pointer is not contiguous on memory
 bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
+  if (op->getParentOfType<ModuleOp>()->hasAttr("triton_gpu.is_lts"))
+    return true;
+
   // Non-PVC device should always remove the tensor pointer
   if (deviceArch != ttgi::DeviceArch::PVC)
     return true;
