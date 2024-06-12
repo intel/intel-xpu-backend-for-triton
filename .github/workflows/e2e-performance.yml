@@ -3,6 +3,10 @@ name: E2E performance mode
 on:
   workflow_dispatch:
     inputs:
+      install_ipex:
+        description: Install Intel PyTorch Extension
+        type: boolean
+        default: true
       suite:
         description: Test suite
         type: choice
@@ -59,6 +63,9 @@ env:
   PYTHON_VERSION: "3.10"
   BENCHMARK_REPO: weishi-deng/benchmark.git
   BENCHMARK_BRANCH: main
+  INSTALL_IPEX: ${{ inputs.install_ipex }}
+  PYTORCH_COMMIT_ID: 6c503f1dbbf9ef1bf99f19f0048c287f419df600
+  TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
   setup:
@@ -164,13 +171,35 @@ jobs:
           pip install wheel
 
       - name: Setup PyTorch
+        if: ${{ env.INSTALL_IPEX == 'true' }}
         uses: ./.github/actions/setup-pytorch
 
+      - name: Setup PyTorch without IPEX
+        if: ${{ env.INSTALL_IPEX == 'false' }}
+        uses: ./.github/actions/setup-pytorch
+        with:
+          repository: pytorch/pytorch
+          commit_id: ${{ env.PYTORCH_COMMIT_ID }}
+          torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
+
       - name: Install latest nightly wheels
+        if: ${{ env.INSTALL_IPEX == 'true' }}
         uses: ./.github/actions/install-wheels
         with:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           python_version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install latest nightly wheels
+        if: ${{ env.INSTALL_IPEX == 'false' }}
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          python_version: ${{ env.PYTHON_VERSION }}
+          wheels_pattern: "!(intel_extension_for_pytorch-2.1.10+gitfd4fce2-cp310-cp310-linux_x86_64).whl"
+
+      - name: Setup fake IPEX
+        if: ${{ env.INSTALL_IPEX == 'false' }}
+        uses: ./.github/actions/setup-fake-ipex
 
       - name: Identify pinned versions
         run: |

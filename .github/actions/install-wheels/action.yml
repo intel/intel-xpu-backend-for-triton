@@ -10,6 +10,7 @@ inputs:
     default: intel/intel-xpu-backend-for-triton
   wheels_pattern:
     # Example of specifying only some packages to install: '{intel_extension_for_pytorch-*,torch-*}'
+    # Extended globbing is enabled for this pattern
     description: Pattern to match the wheel files to download
     default: '*'
   gh_token:
@@ -65,6 +66,7 @@ runs:
       shell: bash
       run: |
         set -x
+        shopt -s extglob
         cd ~/wheels/wheels-py${{ inputs.python_version }}*
         ${{ inputs.install_cmd }} ${{ inputs.wheels_pattern }}
 
