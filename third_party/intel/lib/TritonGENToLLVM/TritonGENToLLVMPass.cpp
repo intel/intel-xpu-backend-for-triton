@@ -624,6 +624,7 @@ protected:
 
     intel::AttrBuilder funcAttrBuilder(*ctx);
     funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+        .addPassthroughAttribute(llvm::Attribute::WillReturn)
         .addPassthroughAttribute(llvm::Attribute::Memory,
                                  llvm::MemoryEffects::none().toIntValue());
 
