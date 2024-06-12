@@ -1,10 +1,10 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
 // CHECK-DAG: llvm.func spir_funccc @_Z25__spirv_BuiltInSubgroupIdv() -> i32
-// CHECK-DAG: llvm.func spir_funccc @_Z14get_num_groupsj(i32) -> i64
-// CHECK-DAG: llvm.func spir_funccc @_Z14get_local_sizej(i32) -> i64
-// CHECK-DAG: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64
-// CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64
+// CHECK-DAG: llvm.func spir_funccc @_Z14get_num_groupsj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
+// CHECK-DAG: llvm.func spir_funccc @_Z14get_local_sizej(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
+// CHECK-DAG: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
+// CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
 
 llvm.func @gen_special_regs() -> i32 {
   // CHECK-LABEL: gen_special_regs
