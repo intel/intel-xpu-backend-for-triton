@@ -510,13 +510,10 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
 inline SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset,
-            bool allowLL = false) {
-  // TODO(jlebar): LLs are disabled for now due to bugs found on AMD and A100
-  // GPUs.  Enable again wth allowLL = true above.
-
+            bool allowLL = true) {
   // Eventually the LinearLayout path will be the only one.  For now we allow
   // both paths so we can test that they produce the same results.
-  if (allowLL) {
+  if (allowLL && target.enableLinearLayout()) {
     std::optional<SmallVector<SmallVector<Value>>> llOffsets =
         emitIndicesUsingLinearLayouts(loc, rewriter, target, layout, type,
                                       withCTAOffset);
