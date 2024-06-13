@@ -1,4 +1,4 @@
-name: E2E performance mode
+name: E2E performance
 
 on:
   workflow_dispatch:
@@ -64,7 +64,6 @@ env:
   BENCHMARK_REPO: weishi-deng/benchmark.git
   BENCHMARK_BRANCH: main
   INSTALL_IPEX: ${{ inputs.install_ipex }}
-  PYTORCH_COMMIT_ID: 6c503f1dbbf9ef1bf99f19f0048c287f419df600
   TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
@@ -179,7 +178,6 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
-          commit_id: ${{ env.PYTORCH_COMMIT_ID }}
           torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
 
       - name: Install latest nightly wheels including IPEX

@@ -12,8 +12,8 @@ inputs:
   repository:
     description: Repository name with owner
     default: Stonepia/pytorch
-  commit_id:
-    description: Commit id of PyTorch repository
+  ref:
+    description: Branch, tag, commit id
     default: ""
   torch_xpu_ops_commit:
     description: Commit id of third_party/xpu_ops repository
@@ -21,20 +21,32 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Identify commit id
-      if: ${{ inputs.commit_id == '' }}
+    - name: Set default commit id
+      if: inputs.ref == ''
       shell: bash
       run: |
-        PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
-        echo "PYTORCH_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
-        echo "PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID" >> "$GITHUB_ENV"
+        if [[ "${{ inputs.repository }}" == "Stonepia/pytorch" ]]; then
+          PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
+        else
+          PYTORCH_COMMIT_ID="$(<.github/pins/pytorch-upstream.txt)"
+        fi
+        echo "PYTORCH_REPO=${{ inputs.repository }}" | tee -a "$GITHUB_ENV"
+        echo "PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID" | tee -a "$GITHUB_ENV"
 
     - name: Identify commit id
-      if: ${{ inputs.commit_id != '' }}
+      if: inputs.ref != ''
+      id: commit-id
+      uses: ./.github/actions/get-commit-id
+      with:
+        repository: ${{ inputs.repository }}
+        branch: ${{ inputs.ref }}
+
+    - name: Set commit id
+      if: inputs.ref != ''
       shell: bash
       run: |
-        echo "PYTORCH_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
-        echo "PYTORCH_COMMIT_ID=${{ inputs.commit_id }}" >> "$GITHUB_ENV"
+        echo "PYTORCH_REPO=${{ inputs.repository }}" | tee -a "$GITHUB_ENV"
+        echo "PYTORCH_COMMIT_ID=${{ steps.commit-id.outputs.commit_id }}" | tee -a "$GITHUB_ENV"
 
     - name: Identify Python version
       shell: bash
