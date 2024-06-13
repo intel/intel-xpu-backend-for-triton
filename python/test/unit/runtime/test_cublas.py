@@ -18,7 +18,7 @@ def is_cuda():
 def test_cublas(m, n, k, dtype_str, device):
     dtype = getattr(torch, dtype_str)
     if not is_cuda():
-        pytest.skip("test_cublas is only supported on CUDA")
+        pytest.xfail("test_cublas is only supported on CUDA")
     if dtype == torch.float8_e4m3fn and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("fp8 is only supported on CUDA with cc >= 90")
 
