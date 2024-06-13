@@ -361,9 +361,9 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     Value zero = i32_val(0);
     Value one = i32_val(1);
     SmallVector<Value> args{ptrtoint(i64_ty, op.getPtr()),
-                            sub(op.getBaseWidth(), one),
-                            sub(op.getBaseHeight(), one),
-                            sub(op.getBasePitch(), one),
+                            op.getBaseWidth(),
+                            op.getBaseHeight(),
+                            op.getBasePitch(),
                             zero,
                             zero,
                             i32_val(op.getTileWidth()),
@@ -412,6 +412,94 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
         LLVM::LLVMVoidType::get(ctx), argTypes, {ptr, op.getY()}, attrs);
   };
 
+  // Attempt to use the GenISA intrinsic (this allows us to set transpose to
+  // true when necessary).
+  auto createBlock2DReadGenIsa = [&](Value ptr,
+                                     TritonGEN::Matrix2DBlockLoadOp op) {
+    assert(isa<LLVM::LLVMPointerType>(ptr.getType()) &&
+           "Expecting a pointer type");
+
+    std::string fnName = "llvm.genx.GenISA.LSC2DBlockReadAddrPayload";
+
+    llvm::LLVMContext llvmContext;
+    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+    auto llvmResTy = typeTranslator.translateType(resType);
+    assert(isa<VectorType>(resType) && "Expecting a vector type");
+    auto vecType = cast<VectorType>(resType);
+    assert(vecType.getShape().size() == 1 && "Expecting a 1D vector");
+
+    switch (vecType.getDimSize(0)) {
+    case 8:
+      fnName += ".v8";
+      break;
+    case 16:
+      fnName += ".v16";
+      break;
+    case 32:
+      fnName += ".v32";
+      break;
+    default:
+      llvm::errs() << "vecType.getDimSize(0): " << vecType.getDimSize(0)
+                   << "\n";
+      llvm_unreachable("unhandled vector size for LSC2DBlockReadAddrPayload");
+    };
+
+    switch (vecType.getElementType().getIntOrFloatBitWidth()) {
+    case 16:
+      fnName += "i16.p0i8";
+      break;
+    case 32:
+      fnName += "i32.p0i8";
+      break;
+    default:
+      llvm::errs() << "vecType.getElementType().getIntOrFloatBitWidth(): "
+                   << vecType.getElementType().getIntOrFloatBitWidth() << "\n";
+      llvm_unreachable("unhandled element size for LSC2DBlockReadAddrPayload");
+    }
+
+    Value zero = i32_val(0);
+    SmallVector<Type> argTypes{ptr.getType(), i32_ty, i32_ty, i32_ty, i32_ty,
+                               i32_ty,        i32_ty, i1_ty,  i1_ty,  i32_ty};
+
+    Value x = zero;
+    Value y = zero;
+    auto elemSize =
+        rewriter.create<LLVM::ConstantOp>(loc, i32_ty, op.getElemSizeInBits());
+    auto tileWidth =
+        rewriter.create<LLVM::ConstantOp>(loc, i32_ty, op.getTileWidth());
+    auto tileHeight =
+        rewriter.create<LLVM::ConstantOp>(loc, i32_ty, op.getTileHeight());
+    auto vBlocks =
+        rewriter.create<LLVM::ConstantOp>(loc, i32_ty, op.getVBlocks());
+    auto useTranspose =
+        rewriter.create<LLVM::ConstantOp>(loc, i1_ty, op.getTranspose());
+    auto vnniTransform =
+        rewriter.create<LLVM::ConstantOp>(loc, i1_ty, op.getVnniTransform());
+    auto cache = rewriter.create<LLVM::ConstantOp>(loc, i32_ty, 4);
+
+    SmallVector<Value> args{ptr,           x,          y,       elemSize,
+                            tileWidth,     tileHeight, vBlocks, useTranspose,
+                            vnniTransform, cache};
+
+    // Function and parameters attributes.
+    intel::AttrBuilder funcAttrBuilder(*ctx);
+    intel::AttrBuilder paramAttrBuilder(*ctx);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+        .addPassthroughAttribute(
+            llvm::Attribute::Memory,
+            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
+                .toIntValue());
+    paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    SmallVector<NamedAttrList> paramAttrs(argTypes.size());
+    paramAttrs[0] = paramAttrBuilder.getAttributes();
+    intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
+
+    return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
+                                    attrs);
+  };
+
+  // Attempt to use the __builtin intrinsic (but this interface doesn't allow us
+  // to set transpose to true when necessary).
   auto createBlock2DRead = [&](Value ptr, TritonGEN::Matrix2DBlockLoadOp op) {
     assert(isa<LLVM::LLVMPointerType>(ptr.getType()) &&
            "Expecting a pointer type");
@@ -419,6 +507,8 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     std::string fnName = "__builtin_IB_subgroup_block_read_ap_";
     if (op.getVnniTransform())
       fnName += "transform_";
+    // FIXME: need to set transpose flag (IGC doesn't accept it).
+
     fnName += "u" + std::to_string(op.getElemSizeInBits()) + "_m" +
               std::to_string(op.getTileHeight()) + "k" +
               std::to_string(op.getTileWidth()) + "v" +
@@ -446,7 +536,7 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
 
   Value ptr = createBlock2DAddressPayload(op);
   setBlock2DAddressPayload(ptr, op);
-  return createBlock2DRead(ptr, op);
+  return createBlock2DReadGenIsa(ptr, op);
 }
 
 static LLVM::CallOp
