@@ -111,7 +111,7 @@ def parse_tutorials_reports(reports_path: pathlib.Path) -> List[ReportStats]:
             stats.passed += 1
         else:
             stats.failed += 1
-    return [stats]
+    return [stats] if stats.total > 0 else []
 
 
 def parse_reports(reports_path: pathlib.Path) -> List[ReportStats]:
