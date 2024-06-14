@@ -635,6 +635,9 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
     if (dotAttr.getKWidth() != 0 && dotAttr.getOpIdx() == 1)
       return {dotShape.k, dotShape.n};
     colLimit = 32;
+    // hack for attn
+    if (dotAttr.getOpIdx() == 1)
+      colLimit = 16;
   }
 
   // Load/Store operations.
