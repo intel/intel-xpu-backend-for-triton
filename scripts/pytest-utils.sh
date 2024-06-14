@@ -13,7 +13,7 @@ TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
 CURRENT_SKIPLIST_DIR="$SCRIPTS_DIR/skiplist/current"
 
 pytest() {
-    pytest_extra_args=("--timeout=15")   # need pytest-timeout installed
+    pytest_extra_args=()
 
     if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_REPORTS = true ]]; then
         mkdir -p "$TRITON_TEST_REPORTS_DIR"
@@ -36,11 +36,8 @@ pytest() {
         sed -e '/^#/d' "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt" > "$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
         pytest_extra_args+=(
             "--deselect-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+            "--select-fail-on-missing"
         )
-        # this argument results in execution error when enable unskip test
-        if [ "$TEST_UNSKIP" = false ]; then
-            pytest_extra_args+=("--select-fail-on-missing")
-        fi
     fi
 
     python3 -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS

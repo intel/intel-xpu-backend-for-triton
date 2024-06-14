@@ -90,7 +90,7 @@ export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
 
-python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout setuptools==69.5.1
+python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select setuptools==69.5.1
 
 if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
     python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
@@ -145,16 +145,13 @@ run_core_tests() {
   echo "***************************************************"
   echo "******      Running Triton Core tests        ******"
   echo "***************************************************"
-  if [ "$TEST_UNSKIP" = true ]; then
-    CORE_TEST_DIR=$TRITON_PROJ/tmp/python/test/unit
-  else
-    CORE_TEST_DIR=$TRITON_PROJ/python/test/unit
-  fi
+  CORE_TEST_DIR=$TRITON_PROJ/python/test/unit
 
   if [ ! -d "${CORE_TEST_DIR}" ]; then
     echo "Not found '${CORE_TEST_DIR}'. Build Triton please" ; exit 3
   fi
   cd ${CORE_TEST_DIR}
+  export TEST_UNSKIP
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
   pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
@@ -175,11 +172,9 @@ run_regression_tests() {
   echo "***************************************************"
   echo "******   Running Triton Regression tests     ******"
   echo "***************************************************"
-  if [ "$TEST_UNSKIP" = true ]; then
-    REGRESSION_TEST_DIR=$TRITON_PROJ/tmp/python/test/regression
-  else
-    REGRESSION_TEST_DIR=$TRITON_PROJ/python/test/regression
-  fi
+  REGRESSION_TEST_DIR=$TRITON_PROJ/python/test/regression
+  export TEST_UNSKIP
+
   if [ ! -d "${REGRESSION_TEST_DIR}" ]; then
     echo "Not found '${REGRESSION_TEST_DIR}'. Build Triton please" ; exit 3
   fi
@@ -214,10 +209,6 @@ run_tutorial_tests() {
 }
 
 test_triton() {
-  # generate dir ${TRITON_PROJ}/tmp/python/test/
-  if [ "$TEST_UNSKIP" = true ]; then
-    python ${SCRIPTS_DIR}/replace_skip_calls.py
-  fi
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
   fi
