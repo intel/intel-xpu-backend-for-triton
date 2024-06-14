@@ -34,10 +34,17 @@ pytest() {
         mkdir -p "$CURRENT_SKIPLIST_DIR"
         # skip comments in the skiplist
         sed -e '/^#/d' "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt" > "$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
-        pytest_extra_args+=(
-            "--deselect-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
-            "--select-fail-on-missing"
-        )
+        if [[ $TEST_UNSKIP = false ]]; then
+            pytest_extra_args+=(
+                "--deselect-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+                "--select-fail-on-missing"
+            )
+        else
+            pytest_extra_args+=(
+                "--timeout=500"
+                "--max-worker-restart=500"
+            )
+        fi
     fi
 
     python3 -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS

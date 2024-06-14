@@ -49,12 +49,17 @@ on:
         description: Build LLVM
         type: boolean
         default: false
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
 
 permissions: read-all
 
 env:
   TRITON_DISABLE_LINE_INFO: 1
   TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
+  TEST_UNSKIP: ${{ inputs.enable_unskip }}
 
 jobs:
   integration-tests:
@@ -177,7 +182,7 @@ jobs:
         run: |
           export DEBUG=1
           cd python
-          pip install wheel pytest pytest-xdist pytest-rerunfailures pytest-select
+          pip install wheel pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout
           pip install --no-build-isolation '.[build,tests,tutorials]'
           pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
 
