@@ -97,7 +97,12 @@ def overall_stats(stats: List[ReportStats]) -> ReportStats:
 
 
 def parse_junit_reports(reports_path: pathlib.Path) -> List[ReportStats]:
-    """Parses junit reports in the specified directory."""
+    """Parses junit report in the specified directory."""
+    return [parse_report(report) for report in reports_path.glob('*.xml')]
+
+
+def parse_tutorials_reports(reports_path: pathlib.Path) -> List[ReportStats]:
+    """Parses tutorials reports in the specified directory."""
     stats = ReportStats(name='tutorials')
     for report in reports_path.glob('tutorial-*.txt'):
         result = report.read_text().strip()
@@ -107,11 +112,6 @@ def parse_junit_reports(reports_path: pathlib.Path) -> List[ReportStats]:
         else:
             stats.failed += 1
     return [stats]
-
-
-def parse_tutorials_reports(reports_path: pathlib.Path) -> List[ReportStats]:
-    """Parses tutorials report in the specified directory."""
-    return [parse_report(report) for report in reports_path.glob('*.xml')]
 
 
 def parse_reports(reports_path: pathlib.Path) -> List[ReportStats]:
