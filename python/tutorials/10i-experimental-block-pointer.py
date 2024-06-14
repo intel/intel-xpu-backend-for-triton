@@ -7,7 +7,6 @@ Runs Block Pointer tutorial with TRITON_INTEL_ENABLE_BLOCK_PTR=1.
 import os.path
 import runpy
 
-
 if __name__ == '__main__':
     os.environ['TRITON_INTEL_ENABLE_BLOCK_PTR'] = '1'
     dirname = os.path.dirname(__file__)
