@@ -25,6 +25,7 @@ export NEO_CACHE_PERSISTENT=0
 
 TRITON_INTEL_ENABLE_BLOCK_PTR=1 \
 TRITON_DISABLE_LINE_INFO=1 \
+TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
 IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
 IGC_ForcePrefetchToL1Cache=1 \
 IGC_VATemp=1 \

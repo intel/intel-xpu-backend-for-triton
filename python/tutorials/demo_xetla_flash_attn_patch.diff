@@ -1,0 +1,27 @@
+diff --git a/include/common/core/base_types.hpp b/include/common/core/base_types.hpp
+index 59346173..dd3098e4 100644
+--- a/include/common/core/base_types.hpp
++++ b/include/common/core/base_types.hpp
+@@ -219,7 +219,7 @@ concept xetla_matrix_ref
+ 
+ namespace sycl {
+ template <typename T>
+-struct is_device_copyable<T,
+-        std::enable_if_t<gpu::xetla::is_host_callable<T>::value>>
++struct is_device_copyable<
++        std::enable_if_t<gpu::xetla::is_host_callable<T>::value, T>>
+     : std::true_type {};
+ } // namespace sycl
+diff --git a/tools/scripts/env.sh b/tools/scripts/env.sh
+index 36c5cf1e..68c92ef5 100755
+--- a/tools/scripts/env.sh
++++ b/tools/scripts/env.sh
+@@ -6,7 +6,7 @@ source ${script_dir}/clang_format.sh
+ # ONEAPI_INSTALL_PATH below assumes you installed to the default folder /opt/intel/oneapi
+ # If you customized the installation folder, please update ONEAPI_INSTALL_PATH to your custom folder
+ ONEAPI_INSTALL_PATH=/opt/intel/oneapi
+-source ${ONEAPI_INSTALL_PATH}/setvars.sh
++source ${ONEAPI_INSTALL_PATH}/setvars.sh --force
+ 
+ # Export environment variables
+ export CC=icx
