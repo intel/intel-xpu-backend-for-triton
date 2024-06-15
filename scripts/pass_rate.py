@@ -130,7 +130,7 @@ def print_stats(stats: ReportStats):
         f' skipped: {stats.skipped},'
         f' xfailed: {stats.xfailed},'
         f' total: {stats.total},'
-        f' fixme: {stats.fixme}'
+        f' fixme: {stats.fixme},'
         f' pass rate (w/o xfailed): {round(100 * stats.passed / (stats.total - stats.xfailed), 2)}%'
     )  # yapf: disable
 
