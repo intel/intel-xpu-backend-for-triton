@@ -282,6 +282,7 @@ jobs:
 
       - name: Pass rate
         run: |
+          source ./scripts/capture-hw-details.sh
           python3 scripts/pass_rate.py --reports reports
           python3 scripts/pass_rate.py --reports reports --json > pass_rate.json
 
