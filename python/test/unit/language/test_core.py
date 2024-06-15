@@ -5241,8 +5241,6 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     check_type_supported(in_type_str, device)
-    if is_xpu() and in_type_str == "float8e4b15":
-        pytest.skip("FIXME: Fails to compile on XPU")
 
     if is_interpreter():
         pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
