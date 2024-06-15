@@ -26,7 +26,6 @@ constexpr int patternBenefitDefault = 1;
 constexpr int patternBenefitPrioritizeOverLLVMConversions = 10;
 constexpr int patternBenefitClampOptimizedPattern = 20;
 constexpr int patternBenefitConvertLayoutOptimizedPattern = 20;
-constexpr int patternBenefitAddSPIRVEnv = 30;
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
