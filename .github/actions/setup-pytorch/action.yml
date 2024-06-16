@@ -75,7 +75,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: "6"
+        CACHE_NUMBER: 7
       with:
         path: pytorch
         key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID-$CACHE_NUMBER
@@ -90,7 +90,7 @@ runs:
         path: pytorch
 
     - name: Update third_party/xpu_ops
-      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.torch_xpu_ops_commit != '' }}
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.repository == 'pytorch/pytorch' }}
       shell: bash
       run: |
         cd pytorch/third_party
@@ -105,6 +105,13 @@ runs:
         pip install -r requirements.txt
         wget https://raw.githubusercontent.com/intel/torch-xpu-ops/main/.github/scripts/apply_torch_pr.py
         python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/124147 --pr-list https://github.com/pytorch/pytorch/pull/126516
+
+    # FIXME: Old PyTorch does not work with numpy==2.0.0
+    - name: Install numpy < 2.0.0
+      if: ${{ inputs.repository == 'Stonepia/pytorch' }}
+      shell: bash
+      run: |
+        pip install 'numpy<2.0.0'
 
     - name: Build PyTorch
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
