@@ -109,7 +109,9 @@ def parse_tutorials_reports(reports_path: pathlib.Path) -> List[ReportStats]:
         stats.total += 1
         if result == 'PASS':
             stats.passed += 1
-        else:
+        elif result == 'SKIP':
+            stats.skipped += 1
+        elif result == 'FAIL':
             stats.failed += 1
     return [stats] if stats.total > 0 else []
 
@@ -128,7 +130,7 @@ def print_stats(stats: ReportStats):
         f' skipped: {stats.skipped},'
         f' xfailed: {stats.xfailed},'
         f' total: {stats.total},'
-        f' fixme: {stats.fixme}'
+        f' fixme: {stats.fixme},'
         f' pass rate (w/o xfailed): {round(100 * stats.passed / (stats.total - stats.xfailed), 2)}%'
     )  # yapf: disable
 
