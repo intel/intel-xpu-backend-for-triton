@@ -146,6 +146,33 @@ public:
                               dpasCap.systolicDepth, dpasCap.executionSize,
                               opsPerChan, warpsPerTile, {1, 1}, threadsPerWarp);
 
+    if (arch == DeviceArch::PVC) {
+      // Enlarge the repCluster size to use the large 2D load for A and B
+      // operands.
+      auto repA = dpasEnc.getDPASRepetitions(oldAType.getShape(), 0);
+      unsigned repClusterDimM;
+      if (repA[0] >= 4) {
+        repClusterDimM = 4;
+      } else if (repA[0] == 2) {
+        repClusterDimM = 2;
+      } else {
+        repClusterDimM = 1;
+      }
+
+      unsigned repClusterDimN;
+      auto repB = dpasEnc.getDPASRepetitions(oldBType.getShape(), 1);
+      if (repB[0] >= 2) {
+        repClusterDimN = 2;
+      } else {
+        repClusterDimN = 1;
+      }
+
+      dpasEnc = DpasEncodingAttr::get(
+          oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
+          dpasCap.executionSize, opsPerChan, warpsPerTile,
+          {repClusterDimM, repClusterDimN}, threadsPerWarp);
+    }
+
     RankedTensorType newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), dpasEnc);
 
