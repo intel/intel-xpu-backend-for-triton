@@ -114,7 +114,7 @@ jobs:
           cd benchmarks/xetla_benchmark
           python fused_softmax.py --reports $REPORTS
           python build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-report.csv --param_cols "N" --result_cols "Triton-TFlops-max,XeTLA-TFlops-max" --name softmax
-          
+
 
       - name: Run micro benchmark
         run: |
