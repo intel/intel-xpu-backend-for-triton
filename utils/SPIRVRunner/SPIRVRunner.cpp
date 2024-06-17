@@ -111,7 +111,7 @@ loadBinary(const std::string &kernel_name, uint32_t *binary_ptr,
   ze_kernel_properties_t props;
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   props.pNext = nullptr;
-  gpuAssert((zeKernelGetProperties(l0_kernel, &props)), __FILE__, __LINE__);
+  gpuAssert((zeKernelGetProperties(l0_kernel, &props)));
   n_spills = props.spillMemSize;
   auto mod = sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
                                       sycl::bundle_state::executable>(
