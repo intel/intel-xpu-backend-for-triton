@@ -634,6 +634,7 @@ setup(
             "pytest",
             "scipy>=1.7.1",
             "llnl-hatchet",
+            "cmake>=3.20",
         ],
         "tutorials": [
             "matplotlib",
