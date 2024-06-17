@@ -654,7 +654,7 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
   case 2: {
     subSize[1] = (shape[1] > colLimit) ? colLimit : shape[1];
     int64_t max = maxLoadStoreSize * 4 / sizeInBytes / subSize[1];
-    subSize[0] = std::min(max, shape[0]);
+    subSize[0] = std::min(32L, shape[0]);
   } break;
   default:
     llvm_unreachable("Unsupported shape");
