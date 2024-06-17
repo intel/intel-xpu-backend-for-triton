@@ -62,8 +62,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
-    n_warmup = max(1, int(warmup / estimate_ms))
-    n_repeat = max(1, int(rep / estimate_ms))
+    n_warmup = max(warmup, int(warmup / estimate_ms))
+    n_repeat = max(rep, int(rep / estimate_ms))
     # Warm-up
     for _ in range(n_warmup):
         fn()

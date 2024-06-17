@@ -15,8 +15,8 @@ using namespace mlir;
 namespace mlir::triton::intel {
 
 bool TargetInfo::supportMaximumMinimum() const { return true; }
-Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
-                         Type type, Value cmp) const {
+Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
+                         Value cmp) const {
   assert("TODO: implement ballot on XPU");
   return Value();
 }
@@ -26,17 +26,18 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   return i32_val(0);
 }
 
-void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Value val, Value pred) const {
+void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              std::optional<Value> ctaId, Value val,
+                              Value pred) const {
   LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
     store(val, ptr);
     return ArrayRef<Value>();
   });
 }
 
-Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             const TypeConverter *converter, Value ptr,
-                             Type elemTy, Value pred) const {
+Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              std::optional<Value> ctaId, Type elemTy,
+                              Value pred) const {
   assert(cast<mlir::LLVM::LLVMPointerType>(ptr.getType()).getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");
@@ -49,27 +50,27 @@ Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
   return *endBlock.args_begin();
 }
 
-Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, int i) const {
+Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
+                             int i) const {
   return LLVM::intel::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
-                            Value val, int i) const {
+Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
+                            int i) const {
   return LLVM::intel::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, int i) const {
+Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
+                             int i) const {
   return LLVM::intel::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, Value i) const {
+Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
+                             Value i) const {
   return LLVM::intel::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
+Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   assert(axis >= 0);
   assert(axis < 3);
@@ -83,7 +84,7 @@ Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
-bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
+bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
@@ -142,7 +143,7 @@ bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 bool TargetInfo::processReplicaUsingStMatrix(
-    ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
+    RewriterBase &rewriter, Location loc, Value smemBase,
     SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
     ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
@@ -156,9 +157,8 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   return funcName;
 }
 
-void TargetInfo::printf(ConversionPatternRewriter &rewriter,
-                        Value formatStrStart, int /*formatStrByteCount*/,
-                        ValueRange args) const {
+void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
+                        int /*formatStrByteCount*/, ValueRange args) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -173,8 +173,7 @@ void TargetInfo::printf(ConversionPatternRewriter &rewriter,
   call(funcOp, operands);
 }
 
-static LLVM::LLVMFuncOp
-getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
+static LLVM::LLVMFuncOp getAssertfailDeclaration(RewriterBase &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName = "__assert_fail";
   Operation *funcOp = moduleOp.lookupSymbol(funcName);
@@ -190,7 +189,7 @@ getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
               ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric)};
   auto funcType = LLVM::LLVMFunctionType::get(void_ty(ctx), argsType);
 
-  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  RewriterBase::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(moduleOp.getBody());
 
   auto func = rewriter.create<LLVM::LLVMFuncOp>(UnknownLoc::get(ctx), funcName,
@@ -199,7 +198,7 @@ getAssertfailDeclaration(ConversionPatternRewriter &rewriter) {
   return func;
 }
 
-void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
+void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
   auto funcOp = getAssertfailDeclaration(rewriter);
