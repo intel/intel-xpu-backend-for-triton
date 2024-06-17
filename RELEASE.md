@@ -38,7 +38,7 @@ git checkout c37ca9c6 # [GEN] Update libGenISAIntrinsics
 
 4. Next, create a release branch.
 ```
-git checkout -b release/vX.Y.Z
+git checkout -b release/X.Y.Z
 ```
 
 5. Finally, cherry-pick (or revert) commits to get to the desired state. When cherry-picking, use `-x` to preserve references:
