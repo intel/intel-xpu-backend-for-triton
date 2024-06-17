@@ -27,9 +27,9 @@ static std::vector<ze_device_handle_t> devices;
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     sycl_l0_device_list;
 
-static inline void gpuAssert(ze_result_t code, const char *file, int line) {
+static inline void gpuAssert(ze_result_t code) {
   if (code != ZE_RESULT_SUCCESS) {
-    auto str = parseZeResultCode(code, file, line);
+    auto str = parseZeResultCode(code);
     char err[1024] = {0};
     strncat(err, str.c_str(), std::min(str.size(), size_t(1024)));
     PyGILState_STATE gil_state;
@@ -41,7 +41,7 @@ static inline void gpuAssert(ze_result_t code, const char *file, int line) {
 
 template <typename T>
 static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
-  gpuAssert(std::get<1>(tuple), __FILE__, __LINE__);
+  gpuAssert(std::get<1>(tuple));
   if (PyErr_Occurred())
     return nullptr;
   else
@@ -154,7 +154,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   ze_kernel_properties_t props;
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   props.pNext = nullptr;
-  gpuAssert(zeKernelGetProperties(l0_kernel, &props), __FILE__, __LINE__);
+  gpuAssert(zeKernelGetProperties(l0_kernel, &props));
 
   n_spills = props.spillMemSize;
   auto mod = sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,

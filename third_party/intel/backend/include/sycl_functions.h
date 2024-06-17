@@ -20,8 +20,7 @@ inline std::string parseZeResultCode(const ze_result_t code, const char *file,
                                      int line) {
   const std::string prefix = "Triton Error [ZE]: ";
   std::stringstream ss;
-  ss << prefix << "0x" << std::hex << code;
-  ss << "\n" << file << ":" << line;
+  ss << prefix << "0x" << std::hex << code << "\n";
   return ss.str();
 }
 

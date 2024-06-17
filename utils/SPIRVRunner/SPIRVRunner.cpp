@@ -72,16 +72,16 @@ static std::vector<std::pair<sycl::device, ze_device_handle_t>>
 
 std::vector<std::unique_ptr<sycl::kernel>> compiled_kernels;
 
-static inline void gpuAssert(ze_result_t code, const char *file, int line) {
+static inline void gpuAssert(ze_result_t code) {
   if (code != ZE_RESULT_SUCCESS) {
-    auto str = parseZeResultCode(code, file, line);
+    auto str = parseZeResultCode(code);
     throw std::runtime_error(str);
   }
 }
 
 template <typename T>
 static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
-  gpuAssert(std::get<1>(tuple), __FILE__, __LINE__);
+  gpuAssert(std::get<1>(tuple));
   return std::get<0>(tuple);
 }
 
