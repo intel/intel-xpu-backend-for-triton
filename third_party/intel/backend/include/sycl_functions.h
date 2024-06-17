@@ -16,8 +16,7 @@ typedef struct l0_resc_handles {
 
 using SyclQueueMap = std::unordered_map<sycl::queue, l0_resc_handles>;
 
-inline std::string parseZeResultCode(const ze_result_t code, const char *file,
-                                     int line) {
+inline std::string parseZeResultCode(const ze_result_t code) {
   const std::string prefix = "Triton Error [ZE]: ";
   std::stringstream ss;
   ss << prefix << "0x" << std::hex << code << "\n";
