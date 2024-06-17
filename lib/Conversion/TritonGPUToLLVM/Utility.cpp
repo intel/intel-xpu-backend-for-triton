@@ -12,7 +12,7 @@ using CoordTy = SmallVector<Value>;
 using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
 
 static SmallVector<CoordTy>
-getMNCoords(Value thread, Location loc, ConversionPatternRewriter &rewriter,
+getMNCoords(Value thread, Location loc, RewriterBase &rewriter,
             ArrayRef<unsigned int> wpt, const NvidiaMmaEncodingAttr &mmaLayout,
             ArrayRef<int64_t> shape, bool isARow, bool isBRow, bool isAVec4,
             bool isBVec4) {
@@ -120,9 +120,8 @@ Type getFunctionType(Type resultType, ValueRange operands) {
   return LLVM::LLVMFunctionType::get(resultType, operandTypes);
 }
 
-LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
-                                         Operation *op, StringRef funcName,
-                                         Type funcType,
+LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
+                                         StringRef funcName, Type funcType,
                                          StringRef libname /*= ""*/,
                                          StringRef libpath /*= ""*/) {
   using LLVM::LLVMFuncOp;
@@ -248,6 +247,36 @@ emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
   return ret;
 }
 
+std::optional<SmallVector<SmallVector<unsigned>>>
+emitOffsetForLayoutUsingLinearLayouts(Attribute layout, RankedTensorType type) {
+  MLIRContext *ctx = layout.getContext();
+  auto shape = type.getShape();
+  unsigned rank = shape.size();
+
+  std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(shape, layout);
+  if (!ll.has_value()) {
+    return std::nullopt;
+  }
+
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+  StringAttr kBlock = str_attr("block");
+
+  SmallVector<SmallVector<unsigned>> offsets;
+  for (int i = 0; i < ll->getInDimSize(str_attr("register")); i++) {
+    auto idxs =
+        ll->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    assert(idxs.size() == rank);
+    for (unsigned k = 0; k < rank; ++k) {
+      assert(idxs[k].first == str_attr("dim" + std::to_string(k)));
+    }
+    offsets.push_back(
+        llvm::to_vector_of<unsigned>(llvm::make_second_range(idxs)));
+  }
+  return offsets;
+}
+
 bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
     std::optional<int32_t> maxVecElems, Value shmemBase,
@@ -305,17 +334,8 @@ bool emitTransferBetweenRegistersAndShared(
                       [&](auto offset) { return offset == 0; })) {
       return false;
     }
-
-    // We now have
-    //   regToSharedLayout(0, ..., block=inBlock) => (0, ..., block=outBlock).
-    // To confirm that there's no cross-block communication, we must also have
-    // outBlock == inBlock or outBlock == 0.
-    //
-    // The fact that outBlock == 0 works is nonobvious.  It occurs when the
-    // shared layout is broadcasted in its block dim, i.e. multiple blocks
-    // contain the same data.
     int32_t outBlock = idx.back();
-    if (outBlock != inBlock && outBlock != 0) {
+    if (outBlock != inBlock) {
       return false;
     }
   }
@@ -421,6 +441,12 @@ using namespace mlir::triton;
 using mlir::triton::gpu::getOrder;
 using mlir::triton::gpu::getSizePerThread;
 
+Value createConstantI1(Location loc, OpBuilder &rewriter, bool v) {
+  auto i1ty = rewriter.getIntegerType(1);
+  return rewriter.create<LLVM::ConstantOp>(loc, i1ty,
+                                           IntegerAttr::get(i1ty, v));
+}
+
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
   return rewriter.create<LLVM::ConstantOp>(loc, i32ty,
@@ -475,9 +501,22 @@ Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                           builder.getIntegerAttr(ty, value));
 }
 
-SharedMemoryObject
-getSharedMemoryObjectFromStruct(Location loc, Value llvmStruct, Type elemTy,
-                                ConversionPatternRewriter &rewriter) {
+bool isConstantZero(Value v) {
+  if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
+      return attr.getValue().isZero();
+    }
+    if (auto attr = dyn_cast<FloatAttr>(constantOp.getValue())) {
+      return attr.getValue().isZero();
+    }
+  }
+  return false;
+}
+
+SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
+                                                   Value llvmStruct,
+                                                   Type elemTy,
+                                                   RewriterBase &rewriter) {
   ArrayRef<Type> types =
       cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
   SmallVector<Value> elems(types.size());
@@ -559,15 +598,14 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
   return multiDim;
 }
 
-Value linearize(ConversionPatternRewriter &rewriter, Location loc,
-                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape,
-                ArrayRef<unsigned> order) {
+Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
+                ArrayRef<unsigned> shape, ArrayRef<unsigned> order) {
   return linearize(rewriter, loc, applyPermutation(multiDim, order),
                    applyPermutation(shape, order));
 }
 
-Value linearize(ConversionPatternRewriter &rewriter, Location loc,
-                ArrayRef<Value> multiDim, ArrayRef<unsigned> shape) {
+Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
+                ArrayRef<unsigned> shape) {
   auto rank = multiDim.size();
   Value linear = i32_val(0);
   if (rank > 0) {
@@ -581,8 +619,8 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
   return linear;
 }
 
-Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
-                        StringRef key, StringRef content) {
+Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
+                        StringRef content) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto ctx = moduleOp.getContext();
   unsigned stringNumber = 0;
@@ -598,7 +636,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 
   LLVM::GlobalOp global;
   {
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
     global = rewriter.create<LLVM::GlobalOp>(
         UnknownLoc::get(ctx), globalType,
@@ -616,7 +654,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
-                                     ConversionPatternRewriter &rewriter,
+                                     RewriterBase &rewriter,
                                      const TargetInfoBase &targetInfo,
                                      unsigned elemId, RankedTensorType type,
                                      ArrayRef<unsigned> multiDimCTAInRepId,
@@ -770,9 +808,9 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
 }
 
 SmallVector<Value> getWrappedMultiDimOffset(
-    ConversionPatternRewriter &rewriter, Location loc,
-    ArrayRef<Value> multiDimOffset, ArrayRef<unsigned> shape,
-    SmallVector<unsigned> shapePerCTATile, SmallVector<int64_t> shapePerCTA) {
+    RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDimOffset,
+    ArrayRef<unsigned> shape, SmallVector<unsigned> shapePerCTATile,
+    SmallVector<int64_t> shapePerCTA) {
   unsigned rank = shape.size();
   SmallVector<Value> multiDimOffsetWrapped(rank);
   for (unsigned d = 0; d < rank; ++d) {

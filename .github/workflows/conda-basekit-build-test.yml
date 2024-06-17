@@ -17,7 +17,7 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.15
+      - runner-0.0.16
     strategy:
       matrix:
         python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
@@ -79,7 +79,7 @@ jobs:
             s/\(.*03-matrix-multiplication\)/#\1/
             s/\(.*07-extern-functions\)/#\1/
             s/\(.*08-grouped-gemm\)/#\1/
-            s/\(.*09-experimental-block-pointer\)/#\1/
+            s/\(.*10-experimental-block-pointer\)/#\1/
           ' scripts/test-triton.sh
 
           conda create -y -n dpcpp -c intel -c conda-forge dpcpp_linux-64=2024.1.*

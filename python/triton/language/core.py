@@ -149,6 +149,176 @@ def _to_tensor(x, builder):
     assert False, f"cannot convert {x} of type {type(x)} to tensor"
 
 
+# -----------------------
+# constexpr
+# -----------------------
+
+
+class const:
+    """
+    This class is used as a type annotation to mark pointers to constant data.
+    The `store` function cannot be called with a pointer to const. Constness
+    is part of the pointer type and the usual Triton type consistency rules
+    apply. For example you cannot have a function that returns constant pointer
+    in one return statement and non-constant pointer in another.
+    """
+    pass
+
+
+class constexpr:
+    """
+    This class is used to store a value that is known at compile-time.
+    """
+
+    def __init__(self, value):
+        if isinstance(value, constexpr):
+            self.value = value.value
+        else:
+            self.value = value
+
+    def __repr__(self) -> str:
+        return f"constexpr[{self.value}]"
+
+    def __index__(self):
+        return self.value
+
+    # In interpreter mode, constant values are not wrapped in constexpr,
+    # and therefore do not have a .value attribute.
+    # As a result, from here and below, we need to call the _constexpr_to_value
+    # function to obtain either constexpr.value or the value itself.
+    def __add__(self, other):
+        return constexpr(self.value + _constexpr_to_value(other))
+
+    def __radd__(self, other):
+        return constexpr(_constexpr_to_value(other) + self.value)
+
+    def __sub__(self, other):
+        return constexpr(self.value - _constexpr_to_value(other))
+
+    def __rsub__(self, other):
+        return constexpr(_constexpr_to_value(other) - self.value)
+
+    def __mul__(self, other):
+        return constexpr(self.value * _constexpr_to_value(other))
+
+    def __mod__(self, other):
+        return constexpr(self.value % _constexpr_to_value(other))
+
+    def __rmul__(self, other):
+        return constexpr(_constexpr_to_value(other) * self.value)
+
+    def __truediv__(self, other):
+        return constexpr(self.value / _constexpr_to_value(other))
+
+    def __rtruediv__(self, other):
+        return constexpr(_constexpr_to_value(other) / self.value)
+
+    def __floordiv__(self, other):
+        return constexpr(self.value // _constexpr_to_value(other))
+
+    def __rfloordiv__(self, other):
+        return constexpr(_constexpr_to_value(other) // self.value)
+
+    def __gt__(self, other):
+        return constexpr(self.value > _constexpr_to_value(other))
+
+    def __rgt__(self, other):
+        return constexpr(_constexpr_to_value(other) > self.value)
+
+    def __ge__(self, other):
+        return constexpr(self.value >= _constexpr_to_value(other))
+
+    def __rge__(self, other):
+        return constexpr(_constexpr_to_value(other) >= self.value)
+
+    def __lt__(self, other):
+        return constexpr(self.value < _constexpr_to_value(other))
+
+    def __rlt__(self, other):
+        return constexpr(_constexpr_to_value(other) < self.value)
+
+    def __le__(self, other):
+        return constexpr(self.value <= _constexpr_to_value(other))
+
+    def __rle__(self, other):
+        return constexpr(_constexpr_to_value(other) <= self.value)
+
+    def __eq__(self, other):
+        return constexpr(self.value == _constexpr_to_value(other))
+
+    def __ne__(self, other):
+        return constexpr(self.value != _constexpr_to_value(other))
+
+    def __bool__(self):
+        return bool(self.value)
+
+    def __neg__(self):
+        return constexpr(-self.value)
+
+    def __and__(self, other):
+        return constexpr(self.value & _constexpr_to_value(other))
+
+    def logical_and(self, other):
+        return constexpr(self.value and _constexpr_to_value(other))
+
+    def __or__(self, other):
+        return constexpr(self.value | _constexpr_to_value(other))
+
+    def __xor__(self, other):
+        return constexpr(self.value ^ _constexpr_to_value(other))
+
+    def logical_or(self, other):
+        return constexpr(self.value or _constexpr_to_value(other))
+
+    def __pos__(self):
+        return constexpr(+self.value)
+
+    def __invert__(self):
+        return constexpr(~self.value)
+
+    def __pow__(self, other):
+        return constexpr(self.value**_constexpr_to_value(other))
+
+    def __rpow__(self, other):
+        return constexpr(_constexpr_to_value(other)**self.value)
+
+    def __rshift__(self, other):
+        return constexpr(self.value >> _constexpr_to_value(other))
+
+    def __lshift__(self, other):
+        return constexpr(self.value << _constexpr_to_value(other))
+
+    def __not__(self):
+        return constexpr(not self.value)
+
+    def __iter__(self):
+        return iter(self.value)
+
+    def __call__(self, *args, **kwds):
+        return self.value(*args, **kwds)
+
+
+CONSTEXPR_0 = constexpr(0)
+
+
+def _unwrap_if_constexpr(o):
+    return o.value if isinstance(o, constexpr) else o
+
+
+def check_bit_width(value, shift_value):
+    if isinstance(value, tensor) and isinstance(shift_value, constexpr):
+        bitwidth = value.type.scalar.primitive_bitwidth
+        if shift_value.value >= bitwidth:
+            warn(
+                f"Value {shift_value.value} exceeds the maximum bitwidth ({bitwidth}) for type '{value.dtype}'. This may result in undefined behavior."
+            )
+
+
+# -----------------------
+# dtype
+# -----------------------
+
+
 class dtype:
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
@@ -161,8 +331,7 @@ class dtype:
         UNSIGNED = 1
 
     def __init__(self, name):
-        if hasattr(name, 'value'):
-            name = name.value
+        name = _unwrap_if_constexpr(name)
         self.name = name
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
         if name in dtype.SINT_TYPES:
@@ -388,6 +557,7 @@ _DtypeClass = dtype
 class pointer_type(dtype):
 
     def __init__(self, element_ty: dtype, address_space: int = 1):
+        element_ty = _unwrap_if_constexpr(element_ty)
         if not isinstance(element_ty, dtype):
             raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
         self.element_ty = element_ty
@@ -551,164 +721,8 @@ def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
 
 
 # -----------------------
-# constexpr
+# tensor
 # -----------------------
-
-
-class const:
-    """
-    This class is used as a type annotation to mark pointers to constant data.
-    The `store` function cannot be called with a pointer to const. Constness
-    is part of the pointer type and the usual Triton type consistency rules
-    apply. For example you cannot have a function that returns constant pointer
-    in one return statement and non-constant pointer in another.
-    """
-    pass
-
-
-class constexpr:
-    """
-    This class is used to store a value that is known at compile-time.
-    """
-
-    def __init__(self, value):
-        if isinstance(value, constexpr):
-            self.value = value.value
-        else:
-            self.value = value
-
-    def __repr__(self) -> str:
-        return f"constexpr[{self.value}]"
-
-    def __index__(self):
-        return self.value
-
-    # In interpreter mode, constant values are not wrapped in constexpr,
-    # and therefore do not have a .value attribute.
-    # As a result, from here and below, we need to call the _constexpr_to_value
-    # function to obtain either constexpr.value or the value itself.
-    def __add__(self, other):
-        return constexpr(self.value + _constexpr_to_value(other))
-
-    def __radd__(self, other):
-        return constexpr(_constexpr_to_value(other) + self.value)
-
-    def __sub__(self, other):
-        return constexpr(self.value - _constexpr_to_value(other))
-
-    def __rsub__(self, other):
-        return constexpr(_constexpr_to_value(other) - self.value)
-
-    def __mul__(self, other):
-        return constexpr(self.value * _constexpr_to_value(other))
-
-    def __mod__(self, other):
-        return constexpr(self.value % _constexpr_to_value(other))
-
-    def __rmul__(self, other):
-        return constexpr(_constexpr_to_value(other) * self.value)
-
-    def __truediv__(self, other):
-        return constexpr(self.value / _constexpr_to_value(other))
-
-    def __rtruediv__(self, other):
-        return constexpr(_constexpr_to_value(other) / self.value)
-
-    def __floordiv__(self, other):
-        return constexpr(self.value // _constexpr_to_value(other))
-
-    def __rfloordiv__(self, other):
-        return constexpr(_constexpr_to_value(other) // self.value)
-
-    def __gt__(self, other):
-        return constexpr(self.value > _constexpr_to_value(other))
-
-    def __rgt__(self, other):
-        return constexpr(_constexpr_to_value(other) > self.value)
-
-    def __ge__(self, other):
-        return constexpr(self.value >= _constexpr_to_value(other))
-
-    def __rge__(self, other):
-        return constexpr(_constexpr_to_value(other) >= self.value)
-
-    def __lt__(self, other):
-        return constexpr(self.value < _constexpr_to_value(other))
-
-    def __rlt__(self, other):
-        return constexpr(_constexpr_to_value(other) < self.value)
-
-    def __le__(self, other):
-        return constexpr(self.value <= _constexpr_to_value(other))
-
-    def __rle__(self, other):
-        return constexpr(_constexpr_to_value(other) <= self.value)
-
-    def __eq__(self, other):
-        return constexpr(self.value == _constexpr_to_value(other))
-
-    def __ne__(self, other):
-        return constexpr(self.value != _constexpr_to_value(other))
-
-    def __bool__(self):
-        return bool(self.value)
-
-    def __neg__(self):
-        return constexpr(-self.value)
-
-    def __and__(self, other):
-        return constexpr(self.value & _constexpr_to_value(other))
-
-    def logical_and(self, other):
-        return constexpr(self.value and _constexpr_to_value(other))
-
-    def __or__(self, other):
-        return constexpr(self.value | _constexpr_to_value(other))
-
-    def __xor__(self, other):
-        return constexpr(self.value ^ _constexpr_to_value(other))
-
-    def logical_or(self, other):
-        return constexpr(self.value or _constexpr_to_value(other))
-
-    def __pos__(self):
-        return constexpr(+self.value)
-
-    def __invert__(self):
-        return constexpr(~self.value)
-
-    def __pow__(self, other):
-        return constexpr(self.value**_constexpr_to_value(other))
-
-    def __rpow__(self, other):
-        return constexpr(_constexpr_to_value(other)**self.value)
-
-    def __rshift__(self, other):
-        return constexpr(self.value >> _constexpr_to_value(other))
-
-    def __lshift__(self, other):
-        return constexpr(self.value << _constexpr_to_value(other))
-
-    def __not__(self):
-        return constexpr(not self.value)
-
-    def __iter__(self):
-        return iter(self.value)
-
-    def __call__(self, *args, **kwds):
-        return self.value(*args, **kwds)
-
-
-CONSTEXPR_0 = constexpr(0)
-
-
-def check_bit_width(value, shift_value):
-    if isinstance(value, tensor) and isinstance(shift_value, constexpr):
-        bitwidth = value.type.scalar.primitive_bitwidth
-        if shift_value.value >= bitwidth:
-            warn(
-                f"Value {shift_value.value} exceeds the maximum bitwidth ({bitwidth}) for type '{value.dtype}'. This may result in undefined behavior."
-            )
 
 
 class tensor:
@@ -986,8 +1000,8 @@ class tensor:
         """
         # Triton doesn't like core functions calling other core functions, so we
         # just copy-paste the implementation of cast here.  It's not too bad.
-        if isinstance(bitcast, constexpr):
-            bitcast = bitcast.value
+        dtype = _unwrap_if_constexpr(dtype)
+        bitcast = _unwrap_if_constexpr(bitcast)
         if bitcast:
             return semantic.bitcast(self, dtype, _builder)
         return semantic.cast(self, dtype, _builder, fp_downcast_rounding)
@@ -1729,12 +1743,13 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
         docstr += """
     :param val: The values with which to perform the atomic operation
     :type val: Block of dtype=pointer.dtype.element_ty
-    :param sem: Memory semantics to use ("ACQUIRE_RELEASE" (default),
-        "ACQUIRE", "RELEASE", or "RELAXED")
-    :type sem: str
-    :param scope: Scope of threads that observe synchronizing effect of the
-        atomic operation ("GPU" (default), "CTA", or "SYSTEM")
-    :type scope: str
+    :param sem: Specifies the memory semantics for the operation. Acceptable values are "acquire",
+        "release", "acq_rel" (stands for "ACQUIRE_RELEASE"), and "relaxed". If not provided,
+        the function defaults to using "acq_rel" semantics.
+    :type sem: str, optional
+    :param scope: Defines the scope of threads that observe the synchronizing effect of the atomic operation.
+        Acceptable values are "gpu" (default), "cta" (cooperative thread array, thread block), or "sys" (stands for "SYSTEM"). The default value is "gpu".
+    :type scope: str, optional
     """
         func.__doc__ = docstr
         return func
@@ -1949,14 +1964,19 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
+    :type input: Tensor
     :param axis: the dimension along which the reduction should be done
-    :param keep_dims: if true, keep the reduced dimensions with length 1"""
+    :type axis: int
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool"""
         if return_indices_arg is not None:
             docstr += f"""
-    :param {return_indices_arg}: if true, return index corresponding to the {name} value"""
+    :param {return_indices_arg}: if true, return index corresponding to the {name} value
+    :type {return_indices_arg}: bool"""
         if tie_break_arg is not None:
             docstr += f"""
-    :param {tie_break_arg}: if true, return the left-most indices in case of ties for values that aren't NaN"""
+    :param {tie_break_arg}: if true, in case of a tie (i.e., multiple elements have the same {name} value), return the left-most index for values that aren't NaN
+    :type {tie_break_arg}: bool"""
 
         func.__doc__ = docstr.format(name=name)
         return func
@@ -1977,9 +1997,13 @@ def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=N
     """Applies the combine_fn to all elements in :code:`input` tensors along the provided :code:`axis`
 
     :param input: the input tensor, or tuple of tensors
+    :type input: Tensor
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
+    :type axis: int | None
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :type combine_fn: Callable
     :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
 
     """
     if isinstance(input, tensor):
@@ -2059,7 +2083,9 @@ def _add_scan_docstr(name: str) -> Callable[[T], T]:
     Returns the {name} of all elements in the :code:`input` tensor along the provided :code:`axis`
 
     :param input: the input values
-    :param axis: the dimension along which the scan should be done"""
+    :type input: Tensor
+    :param axis: the dimension along which the scan should be done
+    :type axis: int"""
         func.__doc__ = docstr.format(name=name)
         return func
 
@@ -2072,9 +2098,13 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
     """Applies the combine_fn to each elements with a carry in :code:`input` tensors along the provided :code:`axis` and update the carry
 
     :param input: the input tensor, or tuple of tensors
+    :type input: Tensor
     :param axis: the dimension along which the reduction should be done
+    :type axis: int
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
-    :param reverse: apply the associative scan in the reverse direction along axis.
+    :type combine_fn: Callable
+    :param reverse: whether to apply the associative scan in the reverse direction along axis
+    :type reverse: bool
 
     """
     if isinstance(input, tensor):
@@ -2108,7 +2138,9 @@ def histogram(input, num_bins, _builder=None, _generator=None):
     """computes an histogram based on input tensor with num_bins bins, the bins have a width of 1 and start at 0.
 
     :param input: the input tensor
+    :type input: Tensor
     :param num_bins: number of histogram bins
+    :type num_bins: int
 
     """
     num_bins = _constexpr_to_value(num_bins)

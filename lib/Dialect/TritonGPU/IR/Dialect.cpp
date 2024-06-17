@@ -10,11 +10,13 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
+
+// Include TableGen'erated code
+#include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -247,45 +249,44 @@ SmallVector<unsigned> getWarpOrder(Attribute layout) {
 
 SmallVector<unsigned> getOrder(Attribute layout) {
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
-    return SmallVector<unsigned>(blockedLayout.getOrder().begin(),
-                                 blockedLayout.getOrder().end());
-  } else if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
+    return llvm::to_vector(blockedLayout.getOrder());
+  }
+  if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
     auto distributedLayout = cast<DistributedEncodingTrait>(layout);
     auto rank = distributedLayout.getWarpsPerCTA().size();
     SmallVector<unsigned> order(rank);
-    for (auto i = 0; i < rank; ++i)
-      order[i] = rank - 1 - i;
-    if (auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout)) {
-      if (mfmaLayout.getIsTransposed()) {
-        std::swap(order[rank - 2], order[rank - 1]);
-      }
-    }
+    std::iota(order.rbegin(), order.rend(), 0);
+    auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout);
+    if (!mfmaLayout)
+      return order;
+    // For transposed MFMA layouts, we swap M and N dimensions, which is
+    // always the first two in order; as we can have an optional batch
+    // dimension following them.
+    if (mfmaLayout.getIsTransposed())
+      std::swap(order[0], order[1]);
     return order;
-  } else if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
+  }
+  if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
     SmallVector<unsigned> order(rank);
-    for (auto i = 0; i < rank; ++i)
-      order[i] = rank - 1 - i;
+    std::iota(order.rbegin(), order.rend(), 0);
     return order;
-  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
+  }
+  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
     SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
     unsigned dim = sliceLayout.getDim();
     SmallVector<unsigned> order;
     for (unsigned d : parentOrder) {
-      if (d == dim)
-        continue;
-      else if (d > dim)
-        order.push_back(d - 1);
-      else
-        order.push_back(d);
+      if (d != dim)
+        order.push_back(d > dim ? d - 1 : d);
     }
     return order;
-  } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
-    return SmallVector<unsigned>(sharedLayout.getOrder().begin(),
-                                 sharedLayout.getOrder().end());
-  } else {
-    llvm::report_fatal_error("Unimplemented usage of getOrder");
   }
+  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
+    return llvm::to_vector(sharedLayout.getOrder());
+  }
+
+  llvm::report_fatal_error("Unimplemented usage of getOrder");
   return {};
 };
 
@@ -1337,6 +1338,26 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
   printer << "}>";
+}
+
+LogicalResult
+AMDMfmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
+                            unsigned versionMajor, unsigned versionMinor,
+                            llvm::ArrayRef<unsigned int> warpsPerCTA,
+                            unsigned mDim, unsigned nDim, bool isTransposed,
+                            mlir::triton::gpu::CTALayoutAttr) {
+  if (!(versionMajor >= 0 && versionMajor <= 3)) {
+    return emitError() << "major version must be in the [0, 3] range";
+  }
+  if (versionMinor != 0) {
+    return emitError() << "minor version must be 0";
+  }
+  if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16))) {
+    return emitError()
+           << "(M, N) cases other than (32, 32) or (16, 16) unimplemented";
+  }
+
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
