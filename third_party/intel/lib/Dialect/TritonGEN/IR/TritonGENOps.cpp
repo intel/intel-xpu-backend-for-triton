@@ -69,7 +69,7 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
 
   if (op.getElemSizeInBits() == 16 && tileWidth != 16)
     return op->emitOpError("tile_width for 16 bit elements should be equal "
-                           "to systolic depth times 2, i.e., 16 elements");
+                           "to 16");
 
   return success();
 }
@@ -211,7 +211,7 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (getElemSizeInBits() == 8 && !getVnniTransform())
     if (getTileWidth() != 32)
       return emitOpError("tile_width for 8 bit elements should be equal "
-                         "to systolic depth times 4, i.e., 32 elements");
+                         "to 32");
 
   return verifyMatrixReadInput(*this);
 }
@@ -227,11 +227,11 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
   if (getElemSizeInBits() == 8 && !getVnniTransform())
     if (getTileWidth() != 32)
       return emitOpError("tile_width for 8 bit elements should be equal "
-                         "to systolic depth times 4, i.e., 32 elements");
+                         "to 32");
 
   if (getElemSizeInBits() == 32 && getTileWidth() != 8)
     return emitOpError("tile_width for 32 bit elements should be equal "
-                       "to systolic depth, i.e., 8 elements");
+                       "to 8");
 
   return success();
 }
