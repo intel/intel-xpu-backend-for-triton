@@ -33,7 +33,7 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler):
     # Build json with parameters
     df_results = pd.DataFrame()
     df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
-    df_results['tflops']  = df[tflops_col]
+    df_results['tflops'] = df[tflops_col]
     if hbm_col is not None:
         df_results['hbm_gbs'] = df[hbm_col]
 
@@ -57,10 +57,8 @@ def main():
     args = parse_args()
     param_cols = args.param_cols.split(",")
     df = pd.read_csv(args.source)
-    result_df = transform_df(
-        df, param_cols=param_cols, tflops_col=args.tflops_col,
-        hbm_col=args.hbm_col, benchmark=args.benchmark, compiler=args.compiler
-    )
+    result_df = transform_df(df, param_cols=param_cols, tflops_col=args.tflops_col, hbm_col=args.hbm_col,
+                             benchmark=args.benchmark, compiler=args.compiler)
     result_df.to_csv(args.target, index=False)
 
 
