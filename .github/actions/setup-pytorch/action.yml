@@ -106,6 +106,13 @@ runs:
         wget https://raw.githubusercontent.com/intel/torch-xpu-ops/main/.github/scripts/apply_torch_pr.py
         python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/124147 --pr-list https://github.com/pytorch/pytorch/pull/126516
 
+    # FIXME: Old PyTorch does not work with numpy==2.0.0
+    - name: Install numpy < 2.0.0
+      if: ${{ inputs.repository == 'Stonepia/pytorch' }}
+      shell: bash
+      run: |
+        pip install 'numpy<2.0.0'
+
     - name: Build PyTorch
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
       shell: bash
