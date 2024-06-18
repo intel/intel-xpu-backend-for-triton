@@ -135,6 +135,10 @@ public:
     IntelDPASCapability dpasCap = getDPASCapability(arch);
     unsigned dpasElemBitWidths =
         oldAType.getElementType().getIntOrFloatBitWidth();
+    // We are upcasting FP8 to FP16
+    if (oldAType.getElementType().isFloat8E5M2() ||
+        oldAType.getElementType().isFloat8E4M3FNUZ())
+      dpasElemBitWidths = 2 * dpasElemBitWidths;
     unsigned opsPerChan = dpasCap.opsChanBitWidths / dpasElemBitWidths;
 
     SmallVector<unsigned> warpsPerTile =
@@ -209,9 +213,16 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     DpasEncodingAttr dpasLayout =
         dyn_cast<DpasEncodingAttr>(D.getType().getEncoding());
     if (dpasLayout) {
+
+      bool isNativeFP8 = AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
+
       // No operands promotion because of DPAS using different layout
       // to pack the dot operands for different scalar type.
-      return;
+      if (!isNativeFP8)
+        return;
+
+      // promote operands from fp8 to fp16 to use DPAS
+      promoteType = builder.getF16Type();
     } else {
       // FMA case.
       Type DElType = D.getType().getElementType();
