@@ -57,4 +57,4 @@ for i in "${grid[@]}"; do
 # Display the contents of the output file
 cat "$OUT_FILE"
 source ../../scripts/capture-hw-details.sh
-python ../../scripts/build_report.py gemm_results.csv gemm-report.csv --param_cols "M,N,K" --result_cols "max_tflops" --name gemm
+python ../../scripts/build_report.py gemm_results.csv gemm-report.csv --benchmark gemm --compiler triton --param_cols "N,K,M" --tflops_col max_tflops --hbm_col max_gbs

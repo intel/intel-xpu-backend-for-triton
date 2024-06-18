@@ -14,55 +14,33 @@ def parse_args():
         "target",
         help="Path to result csv file with benchmark results including host info and dates",
     )
-    parser.add_argument(
-        "--param_cols", help="Names of parameter columns, separated by commas.", required=True
-    )
-    parser.add_argument("--name", help="Name of the benchmark.", required=True)
-    parser.add_argument(
-        "--result_cols", help="Names of the result columns, separated by commas.", required=True
-    )
+    parser.add_argument("--param_cols", help="Names of parameter columns, separated by commas.", required=True)
+    parser.add_argument("--benchmark", help="Name of the benchmark.", required=True)
+    parser.add_argument("--compiler", help="Name of the compiler, like `triton`.", required=True)
+    parser.add_argument("--tflops_col", help="Column name with tflops.", required=True)
+    parser.add_argument("--hbm_col", help="Column name with HBM results.", required=False, default=None)
     return parser.parse_args()
 
 
 def check_cols(target_cols, all_cols):
     diff = set(target_cols).difference(all_cols)
-    assert (
-        len(diff) == 0
-    ), f"Couldn't find required columns: '{diff}' among available '{all_cols}'"
+    assert (len(diff) == 0), f"Couldn't find required columns: '{diff}' among available '{all_cols}'"
 
 
-def parse_result(name):
-    name = name.lower()
-    if "triton" in name:
-        return "triton"
-    elif "xetla" in name:
-        return "xetla"
-    else:
-        return name
-
-
-def transform_df(df, param_cols, result_cols, bench_name):
-
+def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler):
     check_cols(param_cols, df.columns)
-    check_cols(result_cols, df.columns)
+    check_cols([tflops_col] + [] if hbm_col is None else [hbm_col], df.columns)
     # Build json with parameters
-    df_results = df[result_cols].copy()
-    df_results["params"] = [
-        json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")
-    ]
+    df_results = pd.DataFrame()
+    df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
+    df_results['tflops']  = df[tflops_col]
+    if hbm_col is not None:
+        df_results['hbm_gbs'] = df[hbm_col]
 
-    df = pd.melt(
-        df_results,
-        id_vars=["params"],
-        value_vars=result_cols,
-        value_name="tflops",
-        var_name="comment",
-    )
-
-    df["compiler"] = df["comment"].apply(parse_result)
-    df["run_uuid"] = uuid.uuid4().hex
-    df["datetime"] = datetime.datetime.now()
-    df["benchmark"] = bench_name
+    df_results["run_uuid"] = uuid.uuid4().hex
+    df_results["datetime"] = datetime.datetime.now()
+    df_results["benchmark"] = benchmark
+    df_results["compiler"] = compiler
 
     host_info = {
         n: os.getenv(n.upper(), default="")
@@ -70,18 +48,18 @@ def transform_df(df, param_cols, result_cols, bench_name):
     }
     assert host_info['gpu_device'], "Could not find GPU device description, was capture_device.sh called?"
     for name, val in host_info.items():
-        df[name] = val
+        df_results[name] = val
 
-    return df
+    return df_results
 
 
 def main():
     args = parse_args()
     param_cols = args.param_cols.split(",")
-    result_cols = args.result_cols.split(",")
     df = pd.read_csv(args.source)
     result_df = transform_df(
-        df, param_cols=param_cols, result_cols=result_cols, bench_name=args.name
+        df, param_cols=param_cols, tflops_col=args.tflops_col,
+        hbm_col=args.hbm_col, benchmark=args.benchmark, compiler=args.compiler
     )
     result_df.to_csv(args.target, index=False)
 
