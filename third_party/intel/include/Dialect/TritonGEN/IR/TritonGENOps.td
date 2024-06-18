@@ -460,8 +460,6 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
     I32Attr:$tile_width,
     I32Attr:$tile_height,
     I32Attr:$v_blocks,
-    I1Attr:$transpose,
-    I1Attr:$vnni_transform,
     DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control
   )> {
 
@@ -478,8 +476,6 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
       - 16 for f16, int16, bf16
       - 8 for int8, int4, int2
     $v_blocks - number of tiles to prefetch
-    $transpose - transpose the tile in registers (useful for 32 bit element types)
-    $vnni_transform - transpose and pack the tile in registers (useful for < 32 bit element types)
     $cache_control - an enumerator that sets the L1 and L3 cache behaviour
 
     Notes:
@@ -491,9 +487,8 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
 
   let assemblyFormat = [{
     operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,`
-      `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,`
-      `vnni_transform` `=` $vnni_transform `,` `cache_control` `=` $cache_control `}` attr-dict `:`
-      `(` type(operands) `)`
+      `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `cache_control` `=` $cache_control `}`
+      attr-dict `:` `(` type(operands) `)`
   }];
 
   let hasVerifier = 1;

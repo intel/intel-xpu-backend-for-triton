@@ -191,8 +191,7 @@ public:
     } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
       rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
-          blockWidth, blockHeight, vBlks, false /*transpose*/, false /*vnni*/,
-          TritonGEN::LoadCacheControl::L1C_L3C);
+          blockWidth, blockHeight, vBlks, TritonGEN::LoadCacheControl::L1C_L3C);
       rewriter.eraseOp(op);
     } else {
       VectorType vectorType =

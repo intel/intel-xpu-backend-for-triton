@@ -619,9 +619,7 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
       op.getTileWidth() == 32 && op.getVBlocks() == 1)
     return false;
 
-  // Transpose and transform operation happens after loading data from a
-  // specific memory address, so they are not necessary for prefetch.
-  return !op.getTranspose() && !op.getVnniTransform();
+  return true;
 }
 
 static LLVM::CallOp
@@ -713,10 +711,8 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
       rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileHeight());
   auto vBlocks =
       rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getVBlocks());
-  auto useTranspose =
-      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getTranspose());
-  auto vnniTransform =
-      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getVnniTransform());
+  auto useTranspose = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
+  auto vnniTransform = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   auto cache = rewriter.create<LLVM::ConstantOp>(
       loc, int32Ty, static_cast<int>(op.getCacheControl()));
 
