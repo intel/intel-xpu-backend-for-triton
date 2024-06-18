@@ -171,7 +171,6 @@ build_pytorch() {
     if [ "$UPSTREAM_PYTORCH" = true ]; then
       git clone --single-branch -b main --recurse-submodules https://github.com/pytorch/pytorch.git
       pushd $PYTORCH_PROJ
-      curl -Ls https://github.com/pytorch/pytorch/pull/124147.diff | git apply -
       curl -Ls https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
       popd
     else

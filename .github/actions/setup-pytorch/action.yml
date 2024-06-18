@@ -101,7 +101,6 @@ runs:
       shell: bash
       run: |
         cd pytorch
-        curl -Ls https://github.com/pytorch/pytorch/pull/124147.diff | git apply -
         curl -Ls https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
 
     # FIXME: Old PyTorch does not work with numpy==2.0.0
