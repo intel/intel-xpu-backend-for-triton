@@ -8,6 +8,8 @@
 
 namespace mlir::triton::intel {
 
+constexpr int patternBenefitAddSPIRVEnv = 30;
+
 void populateTritonOpsToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);

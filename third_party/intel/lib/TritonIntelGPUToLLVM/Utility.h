@@ -30,9 +30,8 @@ namespace mlir::LLVM::intel {
 ///     cf.br ^br2(%then_ops)
 ///   ^br2(%block_ops):
 template <typename ThenOpsFn>
-Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
-                             Value cond, ArrayRef<Value> ops,
-                             ThenOpsFn &&thenOpsFn) {
+Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
+                             ArrayRef<Value> ops, ThenOpsFn &&thenOpsFn) {
   Block *insertionBlock = rewriter.getInsertionBlock();
   Block *thenBlock =
       rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
@@ -71,28 +70,23 @@ Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
 ///     cf.br ^br2
 ///   ^br2:
 template <typename ThenOpsFn>
-Block &createPredicatedBlock(ConversionPatternRewriter &rewriter, Location loc,
-                             Value cond, ThenOpsFn &&thenOpsFn) {
+Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
+                             ThenOpsFn &&thenOpsFn) {
   return createPredicatedBlock(rewriter, loc, cond, {}, thenOpsFn);
 }
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
                  Type elemTy, Value pred);
 
-Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i);
-Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                int i);
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i);
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 Value i);
+Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
+Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
 
-Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
-                        StringRef key, StringRef content,
-                        unsigned addressSpace);
+Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
+                        StringRef content, unsigned addressSpace);
 
-LLVM::LLVMFuncOp getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter);
+LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter);
 
 static Value getStackPointer(PatternRewriter &rewriter,
                              FunctionOpInterface funcOp) {
@@ -510,13 +504,10 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
 inline SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset,
-            bool allowLL = false) {
-  // TODO(jlebar): LLs are disabled for now due to bugs found on AMD and A100
-  // GPUs.  Enable again wth allowLL = true above.
-
+            bool allowLL = true) {
   // Eventually the LinearLayout path will be the only one.  For now we allow
   // both paths so we can test that they produce the same results.
-  if (allowLL) {
+  if (allowLL && target.enableLinearLayout()) {
     std::optional<SmallVector<SmallVector<Value>>> llOffsets =
         emitIndicesUsingLinearLayouts(loc, rewriter, target, layout, type,
                                       withCTAOffset);

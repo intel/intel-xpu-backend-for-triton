@@ -96,9 +96,29 @@ def overall_stats(stats: List[ReportStats]) -> ReportStats:
     return overall
 
 
+def parse_junit_reports(reports_path: pathlib.Path) -> List[ReportStats]:
+    """Parses junit report in the specified directory."""
+    return [parse_report(report) for report in reports_path.glob('*.xml')]
+
+
+def parse_tutorials_reports(reports_path: pathlib.Path) -> List[ReportStats]:
+    """Parses tutorials reports in the specified directory."""
+    stats = ReportStats(name='tutorials')
+    for report in reports_path.glob('tutorial-*.txt'):
+        result = report.read_text().strip()
+        stats.total += 1
+        if result == 'PASS':
+            stats.passed += 1
+        elif result == 'SKIP':
+            stats.skipped += 1
+        elif result == 'FAIL':
+            stats.failed += 1
+    return [stats] if stats.total > 0 else []
+
+
 def parse_reports(reports_path: pathlib.Path) -> List[ReportStats]:
     """Parses all report in the specified directory."""
-    return [parse_report(report) for report in reports_path.glob('*.xml')]
+    return parse_junit_reports(reports_path) + parse_tutorials_reports(reports_path)
 
 
 def print_stats(stats: ReportStats):
@@ -110,7 +130,7 @@ def print_stats(stats: ReportStats):
         f' skipped: {stats.skipped},'
         f' xfailed: {stats.xfailed},'
         f' total: {stats.total},'
-        f' fixme: {stats.fixme}'
+        f' fixme: {stats.fixme},'
         f' pass rate (w/o xfailed): {round(100 * stats.passed / (stats.total - stats.xfailed), 2)}%'
     )  # yapf: disable
 
@@ -129,6 +149,10 @@ def print_json_stats(stats: List[ReportStats]):
         'ts': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
         'git_ref': os.getenv('GITHUB_REF_NAME', ''),
         'git_sha': os.getenv('GITHUB_SHA', ''),
+        'libigc1_version': os.getenv('LIBIGC1_VERSION', ''),
+        'level_zero_version': os.getenv('LEVEL_ZERO_VERSION', ''),
+        'agama_version': os.getenv('AGAMA_VERSION', ''),
+        'gpu_device': os.getenv('GPU_DEVICE', ''),
         'python_version': platform.python_version(),
         'testsuite': overall.name,
         'passed': overall.passed,
