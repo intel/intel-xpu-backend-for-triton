@@ -639,10 +639,8 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
       rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileHeight());
   auto vBlocks =
       rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getVBlocks());
-  auto useTranspose =
-      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getTranspose());
-  auto vnniTransform =
-      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getVnniTransform());
+  auto useTranspose = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
+  auto vnniTransform = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   auto cache = rewriter.create<LLVM::ConstantOp>(
       loc, int32Ty, static_cast<int>(op.getCacheControl()));
 
