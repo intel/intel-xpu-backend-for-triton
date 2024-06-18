@@ -652,7 +652,6 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
             llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
                 .toIntValue());
     paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
-    paramAttrBuilder.addAttribute(llvm::Attribute::ReadOnly);
     std::vector<NamedAttrList> paramAttrs(argTypes.size());
     paramAttrs[0] = paramAttrBuilder.getAttributes();
     intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
