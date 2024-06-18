@@ -43,7 +43,7 @@ class XPUOptions:
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     allow_fp8e4nv: bool = False
-    allow_fp8e4b15: bool = False
+    allow_fp8e4b15: bool = True
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
