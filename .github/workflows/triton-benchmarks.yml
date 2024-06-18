@@ -113,7 +113,9 @@ jobs:
           source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           cd benchmarks/xetla_benchmark
           python fused_softmax.py --reports $REPORTS
-          python build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-report.csv --param_cols "N" --result_cols "Triton-TFlops-max,XeTLA-TFlops-max" --name softmax
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops-max --hbm_col "Triton-GB/s-max"
+          python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops-max --hbm_col "XeTLA-GB/s-max"
 
 
       - name: Run micro benchmark
