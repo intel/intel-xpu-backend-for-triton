@@ -283,8 +283,40 @@ llvm.func @triton_gen.dpas.f16(%c : vector<8xf32>, %a : vector<8xi16>, %b : vect
 llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vector<8xf32>) {
   // CHECK:     llvm.func @triton_gen.dpas.f32(%arg0: vector<8xf32>, %arg1: vector<4xf32>, %arg2: vector<8xf32>) {
   // CHECK-NEXT: llvm.call spir_funccc @_Z43intel_sub_group_tf32_tf32_matrix_mad_k8_f32Dv4_fDv8_fS0_
-  // CHEC-SAME:    (%arg1, %arg2, %arg0)  {passthrough = ["convergent"]} : (vector<4xf32>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+  // CHECK-SAME:    (%arg1, %arg2, %arg0)
+  // CHECK-SAME:    passthrough = ["convergent"]
+  // CHECK-SAME:    : (vector<4xf32>, vector<8xf32>, vector<8xf32>) -> vector<8xf32>
   %0 = triton_gen.dpas %c, %a, %b {pa = tf32, pb = tf32, rc = 8} : (vector<8xf32>, vector<4xf32>, vector<8xf32>) -> vector<8xf32>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_Dh(vector<8xi16>, vector<8xi32>, vector<8xf16>) -> vector<8xf16> attributes {passthrough = ["convergent"]}
+
+llvm.func @triton_gen.dpas.f16_accum(%c: vector<8xf16>, %a : vector<8xi16>, %b : vector<8xi32>) {
+  // CHECK:     llvm.func @triton_gen.dpas.f16_accum(%arg0: vector<8xf16>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
+  // CHECK-NEXT: lvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_Dh
+  // CHECK-SAME:    (%arg1, %arg2, %arg0)
+  // CHECK-SAME:    passthrough = ["convergent"]
+  // CHECK-SAME:    : (vector<8xi16>, vector<8xi32>, vector<8xf16>) -> vector<8xf16>
+  %0 = triton_gen.dpas %c, %a, %b {pa = f16, pb = f16, rc = 8} : (vector<8xf16>, vector<8xi16>, vector<8xi32>) -> vector<8xf16>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iS_(vector<8xi16>, vector<8xi32>, vector<8xi16>) -> vector<8xi16> attributes {passthrough = ["convergent"]}
+
+llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b : vector<8xi32>) {
+  // CHECK:     llvm.func @triton_gen.dpas.bf16_accum(%arg0: vector<8xbf16>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
+  // CHECK-NEXT: [[CAST:%.*]] = llvm.bitcast %arg0 : vector<8xbf16> to vector<8xi16>
+  // CHECK-NEXT: [[RES:%.*]] = llvm.call spir_funccc @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iS_
+  // CHECK-SAME:    (%arg1, %arg2, [[CAST]])
+  // CHECK-SAME:    passthrough = ["convergent"]
+  // CHECK-SAME:    : (vector<8xi16>, vector<8xi32>, vector<8xi16>) -> vector<8xi16>
+  %0 = triton_gen.dpas %c, %a, %b {pa = bf16, pb = bf16, rc = 8} : (vector<8xbf16>, vector<8xi16>, vector<8xi32>) -> vector<8xbf16>
+  // CHECK-NEXT: {{%.*}} = llvm.bitcast [[RES]] : vector<8xi16> to vector<8xbf16>
   llvm.return
 }
 

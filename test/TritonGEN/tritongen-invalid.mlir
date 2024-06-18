@@ -113,8 +113,24 @@ llvm.func @triton_gen.dpas(%c : vector<8xi8>, %a : vector<8xi16>, %b : vector<8x
 // -----
 
 llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
-  // expected-error @+1 {{'triton_gen.dpas' op the element type for 1st operand (C) and the result should be f32}}
+  // expected-error @+1 {{'triton_gen.dpas' op the element type for 1st operand (C) and the result should be f16 or f32}}
   %0 = triton_gen.dpas %c, %a, %b {pa=f16, pb=f16, rc=8} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas(%c : vector<8xf16>, %a : vector<8xi16>, %b : vector<8xi32>) {
+  // expected-error @+1 {{'triton_gen.dpas' op the element type for 1st operand (C) and the result should be bf16 or f32}}
+  %0 = triton_gen.dpas %c, %a, %b {pa=bf16, pb=bf16, rc=8} : (vector<8xf16>, vector<8xi16>, vector<8xi32>) -> vector<8xf16>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.dpas(%c : vector<8xf16>, %a : vector<4xf32>, %b : vector<8xf32>) {
+  // expected-error @+1 {{'triton_gen.dpas' op the element type for 1st operand (C) and the result should be f32}}
+  %0 = triton_gen.dpas %c, %a, %b {pa = tf32, pb = tf32, rc = 8} : (vector<8xf16>, vector<4xf32>, vector<8xf32>) -> vector<8xf16>
   llvm.return
 }
 

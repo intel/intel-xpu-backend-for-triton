@@ -147,14 +147,32 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
   Type BElemTy = BTy.getElementType();
   Type CElemTy = CTy.getElementType();
 
-  if (precision == TritonGEN::PrecisionType::U8 ||
-      precision == TritonGEN::PrecisionType::S8) {
+  switch (precision) {
+  case PrecisionType::U8:
+  case PrecisionType::S8:
     if (!CElemTy.isInteger(32))
-      return this->emitOpError("the element type for 1st operand (C) and "
-                               "the result should be i32");
-  } else if (!CElemTy.isF32())
-    return this->emitOpError("the element type for 1st operand (C) and the "
-                             "result should be f32");
+      return this->emitOpError(
+          "the element type for 1st operand (C) and the result should be i32");
+    break;
+  case PrecisionType::FP16:
+    if (!(CElemTy.isF16() || CElemTy.isF32()))
+      return this->emitOpError("the element type for 1st operand (C) and the "
+                               "result should be f16 or f32");
+    break;
+  case PrecisionType::BF16:
+    if (!(CElemTy.isBF16() || CElemTy.isF32()))
+      return this->emitOpError("the element type for 1st operand (C) and the "
+                               "result should be bf16 or f32");
+    break;
+  case PrecisionType::TF32:
+    if (!CElemTy.isF32())
+      return this->emitOpError(
+          "the element type for 1st operand (C) and the result should be f32");
+    break;
+  default:
+    return this->emitOpError(
+        "expecting precision type to be tf32, bf16, fp16, u8, or s8");
+  }
 
   switch (precision) {
   case TritonGEN::PrecisionType::TF32:
@@ -185,8 +203,7 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
           "the precision type is not tf32");
     break;
   default:
-    return this->emitOpError(
-        "expecting precision type to be tf32, bf16, fp16, u8, or s8");
+    llvm_unreachable("unhandled precision type");
   }
   return success();
 }
