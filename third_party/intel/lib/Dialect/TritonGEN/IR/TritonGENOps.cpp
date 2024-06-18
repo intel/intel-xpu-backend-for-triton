@@ -210,8 +210,8 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 
   if (getElemSizeInBits() == 8 && !getVnniTransform())
     if (getTileWidth() != 32)
-      return emitOpError("tile_width for 8 bit elements should be equal "
-                         "to 32");
+      return emitOpError("tile_width for 8 bit elements when vnni_transform is "
+                         "false should be equal to 32");
 
   return verifyMatrixReadInput(*this);
 }
@@ -226,8 +226,8 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
 
   if (getElemSizeInBits() == 8 && !getVnniTransform())
     if (getTileWidth() != 32)
-      return emitOpError("tile_width for 8 bit elements should be equal "
-                         "to 32");
+      return emitOpError("tile_width for 8 bit elements when vnni_transform is "
+                         "false should be equal to 32");
 
   if (getElemSizeInBits() == 32 && getTileWidth() != 8)
     return emitOpError("tile_width for 32 bit elements should be equal "
