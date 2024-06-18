@@ -620,7 +620,7 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
     return false;
 
   // Transpose and transform operation happens after loading data from a
-  // specific memory address, so they are not neccessary for prefetch.
+  // specific memory address, so they are not necessary for prefetch.
   return !op.getTranspose() && !op.getVnniTransform();
 }
 
