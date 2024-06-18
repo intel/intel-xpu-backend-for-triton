@@ -101,10 +101,8 @@ runs:
       shell: bash
       run: |
         cd pytorch
-        # Pytorch requirements installed here include everything that is needed to run apply_torch_pr.py script
-        pip install -r requirements.txt
-        wget https://raw.githubusercontent.com/intel/torch-xpu-ops/main/.github/scripts/apply_torch_pr.py
-        python apply_torch_pr.py --pr-list https://github.com/pytorch/pytorch/pull/124147 --pr-list https://github.com/pytorch/pytorch/pull/126516
+        curl -Ls https://github.com/pytorch/pytorch/pull/124147.diff | git apply -
+        curl -Ls https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
 
     # FIXME: Old PyTorch does not work with numpy==2.0.0
     - name: Install numpy < 2.0.0
