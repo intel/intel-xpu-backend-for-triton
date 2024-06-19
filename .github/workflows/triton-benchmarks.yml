@@ -136,3 +136,119 @@ jobs:
         with:
           name: benchmark-reports
           path: reports
+  benchmark-gemm:
+    name: GEMM benchmarks
+    runs-on:
+      - ${{ inputs.runner_label || 'max1550' }}
+    timeout-minutes: 720
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # TODO:
+          # THIS WILL NEED TO BE UPDATED BEFORE MERGE TO MAIN GEMM BRANCH
+          # ref: 'triton_perf_poc'
+          ref: 'pr/1385'
+
+
+      - name: Get LLVM commit id
+        run: |
+          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
+          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          # pip cache per commit id just to minimize network traffic
+          key: pip-$PYTHON_VERSION-$GITHUB_SHA
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python build dependencies
+        run: |
+          pip install wheel
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Setup IPEX
+        uses: ./.github/actions/setup-ipex
+
+      - name: Generate Triton cache key
+        id: triton-key
+        run: |
+          COMPOSITE_KEY=$(echo $PYTHON_VERSION $LLVM_COMMIT_ID $GITHUB_SHA | sha256sum - | cut -d\  -f1)
+          echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
+
+      - name: Load Triton wheels from a cache
+        id: triton-cache
+        uses: ./.github/actions/load
+        with:
+          path: python/dist
+          key: ${{ steps.triton-key.outputs.key }}
+
+      - name: Build Triton wheels
+        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
+        run: |
+          export DEBUG=1
+          cd python
+          python setup.py bdist_wheel
+
+      - name: Install Triton
+        run: |
+          pip install python/dist/*.whl
+
+      - name: Save Triton wheels to a cache
+        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.triton-cache.outputs.path }}
+          dest: ${{ steps.triton-cache.outputs.dest }}
+
+      - name: Install benchmark dependencies
+        run: |
+          pip install matplotlib pandas tabulate
+
+      - name: Install intel-basekit
+        run: |
+          set -ex; \
+          sudo apt update
+          sudo apt install -y gpg-agent wget
+          wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt update
+          sudo apt-get install -y intel-basekit=2024.1.0-589
+
+      - name: Create reports dir
+        run: |
+          mkdir reports
+          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
+
+      - name: Run xetla benchmark
+        run: |
+          source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
+          bash scripts/gather_gemm_perf.sh
+          source scripts/capture-hw-details.sh
+          cd python/tutorials
+          python scripts/build_report.py python/tutorials/gemm_results.csv $REPORTS/gemm-report.csv --benchmark gemm --compiler triton --param_cols "N,K,M" --tflops_col max_tflops --hbm_col max_gbs
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Upload benchmark reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-reports
+          path: reports
