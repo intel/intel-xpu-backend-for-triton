@@ -337,7 +337,7 @@ struct TritonRaiseBlockPointer
 
       op.replaceAllUsesWith(loadOp.getResult());
     } else {
-      auto storeOp = builder.create<triton::StoreOp>(
+      [[maybe_unused]] auto storeOp = builder.create<triton::StoreOp>(
           op.getLoc(), ptr, op.getValue(), op.getMask(), op.getBoundaryCheck(),
           op.getCache(), op.getEvict());
 
