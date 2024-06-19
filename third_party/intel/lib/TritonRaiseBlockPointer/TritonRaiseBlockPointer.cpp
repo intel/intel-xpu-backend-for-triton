@@ -316,14 +316,14 @@ struct TritonRaiseBlockPointer
     if (!ptr) {
       op->emitRemark("TritonRaiseBlockPointer: pointer is not replaced with "
                      "tt.make_tensor_ptr so ")
-          << opName << "cannot be rewritten";
+          << opName << " cannot be rewritten";
       return failure();
     }
 
     auto ptrType = dyn_cast<triton::PointerType>(ptr.getType());
     if (ptrType && !isa<ShapedType>(ptrType.getPointeeType())) {
       op->emitRemark("TritonRaiseBlockPointer: scalar ")
-          << opName << "will not be rewritten";
+          << opName << " will not be rewritten";
       return failure();
     }
 
