@@ -25,6 +25,9 @@ namespace ttgi = mlir::triton::gpu::intel;
 namespace mlir::triton::gpu::intel {
 
 bool supportDPAS(DotOp op, DeviceArch arch) {
+  if (op->getParentOfType<ModuleOp>()->hasAttr("triton_gpu.is_lts"))
+    return false;
+
   if (arch == DeviceArch::UNKNOWN)
     return false;
 

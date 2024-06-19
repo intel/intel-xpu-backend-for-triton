@@ -318,8 +318,6 @@ struct PrefetchOpConversion
             /*tile_width*/ tileWidthInElem,
             /*tile_height*/ tileHeightInElem,
             /*v_blocks*/ 1,
-            /*transpose*/ false,
-            /*vnni_transform*/ false,
             /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
       }
     }

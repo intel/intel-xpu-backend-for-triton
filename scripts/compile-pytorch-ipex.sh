@@ -65,6 +65,7 @@ if [ ! -v BASE ]; then
 fi
 
 if [ "$VENV" = true ]; then
+  echo "**** Activate virtual environment *****"
   source .venv/bin/activate
 fi
 
@@ -79,26 +80,28 @@ if [ "$CLEAN" = true ]; then
 fi
 
 if [ "$BUILD_PINNED" = true ]; then
-  # Determine if the installed PyTorch version is the same as the pinned version.
+  echo "**** Determine if the installed PyTorch version is the same as the pinned version. ****"
   INSTALL_PYTORCH=true
   if pip show torch &>/dev/null; then
     PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
     PYTORCH_CURRENT_COMMIT=`python -c "import torch;print(torch.__version__)"`
     PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
     if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
+      echo "**** PyTorch is already installed and its current commit is equal to the pinned commit: $PYTORCH_PINNED_COMMIT. ****"
       INSTALL_PYTORCH=false
     else
       echo "**** Current PyTorch commit $PYTORCH_CURRENT_COMMIT ****"
       echo "**** Pinned PyTorch commit $PYTORCH_PINNED_COMMIT ****"
     fi
   fi
-  # Determine if the installed IPEX version is the same as the pinned version.
+  echo "**** Determine if the installed IPEX version is the same as the pinned version. ****"
   INSTALL_IPEX=true
   if pip show intel-extension-for-pytorch &>/dev/null; then
     IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
     IPEX_CURRENT_COMMIT=`python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"`
     IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
     if [[ "$IPEX_PINNED_COMMIT" = "$IPEX_CURRENT_COMMIT"* ]]; then
+      echo "**** IPEX is already installed and its current commit is equal to the pinned commit: $IPEX_PINNED_COMMIT. ****"
       INSTALL_IPEX=false
     else
       echo "**** Current IPEX commit $IPEX_CURRENT_COMMIT ****"
@@ -107,6 +110,7 @@ if [ "$BUILD_PINNED" = true ]; then
   fi
 
   if [[ "$INSTALL_PYTORCH" = false && "$INSTALL_IPEX" = false ]]; then
+    echo "**** Nothing needs to be installed, just exit. ****"
     exit 0
   fi
 fi
@@ -119,10 +123,12 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
 fi
 
 if [ "$BUILD_PINNED" = false ]; then
+  echo "**** Since '--pinned' option is not used, enable building from source. ****"
   BUILD_FROM_SOURCE=true
 fi
 
 if [ "$BUILD_FROM_SOURCE" = false ]; then
+  echo "**** Install PyTorch and IPEX from nightly builds. ****"
   PYTHON_VERSION=$( python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" )
   RUN_ID=$(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
   TEMP_DIR=$(mktemp -d)
@@ -140,13 +146,16 @@ fi
 if [ "$BUILD_PYTORCH" = false ] && [ "$BUILD_IPEX" = false ]; then
   # Avoid overriding the user's existing PyTorch by default.
   if ! pip show torch &>/dev/null; then
+    echo "**** pip didn't find PyTorch, so it will be built from sources. ****"
     BUILD_PYTORCH=true
   fi
   # Avoid overriding the user's existing IPEX by default.
   if ! pip show intel_extension_for_pytorch &>/dev/null; then
+    echo "**** pip didn't find IPEX, so it will be built from sources. ****"
     BUILD_IPEX=true
   fi
   if [ "$BUILD_PINNED" = true ]; then
+    echo "**** Even if pip sees PyTorch and IPEX in the environment they will be build from sources since '--pinned' option is used. ****"
     BUILD_PYTORCH=true
     BUILD_IPEX=true
   fi
@@ -162,7 +171,6 @@ build_pytorch() {
     if [ "$UPSTREAM_PYTORCH" = true ]; then
       git clone --single-branch -b main --recurse-submodules https://github.com/pytorch/pytorch.git
       pushd $PYTORCH_PROJ
-      curl -Ls https://github.com/pytorch/pytorch/pull/124147.diff | git apply -
       curl -Ls https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
       popd
     else

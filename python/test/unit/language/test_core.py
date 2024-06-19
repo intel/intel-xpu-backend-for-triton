@@ -1481,11 +1481,13 @@ def test_atomic_rmw_predicate(num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("shape, axis, num_ctas", [(shape, axis, num_ctas)
-                                                   for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
-                                                   for axis in [0, 1]
-                                                   for num_ctas in num_ctas_list])
-def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
+@pytest.mark.parametrize("shape, axis, num_ctas, dtype_x_str",
+                         [(shape, axis, num_ctas, dtype_x_str)
+                          for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
+                          for axis in [0, 1]
+                          for num_ctas in num_ctas_list
+                          for dtype_x_str in ['float32', 'uint64', 'int64', 'float64']])
+def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
     shape0, shape1 = shape
     # triton kernel
 
@@ -1501,13 +1503,13 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, device):
             tl.atomic_add(Z + off1, z)
 
     rs = RandomState(17)
-    x = numpy_random((shape0, shape1), dtype_str="float32", rs=rs)
+    x = numpy_random((shape0, shape1), dtype_str=dtype_x_str, rs=rs)
     # reference result
     z_ref = np.sum(x, axis=axis, keepdims=False)
     # triton result
     x_tri = to_triton(x, device=device)
     z_shape = (shape0, ) if axis == 1 else (shape1, )
-    z_tri = to_triton(np.zeros(z_shape, dtype="float32"), device=device)
+    z_tri = to_triton(np.zeros(z_shape, dtype=getattr(np, dtype_x_str)), device=device)
     kernel[(1, )](z_tri, x_tri, axis, shape0, shape1, num_ctas=num_ctas)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
 
@@ -3267,6 +3269,14 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         z_ref = num / denom
     if epilogue == 'chain-dot':
         if 'float8' in in_dtype:
+            # Reduce z_ref's precision to fp8 to match the kernel behavior
+            if in_dtype == 'float8e4nv':
+                z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e4m3fn)
+            elif in_dtype == 'float8e5':
+                z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e5m2)
+            else:
+                assert "Unsupported float8 dtype"
+            z_ref = to_numpy(z_fp8.to(torch.float32))
             w = to_numpy(convert_fp8_to_fp32(w, device, in_dtype))
         z_ref = np.matmul(z_ref, w)
     # compare
@@ -4936,12 +4946,6 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 @pytest.mark.parametrize("interm_layout", intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", layouts)
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
-    if is_xpu():
-        if (M == 1 or N == 1) and interm_layout:
-            # TODO(jlebar): These OOB accesses don't even hit an assert in the
-            # compiler, and some of them return the wrong result instead of
-            # crashing!
-            pytest.skip("FIXME: Out of bound access when maxPhase > 1")
     if str(src_layout) == str(dst_layout):
         pytest.xfail("Do not convert same layout")
     if is_hip() or is_xpu():
@@ -5238,8 +5242,6 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     check_type_supported(in_type_str, device)
-    if is_xpu() and in_type_str == "float8e4b15":
-        pytest.skip("FIXME: Fails to compile on XPU")
 
     if is_interpreter():
         pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")

@@ -13,8 +13,8 @@ using namespace mlir::triton;
 
 namespace mlir::LLVM::intel {
 
-static Value shuffleCommon(Location loc, ConversionPatternRewriter &rewriter,
-                           Value val, Value i, TritonGEN::ShflKind mode) {
+static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
+                           Value i, TritonGEN::ShflKind mode) {
   Type type = val.getType();
   return rewriter.create<TritonGEN::SubGroupShuffleOp>(loc, type, val, i, mode);
 }
@@ -32,30 +32,25 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
   return *endBlock.args_begin();
 }
 
-Value shuffleXor(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
+Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleCommon(loc, rewriter, val, i32_val(i),
                        TritonGEN::ShflKind::XOR);
 }
 
-Value shuffleUp(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                int i) {
+Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleCommon(loc, rewriter, val, i32_val(i), TritonGEN::ShflKind::UP);
 }
 
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 int i) {
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleIdx(loc, rewriter, val, i32_val(i));
 }
 
-Value shuffleIdx(Location loc, ConversionPatternRewriter &rewriter, Value val,
-                 Value i) {
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
   return shuffleCommon(loc, rewriter, val, i, TritonGEN::ShflKind::IDX);
 }
 
-Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
-                        StringRef key, StringRef content,
-                        unsigned addressSpace) {
+Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
+                        StringRef content, unsigned addressSpace) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto ctx = moduleOp.getContext();
   unsigned stringNumber = 0;
@@ -91,8 +86,7 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 // declare __spirv_ocl_printf(i8*, ...) as external function
-LLVM::LLVMFuncOp
-getSpirvPrintfDeclaration(ConversionPatternRewriter &rewriter) {
+LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   StringRef funcName("_Z18__spirv_ocl_printf");
   Operation *funcOp = moduleOp.lookupSymbol(funcName);

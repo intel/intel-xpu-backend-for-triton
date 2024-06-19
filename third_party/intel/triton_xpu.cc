@@ -1,4 +1,4 @@
-﻿#include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassManager.h"
 #include "passes.h"
 
 #include "llvm/IRReader/IRReader.h"
@@ -56,8 +56,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .value("PVC", gpu::intel::DeviceArch::PVC)
       .export_values();
 
-  ADD_PASS_WRAPPER_OPT_1("add_to_llvmir",
-                         gpu::intel::createConvertTritonIntelGPUToLLVM, bool);
+  ADD_PASS_WRAPPER_0("add_to_llvmir",
+                     gpu::intel::createConvertTritonIntelGPUToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
@@ -66,9 +66,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_OPT_2("add_pipeline",
                          gpu::intel::createTritonIntelGPUPipeline, int, bool);
-  ADD_PASS_WRAPPER_OPT_1(
-      "add_remove_layout_conversions",
-      gpu::intel::createTritonIntelGPURemoveLayoutConversions, bool);
+  ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
+                     gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
                      gpu::intel::createTritonIntelGPURewriteTensorPointer);
   ADD_PASS_WRAPPER_OPT_2("add_prefetch_block",
@@ -93,6 +92,14 @@ void init_triton_intel(py::module &&m) {
     mlir::registerTritonGENDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
+  });
+
+  // FIXME: Use SYCL runtime to query supported OpenCL extensions, instead of
+  // checking driver version.
+  m.def("set_device_properties", [](mlir::ModuleOp mod, bool isLTS) {
+    auto i1_ty = mlir::IntegerType::get(mod->getContext(), 1);
+    if (isLTS)
+      mod->setAttr("triton_gpu.is_lts", mlir::IntegerAttr::get(i1_ty, 1));
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {

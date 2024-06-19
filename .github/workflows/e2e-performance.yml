@@ -1,8 +1,12 @@
-name: E2E performance mode
+name: E2E performance
 
 on:
   workflow_dispatch:
     inputs:
+      install_ipex:
+        description: Install Intel PyTorch Extension
+        type: boolean
+        default: true
       suite:
         description: Test suite
         type: choice
@@ -59,6 +63,8 @@ env:
   PYTHON_VERSION: "3.10"
   BENCHMARK_REPO: weishi-deng/benchmark.git
   BENCHMARK_BRANCH: main
+  INSTALL_IPEX: ${{ inputs.install_ipex }}
+  TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
   setup:
@@ -164,13 +170,34 @@ jobs:
           pip install wheel
 
       - name: Setup PyTorch
+        if: ${{ env.INSTALL_IPEX == 'true' }}
         uses: ./.github/actions/setup-pytorch
 
-      - name: Install latest nightly wheels
+      - name: Setup PyTorch without IPEX
+        if: ${{ env.INSTALL_IPEX == 'false' }}
+        uses: ./.github/actions/setup-pytorch
+        with:
+          repository: pytorch/pytorch
+          torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
+
+      - name: Install latest nightly wheels including IPEX
+        if: ${{ env.INSTALL_IPEX == 'true' }}
         uses: ./.github/actions/install-wheels
         with:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           python_version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install latest nightly wheels excluding IPEX
+        if: ${{ env.INSTALL_IPEX == 'false' }}
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          python_version: ${{ env.PYTHON_VERSION }}
+          wheels_pattern: "!(intel_extension_for_pytorch-*|torch-*).whl"
+
+      - name: Setup fake IPEX
+        if: ${{ env.INSTALL_IPEX == 'false' }}
+        uses: ./.github/actions/setup-fake-ipex
 
       - name: Identify pinned versions
         run: |
@@ -222,7 +249,16 @@ jobs:
 
       - name: Install python test dependencies
         run: |
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+
+      - name: Install transformers package
+        if: ${{ matrix.suite == 'huggingface' }}
+        uses: ./.github/actions/install-dependency
+        with:
+          package: transformers
+          repository: huggingface/transformers
+          ref: ${{ env.TRANSFORMERS_VERSION }}
+          try-tag-prefix: v
 
       - name: Clone pytorch benchmark
         if: ${{ matrix.suite == 'torchbench' }}

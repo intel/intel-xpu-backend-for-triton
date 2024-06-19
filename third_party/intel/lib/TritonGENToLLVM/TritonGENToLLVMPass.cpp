@@ -216,10 +216,58 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 32 && op.getVBlocks() == 1)
     return false;
 
-  if (op.getCacheControl() != TritonGEN::LoadCacheControl::DEFAULT)
-    return false;
-
   return true;
+}
+
+static SmallVector<Attribute>
+loadCacheControlToDecoration(Builder &builder, uint32_t operandNum,
+                             TritonGEN::LoadCacheControl orig) {
+  const auto build = [&builder,
+                      operandNum](TritonGEN::LoadCacheControlDecorationEnum l1,
+                                  TritonGEN::LoadCacheControlDecorationEnum l3)
+      -> SmallVector<Attribute> {
+    return {builder.getAttr<TritonGEN::LoadCacheControlDecorationAttr>(
+                0, l1, operandNum),
+            builder.getAttr<TritonGEN::LoadCacheControlDecorationAttr>(
+                1, l3, operandNum)};
+  };
+  switch (orig) {
+  case TritonGEN::LoadCacheControl::DEFAULT:
+    return {};
+  case TritonGEN::LoadCacheControl::L1UC_L3UC:
+    return build(TritonGEN::LoadCacheControlDecorationEnum::Uncached,
+                 TritonGEN::LoadCacheControlDecorationEnum::Uncached);
+  case TritonGEN::LoadCacheControl::L1UC_L3C:
+    return build(TritonGEN::LoadCacheControlDecorationEnum::Uncached,
+                 TritonGEN::LoadCacheControlDecorationEnum::Cached);
+  case TritonGEN::LoadCacheControl::L1C_L3UC:
+    return build(TritonGEN::LoadCacheControlDecorationEnum::Cached,
+                 TritonGEN::LoadCacheControlDecorationEnum::Uncached);
+  case TritonGEN::LoadCacheControl::L1C_L3C:
+    return build(TritonGEN::LoadCacheControlDecorationEnum::Cached,
+                 TritonGEN::LoadCacheControlDecorationEnum::Cached);
+  case TritonGEN::LoadCacheControl::L1S_L3UC:
+    return build(TritonGEN::LoadCacheControlDecorationEnum::Streaming,
+                 TritonGEN::LoadCacheControlDecorationEnum::Uncached);
+  case TritonGEN::LoadCacheControl::L1S_L3C:
+    return build(TritonGEN::LoadCacheControlDecorationEnum::Streaming,
+                 TritonGEN::LoadCacheControlDecorationEnum::Cached);
+  case TritonGEN::LoadCacheControl::L1IAR_L3C:
+    return build(TritonGEN::LoadCacheControlDecorationEnum::InvalidateAfterRead,
+                 TritonGEN::LoadCacheControlDecorationEnum::Cached);
+  }
+  llvm_unreachable("Unhandled case");
+}
+
+static std::optional<TritonGEN::DecorationCacheControlAttr>
+loadCacheControlToCacheControls(Builder &builder,
+                                TritonGEN::LoadCacheControl orig,
+                                uint32_t operandNum) {
+  SmallVector<Attribute> decorations =
+      loadCacheControlToDecoration(builder, operandNum, orig);
+  if (decorations.empty())
+    return {};
+  return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
 static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
@@ -269,8 +317,15 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
     paramAttrs[5] = param5AttrBuilder.getAttributes();
     intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
 
-    createDeviceFunctionCall(rewriter, fnName, void_ty(context), argTypes, args,
-                             attrs);
+    LLVM::CallOp call = createDeviceFunctionCall(
+        rewriter, fnName, void_ty(context), argTypes, args, attrs);
+    constexpr uint32_t ptrOperandIndex = 0;
+    if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
+            loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
+                                            ptrOperandIndex)) {
+      call->setAttr(TritonGEN::TritonGENDialect::getCacheControlsAttrName(),
+                    *optCacheControls);
+    }
     return rewriter.create<LLVM::LoadOp>(loc, resType, dest);
   }
 
@@ -584,10 +639,8 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
       rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileHeight());
   auto vBlocks =
       rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getVBlocks());
-  auto useTranspose =
-      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getTranspose());
-  auto vnniTransform =
-      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getVnniTransform());
+  auto useTranspose = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
+  auto vnniTransform = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   auto cache = rewriter.create<LLVM::ConstantOp>(
       loc, int32Ty, static_cast<int>(op.getCacheControl()));
 
@@ -615,13 +668,20 @@ namespace {
 
 struct FuncCallLowering {
 protected:
-  Value rewrite(Operation *op, StringRef funcName, unsigned dim,
-                ConversionPatternRewriter &rewriter) const {
+  static Value rewrite(Operation *op, StringRef funcName, unsigned dim,
+                       ConversionPatternRewriter &rewriter) {
+    MLIRContext *ctx = rewriter.getContext();
     auto retType = rewriter.getIntegerType(64);
     auto argType = rewriter.getIntegerType(32);
     auto arg = LLVM::createConstantI32(op->getLoc(), rewriter, dim);
 
-    intel::AttributeList attrs;
+    intel::AttrBuilder funcAttrBuilder(*ctx);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+        .addPassthroughAttribute(llvm::Attribute::WillReturn)
+        .addPassthroughAttribute(llvm::Attribute::Memory,
+                                 llvm::MemoryEffects::none().toIntValue());
+
+    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
     LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, funcName, retType,
                                                    {argType}, {arg}, attrs);
 

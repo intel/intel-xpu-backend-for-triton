@@ -54,11 +54,12 @@ bool isDivisible(Value value, unsigned divisor) {
 /// removed if:
 ///   - the device architecture is not PVC
 ///   - the tensor pointer does not have DotEncoding with DpasEncoding parent
-///   and does not have DpasEncoding
 ///   - the tensor pointer pitch is not divisible by Qword bitwidth
 ///   - the tensor pointer is not contiguous on memory
-bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch,
-                  bool isStoreOp) {
+bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch) {
+  if (op->getParentOfType<ModuleOp>()->hasAttr("triton_gpu.is_lts"))
+    return true;
+
   // Non-PVC device should always remove the tensor pointer
   if (deviceArch != ttgi::DeviceArch::PVC)
     return true;
@@ -66,10 +67,8 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch,
   auto ptrType = cast<tt::PointerType>(op.getType());
   auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
-  if (!ttgi::hasDotDpasEncoding(tensorType) &&
-      !(isStoreOp && ttgi::hasDpasEncoding(tensorType))) {
+  if (!ttgi::hasDotDpasEncoding(tensorType))
     return true;
-  }
 
   TypedValue<triton::PointerType> base = op.getBase();
   Operation::operand_range shape = op.getShape();
@@ -719,31 +718,24 @@ public:
 
     ttgi::DeviceArch arch = ttgi::getDeviceArch(mod);
 
-    auto usedByStoreOp = [](Value val) {
-      for (Operation *user : val.getUsers()) {
-        if (llvm::isa<tt::StoreOp>(user))
-          return true;
-      }
-      return false;
-    };
-
-    auto markTensorPointerForRemoval = [this, arch](Value val,
-                                                    bool isStoreOp = false) {
+    auto markTensorPointerForRemoval = [this, arch](Value val) {
       if (tt::isTensorPointerType(val.getType())) {
         tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
-        if (shouldRemove(makeTensorPtrOp, arch, isStoreOp))
+        if (shouldRemove(makeTensorPtrOp, arch))
           valueToRemove.insert(val);
       }
     };
 
     mod.walk([&](Operation *op) {
       if (llvm::isa<tt::MakeTensorPtrOp>(op)) {
-        Value result = op->getResult(0);
-        markTensorPointerForRemoval(result, usedByStoreOp(result));
+        markTensorPointerForRemoval(op->getResult(0));
       } else if (llvm::isa<tt::AdvanceOp, tt::LoadOp>(op)) {
         markTensorPointerForRemoval(op->getOperand(0));
       } else if (llvm::isa<tt::StoreOp>(op)) {
-        markTensorPointerForRemoval(op->getOperand(0), true);
+        // TODO: Block store should not be removed when 2d store is enabled
+        auto src = op->getOperand(0);
+        if (tt::isTensorPointerType(src.getType()))
+          valueToRemove.insert(src);
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         for (auto arg : forOp.getInitArgs())
           markTensorPointerForRemoval(arg);

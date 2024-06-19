@@ -87,6 +87,10 @@ jobs:
           path: ${{ steps.triton-cache.outputs.path }}
           dest: ${{ steps.triton-cache.outputs.dest }}
 
+      - name: Install benchmark dependencies
+        run: |
+          pip install matplotlib pandas tabulate
+
       - name: Install intel-basekit
         run: |
           set -ex; \

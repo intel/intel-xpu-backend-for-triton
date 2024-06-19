@@ -8,41 +8,30 @@
 
 #include <cstddef>
 #include <iostream>
-#include <level_zero/ze_api.h>
 #include <string>
-#include <sycl/sycl.hpp>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include "sycl_functions.h"
+
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
-typedef struct l0_resc_handles {
-  ze_context_handle_t context;
-  ze_device_handle_t device;
-  ze_command_queue_handle_t queue;
-  ze_command_list_handle_t cmd_list;
-} l0_resc_handles;
-
-std::unordered_map<sycl::queue, l0_resc_handles> sycl_queue_map;
+SyclQueueMap sycl_queue_map;
 static ze_context_handle_t context = {nullptr};
 
 static std::vector<ze_device_handle_t> devices;
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     sycl_l0_device_list;
 
-static inline void gpuAssert(ze_result_t code, const char *file, int line) {
+static inline void gpuAssert(ze_result_t code) {
   if (code != ZE_RESULT_SUCCESS) {
-    const char *prefix = "Triton Error [ZE]: ";
-    std::stringstream ss;
-    ss << "0x" << std::hex << code;
-    std::string str = ss.str();
+    auto str = parseZeResultCode(code);
     char err[1024] = {0};
-    strcat(err, prefix);
-    strcat(err, str.c_str());
+    strncat(err, str.c_str(), std::min(str.size(), size_t(1024)));
     PyGILState_STATE gil_state;
     gil_state = PyGILState_Ensure();
     PyErr_SetString(PyExc_RuntimeError, err);
@@ -50,12 +39,14 @@ static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   }
 }
 
-#define ZE_CHECK(ans)                                                          \
-  {                                                                            \
-    gpuAssert((ans), __FILE__, __LINE__);                                      \
-    if (PyErr_Occurred())                                                      \
-      return NULL;                                                             \
-  }
+template <typename T>
+static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
+  gpuAssert(std::get<1>(tuple));
+  if (PyErr_Occurred())
+    return nullptr;
+  else
+    return std::get<0>(tuple);
+}
 
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int device_id;
@@ -114,84 +105,6 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
                        "sub_group_sizes", subgroup_sizes);
 }
 
-/*Sycl code Start*/
-bool getBoolEnv(const std::string &env) {
-  const char *s = std::getenv(env.c_str());
-  std::string str(s ? s : "");
-  std::transform(str.begin(), str.end(), str.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-  return (str == "on" || str == "true" || str == "1");
-}
-
-ze_module_handle_t create_module(ze_context_handle_t context,
-                                 ze_device_handle_t device,
-                                 uint32_t *binary_ptr, size_t binary_size) {
-  const char *build_flags = "";
-  const ze_module_format_t format = ZE_MODULE_FORMAT_IL_SPIRV;
-  ze_module_desc_t module_description = {};
-  module_description.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
-  module_description.format = format;
-  module_description.inputSize =
-      static_cast<uint32_t>(binary_size * sizeof(uint32_t));
-  module_description.pInputModule = (uint8_t *)binary_ptr;
-  module_description.pBuildFlags = build_flags;
-  ze_module_build_log_handle_t buildlog;
-  ze_module_handle_t module;
-  auto context_initial = context;
-  auto device_initial = device;
-  auto error_no = ZE_RESULT_SUCCESS;
-  error_no =
-      zeModuleCreate(context, device, &module_description, &module, &buildlog);
-  if (error_no != ZE_RESULT_SUCCESS) {
-    size_t szLog = 0;
-    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
-    char *strLog = (char *)malloc(szLog);
-    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog));
-    std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
-    free(strLog);
-    ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
-  }
-  ZE_CHECK(error_no);
-  return module;
-}
-
-void printModuleKernelName(ze_module_handle_t hModule) {
-  uint32_t Count = 0;
-  auto ret = zeModuleGetKernelNames(hModule, &Count, nullptr);
-  assert(ret == ZE_RESULT_SUCCESS);
-  std::unique_ptr<const char *[]> PNames(new const char *[Count]);
-  ret = zeModuleGetKernelNames(hModule, &Count, PNames.get());
-  assert(ret == ZE_RESULT_SUCCESS);
-  if (getBoolEnv("MLIR_ENABLE_DUMP")) {
-    for (uint32_t i = 0; i < Count; ++i) {
-      std::cout << std::string(PNames[i]) << std::endl;
-    }
-  }
-}
-
-ze_kernel_handle_t create_function(ze_module_handle_t module,
-                                   ze_kernel_flags_t flag,
-                                   std::string func_name) {
-  ze_kernel_handle_t kernel;
-  ze_kernel_desc_t kernel_description = {};
-  kernel_description.stype = ZE_STRUCTURE_TYPE_KERNEL_DESC;
-  kernel_description.pNext = nullptr;
-  kernel_description.flags = flag;
-  kernel_description.pKernelName = func_name.c_str();
-  assert(module);
-  auto module_initial = module;
-  if (getBoolEnv("MLIR_ENABLE_DUMP")) {
-    std::cout << "create kernel:" << func_name << std::endl;
-  }
-  ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel));
-  return kernel;
-}
-
-ze_kernel_handle_t create_function(ze_module_handle_t module,
-                                   std::string func_name) {
-  return create_function(module, ZE_KERNEL_FLAG_FORCE_RESIDENCY, func_name);
-}
-
 std::vector<std::unique_ptr<sycl::kernel>> compiled_kernels;
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
@@ -225,16 +138,14 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-  auto l0_module =
-      create_module(l0_context, l0_device, binary_ptr, binary_size);
-
+  auto l0_module = checkSyclErrors(
+      create_module(l0_context, l0_device, binary_ptr, binary_size));
   if (PyErr_Occurred()) {
     // check for errors from module creation
     return NULL;
   }
 
-  auto l0_kernel = create_function(l0_module, kernel_name);
-
+  auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
   if (PyErr_Occurred()) {
     // check for errors from kernel creation
     return NULL;
@@ -243,7 +154,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   ze_kernel_properties_t props;
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   props.pNext = nullptr;
-  ZE_CHECK(zeKernelGetProperties(l0_kernel, &props));
+  gpuAssert(zeKernelGetProperties(l0_kernel, &props));
+
   n_spills = props.spillMemSize;
   auto mod = sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
                                       sycl::bundle_state::executable>(
@@ -267,44 +179,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       new sycl::kernel_bundle<sycl::bundle_state::executable>(mod);
   return Py_BuildValue("(KKii)", (uint64_t)kb, (uint64_t)k, n_regs, n_spills);
 }
-/*Sycl code end*/
-
-bool update(sycl::queue sycl_queue) {
-  // Get l0-context
-  auto sycl_context = sycl_queue.get_context();
-  ze_context_handle_t hCtxt =
-      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_context);
-  // Get l0-device
-  std::vector<sycl::device> sycl_devices = sycl_context.get_devices();
-  ze_device_handle_t hDev =
-      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_devices[0]);
-  // Get l0-queue
-  bool immediate_cmd_list = false;
-  std::variant<ze_command_queue_handle_t, ze_command_list_handle_t> queue_var =
-      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_queue);
-  auto l0_queue = std::get_if<ze_command_queue_handle_t>(&queue_var);
-  if (l0_queue == nullptr) {
-    auto imm_cmd_list = std::get_if<ze_command_list_handle_t>(&queue_var);
-    if (imm_cmd_list == nullptr) {
-      return false;
-    }
-    immediate_cmd_list = true;
-    sycl_queue_map[sycl_queue].cmd_list = *imm_cmd_list;
-  }
-  sycl_queue_map[sycl_queue].context = hCtxt;
-  sycl_queue_map[sycl_queue].device = hDev;
-  sycl_queue_map[sycl_queue].queue = immediate_cmd_list ? 0 : *l0_queue;
-
-  // Update global data
-  context = sycl_queue_map[sycl_queue].context;
-  uint32_t deviceCount = std::min(sycl_devices.size(), devices.size());
-  for (uint32_t i = 0; i < deviceCount; ++i) {
-    devices[i] =
-        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_devices[i]);
-  }
-
-  return true;
-}
 
 static PyObject *initContext(PyObject *self, PyObject *args) {
   PyObject *cap;
@@ -315,7 +189,17 @@ static PyObject *initContext(PyObject *self, PyObject *args) {
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   if (sycl_queue_map.find(*sycl_queue) == sycl_queue_map.end()) {
-    update(*sycl_queue);
+    auto updated_sycl_devices = update(*sycl_queue, sycl_queue_map);
+    if (!updated_sycl_devices.empty()) {
+      // Update global data
+      context = sycl_queue_map[*sycl_queue].context;
+      uint32_t deviceCount =
+          std::min(updated_sycl_devices.size(), devices.size());
+      for (uint32_t i = 0; i < deviceCount; ++i) {
+        devices[i] = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+            updated_sycl_devices[i]);
+      }
+    }
   }
   context = sycl_queue_map[*sycl_queue].context;
   return Py_BuildValue("(K)", (uint64_t)context);
