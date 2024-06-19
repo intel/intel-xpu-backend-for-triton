@@ -4,6 +4,7 @@ set_target_properties(GenISAIntrinsics
 )
 
 add_triton_library(TritonGENToLLVM
+  Attributes.cpp
   TritonGENToLLVMPass.cpp
 
   DEPENDS
@@ -12,4 +13,5 @@ add_triton_library(TritonGENToLLVM
 
   LINK_LIBS PUBLIC
   GenISAIntrinsics
+  MLIRLLVMDialect
 )

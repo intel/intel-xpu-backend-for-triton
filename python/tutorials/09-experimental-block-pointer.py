@@ -99,7 +99,8 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4, num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+                      num_warps=32),
     ],
     key=['M', 'N', 'K'],
 )
@@ -243,8 +244,8 @@ def matmul(a, b):
     ))
 def benchmark(M, N, K, provider):
     torch.manual_seed(0)
-    a = torch.randn((M, K), device='xpu', dtype=torch.bfloat16)
-    b = torch.randn((K, N), device='xpu', dtype=torch.bfloat16)
+    a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
+    b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
     quantiles = [0.5, 0.2, 0.8]
 
     # calculate tflops for oneDNN kernel
