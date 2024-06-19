@@ -172,15 +172,14 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
                          << expectedSize << " bits";
 
   if (getTranspose() && getVnniTransform())
-    return emitOpError(
-        "transpose and vnni_transform are mutually exclusive");
+    return emitOpError("transpose and vnni_transform are mutually exclusive");
 
   if (getTranspose() && getElemSizeInBits() != 32)
     return emitOpError("transpose is only supported for 32 bit elements");
 
   if (getVnniTransform() && getElemSizeInBits() == 32)
     return emitOpError("vnni_transform is only supported for 8 and 16 bit "
-                           "elements");
+                       "elements");
 
   uint32_t tileWidth = getTileWidth();
   if (getVnniTransform()) {
@@ -208,6 +207,8 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
       return emitOpError("tile_width for 32 bit elements when vnni_transform "
                          "is false should be equal to 8 or 16");
     break;
+  default:
+    llvm_unreachable("unexpected element size");
   }
 
   return success();
@@ -238,6 +239,8 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
       return emitOpError("tile_width for 32 bit elements should be equal "
                          "to 16");
     break;
+  default:
+    llvm_unreachable("unexpected element size");
   }
 
   return success();
@@ -268,6 +271,8 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
       return emitOpError(
           "tile_width for 32 bit elements should be equal to 8 or 16");
     break;
+  default:
+    llvm_unreachable("unexpected element size");
   }
 
   return success();
