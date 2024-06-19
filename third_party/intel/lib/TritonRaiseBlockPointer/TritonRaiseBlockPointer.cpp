@@ -21,8 +21,8 @@ namespace mlir::triton::intel {
 } // namespace mlir::triton::intel
 
 namespace {
-constexpr unsigned offsetWidth = 32;
-constexpr unsigned shapeAndStridesWidth = 64;
+constexpr unsigned offsetBitwidth = 32;
+constexpr unsigned shapeAndStridesBitwidth = 64;
 
 // Data structure used to decode pointer arithmetics. offsets, sizes, and
 // strides are in unit of elements in a linearly laid-out memory, which is the
@@ -242,11 +242,11 @@ struct TritonRaiseBlockPointer
            "Expect make_range op to always return tensor of stride 1");
 
     state.offsets.push_back(
-        builder.create<arith::ConstantIntOp>(loc, start, offsetWidth));
+        builder.create<arith::ConstantIntOp>(loc, start, offsetBitwidth));
     state.strides.push_back(builder.create<arith::ConstantIntOp>(
-        loc, stride, shapeAndStridesWidth));
+        loc, stride, shapeAndStridesBitwidth));
     state.shape.push_back(
-        builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesWidth));
+        builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
     state.sizes.push_back(shape[0]);
 
     LLVM_DEBUG(llvm::dbgs() << "MakeRange state: " << state << "\n";);
@@ -271,9 +271,10 @@ struct TritonRaiseBlockPointer
     }
 
     for (auto s : dstShape) {
-      Value c0i32 = builder.create<arith::ConstantIntOp>(loc, 0, offsetWidth);
+      Value c0i32 =
+          builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
       Value c0i64 =
-          builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesWidth);
+          builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth);
       state.offsets.push_back(c0i32);
       state.strides.push_back(c0i64);
       state.shape.push_back(c0i64);
@@ -284,7 +285,7 @@ struct TritonRaiseBlockPointer
     // outer most dimension
     if (state.scalar) {
       state.offsets[0] = getValueOrCreateCastToIndexLike(
-          builder, loc, builder.getIntegerType(offsetWidth), state.scalar);
+          builder, loc, builder.getIntegerType(offsetBitwidth), state.scalar);
     }
 
     LLVM_DEBUG(llvm::dbgs() << "Splat state: " << state << "\n";);
