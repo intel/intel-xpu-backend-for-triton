@@ -232,7 +232,7 @@ jobs:
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
-      - name: Run xetla benchmark
+      - name: Run GEMM benchmark
         run: |
           source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           bash scripts/gather_gemm_perf.sh
