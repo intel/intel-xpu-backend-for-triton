@@ -1,4 +1,5 @@
 #!/bin/bash
+cd ../python/tutorials
 
 # Define the output file
 OUT_FILE="gemm_results.csv"
