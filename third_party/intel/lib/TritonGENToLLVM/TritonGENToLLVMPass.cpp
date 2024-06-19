@@ -1140,8 +1140,7 @@ struct TritonMatrixDPASLowering
   LogicalResult
   matchAndRewrite(TritonGEN::MatrixDPASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value call = createGenISADPAS(op, rewriter);
-    rewriter.replaceOp(op, call);
+    rewriter.replaceOp(op, createGenISADPAS(op, rewriter));
     return success();
   }
 };
