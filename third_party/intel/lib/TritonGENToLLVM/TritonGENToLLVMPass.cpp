@@ -591,12 +591,82 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   return callOp;
 }
 
+static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
+  // FIXME: Incorrect usages of
+  // intel_sub_group_2d_block_prefetch_32b_2r32x1c,
+  // intel_sub_group_2d_block_prefetch_32b_4r32x1c and
+  // intel_sub_group_2d_block_prefetch_32b_8r32x1c.
+  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 32 &&
+      op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_read_32b_8r8x1c is expected to be lowered to
+  // llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is incorrectly lowered to
+  // llvm.genx.GenISA.LSC2DBlockRead.v8i32.
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
+  // intel_sub_group_2d_block_read_32b_16r16x1c.
+  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 16 &&
+      op.getVBlocks() == 1)
+    return false;
+
+  // Missing intel_sub_group_2d_block_read_8b_16r32x1c and
+  // intel_sub_group_2d_block_read_8b_32r32x1c.
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() > 8 &&
+      op.getTileWidth() == 32 && op.getVBlocks() == 1)
+    return false;
+
+  return true;
+}
+
 static LLVM::CallOp
 createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                             ConversionPatternRewriter &rewriter) {
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *context = rewriter.getContext();
   Location loc = op->getLoc();
+
+  if (isOCLBuiltinAvailable(op)) {
+    std::string fnName = "intel_sub_group_2d_block_prefetch_";
+    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
+              std::to_string(op.getTileHeight()) + "r" +
+              std::to_string(op.getTileWidth()) + "x" +
+              std::to_string(op.getVBlocks()) + "c";
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_i";
+    VectorType vecType = vec_ty(i32_ty, 2);
+    Value byteCoord = insert_element(
+        vecType, insert_element(vecType, undef(vecType), op.getX(), i32_val(0)),
+        op.getY(), i32_val(1));
+    SmallVector<Type> argTypes{ptr_ty(context, 1), i32_ty, i32_ty, i32_ty,
+                               vecType};
+    SmallVector<Value> args{op.getPtr(), op.getBaseWidth(), op.getBaseHeight(),
+                            op.getBasePitch(), byteCoord};
+
+    intel::AttrBuilder funcAttrBuilder(*context);
+    intel::AttrBuilder paramAttrBuilder(*context);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+        .addPassthroughAttribute(
+            llvm::Attribute::Memory,
+            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
+                .toIntValue());
+    paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    std::vector<NamedAttrList> paramAttrs(argTypes.size());
+    paramAttrs[0] = paramAttrBuilder.getAttributes();
+    intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
+
+    LLVM::CallOp call = createDeviceFunctionCall(
+        rewriter, fnName, void_ty(context), argTypes, args, attrs);
+    constexpr uint32_t ptrOperandIndex = 0;
+    if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
+            loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
+                                            ptrOperandIndex)) {
+      call->setAttr(TritonGEN::TritonGENDialect::getCacheControlsAttrName(),
+                    *optCacheControls);
+    }
+    return call;
+  }
 
   Value ptr = op.getPtr();
   Value baseWidth = op.getBaseWidth();
@@ -627,6 +697,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                              int1Ty,
                              int32Ty};
 
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
       moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(context));
   funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
