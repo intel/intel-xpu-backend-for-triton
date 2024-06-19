@@ -46,6 +46,17 @@ env:
   TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
+  print_inputs:
+    name: Print inputs
+    runs-on: Linux
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(github.event.inputs) }}
+          EOF
+          echo INSTALL_IPEX=${{ env.INSTALL_IPEX }}
+
   integration-tests:
     name: Integration tests
     runs-on:
