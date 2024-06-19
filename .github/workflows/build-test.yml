@@ -4,6 +4,10 @@ run-name: ${{ inputs.run_name }}
 on:
   workflow_dispatch:
     inputs:
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
       install_ipex:
         # This boolean parameter defines what PyTorch will be used in the workflow:
         #   true: Stonepia/pytorch (fork) with IPEX
@@ -103,7 +107,8 @@ jobs:
         drivers: ["rolling", "lts"]
     uses: ./.github/workflows/build-test-reusable.yml
     with:
-      runner_label: ${{ matrix.drivers }}
+      driver_version: ${{ matrix.drivers }}
+      runner_label: ${{ inputs.runner_label }}
       install_ipex: ${{ inputs.install_ipex }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}

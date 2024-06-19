@@ -4,6 +4,10 @@ run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.ins
 on:
   workflow_call:
     inputs:
+      driver_version:
+        description: Driver version
+        type: string
+        default: "rolling"
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -24,7 +28,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.9"
+        required: true
       upload_test_reports:
         description: Upload test reports
         type: boolean
@@ -61,6 +65,7 @@ jobs:
     name: Integration tests
     runs-on:
       - ${{ inputs.runner_label || 'runner-0.0.16' }}
+      - ${{ inputs.driver_version }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
