@@ -727,8 +727,6 @@ struct StoreOpConversion
             /*tile_width*/ elemsPerInstr[1],
             /*tile_height*/ elemsPerInstr[0],
             /*v_blocks*/ 1,
-            /*transpose*/ false,
-            /*vnni_transform*/ false,
             /*stored_val*/ bitcast(storeVal, store2DGenXType));
       }
     }
