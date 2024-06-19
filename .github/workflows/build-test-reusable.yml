@@ -57,8 +57,11 @@ jobs:
       - name: Print inputs
         run: |
           cat <<EOF
-          ${{ toJSON(github.event.inputs) }}
+          ${{ toJSON(inputs) }}
           EOF
+          echo python = ${{ inputs.python_version }}
+          echo runner = ${{ inputs.runner_label }}
+          echo driver = ${{ inputs.driver_version }}
           echo INSTALL_IPEX=${{ env.INSTALL_IPEX }}
 
   integration-tests:
