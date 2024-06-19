@@ -1170,6 +1170,11 @@ struct TritonMatrix2DBlockPrefetchLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // FIXME: Remove explict verification again if
+    // `-convert-triton-intel-gpu-to-llvm` is split and `triton_gen` ops are no
+    // longer ephemeral.
+    if (failed(op.verify()))
+      return failure();
     LLVM::CallOp callOp = createGenISA2DBlockPrefetch(op, rewriter);
     rewriter.replaceOp(op, callOp);
     return success();
