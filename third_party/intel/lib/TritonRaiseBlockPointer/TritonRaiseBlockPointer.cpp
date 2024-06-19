@@ -87,6 +87,51 @@ struct PtrState {
     return success();
   }
 
+  LogicalResult mulState(const PtrState &lhsState, const PtrState &rhsState,
+                         Operation *op, OpBuilder &builder) {
+    assert(isEmpty() && lhsState.getRank() == rhsState.getRank());
+
+    auto loc = op->getLoc();
+
+    assert(!lhsState.source && !rhsState.source &&
+           "Multiplying base pointer does not make sense");
+
+    assert(!(lhsState.scalar && rhsState.scalar) &&
+           "do not expect to see both lhs and rhs are scalars");
+
+    // currently do not support both tensors are effectively non-scalar
+    if (!lhsState.scalar && !rhsState.scalar) {
+      op->emitRemark("TritonRaiseBlockPointer: only support multiplying "
+                     "pointer states when one of them represent a scalar");
+      return failure();
+    }
+
+    PtrState const *lhs = &lhsState;
+    PtrState const *rhs = &rhsState;
+
+    if (!rhs->scalar && lhs->scalar)
+      std::swap(lhs, rhs);
+
+    Value i32Scalar = getValueOrCreateCastToIndexLike(
+        builder, loc, builder.getI32Type(), rhs->scalar);
+    Value i64Scalar = getValueOrCreateCastToIndexLike(
+        builder, loc, builder.getI64Type(), rhs->scalar);
+    ArithBuilder abuilder(builder, loc);
+    for (const auto &[offset, stride, dim, size] :
+         llvm::zip(lhs->offsets, lhs->strides, lhs->shape, lhs->sizes)) {
+      auto newOffset = abuilder.mul(offset, i32Scalar);
+      auto newStride = abuilder.mul(stride, i64Scalar);
+      auto newDim = abuilder.mul(dim, i64Scalar);
+
+      offsets.push_back(newOffset);
+      strides.push_back(newStride);
+      shape.push_back(newDim);
+      sizes.push_back(size);
+    }
+
+    return success();
+  }
+
   triton::MakeTensorPtrOp createTTMakeTensorPtrOp(OpBuilder &builder,
                                                   Location loc) {
     auto op = builder.create<triton::MakeTensorPtrOp>(
@@ -224,85 +269,30 @@ struct TritonRaiseBlockPointer
       return success();
     }
 
-    if (Operation *definingOp = operand.getDefiningOp()) {
-      if (auto op = dyn_cast<triton::MakeRangeOp>(definingOp))
-        return visitOperandMakeRange(op, state, loc, builder);
-      if (auto op = dyn_cast<triton::SplatOp>(definingOp)) {
-        return visitOperandSplat(op, state, loc, builder);
-      }
+    Operation *definingOp = operand.getDefiningOp();
+    if (!definingOp) {
+      llvm::errs() << "TritonRaiseBlockPointer: encountered addptr block "
+                      "argument operand\n"
+                   << operand << "\n";
     }
 
-    llvm::errs() << "TritonRaiseBlockPointer: encountered addptr operand "
-                    "produced by an unsupported operation\n"
-                 << operand << "\n";
-
-    return failure();
+    return TypeSwitch<Operation *, LogicalResult>(definingOp)
+        .Case<arith::AddIOp, arith::ConstantOp, arith::MulIOp,
+              triton::MakeRangeOp, triton::SplatOp>(
+            [this, &state, loc, &builder](auto op) {
+              return visitAddPointerOperand(op, state, loc, builder);
+            })
+        .Default([](Operation *op) {
+          llvm::dbgs() << "TritonRaiseBlockPointer: encountered addptr operand "
+                          "produced by an unsupported operation\n"
+                       << op << "\n";
+          return failure();
+        });
   }
 
-  LogicalResult visitOperandMakeRange(triton::MakeRangeOp rangeOp,
-                                      PtrState &state, Location loc,
-                                      OpBuilder &builder) {
-    assert(state.isEmpty());
-
-    ArrayRef<int64_t> shape = cast<ShapedType>(rangeOp.getType()).getShape();
-
-    uint32_t start = rangeOp.getStart();
-    uint32_t end = rangeOp.getEnd();
-    uint32_t stride = (end - start + shape[0] - 1) / shape[0];
-    assert(stride == 1 &&
-           "Expect make_range op to always return tensor of stride 1");
-
-    state.offsets.push_back(
-        builder.create<arith::ConstantIntOp>(loc, start, offsetBitwidth));
-    state.strides.push_back(builder.create<arith::ConstantIntOp>(
-        loc, stride, shapeAndStridesBitwidth));
-    state.shape.push_back(
-        builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
-    state.sizes.push_back(shape[0]);
-
-    LLVM_DEBUG(llvm::dbgs() << "MakeRange state: " << state << "\n";);
-
-    return success();
-  }
-
-  LogicalResult visitOperandSplat(triton::SplatOp splatOp, PtrState &state,
-                                  Location loc, OpBuilder &builder) {
-    assert(state.isEmpty());
-
-    Value src = splatOp.getSrc();
-    Value dst = splatOp.getResult();
-    ArrayRef<int64_t> dstShape = cast<ShapedType>(dst.getType()).getShape();
-
-    if (failed(visitOperand(src, state, loc, builder)))
-      return failure();
-
-    if (!isa<IntegerType, IndexType, triton::PointerType>(src.getType())) {
-      splatOp->emitRemark("TritonRaiseBlockPointer: unsupported splat pattern");
-      return failure();
-    }
-
-    for (int64_t s : dstShape) {
-      Value c0i32 =
-          builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
-      Value c0i64 =
-          builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth);
-      state.offsets.push_back(c0i32);
-      state.strides.push_back(c0i64);
-      state.shape.push_back(c0i64);
-      state.sizes.push_back(s);
-    }
-
-    // If we splat a integer value, scalar should become the offset of the
-    // outer most dimension
-    if (state.scalar) {
-      state.offsets[0] = getValueOrCreateCastToIndexLike(
-          builder, loc, builder.getIntegerType(offsetBitwidth), state.scalar);
-    }
-
-    LLVM_DEBUG(llvm::dbgs() << "Splat state: " << state << "\n";);
-
-    return success();
-  }
+  template <typename OpTy>
+  LogicalResult visitAddPointerOperand(OpTy op, PtrState &state, Location loc,
+                                       OpBuilder &builder);
 
   template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
                                OpTy, triton::LoadOp, triton::StoreOp>::value>>
@@ -351,4 +341,143 @@ struct TritonRaiseBlockPointer
   llvm::SmallDenseMap<Value, PtrState> knownPtrs;
   IRMapping ptrMap;
 };
+
+template <>
+LogicalResult
+TritonRaiseBlockPointer::visitAddPointerOperand(triton::MakeRangeOp rangeOp,
+                                                PtrState &state, Location loc,
+                                                OpBuilder &builder) {
+  assert(state.isEmpty());
+
+  ArrayRef<int64_t> shape = cast<ShapedType>(rangeOp.getType()).getShape();
+
+  uint32_t start = rangeOp.getStart();
+  uint32_t end = rangeOp.getEnd();
+  uint32_t stride = (end - start + shape[0] - 1) / shape[0];
+  assert(stride == 1 &&
+         "Expect make_range op to always return tensor of stride 1");
+
+  state.offsets.push_back(
+      builder.create<arith::ConstantIntOp>(loc, start, offsetBitwidth));
+  state.strides.push_back(builder.create<arith::ConstantIntOp>(
+      loc, stride, shapeAndStridesBitwidth));
+  state.shape.push_back(
+      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
+  state.sizes.push_back(shape[0]);
+
+  LLVM_DEBUG(llvm::dbgs() << "MakeRange state: " << state << "\n";);
+
+  return success();
+}
+
+template <>
+LogicalResult
+TritonRaiseBlockPointer::visitAddPointerOperand(triton::SplatOp splatOp,
+                                                PtrState &state, Location loc,
+                                                OpBuilder &builder) {
+  assert(state.isEmpty());
+
+  Value src = splatOp.getSrc();
+  Value dst = splatOp.getResult();
+  ArrayRef<int64_t> dstShape = cast<ShapedType>(dst.getType()).getShape();
+
+  if (failed(visitOperand(src, state, loc, builder)))
+    return failure();
+
+  if (!isa<IntegerType, IndexType, triton::PointerType>(src.getType())) {
+    splatOp->emitRemark("TritonRaiseBlockPointer: unsupported splat pattern");
+    return failure();
+  }
+
+  for (int64_t s : dstShape) {
+    Value c0i32 = builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
+    Value c0i64 =
+        builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth);
+    state.offsets.push_back(c0i32);
+    state.strides.push_back(c0i64);
+    state.shape.push_back(c0i64);
+    state.sizes.push_back(s);
+  }
+
+  // If we splat a integer value, scalar should become the offset of the
+  // outer most dimension
+  if (state.scalar) {
+    state.offsets[0] = getValueOrCreateCastToIndexLike(
+        builder, loc, builder.getIntegerType(offsetBitwidth), state.scalar);
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "Splat state: " << state << "\n";);
+
+  return success();
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::AddIOp addOp, PtrState &state, Location loc, OpBuilder &builder) {
+  assert(state.isEmpty());
+
+  PtrState lhsState;
+  if (failed(visitOperand(addOp.getLhs(), lhsState, loc, builder)))
+    return failure();
+
+  PtrState rhsState;
+  if (failed(visitOperand(addOp.getRhs(), rhsState, loc, builder)))
+    return failure();
+
+  if (failed(state.addState(lhsState, rhsState, addOp, builder)))
+    return failure();
+
+  LLVM_DEBUG(llvm::dbgs() << "Add state: " << state << "\n";);
+
+  return success();
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::MulIOp mulOp, PtrState &state, Location loc, OpBuilder &builder) {
+  assert(state.isEmpty());
+
+  PtrState lhsState;
+  if (failed(visitOperand(mulOp.getLhs(), lhsState, loc, builder)))
+    return failure();
+
+  PtrState rhsState;
+  if (failed(visitOperand(mulOp.getRhs(), rhsState, loc, builder)))
+    return failure();
+
+  if (failed(state.mulState(lhsState, rhsState, mulOp, builder)))
+    return failure();
+
+  LLVM_DEBUG(llvm::dbgs() << "Mul state: " << state << "\n";);
+
+  return success();
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::ConstantOp op, PtrState &state, Location loc, OpBuilder &builder) {
+  assert(state.isEmpty());
+
+  auto attr = cast<DenseElementsAttr>(op.getValue());
+  auto elementType = attr.getElementType();
+  assert(attr.isSplat() && isa<IntegerType>(elementType));
+
+  state.scalar = builder.create<arith::ConstantIndexOp>(
+      loc, attr.getValues<IntegerAttr>()[0].getValue().getSExtValue());
+
+  Type offsetType = builder.getIntegerType(offsetBitwidth);
+  auto resultType = cast<ShapedType>(op.getResult().getType());
+  Value offset = convertScalarToDtype(builder, loc, state.scalar, offsetType,
+                                      /*isUnsignedCast=*/true);
+  for (int32_t dim : resultType.getShape()) {
+    state.offsets.push_back(offset);
+    state.sizes.push_back(dim);
+    state.strides.push_back(
+        builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
+    state.shape.push_back(
+        builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
+  }
+
+  return success();
+}
 } // namespace
