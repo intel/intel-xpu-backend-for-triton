@@ -15,7 +15,10 @@ def TritonRaiseBlockPointer
     : Pass<"triton-raise-block-pointer", "mlir::ModuleOp"> {
   let summary = "Convert Triton non-block pointer to block pointer";
   let description = [{
-    TODO
+    Pass to raise different patterns operating on pointers to block pointers.
+    The basic idea of this pass is to convert code operating on tensors of
+    pointers (`tensor<...x!tt.ptr<ty>>`) to pointers to tensors
+    (`!tt.ptr<tensor<...xty>>`) using `tt.make_block_ptr` operations.
   }];
 
   let dependentDialects = [

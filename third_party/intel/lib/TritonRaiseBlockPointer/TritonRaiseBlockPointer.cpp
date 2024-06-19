@@ -6,7 +6,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/TritonRaiseBlockPointer/Passes.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "mlir/IR/Matchers.h"
 #include "llvm/ADT/TypeSwitch.h"
