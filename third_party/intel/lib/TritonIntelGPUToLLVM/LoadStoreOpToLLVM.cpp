@@ -688,7 +688,7 @@ struct StoreOpConversion
     Value baseWidth = mul(width, elemSizeInBytes);
     // encoded as bytes.
     Value basePitch = mul(rowStride, elemSizeInBytes);
-    
+
     // A warp stride for the replicates.
     int outerDimWarpNum = std::min<int>(
         warpsPerCTA[0], mlir::ceil<unsigned>(tensorShape[0], elemsPerInstr[0]));
@@ -698,11 +698,12 @@ struct StoreOpConversion
     Value innerDimWarpId = urem(multiDimWarpId[1], i32_val(innerDimWarpNum));
     int64_t numRepOuter = numReps[0];
     int64_t numRepInner = numReps[1];
-    
-    std::array<unsigned, 2> replicaStride = {(unsigned)(outerDimWarpNum * elemsPerInstr[0]),
-      (unsigned)(innerDimWarpNum * elemsPerInstr[1])};
+
+    std::array<unsigned, 2> replicaStride = {
+        (unsigned)(outerDimWarpNum * elemsPerInstr[0]),
+        (unsigned)(innerDimWarpNum * elemsPerInstr[1])};
     std::array<unsigned, 2> warpStride = {(unsigned)(elemsPerInstr[0]),
-	  (unsigned)(elemsPerInstr[1])};
+                                          (unsigned)(elemsPerInstr[1])};
 
     Value dimWarpId0 = mul(outerDimWarpId, i32_val(warpStride[0]));
     Value dimWarpId1 = mul(innerDimWarpId, i32_val(warpStride[1]));
