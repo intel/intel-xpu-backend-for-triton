@@ -700,10 +700,11 @@ struct StoreOpConversion
     int64_t numRepInner = numReps[1];
 
     std::array<unsigned, 2> replicaStride = {
-        (unsigned)(outerDimWarpNum * elemsPerInstr[0]),
-        (unsigned)(innerDimWarpNum * elemsPerInstr[1])};
-    std::array<unsigned, 2> warpStride = {(unsigned)(elemsPerInstr[0]),
-                                          (unsigned)(elemsPerInstr[1])};
+        static_cast<unsigned>(outerDimWarpNum * elemsPerInstr[0]),
+        static_cast<unsigned>(innerDimWarpNum * elemsPerInstr[1])};
+    std::array<unsigned, 2> warpStride = {
+        static_cast<unsigned>(elemsPerInstr[0]),
+        static_cast<unsigned>(elemsPerInstr[1])};
 
     Value dimWarpId0 = mul(outerDimWarpId, i32_val(warpStride[0]));
     Value dimWarpId1 = mul(innerDimWarpId, i32_val(warpStride[1]));
