@@ -140,6 +140,7 @@ jobs:
         with:
           name: benchmark-reports
           path: reports
+
   benchmark-gemm:
     name: GEMM benchmarks
     runs-on:
@@ -224,16 +225,6 @@ jobs:
         run: |
           pip install matplotlib pandas tabulate
 
-      - name: Install intel-basekit
-        run: |
-          set -ex; \
-          sudo apt update
-          sudo apt install -y gpg-agent wget
-          wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
-          sudo apt update
-          sudo apt-get install -y intel-basekit=2024.1.0-589
-
       - name: Install a custom libigc from artifacts
         run: |
           sudo dpkg -i artifacts/libigc1_1.0.24994.16243-igc+releaseinternal1_amd64.deb
@@ -245,7 +236,6 @@ jobs:
 
       - name: Run GEMM benchmark
         run: |
-          source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           bash scripts/gather_gemm_perf.sh
           source scripts/capture-hw-details.sh
           cd python/tutorials
