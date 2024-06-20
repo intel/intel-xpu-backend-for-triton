@@ -304,7 +304,7 @@ struct TritonRaiseBlockPointer
   }
 
   LogicalResult rewriteLoadOp(triton::LoadOp op) {
-    auto ptr = ptrMap.lookupOrNull(op.getPtr());
+    Value ptr = ptrMap.lookupOrNull(op.getPtr());
 
     if (!ptr) {
       op->emitRemark("TritonRaiseBlockPointer: pointer is not replace with "
