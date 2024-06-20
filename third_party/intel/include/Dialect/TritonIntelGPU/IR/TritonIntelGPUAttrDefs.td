@@ -69,6 +69,7 @@ along the row (resp. col) dimension.
     "unsigned":$executionSize,
     "unsigned":$opsPerChannel,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$repCluster,
     "unsigned":$subGroupSize
   );
 
@@ -77,6 +78,9 @@ along the row (resp. col) dimension.
     SmallVector<unsigned> getShapeA() const;
     SmallVector<unsigned> getShapeB() const;
     SmallVector<unsigned> getShapeC() const;
+    SmallVector<unsigned> getDPASInstShapeA() const;
+    SmallVector<unsigned> getDPASInstShapeB() const;
+    SmallVector<unsigned> getDPASInstShapeC() const;
     SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const;
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
