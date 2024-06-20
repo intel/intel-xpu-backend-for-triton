@@ -3193,7 +3193,11 @@ layouts = [
     DotOperandLayout(parent=MmaLayout([3, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 32, 16]), op_idx=0, k_width=2),
     DotOperandLayout(parent=MmaLayout([2, 0], [2, 2], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=2),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
-               warps_per_cta=[4, 1], rep_cluster=[1, 1])
+               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[2, 2], rep_cluster=[2, 1]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[1, 4], rep_cluster=[2, 2]),
 ]
 
 
@@ -5812,7 +5816,13 @@ layouts = [
         dim=1, parent=DotOperandLayout(parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8]),
                                        op_idx=1, k_width=2)),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
-               warps_per_cta=[4, 1], rep_cluster=[1, 1])
+               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[1, 4], rep_cluster=[2, 2]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[2, 2], rep_cluster=[2, 1]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[4, 1], rep_cluster=[1, 2]),
 ]
 
 intermediate_layouts = [
