@@ -249,6 +249,7 @@ jobs:
           cd python/tutorials
           bash run_all.sh
           # This will fix csv file issues, fixing ", "->"," and " " -> "," that exist in raw output
+          cp summary.csv $REPORTS/attention-summary.csv
           sed -E 's/, /,/g;s/ /,/g' summary.csv > attention-results.csv
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py attention-results.csv $REPORTS/attention-triton-report.csv --benchmark flash_attention --compiler triton --tflops_col max_tflops --param_cols "Z,H,N_CTX,D_HEAD"
