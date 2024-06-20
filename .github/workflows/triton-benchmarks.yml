@@ -91,16 +91,6 @@ jobs:
         run: |
           pip install matplotlib pandas tabulate
 
-      - name: Install intel-basekit
-        run: |
-          set -ex; \
-          sudo apt update
-          sudo apt install -y gpg-agent wget
-          wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
-          sudo apt update
-          sudo apt-get install -y intel-basekit=2024.1.0-589
-
       - name: Create reports dir
         run: |
           mkdir reports
@@ -108,13 +98,11 @@ jobs:
 
       - name: Install xetla benchmark
         run: |
-          source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           cd benchmarks
           python setup.py install
 
       - name: Run xetla benchmark
         run: |
-          source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           cd benchmarks/xetla_benchmark
           python fused_softmax.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
@@ -124,7 +112,6 @@ jobs:
 
       - name: Run micro benchmark
         run: |
-          source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
 
