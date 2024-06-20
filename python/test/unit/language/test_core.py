@@ -217,16 +217,18 @@ class MmaLayout:
 
 class DpasLayout:
 
-    def __init__(self, repeatCount, systolic_depth, execution_size, ops_per_chan, threads_per_warp, warps_per_cta):
+    def __init__(self, repeatCount, systolic_depth, execution_size, ops_per_chan, threads_per_warp, rep_cluster,
+                 warps_per_cta):
         self.repeatCount = repeatCount
         self.systolic_depth = systolic_depth
         self.execution_size = execution_size
         self.ops_per_chan = ops_per_chan
         self.threads_per_warp = threads_per_warp
         self.warps_per_cta = warps_per_cta
+        self.rep_cluster = rep_cluster
 
     def __str__(self):
-        return f"#triton_intel_gpu.dpas<{{repeatCount={self.repeatCount}, systolicDepth={self.systolic_depth}, executionSize = {self.execution_size}, opsPerChan = {self.ops_per_chan}, threadsPerWarp = {self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}}}>"
+        return f"#triton_intel_gpu.dpas<{{repeatCount={self.repeatCount}, systolicDepth={self.systolic_depth}, executionSize = {self.execution_size}, opsPerChan = {self.ops_per_chan}, threadsPerWarp = {self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, repCluster={self.rep_cluster}}}>"
 
 
 class BlockedLayout:
@@ -2591,11 +2593,11 @@ layouts = [
     BlockedLayout([4, 4], [THREADS_PER_WARP // 16, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
-               warps_per_cta=[4, 1]),
+               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=32,
-               warps_per_cta=[2, 2]),
+               warps_per_cta=[2, 2], rep_cluster=[1, 1]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=4, threads_per_warp=32,
-               warps_per_cta=[4, 1])
+               warps_per_cta=[4, 1], rep_cluster=[1, 1])
 ]
 
 
@@ -2726,7 +2728,7 @@ layouts = [
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
-               warps_per_cta=[4, 1]),
+               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
 ]
 
 
@@ -2774,7 +2776,11 @@ layouts = [
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
-               warps_per_cta=[4, 1])
+               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[2, 2], rep_cluster=[2, 1]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[1, 4], rep_cluster=[2, 2]),
 ]
 
 
@@ -4908,7 +4914,13 @@ layouts = [
     BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([4, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
-               warps_per_cta=[4, 1]),
+               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[1, 4], rep_cluster=[2, 2]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[2, 2], rep_cluster=[2, 1]),
+    DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[4, 1], rep_cluster=[1, 2]),
 ]
 
 intermediate_layouts = [
@@ -4926,6 +4938,7 @@ def compute_rep_shape(layout):
         return rep_shape
     elif type(layout) is DpasLayout:
         warp_shape = [layout.repeatCount, layout.execution_size]
+        warp_shape = np.multiply(warp_shape, layout.rep_cluster)
         rep_shape = np.multiply(warp_shape, layout.warps_per_cta)
         return rep_shape
     else:
