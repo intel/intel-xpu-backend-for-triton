@@ -123,9 +123,17 @@ struct TritonRaiseBlockPointer
   using Base::Base;
 
   void runOnOperation() final {
-    getOperation()->walk([this](triton::AddPtrOp addptr) {
-      if (failed(rewriteAddPtrOp(addptr)))
-        addptr->emitRemark("TritonRaiseToBlockPointer: Failed to rewrite");
+    getOperation()->walk([this](Operation *op) {
+      TypeSwitch<Operation *>(op)
+          .Case([this](triton::AddPtrOp addptr) {
+            if (failed(rewriteAddPtrOp(addptr)))
+              addptr->emitRemark(
+                  "TritonRaiseToBlockPointer: Failed to rewrite");
+          })
+          .Case([this](triton::LoadOp load) {
+            if (failed(rewriteLoadOp(load)))
+              load->emitRemark("TritonRaiseToBlockPointer: Failed to rewrite");
+          });
     });
   }
 
@@ -292,6 +300,34 @@ struct TritonRaiseBlockPointer
 
     LLVM_DEBUG(llvm::dbgs() << "Splat state: " << state << "\n";);
 
+    return success();
+  }
+
+  LogicalResult rewriteLoadOp(triton::LoadOp op) {
+    Value ptr = ptrMap.lookupOrNull(op.getPtr());
+
+    if (!ptr) {
+      op->emitRemark("TritonRaiseBlockPointer: pointer is not replaced with "
+                     "tt.make_tensor_ptr so loadOp cannot be rewritten");
+      return failure();
+    }
+
+    auto ptrType = dyn_cast<triton::PointerType>(ptr.getType());
+    if (ptrType && !isa<ShapedType>(ptrType.getPointeeType())) {
+      op->emitRemark(
+          "TritonRaiseBlockPointer: scalar loadOp will not be rewritten");
+      return failure();
+    }
+
+    OpBuilder builder(op);
+    auto loadOp = builder.create<triton::LoadOp>(
+        op.getLoc(), ptr, op.getMask(), op.getOther(), op.getBoundaryCheck(),
+        op.getPadding(), op.getCache(), op.getEvict(), op.getIsVolatile());
+
+    LLVM_DEBUG(llvm::dbgs() << "creating tt.load: " << loadOp << "\n";);
+
+    op.replaceAllUsesWith(loadOp.getResult());
+    op->erase();
     return success();
   }
 
