@@ -49,7 +49,7 @@ jobs:
     uses: ./.github/workflows/build-test-reusable.yml
     with:
       driver_version: ${{ matrix.drivers }}
-      runner_label: ${{ inputs.runner_label || "a770" }}
+      runner_label: ${{ inputs.runner_label || 'a770' }}
       install_ipex: ${{ inputs.install_ipex || github.event_name == 'schedule' }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
