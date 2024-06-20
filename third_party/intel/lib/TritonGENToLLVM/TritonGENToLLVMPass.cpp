@@ -595,7 +595,7 @@ static LLVM::CallOp
 createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                             ConversionPatternRewriter &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  MLIRContext *context = rewriter.getContext();
+  MLIRContext *ctx = rewriter.getContext();
   Location loc = op->getLoc();
 
   Value ptr = op.getPtr();
@@ -628,7 +628,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                              int32Ty};
 
   LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
-      moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(context));
+      moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(ctx));
   funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
   auto elemSize =
@@ -661,8 +661,16 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                           vnniTransform,
                           cache};
 
-  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  intel::AttrBuilder funcAttrBuilder(*ctx);
+  funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
+      .addPassthroughAttribute(llvm::Attribute::WillReturn)
+      .addPassthroughAttribute(llvm::Attribute::Memory,
+                               llvm::MemoryEffects::readOnly().toIntValue());
+  intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+
+  auto retType = LLVM::LLVMVoidType::get(rewriter.getContext());
+  LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, funcName, retType,
+                                                 {argTypes}, {args}, attrs);
   return callOp;
 }
 
