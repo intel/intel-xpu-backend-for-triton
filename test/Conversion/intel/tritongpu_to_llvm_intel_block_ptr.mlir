@@ -1,10 +1,10 @@
 // RUN: TRITON_INTEL_ENABLE_BLOCK_PTR=1 triton-opt %s --convert-triton-intel-gpu-to-llvm --split-input-file | FileCheck %s
 
 module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
-  // CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i32(i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xi32>)
   // CHECK-DAG: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent"]}
   // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_read_16b_32r16x2cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {passthrough = ["nounwind"]}
   // CHECK-DAG: llvm.func spir_funccc @_Z52intel_sub_group_2d_block_read_transform_16b_32r16x2cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {passthrough = ["nounwind"]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_write_32b_8r16x1cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.readonly}) attributes {passthrough = ["nounwind"]}
   // CHECK-DAG: llvm.func spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_8r16x2cPU3AS1viiiDv2_i(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {passthrough = ["nounwind", ["memory", "1"]]}
 
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1>, %arg1: !tt.ptr<f16, 1>, %arg2: !tt.ptr<f32, 1>, %arg3: i32, %arg4: i32, %arg5: i32) {
@@ -102,8 +102,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     cf.br ^bb1(%119, %71, %115, %117, %118 : i32, tensor<8x16xf32>, !tt.ptr<tensor<32x32xf16>, 1>, !tt.ptr<tensor<32x32xf16>, 1>, !tt.ptr<tensor<32x32xf16>, 1>)
   ^bb3:
     %120 = tt.make_tensor_ptr %arg2, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%21, %36] {order = array<i32: 1, 0>} : <tensor<8x16xf32>, 1>
-    // CHECK: [[RES_PTR:%.*]] = llvm.ptrtoint %arg2 : !llvm.ptr<1> to i64
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i32([[RES_PTR]], {{.*}}
+    // CHECK: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_32b_8r16x1cPU3AS1viiiDv2_iPj(%arg2, {{.*}}
     tt.store %120, %41 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<8x16xf32>, 1>
     tt.return
   }
@@ -153,13 +152,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     %c0_i32 = arith.constant 0 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<8x16xf16>
     %0 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%c0_i64, %c0_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x16xf16>>
-    // CHECK: [[ELEM_SIZE:%.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK: [[TILE_WIDTH:%.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK: [[TILE_HEIGHT:%.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK: [[NUM_BLOCKS:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK: [[TRANSPOSE:%.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: [[VNNI:%.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i16({{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, [[ELEM_SIZE]], [[TILE_WIDTH]], [[TILE_HEIGHT]], [[NUM_BLOCKS]], [[TRANSPOSE]], [[VNNI]], {{%.*}}, {{%.*}}) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xi16>) -> ()
+    // CHECK: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%arg0, {{.*}})
     tt.store %0, %cst {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x16xf16>>
     tt.return
   }
