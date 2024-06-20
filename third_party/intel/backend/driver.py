@@ -7,8 +7,8 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
 
-dirname = os.getenv("ZE_PATH", default="/usr/local")
-include_dir = [os.path.join(dirname, "include")]
+ze_root = os.getenv("ZE_PATH", default="/usr/local")
+include_dir = [os.path.join(ze_root, "include")]
 
 oneapi_root = os.getenv("ONEAPI_ROOT")
 if oneapi_root:
@@ -16,6 +16,9 @@ if oneapi_root:
         os.path.join(oneapi_root, "compiler/latest/include"),
         os.path.join(oneapi_root, "compiler/latest/include/sycl")
     ]
+
+dirname = os.path.dirname(os.path.realpath(__file__))
+include_dir += [os.path.join(dirname, "include")]
 
 library_dir = [os.path.join(dirname, "lib")]
 libraries = ['ze_loader', 'sycl']
@@ -383,6 +386,8 @@ class XPULauncher(object):
         constants = {cst_key(key): value for key, value in constants.items()}
         signature = {cst_key(key): value for key, value in src.signature.items()}
         src = make_launcher(constants, signature, ids)
+        with open('/tmp/src', 'w') as f:
+            f.write(src)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
 

@@ -44,10 +44,34 @@ pytest() {
 }
 
 run_tutorial_test() {
-  echo
-  echo "****** Running $1 test ******"
-  echo
-  python3 -u "$1.py" || $TRITON_TEST_IGNORE_ERRORS
+    echo
+    echo "****** Running $1 test ******"
+    echo
+
+    TUTORIAL_RESULT=TODO
+
+    if [[ -f $TRITON_TEST_SKIPLIST_DIR/tutorials.txt ]]; then
+        if grep --fixed-strings --quiet "$1" "$TRITON_TEST_SKIPLIST_DIR/tutorials.txt"; then
+            TUTORIAL_RESULT=SKIP
+        fi
+    fi
+
+    if [[ $TUTORIAL_RESULT = TODO ]]; then
+        if python3 -u "$1.py"; then
+            TUTORIAL_RESULT=PASS
+        else
+            TUTORIAL_RESULT=FAIL
+        fi
+    fi
+
+    if [[ $TRITON_TEST_REPORTS = true ]]; then
+        mkdir -p "$TRITON_TEST_REPORTS_DIR"
+        echo $TUTORIAL_RESULT > "$TRITON_TEST_REPORTS_DIR/tutorial-$1.txt"
+    fi
+
+    if [[ $TUTORIAL_RESULT = FAIL && $TRITON_TEST_IGNORE_ERRORS = false ]]; then
+        exit 1
+    fi
 }
 
 capture_runtime_env() {

@@ -1,10 +1,10 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
 // CHECK-DAG: llvm.func spir_funccc @_Z25__spirv_BuiltInSubgroupIdv() -> i32
-// CHECK-DAG: llvm.func spir_funccc @_Z14get_num_groupsj(i32) -> i64
-// CHECK-DAG: llvm.func spir_funccc @_Z14get_local_sizej(i32) -> i64
-// CHECK-DAG: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64
-// CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64
+// CHECK-DAG: llvm.func spir_funccc @_Z14get_num_groupsj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
+// CHECK-DAG: llvm.func spir_funccc @_Z14get_local_sizej(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
+// CHECK-DAG: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
+// CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
 
 llvm.func @gen_special_regs() -> i32 {
   // CHECK-LABEL: gen_special_regs
@@ -308,28 +308,5 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_he
   // CHECK-DAG:  [[PITCH:%.*]] = llvm.sub %arg3, [[ONE]] : i32
   // CHECK-NEXT: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8f32([[PTR]], [[WIDTH]], [[HEIGHT]], [[PITCH]], %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[ZERO]], %arg6) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xf32>) -> ()
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xf32>)
-  llvm.return
-}
-
-// -----
-
-// CHECK:  llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid(i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32)
-
-llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK:     llvm.func @triton_gen.2Dblockprefetch(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK-DAG:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr to i64
-  // CHECK-DAG:  [[CST_32:%.*]] = llvm.mlir.constant(32 : i32) : i32
-  // CHECK-DAG:  [[CST_8a:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-DAG:  [[CST_8b:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-DAG:  [[CST_1:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-DAG:  [[CST_FALSE_1:%.*]] = llvm.mlir.constant(false) : i1
-  // CHECK-DAG:  [[CST_FALSE_2:%.*]] = llvm.mlir.constant(false) : i1
-  // CHECK-DAG:  [[FOUR:%.*]] = llvm.mlir.constant(4 : i32) : i32
-  // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-DAG:  [[WIDTH:%.*]] = llvm.sub %arg1, [[ONE]] : i32
-  // CHECK-DAG:  [[HEIGHT:%.*]] = llvm.sub %arg2, [[ONE]] : i32
-  // CHECK-DAG:  [[PITCH:%.*]] = llvm.sub %arg3, [[ONE]] : i32
-  // CHECK-NEXT: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid([[PTR]], [[WIDTH]], [[HEIGHT]], [[PITCH]], %arg4, %arg5, [[CST_32]], [[CST_8a]], [[CST_8b]], [[CST_1]], [[CST_FALSE_1]], [[CST_FALSE_2]], [[FOUR]]) : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
-  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=L1C_L3C} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
 }

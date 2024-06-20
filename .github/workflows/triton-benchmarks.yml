@@ -87,6 +87,10 @@ jobs:
           path: ${{ steps.triton-cache.outputs.path }}
           dest: ${{ steps.triton-cache.outputs.dest }}
 
+      - name: Install benchmark dependencies
+        run: |
+          pip install matplotlib pandas tabulate
+
       - name: Install intel-basekit
         run: |
           set -ex; \
@@ -113,6 +117,10 @@ jobs:
           source /home/runner/intel/oneapi/mkl/2024.1/env/vars.sh
           cd benchmarks/xetla_benchmark
           python fused_softmax.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops-max --hbm_col "Triton-GB/s-max"
+          python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops-max --hbm_col "XeTLA-GB/s-max"
+
 
       - name: Run micro benchmark
         run: |

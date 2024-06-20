@@ -38,6 +38,24 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
       op.getElemSizeInBits() != 32)
     return op->emitOpError("expecting 'elem_size_in_bits' to be 8, 16, or 32");
 
+  uint32_t tileHeight = op.getTileHeight();
+  if (tileHeight != 1 && tileHeight != 2 && tileHeight != 4 &&
+      tileHeight != 8 && tileHeight != 16 && tileHeight != 32)
+    return op->emitOpError("expecting tile_height to be 1, 2, 4, 8, 16, or 32");
+
+  uint32_t vBlocks = op.getVBlocks();
+  if (vBlocks != 1 && vBlocks != 2 && vBlocks != 4 && vBlocks != 8)
+    return op->emitOpError("expecting v_blocks to be 1, 2, 4, or 8");
+
+  return success();
+}
+
+template <typename Op>
+static LogicalResult verifyMatrixTransposeTransform(Op op) {
+  static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
+                                TritonGEN::Matrix2DBlockStoreOp>::value,
+                "Unexpected template parameter");
+
   if (op.getTranspose() && op.getVnniTransform())
     return op->emitOpError(
         "transpose and vnni_transform are mutually exclusive");
@@ -49,15 +67,6 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
     return op->emitOpError("vnni_transform is only supported for 8 and 16 bit "
                            "elements");
 
-  uint32_t tileHeight = op.getTileHeight();
-  if (tileHeight != 1 && tileHeight != 2 && tileHeight != 4 &&
-      tileHeight != 8 && tileHeight != 16 && tileHeight != 32)
-    return op->emitOpError("expecting tile_height to be 1, 2, 4, 8, 16, or 32");
-
-  uint32_t vBlocks = op.getVBlocks();
-  if (vBlocks != 1 && vBlocks != 2 && vBlocks != 4 && vBlocks != 8)
-    return op->emitOpError("expecting v_blocks to be 1, 2, 4, or 8");
-
   uint32_t tileWidth = op.getTileWidth();
   if (op.getVnniTransform()) {
     if (tileWidth != 16)
@@ -67,18 +76,9 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
     return success();
   }
 
-  switch (op.getElemSizeInBits()) {
-  case 16:
-    if (tileWidth != 16)
-      return op->emitOpError("tile_width for 16 bit elements should be equal "
-                             "to systolic depth times 2, i.e., 16 elements");
-    break;
-  case 8:
-    if (tileWidth != 32)
-      return op->emitOpError("tile_width for 8 bit elements should be equal "
-                             "to systolic depth times 4, i.e., 32 elements");
-    break;
-  }
+  if (op.getElemSizeInBits() == 16 && tileWidth != 16)
+    return op->emitOpError("tile_width for 16 bit elements should be equal "
+                           "to 16");
 
   return success();
 }
@@ -199,6 +199,9 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (verifyMatrixInput(*this).failed())
     return failure();
 
+  if (verifyMatrixTransposeTransform(*this).failed())
+    return failure();
+
   VectorType resTy = getRes().getType();
   unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
   if (getElemSizeInBits() == 32 || getVnniTransform()) {
@@ -217,6 +220,11 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
                          << " bits does not match the expected size of "
                          << expectedSize << " bits";
 
+  if (getElemSizeInBits() == 8 && !getVnniTransform())
+    if (getTileWidth() != 32)
+      return emitOpError("tile_width for 8 bit elements when vnni_transform is "
+                         "false should be equal to 32");
+
   return verifyMatrixReadInput(*this);
 }
 
@@ -228,9 +236,17 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
   if (verifyMatrixInput(*this).failed())
     return failure();
 
+  if (verifyMatrixTransposeTransform(*this).failed())
+    return failure();
+
+  if (getElemSizeInBits() == 8 && !getVnniTransform())
+    if (getTileWidth() != 32)
+      return emitOpError("tile_width for 8 bit elements when vnni_transform is "
+                         "false should be equal to 32");
+
   if (getElemSizeInBits() == 32 && getTileWidth() != 8)
     return emitOpError("tile_width for 32 bit elements should be equal "
-                       "to systolic depth, i.e., 8 elements");
+                       "to 8");
 
   return success();
 }
@@ -242,6 +258,20 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
 LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
   if (verifyMatrixInput(*this).failed())
     return failure();
+
+  uint32_t tileWidth = getTileWidth();
+  switch (getElemSizeInBits()) {
+  case 16:
+    if (tileWidth != 16)
+      return emitOpError("tile_width for 16 bit elements should be equal "
+                         "to 16");
+    break;
+  case 8:
+    if (tileWidth != 16 && tileWidth != 32)
+      return emitOpError("tile_width for 8 bit elements should be equal to "
+                         "either be 16 or 32");
+    break;
+  }
 
   return verifyMatrixReadInput(*this);
 }

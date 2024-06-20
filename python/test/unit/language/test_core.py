@@ -3269,6 +3269,14 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         z_ref = num / denom
     if epilogue == 'chain-dot':
         if 'float8' in in_dtype:
+            # Reduce z_ref's precision to fp8 to match the kernel behavior
+            if in_dtype == 'float8e4nv':
+                z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e4m3fn)
+            elif in_dtype == 'float8e5':
+                z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e5m2)
+            else:
+                assert "Unsupported float8 dtype"
+            z_ref = to_numpy(z_fp8.to(torch.float32))
             w = to_numpy(convert_fp8_to_fp32(w, device, in_dtype))
         z_ref = np.matmul(z_ref, w)
     # compare
@@ -5234,8 +5242,6 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
         if cc[0] >= 9 and in_type_str == "float8e4b15":
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     check_type_supported(in_type_str, device)
-    if is_xpu() and in_type_str == "float8e4b15":
-        pytest.skip("FIXME: Fails to compile on XPU")
 
     if is_interpreter():
         pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
