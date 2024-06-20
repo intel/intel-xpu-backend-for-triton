@@ -120,21 +120,9 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
     %c0_i32 = arith.constant 0 : i32
     %0 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%c0_i64, %c0_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x8xf32>>
     %1 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%c0_i64, %c0_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x16xf32>>
-    // CHECK: [[ELEM_SIZE:%.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK: [[TILE_WIDTH:%.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK: [[TILE_HEIGHT:%.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK: [[NUM_BLOCKS:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK: [[TRANSPOSE:%.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: [[VNNI:%.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: {{%.*}} = llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v4i32({{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, [[ELEM_SIZE]], [[TILE_WIDTH]], [[TILE_HEIGHT]], [[NUM_BLOCKS]], [[TRANSPOSE]], [[VNNI]], {{%.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<4xi32>
+    // CHECK: llvm.call spir_funccc @_Z40intel_sub_group_2d_block_read_32b_8r8x1cPU3AS1viiiDv2_iPj(%arg0, {{.*}}) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>, !llvm.ptr) -> ()
     %2 = tt.load %0 {DotIdx = 0 : i32, boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x8xf32>>
-    // CHECK: [[ELEM_SIZE:%.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK: [[TILE_WIDTH:%.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK: [[TILE_HEIGHT:%.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK: [[NUM_BLOCKS:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK: [[TRANSPOSE:%.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: [[VNNI:%.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: [[VAL_60:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v8i32({{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, [[ELEM_SIZE]], [[TILE_WIDTH]], [[TILE_HEIGHT]], [[NUM_BLOCKS]], [[TRANSPOSE]], [[VNNI]], {{%.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xi32>
+    // CHECK: llvm.call spir_funccc @_Z41intel_sub_group_2d_block_read_32b_8r16x1cPU3AS1viiiDv2_iPj(%arg0, {{.*}}) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>, !llvm.ptr) -> ()
     %3 = tt.load %1 {DotIdx = 1 : i32, boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x16xf32>>
     tt.return
   }
