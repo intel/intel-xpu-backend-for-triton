@@ -6,28 +6,21 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 
-if "intel_extension_for_pytorch" in sys.modules:
-    import torch
 
-    def Event(**kwargs):
-        return torch.xpu.Event(**kwargs)
+import time
 
-    USE_WALL_TIME = False
-else:
-    import time
+class Event():
 
-    class Event():
+    def __init__(self, **kwargs):
+        self.record()
 
-        def __init__(self, **kwargs):
-            self.record()
+    def record(self):
+        self.timestamp = time.time_ns()
 
-        def record(self):
-            self.timestamp = time.time_ns()
+    def elapsed_time(self, end):
+        return end.timestamp - self.timestamp
 
-        def elapsed_time(self, end):
-            return end.timestamp - self.timestamp
-
-    USE_WALL_TIME = True
+USE_WALL_TIME = True
 
 
 def synchronize():
