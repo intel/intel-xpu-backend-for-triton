@@ -239,7 +239,7 @@ jobs:
           bash scripts/gather_gemm_perf.sh
           source scripts/capture-hw-details.sh
           cd python/tutorials
-          python ../../scripts/build_report.py python/tutorials/gemm_results.csv $REPORTS/gemm-report.csv --benchmark gemm --compiler triton --param_cols "N,K,M" --tflops_col max_tflops --hbm_col max_gbs
+          python ../../scripts/build_report.py gemm_results.csv $REPORTS/gemm-report.csv --benchmark gemm --compiler triton --param_cols "N,K,M" --tflops_col max_tflops --hbm_col max_gbs
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
