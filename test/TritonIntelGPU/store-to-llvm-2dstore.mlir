@@ -22,6 +22,21 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     %11 = tt.dot %9, %10, %cst, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
     %12 = arith.truncf %11#0 : tensor<64x64xf32, #dpas> to tensor<64x64xf16, #dpas>
     %13 = tt.make_tensor_ptr %arg2, [%arg3, %arg5], [%arg6, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #dpas>>
+    // The next two lines is used to start checking constant related to the BlockStore.
+    // CHECK-COUNT-6: llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK-COUNT-39: llvm.extractvalue
+    // Next constant must be equal to warpsPerCTA[0]
+    // CHECK: %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK: %[[VAL_0:.*]] = llvm.urem %{{[0-9]+}}, %[[CST_4]] : i32
+    // Next constant must be equal to warpsPerCTA[1]
+    // CHECK: %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK: %[[VAL_1:.*]] = llvm.urem %{{[0-9]+}}, %[[CST_2]] : i32
+    // Next constant must is elemsPerInstr[0]
+    // CHECK: %[[CST_8:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK: llvm.mul %[[VAL_0]], %[[CST_8]] : i32
+    // Next constant must is elemsPerInstr[1]
+    // CHECK: %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: llvm.mul %[[VAL_1]], %[[CST_16]] : i32
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i16{{.*}}
