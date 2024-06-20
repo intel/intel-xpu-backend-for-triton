@@ -4,6 +4,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/TritonGENToLLVM/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+#include "intel/include/TritonRaiseBlockPointer/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
 
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
@@ -50,6 +51,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestMembarPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::intel::registerConvertTritonToTritonGPUWarpPass();
+  mlir::triton::intel::registerTritonRaiseBlockPointer();
   mlir::triton::registerAllocateSharedMemoryPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
   mlir::triton::registerConvertNVGPUToLLVMPass();
