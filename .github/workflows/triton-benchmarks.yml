@@ -152,11 +152,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # TODO:
-          # THIS WILL NEED TO BE UPDATED BEFORE MERGE TO MAIN GEMM BRANCH
-          # ref: 'triton_perf_poc'
-          ref: 'pr/1385'
-
+          ref: 'triton_perf_poc'
 
       - name: Get LLVM commit id
         run: |
