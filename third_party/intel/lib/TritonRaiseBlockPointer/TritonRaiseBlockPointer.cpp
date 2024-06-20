@@ -307,7 +307,7 @@ struct TritonRaiseBlockPointer
     Value ptr = ptrMap.lookupOrNull(op.getPtr());
 
     if (!ptr) {
-      op->emitRemark("TritonRaiseBlockPointer: pointer is not replace with "
+      op->emitRemark("TritonRaiseBlockPointer: pointer is not replaced with "
                      "tt.make_tensor_ptr so loadOp cannot be rewritten");
       return failure();
     }
