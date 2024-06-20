@@ -2,8 +2,10 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
+#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -151,6 +153,8 @@ public:
     if (auto cast =
             dyn_cast<mlir::UnrealizedConversionCastOp>(base.getDefiningOp()))
       base = cast.getInputs()[0];
+    else
+      base = rewriter.getRemappedValue(base);
 
     OpBuilder::InsertPoint insertPoint = rewriter.saveInsertionPoint();
     rewriter.setInsertionPointAfter(ptrOp);
@@ -355,6 +359,26 @@ public:
   }
 };
 
+class AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
+public:
+  using ConvertTritonGPUOpToLLVMPattern<
+      AddPtrOp>::ConvertTritonGPUOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(AddPtrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto resultType = op.getType();
+    auto typeConverter = getTypeConverter();
+    auto resultPtrTy = typeConverter->convertType(resultType);
+    auto resultElmTy = typeConverter->convertType(
+        cast<PointerType>(resultType).getPointeeType());
+    Value result = rewriter.create<LLVM::GEPOp>(
+        loc, resultPtrTy, resultElmTy, adaptor.getPtr(), adaptor.getOffset());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
@@ -369,4 +393,5 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, benefit);
   patterns.add<GlueOpConversion>(typeConverter, benefit);
   patterns.add<ExtractOpConversion>(typeConverter, benefit);
+  patterns.add<AddPtrOpConversion>(typeConverter, benefit);
 }
