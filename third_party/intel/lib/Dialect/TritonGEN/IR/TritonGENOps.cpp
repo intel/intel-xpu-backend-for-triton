@@ -76,18 +76,9 @@ static LogicalResult verifyMatrixTransposeTransform(Op op) {
     return success();
   }
 
-  switch (op.getElemSizeInBits()) {
-  case 16:
-    if (tileWidth != 16)
-      return op->emitOpError("tile_width for 16 bit elements should be equal "
-                             "to systolic depth times 2, i.e., 16 elements");
-    break;
-  case 8:
-    if (tileWidth != 32)
-      return op->emitOpError("tile_width for 8 bit elements should be equal "
-                             "to systolic depth times 4, i.e., 32 elements");
-    break;
-  }
+  if (op.getElemSizeInBits() == 16 && tileWidth != 16)
+    return op->emitOpError("tile_width for 16 bit elements should be equal "
+                           "to 16");
 
   return success();
 }
@@ -229,6 +220,11 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
                          << " bits does not match the expected size of "
                          << expectedSize << " bits";
 
+  if (getElemSizeInBits() == 8 && !getVnniTransform())
+    if (getTileWidth() != 32)
+      return emitOpError("tile_width for 8 bit elements when vnni_transform is "
+                         "false should be equal to 32");
+
   return verifyMatrixReadInput(*this);
 }
 
@@ -243,9 +239,14 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
   if (verifyMatrixTransposeTransform(*this).failed())
     return failure();
 
+  if (getElemSizeInBits() == 8 && !getVnniTransform())
+    if (getTileWidth() != 32)
+      return emitOpError("tile_width for 8 bit elements when vnni_transform is "
+                         "false should be equal to 32");
+
   if (getElemSizeInBits() == 32 && getTileWidth() != 8)
     return emitOpError("tile_width for 32 bit elements should be equal "
-                       "to systolic depth, i.e., 8 elements");
+                       "to 8");
 
   return success();
 }
@@ -263,12 +264,12 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
   case 16:
     if (tileWidth != 16)
       return emitOpError("tile_width for 16 bit elements should be equal "
-                         "to systolic depth times 2, i.e., 16 elements");
+                         "to 16");
     break;
   case 8:
-    if (tileWidth != 32)
-      return emitOpError("tile_width for 8 bit elements should be equal "
-                         "to systolic depth times 4, i.e., 32 elements");
+    if (tileWidth != 16 && tileWidth != 32)
+      return emitOpError("tile_width for 8 bit elements should be equal to "
+                         "either be 16 or 32");
     break;
   }
 
