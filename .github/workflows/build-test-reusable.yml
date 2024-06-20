@@ -92,14 +92,14 @@ jobs:
           echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
       - name: Setup PyTorch with IPEX
-        if: inputs.install_ipex
+        if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: Stonepia/pytorch
           ref: ${{ inputs.pytorch_ref }}
 
       - name: Setup PyTorch without IPEX
-        if: !inputs.install_ipex
+        if: ${{ !inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
@@ -107,11 +107,11 @@ jobs:
           torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
 
       - name: Setup IPEX
-        if: inputs.install_ipex
+        if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-ipex
 
       - name: Setup fake IPEX
-        if: !inputs.install_ipex
+        if: ${{ !inputs.install_ipex }}
         uses: ./.github/actions/setup-fake-ipex
 
       - name: Build Triton
