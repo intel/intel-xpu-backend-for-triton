@@ -103,9 +103,9 @@ jobs:
     with:
       driver_version: ${{ matrix.drivers }}
       runner_label: ${{ inputs.runner_label }}
-      install_ipex: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
+      install_ipex: ${{ inputs.install_ipex == 'true' || github.event_name == 'pull_request' || github.event_name == 'push' || false }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
-      upload_test_reports: ${{ inputs.upload_test_reports }}
-      ignore_errors: ${{ inputs.ignore_errors }}
+      upload_test_reports: ${{ inputs.upload_test_reports || false }}
+      ignore_errors: ${{ inputs.ignore_errors || false }}
       run_name: ${{ inputs.run_name }}
