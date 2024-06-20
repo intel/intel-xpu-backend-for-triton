@@ -38,11 +38,11 @@ public:
 
     unsigned threadsPerWarp = layout.getSubGroupSize();
     unsigned opsPerChannel = layout.getOpsPerChannel();
-    SmallVector<unsigned> shapeC = layout.getShapeC();
+    SmallVector<unsigned> shapeC = layout.getDPASInstShapeC();
     unsigned elemNumC = product<unsigned>(shapeC) / threadsPerWarp;
-    SmallVector<unsigned> shapeA = layout.getShapeA();
+    SmallVector<unsigned> shapeA = layout.getDPASInstShapeA();
     unsigned elemNumA = product<unsigned>(shapeA) / threadsPerWarp;
-    SmallVector<unsigned> shapeB = layout.getShapeB();
+    SmallVector<unsigned> shapeB = layout.getDPASInstShapeB();
     unsigned elemNumB = product<unsigned>(shapeB) / threadsPerWarp;
     switch (dpasType) {
     case DPASEngineType::FP32_FP32_FP16_FP16: {
@@ -145,13 +145,13 @@ public:
         getDPASOperandsType(dpasType, op.getContext(), dpasEncoding);
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, repM, repK,
-        typeConverter->convertType(ATensorTy.getElementType()), aTy);
+        typeConverter->convertType(ATensorTy.getElementType()), aTy, 0);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
         loadedB, repN, repK,
-        typeConverter->convertType(BTensorTy.getElementType()), bTy);
+        typeConverter->convertType(BTensorTy.getElementType()), bTy, 1);
     ValueTable fc = getValuesFromDotOperandLayoutStruct(
         loadedC, repM, repN,
-        typeConverter->convertType(CTensorTy.getElementType()), cTy);
+        typeConverter->convertType(CTensorTy.getElementType()), cTy, 2);
 
     Type resElemTy = DTensorTy.getElementType();
 
@@ -180,16 +180,20 @@ public:
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
 
-      auto ret = rewriter.create<TritonGEN::MatrixDPASOp>(loc, dTy, valc, valA,
-                                                          valB, pA, pB, RC);
+      Value ret = rewriter.create<TritonGEN::MatrixDPASOp>(loc, dTy, valc, valA,
+                                                           valB, pA, pB, RC);
 
       fc.at({m, n}) = ret;
     };
 
+    auto repCluster = dpasEncoding.getRepCluster();
     for (int k = 0; k < repK; ++k)
       for (int m = 0; m < repM; ++m)
         for (int n = 0; n < repN; ++n)
-          generateDPASOp(m, n, k);
+          for (int repRow = 0; repRow < repCluster[0]; repRow++)
+            for (int repCol = 0; repCol < repCluster[1]; repCol++)
+              generateDPASOp(m * repCluster[0] + repRow,
+                             n * repCluster[1] + repCol, k);
 
     Value res =
         composeValuesToDotOperandLayoutStruct(fc, repM, repN, resElemTy);
@@ -226,19 +230,22 @@ private:
   Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals,
                                               int64_t dim0, int64_t dim1,
                                               Type elemTy) const {
-
+    auto repCluster = dpasLayout.getRepCluster();
     std::vector<Value> elems;
     for (int m = 0; m < dim0; ++m)
-      for (int k = 0; k < dim1; ++k) {
-        auto matVal = vals.at({m, k});
-        auto vecType = cast<mlir::VectorType>(matVal.getType());
-        auto valTy = vecType.getElementType();
-        for (int i = 0; i < vecType.getNumElements(); ++i) {
-          auto val = extract_element(valTy, matVal, i32_val(i));
+      for (int k = 0; k < dim1; ++k)
+        for (int repRow = 0; repRow < repCluster[0]; repRow++)
+          for (int repCol = 0; repCol < repCluster[1]; repCol++) {
+            auto matVal = vals.at(
+                {m * repCluster[0] + repRow, k * repCluster[1] + repCol});
+            auto vecType = cast<mlir::VectorType>(matVal.getType());
+            auto valTy = vecType.getElementType();
+            for (int i = 0; i < vecType.getNumElements(); ++i) {
+              auto val = extract_element(valTy, matVal, i32_val(i));
 
-          elems.push_back(val);
-        }
-      }
+              elems.push_back(val);
+            }
+          }
 
     assert(!elems.empty() &&
            "unexpected empty result in composing the DPAS result.");
@@ -248,24 +255,46 @@ private:
     return packLLElements(loc, typeConverter, elems, rewriter, structTy);
   }
 
-  ValueTable getValuesFromDotOperandLayoutStruct(Value val, int64_t dim0,
-                                                 int64_t dim1, Type elemTy,
-                                                 Type dotOperandType) const {
+  ValueTable getValuesFromDotOperandLayoutStruct(Value val, int64_t outer,
+                                                 int64_t inner, Type elemTy,
+                                                 Type dotOperandType,
+                                                 uint32_t opIdx) const {
     SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
-
+    auto repCluster = dpasLayout.getRepCluster();
+    unsigned repClusterOuter;
+    unsigned repClusterInner;
+    if (opIdx == 0) {
+      repClusterOuter = repCluster[0];
+      repClusterInner = 1;
+    } else if (opIdx == 1) {
+      repClusterInner = 1;
+      repClusterOuter = repCluster[1];
+    } else {
+      assert(opIdx == 2);
+      repClusterOuter = repCluster[0];
+      repClusterInner = repCluster[1];
+    }
     int offset{};
     ValueTable vals;
     size_t totalElems = elems.size();
-    size_t numElemsPerOperand = totalElems / (dim0 * dim1);
+    size_t numElemsPerOperand =
+        totalElems / (outer * inner) / (repClusterOuter * repClusterInner);
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
 
-    for (int i = 0; i < dim0; ++i) {
-      for (int j = 0; j < dim1; ++j) {
-        Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
-        for (int k = 0; k < numElemsPerOperand; ++k) {
-          matVal = insert_element(dotOpTy, matVal, elems[offset++], i32_val(k));
+    for (int i = 0; i < outer; ++i) {
+      for (int j = 0; j < inner; ++j) {
+        for (int repOuter = 0; repOuter < repClusterOuter; repOuter++) {
+          for (int repInner = 0; repInner < repClusterInner; repInner++) {
+            Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
+            for (int k = 0; k < numElemsPerOperand; ++k) {
+              matVal =
+                  insert_element(dotOpTy, matVal, elems[offset++], i32_val(k));
+            }
+            vals[{i * repClusterOuter + repOuter,
+                  j * repClusterInner + repInner}] =
+                bitcast(matVal, dotOperandType);
+          }
         }
-        vals[{i, j}] = bitcast(matVal, dotOperandType);
       }
     }
     return vals;
