@@ -24,10 +24,10 @@ namespace {
 constexpr unsigned offsetBitwidth = 32;
 constexpr unsigned shapeAndStridesBitwidth = 64;
 
-// Data structure used to decode pointer arithmetics. offsets, sizes, and
+// Data structure used to decode pointer arithmetics. Offsets, sizes, and
 // strides are in unit of elements in a linearly laid-out memory, which is the
-// same as pointer arithmetic operations in Triton language. scalar is a
-// shortcut used when the entire state describes a single scalar value. source
+// same as pointer arithmetic operations in Triton language. Scalar is a
+// shortcut used when the entire state describes a single scalar value. Source
 // is the base pointer. If order is present, PtrState describes block pointer;
 // otherwise it describes non-block pointers. When it describes block pointer,
 // shape field means the same field as tt.make_tensor_ptr; when it describes a
@@ -46,7 +46,7 @@ struct PtrState {
 
   int32_t getRank() const {
     assert(offsets.size() == sizes.size() && offsets.size() == strides.size() &&
-           shape.size() == offsets.size());
+           offsets.size() == strides.size());
     return offsets.size();
   }
 
@@ -56,7 +56,7 @@ struct PtrState {
   LogicalResult addState(const PtrState &lhsState, const PtrState &rhsState,
                          Operation *op, OpBuilder &builder) {
     assert(isEmpty() && lhsState.getRank() == rhsState.getRank());
-    auto loc = op->getLoc();
+    Location loc = op->getLoc();
 
     if (lhsState.source && rhsState.source) {
       op->emitRemark("TritonRaiseBlockPointer: do not support adding two "
@@ -67,20 +67,20 @@ struct PtrState {
     source = lhsState.source ? lhsState.source : rhsState.source;
 
     ArithBuilder abuilder(builder, loc);
-    for (uint64_t i = 0; i < lhsState.getRank(); i++) {
-      auto newOffset = abuilder.add(lhsState.offsets[i], rhsState.offsets[i]);
+    for (uint64_t i = 0; i < lhsState.getRank(); ++i) {
+      Value newOffset = abuilder.add(lhsState.offsets[i], rhsState.offsets[i]);
       offsets.push_back(newOffset);
 
-      auto newStride = abuilder.add(lhsState.strides[i], rhsState.strides[i]);
+      Value newStride = abuilder.add(lhsState.strides[i], rhsState.strides[i]);
       strides.push_back(newStride);
 
       sizes.push_back(lhsState.sizes[i]);
     }
 
-    PtrState const *lhs = &lhsState;
-    PtrState const *rhs = &rhsState;
+    const PtrState *lhs = &lhsState;
+    const PtrState *rhs = &rhsState;
 
-    for (uint64_t i = 0; i < lhs->getRank(); i++) {
+    for (uint64_t i = 0; i < lhs->getRank(); ++i) {
       shape.push_back(lhs->shape[i]);
     }
 
@@ -193,7 +193,9 @@ struct TritonRaiseBlockPointer
           loc, builder.getIndexType(), operand);
       state.scalar = castOp.getResult();
       return success();
-    } else if (isa<IndexType>(operand.getType())) {
+    }
+
+    if (isa<IndexType>(operand.getType())) {
       state.scalar = operand;
       return success();
     }
@@ -201,7 +203,7 @@ struct TritonRaiseBlockPointer
     if (isa<triton::PointerType>(operand.getType())) {
       // A scalar pointer can either be produced by AddPtrOp or a block
       // argument
-      if (auto op = operand.getDefiningOp()) {
+      if (Operation *op = operand.getDefiningOp()) {
         if (auto addPtrOp = dyn_cast<triton::AddPtrOp>(op))
           return visitOperandAddptr(addPtrOp, state, loc, builder);
         if (isa<triton::MakeTensorPtrOp>(op))
@@ -233,11 +235,11 @@ struct TritonRaiseBlockPointer
                                       OpBuilder &builder) {
     assert(state.isEmpty());
 
-    auto shape = cast<ShapedType>(rangeOp.getType()).getShape();
+    ArrayRef<int64_t> shape = cast<ShapedType>(rangeOp.getType()).getShape();
 
-    auto start = rangeOp.getStart();
-    auto end = rangeOp.getEnd();
-    auto stride = (end - start + shape[0] - 1) / shape[0];
+    uint32_t start = rangeOp.getStart();
+    uint32_t end = rangeOp.getEnd();
+    uint32_t stride = (end - start + shape[0] - 1) / shape[0];
     assert(stride == 1 &&
            "Expect make_range op to always return tensor of stride 1");
 
@@ -258,9 +260,9 @@ struct TritonRaiseBlockPointer
                                   Location loc, OpBuilder &builder) {
     assert(state.isEmpty());
 
-    auto src = splatOp.getSrc();
-    auto dst = splatOp.getResult();
-    auto dstShape = cast<ShapedType>(dst.getType()).getShape();
+    Value src = splatOp.getSrc();
+    Value dst = splatOp.getResult();
+    ArrayRef<int64_t> dstShape = cast<ShapedType>(dst.getType()).getShape();
 
     if (failed(visitOperand(src, state, loc, builder)))
       return failure();
@@ -270,7 +272,7 @@ struct TritonRaiseBlockPointer
       return failure();
     }
 
-    for (auto s : dstShape) {
+    for (int64_t s : dstShape) {
       Value c0i32 =
           builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
       Value c0i64 =
