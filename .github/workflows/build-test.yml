@@ -109,7 +109,7 @@ jobs:
     with:
       driver_version: ${{ matrix.drivers }}
       runner_label: ${{ inputs.runner_label }}
-      install_ipex: ${{ inputs.install_ipex }}
+      install_ipex: ${{ env.INSTALL_IPEX }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports }}
