@@ -99,7 +99,7 @@ jobs:
           ref: ${{ inputs.pytorch_ref }}
 
       - name: Setup PyTorch without IPEX
-        if: inputs.install_ipex
+        if: !inputs.install_ipex
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
@@ -111,7 +111,7 @@ jobs:
         uses: ./.github/actions/setup-ipex
 
       - name: Setup fake IPEX
-        if: inputs.install_ipex
+        if: !inputs.install_ipex
         uses: ./.github/actions/setup-fake-ipex
 
       - name: Build Triton
