@@ -91,7 +91,7 @@ struct PtrState {
                          Operation *op, OpBuilder &builder) {
     assert(isEmpty() && lhsState.getRank() == rhsState.getRank());
 
-    auto loc = op->getLoc();
+    Location loc = op->getLoc();
 
     assert(!lhsState.source && !rhsState.source &&
            "Multiplying base pointer does not make sense");
@@ -119,9 +119,9 @@ struct PtrState {
     ArithBuilder abuilder(builder, loc);
     for (const auto &[offset, stride, dim, size] :
          llvm::zip(lhs->offsets, lhs->strides, lhs->shape, lhs->sizes)) {
-      auto newOffset = abuilder.mul(offset, i32Scalar);
-      auto newStride = abuilder.mul(stride, i64Scalar);
-      auto newDim = abuilder.mul(dim, i64Scalar);
+      Value newOffset = abuilder.mul(offset, i32Scalar);
+      Value newStride = abuilder.mul(stride, i64Scalar);
+      Value newDim = abuilder.mul(dim, i64Scalar);
 
       offsets.push_back(newOffset);
       strides.push_back(newStride);
@@ -459,7 +459,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   assert(state.isEmpty());
 
   auto attr = cast<DenseElementsAttr>(op.getValue());
-  auto elementType = attr.getElementType();
+  Type elementType = attr.getElementType();
   assert(attr.isSplat() && isa<IntegerType>(elementType));
 
   state.scalar = builder.create<arith::ConstantIndexOp>(
