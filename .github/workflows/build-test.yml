@@ -44,7 +44,6 @@ permissions: read-all
 
 env:
   TRITON_DISABLE_LINE_INFO: 1
-  INSTALL_IPEX: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' || 'false' }}
   TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
@@ -60,7 +59,6 @@ jobs:
           cat <<EOF
           ${{ toJSON(github.event.inputs) }}
           EOF
-          echo INSTALL_IPEX=${{ env.INSTALL_IPEX }}
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -109,7 +107,7 @@ jobs:
     with:
       driver_version: ${{ matrix.drivers }}
       runner_label: ${{ inputs.runner_label }}
-      install_ipex: ${{ env.INSTALL_IPEX }}
+      install_ipex: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports }}
