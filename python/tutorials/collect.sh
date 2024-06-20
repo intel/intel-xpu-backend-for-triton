@@ -1,10 +1,15 @@
 #!/bin/bash
 set -e
-M=${1:-4096}
-K=${2:-4096}
-N=${3:-4096}
 
-echo -e "================M: $M==============K: $K==============N: $N==============="
+B=1; M=4096; K=4096; N=4096
+if [ $# -eq 3 ]; then
+  M=$1; K=$2; N=$3
+fi
+if [ $# -eq 4 ]; then
+  B=$1; M=$2; K=$3; N=$4
+fi
+
+echo -e "===============B: $B=========M: $M=========K: $K=========N: $N==============="
 
 # basekit
 source /opt/intel/oneapi/setvars.sh --force
@@ -18,9 +23,16 @@ then
 fi
 
 # update shape size in driver.py and 09-experimental-block-pointer.py
-sed -i "s/x_vals=.*/x_vals=[[$M, $K, $N]],/g" 09-experimental-block-pointer.py
-sed -i "s/float M = .*/float M = $M, K = $K, N = $N;/g" ../../third_party/intel/backend/driver.py
+GEMM_KERNEL=09-experimental-block-pointer.py
+sed -i "s/float B = .*/float B = $B, M = $M, K = $K, N = $N;/g" ../../third_party/intel/backend/driver.py
 
+if [ $B -eq 1 ]; then
+  sed -i "s/x_vals=.*/x_vals=[[$M, $K, $N]],/g" $GEMM_KERNEL
+else
+  GEMM_KERNEL=09-experimental-block-pointer-batched.py
+  sed -i "s/x_vals=.*/x_vals=[[$B, $M, $K, $N]],/g" $GEMM_KERNEL
+fi
+  
 # default
 BLOCK_SIZE_M=256
 BLOCK_SIZE_N=256
@@ -58,7 +70,7 @@ then
 fi
 
 echo "===Using: BLOCK_SIZE_M: $BLOCK_SIZE_M, BLOCK_SIZE_N: $BLOCK_SIZE_N, BLOCK_SIZE_K: $BLOCK_SIZE_K, GROUP_SIZE_M: $GROUP_SIZE_M, num_stages: $num_stages, num_warps: $num_warps====="
-sed -i "s/triton.Config({'BLOCK_SIZE_M'.*/triton.Config({'BLOCK_SIZE_M': $BLOCK_SIZE_M, 'BLOCK_SIZE_N': $BLOCK_SIZE_N, 'BLOCK_SIZE_K': $BLOCK_SIZE_K, 'GROUP_SIZE_M': $GROUP_SIZE_M}, num_stages=$num_stages, num_warps=$num_warps),/g" 09-experimental-block-pointer.py
+sed -i "s/triton.Config({'BLOCK_SIZE_M'.*/triton.Config({'BLOCK_SIZE_M': $BLOCK_SIZE_M, 'BLOCK_SIZE_N': $BLOCK_SIZE_N, 'BLOCK_SIZE_K': $BLOCK_SIZE_K, 'GROUP_SIZE_M': $GROUP_SIZE_M}, num_stages=$num_stages, num_warps=$num_warps),/g" $GEMM_KERNEL
 
 # clean Triton cache
 rm -rf ./tt_cache
@@ -75,7 +87,7 @@ IGC_ForcePrefetchToL1Cache=1 \
 IGC_VATemp=1 \
 UR_L0_IN_ORDER_BARRIER_BY_SIGNAL=0 \
 IGC_DisableLoopUnroll=1 \
-python 09-experimental-block-pointer.py 2>&1 | tee result.txt
+python $GEMM_KERNEL 2>&1 | tee result.txt
 
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     exit 1
@@ -90,5 +102,5 @@ Triton_gbs_min=`grep "Triton Peak HBM" result.txt | awk '{print $NF}'  | tail -n
 Triton_gbs_avg=$(grep "Triton Peak HBM" result.txt | awk '{print $NF}'  | tail -n10 | awk -v max="$Triton_gbs_max" -v min="$Triton_gbs_min" '{sum+=$1} END{print (sum-max-min)/(NR-2)}')
 
 echo -e "=================================== Result ========================================"
-echo "M, K, N, avg_tflops, avg_gbs, max_tflops, max_gbs, min_tflops, min_gbs" | tee result.csv
-echo $M, $K, $N, $Triton_tflops_avg, $Triton_gbs_avg, $Triton_tflops_max, $Triton_gbs_max, $Triton_tflops_min, $Triton_gbs_min | tee -a result.csv    
+echo "B, M, K, N, avg_tflops, avg_gbs, max_tflops, max_gbs, min_tflops, min_gbs" | tee result.csv
+echo $B, $M, $K, $N, $Triton_tflops_avg, $Triton_gbs_avg, $Triton_tflops_max, $Triton_gbs_max, $Triton_tflops_min, $Triton_gbs_min | tee -a result.csv    
