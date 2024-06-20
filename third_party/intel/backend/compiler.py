@@ -148,7 +148,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
-        is_lts = Version(metadata["target"].arch['driver_version']) == Version("1.3.27642")
+        is_lts = Version(metadata["target"].arch["driver_version"]) == Version("1.3.27642")
         if (not is_lts and os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"):
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt)
 
@@ -156,8 +156,7 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
-        is_lts_driver = Version(metadata["target"].arch['driver_version']) == Version("1.3.27642")
-        intel.set_device_properties(mod, is_lts_driver)
+        intel.set_device_properties(mod, is_lts)
 
         # optimize TTGIR
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
