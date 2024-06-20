@@ -136,10 +136,8 @@ static unsigned getNumOperandsPerDword(TritonGEN::PrecisionType pTy) {
   }
 }
 
-static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
-                                     ConversionPatternRewriter &rewriter) {
-  Type resType = op->getResultTypes()[0];
-  TypeRange opTypes = op->getOperandTypes();
+static Value createGenISADPAS(TritonGEN::MatrixDPASOp op,
+                              ConversionPatternRewriter &rewriter) {
   Location loc = op->getLoc();
 
   FloatType fp32Ty = rewriter.getF32Type();
@@ -172,28 +170,46 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   if (bOrigTy != bTy)
     b = rewriter.create<LLVM::BitcastOp>(loc, bTy, b);
 
+  Value c = op.getC();
+  VectorType cOrigTy = cast<VectorType>(c.getType());
+  assert(cOrigTy == op->getResultTypes()[0] &&
+         "Accumulator and result type mismatch");
+  // OCL builtins encode bfloat16 as int16
+  VectorType cTy = cOrigTy.getElementType().isBF16()
+                       ? VectorType::get(cOrigTy.getShape(), int16Ty)
+                       : cOrigTy;
+  if (cOrigTy != cTy)
+    c = rewriter.create<LLVM::BitcastOp>(loc, cTy, c);
+
   std::string fnName =
       "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
       stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
       std::to_string(8 /*systolic depth*/ * getNumOperandsPerDword(precisionA));
   if (precisionA == TritonGEN::PrecisionType::TF32)
     fnName += "_f32";
+  std::string aMangledTy = intel::getTypeMangling(aTy);
   std::string bMangledTy = intel::getTypeMangling(bTy);
-  std::string cMangledTy = intel::getTypeMangling(opTypes[0]);
+  std::string cMangledTy = intel::getTypeMangling(cTy);
   if (bMangledTy == cMangledTy)
     cMangledTy = "S0_";
-  fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-           intel::getTypeMangling(aTy) + bMangledTy + cMangledTy;
-  SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
-  SmallVector<Value> args{a, b, op.getC()};
+  else if (aMangledTy == cMangledTy)
+    cMangledTy = "S_";
+  fnName = "_Z" + std::to_string(fnName.size()) + fnName + aMangledTy +
+           bMangledTy + cMangledTy;
+  SmallVector<Type> argTypes{aTy, bTy, cTy};
+  SmallVector<Value> args{a, b, c};
 
   MLIRContext *ctx = rewriter.getContext();
   intel::AttrBuilder funcAttrBuilder(*ctx);
   funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
   intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
-  return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
-                                  attrs);
+  Value result =
+      createDeviceFunctionCall(rewriter, fnName, cTy, argTypes, args, attrs)
+          ->getResult(0);
+  if (cOrigTy != cTy)
+    result = rewriter.create<LLVM::BitcastOp>(loc, cOrigTy, result);
+  return result;
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
@@ -1193,8 +1209,7 @@ struct TritonMatrixDPASLowering
   LogicalResult
   matchAndRewrite(TritonGEN::MatrixDPASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    LLVM::CallOp callOp = createGenISADPAS(op, rewriter);
-    rewriter.replaceOp(op, callOp);
+    rewriter.replaceOp(op, createGenISADPAS(op, rewriter));
     return success();
   }
 };

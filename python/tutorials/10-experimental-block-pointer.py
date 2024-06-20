@@ -217,12 +217,13 @@ torch.xpu.set_fp32_math_mode(torch.xpu.utils.FP32MathMode.TF32)
 for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float16),
                                       (torch.float16, torch.float32, torch.float16),
                                       (torch.float16, torch.float32, torch.float32),
+                                      (torch.bfloat16, torch.bfloat16, torch.bfloat16),
                                       (torch.bfloat16, torch.float32, torch.float32),
                                       (torch.bfloat16, torch.float32, torch.bfloat16),
                                       (torch.float32, torch.float32, torch.float32),
                                       (torch.int8, torch.int32, torch.int32)]:
     if dtype.is_floating_point:
-        if accum_dtype == torch.float16:
+        if accum_dtype in [torch.float16, torch.bfloat16]:
             # 16-bit accumulation across 512 multiplications is error-prone,
             # hence we multiply a matrix of random numbers with
             # [[ 1  1  0 ... ],
@@ -251,8 +252,8 @@ for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float
 
     # Note: the torch.matmul and Triton implementations uses different
     # algorithms so we need to adjust tolerance.
-    rtol = 1e-2 if dtype == torch.bfloat16 or accum_dtype == torch.float16 else 1e-3
-    atol = 1e-3 if accum_dtype == torch.float16 else 1e-4
+    rtol = 1e-2 if dtype == torch.bfloat16 or accum_dtype in [torch.float16, torch.bfloat16] else 1e-3
+    atol = 1e-2 if accum_dtype == torch.bfloat16 else 1e-3 if accum_dtype == torch.float16 else 1e-4
     if torch.allclose(triton_output, torch_output, atol=atol, rtol=rtol):
         print("✅ Triton and Torch match")
     else:
