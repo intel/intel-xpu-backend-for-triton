@@ -167,6 +167,13 @@ jobs:
           # pip cache per commit id just to minimize network traffic
           key: pip-$PYTHON_VERSION-$GITHUB_SHA
 
+      - name: Load artifacts cache
+        id: artifacts-cache
+        uses: ./.github/actions/load
+        with:
+          path: artifacts
+          key: artifacts
+
       - name: Install Python
         uses: actions/setup-python@v5
         with:
@@ -226,6 +233,10 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
           sudo apt update
           sudo apt-get install -y intel-basekit=2024.1.0-589
+
+      - name: Install a custom libigc from artifacts
+        run: |
+          sudo dpkg -i artifacts/libigc1_1.0.24994.16243-igc+releaseinternal1_amd64.deb
 
       - name: Create reports dir
         run: |
