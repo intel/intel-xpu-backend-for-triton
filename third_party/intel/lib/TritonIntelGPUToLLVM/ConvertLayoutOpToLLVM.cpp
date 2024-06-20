@@ -236,39 +236,17 @@ private:
       return multiDimOffset;
     }
     if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
-      SmallVector<Value> multiDimBase = ::intel::emitBaseIndexForLayout(
+      assert(rank == 2);
+      auto multiDimBase = ::intel::emitBaseIndexForLayout(
           loc, rewriter, targetInfo, layout, type, false);
-
-      // clang-format off
-      // For C operand the layout illustration.
-      //                      sub-group size 16
-      //               execution size = 16
-      // <------------------------------------------------------------->
-      // t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15       ^
-      // .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .         | repeat count = 8
-      // .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .         |
-      // t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15       v
-      // Then sizePerThreads = [8, 1], and coordinate offset for each element per lane should be:
-      // [0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0]
-      // clang-format on
-      auto sizePerThreads = getSizePerThread(dpasLayout);
-      int rowsPerWarp =
-          dpasLayout.getSubGroupSize() / dpasLayout.getExecutionSize();
-      SmallVector<Value> elemOffset = {
-          i32_val((elemId / sizePerThreads[1]) * rowsPerWarp),
-          i32_val(elemId % sizePerThreads[1])};
+      SmallVector<SmallVector<unsigned>> offsets;
+      ::emitOffsetForDpasLayoutPerCTA(
+          dpasLayout, offsets, multiDimCTAInRepId[0] * shapePerCTATile[0],
+          multiDimCTAInRepId[1] * shapePerCTATile[1]);
 
       SmallVector<Value> multiDimOffset = {
-          add(
-              // per-lane base + per-elem offset.
-              add(multiDimBase[0], elemOffset[0]),
-              // add CTA Cluster offset in final.
-              i32_val(multiDimCTAInRepId[0] * shapePerCTATile[0])),
-          add(
-              // per-lane base + per-elem offset.
-              add(multiDimBase[1], elemOffset[1]),
-              // add CTA Cluster offset in final.
-              i32_val(multiDimCTAInRepId[1] * shapePerCTATile[1]))};
+          add(multiDimBase[0], i32_val(offsets[elemId][0])),
+          add(multiDimBase[1], i32_val(offsets[elemId][1]))};
 
       return multiDimOffset;
     }
@@ -323,6 +301,20 @@ private:
       elemTy = IntegerType::get(elemTy.getContext(), 64);
 
     auto llvmElemTy = getTypeConverter()->convertType(elemTy);
+
+    //    llvm::outs() << "johnlu accumNumCTAsEachRep:" << accumNumCTAsEachRep
+    //                 << "\n";
+    //    llvm::outs().flush();
+    //    llvm::outs() << "johnlu layout:" << layout << "\n";
+    //    llvm::outs().flush();
+    //    llvm::outs() << "johnlu accumSizePerThread:" << accumSizePerThread <<
+    //    "\n"; llvm::outs().flush(); llvm::outs() << "johnlu the
+    //    numCTAsEachRep:"; llvm::outs().flush(); for (auto size :
+    //    numCTAsEachRep) {
+    //      llvm::outs() << size << ", ";
+    //    }
+    //    llvm::outs() << "\n";
+    //    llvm::outs().flush();
 
     for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
       auto multiDimCTAInRepId =
@@ -407,6 +399,8 @@ private:
     auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
 
+    //    llvm::outs() << "johnlu the convert layout op: " << op << "\n";
+    //    llvm::outs().flush();
     for (unsigned d = 0; d < rank; ++d) {
       unsigned inPerCTA =
           std::min<unsigned>(shapePerCTA[d], srcShapePerCTATile[d]);
