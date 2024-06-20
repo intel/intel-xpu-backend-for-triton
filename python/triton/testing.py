@@ -6,8 +6,8 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 
-
 import time
+
 
 class Event():
 
@@ -19,6 +19,7 @@ class Event():
 
     def elapsed_time(self, end):
         return end.timestamp - self.timestamp
+
 
 USE_WALL_TIME = True
 
