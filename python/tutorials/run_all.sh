@@ -14,12 +14,12 @@ run_benchmark() {
     while [ "$success" = false ] && [ "$attempt" -lt "$max_attempts" ]; do
         ((attempt++))
         echo "Attempt $attempt: M:$1 K:$2 N:$3"
-        
+
         bash collect.sh "$1" "$2" "$3" | tail -n 1 > temp.txt
-        
+
         local exit_status=${PIPESTATUS[0]}
         echo "Exit status: $exit_status"
-        
+
         if [ "$exit_status" -eq 0 ]; then
             cat temp.txt | tee -a "$RES_FILE"
             success=true
