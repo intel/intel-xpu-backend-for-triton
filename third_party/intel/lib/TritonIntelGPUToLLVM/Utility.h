@@ -180,62 +180,77 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
       dpasLayout.getDPASRepetitions(shapePerCTA, opIdx);
   SmallVector<unsigned> warpShape =
       (opIdx == 0) ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
+  SmallVector<unsigned> instShape = (opIdx == 0)
+                                        ? dpasLayout.getDPASInstShapeA()
+                                        : dpasLayout.getDPASInstShapeB();
 
   unsigned warpSize = triton::gpu::getWarpSize(dpasLayout);
-  unsigned numElemPerInstPerThread = product<unsigned>(warpShape) / warpSize;
+  unsigned numElemPerInstPerThread = product<unsigned>(instShape) / warpSize;
 
-  unsigned systolicDepth = dpasLayout.getSystolicDepth();
-  unsigned repeatCount = dpasLayout.getRepeatCount();
   unsigned executionSize = dpasLayout.getExecutionSize();
   unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
 
-  unsigned rowsPerWarp = 0u, numElemPerInstPerRowPerThread = 0u;
+  unsigned numRowsPerValue = 0u, numColsPerValue = 0u, packedOpsPerLane = 0u;
   switch (opIdx) {
   case 0: {
-    assert((opsPerChannel == 1 || opsPerChannel == 2 || opsPerChannel == 4) &&
+    assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
            "invalid opsPerChannel number.");
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
     // Unlike the operand B, to pack the value to i16 for scalar bit width <=16.
-    unsigned packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
+    packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
     unsigned packedColNum = shapeA[1] / packedOpsPerLane;
-    if (warpSize < packedColNum)
+    if (warpSize < packedColNum) {
       llvm::report_fatal_error(
           "DpasEncodingAttr sub-group size could not "
           "be smaller than the threads required per row for A operand.");
-
-    rowsPerWarp = warpSize / packedColNum;
-    numElemPerInstPerRowPerThread = packedOpsPerLane;
+    }
+    numRowsPerValue = warpSize / packedColNum;
+    numColsPerValue = packedOpsPerLane;
   } break;
   case 1: {
-    if (warpSize < executionSize)
+    if (warpSize < executionSize) {
       llvm::report_fatal_error(
           "DpasEncodingAttr sub-group size could not "
           "be smaller than the execution size for B operand.");
-
-    rowsPerWarp = warpSize / executionSize;
-    rowsPerWarp = rowsPerWarp * opsPerChannel;
-    numElemPerInstPerRowPerThread = 1;
+    }
+    numRowsPerValue = warpSize / executionSize;
+    numRowsPerValue = numRowsPerValue * opsPerChannel;
+    numColsPerValue = 1;
+    packedOpsPerLane = opsPerChannel;
   } break;
   default:
     llvm_unreachable("unexpected operand index");
   }
-  assert(numElemPerInstPerRowPerThread != 0 &&
+  assert(packedOpsPerLane != 0 &&
          "numElemPerInstPerRowPerThread should not be zero");
 
-  SmallVector<unsigned> shapePerCTATile =
-      triton::gpu::getShapePerCTATile(dotLayout);
+  auto shapePerCTATile = triton::gpu::getShapePerCTATile(dotLayout);
   int64_t numRepOuter = numReps[opIdx];
   int64_t numRepK = numReps[(opIdx == 0) ? 1 : 0];
-  for (int dimOuter = 0; dimOuter < numRepOuter; ++dimOuter)
-    for (int k = 0; k < numRepK; ++k)
-      for (unsigned elemId = 0; elemId < numElemPerInstPerThread; ++elemId) {
-        uint32_t repRowIndex = shapePerCTATile[0] * (opIdx == 0 ? dimOuter : k);
-        uint32_t repColIndex = shapePerCTATile[1] * (opIdx == 0 ? k : dimOuter);
-        uint32_t elemRowIndex =
-            (elemId / numElemPerInstPerRowPerThread) * rowsPerWarp;
-        uint32_t elemColIndex = elemId % numElemPerInstPerRowPerThread;
-        offsets.push_back(
-            {repRowIndex + elemRowIndex, repColIndex + elemColIndex});
+
+  auto repCluster = dpasLayout.getRepCluster();
+  unsigned repClusterSize = repCluster[opIdx];
+
+  for (unsigned dimOuter = 0; dimOuter < numRepOuter; ++dimOuter)
+    for (unsigned k = 0; k < numRepK; ++k)
+      for (unsigned rep = 0; rep < repClusterSize; ++rep) {
+        for (unsigned elemId = 0; elemId < numElemPerInstPerThread; ++elemId) {
+          uint32_t opsRowIndex = opIdx == 0 ? 0 : elemId % packedOpsPerLane;
+          uint32_t opsColIndex = opIdx == 0 ? elemId % packedOpsPerLane : 0;
+          uint32_t packedElemId = elemId / packedOpsPerLane;
+          uint32_t repRowIndex =
+              shapePerCTATile[0] * (opIdx == 0 ? dimOuter : k);
+          uint32_t repColIndex =
+              shapePerCTATile[1] * (opIdx == 0 ? k : dimOuter);
+          uint32_t repClusterRowIndex = opIdx == 0 ? rep * instShape[0] : 0;
+          uint32_t repClusterColIndex = opIdx == 0 ? 0 : rep * instShape[1];
+          uint32_t elemRowIndex =
+              (packedElemId / numColsPerValue) * numRowsPerValue;
+          uint32_t elemColIndex = packedElemId % numColsPerValue;
+          offsets.push_back(
+              {repRowIndex + repClusterRowIndex + elemRowIndex + opsRowIndex,
+               repColIndex + repClusterColIndex + elemColIndex + opsColIndex});
+        }
       }
 
   return offsets;
@@ -288,19 +303,20 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
   SmallVector<Value> multiDimWarpId =
       mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
-  Value rowWarpId =
-      urem(multiDimWarpId[0],
-           i32_val(mlir::ceil<unsigned>(shapePerCTA[0], warpShape[0])));
-  Value colWarpId =
-      urem(multiDimWarpId[1],
-           i32_val(mlir::ceil<unsigned>(shapePerCTA[1], warpShape[1])));
-  Value rowWarpOffset = mul(rowWarpId, i32_val(warpShape[0]));
-  Value colWarpOffset = mul(colWarpId, i32_val(warpShape[1]));
+  Value warpIndex;
+  if (opIdx == 0) {
+    warpIndex =
+        urem(multiDimWarpId[0],
+             i32_val(mlir::ceil<unsigned>(shapePerCTA[0], warpShape[0])));
+  } else {
+    warpIndex =
+        urem(multiDimWarpId[1],
+             i32_val(mlir::ceil<unsigned>(shapePerCTA[1], warpShape[1])));
+  }
+  Value warpOffset = mul(warpIndex, i32_val(warpShape[opIdx]));
 
   // Compute the 2-dim coordinates of the first element in the warp operated
   // own by this thread.
-  unsigned systolicDepth = dpasLayout.getSystolicDepth();
-  unsigned repeatCount = dpasLayout.getRepeatCount();
   unsigned executionSize = dpasLayout.getExecutionSize();
   unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
 
@@ -335,8 +351,12 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
   } break;
   }
 
-  SmallVector<Value> multiDimBase = {add(laneRowIndex, rowWarpOffset),
-                                     add(laneColIndex, colWarpOffset)};
+  SmallVector<Value> multiDimBase;
+  if (opIdx == 0) {
+    multiDimBase = {add(laneRowIndex, warpOffset), laneColIndex};
+  } else {
+    multiDimBase = {laneRowIndex, add(laneColIndex, warpOffset)};
+  }
   return multiDimBase;
 }
 
