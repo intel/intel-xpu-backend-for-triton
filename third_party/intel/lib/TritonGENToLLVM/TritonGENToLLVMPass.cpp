@@ -159,8 +159,8 @@ static unsigned getNumOperandsPerDword(TritonGEN::PrecisionType pTy) {
   llvm_unreachable("unsupported TritonGEN::PrecisionType");
 }
 
-static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
-                                     ConversionPatternRewriter &rewriter) {
+static Value createGenISADPAS(TritonGEN::MatrixDPASOp op,
+                              ConversionPatternRewriter &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *context = rewriter.getContext();
   Type resType = op->getResultTypes()[0];
@@ -195,23 +195,47 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
 
   // FIXME: Use the OpenCL API also for TF32.
   if (precisionA != TritonGEN::PrecisionType::TF32) {
+    Value c = op.getC();
+    VectorType cOrigTy = cast<VectorType>(c.getType());
+    assert(cOrigTy == op->getResultTypes()[0] &&
+           "Accumulator and result type mismatch");
+    // OCL builtins encode bfloat16 as int16
+    VectorType cTy = cOrigTy.getElementType().isBF16()
+                         ? VectorType::get(cOrigTy.getShape(), int16Ty)
+                         : cOrigTy;
+    if (cOrigTy != cTy)
+      c = rewriter.create<LLVM::BitcastOp>(loc, cTy, c);
+
     std::string fnName =
         "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
         stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
         std::to_string(8 /*systolic depth*/ *
                        getNumOperandsPerDword(precisionA));
+    if (precisionA == TritonGEN::PrecisionType::TF32)
+      fnName += "_f32";
+    std::string aMangledTy = getTypeMangling(aTy);
     std::string bMangledTy = getTypeMangling(bTy);
-    std::string cMangledTy = getTypeMangling(opTypes[0]);
+    std::string cMangledTy = getTypeMangling(cTy);
     if (bMangledTy == cMangledTy)
       cMangledTy = "S0_";
-    fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             getTypeMangling(aTy) + bMangledTy + cMangledTy;
-    SmallVector<Type> argTypes{aTy, bTy, opTypes[0]};
-    SmallVector<Value> args{a, b, op.getC()};
-    intel::AttributeList attrs;
+    else if (aMangledTy == cMangledTy)
+      cMangledTy = "S_";
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName + aMangledTy +
+             bMangledTy + cMangledTy;
+    SmallVector<Type> argTypes{aTy, bTy, cTy};
+    SmallVector<Value> args{a, b, c};
 
-    return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
-                                    attrs);
+    MLIRContext *ctx = rewriter.getContext();
+    intel::AttrBuilder funcAttrBuilder(*ctx);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
+    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+
+    Value result =
+        createDeviceFunctionCall(rewriter, fnName, cTy, argTypes, args, attrs)
+            ->getResult(0);
+    if (cOrigTy != cTy)
+      result = rewriter.create<LLVM::BitcastOp>(loc, cOrigTy, result);
+    return result;
   }
 
   llvm::LLVMContext llvmContext;
@@ -239,7 +263,7 @@ static LLVM::CallOp createGenISADPAS(TritonGEN::MatrixDPASOp op,
   auto RC = rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getRc());
   auto False = rewriter.create<LLVM::ConstantOp>(loc, int1Ty, false);
   SmallVector<Value> args{op.getC(), a, b, precA, precB, sysDepth, RC, False};
-  return rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  return rewriter.create<LLVM::CallOp>(loc, funcOp, args).getResult();
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
@@ -328,8 +352,8 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
     paramAttrs[5] = param5AttrBuilder.getAttributes();
     intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
 
-    createDeviceFunctionCall(rewriter, fnName, void_ty(context), argTypes, args,
-                             attrs);
+    LLVM::CallOp call = createDeviceFunctionCall(
+        rewriter, fnName, void_ty(context), argTypes, args, attrs);
     return rewriter.create<LLVM::LoadOp>(loc, resType, dest);
   }
 
@@ -612,10 +636,60 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
 static LLVM::CallOp
 createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                          ConversionPatternRewriter &rewriter) {
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *context = rewriter.getContext();
   Location loc = op->getLoc();
 
+  if (false) {
+    VectorType storeValType = op.getStoredVal().getType();
+    auto storeValPtr = rewriter.create<LLVM::AllocaOp>(
+        loc, ptr_ty(context), storeValType.getElementType(),
+        i32_val(storeValType.getNumElements()));
+    rewriter.create<LLVM::StoreOp>(loc, op.getStoredVal(), storeValPtr);
+
+    std::string fnName = "intel_sub_group_2d_block_write_";
+    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
+              std::to_string(op.getTileHeight()) + "r" +
+              std::to_string(op.getTileWidth()) + "x" +
+              std::to_string(op.getVBlocks()) + "c";
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iP";
+    unsigned storeValBitWidth =
+        storeValType.getElementType().getIntOrFloatBitWidth();
+    fnName += (storeValBitWidth == 32)   ? "j"
+              : (storeValBitWidth == 16) ? "t"
+                                         : "h";
+
+    VectorType vecType = vec_ty(i32_ty, 2);
+    Value byteCoord = insert_element(
+        vecType, insert_element(vecType, undef(vecType), op.getX(), i32_val(0)),
+        op.getY(), i32_val(1));
+    SmallVector<Type> argTypes{
+        ptr_ty(context, 1), i32_ty, i32_ty, i32_ty, vecType, ptr_ty(context)};
+    Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
+    Value baseWidth = mul(trunc(i32_ty, op.getBaseWidth()), elemSizeInBytes);
+    Value baseHeight = trunc(i32_ty, op.getBaseHeight());
+    Value basePitch = mul(trunc(i32_ty, op.getBasePitch()), elemSizeInBytes);
+    SmallVector<Value> args{op.getPtr(), baseWidth, baseHeight,
+                            basePitch,   byteCoord, storeValPtr};
+
+    intel::AttrBuilder funcAttrBuilder(*context);
+    intel::AttrBuilder param0AttrBuilder(*context);
+    intel::AttrBuilder param5AttrBuilder(*context);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
+    param0AttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    param0AttrBuilder.addAttribute(llvm::Attribute::WriteOnly);
+    param5AttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    param5AttrBuilder.addAttribute(llvm::Attribute::ReadOnly);
+    std::vector<NamedAttrList> paramAttrs(argTypes.size());
+    paramAttrs[0] = param0AttrBuilder.getAttributes();
+    paramAttrs[5] = param5AttrBuilder.getAttributes();
+    intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
+
+    LLVM::CallOp call = createDeviceFunctionCall(
+        rewriter, fnName, void_ty(context), argTypes, args, attrs);
+    return call;
+  }
+
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   Value ptr = op.getPtr();
   Value elemSizeInBytes = i32_val(op.getElemSizeInBits() / 8);
 
@@ -689,7 +763,6 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
 static LLVM::CallOp
 createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                             ConversionPatternRewriter &rewriter) {
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *context = rewriter.getContext();
   Location loc = op->getLoc();
 
@@ -728,6 +801,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                              int1Ty,
                              int32Ty};
 
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
       moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(context));
   funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
@@ -1153,8 +1227,7 @@ struct TritonMatrixDPASLowering
   LogicalResult
   matchAndRewrite(TritonGEN::MatrixDPASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    LLVM::CallOp callOp = createGenISADPAS(op, rewriter);
-    rewriter.replaceOp(op, callOp);
+    rewriter.replaceOp(op, createGenISADPAS(op, rewriter));
     return success();
   }
 };
