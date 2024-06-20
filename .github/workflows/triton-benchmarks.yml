@@ -263,5 +263,5 @@ jobs:
       - name: Upload benchmark reports
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-reports
+          name: benchmark-attention-reports
           path: reports
