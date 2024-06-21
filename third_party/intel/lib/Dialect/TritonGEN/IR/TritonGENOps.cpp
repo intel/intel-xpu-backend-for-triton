@@ -50,52 +50,6 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
   return success();
 }
 
-template <typename Op>
-static LogicalResult verifyMatrixTransposeTransform(Op op) {
-  static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
-                                TritonGEN::Matrix2DBlockStoreOp>::value,
-                "Unexpected template parameter");
-
-  if (op.getTranspose() && op.getVnniTransform())
-    return op->emitOpError(
-        "transpose and vnni_transform are mutually exclusive");
-
-  if (op.getTranspose() && op.getElemSizeInBits() != 32)
-    return op->emitOpError("transpose is only supported for 32 bit elements");
-
-  if (op.getVnniTransform() && op.getElemSizeInBits() == 32)
-    return op->emitOpError("vnni_transform is only supported for 8 and 16 bit "
-                           "elements");
-
-  uint32_t tileWidth = op.getTileWidth();
-  if (op.getVnniTransform()) {
-    if (tileWidth != 16)
-      return op->emitOpError(
-          "tile_width when vnni_transform is true should be equal "
-          "to subgroup size (16 elements)");
-    return success();
-  }
-
-  if (op.getElemSizeInBits() == 16 && tileWidth != 16)
-    return op->emitOpError("tile_width for 16 bit elements should be equal "
-                           "to 16");
-
-  return success();
-}
-
-template <typename Op> static LogicalResult verifyMatrixReadInput(Op op) {
-  static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
-                                TritonGEN::Matrix2DBlockPrefetchOp>::value,
-                "Unexpected template parameter");
-
-  uint32_t tileWidth = op.getTileWidth();
-  if (op.getElemSizeInBits() == 32 && tileWidth != 8 && tileWidth != 16)
-    return op->emitOpError(
-        "tile_width for 32 bit elements should be equal to either be 8 or 16");
-
-  return success();
-}
-
 //===----------------------------------------------------------------------===//
 // gen.sub_group_reduce
 //===----------------------------------------------------------------------===//
@@ -216,9 +170,6 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (verifyMatrixInput(*this).failed())
     return failure();
 
-  if (verifyMatrixTransposeTransform(*this).failed())
-    return failure();
-
   VectorType resTy = getRes().getType();
   unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
   if (getElemSizeInBits() == 32 || getVnniTransform()) {
@@ -237,12 +188,47 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
                          << " bits does not match the expected size of "
                          << expectedSize << " bits";
 
-  if (getElemSizeInBits() == 8 && !getVnniTransform())
-    if (getTileWidth() != 32)
+  if (getTranspose() && getVnniTransform())
+    return emitOpError("transpose and vnni_transform are mutually exclusive");
+
+  if (getTranspose() && getElemSizeInBits() != 32)
+    return emitOpError("transpose is only supported for 32 bit elements");
+
+  if (getVnniTransform() && getElemSizeInBits() == 32)
+    return emitOpError("vnni_transform is only supported for 8 and 16 bit "
+                       "elements");
+
+  uint32_t tileWidth = getTileWidth();
+  if (getVnniTransform()) {
+    if (tileWidth != 16)
+      return emitOpError(
+          "tile_width when vnni_transform is true should be equal "
+          "to subgroup size (16 elements)");
+    return success();
+  }
+
+  assert(!getVnniTransform() && "Expecting vnni_transform should be false");
+  switch (getElemSizeInBits()) {
+  case 8:
+    if (tileWidth != 32)
       return emitOpError("tile_width for 8 bit elements when vnni_transform is "
                          "false should be equal to 32");
+    break;
+  case 16:
+    if (tileWidth != 16)
+      return emitOpError("tile_width for 16 bit elements when vnni_transform "
+                         "is false should be equal to 16");
+    break;
+  case 32:
+    if (tileWidth != 8 && tileWidth != 16)
+      return emitOpError("tile_width for 32 bit elements when vnni_transform "
+                         "is false should be equal to 8 or 16");
+    break;
+  default:
+    llvm_unreachable("unexpected element size");
+  }
 
-  return verifyMatrixReadInput(*this);
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -253,17 +239,26 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
   if (verifyMatrixInput(*this).failed())
     return failure();
 
-  if (verifyMatrixTransposeTransform(*this).failed())
-    return failure();
-
-  if (getElemSizeInBits() == 8 && !getVnniTransform())
-    if (getTileWidth() != 32)
-      return emitOpError("tile_width for 8 bit elements when vnni_transform is "
-                         "false should be equal to 32");
-
-  if (getElemSizeInBits() == 32 && getTileWidth() != 8)
-    return emitOpError("tile_width for 32 bit elements should be equal "
-                       "to 8");
+  uint32_t tileWidth = getTileWidth();
+  switch (getElemSizeInBits()) {
+  case 8:
+    if (tileWidth != 16 && tileWidth != 32)
+      return emitOpError("tile_width for 8 bit elements should be equal to "
+                         "16 or 32");
+    break;
+  case 16:
+    if (tileWidth != 16)
+      return emitOpError("tile_width for 16 bit elements should be equal "
+                         "to 16");
+    break;
+  case 32:
+    if (tileWidth != 16)
+      return emitOpError("tile_width for 32 bit elements should be equal "
+                         "to 16");
+    break;
+  default:
+    llvm_unreachable("unexpected element size");
+  }
 
   return success();
 }
@@ -278,17 +273,24 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
 
   uint32_t tileWidth = getTileWidth();
   switch (getElemSizeInBits()) {
+  case 8:
+    if (tileWidth != 16 && tileWidth != 32)
+      return emitOpError("tile_width for 8 bit elements should be equal to "
+                         "16 or 32");
+    break;
   case 16:
     if (tileWidth != 16)
       return emitOpError("tile_width for 16 bit elements should be equal "
                          "to 16");
     break;
-  case 8:
-    if (tileWidth != 16 && tileWidth != 32)
-      return emitOpError("tile_width for 8 bit elements should be equal to "
-                         "either be 16 or 32");
+  case 32:
+    if (tileWidth != 8 && tileWidth != 16)
+      return emitOpError(
+          "tile_width for 32 bit elements should be equal to 8 or 16");
     break;
+  default:
+    llvm_unreachable("unexpected element size");
   }
 
-  return verifyMatrixReadInput(*this);
+  return success();
 }

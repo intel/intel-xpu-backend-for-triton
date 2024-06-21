@@ -408,8 +408,6 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
     I32Attr:$tile_width,
     I32Attr:$tile_height,
     I32Attr:$v_blocks,
-    I1Attr:$transpose,
-    I1Attr:$vnni_transform,
     FixedVectorOf<[TritonGEN_MatrixElemType]>:$stored_val,
     DefaultValuedAttr<TritonGEN_StoreCacheControl, "::mlir::triton::TritonGEN::StoreCacheControl::DEFAULT">:$cache_control
   )> {
@@ -427,22 +425,17 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
         - 16 for f16, int16, bf16
         - 8 for int8, int4, int2
       $v_blocks - number of tiles to store
-      $transpose - transpose the tile in registers (useful for 32 bit element types)
-      $vnni_transform - transpose and pack the tile in registers (useful for < 32 bit element types)
       $cache_control - an enumerator that sets the L1 and L3 cache behaviour
       $stored_val - the tile to store
 
     Notes:
-      - the $transpose and $vnni_transform parameters are mutual exclusive
-      - transposing the tile loaded is typically used for the B matrix operand of a `gen.tile` operations
-        (D = C + A * B), where A has row-major layout in registers and B should have column-major layout.
       - coordinate is provided in elements, while width and pitch are provided in bytes.
   }];
 
   let assemblyFormat = [{
     operands ` ` `{` `elem_size_in_bits` `=` $elem_size_in_bits `,` `tile_width` `=` $tile_width `,`
-      `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `transpose` `=` $transpose `,`
-      `vnni_transform` `=` $vnni_transform `,` `cache_control` `=` $cache_control `}` attr-dict `:` `(` type(operands) `)`
+      `tile_height` `=` $tile_height `,` `v_blocks` `=` $v_blocks `,` `cache_control` `=` $cache_control `}`
+      attr-dict `:` `(` type(operands) `)`
   }];
 
   let hasVerifier = 1;
@@ -479,9 +472,6 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
     $cache_control - an enumerator that sets the L1 and L3 cache behaviour
 
     Notes:
-      - the $transpose and $vnni_transform parameters are mutual exclusive
-      - transposing the tile loaded is typically used for the B matrix operand of a `gen.tile` operations
-        (D = C + A * B), where A has row-major layout in registers and B should have column-major layout.
       - coordinate is provided in elements, while width and pitch are provided in bytes.
   }];
 
