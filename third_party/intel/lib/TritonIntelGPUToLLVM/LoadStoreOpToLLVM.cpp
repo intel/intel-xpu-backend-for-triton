@@ -306,7 +306,7 @@ struct PrefetchOpConversion
             i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
         // Round the offset into to the tensor shape
         offsetY = urem(offsetY, i32_val(tensorShape[0]));
-        rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
+        auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
             loc,
             /*ptr*/ base,
             /*base_width*/ baseWidth,
@@ -319,6 +319,11 @@ struct PrefetchOpConversion
             /*tile_height*/ tileHeightInElem,
             /*v_blocks*/ 1,
             /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+        if (failed(newOp.verify())) {
+          // Explicitly invoke verifier because `triton_gen` ops immediately
+          // lowered further to a builtin call.
+          return failure();
+        }
       }
     }
 

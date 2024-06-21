@@ -1,6 +1,6 @@
 // RUN: triton-opt %s --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
 
-// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i16(i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32, vector<8xi16>)
+// CHECK: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.readonly}) attributes {passthrough = ["nounwind"]}
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>
 #dot1 = #triton_gpu.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
@@ -39,16 +39,16 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: llvm.mul %[[VAL_1]], %[[CST_16]] : i32
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i16{{.*}}
+    // CHECK: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt{{.*}}
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i16{{.*}}
+    // CHECK: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt{{.*}}
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i16{{.*}}
+    // CHECK: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt{{.*}}
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v8i16{{.*}}
+    // CHECK: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt{{.*}}
     tt.store %13, %12 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x64xf16, #dpas>>
     tt.return
   }
