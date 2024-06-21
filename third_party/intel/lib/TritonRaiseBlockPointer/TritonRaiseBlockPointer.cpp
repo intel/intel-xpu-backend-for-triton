@@ -278,7 +278,7 @@ struct TritonRaiseBlockPointer
 
     return TypeSwitch<Operation *, LogicalResult>(definingOp)
         .Case<arith::AddIOp, arith::ConstantOp, arith::MulIOp,
-              triton::MakeRangeOp, triton::SplatOp>(
+              triton::BroadcastOp, triton::MakeRangeOp, triton::SplatOp>(
             [this, &state, loc, &builder](auto op) {
               return visitAddPointerOperand(op, state, loc, builder);
             })
@@ -478,6 +478,40 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     state.shape.push_back(
         builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
   }
+
+  return success();
+}
+
+template <>
+LogicalResult
+TritonRaiseBlockPointer::visitAddPointerOperand(triton::BroadcastOp broadcastOp,
+                                                PtrState &state, Location loc,
+                                                OpBuilder &builder) {
+  assert(state.isEmpty());
+
+  Value src = broadcastOp.getSrc();
+  Value dst = broadcastOp.getResult();
+
+  if (!isa<ShapedType>(src.getType())) {
+    broadcastOp->emitRemark(
+        "TritonRaiseBlockPointer: Unsupported broadcast source type");
+    return failure();
+  }
+
+  ArrayRef<int64_t> srcShape = cast<ShapedType>(src.getType()).getShape();
+  ArrayRef<int64_t> dstShape = cast<ShapedType>(dst.getType()).getShape();
+
+  // TODO: Implement srcShape.size() < dstShape.size() case
+  assert(srcShape.size() == dstShape.size() &&
+         "rank of source cannot be different to rank of destination");
+
+  if (failed(visitOperand(src, state, loc, builder))) {
+    return failure();
+  }
+
+  llvm::copy(dstShape, state.sizes.begin());
+
+  LLVM_DEBUG(llvm::dbgs() << "Broadcast state: " << state << "\n";);
 
   return success();
 }
