@@ -220,6 +220,13 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 8 && op.getVBlocks() == 1)
     return false;
 
+  // intel_sub_group_2d_block_read_32b_8r8x2c is expected to be lowered to
+  // llvm.genx.GenISA.LSC2DBlockRead.v8i32, but it is incorrectly lowered to
+  // llvm.genx.GenISA.LSC2DBlockRead.v16i32.
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 2)
+    return false;
+
   // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
   // intel_sub_group_2d_block_read_32b_16r16x1c.
   if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 16 &&
