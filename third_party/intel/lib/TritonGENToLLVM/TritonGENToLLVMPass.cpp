@@ -1174,8 +1174,6 @@ struct TritonMatrixDPASLowering
         stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
         std::to_string(8 /*systolic depth*/ *
                        getNumOperandsPerDword(precisionA));
-    if (precisionA == TritonGEN::PrecisionType::TF32)
-      fnName += "_f32";
 
     SmallVector<Type> argTypes{aTy, bTy, cTy};
     fnName = intel::mangle(fnName, argTypes);
