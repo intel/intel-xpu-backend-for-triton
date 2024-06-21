@@ -223,10 +223,14 @@ jobs:
 
       - name: Run GEMM benchmark
         run: |
-          bash scripts/gather_gemm_perf.sh
           source scripts/capture-hw-details.sh
           cd python/tutorials
-          python ../../scripts/build_report.py gemm_results.csv $REPORTS/gemm-report.csv --benchmark gemm --compiler triton --param_cols "N,K,M" --tflops_col max_tflops --hbm_col max_gbs
+          bash run_all.sh
+          # This will fix csv file issues, fixing ", "->"," and " " -> "," that exist in raw output
+          sed -E 's/, /,/g;s/ /,/g' summary.csv > gemm-summary.csv
+          # For debug
+          cp summary.csv $REPORTS/gemm-summary.csv
+          python ../../scripts/build_report.py $REPORTS/gemm-summary.csv $REPORTS/gemm-report.csv --benchmark gemm --compiler triton --param_cols "B,N,K,M" --tflops_col max_tflops --hbm_col max_gbs
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
