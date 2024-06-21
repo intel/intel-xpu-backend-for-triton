@@ -204,7 +204,7 @@ public:
                         rewriter.getIntegerType(dataSize));
       rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
-          blockWidth, blockHeight, vBlks, false /*transpose*/, false /*vnni*/,
+          blockWidth, blockHeight, vBlks,
           bitcast(adaptor.getValue(), vectorType));
       rewriter.eraseOp(op);
     }
