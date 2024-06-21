@@ -386,8 +386,6 @@ class XPULauncher(object):
         constants = {cst_key(key): value for key, value in constants.items()}
         signature = {cst_key(key): value for key, value in src.signature.items()}
         src = make_launcher(constants, signature, ids)
-        with open('/tmp/src', 'w') as f:
-            f.write(src)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
 
