@@ -53,7 +53,7 @@ jobs:
       - name: Print inputs
         run: |
           cat <<EOF
-          ${{ toJSON(github.event.inputs) }}
+          ${{ toJSON(inputs) }}
           EOF
 
       - name: Checkout repository
@@ -98,12 +98,12 @@ jobs:
     strategy:
       matrix:
         python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
-        drivers: ["rolling", "lts"]
+        drivers: ${{ inputs.runner_label || fromJson('["rolling", "lts"]') }}
     uses: ./.github/workflows/build-test-reusable.yml
     with:
       driver_version: ${{ matrix.drivers }}
       runner_label: ${{ inputs.runner_label }}
-      install_ipex: ${{ inputs.install_ipex == 'true' || github.event_name == 'pull_request' || github.event_name == 'push' || false }}
+      install_ipex: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports || false }}
