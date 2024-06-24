@@ -258,12 +258,12 @@ jobs:
         if: github.ref_name == 'llvm-target'
         uses: actions/upload-artifact@v4
         with:
-          name: pass_rate-${{ inputs.python_version }}
+          name: pass_rate-${{ inputs.python_version }}-${{ inputs.driver_version }}
           path: pass_rate.json
 
       - name: Upload test reports
         if: inputs.upload_test_reports
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports-${{ inputs.python_version }}
+          name: test-reports-${{ inputs.python_version }}-${{ inputs.driver_version }}
           path: reports
