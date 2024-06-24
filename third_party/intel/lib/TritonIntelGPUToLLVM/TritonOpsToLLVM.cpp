@@ -189,9 +189,14 @@ public:
           dataSize, blockWidth, blockHeight, vBlks, false /*transpose*/, vnni);
       rewriter.replaceOp(op, bitcast(load, resType));
     } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
-      rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
+      auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, TritonGEN::LoadCacheControl::L1C_L3C);
+      if (failed(newOp.verify())) {
+        // Explicitly invoke verifier because `triton_gen` ops immediately
+        // lowered further to a builtin call.
+        return failure();
+      }
       rewriter.eraseOp(op);
     } else {
       VectorType vectorType =

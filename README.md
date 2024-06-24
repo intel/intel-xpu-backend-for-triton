@@ -129,7 +129,8 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 
 **Helpful environment variables**
 
-- `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs.
+- `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
+   kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
 - `TRITON_INTERPRET=1` uses the Triton interpreter instead of running on the
   GPU.  You can insert Python breakpoints in your kernel code!
@@ -164,6 +165,8 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
+- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
+- `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
 
 # Usage Guide
 
