@@ -3130,9 +3130,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if not is_hip() and kpack == 2:
             pytest.xfail("Skip duplicated tests on nv path")
 
-    if is_xpu() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
-        pytest.skip("FIXME: float8e4nv and float8e5 fails to run on XPU")
-
     if is_cuda():
         torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
 

@@ -73,6 +73,11 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch,
       !(isUsedByStoreOp && ttgi::hasDpasEncoding(tensorType)))
     return true;
 
+  // FIXME: Temporary workaround to avoid
+  // compile error on fp8 2d block read
+  Type eltType = tensorType.getElementType();
+  if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FNUZ())
+    return true;
   TypedValue<triton::PointerType> base = op.getBase();
   Operation::operand_range shape = op.getShape();
   Operation::operand_range strides = op.getStrides();
