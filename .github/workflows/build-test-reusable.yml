@@ -37,6 +37,10 @@ on:
         description: Ignore test errors
         type: boolean
         default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
       run_name:
         description: Custom run name
         type: string
@@ -139,6 +143,19 @@ jobs:
         run: |
           echo "TRITON_TEST_IGNORE_ERRORS=true" >> $GITHUB_ENV
 
+      - name: Set a default skip list
+        if: inputs.skip_list == ''
+        run: |
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
+          if [[ -d $skiplist ]]; then
+            echo "TRITON_TEST_SKIPLIST_DIR=$skiplist" | tee -a $GITHUB_ENV
+          fi
+
+      - name: Set a custom skip list
+        if: inputs.skip_list != ''
+        run: |
+          echo "TRITON_TEST_SKIPLIST_DIR=$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}" | tee -a $GITHUB_ENV
+
       - name: Run core tests
         run: |
           source ./scripts/pytest-utils.sh
@@ -191,7 +208,7 @@ jobs:
           run_tutorial_test "07-extern-functions"
           run_tutorial_test "08-grouped-gemm"
           run_tutorial_test "10-experimental-block-pointer"
-          TRITON_INTEL_ENABLE_BLOCK_PTR=1 run_tutorial_test "10-experimental-block-pointer"
+          run_tutorial_test "10i-experimental-block-pointer"
 
       - name: Run CXX unittests
         run: |
@@ -241,12 +258,12 @@ jobs:
         if: github.ref_name == 'llvm-target'
         uses: actions/upload-artifact@v4
         with:
-          name: pass_rate-${{ inputs.python_version }}
+          name: pass_rate-${{ inputs.python_version }}-${{ inputs.driver_version }}
           path: pass_rate.json
 
       - name: Upload test reports
         if: inputs.upload_test_reports
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports-${{ inputs.python_version }}
+          name: test-reports-${{ inputs.python_version }}-${{ inputs.driver_version }}
           path: reports
