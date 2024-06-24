@@ -44,6 +44,6 @@ jobs:
       install_ipex: false
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
-      upload_test_reports: ${{ inputs.upload_test_reports }}
-      ignore_errors: ${{ inputs.ignore_errors }}
+      upload_test_reports: ${{ inputs.upload_test_reports || false }}
+      ignore_errors: ${{ inputs.ignore_errors || false }}
       run_name: ${{ inputs.run_name }}

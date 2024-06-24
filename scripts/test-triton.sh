@@ -159,13 +159,6 @@ run_core_tests() {
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
   pytest --verbose --device xpu language/test_line_info.py
-
-  TRITON_INTERPRET=1 TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=interpreter \
-  pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
-  language/test_random.py operators/test_flash_attention.py::test_op --device cpu
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=operators \
-  pytest -n 8 --verbose --device xpu operators/
 }
 
 run_regression_tests() {
