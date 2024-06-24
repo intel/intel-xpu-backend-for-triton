@@ -447,7 +447,6 @@ struct LoadOpConversion
             /*transpose*/ false,
             /*vnni_transform*/
             (!isOperandA && eltTy.getIntOrFloatBitWidth() != 32));
-        load2dOp->dump();
         if (failed(load2dOp.verify())) {
           // Explicitly invoke verifier because `triton_gen` ops are immediately
           // lowered further to a builtin call.
