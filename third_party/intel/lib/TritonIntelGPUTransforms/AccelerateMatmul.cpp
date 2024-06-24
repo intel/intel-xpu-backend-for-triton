@@ -213,16 +213,11 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     DpasEncodingAttr dpasLayout =
         dyn_cast<DpasEncodingAttr>(D.getType().getEncoding());
     if (dpasLayout) {
-      // For fp8, DPAS is not supported yet.
-      // Hence, fp8 is promoted to fp16 to use DPAS dot operation.
       bool isNativeFP8 = AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
-
-      // No operands promotion because of DPAS using different layout
-      // to pack the dot operands for different scalar type.
+      // promote operands for fp8 since fp8 DPAS is not natively supported
+      // fp8 is promoted to fp16 to use DPAS implementation
       if (!isNativeFP8)
         return;
-
-      // promote operands from fp8 to fp16 to use DPAS
       promoteType = builder.getF16Type();
     } else {
       // FMA case.

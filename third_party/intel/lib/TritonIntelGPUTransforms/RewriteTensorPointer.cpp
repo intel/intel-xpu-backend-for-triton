@@ -75,7 +75,8 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch,
 
   // FIXME: Temporary workaround to avoid
   // compile error on fp8 2d block read
-  if (tensorType.getElementTypeBitWidth() == 8)
+  Type eltType = tensorType.getElementType();
+  if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FNUZ())
     return true;
   TypedValue<triton::PointerType> base = op.getBase();
   Operation::operand_range shape = op.getShape();
