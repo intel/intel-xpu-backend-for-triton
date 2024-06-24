@@ -306,7 +306,7 @@ struct PrefetchOpConversion
             i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
         // Round the offset into to the tensor shape
         offsetY = urem(offsetY, i32_val(tensorShape[0]));
-        rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
+        auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
             loc,
             /*ptr*/ base,
             /*base_width*/ baseWidth,
@@ -318,9 +318,12 @@ struct PrefetchOpConversion
             /*tile_width*/ tileWidthInElem,
             /*tile_height*/ tileHeightInElem,
             /*v_blocks*/ 1,
-            /*transpose*/ false,
-            /*vnni_transform*/ false,
             /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+        if (failed(newOp.verify())) {
+          // Explicitly invoke verifier because `triton_gen` ops immediately
+          // lowered further to a builtin call.
+          return failure();
+        }
       }
     }
 
@@ -691,22 +694,32 @@ struct StoreOpConversion
     // encoded as bytes.
     Value basePitch = mul(rowStride, elemSizeInBytes);
 
-    // A dense stride for the replicates.
+    // A warp stride for the replicates.
+    int outerDimWarpNum = std::min<int>(
+        warpsPerCTA[0], mlir::ceil<unsigned>(tensorShape[0], elemsPerInstr[0]));
+    int innerDimWarpNum = std::min<int>(
+        warpsPerCTA[1], mlir::ceil<unsigned>(tensorShape[1], elemsPerInstr[1]));
+    Value outerDimWarpId = urem(multiDimWarpId[0], i32_val(outerDimWarpNum));
+    Value innerDimWarpId = urem(multiDimWarpId[1], i32_val(innerDimWarpNum));
+    int64_t numRepOuter = numReps[0];
+    int64_t numRepInner = numReps[1];
+
     std::array<unsigned, 2> replicaStride = {
+        static_cast<unsigned>(outerDimWarpNum * elemsPerInstr[0]),
+        static_cast<unsigned>(innerDimWarpNum * elemsPerInstr[1])};
+    std::array<unsigned, 2> warpStride = {
         static_cast<unsigned>(elemsPerInstr[0]),
         static_cast<unsigned>(elemsPerInstr[1])};
-    std::array<unsigned, 2> warpStride = {
-        static_cast<unsigned>(numReps[0] * elemsPerInstr[0]),
-        static_cast<unsigned>(numReps[1] * elemsPerInstr[1])};
 
-    Value dimWarpId0 = mul(multiDimWarpId[0], i32_val(warpStride[0]));
-    Value dimWarpId1 = mul(multiDimWarpId[1], i32_val(warpStride[1]));
+    Value dimWarpId0 = mul(outerDimWarpId, i32_val(warpStride[0]));
+    Value dimWarpId1 = mul(innerDimWarpId, i32_val(warpStride[1]));
     Value warpId0Offset = add(dimWarpId0, offsetBaseY);
     Value warpId1Offset = add(dimWarpId1, offsetBaseX);
+
     unsigned valOffset = 0;
-    for (int m = 0; m < numReps[0]; ++m) {
+    for (int m = 0; m < numRepOuter; ++m) {
       Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0]));
-      for (int n = 0; n < numReps[1]; ++n) {
+      for (int n = 0; n < numRepInner; ++n) {
         Value offsetX = add(warpId1Offset, i32_val(n * replicaStride[1]));
 
         Value storeVal = rewriter.create<LLVM::UndefOp>(
@@ -729,8 +742,6 @@ struct StoreOpConversion
             /*tile_width*/ elemsPerInstr[1],
             /*tile_height*/ elemsPerInstr[0],
             /*v_blocks*/ 1,
-            /*transpose*/ false,
-            /*vnni_transform*/ false,
             /*stored_val*/ bitcast(storeVal, store2DGenXType));
       }
     }

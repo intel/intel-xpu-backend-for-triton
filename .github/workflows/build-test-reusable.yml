@@ -1,0 +1,269 @@
+name: Build and test reusable workflow
+run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.install_ipex && 'IPEX' || 'no IPEX' }} - ${{ inputs.runner_label || 'default'}}
+
+on:
+  workflow_call:
+    inputs:
+      driver_version:
+        description: Driver version
+        type: string
+        default: "rolling"
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      install_ipex:
+        # This boolean parameter defines what PyTorch will be used in the workflow:
+        #   true: Stonepia/pytorch (fork) with IPEX
+        #   false: pytorch/pytorch (upstream) without IPX
+        # In both cases, pytorch_ref below allows specifying a branch, tag, or commit id in the
+        # corresponding repository. If not specified, a default (pinned) version will be used.
+        description: Install Intel PyTorch Extension
+        type: boolean
+        default: true
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
+      python_version:
+        description: Python version
+        type: string
+        required: true
+      upload_test_reports:
+        description: Upload test reports
+        type: boolean
+        default: false
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
+      run_name:
+        description: Custom run name
+        type: string
+        default: "Build and test"
+
+permissions: read-all
+
+env:
+  TRITON_DISABLE_LINE_INFO: 1
+  TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
+
+jobs:
+  print_inputs:
+    name: Print inputs
+    runs-on: Linux
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+  integration-tests:
+    name: Integration tests
+    runs-on:
+      - ${{ inputs.runner_label || 'Linux' }}
+      - ${{ inputs.driver_version }}
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Install Python ${{ inputs.python_version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Get LLVM commit id
+        run: |
+          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
+          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
+
+      - name: Setup PyTorch with IPEX
+        if: ${{ inputs.install_ipex }}
+        uses: ./.github/actions/setup-pytorch
+        with:
+          repository: Stonepia/pytorch
+          ref: ${{ inputs.pytorch_ref }}
+
+      - name: Setup PyTorch without IPEX
+        if: ${{ !inputs.install_ipex }}
+        uses: ./.github/actions/setup-pytorch
+        with:
+          repository: pytorch/pytorch
+          ref: ${{ inputs.pytorch_ref }}
+          torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
+
+      - name: Setup IPEX
+        if: ${{ inputs.install_ipex }}
+        uses: ./.github/actions/setup-ipex
+
+      - name: Setup fake IPEX
+        if: ${{ !inputs.install_ipex }}
+        uses: ./.github/actions/setup-fake-ipex
+
+      - name: Build Triton
+        run: |
+          export DEBUG=1
+          cd python
+          pip install wheel pytest pytest-xdist pytest-rerunfailures pytest-select
+          pip install --no-build-isolation '.[build,tests,tutorials]'
+          pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
+
+      - name: Run lit tests
+        run: |
+          cd python
+          lit -v build/*/test
+
+      - name: Create directory for tests reports
+        run: |
+          mkdir reports
+          echo "TRITON_TEST_REPORTS=true" >> $GITHUB_ENV
+          echo "TRITON_TEST_WARNING_REPORTS=true" >> $GITHUB_ENV
+          echo "TRITON_TEST_REPORTS_DIR=$GITHUB_WORKSPACE/reports" >> $GITHUB_ENV
+
+      - name: Enable ignoring test errors
+        if: inputs.ignore_errors
+        run: |
+          echo "TRITON_TEST_IGNORE_ERRORS=true" >> $GITHUB_ENV
+
+      - name: Set a default skip list
+        if: inputs.skip_list == ''
+        run: |
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
+          if [[ -d $skiplist ]]; then
+            echo "TRITON_TEST_SKIPLIST_DIR=$skiplist" | tee -a $GITHUB_ENV
+          fi
+
+      - name: Set a custom skip list
+        if: inputs.skip_list != ''
+        run: |
+          echo "TRITON_TEST_SKIPLIST_DIR=$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}" | tee -a $GITHUB_ENV
+
+      - name: Run core tests
+        run: |
+          source ./scripts/pytest-utils.sh
+          cd python/test/unit
+          TRITON_TEST_SUITE=language \
+            pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          TRITON_TEST_SUITE=subprocess \
+            pytest -vvv -n 8 language/test_subprocess.py
+          # Run runtime tests serially to avoid race condition with cache handling
+          TRITON_TEST_SUITE=runtime \
+            pytest -vvv --device xpu runtime/
+          # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
+            pytest -vvv --device xpu language/test_line_info.py
+
+      - name: Clear cache
+        run: |
+          rm -rf ~/.triton
+
+      - name: Run interpreter tests
+        run: |
+          source ./scripts/pytest-utils.sh
+          cd python/test/unit
+          TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
+            pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+            language/test_random.py --device cpu
+
+      - name: Regression tests
+        run: |
+          source ./scripts/pytest-utils.sh
+          cd python/test/regression
+          TRITON_TEST_SUITE=regression \
+            pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
+
+      - name: Run XPU python tests
+        run: |
+          cd python/test/backend/third_party_backends
+          python3 -m pytest -n auto --verbose test_xpu_backend.py
+
+      - name: Run Tutorials
+        run: |
+          source ./scripts/pytest-utils.sh
+          cd python/tutorials
+          run_tutorial_test "01-vector-add"
+          run_tutorial_test "02-fused-softmax"
+          run_tutorial_test "03-matrix-multiplication"
+          run_tutorial_test "04-low-memory-dropout"
+          run_tutorial_test "05-layer-norm"
+          run_tutorial_test "06-fused-attention"
+          run_tutorial_test "07-extern-functions"
+          run_tutorial_test "08-grouped-gemm"
+          run_tutorial_test "10-experimental-block-pointer"
+          run_tutorial_test "10i-experimental-block-pointer"
+
+      - name: Run CXX unittests
+        run: |
+          cd python/build/*cmake*
+          ctest
+
+      - name: Get transformers version
+        run: |
+          cd pytorch
+          TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
+          echo "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install transformers
+        uses: ./.github/actions/install-dependency
+        with:
+          package: transformers
+          repository: huggingface/transformers
+          ref: ${{ env.TRANSFORMERS_VERSION }}
+          try-tag-prefix: v
+
+      - name: Run E2E test
+        run: |
+          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
+          export WORKSPACE=$GITHUB_WORKSPACE
+          cd pytorch
+          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+          # TODO: Find the fastest Hugging Face model
+          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
+          cat $WORKSPACE/inductor_log/*/*/*.csv
+          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Pass rate
+        run: |
+          python3 scripts/pass_rate.py --reports reports
+          python3 scripts/pass_rate.py --reports reports --json > pass_rate.json
+
+      - name: Upload pass rate report
+        # upload reports only for the default branch
+        if: github.ref_name == 'llvm-target'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pass_rate-${{ inputs.python_version }}-${{ inputs.driver_version }}
+          path: pass_rate.json
+
+      - name: Upload test reports
+        if: inputs.upload_test_reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ inputs.python_version }}-${{ inputs.driver_version }}
+          path: reports
