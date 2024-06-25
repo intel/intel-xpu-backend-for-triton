@@ -487,7 +487,7 @@ LogicalResult
 TritonRaiseBlockPointer::visitAddPointerOperand(triton::BroadcastOp broadcastOp,
                                                 PtrState &state, Location loc,
                                                 OpBuilder &builder) {
-  assert(state.isEmpty());
+  assert(state.isEmpty() && "state is a return argument");
 
   Value src = broadcastOp.getSrc();
   Value dst = broadcastOp.getResult();
