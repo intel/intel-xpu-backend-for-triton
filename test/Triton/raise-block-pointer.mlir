@@ -155,3 +155,19 @@ tt.func @test_const_splat_addptr_2d(%arg0 : !tt.ptr<f32>) -> tensor<2x128xf32> {
   %2 = tt.load %1 : tensor<2x128x!tt.ptr<f32>>
   tt.return %2 : tensor<2x128xf32>
 }
+
+// CHECK-LABEL:   tt.func @test_addptr_broadcast(
+// CHECK-SAME:                                   %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<2x128xf32> {
+// CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64
+// CHECK:           %[[VAL_2:.*]] = arith.constant 1 : i32
+// CHECK:           %[[VAL_3:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_1]], %[[VAL_1]]], {{\[}}%[[VAL_1]], %[[VAL_1]]], {{\[}}%[[VAL_2]], %[[VAL_2]]] {order = array<i32>} : <tensor<2x128xf32>>
+// CHECK:           %[[VAL_4:.*]] = tt.load %[[VAL_3]] : !tt.ptr<tensor<2x128xf32>>
+// CHECK:           tt.return %[[VAL_4]] : tensor<2x128xf32>
+tt.func @test_addptr_broadcast(%arg0 : !tt.ptr<f32>) -> tensor<2x128xf32> {
+  %cst = arith.constant dense<1> : tensor<1x128xi32>
+  %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<2x128x!tt.ptr<f32>>
+  %1 = tt.broadcast %cst : tensor<1x128xi32> -> tensor<2x128xi32>
+  %2 = tt.addptr %0, %1 : tensor<2x128x!tt.ptr<f32>>, tensor<2x128xi32>
+  %3 = tt.load %2 : tensor<2x128x!tt.ptr<f32>>
+  tt.return %3 : tensor<2x128xf32>
+}
