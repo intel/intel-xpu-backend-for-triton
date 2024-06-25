@@ -1,5 +1,6 @@
 #include "third_party/intel/include/Target/LLVMIR/DSE.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
@@ -158,7 +159,7 @@ class SetAddressPayloadInfo {
   friend raw_ostream &operator<<(raw_ostream &, const SetAddressPayloadInfo &);
 
 public:
-  static constexpr StringRef prefix =
+  static constexpr StringLiteral prefix =
       "__builtin_IB_subgroup_setBlock2DAddressPayloadBlock";
 
   /// The field to set in the address payload.
@@ -188,7 +189,7 @@ public:
   bool samePtrAndField(const SetAddressPayloadInfo &other) const {
     return ptr == other.ptr && field == other.field;
   }
-  bool isEqual(const SetAddressPayloadInfo &other) const {
+  bool operator==(const SetAddressPayloadInfo &other) const {
     return ptr == other.ptr && val == other.val && field == other.field &&
            memAccess == other.memAccess;
   }
@@ -226,6 +227,8 @@ raw_ostream &operator<<(raw_ostream &OS, const SetAddressPayloadInfo &info) {
 
 class DSEPass : public PassInfoMixin<DSEPass> {
 public:
+  DSEPass(bool trace) : trace(trace) {}
+
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
     auto &LI = AM.getResult<LoopAnalysis>(F);
     auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
@@ -233,9 +236,7 @@ public:
     auto &MSSA = AM.getResult<MemorySSAAnalysis>(F).getMSSA();
     auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
 
-    bool Changed = eliminateDeadStores(F, AA, MSSA, DT, TLI, LI);
-
-    if (!Changed)
+    if (!eliminateDeadStores(F, AA, MSSA, DT, TLI, LI))
       return PreservedAnalyses::all();
 
     PreservedAnalyses PA;
@@ -244,6 +245,9 @@ public:
     PA.preserve<LoopAnalysis>();
     return PA;
   }
+
+private:
+  bool trace;
 
   static bool isCandidate(Instruction *I) {
     if (!isa<CallInst>(I))
@@ -254,23 +258,23 @@ public:
     return funcName.starts_with(SetAddressPayloadInfo::prefix);
   }
 
-  static bool getDomMemoryDef(const SetAddressPayloadInfo &info,
-                              MemoryAccess *StartAccess, MemorySSA &MSSA,
-                              SmallVector<SetAddressPayloadInfo> &SetPayloads) {
+  bool getDomMemoryDef(const SetAddressPayloadInfo &info,
+                       MemoryAccess *StartAccess, MemorySSA &MSSA,
+                       SmallVector<SetAddressPayloadInfo> &SetPayloads) const {
     for (MemoryAccess *Current = StartAccess; Current;
          Current = cast<MemoryDef>(Current)->getDefiningAccess()) {
       {
-        llvm::errs() << "   visiting " << *Current;
-        if (!MSSA.isLiveOnEntryDef(Current) && isa<MemoryUseOrDef>(Current))
-          llvm::errs() << " ("
-                       << *cast<MemoryUseOrDef>(Current)->getMemoryInst()
-                       << ")";
-        llvm::errs() << "\n";
+        if (trace) {
+          llvm::errs() << "   visiting " << *Current;
+          if (!MSSA.isLiveOnEntryDef(Current) && isa<MemoryUseOrDef>(Current))
+            llvm::errs() << " ("
+                         << *cast<MemoryUseOrDef>(Current)->getMemoryInst()
+                         << ")";
+          llvm::errs() << "\n";
+        }
       }
 
-      if (MSSA.isLiveOnEntryDef(Current))
-        return false;
-      if (isa<MemoryPhi>(Current)) // TODO: add memoryPhi values here ?
+      if (MSSA.isLiveOnEntryDef(Current) || isa<MemoryPhi>(Current))
         return false;
       if (isa<MemoryUse>(Current))
         continue; // reads aren't interesting
@@ -285,43 +289,47 @@ public:
       }
 
       SetAddressPayloadInfo prev(cast<CallInst>(memInstr), Current);
-      if (llvm::none_of(SetPayloads, [&](const auto &entry) {
-            return entry.isEqual(prev);
-          })) {
-        //          llvm::errs() << "   prev: " << prev << "\n";
-        //          llvm::errs() << "   ... not found in set payloads\n";
+      if (llvm::none_of(SetPayloads,
+                        [&](const auto &entry) { return entry == prev; })) {
         continue;
       }
 
       if (info.samePtrAndValueAndField(prev)) {
-        llvm::errs() << "   ... found matching set payload, this one (" << info
-                     << ") is dead\n";
+        if (trace) {
+          llvm::errs() << "   ... found matching set payload, this one ("
+                       << info << ") is dead\n";
+        }
 
         for (auto it = SetPayloads.begin(); it != SetPayloads.end(); ++it) {
-          if (it->isEqual(info)) {
+          if (*it == info) {
             SetPayloads.erase(it);
             break;
           }
         }
-        llvm::errs() << "SetPayloads:\n";
-        for (auto &e : SetPayloads) {
-          llvm::errs() << "   e: " << e << "\n";
+
+        if (trace) {
+          llvm::errs() << "SetPayloads:\n";
+          for (auto &e : SetPayloads)
+            llvm::errs() << "   e: " << e << "\n";
         }
 
         return true;
       }
       if (info.samePtrAndField(prev)) {
-        llvm::errs() << "   ... remove previous entry: " << prev << "\n";
+        if (trace)
+          llvm::errs() << "   ... remove previous entry: " << prev << "\n";
 
         for (auto it = SetPayloads.begin(); it != SetPayloads.end(); ++it) {
-          if (it->isEqual(prev)) {
+          if (*it == prev) {
             SetPayloads.erase(it);
             break;
           }
         }
-        llvm::errs() << "SetPayloads:\n";
-        for (auto &e : SetPayloads) {
-          llvm::errs() << "   e: " << e << "\n";
+
+        if (trace) {
+          llvm::errs() << "SetPayloads:\n";
+          for (auto &e : SetPayloads)
+            llvm::errs() << "   e: " << e << "\n";
         }
       }
     }
@@ -329,10 +337,9 @@ public:
     return false;
   }
 
-  static bool eliminateDeadStores(Function &F, AliasAnalysis &AA,
-                                  MemorySSA &MSSA, DominatorTree &DT,
-                                  const TargetLibraryInfo &TLI,
-                                  const LoopInfo &LI) {
+  bool eliminateDeadStores(Function &F, AliasAnalysis &AA, MemorySSA &MSSA,
+                           DominatorTree &DT, const TargetLibraryInfo &TLI,
+                           const LoopInfo &LI) const {
     bool Changed = false;
 
     DSEState State(F, AA, MSSA, DT, TLI, LI);
@@ -350,15 +357,17 @@ public:
       if (!MaybeKillingLoc)
         continue;
 
-      llvm::errs() << "\nKillingDef: " << *KillingDef << " (" << *KillingI
-                   << ")\n";
+      if (trace)
+        llvm::errs() << "\nKillingDef: " << *KillingDef << " (" << *KillingI
+                     << ")\n";
 
       SetAddressPayloadInfo info(cast<CallInst>(KillingI), KillingDef);
       SetPayloads.push_back(info);
 
-      llvm::errs() << "SetPayloads:\n";
-      for (auto &e : SetPayloads) {
-        llvm::errs() << "   e: " << e << "\n";
+      if (trace) {
+        llvm::errs() << "SetPayloads:\n";
+        for (auto &e : SetPayloads)
+          llvm::errs() << "   e: " << e << "\n";
       }
 
       // Worklist of MemoryAccesses that may be killed by KillingDef.
@@ -388,17 +397,9 @@ public:
 
 } // namespace
 
-void mlir::triton::intel::DSE(llvm::Module &mod) {
-  std::set<llvm::Function *> kernels;
-  uint32_t numKernels = 0;
-  for (llvm::Function &function : mod.functions())
-    if (function.getCallingConv() == CallingConv::SPIR_KERNEL) {
-      kernels.insert(&function);
-      ++numKernels;
-    }
-  assert(numKernels == 1 && "Expecting a single SPIR kernel");
-  llvm::Function *kernel = *kernels.begin();
-
+/// FIXME: This is a temporary workaround (should be done by IGC). We should
+/// remove it once that feature is implemented.
+void mlir::triton::intel::DSE(llvm::Module &mod, bool trace) {
   FunctionAnalysisManager FAM;
   FAM.registerPass([&] { return AssumptionAnalysis(); });
   FAM.registerPass([&] { return DominatorTreeAnalysis(); });
@@ -419,6 +420,10 @@ void mlir::triton::intel::DSE(llvm::Module &mod) {
   });
 
   FunctionPassManager FPM;
-  FPM.addPass(DSEPass());
-  FPM.run(*kernel, FAM);
+  FPM.addPass(DSEPass(trace));
+
+  for (llvm::Function &function : mod.functions()) {
+    if (function.getCallingConv() == CallingConv::SPIR_KERNEL)
+      FPM.run(function, FAM);
+  }
 }
