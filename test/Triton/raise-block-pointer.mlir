@@ -126,14 +126,14 @@ tt.func @test_addptr_splat_make_range_mul(%arg0 : !tt.ptr<f32>, %arg1: i32) -> t
   tt.return %5 : tensor<128xf32>
 }
 
-// CHECK-LABEL:   tt.func @test_addptr_splat_const(
+// CHECK-LABEL:   tt.func @test_const_splat_addptr(
 // CHECK-SAME:                                     %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<128xf32> {
 // CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64
 // CHECK:           %[[VAL_2:.*]] = arith.constant 512 : i32
 // CHECK:           %[[VAL_3:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_1]]], {{\[}}%[[VAL_1]]], {{\[}}%[[VAL_2]]] {order = array<i32>} : <tensor<128xf32>>
 // CHECK:           %[[VAL_4:.*]] = tt.load %[[VAL_3]] : !tt.ptr<tensor<128xf32>>
 // CHECK:           tt.return %[[VAL_4]] : tensor<128xf32>
-tt.func @test_addptr_splat_const(%arg0 : !tt.ptr<f32>) -> tensor<128xf32> {
+tt.func @test_const_splat_addptr(%arg0 : !tt.ptr<f32>) -> tensor<128xf32> {
   %cst = arith.constant dense<512> : tensor<128xi32>
   %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
   %1 = tt.addptr %0, %cst : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
@@ -141,14 +141,14 @@ tt.func @test_addptr_splat_const(%arg0 : !tt.ptr<f32>) -> tensor<128xf32> {
   tt.return %2 : tensor<128xf32>
 }
 
-// CHECK-LABEL:   tt.func @test_addptr_splat_const_2d(
+// CHECK-LABEL:   tt.func @test_const_splat_addptr_2d(
 // CHECK-SAME:                                        %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<2x128xf32> {
 // CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64
 // CHECK:           %[[VAL_2:.*]] = arith.constant 512 : i32
 // CHECK:           %[[VAL_3:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_1]], %[[VAL_1]]], {{\[}}%[[VAL_1]], %[[VAL_1]]], {{\[}}%[[VAL_2]], %[[VAL_2]]] {order = array<i32>} : <tensor<2x128xf32>>
 // CHECK:           %[[VAL_4:.*]] = tt.load %[[VAL_3]] : !tt.ptr<tensor<2x128xf32>>
 // CHECK:           tt.return %[[VAL_4]] : tensor<2x128xf32>
-tt.func @test_addptr_splat_const_2d(%arg0 : !tt.ptr<f32>) -> tensor<2x128xf32> {
+tt.func @test_const_splat_addptr_2d(%arg0 : !tt.ptr<f32>) -> tensor<2x128xf32> {
   %cst = arith.constant dense<512> : tensor<2x128xi32>
   %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<2x128x!tt.ptr<f32>>
   %1 = tt.addptr %0, %cst : tensor<2x128x!tt.ptr<f32>>, tensor<2x128xi32>
