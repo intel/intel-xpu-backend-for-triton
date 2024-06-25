@@ -390,6 +390,10 @@ struct LoadOpConversion
 
     // pack scalars for operand A and B.
     Type elemType = (isOperandA && eltTy != f32_ty) ? i16_ty : i32_ty;
+
+    // fp8 needs to be accessed in 8-bit granularity
+    if (isOperandA && (eltTy.isFloat8E5M2() || eltTy.isFloat8E4M3FNUZ()))
+      elemType = i8_ty;
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
     elemsPerLane = isOperandA ? elemsPerLane / (opsPerChannel == 4 ? 2 : 1)
                               : elemsPerLane / opsPerChannel;
