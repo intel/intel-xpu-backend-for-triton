@@ -50,6 +50,30 @@ struct PtrState {
     return offsets.size();
   }
 
+  bool isBlockPtr() const { return !order.empty(); }
+
+  bool dimHasModulo(uint32_t dim) const {
+    assert(
+        !isBlockPtr() &&
+        "Analysis should not check modulo if PtrState describes block pointer");
+
+    assert(dim < getRank());
+
+    if (auto intOp = shape[dim].getDefiningOp<arith::ConstantIntOp>()) {
+      return intOp.value() != 0;
+    }
+    return true;
+  }
+
+  bool hasModulo() const {
+    for (int32_t i = 0; i < getRank(); i++) {
+      if (dimHasModulo(i)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   bool isEmpty() const { return getRank() == 0 && !source && !scalar; }
 
   // Process addition of two PtrStates.
@@ -278,7 +302,7 @@ struct TritonRaiseBlockPointer
 
     return TypeSwitch<Operation *, LogicalResult>(definingOp)
         .Case<arith::AddIOp, arith::ConstantOp, arith::MulIOp,
-              triton::MakeRangeOp, triton::SplatOp>(
+              triton::MakeRangeOp, triton::SplatOp, triton::ExpandDimsOp>(
             [this, &state, loc, &builder](auto op) {
               return visitAddPointerOperand(op, state, loc, builder);
             })
@@ -477,6 +501,44 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     state.shape.push_back(
         builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
   }
+
+  return success();
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    triton::ExpandDimsOp expandDimsOp, PtrState &state, Location loc,
+    OpBuilder &builder) {
+  assert(state.isEmpty() && "state is a return argument");
+
+  if (failed(visitOperand(expandDimsOp.getSrc(), state, loc, builder))) {
+    return failure();
+  }
+
+  ArrayRef<int64_t> dstShape =
+      cast<ShapedType>(expandDimsOp.getResult().getType()).getShape();
+  auto axis = expandDimsOp.getAxis();
+
+  assert(dstShape[axis] == 1 &&
+         "expect changed dimension to be 1 in expand_dims");
+
+  // insert dimension info
+  Value c0i32 = builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
+  Value c0i64 =
+      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth);
+  state.offsets.insert(state.offsets.begin() + axis, c0i32);
+  state.sizes.insert(state.sizes.begin() + axis, 1);
+  state.strides.insert(state.strides.begin() + axis, c0i64);
+  state.shape.insert(state.shape.begin() + axis, c0i64);
+
+  if (state.hasModulo() && state.getRank() > 2) {
+    expandDimsOp->emitRemark(
+        "PtrAnalysis: unsupported scenario where expand_dims result "
+        "has modulo and rank > 2");
+    return failure();
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "ExpandDims state: " << state << "\n";);
 
   return success();
 }
