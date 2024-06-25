@@ -112,7 +112,7 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, w_dtype, x_dtype, out_dtype, dev
 
     torch_dtype = getattr(torch, out_dtype)
     triton_dtype = getattr(tl, out_dtype)  # <- here force dot_out_dtype
-    out_torch = torch.matmul(a.to(torch_dtype), b.to(torch_dtype))
+    out_torch = torch.matmul(a.cpu().to(torch_dtype), b.cpu().to(torch_dtype))
     out_triton = torch.empty((M, N), device=device, dtype=torch_dtype)
 
     # launch kernel
@@ -134,6 +134,6 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, w_dtype, x_dtype, out_dtype, dev
     # big K values.
     if device == "xpu" and out_dtype == "float16" and K > 128:
         warnings.warn("FIXME: test case modified, increased tolerance")
-        torch.testing.assert_close(out_torch, out_triton, atol=2, rtol=0.1)
+        torch.testing.assert_close(out_torch.cpu(), out_triton.cpu(), atol=2, rtol=0.1)
     else:
-        torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
+        torch.testing.assert_close(out_torch.cpu(), out_triton.cpu(), atol=0.3, rtol=0.01)
