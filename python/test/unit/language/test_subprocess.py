@@ -106,7 +106,7 @@ def test_print(func_type: str, data_type: str):
         if delta == 0:
             continue
         print(f'Expected line "{line}" {expected_lines[line]} time(s), but saw {actual_lines[line]} time(s)')
-    assert all(delta == 0 for delta in diff.values()), f"{actual_lines=}\n\n\n{expected_lines=}"
+    assert all(delta == 0 for delta in diff.values())
 
 
 @pytest.mark.parametrize("func_type", assert_types)
