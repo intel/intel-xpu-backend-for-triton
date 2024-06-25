@@ -28,7 +28,8 @@ out_dtypes = ["float16", "float32"]
 def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype, device):
     if x_dtype == w_dtype:
         pytest.xfail("skip same dtype")
-    if "float64" in (w_dtype, x_dtype) and not tr.driver.active.get_current_target().arch['has_fp64']:
+    if device == "xpu" and "float64" in (w_dtype,
+                                         x_dtype) and not tr.driver.active.get_current_target().arch['has_fp64']:
         pytest.xfail("float64 not supported on current xpu hardware")
     x_dtype = getattr(torch, x_dtype)
     w_dtype = getattr(torch, w_dtype)
