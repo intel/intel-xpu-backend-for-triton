@@ -261,6 +261,13 @@ private:
   bool getDomMemoryDef(const SetAddressPayloadInfo &info,
                        MemoryAccess *StartAccess, MemorySSA &MSSA,
                        SmallVector<SetAddressPayloadInfo> &SetPayloads) const {
+    [[maybe_unused]] auto print =
+        [](const SmallVector<SetAddressPayloadInfo> &SetPayloads) {
+          llvm::errs() << "SetPayloads:\n";
+          for (const SetAddressPayloadInfo &e : SetPayloads)
+            llvm::errs() << "   e: " << e << "\n";
+        };
+
     for (MemoryAccess *Current = StartAccess; Current;
          Current = cast<MemoryDef>(Current)->getDefiningAccess()) {
       {
@@ -279,8 +286,6 @@ private:
       if (isa<MemoryUse>(Current))
         continue; // reads aren't interesting
 
-      assert(isa<MemoryDef>(Current) && "Expecting MemoryDef");
-
       Instruction *memInstr = cast<MemoryDef>(Current)->getMemoryInst();
       if (!isCandidate(memInstr)) {
         // possible store clobber, bail out.
@@ -295,10 +300,8 @@ private:
       }
 
       if (info.samePtrAndValueAndField(prev)) {
-        if (trace) {
-          llvm::errs() << "   ... found matching set payload, this one ("
-                       << info << ") is dead\n";
-        }
+        if (trace)
+          llvm::errs() << "   ... found dead entry: " << info << "\n";
 
         for (auto it = SetPayloads.begin(); it != SetPayloads.end(); ++it) {
           if (*it == info) {
@@ -307,11 +310,8 @@ private:
           }
         }
 
-        if (trace) {
-          llvm::errs() << "SetPayloads:\n";
-          for (auto &e : SetPayloads)
-            llvm::errs() << "   e: " << e << "\n";
-        }
+        if (trace)
+          print(SetPayloads);
 
         return true;
       }
@@ -326,11 +326,8 @@ private:
           }
         }
 
-        if (trace) {
-          llvm::errs() << "SetPayloads:\n";
-          for (auto &e : SetPayloads)
-            llvm::errs() << "   e: " << e << "\n";
-        }
+        if (trace)
+          print(SetPayloads);
       }
     }
 
