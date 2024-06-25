@@ -533,9 +533,9 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   state.shape.insert(state.shape.begin() + axis, c0i64);
 
   if (state.hasModulo() && state.getRank() > 2) {
-    expandDimsOp->emitRemark(
-        "TritonRaiseBlockPointer: unsupported scenario where expand_dims result "
-        "has modulo and rank > 2");
+    expandDimsOp->emitRemark("TritonRaiseBlockPointer: unsupported scenario "
+                             "where expand_dims result "
+                             "has modulo and rank > 2");
     return failure();
   }
 
