@@ -213,14 +213,11 @@ static Value createGenISADPAS(TritonGEN::MatrixDPASOp op,
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  // intel_sub_group_2d_block_read_32b_8r8x1c is expected to be lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is incorrectly lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v8i32.
-  // intel_sub_group_2d_block_read_32b_8r8x2c is expected to be lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v8i32, but it is incorrectly lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v16i32.
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8)
+  // OCL builtins with 32-bit element size and tile width of 8 are lowered
+  // incorrectly. For example, intel_sub_group_2d_block_read_32b_8r8x1c is
+  // expected to be lowered to llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is
+  // incorrectly lowered to llvm.genx.GenISA.LSC2DBlockRead.v8i32.
+  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 8)
     return false;
 
   // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
@@ -578,21 +575,6 @@ storeCacheControlToCacheControls(Builder &builder,
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
-  // FIXME: Incorrect usages of
-  // intel_sub_group_2d_block_prefetch_32b_2r32x1c,
-  // intel_sub_group_2d_block_prefetch_32b_4r32x1c and
-  // intel_sub_group_2d_block_prefetch_32b_8r32x1c.
-  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 32 &&
-      op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_read_32b_8r8x1c is expected to be lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is incorrectly lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v8i32.
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
   // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
   // intel_sub_group_2d_block_read_32b_16r16x1c.
   if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 16 &&
