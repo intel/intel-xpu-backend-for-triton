@@ -3130,9 +3130,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if not is_hip() and kpack == 2:
             pytest.xfail("Skip duplicated tests on nv path")
 
-    if is_xpu() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
-        pytest.skip("FIXME: float8e4nv and float8e5 fails to run on XPU")
-
     if is_cuda():
         torch.backends.cuda.matmul.allow_tf32 = input_precision == "tf32"
 
@@ -5283,7 +5280,8 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
 
 
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
-def test_enable_fp_fusion(enable_fp_fusion, device):
+@pytest.mark.parametrize("default_override", [False, True])
+def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
     if is_hip():
         pytest.skip(
             'test_enable_fp_fusion for HIP currently broken in https://github.com/triton-lang/triton. Use https://github.com/ROCmSoftwarePlatform/triton'
@@ -5296,7 +5294,11 @@ def test_enable_fp_fusion(enable_fp_fusion, device):
         tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
-    h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)
+    if default_override:
+        os.environ["TRITON_DEFAULT_FP_FUSION"] = "1" if enable_fp_fusion else "0"
+        h = mul_add[(1, )](data)
+    else:
+        h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)
 
     if not is_cuda():
         return

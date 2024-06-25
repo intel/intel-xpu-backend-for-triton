@@ -20,6 +20,10 @@ on:
         description: Ignore test errors
         type: boolean
         default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
       run_name:
         description: Custom run name
         type: string
@@ -44,6 +48,7 @@ jobs:
       install_ipex: false
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
-      upload_test_reports: ${{ inputs.upload_test_reports }}
-      ignore_errors: ${{ inputs.ignore_errors }}
+      upload_test_reports: ${{ inputs.upload_test_reports || false }}
+      ignore_errors: ${{ inputs.ignore_errors || false }}
+      skip_list: ${{ inputs.skip_list }}
       run_name: ${{ inputs.run_name }}

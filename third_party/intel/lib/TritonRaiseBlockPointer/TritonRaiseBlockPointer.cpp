@@ -231,7 +231,7 @@ struct TritonRaiseBlockPointer
 
   LogicalResult visitOperandAddptr(triton::AddPtrOp addptrOp, PtrState &state,
                                    Location loc, OpBuilder &builder) {
-    assert(state.isEmpty());
+    assert(state.isEmpty() && "state is a return argument");
 
     PtrState ptrState;
     if (failed(visitOperand(addptrOp.getPtr(), ptrState, addptrOp.getLoc(),
@@ -371,7 +371,7 @@ LogicalResult
 TritonRaiseBlockPointer::visitAddPointerOperand(triton::MakeRangeOp rangeOp,
                                                 PtrState &state, Location loc,
                                                 OpBuilder &builder) {
-  assert(state.isEmpty());
+  assert(state.isEmpty() && "state is a return argument");
 
   ArrayRef<int64_t> shape = cast<ShapedType>(rangeOp.getType()).getShape();
 
@@ -399,7 +399,7 @@ LogicalResult
 TritonRaiseBlockPointer::visitAddPointerOperand(triton::SplatOp splatOp,
                                                 PtrState &state, Location loc,
                                                 OpBuilder &builder) {
-  assert(state.isEmpty());
+  assert(state.isEmpty() && "state is a return argument");
 
   Value src = splatOp.getSrc();
   Value dst = splatOp.getResult();
@@ -438,7 +438,7 @@ TritonRaiseBlockPointer::visitAddPointerOperand(triton::SplatOp splatOp,
 template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     arith::AddIOp addOp, PtrState &state, Location loc, OpBuilder &builder) {
-  assert(state.isEmpty());
+  assert(state.isEmpty() && "state is a return argument");
 
   PtrState lhsState;
   if (failed(visitOperand(addOp.getLhs(), lhsState, loc, builder)))
@@ -459,7 +459,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
 template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     arith::MulIOp mulOp, PtrState &state, Location loc, OpBuilder &builder) {
-  assert(state.isEmpty());
+  assert(state.isEmpty() && "state is a return argument");
 
   PtrState lhsState;
   if (failed(visitOperand(mulOp.getLhs(), lhsState, loc, builder)))
@@ -480,11 +480,12 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
 template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     arith::ConstantOp op, PtrState &state, Location loc, OpBuilder &builder) {
-  assert(state.isEmpty());
+  assert(state.isEmpty() && "state is a return argument");
 
   auto attr = cast<DenseElementsAttr>(op.getValue());
   Type elementType = attr.getElementType();
-  assert(attr.isSplat() && isa<IntegerType>(elementType));
+  assert(attr.isSplat() && isa<IntegerType>(elementType) &&
+         "Expecting constant tensor");
 
   state.scalar = builder.create<arith::ConstantIndexOp>(
       loc, attr.getValues<IntegerAttr>()[0].getValue().getSExtValue());

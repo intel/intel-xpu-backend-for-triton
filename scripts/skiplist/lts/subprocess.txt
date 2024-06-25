@@ -1,0 +1,13 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/800
+test/unit/language/test_subprocess.py::test_print[device_print-float16]
+test/unit/language/test_subprocess.py::test_print[device_print-float32]
+test/unit/language/test_subprocess.py::test_print[device_print-float64]
+test/unit/language/test_subprocess.py::test_print[device_print-int16]
+test/unit/language/test_subprocess.py::test_print[device_print-int32]
+test/unit/language/test_subprocess.py::test_print[device_print-int8]
+test/unit/language/test_subprocess.py::test_print[device_print-long]
+test/unit/language/test_subprocess.py::test_print[device_print-uint8]
+test/unit/language/test_subprocess.py::test_print[device_print_hex-int16]
+test/unit/language/test_subprocess.py::test_print[device_print_hex-int32]
+test/unit/language/test_subprocess.py::test_print[device_print_hex-int64]
+test/unit/language/test_subprocess.py::test_print[print-int32]
