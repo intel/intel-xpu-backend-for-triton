@@ -116,6 +116,9 @@ def test_print(func: str, data_type: str):
     else:
         assert f"Unknown kernel: {func}"
 
+    # FIXME: remove trigger to get output from kernel for xpu
+    repr(x)
+
     if func != "print_no_arg" and func != "no_arg_print" and func != "device_print_large" and \
        func != "print_multiple_args" and func != "device_print_multiple_args" and \
        func != "device_print_pointer":
