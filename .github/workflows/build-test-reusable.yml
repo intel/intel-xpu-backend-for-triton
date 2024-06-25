@@ -93,7 +93,7 @@ jobs:
       - name: Get LLVM commit id
         run: |
           LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
-          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
+          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" | tee -a $GITHUB_ENV
 
       - name: Load LLVM cache
         id: llvm-cache
@@ -106,10 +106,15 @@ jobs:
           key: packages-${{ env.LLVM_COMMIT_ID }}-${{ env.CACHE_NUMBER }}
 
       - name: Build LLVM
-        if: inputs.build_llvm
+        if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
         run: |
           export BASE=$HOME
           ./scripts/compile-triton.sh --llvm
+
+      - name: Set LLVM_SYSPATH
+        if: inputs.build_llvm
+        run: |
+          echo "LLVM_SYSPATH=$HOME/packages/llvm" | tee -a $GITHUB_ENV
 
       - name: Save LLVM cache
         if: steps.llvm-cache.outputs.status == 'miss'
