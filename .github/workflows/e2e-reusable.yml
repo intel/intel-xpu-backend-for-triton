@@ -47,7 +47,7 @@ jobs:
           echo "${{ toJSON(inputs) }}"
 
   build:
-    name: Test
+    name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} accuracy
     runs-on:
       - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
@@ -88,11 +88,11 @@ jobs:
           pip install wheel
 
       - name: Setup PyTorch with IPEX
-        if: ${{ env.INSTALL_IPEX == 'true' }}
+        if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
 
       - name: Setup PyTorch without IPEX
-        if: ${{ env.INSTALL_IPEX == 'false' }}
+        if: ${{ !inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
@@ -118,11 +118,11 @@ jobs:
           pip install $(curl -sSL https://raw.githubusercontent.com/huggingface/pytorch-image-models/$TIMM_COMMIT_ID/requirements.txt | grep -vE torch)
 
       - name: Setup IPEX
-        if: ${{ env.INSTALL_IPEX == 'true' }}
+        if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-ipex
 
       - name: Setup fake IPEX
-        if: ${{ env.INSTALL_IPEX == 'false' }}
+        if: ${{ !inputs.install_ipex }}
         uses: ./.github/actions/setup-fake-ipex
 
       - name: Generate Triton cache key
@@ -161,7 +161,7 @@ jobs:
           pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
 
       - name: Install transformers package
-        if: ${{ matrix.suite == 'huggingface' }}
+        if: ${{ inputs.suite == 'huggingface' }}
         uses: ./.github/actions/install-dependency
         with:
           package: transformers
@@ -170,7 +170,7 @@ jobs:
           try-tag-prefix: v
 
       - name: Install torchvision package
-        if: ${{ matrix.suite == 'timm_models' || matrix.suite == 'torchbench' }}
+        if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
@@ -178,7 +178,7 @@ jobs:
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
 
       - name: Install torchtext package
-        if: ${{ matrix.suite == 'torchbench' }}
+        if: ${{ inputs.suite == 'torchbench' }}
         uses: ./.github/actions/install-dependency
         with:
           package: torchtext
@@ -186,7 +186,7 @@ jobs:
           ref: ${{ env.TORCHTEXT_COMMIT_ID }}
 
       - name: Install torchaudio package
-        if: ${{ matrix.suite == 'torchbench' }}
+        if: ${{ inputs.suite == 'torchbench' }}
         uses: ./.github/actions/install-dependency
         with:
           package: torchaudio
@@ -194,7 +194,7 @@ jobs:
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
 
       - name: Clone pytorch benchmark
-        if: ${{ matrix.suite == 'torchbench' }}
+        if: ${{ inputs.suite == 'torchbench' }}
         uses: actions/checkout@v4
         with:
           repository: ${{ env.BENCHMARK_REPO }}
@@ -203,7 +203,7 @@ jobs:
           path: benchmark
 
       - name: Install pytorch benchmark
-        if: ${{ matrix.suite == 'torchbench' }}
+        if: ${{ inputs.suite == 'torchbench' }}
         run: |
           cd benchmark
           python install.py
@@ -220,7 +220,7 @@ jobs:
             export TORCH_COMPILE_DEBUG_DIR=$GITHUB_WORKSPACE
           fi
           cd pytorch
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} accuracy xpu 0
+          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} accuracy xpu 0
 
       - name: Report environment details
         run: |
@@ -232,7 +232,7 @@ jobs:
 
           cat <<EOF | tee inductor_log/.env
           TIMESTAMP=$TIMESTAMP
-          JOB_NAME=${{ join(matrix.*, '-') }}
+          JOB_NAME=${{ join(inputs.*, '-') }}
           GITHUB_RUN_ID=$GITHUB_RUN_ID
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
           GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
@@ -267,7 +267,7 @@ jobs:
       - name: Upload test logs
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ join(matrix.*, '-') }}
+          name: logs-${{ join(inputs.*, '-') }}
           path: inductor_log
 
       - name: Save pip cache
