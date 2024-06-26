@@ -50,21 +50,32 @@ struct PtrState {
     return offsets.size();
   }
 
+  // @return true if the `PtrState` structure describes a block pointer,
+  // otherwise it describes a non-block pointer.
   bool isBlockPtr() const { return !order.empty(); }
 
+  // This function checks whether the pointer addresses wraps around on the
+  // dimention `dim`.
+  // @return true if the address wraps around, (i.e. has modulo).
+  // Note that this function should only be called when PtrState describes a
+  // non-block pointer.
   bool dimHasModulo(uint32_t dim) const {
     assert(
         !isBlockPtr() &&
         "Analysis should not check modulo if PtrState describes block pointer");
 
-    assert(dim < getRank());
+    assert(dim < getRank() && "Dim cannot be higher than the tensor rank.");
 
+    // When PtrState describes a non-block pointer, shape field indicates how
+    // address wraps around. As a result, a constant 0 indicates no wrap around
+    // (i.e. modulo) for the dimension.
     if (auto intOp = shape[dim].getDefiningOp<arith::ConstantIntOp>()) {
       return intOp.value() != 0;
     }
     return true;
   }
 
+  // @return true if addresses wrap around in any of the pointer dimension.
   bool hasModulo() const {
     for (int32_t i = 0; i < getRank(); i++) {
       if (dimHasModulo(i)) {
