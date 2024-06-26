@@ -100,15 +100,25 @@ jobs:
         uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
-          CACHE_NUMBER: 1
+          CACHE_NUMBER: 2
         with:
           path: $HOME/packages
           key: packages-${{ env.LLVM_COMMIT_ID }}-${{ env.CACHE_NUMBER }}
+
+      - name: Clone LLVM
+        if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
+        uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ env.LLVM_COMMIT_ID }}
+          path: llvm
+          submodules: recursive
 
       - name: Build LLVM
         if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
         run: |
           export BASE=$HOME
+          ln -s $PWD/llvm $BASE/llvm
           ./scripts/compile-triton.sh --llvm
 
       - name: Set LLVM_SYSPATH
