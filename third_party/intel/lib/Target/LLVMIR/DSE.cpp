@@ -193,12 +193,6 @@ public:
     return ptr == other.ptr && val == other.val && field == other.field &&
            memAccess == other.memAccess;
   }
-  bool operator<(const SetAddressPayloadInfo &other) const {
-    return &ptr < &other.ptr || (ptr == other.ptr && &val < &other.val) ||
-           (ptr == other.ptr && val == other.val && &field < &other.field) ||
-           (ptr == other.ptr && val == other.val && field == other.field &&
-            memAccess < other.memAccess);
-  }
 
 private:
   Value *ptr;              // the pointer to the payload
@@ -270,15 +264,13 @@ private:
 
     for (MemoryAccess *Current = StartAccess; Current;
          Current = cast<MemoryDef>(Current)->getDefiningAccess()) {
-      {
-        if (trace) {
-          llvm::errs() << "   visiting " << *Current;
-          if (!MSSA.isLiveOnEntryDef(Current) && isa<MemoryUseOrDef>(Current))
-            llvm::errs() << " ("
-                         << *cast<MemoryUseOrDef>(Current)->getMemoryInst()
-                         << ")";
-          llvm::errs() << "\n";
-        }
+      if (trace) {
+        llvm::errs() << "   visiting " << *Current;
+        if (!MSSA.isLiveOnEntryDef(Current) && isa<MemoryUseOrDef>(Current))
+          llvm::errs() << " ("
+                       << *cast<MemoryUseOrDef>(Current)->getMemoryInst()
+                       << ")";
+        llvm::errs() << "\n";
       }
 
       if (MSSA.isLiveOnEntryDef(Current) || isa<MemoryPhi>(Current))
