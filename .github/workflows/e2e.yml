@@ -103,6 +103,7 @@ jobs:
         mode: ${{ fromJson(needs.setup.outputs.mode) }}
         dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
       fail-fast: false
+    timeout-minutes: 720
     uses: ./.github/workflows/e2e-reusable.yml
     with:
       install_ipex: ${{ inputs.install_ipex }}

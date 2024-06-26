@@ -40,7 +40,6 @@ env:
 jobs:
   print_inputs:
     name: Print inputs
-    needs: setup
     runs-on: Linux
     steps:
       - name: Print inputs
@@ -49,7 +48,6 @@ jobs:
 
   build:
     name: Test
-    needs: setup
     runs-on:
       - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
