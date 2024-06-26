@@ -104,11 +104,15 @@ fi
 
 build_llvm() {
 
-  # Clone the Intel LLVM repository (genx branch).
+  # Clone LLVM repository
   if [ ! -d "$LLVM_PROJ" ]; then
     echo "**** Cloning $LLVM_PROJ ****"
     cd $BASE
-    git clone --recursive https://github.com/intel/llvm.git -b genx
+    LLVM_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/cmake/llvm-hash.txt)"
+    git clone --recurse-submodules --jobs 8 https://github.com/llvm/llvm-project.git
+    cd llvm
+    git checkout $LLVM_COMMIT_ID
+    git submodule update --recursive
   fi
 
   echo "****** Configuring $LLVM_PROJ ******"
