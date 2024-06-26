@@ -264,9 +264,8 @@ struct PrefetchOpConversion
         mlir::ceil<unsigned>(bytesPerCol * 8, elemSizeInBits);
     unsigned tileHeightInElem = shapePerWarp[0];
 
-    Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
-    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
-    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    Value warpId = rewriter.create<arith::IndexCastOp>(
+        loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
     SmallVector<Value> multiDimWarpId =
         mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, {1, 0});
 
@@ -320,7 +319,7 @@ struct PrefetchOpConversion
             /*v_blocks*/ 1,
             /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
         if (failed(newOp.verify())) {
-          // Explicitly invoke verifier because `triton_gen` ops immediately
+          // Explicitly invoke verifier because `triton_gen` ops are immediately
           // lowered further to a builtin call.
           return failure();
         }
@@ -372,9 +371,8 @@ struct LoadOpConversion
     SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
     int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
-    Value warpSize = i32_val(threadsPerWarp);
-    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
-    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    Value warpId = rewriter.create<arith::IndexCastOp>(
+        loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
@@ -447,6 +445,11 @@ struct LoadOpConversion
             /*transpose*/ false,
             /*vnni_transform*/
             (!isOperandA && eltTy.getIntOrFloatBitWidth() != 32));
+        if (failed(load2dOp.verify())) {
+          // Explicitly invoke verifier because `triton_gen` ops are immediately
+          // lowered further to a builtin call.
+          return failure();
+        }
 
         rets.push_back(bitcast(load2dOp, unpackType));
       }
@@ -668,9 +671,8 @@ struct StoreOpConversion
     SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
     int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
-    Value warpSize = i32_val(threadsPerWarp);
-    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
-    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    Value warpId = rewriter.create<arith::IndexCastOp>(
+        loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
     SmallVector<Value> multiDimWarpId =
         mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
@@ -730,7 +732,7 @@ struct StoreOpConversion
           ++valOffset;
         }
 
-        rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
+        auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
             loc,
             /*ptr*/ base,
             /*base_width*/ baseWidth,
@@ -743,6 +745,11 @@ struct StoreOpConversion
             /*tile_height*/ elemsPerInstr[0],
             /*v_blocks*/ 1,
             /*stored_val*/ bitcast(storeVal, store2DGenXType));
+        if (failed(newOp.verify())) {
+          // Explicitly invoke verifier because `triton_gen` ops are immediately
+          // lowered further to a builtin call.
+          return failure();
+        }
       }
     }
     rewriter.eraseOp(op);

@@ -86,6 +86,13 @@ DPASEngineType getDPASType(DotOp op) {
       if (aTy.getElementType().isF32() && bTy.getElementType().isF32() &&
           op.getInputPrecision() == InputPrecision::TF32)
         return DPASEngineType::FP32_FP32_TF32_TF32;
+      // For FP8XFP8->FP32, upcast to FP16
+      if (aTy.getElementType().isFloat8E5M2() &&
+          bTy.getElementType().isFloat8E5M2())
+        return DPASEngineType::FP32_FP32_FP16_FP16;
+      if (aTy.getElementType().isFloat8E4M3FNUZ() &&
+          bTy.getElementType().isFloat8E4M3FNUZ())
+        return DPASEngineType::FP32_FP32_FP16_FP16;
     } else if (dTy.getElementType().isF16()) {
       if (aTy.getElementType().isF16() && bTy.getElementType().isF16())
         return DPASEngineType::FP16_FP16_FP16_FP16;

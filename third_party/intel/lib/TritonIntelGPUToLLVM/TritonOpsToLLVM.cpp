@@ -187,13 +187,18 @@ public:
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
           dataSize, blockWidth, blockHeight, vBlks, false /*transpose*/, vnni);
+      if (failed(load.verify())) {
+        // Explicitly invoke verifier because `triton_gen` ops are immediately
+        // lowered further to a builtin call.
+        return failure();
+      }
       rewriter.replaceOp(op, bitcast(load, resType));
     } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, TritonGEN::LoadCacheControl::L1C_L3C);
       if (failed(newOp.verify())) {
-        // Explicitly invoke verifier because `triton_gen` ops immediately
+        // Explicitly invoke verifier because `triton_gen` ops are immediately
         // lowered further to a builtin call.
         return failure();
       }
@@ -202,10 +207,15 @@ public:
       VectorType vectorType =
           getVectorType(cast<RankedTensorType>(op.getValue().getType()),
                         rewriter.getIntegerType(dataSize));
-      rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
+      auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks,
           bitcast(adaptor.getValue(), vectorType));
+      if (failed(newOp.verify())) {
+        // Explicitly invoke verifier because `triton_gen` ops are immediately
+        // lowered further to a builtin call.
+        return failure();
+      }
       rewriter.eraseOp(op);
     }
 
