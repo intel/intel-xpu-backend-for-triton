@@ -21,7 +21,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "llvm/ADT/SmallVector.h"
-// #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -378,8 +377,9 @@ public:
 
       func.walk<WalkOrder::PreOrder>([&](Operation *op) {
         if (!llvm::any_of(op->getResultTypes(), hasTensorType))
-          ;
-        else if (auto forOp = dyn_cast<scf::ForOp>(op))
+          return WalkResult::advance();
+
+        if (auto forOp = dyn_cast<scf::ForOp>(op))
           distributeScfForOp(forOp);
         else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
           distributeMakeTensorPtrOp(ptrOp, warpId);
@@ -394,6 +394,7 @@ public:
           distributeGenericOp(op);
         else
           assert(false && "op not considered");
+
         return WalkResult::advance();
       });
     }
