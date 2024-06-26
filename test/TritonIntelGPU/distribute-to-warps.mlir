@@ -159,19 +159,21 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     }
     tt.return
   }
-} // end module
+}
 
 // -----
-// test for flash-attention related ops
+
+// COM: test for flash-attention related ops
 #blocked = #triton_gpu.blocked<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
+
 // CHECK: [[WARP:#.*]] = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
-  tt.func public @_attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: f32, %arg4: !tt.ptr<f32>, %arg5: !tt.ptr<f32>) attributes {noinline = false} {
+module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
+  tt.func public @_attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: f32, %arg4: !tt.ptr<f32>, %arg5: !tt.ptr<f32>) {
     // CHECK: @_attn_fwd
     // CHECK: tt.splat {{.*}} : f32 -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = [[WARP]]}>>
     // CHECK: tt.splat {{.*}} : f32 -> tensor<16x64xf32, [[WARP]]>
-    // CHECK: "tt.reduce"
-    // CHECK: : (tensor<16x64xf32, [[WARP]]>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = [[WARP]]}>>
+    // CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}> ({
+    // CHECK: }) : (tensor<16x64xf32, [[WARP]]>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = [[WARP]]}>>
     // CHECK: tt.expand_dims {{.*}} {axis = 1 : i32} : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = [[WARP]]}>> -> tensor<16x1xf32, [[WARP]]>
     // CHECK: tt.broadcast {{.*}} : tensor<16x1xf32, [[WARP]]> -> tensor<16x64xf32, [[WARP]]>
     %0 = tt.splat %arg3 : f32 -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
@@ -186,4 +188,4 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     %5 = tt.broadcast %4 : tensor<128x1xf32, #blocked> -> tensor<128x64xf32, #blocked>
     tt.return
   }
-} // end module
+}
