@@ -49,19 +49,18 @@ SmallVector<int64_t> getSizePerWarp(RankedTensorType type, Attribute layout) {
   } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
     auto parentLayout =
         dyn_cast<ttg::BlockedEncodingAttr>(dotLayout.getParent());
-    assert(parentLayout &&
-           "at this stage, parent layout should be blocked layout.");
-    auto parentSizePerWarp = getSizePerWarp(type, parentLayout);
+    assert(parentLayout && "parent layout should be blocked layout.");
+    const SmallVector<int64_t> &parentSizePerWarp =
+        getSizePerWarp(type, parentLayout);
     if (dotLayout.getOpIdx() == 0) // dot operand A
       sizePerWarp.assign({parentSizePerWarp[0], type.getShape()[1]});
     else // dot operand B
       sizePerWarp.assign({type.getShape()[0], parentSizePerWarp[1]});
   } else if (auto sLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
     auto parentLayout = dyn_cast<ttg::BlockedEncodingAttr>(sLayout.getParent());
-    assert(parentLayout &&
-           "at this stage, parent layout should be blocked layout.");
+    assert(parentLayout && "parent layout should be blocked layout.");
     unsigned dim = sLayout.getDim();
-    auto parentSizePerWarp = getSizePerWarp(type, parentLayout);
+    SmallVector<int64_t> parentSizePerWarp = getSizePerWarp(type, parentLayout);
     parentSizePerWarp.erase(parentSizePerWarp.begin() + dim);
     return parentSizePerWarp;
   } else {
@@ -79,12 +78,12 @@ Attribute getWarpLayout(Attribute layout) {
         blockedLayout.getThreadsPerWarp(), blockedLayout.getOrder());
     return warpLayout;
   } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    auto parentLayout = getWarpLayout(dotLayout.getParent());
+    Attribute parentLayout = getWarpLayout(dotLayout.getParent());
     auto newDotLayout = ttg::DotOperandEncodingAttr::get(
         ctx, dotLayout.getOpIdx(), parentLayout, dotLayout.getKWidth());
     return newDotLayout;
   } else if (auto sLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
-    auto parentLayout = getWarpLayout(sLayout.getParent());
+    Attribute parentLayout = getWarpLayout(sLayout.getParent());
     auto newSLayout =
         ttg::SliceEncodingAttr::get(ctx, sLayout.getDim(), parentLayout);
     return newSLayout;
@@ -96,7 +95,7 @@ RankedTensorType convertType(RankedTensorType type) {
   Attribute layout = type.getEncoding();
   SmallVector<int64_t> sizePerWarp = getSizePerWarp(type, layout);
   Attribute warpLayout = getWarpLayout(layout);
-  // hack for expandDimOp which has fixed 1 sized dim
+  // sizePerWarp can not exceed size(shape) of the type
   for (auto i = 0; i < sizePerWarp.size(); i++) {
     sizePerWarp[i] = std::min(sizePerWarp[i], type.getShape()[i]);
   }
@@ -241,11 +240,11 @@ void distributeMakeTensorPtrOp(tt::MakeTensorPtrOp op, Value warpId) {
 }
 
 RankedTensorType transformToTypeWithWarpAttr(RankedTensorType type) {
-  auto attr = type.getEncoding();
-  auto ctx = attr.getContext();
+  Attribute attr = type.getEncoding();
+  MLIRContext *ctx = attr.getContext();
   ttgi::WarpEncodingAttr warpAttr;
   if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(attr)) {
-    auto idx = dotAttr.getOpIdx();
+    unsigned idx = dotAttr.getOpIdx();
     auto parentAttr = cast<ttgi::WarpEncodingAttr>(dotAttr.getParent());
     SmallVector<unsigned> parentSize(parentAttr.getSizePerThread());
     SmallVector<unsigned> parentThreads(parentAttr.getThreadsPerWarp());
@@ -257,7 +256,7 @@ RankedTensorType transformToTypeWithWarpAttr(RankedTensorType type) {
     warpAttr = ttgi::WarpEncodingAttr::get(ctx, parentSize, parentThreads,
                                            parentAttr.getOrder());
   } else if (auto sAttr = dyn_cast<ttg::SliceEncodingAttr>(attr)) {
-    auto dim = sAttr.getDim();
+    unsigned dim = sAttr.getDim();
     auto parentAttr = cast<ttgi::WarpEncodingAttr>(sAttr.getParent());
     SmallVector<unsigned> parentSize(parentAttr.getSizePerThread());
     SmallVector<unsigned> parentThreads(parentAttr.getThreadsPerWarp());
@@ -268,7 +267,7 @@ RankedTensorType transformToTypeWithWarpAttr(RankedTensorType type) {
   } else if (auto wAttr = dyn_cast<ttgi::WarpEncodingAttr>(attr)) {
     warpAttr = wAttr;
   } else {
-    assert(0 && "add more support");
+    llvm::report_fatal_error("can not reason about the warp layout");
   }
   auto newType =
       RankedTensorType::get(type.getShape(), type.getElementType(), warpAttr);
@@ -285,13 +284,11 @@ void distributeConvertLayoutOp(ttg::ConvertLayoutOp op, Value warpId,
       tt::PointerType::get(op.getSrc().getType(),
                            triton::TritonGEN::TritonGENMemorySpace::kWorkgroup);
 
-  // early return
+  // early return if src and dst has the same layout
   {
-    auto srcTy = transformToTypeWithWarpAttr(op.getSrc().getType());
-    auto dstTy = transformToTypeWithWarpAttr(convertedDstType);
+    Type srcTy = transformToTypeWithWarpAttr(op.getSrc().getType());
+    Type dstTy = transformToTypeWithWarpAttr(convertedDstType);
     if (srcTy == dstTy) {
-      // op.replaceAllUsesWith(op.getSrc());
-      // op->erase();
       op.getResult().setType(convertedDstType);
       return;
     }
