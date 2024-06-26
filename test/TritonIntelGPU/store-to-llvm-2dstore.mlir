@@ -23,7 +23,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     %12 = arith.truncf %11#0 : tensor<64x64xf32, #dpas> to tensor<64x64xf16, #dpas>
     %13 = tt.make_tensor_ptr %arg2, [%arg3, %arg5], [%arg6, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #dpas>>
     // The next two lines is used to start checking constant related to the BlockStore.
-    // CHECK-COUNT-6: llvm.call spir_funccc @_Z12get_local_idj
+    // CHECK-COUNT-3: llvm.call spir_funccc @_Z25__spirv_BuiltInSubgroupIdv
     // CHECK-COUNT-39: llvm.extractvalue
     // Next constant must be equal to warpsPerCTA[0]
     // CHECK: %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
