@@ -1,7 +1,6 @@
 # flake8: noqa: F821,F841
 import itertools
 import re
-import warnings
 from typing import Optional, Union
 import math
 import textwrap
@@ -5241,14 +5240,8 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     if is_interpreter():
         pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
 
-    if is_xpu():
-        # FIXME: revisit problem size once tl.dot is lowered to DPAS.
-        warnings.warn("FIXME: test case modified, reduced problem size")
-        M, N, K = 64, 128, 128
-        BLOCK_M, BLOCK_N, BLOCK_K = 64, 128, 64
-    else:
-        M, N, K = 128, 256, 256
-        BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
+    M, N, K = 128, 256, 256
+    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 128
 
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
@@ -5257,8 +5250,11 @@ def test_fp8_dot_acc(in_type_str, low_precision_acc, device):
     a = to_triton(A, device=device, dst_type=in_type_str)
     b = to_triton(B, device=device, dst_type=in_type_str)
     grid = (triton.cdiv(M, BLOCK_M), 1)
+    kern_kwargs = {}
+    if is_xpu():
+        kern_kwargs['threads_per_warp'] = 16
     matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0), C.stride(1),
-                        BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
+                        BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps, **kern_kwargs)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)
