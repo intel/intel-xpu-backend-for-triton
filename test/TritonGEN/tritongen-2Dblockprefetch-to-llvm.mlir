@@ -74,7 +74,7 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
 // -----
 
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid
+  // CHECK:      llvm.call spir_funccc @_Z44intel_sub_group_2d_block_prefetch_32b_8r8x1cPU3AS1viiiDv2_i(%arg0, %arg1, %arg2, %arg3, {{.*}}) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> ()
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }

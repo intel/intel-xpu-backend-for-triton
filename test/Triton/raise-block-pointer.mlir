@@ -87,3 +87,87 @@ tt.func @test_addptr_splat_splat_2d_store(%arg0 : !tt.ptr<f32>, %arg1: i64, %arg
   tt.store %2, %arg3, %arg2 : tensor<2x128x!tt.ptr<f32>>
   tt.return
 }
+
+// CHECK-LABEL:   tt.func @test_addptr_splat_make_range_add(
+// CHECK-SAME:                                              %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<128xf32> {
+// CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64
+// CHECK:           %[[VAL_2:.*]] = arith.constant 0 : i32
+// CHECK:           %[[VAL_3:.*]] = arith.constant 2 : i64
+// CHECK:           %[[VAL_4:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_1]]], {{\[}}%[[VAL_3]]], {{\[}}%[[VAL_2]]] {order = array<i32>} : <tensor<128xf32>>
+// CHECK:           %[[VAL_5:.*]] = tt.load %[[VAL_4]] : !tt.ptr<tensor<128xf32>>
+// CHECK:           tt.return %[[VAL_5]] : tensor<128xf32>
+tt.func @test_addptr_splat_make_range_add(%arg0 : !tt.ptr<f32>) -> tensor<128xf32> {
+  %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+  %1 = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32>
+  %2 = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32>
+  %3 = arith.addi %1, %2 : tensor<128xi32>
+  %4 = tt.addptr %0, %3 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
+  %5 = tt.load %4 : tensor<128x!tt.ptr<f32>>
+  tt.return %5 : tensor<128xf32>
+}
+
+// CHECK-LABEL:   tt.func @test_addptr_splat_make_range_mul(
+// CHECK-SAME:                                              %[[VAL_0:.*]]: !tt.ptr<f32>,
+// CHECK-SAME:                                              %[[VAL_1:.*]]: i32) -> tensor<128xf32> {
+// CHECK:           %[[VAL_2:.*]] = arith.constant 0 : i64
+// CHECK:           %[[VAL_3:.*]] = arith.constant 0 : i32
+// CHECK:           %[[VAL_4:.*]] = arith.index_cast %[[VAL_1]] : i32 to index
+// CHECK:           %[[VAL_5:.*]] = arith.index_cast %[[VAL_4]] : index to i64
+// CHECK:           %[[VAL_6:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_2]]], {{\[}}%[[VAL_5]]], {{\[}}%[[VAL_3]]] {order = array<i32>} : <tensor<128xf32>>
+// CHECK:           %[[VAL_7:.*]] = tt.load %[[VAL_6]] : !tt.ptr<tensor<128xf32>>
+// CHECK:           tt.return %[[VAL_7]] : tensor<128xf32>
+tt.func @test_addptr_splat_make_range_mul(%arg0 : !tt.ptr<f32>, %arg1: i32) -> tensor<128xf32> {
+  %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+  %1 = tt.splat %arg1 : i32 -> tensor<128xi32>
+  %2 = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32>
+  %3 = arith.muli %1, %2 : tensor<128xi32>
+  %4 = tt.addptr %0, %3 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
+  %5 = tt.load %4 : tensor<128x!tt.ptr<f32>>
+  tt.return %5 : tensor<128xf32>
+}
+
+// CHECK-LABEL:   tt.func @test_const_splat_addptr(
+// CHECK-SAME:                                     %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<128xf32> {
+// CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64
+// CHECK:           %[[VAL_2:.*]] = arith.constant 512 : i32
+// CHECK:           %[[VAL_3:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_1]]], {{\[}}%[[VAL_1]]], {{\[}}%[[VAL_2]]] {order = array<i32>} : <tensor<128xf32>>
+// CHECK:           %[[VAL_4:.*]] = tt.load %[[VAL_3]] : !tt.ptr<tensor<128xf32>>
+// CHECK:           tt.return %[[VAL_4]] : tensor<128xf32>
+tt.func @test_const_splat_addptr(%arg0 : !tt.ptr<f32>) -> tensor<128xf32> {
+  %cst = arith.constant dense<512> : tensor<128xi32>
+  %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+  %1 = tt.addptr %0, %cst : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
+  %2 = tt.load %1 : tensor<128x!tt.ptr<f32>>
+  tt.return %2 : tensor<128xf32>
+}
+
+// CHECK-LABEL:   tt.func @test_const_splat_addptr_2d(
+// CHECK-SAME:                                        %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<2x128xf32> {
+// CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64
+// CHECK:           %[[VAL_2:.*]] = arith.constant 512 : i32
+// CHECK:           %[[VAL_3:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_1]], %[[VAL_1]]], {{\[}}%[[VAL_1]], %[[VAL_1]]], {{\[}}%[[VAL_2]], %[[VAL_2]]] {order = array<i32>} : <tensor<2x128xf32>>
+// CHECK:           %[[VAL_4:.*]] = tt.load %[[VAL_3]] : !tt.ptr<tensor<2x128xf32>>
+// CHECK:           tt.return %[[VAL_4]] : tensor<2x128xf32>
+tt.func @test_const_splat_addptr_2d(%arg0 : !tt.ptr<f32>) -> tensor<2x128xf32> {
+  %cst = arith.constant dense<512> : tensor<2x128xi32>
+  %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<2x128x!tt.ptr<f32>>
+  %1 = tt.addptr %0, %cst : tensor<2x128x!tt.ptr<f32>>, tensor<2x128xi32>
+  %2 = tt.load %1 : tensor<2x128x!tt.ptr<f32>>
+  tt.return %2 : tensor<2x128xf32>
+}
+
+// CHECK-LABEL:   tt.func @test_addptr_broadcast(
+// CHECK-SAME:                                   %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<2x128xf32> {
+// CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64
+// CHECK:           %[[VAL_2:.*]] = arith.constant 1 : i32
+// CHECK:           %[[VAL_3:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_1]], %[[VAL_1]]], {{\[}}%[[VAL_1]], %[[VAL_1]]], {{\[}}%[[VAL_2]], %[[VAL_2]]] {order = array<i32>} : <tensor<2x128xf32>>
+// CHECK:           %[[VAL_4:.*]] = tt.load %[[VAL_3]] : !tt.ptr<tensor<2x128xf32>>
+// CHECK:           tt.return %[[VAL_4]] : tensor<2x128xf32>
+tt.func @test_addptr_broadcast(%arg0 : !tt.ptr<f32>) -> tensor<2x128xf32> {
+  %cst = arith.constant dense<1> : tensor<1x128xi32>
+  %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<2x128x!tt.ptr<f32>>
+  %1 = tt.broadcast %cst : tensor<1x128xi32> -> tensor<2x128xi32>
+  %2 = tt.addptr %0, %1 : tensor<2x128x!tt.ptr<f32>>, tensor<2x128xi32>
+  %3 = tt.load %2 : tensor<2x128x!tt.ptr<f32>>
+  tt.return %3 : tensor<2x128xf32>
+}
