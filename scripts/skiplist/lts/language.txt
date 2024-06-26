@@ -293,3 +293,5 @@ test/unit/language/test_core.py::test_dot[1-64-128-128-2-False-False-none-tf32-f
 test/unit/language/test_core.py::test_dot[1-64-128-128-2-False-False-none-tf32-float16-float32-1_1]
 test/unit/language/test_core.py::test_dot[1-64-128-128-2-False-False-none-tf32-float32-float32-1_0]
 test/unit/language/test_core.py::test_dot[1-64-128-128-2-False-False-none-tf32-float32-float32-1_1]
+test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e5-float32-1]
+test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e4nv-float32-1]

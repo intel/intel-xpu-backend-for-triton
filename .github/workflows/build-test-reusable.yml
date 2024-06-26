@@ -37,10 +37,18 @@ on:
         description: Ignore test errors
         type: boolean
         default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
       run_name:
         description: Custom run name
         type: string
         default: "Build and test"
+      build_llvm:
+        description: Build LLVM
+        type: boolean
+        default: true
 
 permissions: read-all
 
@@ -49,16 +57,6 @@ env:
   TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
-  print_inputs:
-    name: Print inputs
-    runs-on: Linux
-    steps:
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
   integration-tests:
     name: Integration tests
     runs-on:
@@ -68,6 +66,12 @@ jobs:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -89,7 +93,45 @@ jobs:
       - name: Get LLVM commit id
         run: |
           LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
-          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
+          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" | tee -a $GITHUB_ENV
+
+      - name: Load LLVM cache
+        id: llvm-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 2
+        with:
+          path: $HOME/packages
+          key: packages-${{ env.LLVM_COMMIT_ID }}-${{ env.CACHE_NUMBER }}
+
+      - name: Clone LLVM
+        if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
+        uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ env.LLVM_COMMIT_ID }}
+          path: llvm
+          submodules: recursive
+
+      - name: Build LLVM
+        if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
+        run: |
+          export BASE=$HOME
+          ln -s $PWD/llvm $BASE/llvm
+          ./scripts/compile-triton.sh --llvm
+
+      - name: Set LLVM_SYSPATH
+        if: inputs.build_llvm
+        run: |
+          echo "LLVM_SYSPATH=$HOME/packages/llvm" | tee -a $GITHUB_ENV
+
+      - name: Save LLVM cache
+        if: steps.llvm-cache.outputs.status == 'miss'
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.llvm-cache.outputs.path }}
+          dest: ${{ steps.llvm-cache.outputs.dest }}
 
       - name: Setup PyTorch with IPEX
         if: ${{ inputs.install_ipex }}
@@ -138,6 +180,19 @@ jobs:
         if: inputs.ignore_errors
         run: |
           echo "TRITON_TEST_IGNORE_ERRORS=true" >> $GITHUB_ENV
+
+      - name: Set a default skip list
+        if: inputs.skip_list == ''
+        run: |
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
+          if [[ -d $skiplist ]]; then
+            echo "TRITON_TEST_SKIPLIST_DIR=$skiplist" | tee -a $GITHUB_ENV
+          fi
+
+      - name: Set a custom skip list
+        if: inputs.skip_list != ''
+        run: |
+          echo "TRITON_TEST_SKIPLIST_DIR=$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}" | tee -a $GITHUB_ENV
 
       - name: Run core tests
         run: |
@@ -191,7 +246,7 @@ jobs:
           run_tutorial_test "07-extern-functions"
           run_tutorial_test "08-grouped-gemm"
           run_tutorial_test "10-experimental-block-pointer"
-          TRITON_INTEL_ENABLE_BLOCK_PTR=1 run_tutorial_test "10-experimental-block-pointer"
+          run_tutorial_test "10i-experimental-block-pointer"
 
       - name: Run CXX unittests
         run: |
@@ -233,6 +288,7 @@ jobs:
 
       - name: Pass rate
         run: |
+          source ./scripts/capture-hw-details.sh
           python3 scripts/pass_rate.py --reports reports
           python3 scripts/pass_rate.py --reports reports --json > pass_rate.json
 
@@ -241,12 +297,12 @@ jobs:
         if: github.ref_name == 'llvm-target'
         uses: actions/upload-artifact@v4
         with:
-          name: pass_rate-${{ inputs.python_version }}
+          name: pass_rate-${{ inputs.python_version }}-${{ inputs.driver_version }}
           path: pass_rate.json
 
       - name: Upload test reports
         if: inputs.upload_test_reports
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports-${{ inputs.python_version }}
+          name: test-reports-${{ inputs.python_version }}-${{ inputs.driver_version }}
           path: reports
