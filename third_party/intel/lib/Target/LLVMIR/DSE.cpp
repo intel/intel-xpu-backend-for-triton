@@ -244,12 +244,10 @@ private:
   bool trace;
 
   static bool isCandidate(Instruction *I) {
-    if (!isa<CallInst>(I))
-      return false;
-
-    auto *CI = cast<CallInst>(I);
-    StringRef funcName = CI->getCalledFunction()->getName();
-    return funcName.starts_with(SetAddressPayloadInfo::prefix);
+    if (auto *CI = dyn_cast<CallInst>(I))
+      return CI->getCalledFunction()->getName().starts_with(
+          SetAddressPayloadInfo::prefix);
+    return false;
   }
 
   bool getDomMemoryDef(const SetAddressPayloadInfo &info,
@@ -335,7 +333,7 @@ private:
 
     SmallVector<SetAddressPayloadInfo> SetPayloads;
 
-    for (unsigned I = 0; I < State.MemDefs.size(); I++) {
+    for (unsigned I = 0; I < State.MemDefs.size(); ++I) {
       MemoryDef *KillingDef = State.MemDefs[I];
       Instruction *KillingI = KillingDef->getMemoryInst();
       if (!isCandidate(KillingI))
@@ -364,8 +362,8 @@ private:
       ToCheck.insert(KillingDef->getDefiningAccess());
 
       // Check if MemoryAccesses in the worklist are killed by KillingDef.
-      for (unsigned I = 0; I < ToCheck.size(); I++) {
-        MemoryAccess *Current = ToCheck[I];
+      for (unsigned J = 0; J < ToCheck.size(); ++J) {
+        MemoryAccess *Current = ToCheck[J];
         bool isDead = getDomMemoryDef(info, Current, MSSA, SetPayloads);
         if (isDead) {
           Instruction *DeadI = KillingI;
