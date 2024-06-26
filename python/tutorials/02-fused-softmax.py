@@ -122,23 +122,16 @@ def softmax(x):
     # A simple heuristic is to schedule `BLOCK_SIZE // (num_stages*WARP_SIZE)` warps.
     # As the maximum number of warps is limited by hardware, we need to
     # make sure we do not surpass that limit.
+    # You will see in the next tutorial how to auto-tune this value in a more natural
+    # way so you don't have to come up with manual heuristics yourself.
     num_warps = min(WG_SIZE, BLOCK_SIZE // num_stages) // WARP_SIZE
 
     # Allocate output
     y = torch.empty_like(x)
 
     # Create a number of persistent programs.
-    softmax_kernel[(n_rows, )](
-        y,
-        x,
-        x.stride(0),
-        y.stride(0),
-        n_rows,
-        n_cols,
-        num_warps=num_warps,
-        BLOCK_SIZE=BLOCK_SIZE,
-        num_stages=num_stages
-    )
+    softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_rows, n_cols, num_warps=num_warps,
+                               BLOCK_SIZE=BLOCK_SIZE, num_stages=num_stages)
     return y
 
 
