@@ -213,14 +213,11 @@ static Value createGenISADPAS(TritonGEN::MatrixDPASOp op,
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  // intel_sub_group_2d_block_read_32b_8r8x1c is expected to be lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is incorrectly lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v8i32.
-  // intel_sub_group_2d_block_read_32b_8r8x2c is expected to be lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v8i32, but it is incorrectly lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v16i32.
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8)
+  // OCL builtins with 32-bit element size and tile width of 8 are lowered
+  // incorrectly. For example, intel_sub_group_2d_block_read_32b_8r8x1c is
+  // expected to be lowered to llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is
+  // incorrectly lowered to llvm.genx.GenISA.LSC2DBlockRead.v8i32.
+  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 8)
     return false;
 
   // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
@@ -296,7 +293,9 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   Location loc = op->getLoc();
 
   // FIXME: Use the OpenCL API also for all other variants.
-  if (isOCLBuiltinAvailable(op)) {
+  char *env = std::getenv("TRITONGEN_FORCE_GENISA");
+  const bool useGenISA = env ? (bool)std::atoi(env) : false;
+  if (!useGenISA && isOCLBuiltinAvailable(op)) {
     auto dest = rewriter.create<LLVM::AllocaOp>(
         loc, ptr_ty(context), resType.getElementType(),
         i32_val(resType.getNumElements()));
@@ -577,22 +576,71 @@ storeCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
+static LLVM::CallOp
+createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
+                         ConversionPatternRewriter &rewriter) {
+  MLIRContext *context = rewriter.getContext();
+  Location loc = op->getLoc();
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+
+  // The IGC intrinsic requires the first argument be int64
+  Value ptr = op.getPtr();
+  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
+  Value baseWidth = op.getBaseWidth();
+  Value baseHeight = op.getBaseHeight();
+  Value basePitch = op.getBasePitch();
+  Value x = op.getX();
+  Value y = op.getY();
+  Value storeVal = op.getStoredVal();
+
+  llvm::LLVMContext llvmContext;
+  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
+  auto storeTy = typeTranslator.translateType(storeVal.getType());
+  SmallVector<llvm::Type *> llvmTypes{storeTy};
+  std::string funcName = llvm::GenISAIntrinsic::getName(
+      llvm::GenISAIntrinsic::GenISA_LSC2DBlockWrite, llvmTypes);
+
+  SmallVector<Type> argTypes{
+      int_ty(64),          baseWidth.getType(), baseHeight.getType(),
+      basePitch.getType(), x.getType(),         y.getType(),
+      int_ty(32),          int_ty(32),          int_ty(32),
+      int_ty(32),          int_ty(1),           int_ty(1),
+      int_ty(32),          storeVal.getType()};
+
+  LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
+      moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(context));
+  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+  auto elemSize = i32_val(op.getElemSizeInBits());
+  auto tileWidth = i32_val(op.getTileWidth());
+  auto tileHeight = i32_val(op.getTileHeight());
+  auto vBlocks = i32_val(op.getVBlocks());
+  auto useTranspose = i1_val(false);
+  auto vnniTransform = i1_val(false);
+  auto cache = i32_val(static_cast<int>(op.getCacheControl()));
+
+  Value one = i32_val(1);
+  SmallVector<Value> args{ptr,
+                          sub(baseWidth, one),
+                          sub(baseHeight, one),
+                          sub(basePitch, one),
+                          x,
+                          y,
+                          elemSize,
+                          tileWidth,
+                          tileHeight,
+                          vBlocks,
+                          useTranspose,
+                          vnniTransform,
+                          cache,
+                          storeVal};
+
+  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  return callOp;
+}
+
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
-  // FIXME: Incorrect usages of
-  // intel_sub_group_2d_block_prefetch_32b_2r32x1c,
-  // intel_sub_group_2d_block_prefetch_32b_4r32x1c and
-  // intel_sub_group_2d_block_prefetch_32b_8r32x1c.
-  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 32 &&
-      op.getVBlocks() == 1)
-    return false;
-
-  // intel_sub_group_2d_block_read_32b_8r8x1c is expected to be lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is incorrectly lowered to
-  // llvm.genx.GenISA.LSC2DBlockRead.v8i32.
-  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
-      op.getTileWidth() == 8 && op.getVBlocks() == 1)
-    return false;
-
   // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
   // intel_sub_group_2d_block_read_32b_16r16x1c.
   if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 16 &&
@@ -615,7 +663,9 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   Location loc = op->getLoc();
 
   // FIXME: Use the OpenCL API also for all other variants.
-  if (isOCLBuiltinAvailable(op)) {
+  char *env = std::getenv("TRITONGEN_FORCE_GENISA");
+  const bool useGenISA = env ? (bool)std::atoi(env) : false;
+  if (!useGenISA && isOCLBuiltinAvailable(op)) {
     std::string fnName = "intel_sub_group_2d_block_prefetch_";
     fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
               std::to_string(op.getTileHeight()) + "r" +
@@ -1215,6 +1265,14 @@ struct TritonMatrix2DBlockStoreLowering
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *context = rewriter.getContext();
     Location loc = op->getLoc();
+
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
+    const bool useGenISA = env ? (bool)std::atoi(env) : false;
+    if (useGenISA) {
+      rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
+      return success();
+    }
 
     VectorType storeValType = op.getStoredVal().getType();
     auto storeValPtr = rewriter.create<LLVM::AllocaOp>(

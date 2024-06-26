@@ -264,9 +264,8 @@ struct PrefetchOpConversion
         mlir::ceil<unsigned>(bytesPerCol * 8, elemSizeInBits);
     unsigned tileHeightInElem = shapePerWarp[0];
 
-    Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
-    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
-    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    Value warpId = rewriter.create<arith::IndexCastOp>(
+        loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
     SmallVector<Value> multiDimWarpId =
         mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, {1, 0});
 
@@ -372,9 +371,8 @@ struct LoadOpConversion
     SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
     int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
-    Value warpSize = i32_val(threadsPerWarp);
-    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
-    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    Value warpId = rewriter.create<arith::IndexCastOp>(
+        loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
@@ -673,9 +671,8 @@ struct StoreOpConversion
     SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
     int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
-    Value warpSize = i32_val(threadsPerWarp);
-    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
-    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
+    Value warpId = rewriter.create<arith::IndexCastOp>(
+        loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
     SmallVector<Value> multiDimWarpId =
         mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
