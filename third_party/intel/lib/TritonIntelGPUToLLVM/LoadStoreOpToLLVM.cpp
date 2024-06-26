@@ -391,6 +391,11 @@ struct LoadOpConversion
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
     elemsPerLane = isOperandA ? elemsPerLane / (opsPerChannel == 4 ? 2 : 1)
                               : elemsPerLane / opsPerChannel;
+
+    // FP8 tensors will be promoted to FP16 to use DPAS
+    // Hence, there are 2 elements per lane instead of four
+    if (isOperandA && (eltTy.isFloat8E5M2() || eltTy.isFloat8E4M3FNUZ()))
+      elemsPerLane = elemsPerLane / 2;
     Type load2DGenXType = LLVM::getFixedVectorType(elemType, elemsPerLane);
 
     // Outer dim for A is the M, for B is the N. Inner dim for both is the K.

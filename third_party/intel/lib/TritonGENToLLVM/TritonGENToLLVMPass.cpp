@@ -231,6 +231,12 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 32 && op.getVBlocks() == 1)
     return false;
 
+  // Missing intel_sub_group_2d_block_read_8b_8r16x1c and
+  // intel_sub_group_2d_block_read_8b_16r16x1c.
+  Type eltTy = op.getRes().getType().getElementType();
+  bool isFP8 = (eltTy.isFloat8E5M2() || eltTy.isFloat8E4M3FNUZ());
+  if (isFP8 && op.getTileWidth() == 16 && op.getVBlocks() == 1)
+    return false;
   return true;
 }
 
