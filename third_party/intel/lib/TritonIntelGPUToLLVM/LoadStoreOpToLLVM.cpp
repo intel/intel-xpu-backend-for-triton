@@ -664,7 +664,7 @@ struct StoreOpConversion
     Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(tensorType);
-    auto elemsPerInstr = dpasLayout.getShapeC();
+    auto elemsPerInstr = dpasLayout.getDPASInstShapeC();
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, 2);
@@ -697,58 +697,70 @@ struct StoreOpConversion
     Value basePitch = mul(rowStride, elemSizeInBytes);
 
     // A warp stride for the replicates.
-    int outerDimWarpNum = std::min<int>(
-        warpsPerCTA[0], mlir::ceil<unsigned>(tensorShape[0], elemsPerInstr[0]));
-    int innerDimWarpNum = std::min<int>(
-        warpsPerCTA[1], mlir::ceil<unsigned>(tensorShape[1], elemsPerInstr[1]));
+    auto repClusterShape = dpasLayout.getShapeC();
+    int outerDimWarpNum =
+        std::min<int>(warpsPerCTA[0],
+                      mlir::ceil<unsigned>(tensorShape[0], repClusterShape[0]));
+    int innerDimWarpNum =
+        std::min<int>(warpsPerCTA[1],
+                      mlir::ceil<unsigned>(tensorShape[1], repClusterShape[1]));
     Value outerDimWarpId = urem(multiDimWarpId[0], i32_val(outerDimWarpNum));
     Value innerDimWarpId = urem(multiDimWarpId[1], i32_val(innerDimWarpNum));
     int64_t numRepOuter = numReps[0];
     int64_t numRepInner = numReps[1];
 
     std::array<unsigned, 2> replicaStride = {
-        static_cast<unsigned>(outerDimWarpNum * elemsPerInstr[0]),
-        static_cast<unsigned>(innerDimWarpNum * elemsPerInstr[1])};
+        static_cast<unsigned>(outerDimWarpNum * repClusterShape[0]),
+        static_cast<unsigned>(innerDimWarpNum * repClusterShape[1])};
     std::array<unsigned, 2> warpStride = {
-        static_cast<unsigned>(elemsPerInstr[0]),
-        static_cast<unsigned>(elemsPerInstr[1])};
+        static_cast<unsigned>(repClusterShape[0]),
+        static_cast<unsigned>(repClusterShape[1])};
 
     Value dimWarpId0 = mul(outerDimWarpId, i32_val(warpStride[0]));
     Value dimWarpId1 = mul(innerDimWarpId, i32_val(warpStride[1]));
     Value warpId0Offset = add(dimWarpId0, offsetBaseY);
     Value warpId1Offset = add(dimWarpId1, offsetBaseX);
 
+    auto repCluster = dpasLayout.getRepCluster();
     unsigned valOffset = 0;
     for (int m = 0; m < numRepOuter; ++m) {
-      Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0]));
       for (int n = 0; n < numRepInner; ++n) {
-        Value offsetX = add(warpId1Offset, i32_val(n * replicaStride[1]));
+        for (int repM = 0; repM < repCluster[0]; ++repM) {
+          Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0] +
+                                                     repM * elemsPerInstr[0]));
+          for (int repN = 0; repN < repCluster[1]; ++repN) {
 
-        Value storeVal = rewriter.create<LLVM::UndefOp>(
-            loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
-                                          elemsPerLane));
-        for (size_t i = 0; i < elemsPerLane; ++i) {
-          storeVal = insert_element(storeVal, vals[valOffset], i32_val(i));
-          ++valOffset;
-        }
+            Value offsetX =
+                add(warpId1Offset,
+                    i32_val(n * replicaStride[1] + repN * elemsPerInstr[1]));
 
-        auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
-            loc,
-            /*ptr*/ base,
-            /*base_width*/ baseWidth,
-            /*base_height*/ height,
-            /*base_pitch*/ basePitch,
-            /*x*/ trunc(i32_ty, offsetX),
-            /*y*/ trunc(i32_ty, offsetY),
-            /*elem_size_in_bits*/ elemSizeInBits,
-            /*tile_width*/ elemsPerInstr[1],
-            /*tile_height*/ elemsPerInstr[0],
-            /*v_blocks*/ 1,
-            /*stored_val*/ bitcast(storeVal, store2DGenXType));
-        if (failed(newOp.verify())) {
-          // Explicitly invoke verifier because `triton_gen` ops are immediately
-          // lowered further to a builtin call.
-          return failure();
+            Value storeVal = rewriter.create<LLVM::UndefOp>(
+                loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
+                                              elemsPerLane));
+            for (size_t i = 0; i < elemsPerLane; ++i) {
+              storeVal = insert_element(storeVal, vals[valOffset], i32_val(i));
+              ++valOffset;
+            }
+
+            auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
+                loc,
+                /*ptr*/ base,
+                /*base_width*/ baseWidth,
+                /*base_height*/ height,
+                /*base_pitch*/ basePitch,
+                /*x*/ trunc(i32_ty, offsetX),
+                /*y*/ trunc(i32_ty, offsetY),
+                /*elem_size_in_bits*/ elemSizeInBits,
+                /*tile_width*/ elemsPerInstr[1],
+                /*tile_height*/ elemsPerInstr[0],
+                /*v_blocks*/ 1,
+                /*stored_val*/ bitcast(storeVal, store2DGenXType));
+            if (failed(newOp.verify())) {
+              // Explicitly invoke verifier because `triton_gen` ops are
+              // immediately lowered further to a builtin call.
+              return failure();
+            }
+          }
         }
       }
     }
