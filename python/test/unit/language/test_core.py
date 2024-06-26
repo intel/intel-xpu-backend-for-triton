@@ -3466,17 +3466,15 @@ def test_max_num_imprecise_acc(device):
         z = tl.dot(x, y, acc=z, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC)
         tl.store(Z + off_m[:, None] * BLOCK_N + off_n[None, :], z)
 
-    if torch.xpu.is_available():
-        # FIXME: revisit problem size once tl.dot is lowered to DPAS.
-        warnings.warn("FIXME: test case modified, reduced problem size")
-        M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 64, 64, 64, 4, 64
-    else:
-        M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 128, 128, 128, 4, 64
+    M, N, K, num_warps, MAX_NUM_IMPRECISE_ACC = 128, 128, 128, 4, 64
 
     x = torch.zeros((M, K), dtype=torch.float8_e5m2, device=device)
     y = torch.zeros((K, N), dtype=torch.float8_e5m2, device=device)
     z = torch.zeros((M, N), dtype=torch.float32, device=device)
-    h = kernel[(1, 1)](x, y, z, M, N, K, MAX_NUM_IMPRECISE_ACC, num_warps=num_warps)
+    kern_kwargs = {}
+    if is_xpu():
+        kern_kwargs['threads_per_warp'] = 16
+    h = kernel[(1, 1)](x, y, z, M, N, K, MAX_NUM_IMPRECISE_ACC, num_warps=num_warps, **kern_kwargs)
     if not is_cuda():
         return
     assert h.asm["ptx"].count("add.f32") == (M * N) // (32 * num_warps) * (K / MAX_NUM_IMPRECISE_ACC)

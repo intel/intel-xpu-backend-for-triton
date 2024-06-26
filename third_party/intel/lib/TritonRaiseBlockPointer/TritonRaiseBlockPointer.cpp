@@ -50,21 +50,32 @@ struct PtrState {
     return offsets.size();
   }
 
+  // @return true if the `PtrState` structure describes a block pointer,
+  // otherwise it describes a non-block pointer.
   bool isBlockPtr() const { return !order.empty(); }
 
+  // This function checks whether the pointer addresses wraps around on the
+  // dimention `dim`.
+  // @return true if the address wraps around, (i.e. has modulo).
+  // Note that this function should only be called when PtrState describes a
+  // non-block pointer.
   bool dimHasModulo(uint32_t dim) const {
     assert(
         !isBlockPtr() &&
         "Analysis should not check modulo if PtrState describes block pointer");
 
-    assert(dim < getRank());
+    assert(dim < getRank() && "Dim cannot be higher than the tensor rank.");
 
+    // When PtrState describes a non-block pointer, shape field indicates how
+    // address wraps around. As a result, a constant 0 indicates no wrap around
+    // (i.e. modulo) for the dimension.
     if (auto intOp = shape[dim].getDefiningOp<arith::ConstantIntOp>()) {
       return intOp.value() != 0;
     }
     return true;
   }
 
+  // @return true if addresses wrap around in any of the pointer dimension.
   bool hasModulo() const {
     for (int32_t i = 0; i < getRank(); i++) {
       if (dimHasModulo(i)) {
@@ -302,10 +313,10 @@ struct TritonRaiseBlockPointer
 
     return TypeSwitch<Operation *, LogicalResult>(definingOp)
         .Case<arith::AddIOp, arith::ConstantOp, arith::MulIOp,
-              triton::MakeRangeOp, triton::SplatOp, triton::ExpandDimsOp>(
-            [this, &state, loc, &builder](auto op) {
-              return visitAddPointerOperand(op, state, loc, builder);
-            })
+              triton::BroadcastOp, triton::MakeRangeOp, triton::SplatOp,
+              triton::ExpandDimsOp>([this, &state, loc, &builder](auto op) {
+          return visitAddPointerOperand(op, state, loc, builder);
+        })
         .Default([](Operation *op) {
           llvm::dbgs() << "TritonRaiseBlockPointer: encountered addptr operand "
                           "produced by an unsupported operation\n"
@@ -540,6 +551,40 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   }
 
   LLVM_DEBUG(llvm::dbgs() << "ExpandDims state: " << state << "\n";);
+
+  return success();
+}
+
+template <>
+LogicalResult
+TritonRaiseBlockPointer::visitAddPointerOperand(triton::BroadcastOp broadcastOp,
+                                                PtrState &state, Location loc,
+                                                OpBuilder &builder) {
+  assert(state.isEmpty() && "state is a return argument");
+
+  Value src = broadcastOp.getSrc();
+  Value dst = broadcastOp.getResult();
+
+  if (!isa<ShapedType>(src.getType())) {
+    broadcastOp->emitRemark(
+        "TritonRaiseBlockPointer: Unsupported broadcast source type");
+    return failure();
+  }
+
+  ArrayRef<int64_t> srcShape = cast<ShapedType>(src.getType()).getShape();
+  ArrayRef<int64_t> dstShape = cast<ShapedType>(dst.getType()).getShape();
+
+  // TODO: Implement srcShape.size() < dstShape.size() case
+  assert(srcShape.size() == dstShape.size() &&
+         "rank of source cannot be different to rank of destination");
+
+  if (failed(visitOperand(src, state, loc, builder))) {
+    return failure();
+  }
+
+  llvm::copy(dstShape, state.sizes.begin());
+
+  LLVM_DEBUG(llvm::dbgs() << "Broadcast state: " << state << "\n";);
 
   return success();
 }
