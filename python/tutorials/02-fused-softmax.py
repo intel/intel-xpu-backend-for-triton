@@ -119,12 +119,16 @@ def softmax(x):
     # Number of software pipelining stages.
     num_stages = 4 if SIZE_SMEM > 200000 else 2
 
-    # A simple heuristic is to schedule `BLOCK_SIZE // (num_stages*WARP_SIZE)` warps.
+    # Simple heuristic using `BLOCK_SIZE`.
     # As the maximum number of warps is limited by hardware, we need to
     # make sure we do not surpass that limit.
     # You will see in the next tutorial how to auto-tune this value in a more natural
     # way so you don't have to come up with manual heuristics yourself.
-    num_warps = min(WG_SIZE, BLOCK_SIZE // num_stages) // WARP_SIZE
+    num_warps = 4
+    if BLOCK_SIZE >= 2048:
+        num_warps = 8
+    if BLOCK_SIZE >= 4096:
+        num_warps = 32
 
     # Allocate output
     y = torch.empty_like(x)
