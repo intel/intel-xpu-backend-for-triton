@@ -2,6 +2,7 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -366,11 +367,11 @@ public:
   LogicalResult
   matchAndRewrite(AddPtrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto resultType = op.getType();
-    auto typeConverter = getTypeConverter();
-    auto resultPtrTy = typeConverter->convertType(resultType);
-    auto resultElmTy = typeConverter->convertType(
+    Location loc = op.getLoc();
+    Type resultType = op.getType();
+    LLVMTypeConverter *typeConverter = getTypeConverter();
+    Type resultPtrTy = typeConverter->convertType(resultType);
+    Type resultElmTy = typeConverter->convertType(
         cast<PointerType>(resultType).getPointeeType());
     Value result = rewriter.create<LLVM::GEPOp>(
         loc, resultPtrTy, resultElmTy, adaptor.getPtr(), adaptor.getOffset());

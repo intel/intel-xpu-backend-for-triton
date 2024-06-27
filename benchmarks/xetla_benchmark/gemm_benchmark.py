@@ -288,7 +288,10 @@ def matmul(a, b):
         # Allocates output.
         c = torch.empty((B, M, N), device=a.device, dtype=torch.float32)
         # 1D launch kernel where each block gets its own program.
-        grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+        grid = lambda META: (
+            B,
+            triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+        )
         matmul_kernel_with_block_pointers_batched[grid](
             a, b, c,  #
             B, M, N, K,  #
@@ -322,14 +325,11 @@ def matmul(a, b):
     triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['B', 'M', 'N', 'K'],
-        x_vals=[
-            # [1, 4096, 4096, 4096],
-            # [1, 2048,2048,2048],
-            [4096, 8, 128, 16384],
-            # [4, 32768, 128, 4096],
-            # [32, 4096, 4096, 128],
-            # [1, 256 * i, 256 * i, 256 * i] for i in range(1, 17)
-        ],  # different possible values for `x_name`
+        # different possible values for `x_name`
+        x_vals=[[1, 256 * i, 256 * i, 256 * i] for i in range(1, 17)] +  #
+        [[4, 32768, 128, 4096],  #
+         [4, 32768, 4096, 128],  #
+         [32, 4096, 4096, 128]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -344,8 +344,12 @@ def matmul(a, b):
         args={},
     ))
 def benchmark(B, M, N, K, provider):
-    a = torch.randn((B, M, K), device='xpu', dtype=torch.float16)
-    b = torch.randn((B, K, N), device='xpu', dtype=torch.float16)
+    if B == 1:
+        a = torch.randn((M, K), device='xpu', dtype=torch.float16)
+        b = torch.randn((K, N), device='xpu', dtype=torch.float16)
+    else:
+        a = torch.randn((B, M, K), device='xpu', dtype=torch.float16)
+        b = torch.randn((B, K, N), device='xpu', dtype=torch.float16)
 
     quantiles = [0.5, 0.2, 0.8]
 

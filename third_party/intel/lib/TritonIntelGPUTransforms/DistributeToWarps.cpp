@@ -17,6 +17,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -315,17 +316,10 @@ public:
 
       Dialect *arithDialect = getContext().getLoadedDialect("arith");
       Dialect *mathDialect = getContext().getLoadedDialect("math");
-      auto hasTensorType = [](Type type) {
-        if (isa<RankedTensorType>(type))
-          return true;
-        else if (auto ptrType = dyn_cast<tt::PointerType>(type))
-          if (isa<RankedTensorType>(ptrType.getPointeeType()))
-            return true;
-        return false;
-      };
       func.walk<WalkOrder::PreOrder>([&](Operation *op) {
-        if (!llvm::any_of(op->getResultTypes(), hasTensorType))
-          ;
+        if (!llvm::any_of(op->getResultTypes(),
+                          tt::isTensorOrTensorPointerType))
+          return WalkResult::advance();
         else if (auto forOp = dyn_cast<scf::ForOp>(op))
           distributeScfForOp(forOp);
         else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
