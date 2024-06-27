@@ -366,17 +366,10 @@ public:
 
       Dialect *arithDialect = ctx->getLoadedDialect("arith");
       Dialect *mathDialect = ctx->getLoadedDialect("math");
-      auto hasTensorType = [](Type type) {
-        if (isa<RankedTensorType>(type))
-          return true;
-        else if (auto ptrType = dyn_cast<tt::PointerType>(type))
-          if (isa<RankedTensorType>(ptrType.getPointeeType()))
-            return true;
-        return false;
-      };
 
       func.walk<WalkOrder::PreOrder>([&](Operation *op) {
-        if (!llvm::any_of(op->getResultTypes(), hasTensorType))
+        if (!llvm::any_of(op->getResultTypes(),
+                          triton::isTensorOrTensorPointerType))
           return WalkResult::advance();
 
         if (auto forOp = dyn_cast<scf::ForOp>(op))
