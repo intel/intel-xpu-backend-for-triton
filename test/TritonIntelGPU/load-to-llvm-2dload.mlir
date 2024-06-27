@@ -46,3 +46,32 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     tt.return
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 32], order = [0, 1]}>
+#dot1 = #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth=2}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1], hasLeadingOffset = false}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, triton_gpu.target = "xpu:DEVICE_ARCH.PVC", "triton_gpu.threads-per-warp" = 16 : i32} {
+  tt.func public @matmul_no_scf_with_advance_kernel(%arg0: !tt.ptr<f8E5M2>, %arg1: !tt.ptr<f8E5M2>, %arg2: i64, %arg3: i64, %arg4: i64, %arg5: i64, %arg7: i64) {
+    %C = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %ptrA = tt.make_tensor_ptr %arg0, [%arg2, %arg4], [%arg5, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf8E5M2, #dot0>>
+    %1 = tt.splat %arg1 : !tt.ptr<f8E5M2> -> tensor<64x64x!tt.ptr<f8E5M2>, #blocked1>
+    %ptrB_f8 = tt.load %1 : tensor<64x64x!tt.ptr<f8E5M2>, #blocked1>
+    %ptrB = tt.fp_to_fp %ptrB_f8 : tensor<64x64xf8E5M2, #blocked1> -> tensor<64x64xf16, #blocked1>
+    %ptrB_shared = triton_gpu.local_alloc %ptrB : (tensor<64x64xf16, #blocked1>) -> !tt.memdesc<64x64xf16, #shared, #triton_gpu.shared_memory>
+    // CHECK-COUNT-4: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v4i16{{.*}} ->  vector<4xi16>
+    // CHECK-COUNT-16: llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f({{.*}}) {{.*}} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+    %A = tt.load %ptrA : !tt.ptr<tensor<64x64xf8E5M2, #dot0>>
+    %A_f16 = tt.fp_to_fp %A : tensor<64x64xf8E5M2, #dot0> -> tensor<64x64xf16, #dot0>
+    %B = triton_gpu.local_load %ptrB_shared : !tt.memdesc<64x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<64x64xf16, #dot1>
+    %D = tt.dot %A_f16, %B, %C, inputPrecision = tf32 : tensor<64x64xf16, #dot0> * tensor<64x64xf16, #dot1> -> tensor<64x64xf32, #mma>
+
+    tt.return
+  }
+}

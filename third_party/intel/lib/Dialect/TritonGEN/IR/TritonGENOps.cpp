@@ -207,18 +207,13 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
     return success();
   }
 
-  bool isFP8 = (resTy.getElementType().isFloat8E5M2() ||
-                resTy.getElementType().isFloat8E4M3FNUZ());
   assert(!getVnniTransform() && "Expecting vnni_transform should be false");
   switch (getElemSizeInBits()) {
   case 8:
-    // Because FP8 is promoted to fp16, it should follow tile_width=16
-    if (isFP8 && tileWidth != 16)
-      return emitOpError("tile_width for fp8 element type when vnni_transform "
-                         "is false should be equal to 16");
-    else if (tileWidth != 32)
+    // FP8 is promoted to fp16, so should also support tile width = 16
+    if (tileWidth != 32 && tileWidth != 16)
       return emitOpError("tile_width for 8 bit elements when vnni_transform is "
-                         "false should be equal to 32");
+                         "false should be equal to 16 or 32");
     break;
   case 16:
     if (tileWidth != 16)
