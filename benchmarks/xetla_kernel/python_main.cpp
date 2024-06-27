@@ -1,8 +1,9 @@
-#include "bgemm.h"
-#include "fmha_forward_v5.h"
-#include "softmax.h"
+#include "bgemm/bgemm.h"
+#include "flash_attention/fmha_forward_v5.h"
+#include "softmax/softmax.h"
 #include <CL/sycl.hpp>
 #include <ipex.h>
+#include <random>
 #include <torch/extension.h>
 #include <vector>
 
@@ -118,9 +119,10 @@ at::Tensor bgemm(const at::Tensor &a, const at::Tensor &b, const at::Tensor &c,
 
 // refers to test_fmha.cpp::test_fmha_forward()
 template <typename T, bool IsCausal>
-void flash_attn(const int64_t num_batches, const int64_t num_heads,
-                const int64_t head_size, const int64_t num_queries,
-                const int64_t num_keys) {
+T *flash_attn(const int64_t num_batches, const int64_t num_heads,
+              const int64_t head_size, const int64_t num_queries,
+              const int64_t num_keys) {
+  Shape shape(num_batches, num_heads, num_queries, num_keys, head_size);
   auto queue = get_current_sycl_queue();
 
   constexpr bool use_mask = false;
@@ -138,30 +140,31 @@ void flash_attn(const int64_t num_batches, const int64_t num_heads,
   uint32_t size_ml = shape.get_ml_size();
 
   // forward
-  T *query = sycl::malloc_shared<T>(size_query, q);
-  T *key = sycl::malloc_shared<T>(size_key, q);
-  T *value = sycl::malloc_shared<T>(size_key, q);
-  T *attn_mask = sycl::malloc_shared<T>(size_attn_mask, q);
-  uint8_t *dropout_mask = sycl::malloc_shared<uint8_t>(size_score, q);
-  T *output = sycl::malloc_shared<T>(size_query, q);
-  float *m = sycl::malloc_shared<float>(size_ml, q);
-  float *l = sycl::malloc_shared<float>(size_ml, q);
+  T *query = sycl::malloc_shared<T>(size_query, queue);
+  T *key = sycl::malloc_shared<T>(size_key, queue);
+  T *value = sycl::malloc_shared<T>(size_key, queue);
+  T *attn_mask = sycl::malloc_shared<T>(size_attn_mask, queue);
+  uint8_t *dropout_mask = sycl::malloc_shared<uint8_t>(size_score, queue);
+  T *output = sycl::malloc_shared<T>(size_query, queue);
+  float *m = sycl::malloc_shared<float>(size_ml, queue);
+  float *l = sycl::malloc_shared<float>(size_ml, queue);
 
   random_init_forward(shape, query, key, value, attn_mask, dropout_mask,
                       use_mask, use_dropout);
 
-  auto evt = fmha_forward<T, use_mask, IsCausal, use_dropout>(
+  fmha_forward<T, use_mask, IsCausal, use_dropout>(
       queue, query, key, value, attn_mask, dropout_mask, dropout_prob, output,
       m, l, shape.num_batches, shape.num_heads, shape.head_size,
       shape.num_queries, shape.num_keys, head_scale);
 
   queue.wait();
-  sycl::free(query, q);
-  sycl::free(key, q);
-  sycl::free(value, q);
-  sycl::free(attn_mask, q);
-  sycl::free(dropout_mask, q);
-  sycl::free(output, q);
+  sycl::free(query, queue);
+  sycl::free(key, queue);
+  sycl::free(value, queue);
+  sycl::free(attn_mask, queue);
+  sycl::free(dropout_mask, queue);
+  sycl::free(output, queue);
+  return output;
 }
 
 PYBIND11_MODULE(xetla_kernel, m) {
@@ -214,7 +217,14 @@ PYBIND11_MODULE(xetla_kernel, m) {
         "bgemm (XeTLA)");
   // flash_attn_shape_$Z_$H_${N_CTX}_${D_HEAD}
   // num_batches, num_heads, head_size, num_queries, num_keys
-  m.def("flash_attn_shape_4_48_1024_64",
-        &flash_attn<sycl::half, false>(4, 48, 1024, 1024, 64),
-        "flash attn (XeTLA)");
+  m.def(
+      "flash_attn_shape_4_48_1024_64",
+      [](const int64_t num_batches, const int64_t num_heads,
+         const int64_t head_size, const int64_t num_queries,
+         const int64_t num_keys) {
+        return flash_attn<sycl::half, false>(num_batches, num_heads, head_size,
+                                             num_queries, num_keys);
+      },
+      py::arg("num_batches"), py::arg("num_heads"), py::arg("head_size"),
+      py::arg("num_queries"), py::arg("num_keys"), "flash attn (XeTLA)");
 }

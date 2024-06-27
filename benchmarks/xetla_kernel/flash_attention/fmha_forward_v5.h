@@ -141,8 +141,8 @@ private:
 
   static constexpr uint32_t nbarrier_cnt = (wg_size_x > 1) ? wg_size_y : 0;
   // Define kernel to compute Sij = Qi x Kj.T
-  using brgemm_Sij_t = group::brgemm_t<compute_policy, tile_shape_BrBc,
-                                       mem_desc_Qi_L_t, mem_desc_Kj_T_t>;
+  using brgemm_Sij_t = group::gemm_t<compute_policy, tile_shape_BrBc,
+                                     mem_desc_Qi_L_t, mem_desc_Kj_T_t>;
   using matAccSij_t = typename brgemm_Sij_t::matAcc_t;
   using dropout_t = dropout_fwd_t<matAccSij_t::tile_elems>;
   // ======================== // Context // ======================= //
@@ -173,7 +173,7 @@ private:
     inline context_t() = default;
 
     /// @brief Initialize invariant variables in the flash mha loop
-    inline void init_context(const xetla_exec_item<3> &ei,
+    inline void init_context(const sycl::nd_item<3> &ei,
                              const arguments_t &args) {
       // thread id
       uint32_t sg_id = ei.get_local_linear_id();
@@ -217,7 +217,7 @@ private:
     }
 
     /// @brief Update variables for each flash mha loop
-    inline void update_context(const xetla_exec_item<3> &ei,
+    inline void update_context(const sycl::nd_item<3> &ei,
                                const arguments_t &args, uint32_t startT) {
       uint32_t gid = ei.get_group(0);
       uint32_t bid = gid / args.uN;
@@ -288,8 +288,8 @@ private:
 
   // ======================= // gemm_Oi // ======================= //
   // Define kernel to compute Oi += Pij x Vj
-  using brgemm_Oi_t = group::brgemm_t<compute_policy, tile_shape_BrHm,
-                                      mem_desc_Pij_L_t, mem_desc_Vj_t>;
+  using brgemm_Oi_t = group::gemm_t<compute_policy, tile_shape_BrHm,
+                                    mem_desc_Pij_L_t, mem_desc_Vj_t>;
   using matAccOi_t = typename brgemm_Oi_t::matAcc_t;
 
   /// @brief gemm_Oi is used to compute Oi += Pij x Vj
@@ -381,9 +381,9 @@ private:
     }
 
     // save Pij to local memory
-    using epilogue_t = group::epilogue_t<
-        group::epilogue_policy_default<result_overwrite, gpu_arch::Xe>,
-        tile_shape_BrBc, mem_desc_Pij_L_t>;
+    using epilogue_t =
+        group::epilogue_t<group::epilogue_policy_default<gpu_arch::Xe>,
+                          tile_shape_BrBc, mem_desc_Pij_L_t>;
     epilogue_t epilogue;
     epilogue(ctx.g, *matAccSij, ctx.mem_desc_Pij_L);
     xetla_fence<memory_kind::shared_local>();
@@ -395,9 +395,9 @@ private:
 
   /// @brief store raw Oi to global memory. [B,N,F,H]
   inline void store_Oi(const matAccOi_t &matAccOi, const arguments_t &args) {
-    using epilogue_t = group::epilogue_t<
-        group::epilogue_policy_default<result_overwrite, gpu_arch::Xe>,
-        tile_shape_BrHm, mem_desc_Oi_t>;
+    using epilogue_t =
+        group::epilogue_t<group::epilogue_policy_default<gpu_arch::Xe>,
+                          tile_shape_BrHm, mem_desc_Oi_t>;
     epilogue_t epilogue;
     epilogue(ctx.g, matAccOi, ctx.mem_desc_Oi);
   }
@@ -411,9 +411,9 @@ private:
         subgroup::tile_desc_t<kSgBr, 1, kSgBr, 1, reg_layout::tiled>;
     using store_tile_t = subgroup::tile_t<accum_t, store_desc>;
     // Note: use block_2d store as only block_2d supports boundary check
-    using store_payload_t =
-        subgroup::mem_payload_t<accum_t, store_desc, msg_type::block_2d,
-                                mem_layout::row_major, mem_space::global>;
+    using store_payload_t = subgroup::mem_payload_t<
+        mem_desc_t<accum_t, mem_layout::row_major, mem_space::global>,
+        store_desc, msg_type::block_2d, gpu_arch::Xe>;
     store_tile_t mat_store;
     store_payload_t store_payload(ctx.mem_desc_Li);
     mat_store.reg =
@@ -426,8 +426,8 @@ private:
   // ================== // permute_store_Oi // ==================== //
 
   /// @brief permuted store Oi to global memory. [B,F,N,H]
-  inline void permute_store_Oi(const xetla_exec_item<3> &ei,
-                               matAccOi_t *matAccOi, const arguments_t &args) {
+  inline void permute_store_Oi(const sycl::nd_item<3> &ei, matAccOi_t *matAccOi,
+                               const arguments_t &args) {
     int b = ei.get_group(0) / args.uN;
     int n = ei.get_group(0) % args.uN;
     int f = ctx.sg_idy * kSgBr + ei.get_group(1) * kBr;
@@ -470,13 +470,15 @@ private:
     using matQi_tile_desc_t = typename brgemm_Oi_t::matAcc_tile_desc_t;
     using matQi_t = subgroup::tile_t<scalar_t, matQi_tile_desc_t>;
     using matQi_load_t = subgroup::mem_payload_t<
-        scalar_t, matQi_tile_desc_t,
+        mem_desc_t<scalar_t, mem_desc_Qi_t::layout, mem_desc_Qi_t::space>,
+        matQi_tile_desc_t,
         subgroup::msg_type_v<matQi_tile_desc_t, mem_desc_Qi_t::space>,
-        mem_desc_Qi_t::layout, mem_desc_Qi_t::space, gpu_arch::Xe>;
+        gpu_arch::Xe>;
     using matQi_store_t = subgroup::mem_payload_t<
-        scalar_t, matQi_tile_desc_t,
+        mem_desc_t<scalar_t, mem_desc_Qi_L_t::layout, mem_desc_Qi_L_t::space>,
+        matQi_tile_desc_t,
         subgroup::msg_type_v<matQi_tile_desc_t, mem_desc_Qi_L_t::space>,
-        mem_desc_Qi_L_t::layout, mem_desc_Qi_L_t::space, gpu_arch::Xe>;
+        gpu_arch::Xe>;
 
     int32_t tile_offset_x = ctx.sg_idx * kSgHm;
     int32_t tile_offset_y = ctx.sg_idy * kSgBr;
@@ -538,7 +540,7 @@ public:
 
   // ================= // Entry of the functor // ================= //
 
-  inline KERNEL_FUNC void operator()(const xetla_exec_item<3> &ei,
+  inline KERNEL_FUNC void operator()(const sycl::nd_item<3> &ei,
                                      const arguments_t &args) {
     // allocate slm and nbarrier resource
     xetla_local_init<get_slm_size()>();
@@ -623,7 +625,7 @@ sycl::event fmha_forward_impl(sycl::queue &q, T *query, T *key, T *value,
                                              kIsCausal, kIsTraining>>(
         NdRange, [=](sycl::nd_item<3> item) SYCL_ESIMD_KERNEL {
           // exec item
-          xetla_exec_item<3> ei(item);
+          sycl::nd_item<3> ei(item);
 
           // init fmha forward op and arguments
           fmha_forward_op_t fmha_fwd_op;
