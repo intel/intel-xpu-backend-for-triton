@@ -75,12 +75,12 @@ along the row (resp. col) dimension.
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
 
-    SmallVector<unsigned> getShapeA() const;
-    SmallVector<unsigned> getShapeB() const;
-    SmallVector<unsigned> getShapeC() const;
     SmallVector<unsigned> getDPASInstShapeA() const;
     SmallVector<unsigned> getDPASInstShapeB() const;
     SmallVector<unsigned> getDPASInstShapeC() const;
+    SmallVector<unsigned> getShapeA() const;
+    SmallVector<unsigned> getShapeB() const;
+    SmallVector<unsigned> getShapeC() const;
     SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const;
     SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
