@@ -72,12 +72,11 @@ def naive_softmax(x):
 
 
 @triton.jit
-def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols, BLOCK_SIZE: tl.constexpr,
-                   num_stages: tl.constexpr):
+def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols, BLOCK_SIZE: tl.constexpr):
     # starting row of the program
     row_start = tl.program_id(0)
     row_step = tl.num_programs(0)
-    for row_idx in tl.range(row_start, n_rows, row_step, num_stages=num_stages):
+    for row_idx in tl.range(row_start, n_rows, row_step):
         # The stride represents how much we need to increase the pointer to advance 1 row
         row_start_ptr = input_ptr + row_idx * input_row_stride
         # The block size is the next power of two greater than n_cols, so we can fit each
@@ -104,7 +103,6 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
 
 device = torch.xpu.current_device()
 properties = driver.active.utils.get_device_properties(device)
-SIZE_SMEM = properties["max_shared_mem"]
 WARP_SIZE = properties["sub_group_sizes"][-1]
 WG_SIZE = properties["max_work_group_size"]
 target = triton.runtime.driver.active.get_current_target()
@@ -116,26 +114,20 @@ def softmax(x):
     # The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
 
-    # Number of software pipelining stages.
-    num_stages = 4 if SIZE_SMEM > 200000 else 2
-
-    # Simple heuristic using `BLOCK_SIZE`.
-    # As the maximum number of warps is limited by hardware, we need to
+    # Simple heuristic depending on `BLOCK_SIZE`. We aim for 4 elements per
+    # thread. As the maximum number of warps is limited by hardware, we need to
     # make sure we do not surpass that limit.
     # You will see in the next tutorial how to auto-tune this value in a more natural
     # way so you don't have to come up with manual heuristics yourself.
-    num_warps = 4
-    if BLOCK_SIZE >= 2048:
-        num_warps = 8
-    if BLOCK_SIZE >= 4096:
-        num_warps = 32
+    max_num_warps = WG_SIZE // WARP_SIZE
+    num_warps = min(max_num_warps, BLOCK_SIZE // (WARP_SIZE * 4))
 
     # Allocate output
     y = torch.empty_like(x)
 
     # Create a number of persistent programs.
     softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_rows, n_cols, num_warps=num_warps,
-                               BLOCK_SIZE=BLOCK_SIZE, num_stages=num_stages)
+                               BLOCK_SIZE=BLOCK_SIZE)
     return y
 
 
