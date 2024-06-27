@@ -141,6 +141,23 @@ tt.func @test_const_splat_addptr(%arg0 : !tt.ptr<f32>) -> tensor<128xf32> {
   tt.return %2 : tensor<128xf32>
 }
 
+// CHECK-LABEL:   tt.func @test_expand_dims(
+// CHECK-SAME:                                     %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<1x128xf32> {
+// CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64
+// CHECK:           %[[VAL_2:.*]] = arith.constant 0 : i32
+// CHECK:           %[[VAL_3:.*]] = arith.constant 512 : i32
+// CHECK:           %[[VAL_4:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_1]], %[[VAL_1]]], {{\[}}%[[VAL_1]], %[[VAL_1]]], {{\[}}%[[VAL_2]], %[[VAL_3]]] {order = array<i32>} : <tensor<1x128xf32>>
+// CHECK:           %[[VAL_5:.*]] = tt.load %[[VAL_4]] : !tt.ptr<tensor<1x128xf32>>
+// CHECK:           tt.return %[[VAL_5]] : tensor<1x128xf32>
+tt.func @test_expand_dims(%arg0 : !tt.ptr<f32>) -> tensor<1x128xf32> {
+  %cst = arith.constant dense<512> : tensor<128xi32>
+  %0 = tt.expand_dims %cst {axis = 0 : i32} : tensor<128xi32> -> tensor<1x128xi32>
+  %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1x128x!tt.ptr<f32>>
+  %2 = tt.addptr %1, %0 : tensor<1x128x!tt.ptr<f32>>, tensor<1x128xi32>
+  %3 = tt.load %2 : tensor<1x128x!tt.ptr<f32>>
+  tt.return %3 : tensor<1x128xf32>
+}
+
 // CHECK-LABEL:   tt.func @test_const_splat_addptr_2d(
 // CHECK-SAME:                                        %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<2x128xf32> {
 // CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64

@@ -13,11 +13,12 @@
 
 using namespace llvm;
 
-#define DEBUG_TYPE "triton-licm"
 namespace {
 
 class LICMPass : public PassInfoMixin<LICMPass> {
 public:
+  LICMPass(bool trace) : trace(trace) {}
+
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
     auto &LI = AM.getResult<LoopAnalysis>(F);
     auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
@@ -38,6 +39,8 @@ public:
   }
 
 private:
+  bool trace;
+
   bool runOnLoop(Loop &L, LoopInfo &LI, AAResults &AA, DominatorTree &DT,
                  MemorySSA &MSSA, ScalarEvolution &SE) {
     assert(L.getLoopPreheader() && "Loop doesn't have a preheader!");
@@ -56,8 +59,8 @@ private:
     bool changed = false;
     for (BasicBlock *BB : workList) {
       for (Instruction &I : llvm::make_early_inc_range(*BB)) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "Loop: " << L.getHeader()->getName() << "\n");
+        if (trace)
+          llvm::errs() << "Loop: " << L.getHeader()->getName() << "\n";
 
         if (inSubLoop(BB, L, LI))
           continue;
@@ -147,9 +150,9 @@ private:
     return true;
   }
 
-  static void hoist(Instruction &I, const DominatorTree &DT, const Loop &L,
-                    ICFLoopSafetyInfo &SafetyInfo, MemorySSAUpdater &MSSAU,
-                    ScalarEvolution &SE) {
+  void hoist(Instruction &I, const DominatorTree &DT, const Loop &L,
+             ICFLoopSafetyInfo &SafetyInfo, MemorySSAUpdater &MSSAU,
+             ScalarEvolution &SE) const {
     BasicBlock *preHeader = L.getLoopPreheader();
     assert(preHeader && "Loop doesn't have a preheader!");
 
@@ -180,7 +183,9 @@ private:
                             SafetyInfo, MSSAU, SE);
 
     I.updateLocationAfterHoist();
-    LLVM_DEBUG(llvm::dbgs() << "Hoisted: " << I << "\n");
+
+    if (trace)
+      llvm::errs() << "Hoisted: " << I << "\n";
   }
 };
 } // namespace
@@ -188,17 +193,7 @@ private:
 /// Attempt to hoist loop invariant calls (for address payloads)
 /// FIXME: This is a temporary workaround (should be done by IGC). We should
 /// remove it once that feature is implemented.
-void mlir::triton::intel::LICM(llvm::Module &mod) {
-  std::set<llvm::Function *> kernels;
-  uint32_t numKernels = 0;
-  for (llvm::Function &function : mod.functions())
-    if (function.getCallingConv() == CallingConv::SPIR_KERNEL) {
-      kernels.insert(&function);
-      ++numKernels;
-    }
-  assert(numKernels == 1 && "Expecting a single SPIR kernel");
-  llvm::Function *kernel = *kernels.begin();
-
+void mlir::triton::intel::LICM(llvm::Module &mod, bool trace) {
   FunctionAnalysisManager FAM;
   FAM.registerPass([&] { return AssumptionAnalysis(); });
   FAM.registerPass([&] { return DominatorTreeAnalysis(); });
@@ -220,6 +215,10 @@ void mlir::triton::intel::LICM(llvm::Module &mod) {
   });
 
   FunctionPassManager FPM;
-  FPM.addPass(LICMPass());
-  FPM.run(*kernel, FAM);
+  FPM.addPass(LICMPass(trace));
+
+  for (llvm::Function &function : mod.functions()) {
+    if (function.getCallingConv() == CallingConv::SPIR_KERNEL)
+      FPM.run(function, FAM);
+  }
 }
