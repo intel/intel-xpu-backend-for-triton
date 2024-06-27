@@ -2200,7 +2200,7 @@ struct MulhiUIOpConversion
     Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
     assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
 
-    StringRef funcName = targetInfo.getMulhiFuncName(resultElementTy);
+    std::string funcName = targetInfo.getMulhiFuncName(resultElementTy);
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
