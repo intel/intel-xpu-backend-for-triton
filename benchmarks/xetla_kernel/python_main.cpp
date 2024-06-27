@@ -1,8 +1,13 @@
 #include "bgemm.h"
+#include "fmha_forward_v5.h"
 #include "softmax.h"
+#include <CL/sycl.hpp>
 #include <ipex.h>
 #include <torch/extension.h>
 #include <vector>
+
+static constexpr float kNegInfinity = INFINITY * -1;
+#define _USE_FBNH = 0
 
 sycl::queue get_current_sycl_queue() {
   // submit kernel
@@ -10,6 +15,69 @@ sycl::queue get_current_sycl_queue() {
   c10::Stream stream = impl.getStream(impl.getDevice());
 
   return xpu::get_queue_from_stream(stream);
+}
+
+struct Shape {
+  Shape(int B, int N, int F, int T, int H)
+      : num_batches(B), num_heads(N), num_queries(F), num_keys(T),
+        head_size(H) {}
+  const int num_batches;
+  const int num_heads;
+  const int num_queries;
+  const int num_keys;
+  const int head_size;
+
+  inline uint32_t get_query_size() const {
+    return num_batches * num_heads * num_queries * head_size;
+  }
+  inline uint32_t get_key_size() const {
+    return num_batches * num_heads * num_keys * head_size;
+  }
+  inline uint32_t get_score_size() const {
+    return num_batches * num_heads * num_queries * num_keys;
+  }
+  inline uint32_t get_ml_size() const {
+    return num_batches * num_heads * num_queries;
+  }
+  inline uint32_t get_attn_mask_size() const {
+#if _BIAS_AS_INPUT
+    return num_batches * num_heads * num_queries * num_keys;
+#else
+    return num_batches * num_queries * num_keys;
+#endif
+  }
+};
+
+template <typename T> void init_random(T *arr, size_t nelems) {
+  std::vector<float> vec(nelems);
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_real_distribution<float> rg(-1.0f, 1.0f);
+  std::generate(vec.begin(), vec.end(), [&] { return rg(gen); });
+
+  for (uint32_t i = 0; i < nelems; ++i)
+    arr[i] = static_cast<T>(vec[i]);
+}
+
+template <typename T>
+void random_init_forward(const Shape &shape, T *query, T *key, T *value,
+                         T *attn_mask, uint8_t *dropout_mask,
+                         const bool use_mask, const bool use_dropout) {
+  uint32_t size_query = shape.get_query_size();
+  uint32_t size_key = shape.get_key_size();
+  uint32_t size_score = shape.get_score_size();
+  uint32_t size_attn_mask = shape.get_attn_mask_size();
+
+  init_random(query, size_query);
+  init_random(key, size_key);
+  init_random(value, size_key);
+  if (use_mask) {
+    init_random(attn_mask, size_attn_mask);
+  }
+  if (use_dropout) {
+    for (uint32_t i = 0; i < size_score; ++i)
+      dropout_mask[i] = (i & 1) == 0;
+  }
 }
 
 #define CHECK_XPU(x)                                                           \
@@ -46,6 +114,54 @@ at::Tensor bgemm(const at::Tensor &a, const at::Tensor &b, const at::Tensor &c,
                cnt.data_ptr(), queue);
 
   return d;
+}
+
+// refers to test_fmha.cpp::test_fmha_forward()
+template <typename T, bool IsCausal>
+void flash_attn(const int64_t num_batches, const int64_t num_heads,
+                const int64_t head_size, const int64_t num_queries,
+                const int64_t num_keys) {
+  auto queue = get_current_sycl_queue();
+
+  constexpr bool use_mask = false;
+  constexpr bool use_dropout = false;
+  float dropout_prob = 0.0f;
+  if constexpr (use_dropout)
+    dropout_prob = 0.5f;
+  const float scale = 1 / (1 - dropout_prob);
+  const float head_scale = sycl::rsqrt(float(shape.head_size));
+
+  uint32_t size_query = shape.get_query_size();
+  uint32_t size_key = shape.get_key_size();
+  uint32_t size_score = shape.get_score_size();
+  uint32_t size_attn_mask = shape.get_attn_mask_size();
+  uint32_t size_ml = shape.get_ml_size();
+
+  // forward
+  T *query = sycl::malloc_shared<T>(size_query, q);
+  T *key = sycl::malloc_shared<T>(size_key, q);
+  T *value = sycl::malloc_shared<T>(size_key, q);
+  T *attn_mask = sycl::malloc_shared<T>(size_attn_mask, q);
+  uint8_t *dropout_mask = sycl::malloc_shared<uint8_t>(size_score, q);
+  T *output = sycl::malloc_shared<T>(size_query, q);
+  float *m = sycl::malloc_shared<float>(size_ml, q);
+  float *l = sycl::malloc_shared<float>(size_ml, q);
+
+  random_init_forward(shape, query, key, value, attn_mask, dropout_mask,
+                      use_mask, use_dropout);
+
+  auto evt = fmha_forward<T, use_mask, IsCausal, use_dropout>(
+      queue, query, key, value, attn_mask, dropout_mask, dropout_prob, output,
+      m, l, shape.num_batches, shape.num_heads, shape.head_size,
+      shape.num_queries, shape.num_keys, head_scale);
+
+  queue.wait();
+  sycl::free(query, q);
+  sycl::free(key, q);
+  sycl::free(value, q);
+  sycl::free(attn_mask, q);
+  sycl::free(dropout_mask, q);
+  sycl::free(output, q);
 }
 
 PYBIND11_MODULE(xetla_kernel, m) {
@@ -96,4 +212,9 @@ PYBIND11_MODULE(xetla_kernel, m) {
         "bgemm (XeTLA)");
   m.def("bgemm_shape_4096_4096_4096", &bgemm<Test_4096x4096x4096_row_row>,
         "bgemm (XeTLA)");
+  // flash_attn_shape_$Z_$H_${N_CTX}_${D_HEAD}
+  // num_batches, num_heads, head_size, num_queries, num_keys
+  m.def("flash_attn_shape_4_48_1024_64",
+        &flash_attn<sycl::half, false>(4, 48, 1024, 1024, 64),
+        "flash attn (XeTLA)");
 }
