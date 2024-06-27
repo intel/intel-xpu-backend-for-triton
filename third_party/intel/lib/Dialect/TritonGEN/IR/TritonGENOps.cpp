@@ -214,7 +214,7 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   case 8:
     // Because FP8 is promoted to fp16, it should follow tile_width=16
     if (isFP8 && tileWidth != 16)
-      return emitOpError("tile_width for 16 bit elements when vnni_transform "
+      return emitOpError("tile_width for fp8 element type when vnni_transform "
                          "is false should be equal to 16");
     else if (tileWidth != 32)
       return emitOpError("tile_width for 8 bit elements when vnni_transform is "
