@@ -218,12 +218,11 @@ public:
             valueAttrMap[info0.advanceB] = dotBLayout;
           break;
         }
-        case Workload::Attention: {
-          break;
-        }
         case Workload::None:
         case Workload::ElementWise:
-        case Workload::Reduction:;
+        case Workload::Reduction:
+        case Workload::Attention:
+          break;
         }
       }
 
