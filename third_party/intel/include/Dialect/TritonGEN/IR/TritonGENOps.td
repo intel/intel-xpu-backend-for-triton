@@ -269,11 +269,11 @@ def TritonGEN_SubGroupScanOp : TritonGEN_Op<"sub_group_scan", [
 
   let description = [{
     The `triton_gen.sub_group_scan` operation is invoked by all work items in
-    a subgroup, each of them providing a $value. Each work item performs the 
-    reduction operation identified by $reduce_kind. The $scan_kind attribute 
-    indicates whether to perform an inclusive or exclusive scan. The result 
+    a subgroup, each of them providing a $value. Each work item performs the
+    reduction operation identified by $reduce_kind. The $scan_kind attribute
+    indicates whether to perform an inclusive or exclusive scan. The result
     of the scan operation is returned for each work item.
-    Note: The scan order is defined by increasing sub-group local ID within 
+    Note: The scan order is defined by increasing sub-group local ID within
     the sub-group.
   }];
 
