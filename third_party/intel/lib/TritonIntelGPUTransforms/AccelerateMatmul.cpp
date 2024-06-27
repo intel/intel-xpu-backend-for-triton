@@ -145,9 +145,10 @@ public:
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
 
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    DpasEncodingAttr dpasEnc = DpasEncodingAttr::get(
-        oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
-        dpasCap.executionSize, opsPerChan, warpsPerTile, threadsPerWarp);
+    DpasEncodingAttr dpasEnc =
+        DpasEncodingAttr::get(oldRetType.getContext(), dpasCap.repeatCount,
+                              dpasCap.systolicDepth, dpasCap.executionSize,
+                              opsPerChan, warpsPerTile, {1, 1}, threadsPerWarp);
 
     RankedTensorType newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), dpasEnc);

@@ -88,25 +88,44 @@ static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
 // DpasEncodingAttr
 //===----------------------------------------------------------------------===//
 
-SmallVector<unsigned> DpasEncodingAttr::getShapeA() const {
+SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeA() const {
   return {getRepeatCount(), getSystolicDepth() * getOpsPerChannel()};
+};
+
+SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeB() const {
+  return {getSystolicDepth() * getOpsPerChannel(), getExecutionSize()};
+};
+
+SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeC() const {
+  return {getRepeatCount(), getExecutionSize()};
+};
+
+SmallVector<unsigned> DpasEncodingAttr::getShapeA() const {
+  auto shapeA = getDPASInstShapeA();
+  auto repCluster = getRepCluster();
+  return {shapeA[0] * repCluster[0], shapeA[1]};
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeB() const {
-  return {getSystolicDepth() * getOpsPerChannel(), getExecutionSize()};
+  auto shapeB = getDPASInstShapeB();
+  auto repCluster = getRepCluster();
+  return {shapeB[0], shapeB[1] * repCluster[1]};
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeC() const {
-  return {getRepeatCount(), getExecutionSize()};
+  auto shapeC = getDPASInstShapeC();
+  auto repCluster = getRepCluster();
+  return {shapeC[0] * repCluster[0], shapeC[1] * repCluster[1]};
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getSizePerThread() const {
   unsigned threadsPerWarp = getSubGroupSize();
-  auto shapeC = getShapeC();
+  auto shapeC = getDPASInstShapeC();
   unsigned elemsNum = product<unsigned>(shapeC);
   unsigned elemsPerThread = elemsNum / threadsPerWarp;
-  // The Value is shard per col to threads.
-  return {elemsPerThread, 1};
+  auto repCluster = getRepCluster();
+  // The Value is shard to lanes to threads per DPAS instruction.
+  return {elemsPerThread * repCluster[0], repCluster[1]};
 }
 
 SmallVector<unsigned>
@@ -177,18 +196,16 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const {
 unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, mlir::Type eltTy, int kWidth, int opIdx) const {
   auto shapePerCTA = getShapePerCTA(*this, shape);
-  int warpsPerCTAM = getWarpsPerCTA()[0];
-  int warpsPerCTAN = getWarpsPerCTA()[1];
   auto rep = getDPASRepetitions(shapePerCTA, opIdx);
   auto threadsPerWar = getSubGroupSize();
   if (opIdx == 0) {
-    auto instrShapeA = getShapeA();
-    auto totalElem = product<unsigned>(instrShapeA);
+    auto shapeA = getShapeA();
+    auto totalElem = product<unsigned>(shapeA);
     // dpas operands scalar are evenly sharded to each work item.
     return (totalElem / threadsPerWar) * rep[0] * rep[1];
   } else { // if (opIdx == 1)
-    auto instrShapeB = getShapeB();
-    auto totalElem = product<unsigned>(instrShapeB);
+    auto shapeB = getShapeB();
+    auto totalElem = product<unsigned>(shapeB);
     // dpas operands scalar are evenly sharded to each work item.
     return (totalElem / threadsPerWar) * rep[0] * rep[1];
   }
@@ -234,7 +251,7 @@ DpasEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
 SmallVector<unsigned>
 DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   if (opIdx == 0) {
-    SmallVector<unsigned> shapeA = getShapeA();
+    SmallVector<unsigned> shapeA = getDPASInstShapeA();
     unsigned subGroupSize = getSubGroupSize();
     unsigned opsPerChannel = getOpsPerChannel();
 
@@ -248,8 +265,9 @@ DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
       llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
                                "be smaller than the threads required per row.");
     }
-    unsigned rowsPerWarp = subGroupSize / packedColNum;
-    return {shapeA[0] / rowsPerWarp, packedOpsPerLane};
+    unsigned rowsPerWarp = mlir::ceil<unsigned>(subGroupSize, packedColNum);
+    auto repCluster = getRepCluster();
+    return {shapeA[0] / rowsPerWarp * repCluster[0], packedOpsPerLane};
   } else if (opIdx == 1) {
     auto shapeB = getShapeB();
     auto subGroupSize = getSubGroupSize();
@@ -260,7 +278,9 @@ DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
     }
     SmallVector<unsigned, 2> threadsPerWarp = {subGroupSize / executionSize,
                                                executionSize};
-    return {shapeB[0] / threadsPerWarp[0], shapeB[1] / threadsPerWarp[1]};
+    auto repCluster = getRepCluster();
+    return {shapeB[0] / threadsPerWarp[0],
+            shapeB[1] / threadsPerWarp[1] * repCluster[1]};
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
     return {};
@@ -269,13 +289,14 @@ DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
 
 SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() {
   unsigned threadsPerWarp = getSubGroupSize();
-  auto shapeC = getShapeC();
-  // The software vectorization vetorize the value as C array: int a[N] -> int
+  auto shapeC = getDPASInstShapeC();
+  // The software vectorization vectorized the value as C array: int a[N] -> int
   // a[N][threadsPerWarp]
   if (threadsPerWarp > shapeC[1]) {
     return {1, 1};
   } else if (threadsPerWarp == shapeC[1]) {
-    return {shapeC[0], 1};
+    auto repCluster = getRepCluster();
+    return {shapeC[0] * repCluster[0], 1};
   } else {
     // threadsPerWarp < shapeC[1]
     llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
@@ -287,7 +308,7 @@ LogicalResult DpasEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned repeatCount, unsigned systolicDepth, unsigned executionSize,
     unsigned opsPerChan, ::llvm::ArrayRef<unsigned> warpsPerCTA__,
-    unsigned sugGroupSize) {
+    ::llvm::ArrayRef<unsigned> repCluster, unsigned sugGroupSize) {
   if (repeatCount > 8 || repeatCount < 1) {
     return emitError() << "repeatCount must be in the range [1, 8], but was:"
                        << repeatCount;
@@ -302,6 +323,11 @@ LogicalResult DpasEncodingAttr::verify(
     return emitError() << "systolicDepth must be 8, but was:" << opsPerChan;
   }
 
+  if (repCluster.size() != 2) {
+    return emitError() << "expected rank 2 of repCluster, but the rank is:"
+                       << repCluster.size();
+  }
+
   return success();
 }
 
@@ -314,7 +340,7 @@ Attribute DpasEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
 
-  SmallVector<unsigned> warpsPerCTA;
+  SmallVector<unsigned> warpsPerCTA, repCluster;
   unsigned repeatCount = 0;
   unsigned systolicDepth = 0;
   unsigned executionSize = 0;
@@ -342,6 +368,10 @@ Attribute DpasEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
         return {};
     }
+    if (attr.getName() == "repCluster") {
+      if (parseIntArrayAttr(parser, attr, repCluster, "repCluster").failed())
+        return {};
+    }
     if (attr.getName() == "threadsPerWarp") {
       if (parseUInt(parser, attr, threadsPerWarp, "threadsPerWarp").failed())
         return {};
@@ -350,7 +380,7 @@ Attribute DpasEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<DpasEncodingAttr>(
       parser.getContext(), repeatCount, systolicDepth, executionSize,
-      opsPerChan, warpsPerCTA, threadsPerWarp);
+      opsPerChan, warpsPerCTA, repCluster, threadsPerWarp);
 }
 
 void DpasEncodingAttr::print(AsmPrinter &printer) const {
@@ -361,6 +391,7 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   auto shapeC = getShapeC();
   llvm::ArrayRef<unsigned> rC = shapeC;
   auto warpsPerCTA = getWarpsPerCTA();
+  auto repCluster = getRepCluster();
   printer << "<{"
           << "repeatCount = " << getRepeatCount() << ", "
           << "systolicDepth = " << getSystolicDepth() << ", "
@@ -368,6 +399,7 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
           << "opsPerChan = " << getOpsPerChannel() << ", "
           << "threadsPerWarp = " << getSubGroupSize() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
+          << "repCluster = [" << repCluster << "], "
           << "A = [" << rA << "], "
           << "B = [" << rB << "], "
           << "C = [" << rC << "]"
