@@ -8,7 +8,7 @@
 
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
-#include "mlir/IR/OpDefinition.h"
+// #include "mlir/IR/OpDefinition.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
@@ -63,6 +63,18 @@ LogicalResult TritonGEN::SubGroupReduceOp::verify() {
       !llvm::isPowerOf2_32(getSize()))
     return this->emitOpError(
         "expecting size to be a power of 2 between 1 and subgroup size");
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// gen.sub_group_scan
+//===----------------------------------------------------------------------===//
+
+LogicalResult TritonGEN::SubGroupScanOp::verify() {
+  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(*this);
+  if (!attr)
+    return this->emitOpError("expecting valid target env attribute");
 
   return success();
 }
