@@ -40,7 +40,6 @@ def is_interpreter():
     ("device_print_hex", "int64"),
     ("device_print_pointer", "int32"),
 ])
-@pytest.mark.parametrize("device", ['xpu'])
 def test_print(func_type: str, data_type: str, device: str):
     if device == "xpu" and data_type == "float64" and not tr.driver.active.get_current_target().arch['has_fp64']:
         pytest.xfail("float64 not supported on current xpu hardware")
