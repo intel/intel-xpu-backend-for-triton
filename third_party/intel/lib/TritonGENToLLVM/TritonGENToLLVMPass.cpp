@@ -231,8 +231,8 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 32 && op.getVBlocks() == 1)
     return false;
 
-  // Missing intel_sub_group_2d_block_read_8b_8r16x and
-  // intel_sub_group_2d_block_read_8b_16r16x
+  // Missing intel_sub_group_2d_block_read_8b_8r16x1c and
+  // intel_sub_group_2d_block_read_8b_16r16x1c
   // when vnni_transform is false.
   if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
       !op.getVnniTransform())
