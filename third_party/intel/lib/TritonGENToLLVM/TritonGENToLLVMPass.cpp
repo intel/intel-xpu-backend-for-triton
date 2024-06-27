@@ -1190,6 +1190,55 @@ struct TritonSubGroupReduceLowering
   }
 };
 
+struct TritonSubGroupScanLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupScanOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubGroupScanOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubGroupScanOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value val = op.getValue();
+    Type orig_ty = val.getType();
+    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
+      val = zext(i8_ty, val);
+
+    Type val_ty = val.getType();
+    SmallVector<Type> argTypes{val_ty};
+    SmallVector<Value> args{val};
+
+    std::string fnName = "sub_group_scan_";
+    switch (op.getScanKind()) {
+    case TritonGEN::ScanKind::EXCLUSIVE:
+      fnName += "exclusive_";
+      break;
+    case TritonGEN::ScanKind::INCLUSIVE:
+      fnName += "inclusive_";
+      break;
+    default:
+      llvm_unreachable("unhandled scan kind");
+    };
+
+    fnName += stringifyReduceKind(op.getReduceKind()).str();
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName +
+             intel::getTypeMangling(val_ty);
+
+    MLIRContext *ctx = rewriter.getContext();
+    intel::AttrBuilder funcAttrBuilder(*ctx);
+    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
+    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+
+    Value result = createDeviceFunctionCall(rewriter, fnName, val_ty, argTypes,
+                                            args, attrs)
+                       .getResult();
+    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
+      result = trunc(orig_ty, result);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 struct TritonSubGroupShuffleLowering
     : public ConvertOpToLLVMPattern<TritonGEN::SubGroupShuffleOp> {
   using ConvertOpToLLVMPattern<
@@ -1416,10 +1465,10 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
       TritonGENSplitBarrierSignalLowering, TritonGENSplitBarrierWaitLowering,
       TritonGENNamedBarrierSignalLowering, TritonGENNamedBarrierWaitLowering,
-      TritonSubGroupReduceLowering, TritonSubGroupShuffleLowering,
-      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering>(
-      converter);
+      TritonSubGroupReduceLowering, TritonSubGroupScanLowering,
+      TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
+      TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+      TritonMatrix2DBlockPrefetchLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
