@@ -216,8 +216,7 @@ class MmaLayout:
 
 class DpasLayout:
 
-    def __init__(self, repeatCount, systolic_depth, execution_size, ops_per_chan, threads_per_warp, rep_cluster,
-                 warps_per_cta):
+    def __init__(self, repeatCount, systolic_depth, execution_size, ops_per_chan, threads_per_warp, warps_per_cta, rep_cluster):
         self.repeatCount = repeatCount
         self.systolic_depth = systolic_depth
         self.execution_size = execution_size
