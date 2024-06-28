@@ -224,10 +224,9 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: forward(q, k, v, causal, sm_scale), rep=1000,
                                                      quantiles=quantiles, fast_flush=False)
     if provider == 'xetla':
-        # revisit here
-        name = "flash_attn_fwd_shape_{}_{}_{}_{}".format(Z, H, N_CTX, D_HEAD)
+        name = "flash_attn_shape_{}_{}_{}_{}".format(Z, H, N_CTX, D_HEAD)
         func = getattr(xetla_kernel, name)
-        xetla_fn = lambda: func(Z, H, N_CTX, N_CTX, D_HEAD)
+        xetla_fn = lambda: func(Z, H, D_HEAD, N_CTX, N_CTX)
         ms, min_ms, max_ms = triton.testing.do_bench(xetla_fn, rep=1000, quantiles=quantiles, fast_flush=False)
 
     def perf(ms):

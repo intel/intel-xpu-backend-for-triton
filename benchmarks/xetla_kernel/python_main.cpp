@@ -8,7 +8,6 @@
 #include <vector>
 
 static constexpr float kNegInfinity = INFINITY * -1;
-#define _USE_FBNH = 0
 
 sycl::queue get_current_sycl_queue() {
   // submit kernel
@@ -216,7 +215,6 @@ PYBIND11_MODULE(xetla_kernel, m) {
   m.def("bgemm_shape_4096_4096_4096", &bgemm<Test_4096x4096x4096_row_row>,
         "bgemm (XeTLA)");
   // flash_attn_shape_$Z_$H_${N_CTX}_${D_HEAD}
-  // num_batches, num_heads, head_size, num_queries, num_keys
   m.def(
       "flash_attn_shape_4_48_1024_64",
       [](const int64_t num_batches, const int64_t num_heads,
