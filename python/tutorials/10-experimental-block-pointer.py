@@ -336,14 +336,6 @@ for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float
                                       (torch.bfloat16, torch.float32, torch.float32),
                                       (torch.bfloat16, torch.float32, torch.bfloat16),
                                       (torch.float32, torch.float32, torch.float32),
-                                      (torch.int8, torch.int32, torch.int32),
-                                      (torch.float16, torch.float16, torch.float16),
-                                      (torch.float16, torch.float32, torch.float16),
-                                      (torch.float16, torch.float32, torch.float32),
-                                      (torch.bfloat16, torch.bfloat16, torch.bfloat16),
-                                      (torch.bfloat16, torch.float32, torch.float32),
-                                      (torch.bfloat16, torch.float32, torch.bfloat16),
-                                      (torch.float32, torch.float32, torch.float32),
                                       (torch.int8, torch.int32, torch.int32)]:
 
     for shape in [(512, 512), (4, 512, 512)]:
