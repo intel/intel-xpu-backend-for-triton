@@ -16,8 +16,6 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"

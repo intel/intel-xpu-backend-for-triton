@@ -329,65 +329,61 @@ def matmul(a, b, accum_dtype, res_dtype):
 
 torch.manual_seed(0)
 torch.xpu.set_fp32_math_mode(torch.xpu.utils.FP32MathMode.TF32)
-for dtype, accum_dtype, res_dtype, batch_size in [(torch.float16, torch.float16, torch.float16, 1),
-                                                  (torch.float16, torch.float32, torch.float16, 1),
-                                                  (torch.float16, torch.float32, torch.float32, 1),
-                                                  (torch.bfloat16, torch.bfloat16, torch.bfloat16, 1),
-                                                  (torch.bfloat16, torch.float32, torch.float32, 1),
-                                                  (torch.bfloat16, torch.float32, torch.bfloat16, 1),
-                                                  (torch.float32, torch.float32, torch.float32, 1),
-                                                  (torch.int8, torch.int32, torch.int32, 1),
-                                                  (torch.float16, torch.float16, torch.float16, 4),
-                                                  (torch.float16, torch.float32, torch.float16, 4),
-                                                  (torch.float16, torch.float32, torch.float32, 4),
-                                                  (torch.bfloat16, torch.bfloat16, torch.bfloat16, 4),
-                                                  (torch.bfloat16, torch.float32, torch.float32, 4),
-                                                  (torch.bfloat16, torch.float32, torch.bfloat16, 4),
-                                                  (torch.float32, torch.float32, torch.float32, 4),
-                                                  (torch.int8, torch.int32, torch.int32, 4)]:
-    if batch_size == 1:
-        shape_a = (512, 512)
-        shape_b = (512, 512)
-    else:
-        shape_a = (batch_size, 512, 512)
-        shape_b = (batch_size, 512, 512)
+for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float16),
+                                      (torch.float16, torch.float32, torch.float16),
+                                      (torch.float16, torch.float32, torch.float32),
+                                      (torch.bfloat16, torch.bfloat16, torch.bfloat16),
+                                      (torch.bfloat16, torch.float32, torch.float32),
+                                      (torch.bfloat16, torch.float32, torch.bfloat16),
+                                      (torch.float32, torch.float32, torch.float32),
+                                      (torch.int8, torch.int32, torch.int32),
+                                      (torch.float16, torch.float16, torch.float16),
+                                      (torch.float16, torch.float32, torch.float16),
+                                      (torch.float16, torch.float32, torch.float32),
+                                      (torch.bfloat16, torch.bfloat16, torch.bfloat16),
+                                      (torch.bfloat16, torch.float32, torch.float32),
+                                      (torch.bfloat16, torch.float32, torch.bfloat16),
+                                      (torch.float32, torch.float32, torch.float32),
+                                      (torch.int8, torch.int32, torch.int32)]:
 
-    if dtype.is_floating_point:
-        if accum_dtype in [torch.float16, torch.bfloat16]:
-            # 16-bit accumulation across 512 multiplications is error-prone,
-            # hence we multiply a matrix of random numbers with
-            # [[ 1  1  0 ... ],
-            #  [ 1  1  1 ... ],
-            #  [ 0  1  1 ... ], ... ]
-            # in order only add 3 values per result matrix element.
-            a = torch.randn(shape_a, device='xpu', dtype=dtype)
-            b = torch.eye(512, device='xpu', dtype=dtype) + torch.diag(
-                torch.ones(511, device='xpu', dtype=dtype), diagonal=1) + torch.diag(
-                    torch.ones(511, device='xpu', dtype=dtype), diagonal=-1)
-            # duplicate b on batch dimension.
-            if batch_size > 1:
-                b = b.unsqueeze(0).repeat(batch_size, 1, 1)
+    for shape in [(512, 512), (4, 512, 512)]:
+        assert shape[-1] == shape[-2], "Only square matrices are supported"
+        if dtype.is_floating_point:
+            if accum_dtype in [torch.float16, torch.bfloat16]:
+                # 16-bit accumulation across 512 multiplications is error-prone,
+                # hence we multiply a matrix of random numbers with
+                # [[ 1  1  0 ... ],
+                #  [ 1  1  1 ... ],
+                #  [ 0  1  1 ... ], ... ]
+                # in order only add 3 values per result matrix element.
+                a = torch.randn(shape, device='xpu', dtype=dtype)
+                b = torch.eye(shape[-2], device='xpu', dtype=dtype) + torch.diag(
+                    torch.ones(shape[-2] - 1, device='xpu', dtype=dtype), diagonal=1) + torch.diag(
+                        torch.ones(shape[-2] - 1, device='xpu', dtype=dtype), diagonal=-1)
+                # duplicate b on batch dimension.
+                if len(shape) == 3:
+                    b = b.unsqueeze(0).repeat(shape[0], 1, 1)
+            else:
+                a = torch.randn(shape, device='xpu', dtype=dtype)
+                b = torch.randn(shape, device='xpu', dtype=dtype)
+            torch_output = torch.matmul(a, b).to(dtype=res_dtype)
         else:
-            a = torch.randn(shape_a, device='xpu', dtype=dtype)
-            b = torch.randn(shape_b, device='xpu', dtype=dtype)
-        torch_output = torch.matmul(a, b).to(dtype=res_dtype)
-    else:
-        a = torch.randint(low=-127, high=128, size=shape_a, device='xpu', dtype=dtype)
-        b = torch.randint(low=-127, high=128, size=shape_b, device='xpu', dtype=dtype)
-        # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
-        torch_output = torch.matmul(a.to(device='cpu', dtype=accum_dtype),
-                                    b.to(device='cpu', dtype=accum_dtype)).to(device='xpu', dtype=res_dtype)
+            a = torch.randint(low=-127, high=128, size=shape, device='xpu', dtype=dtype)
+            b = torch.randint(low=-127, high=128, size=shape, device='xpu', dtype=dtype)
+            # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
+            torch_output = torch.matmul(a.to(device='cpu', dtype=accum_dtype),
+                                        b.to(device='cpu', dtype=accum_dtype)).to(device='xpu', dtype=res_dtype)
 
-    triton_output = matmul(a, b, accum_dtype, res_dtype)
+        triton_output = matmul(a, b, accum_dtype, res_dtype)
 
-    print(f"triton_output={triton_output}")
-    print(f"torch_output={torch_output}")
+        print(f"triton_output={triton_output}")
+        print(f"torch_output={torch_output}")
 
-    # Note: the torch.matmul and Triton implementations uses different
-    # algorithms so we need to adjust tolerance.
-    rtol = 1e-2 if dtype == torch.bfloat16 or accum_dtype in [torch.float16, torch.bfloat16] else 1e-3
-    atol = 1e-2 if accum_dtype == torch.bfloat16 else 1e-3 if accum_dtype == torch.float16 else 1e-4
-    if torch.allclose(triton_output, torch_output, atol=atol, rtol=rtol):
-        print("✅ Triton and Torch match")
-    else:
-        exit("❌ Triton and Torch differ")
+        # Note: the torch.matmul and Triton implementations uses different
+        # algorithms so we need to adjust tolerance.
+        rtol = 1e-2 if dtype == torch.bfloat16 or accum_dtype in [torch.float16, torch.bfloat16] else 1e-3
+        atol = 1e-2 if accum_dtype == torch.bfloat16 else 1e-3 if accum_dtype == torch.float16 else 1e-4
+        if torch.allclose(triton_output, torch_output, atol=atol, rtol=rtol):
+            print("✅ Triton and Torch match")
+        else:
+            exit("❌ Triton and Torch differ")
