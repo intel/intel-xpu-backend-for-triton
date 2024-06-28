@@ -15,7 +15,7 @@ template <unsigned opIdx> class DpasMatmulLoader {
 public:
   DpasMatmulLoader(DpasEncodingAttr dpasLayout, MemDescType descTy,
                    unsigned warpsPerTile, ArrayRef<Value> smemStrides,
-                   SmallVector<int64_t> instrShape,
+                   SmallVector<unsigned> warpShape,
                    ConversionPatternRewriter &rewriter,
                    const LLVMTypeConverter *typeConverter, Location loc)
       : dpasLayout(dpasLayout), descTy(descTy), smemStrides(smemStrides),
@@ -23,18 +23,14 @@ public:
     static_assert(opIdx == 0 || opIdx == 1);
 
     unsigned kDim = (opIdx == 0) ? 1 : 0;
-    repKDimStride = mul(i32_val(instrShape[kDim]), smemStrides[kDim]);
-    repNonKDimStride = mul(i32_val(instrShape[kDim ^ 1] * warpsPerTile),
-                           smemStrides[kDim ^ 1]);
-    warpMatStride = mul(i32_val(instrShape[kDim ^ 1]), smemStrides[kDim ^ 1]);
+    repKDimStride = mul(i32_val(warpShape[kDim]), smemStrides[kDim]);
+    repNonKDimStride =
+        mul(i32_val(warpShape[kDim ^ 1] * warpsPerTile), smemStrides[kDim ^ 1]);
+    warpMatStride = mul(i32_val(warpShape[kDim ^ 1]), smemStrides[kDim ^ 1]);
 
-    unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
     unsigned threadsPerWarp = getThreadsPerWarp();
 
-    int rowsPerWarp =
-        threadsPerWarp / ((opIdx == 0) ? dpasLayout.getSystolicDepth()
-                                       : dpasLayout.getExecutionSize());
-    numPtrs = (dpasLayout.getRepeatCount() / rowsPerWarp) * opsPerChannel;
+    numPtrs = product<unsigned>(warpShape) / threadsPerWarp;
   }
 
   SmallVector<Value> computeOffsets(Value warpId, Value laneId,
@@ -85,30 +81,36 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   unsigned threadsPerWarp = getThreadsPerWarp();
 
   Value laneRowIndex, laneColIndex;
-  unsigned repRowsPerInst, rowsPerWarp, repOpsPerRow;
+  unsigned rowsPerInst, rowsPerWarp, packedOpsPerLane;
+  unsigned repClusterSize = dpasLayout.getRepCluster()[opIdx];
   switch (opIdx) {
   case 0: {
     assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
            "invalid opsPerChannel number.");
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
     // Unlike the operand B, to pack the value to i16 for scalar bit width <=16.
-    unsigned packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
+    packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
     unsigned packedColNum = shapeA[1] / packedOpsPerLane;
+    assert(threadsPerWarp >= packedColNum &&
+           "DpasEncodingAttr sub-group size could not "
+           "be smaller than the threads required per row for A operand.");
     rowsPerWarp = threadsPerWarp / packedColNum;
-    repRowsPerInst = repeatCount / rowsPerWarp;
+    rowsPerInst = repeatCount / rowsPerWarp;
     laneRowIndex = udiv(laneId, i32_val(packedColNum));
     laneColIndex = urem(laneId, i32_val(packedColNum));
     laneColIndex = mul(laneColIndex, i32_val(packedOpsPerLane));
-    repOpsPerRow = packedOpsPerLane;
   } break;
   case 1: {
+    assert(threadsPerWarp >= executionSize &&
+           "DpasEncodingAttr sub-group size could not "
+           "be smaller than the execution size for B operand.");
     rowsPerWarp = threadsPerWarp / executionSize;
-    repRowsPerInst = systolicDepth / rowsPerWarp;
+    rowsPerInst = systolicDepth / rowsPerWarp;
     rowsPerWarp = rowsPerWarp * opsPerChannel;
     laneRowIndex = udiv(laneId, i32_val(executionSize));
     laneRowIndex = mul(laneRowIndex, i32_val(opsPerChannel));
     laneColIndex = urem(laneId, i32_val(executionSize));
-    repOpsPerRow = opsPerChannel;
+    packedOpsPerLane = opsPerChannel;
   } break;
   }
 
@@ -127,34 +129,46 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   Value perPhaseVal = i32_val(perPhase);
   Value maxPhaseVal = i32_val(maxPhase);
   Value vecVal = i32_val(vec);
+  auto instShape = opIdx == 0 ? dpasLayout.getDPASInstShapeA()
+                              : dpasLayout.getDPASInstShapeB();
+  auto shareMemoryShape = descTy.getShape();
+  for (int repIdx = 0; repIdx < repClusterSize; ++repIdx) {
+    unsigned repIndex = repIdx * instShape[opIdx];
+    for (int rowIdx = 0; rowIdx < rowsPerInst; ++rowIdx) {
+      Value rowIndex = mul(i32_val(rowIdx), rowsPerWarpVal);
+      for (unsigned opsIdx = 0; opsIdx < packedOpsPerLane; ++opsIdx) {
+        // inner index base
+        Value jBase = laneColIndex;
+        // outer index base
+        Value iBase = add(rowIndex, laneRowIndex);
+        switch (opIdx) {
+        case 0:
+          iBase = add(iBase, i32_val(repIndex));
+          jBase = add(jBase, i32_val(opsIdx));
+          break;
+        case 1:
+          iBase = add(iBase, i32_val(opsIdx));
+          jBase = add(jBase, i32_val(repIndex));
+          break;
+        }
 
-  for (int rep = 0; rep < repRowsPerInst; ++rep) {
-    Value repRowIndex = mul(i32_val(rep), rowsPerWarpVal);
-    for (unsigned opsIdx = 0; opsIdx < repOpsPerRow; ++opsIdx) {
-      // inner index base
-      Value jBase = laneColIndex;
-      // outer index base
-      Value iBase = add(repRowIndex, laneRowIndex);
-      switch (opIdx) {
-      case 0:
-        jBase = add(jBase, i32_val(opsIdx));
-        break;
-      case 1:
-        iBase = add(iBase, i32_val(opsIdx));
-        break;
+        // round the offset into the tensor's shape limitation. (Rounded
+        // broadcast)
+        iBase = urem(iBase, i32_val(shareMemoryShape[0]));
+        jBase = urem(jBase, i32_val(shareMemoryShape[1]));
+
+        // inner index offset
+        Value jOff = zeroVal;
+        // swizzle: col_swizzled = (col / vec) ^ phase * vec
+        Value phase = urem(udiv(iBase, perPhaseVal), maxPhaseVal);
+        jOff = add(jOff, udiv(cSwizzleOffset, vecVal));
+        jOff = mul(xor_(jOff, phase), vecVal);
+
+        Value i = add(mul(iBase, smemStrides[0]), iOff);
+        Value j = add(mul(jBase, smemStrides[1]), jOff);
+
+        offs[index++] = add(i, j);
       }
-
-      // inner index offset
-      Value jOff = zeroVal;
-      // swizzle: col_swizzled = (col / vec) ^ phase * vec
-      Value phase = urem(udiv(iBase, perPhaseVal), maxPhaseVal);
-      jOff = add(jOff, udiv(cSwizzleOffset, vecVal));
-      jOff = mul(xor_(jOff, phase), vecVal);
-
-      Value i = add(mul(iBase, smemStrides[0]), iOff);
-      Value j = add(mul(jBase, smemStrides[1]), jOff);
-
-      offs[index++] = add(i, j);
     }
   }
 
@@ -224,15 +238,18 @@ Type getSharedMemTy(Type argType) {
     return type::f32Ty(ctx);
   else if (argType.getIntOrFloatBitWidth() == 8)
     return type::i8Ty(ctx);
+  else if (argType.isF64())
+    return type::f64Ty(ctx);
   else
-    llvm::report_fatal_error("mma16816 data type not supported");
+    llvm::report_fatal_error(
+        "unsupported data type for the dot layout of DPAS");
 }
 
 template <unsigned opIdx>
 std::function<void(int, int)>
 getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
                 DpasEncodingAttr dpasLayout, unsigned warpsPerTile,
-                SmallVector<int64_t> instrShape, Value warpId,
+                SmallVector<unsigned> instrShape, Value warpId,
                 Value outerWarpDim, Value laneId, ValueTable &vals,
                 const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
@@ -266,7 +283,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
           gep(ptr_ty(rewriter.getContext(), 3), smemTy, smemBase, offs[i]);
 
     // Load from shared memory.
-    int64_t totalElem = product<int64_t>(instrShape);
+    unsigned totalElem = product<unsigned>(instrShape);
     unsigned threadsPerWarp = product<unsigned>(getThreadsPerWarp(dpasLayout));
     auto matTy = LLVM::LLVMStructType::getLiteral(
         eltTy.getContext(),
@@ -292,13 +309,11 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
 
   SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
 
-  SmallVector<int64_t> elemsPerInstr;
+  SmallVector<unsigned> shape;
   if constexpr (opIdx == 0) {
-    auto shapeA = dpasLayout.getShapeA();
-    elemsPerInstr = {shapeA[0], shapeA[1]};
+    shape = dpasLayout.getShapeA();
   } else {
-    auto shapeB = dpasLayout.getShapeB();
-    elemsPerInstr = {shapeB[0], shapeB[1]};
+    shape = dpasLayout.getShapeB();
   }
   SmallVector<int64_t> numReps =
       dpasLayout.getDPASRepetitions(shapePerCTA, opIdx);
@@ -310,16 +325,15 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<Value> multiDimWarpId =
       mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
-  unsigned ceilRes =
-      mlir::ceil<unsigned>(shapePerCTA[opIdx], elemsPerInstr[opIdx]);
+  unsigned ceilRes = mlir::ceil<unsigned>(shapePerCTA[opIdx], shape[opIdx]);
   Value outerWarpDim = urem(multiDimWarpId[opIdx], i32_val(ceilRes));
   int warpsPerTile = std::min<int>(warpsPerCTA[opIdx], ceilRes);
 
   // Get the function to use to load the operand.
   ValueTable vals;
   std::function<void(int, int)> loadFn = getLoadMatrixFn<opIdx>(
-      descTy, smemObj, dpasLayout, warpsPerTile, elemsPerInstr, warpId,
-      outerWarpDim, laneId, vals, typeConverter, rewriter, loc);
+      descTy, smemObj, dpasLayout, warpsPerTile, shape, warpId, outerWarpDim,
+      laneId, vals, typeConverter, rewriter, loc);
 
   // Load the operand.
   int64_t numRepOuter = numReps[opIdx];
