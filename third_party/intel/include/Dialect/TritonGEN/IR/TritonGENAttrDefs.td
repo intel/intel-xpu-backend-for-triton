@@ -20,8 +20,8 @@ class TritonGEN_Attr<string name, string attrMnemonic, list<Trait> traits = []>
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
 
-/// Enum attribute of the different reduce kinds.
-def TritonGEN_ReduceKindAttr : I32EnumAttr<"ReduceKind", "TritonGEN reduce kind",
+/// Enum attribute of the different subgroup reduce kinds.
+def TritonGEN_ReduceKindAttr : I32EnumAttr<"ReduceKind", "TritonGEN subgroup reduce kind",
   [
     I32EnumAttrCase<"ADD",  0, "add">,
     I32EnumAttrCase<"MUL",  1, "mul">,
@@ -34,8 +34,17 @@ def TritonGEN_ReduceKindAttr : I32EnumAttr<"ReduceKind", "TritonGEN reduce kind"
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
 
-/// Enum attribute of the different shuffle kinds.
-def TritonGEN_ShflKindAttr : I32EnumAttr<"ShflKind", "TritonGEN shuffle kind",
+/// Enum attribute of the different subgroup scan kinds.
+def TritonGEN_ScanKindAttr : I32EnumAttr<"ScanKind", "TritonGEN subgroup scan kind",
+  [
+    I32EnumAttrCase<"INCLUSIVE",  0, "inclusive">,
+    I32EnumAttrCase<"EXCLUSIVE",  1, "exclusive">,
+  ]> {
+  let cppNamespace = "::mlir::triton::TritonGEN";
+}
+
+/// Enum attribute of the different subgroup shuffle kinds.
+def TritonGEN_ShflKindAttr : I32EnumAttr<"ShflKind", "TritonGEN subgroup shuffle kind",
   [
     I32EnumAttrCase<"XOR",  0, "xor">,
     I32EnumAttrCase<"UP",   1, "up">,
