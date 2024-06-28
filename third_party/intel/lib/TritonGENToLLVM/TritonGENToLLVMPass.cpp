@@ -1149,21 +1149,21 @@ protected:
             typename = std::enable_if_t<llvm::is_one_of<
                 OpType, TritonGEN::SubGroupReduceOp, TritonGEN::SubGroupScanOp,
                 TritonGEN::SubGroupShuffleOp>::value>>
-  static Value extend(OpType op, Value val, ConversionPatternRewriter &rewriter,
-                      Location loc) {
-    Type orig_ty = val.getType();
-    unsigned bitWidth = orig_ty.getIntOrFloatBitWidth();
+  static Value extend(OpType op, Value val, Type type,
+                      ConversionPatternRewriter &rewriter) {
+    Location loc = op.getLoc();
+    unsigned bitWidth = type.getIntOrFloatBitWidth();
 
     if constexpr (llvm::is_one_of<OpType, TritonGEN::SubGroupReduceOp,
                                   TritonGEN::SubGroupScanOp>::value) {
-      if (orig_ty.isInteger() && bitWidth < 8)
+      if (type.isInteger() && bitWidth < 8)
         val = zext(i8_ty, val);
     } else if constexpr (std::is_same_v<OpType, TritonGEN::SubGroupShuffleOp>) {
       if (bitWidth < 8) {
-        if (!orig_ty.isInteger())
+        if (!type.isInteger())
           val = bitcast(val, int_ty(bitWidth));
         val = zext(i8_ty, val);
-      } else if (isa<BFloat16Type>(orig_ty)) {
+      } else if (isa<BFloat16Type>(type)) {
         val = bitcast(val, i16_ty);
       }
     }
@@ -1175,23 +1175,23 @@ protected:
             typename = std::enable_if_t<llvm::is_one_of<
                 OpType, TritonGEN::SubGroupReduceOp, TritonGEN::SubGroupScanOp,
                 TritonGEN::SubGroupShuffleOp>::value>>
-  static Value truncate(OpType op, Value val,
-                        ConversionPatternRewriter &rewriter, Location loc) {
-    Type orig_ty = val.getType();
-    unsigned bitWidth = orig_ty.getIntOrFloatBitWidth();
+  static Value truncate(OpType op, Value val, Type type,
+                        ConversionPatternRewriter &rewriter) {
+    Location loc = op.getLoc();
+    unsigned bitWidth = type.getIntOrFloatBitWidth();
 
     if constexpr (llvm::is_one_of<OpType, TritonGEN::SubGroupReduceOp,
                                   TritonGEN::SubGroupScanOp>::value) {
-      if (orig_ty.isInteger() && bitWidth < 8)
-        val = trunc(orig_ty, val);
+      if (type.isInteger() && bitWidth < 8)
+        val = trunc(type, val);
       return val;
     } else if constexpr (std::is_same_v<OpType, TritonGEN::SubGroupShuffleOp>) {
       if (bitWidth < 8) {
         val = trunc(int_ty(bitWidth), val);
-        if (!orig_ty.isInteger())
-          val = bitcast(val, orig_ty);
-      } else if (isa<BFloat16Type>(orig_ty)) {
-        val = bitcast(val, orig_ty);
+        if (!type.isInteger())
+          val = bitcast(val, type);
+      } else if (isa<BFloat16Type>(type)) {
+        val = bitcast(val, type);
       }
     }
 
@@ -1209,9 +1209,11 @@ struct TritonSubGroupReduceLowering
   matchAndRewrite(TritonGEN::SubGroupReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    Value val = extend(op, op.getValue(), rewriter, loc);
-    Type val_ty = val.getType();
-    SmallVector<Type> argTypes{val_ty};
+    Value val = op.getValue();
+    Type origTy = val.getType();
+    val = extend(op, val, origTy, rewriter);
+    Type valTy = val.getType();
+    SmallVector<Type> argTypes{valTy};
     SmallVector<Value> args{val};
     bool useCluster = (getSubgroupSize(op) != op.getSize());
     std::string fnName = "sub_group_";
@@ -1219,7 +1221,7 @@ struct TritonSubGroupReduceLowering
       fnName += "clustered_";
     fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
     fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             intel::getTypeMangling(val_ty);
+             intel::getTypeMangling(valTy);
     if (useCluster) {
       fnName += "j";
       argTypes.push_back(i32_ty);
@@ -1233,10 +1235,10 @@ struct TritonSubGroupReduceLowering
     funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
     intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
-    Value result = createDeviceFunctionCall(rewriter, fnName, val_ty, argTypes,
-                                            args, attrs)
-                       .getResult();
-    result = TritonSubGroupBase::truncate(op, result, rewriter, loc);
+    Value result =
+        createDeviceFunctionCall(rewriter, fnName, valTy, argTypes, args, attrs)
+            .getResult();
+    result = truncate(op, result, origTy, rewriter);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -1251,10 +1253,11 @@ struct TritonSubGroupScanLowering
   LogicalResult
   matchAndRewrite(TritonGEN::SubGroupScanOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    Value val = TritonSubGroupBase::extend(op, op.getValue(), rewriter, loc);
-    Type val_ty = val.getType();
-    SmallVector<Type> argTypes{val_ty};
+    Value val = op.getValue();
+    Type origTy = val.getType();
+    val = extend(op, op.getValue(), origTy, rewriter);
+    Type valTy = val.getType();
+    SmallVector<Type> argTypes{valTy};
     SmallVector<Value> args{val};
 
     std::string fnName = "sub_group_scan_";
@@ -1271,17 +1274,17 @@ struct TritonSubGroupScanLowering
 
     fnName += stringifyReduceKind(op.getReduceKind()).str();
     fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             intel::getTypeMangling(val_ty);
+             intel::getTypeMangling(valTy);
 
     MLIRContext *ctx = rewriter.getContext();
     intel::AttrBuilder funcAttrBuilder(*ctx);
     funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
     intel::AttributeList attrs = getAttrList(funcAttrBuilder);
 
-    Value result = createDeviceFunctionCall(rewriter, fnName, val_ty, argTypes,
-                                            args, attrs)
-                       .getResult();
-    result = TritonSubGroupBase::truncate(op, result, rewriter, loc);
+    Value result =
+        createDeviceFunctionCall(rewriter, fnName, valTy, argTypes, args, attrs)
+            .getResult();
+    result = truncate(op, result, origTy, rewriter);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -1296,33 +1299,13 @@ struct TritonSubGroupShuffleLowering
   LogicalResult
   matchAndRewrite(TritonGEN::SubGroupShuffleOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
     Value val = op.getValue();
-    //    Value val = TritonSubGroupBase::extend(op, op.getValue(), rewriter,
-    //    loc);
-    Type orig_type = val.getType();
-    unsigned bits = orig_type.getIntOrFloatBitWidth();
-    if (bits < 8) {
-      if (!orig_type.isInteger())
-        val = bitcast(val, int_ty(bits));
-      val = zext(i8_ty, val);
-    } else if (isa<BFloat16Type>(orig_type)) {
-      val = bitcast(val, i16_ty);
-    }
-
+    auto origTy = val.getType();
+    val = extend(op, op.getValue(), origTy, rewriter);
     Value result =
         createSubGroupShuffle(rewriter, val, op.getMask(), op.getKind())
             .getResult();
-    //    result = truncate(op, result, rewriter, loc);
-
-    if (bits < 8) {
-      result = trunc(int_ty(bits), result);
-      if (!orig_type.isInteger())
-        result = bitcast(result, orig_type);
-    } else if (isa<BFloat16Type>(orig_type)) {
-      result = bitcast(result, orig_type);
-    }
-
+    result = truncate(op, result, origTy, rewriter);
     rewriter.replaceOp(op, result);
     return success();
   }
