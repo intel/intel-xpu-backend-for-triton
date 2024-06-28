@@ -35,8 +35,6 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "intel/include/TritonGENToLLVM/GenIntrinsicEnum.h"
-#include "intel/include/TritonGENToLLVM/GenIntrinsics.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 
 namespace mlir::triton {
@@ -353,13 +351,10 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   Value x = op.getX();
   Value y = op.getY();
 
-  llvm::LLVMContext llvmContext;
-  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-  auto llvmResTy = typeTranslator.translateType(resType);
-  SmallVector<llvm::Type *> llvmTypes{llvmResTy};
-  std::string funcName = llvm::GenISAIntrinsic::getName(
-      llvm::GenISAIntrinsic::GenISA_LSC2DBlockRead, llvmTypes);
-
+  std::string funcName =
+      "llvm.genx.GenISA.LSC2DBlockRead.v" +
+      std::to_string(resType.getNumElements()) + "i" +
+      std::to_string(resType.getElementType().getIntOrFloatBitWidth());
   IntegerType int1Ty = rewriter.getIntegerType(1);
   IntegerType int32Ty = rewriter.getIntegerType(32);
   IntegerType int64Ty = rewriter.getIntegerType(64);
@@ -591,12 +586,11 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   Value y = op.getY();
   Value storeVal = op.getStoredVal();
 
-  llvm::LLVMContext llvmContext;
-  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-  auto storeTy = typeTranslator.translateType(storeVal.getType());
-  SmallVector<llvm::Type *> llvmTypes{storeTy};
-  std::string funcName = llvm::GenISAIntrinsic::getName(
-      llvm::GenISAIntrinsic::GenISA_LSC2DBlockWrite, llvmTypes);
+  VectorType storeValType = op.getStoredVal().getType();
+  std::string funcName =
+      "llvm.genx.GenISA.LSC2DBlockWrite.v" +
+      std::to_string(storeValType.getNumElements()) + "i" +
+      std::to_string(storeValType.getElementType().getIntOrFloatBitWidth());
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -1076,14 +1070,10 @@ struct TritonGENNamedBarrierSignalLowering
     Value barrierId = op.getBarrierId();
     Value threadGroupCount = op.getThreadGroupCount();
 
-    llvm::LLVMContext llvmContext;
-    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-    llvm::Type *barrierTy = typeTranslator.translateType(barrierId.getType());
-    llvm::Type *threadGroupCountTy =
-        typeTranslator.translateType(threadGroupCount.getType());
-    std::string funcName = llvm::GenISAIntrinsic::getName(
-        llvm::GenISAIntrinsic::GenISA_threadgroupnamedbarriers_signal,
-        {barrierTy, threadGroupCountTy});
+    std::string funcName =
+        "llvm.genx.GenISA.threadgroupnamedbarriers.signal.i" +
+        std::to_string(barrierId.getType().getIntOrFloatBitWidth()) + ".i" +
+        std::to_string(threadGroupCount.getType().getIntOrFloatBitWidth());
 
     LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
         moduleOp, funcName, {barrierId.getType(), threadGroupCount.getType()},
@@ -1118,12 +1108,9 @@ struct TritonGENNamedBarrierWaitLowering
 
     Value barrierId = op.getBarrierId();
 
-    llvm::LLVMContext llvmContext;
-    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-    llvm::Type *barrierTy = typeTranslator.translateType(barrierId.getType());
-    std::string funcName = llvm::GenISAIntrinsic::getName(
-        llvm::GenISAIntrinsic::GenISA_threadgroupnamedbarriers_wait,
-        {barrierTy});
+    std::string funcName =
+        "llvm.genx.GenISA.threadgroupnamedbarriers.wait.i" +
+        std::to_string(barrierId.getType().getIntOrFloatBitWidth());
 
     LLVM::LLVMFuncOp funcOp =
         LLVM::lookupOrCreateFn(moduleOp, funcName, {barrierId.getType()},
