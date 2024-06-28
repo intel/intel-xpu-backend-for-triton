@@ -280,8 +280,6 @@ def TritonGEN_SubGroupScanOp : TritonGEN_Op<"sub_group_scan", [
   let assemblyFormat = [{
     $reduce_kind $value ` ` `{` `kind` `=` $scan_kind `}` attr-dict `:` type($value)
   }];
-
-  let hasVerifier = 1;
 }
 
 def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [

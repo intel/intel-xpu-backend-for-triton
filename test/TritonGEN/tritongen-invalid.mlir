@@ -64,15 +64,6 @@ module attributes {
 
 // -----
 
-llvm.func @triton_gen.sub_group_scan() {
-  // expected-error @+2 {{'triton_gen.sub_group_scan' op expecting valid target env attribute}}
-  %0 = llvm.mlir.constant(0 : i32) : i32
-  %1 = triton_gen.sub_group_scan add %0 {kind = inclusive} : i32
-  llvm.return
-}
-
-// -----
-
 llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // expected-error @+1 {{'triton_gen.dpas' op expecting repeat count to be 1, 2, 4, or 8}}
   %0 = triton_gen.dpas %c, %a, %b {pa=i8, pb=i8, rc=16} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>

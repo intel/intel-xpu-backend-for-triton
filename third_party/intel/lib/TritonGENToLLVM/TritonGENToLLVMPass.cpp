@@ -1143,8 +1143,65 @@ struct TritonGENNamedBarrierWaitLowering
   }
 };
 
+struct TritonSubGroupBase {
+protected:
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, TritonGEN::SubGroupReduceOp, TritonGEN::SubGroupScanOp,
+                TritonGEN::SubGroupShuffleOp>::value>>
+  static Value extend(OpType op, Value val, ConversionPatternRewriter &rewriter,
+                      Location loc) {
+    Type orig_ty = val.getType();
+    unsigned bitWidth = orig_ty.getIntOrFloatBitWidth();
+
+    if constexpr (llvm::is_one_of<OpType, TritonGEN::SubGroupReduceOp,
+                                  TritonGEN::SubGroupScanOp>::value) {
+      if (orig_ty.isInteger() && bitWidth < 8)
+        val = zext(i8_ty, val);
+    } else if constexpr (std::is_same_v<OpType, TritonGEN::SubGroupShuffleOp>) {
+      if (bitWidth < 8) {
+        if (!orig_ty.isInteger())
+          val = bitcast(val, int_ty(bitWidth));
+        val = zext(i8_ty, val);
+      } else if (isa<BFloat16Type>(orig_ty)) {
+        val = bitcast(val, i16_ty);
+      }
+    }
+
+    return val;
+  }
+
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, TritonGEN::SubGroupReduceOp, TritonGEN::SubGroupScanOp,
+                TritonGEN::SubGroupShuffleOp>::value>>
+  static Value truncate(OpType op, Value val,
+                        ConversionPatternRewriter &rewriter, Location loc) {
+    Type orig_ty = val.getType();
+    unsigned bitWidth = orig_ty.getIntOrFloatBitWidth();
+
+    if constexpr (llvm::is_one_of<OpType, TritonGEN::SubGroupReduceOp,
+                                  TritonGEN::SubGroupScanOp>::value) {
+      if (orig_ty.isInteger() && bitWidth < 8)
+        val = trunc(orig_ty, val);
+      return val;
+    } else if constexpr (std::is_same_v<OpType, TritonGEN::SubGroupShuffleOp>) {
+      if (bitWidth < 8) {
+        val = trunc(int_ty(bitWidth), val);
+        if (!orig_ty.isInteger())
+          val = bitcast(val, orig_ty);
+      } else if (isa<BFloat16Type>(orig_ty)) {
+        val = bitcast(val, orig_ty);
+      }
+    }
+
+    return val;
+  }
+};
+
 struct TritonSubGroupReduceLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupReduceOp> {
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupReduceOp>,
+      public TritonSubGroupBase {
   using ConvertOpToLLVMPattern<
       TritonGEN::SubGroupReduceOp>::ConvertOpToLLVMPattern;
 
@@ -1152,11 +1209,7 @@ struct TritonSubGroupReduceLowering
   matchAndRewrite(TritonGEN::SubGroupReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    Value val = op.getValue();
-    Type orig_ty = val.getType();
-    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
-      val = zext(i8_ty, val);
-
+    Value val = extend(op, op.getValue(), rewriter, loc);
     Type val_ty = val.getType();
     SmallVector<Type> argTypes{val_ty};
     SmallVector<Value> args{val};
@@ -1183,15 +1236,15 @@ struct TritonSubGroupReduceLowering
     Value result = createDeviceFunctionCall(rewriter, fnName, val_ty, argTypes,
                                             args, attrs)
                        .getResult();
-    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
-      result = trunc(orig_ty, result);
+    result = TritonSubGroupBase::truncate(op, result, rewriter, loc);
     rewriter.replaceOp(op, result);
     return success();
   }
 };
 
 struct TritonSubGroupScanLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupScanOp> {
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupScanOp>,
+      public TritonSubGroupBase {
   using ConvertOpToLLVMPattern<
       TritonGEN::SubGroupScanOp>::ConvertOpToLLVMPattern;
 
@@ -1199,11 +1252,7 @@ struct TritonSubGroupScanLowering
   matchAndRewrite(TritonGEN::SubGroupScanOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    Value val = op.getValue();
-    Type orig_ty = val.getType();
-    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
-      val = zext(i8_ty, val);
-
+    Value val = TritonSubGroupBase::extend(op, op.getValue(), rewriter, loc);
     Type val_ty = val.getType();
     SmallVector<Type> argTypes{val_ty};
     SmallVector<Value> args{val};
@@ -1232,15 +1281,15 @@ struct TritonSubGroupScanLowering
     Value result = createDeviceFunctionCall(rewriter, fnName, val_ty, argTypes,
                                             args, attrs)
                        .getResult();
-    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
-      result = trunc(orig_ty, result);
+    result = TritonSubGroupBase::truncate(op, result, rewriter, loc);
     rewriter.replaceOp(op, result);
     return success();
   }
 };
 
 struct TritonSubGroupShuffleLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupShuffleOp> {
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupShuffleOp>,
+      public TritonSubGroupBase {
   using ConvertOpToLLVMPattern<
       TritonGEN::SubGroupShuffleOp>::ConvertOpToLLVMPattern;
 
@@ -1249,8 +1298,8 @@ struct TritonSubGroupShuffleLowering
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value val = op.getValue();
-    Value mask = op.getMask();
-    TritonGEN::ShflKind kind = op.getKind();
+    //    Value val = TritonSubGroupBase::extend(op, op.getValue(), rewriter,
+    //    loc);
     Type orig_type = val.getType();
     unsigned bits = orig_type.getIntOrFloatBitWidth();
     if (bits < 8) {
@@ -1260,7 +1309,12 @@ struct TritonSubGroupShuffleLowering
     } else if (isa<BFloat16Type>(orig_type)) {
       val = bitcast(val, i16_ty);
     }
-    Value result = createSubGroupShuffle(rewriter, val, mask, kind).getResult();
+
+    Value result =
+        createSubGroupShuffle(rewriter, val, op.getMask(), op.getKind())
+            .getResult();
+    //    result = truncate(op, result, rewriter, loc);
+
     if (bits < 8) {
       result = trunc(int_ty(bits), result);
       if (!orig_type.isInteger())
@@ -1268,6 +1322,7 @@ struct TritonSubGroupShuffleLowering
     } else if (isa<BFloat16Type>(orig_type)) {
       result = bitcast(result, orig_type);
     }
+
     rewriter.replaceOp(op, result);
     return success();
   }
