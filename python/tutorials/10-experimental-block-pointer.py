@@ -181,28 +181,143 @@ def matmul_kernel_with_block_pointers(
     tl.store(c_block_ptr, c, boundary_check=(0, 1))
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=2,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=3,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=2,
+                      num_warps=32),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=2,
+                      num_warps=32),
+    ],
+    key=['M', 'N', 'K'],
+)
+@triton.jit
+def matmul_kernel_with_block_pointers_batched(
+        # Pointers to matrices
+        a_ptr, b_ptr, c_ptr,
+        # Matrix dimensions
+        B, M, N, K,
+        # The stride variables represent how much to increase the ptr by when moving by 1
+        # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
+        # by to get the element one row down (A has M rows).
+        stride_az, stride_am, stride_ak,  #
+        stride_bz, stride_bk, stride_bn,  #
+        stride_cz, stride_cm, stride_cn,  #
+        ACCUMULATOR_DTYPE: tl.constexpr,
+        # Meta-parameters
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
+    """Kernel for computing the matmul C = A x B.
+    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
+    """
+    # -----------------------------------------------------------
+    # Map program ids `pid` to the block of C it should compute.
+    # This is done in a grouped ordering to promote L2 data reuse.
+    # See the matrix multiplication tutorial for details.
+    bid = tl.program_id(axis=0)
+    pid = tl.program_id(axis=1)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (pid % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    offset_a = bid.to(tl.int64) * stride_az
+    offset_b = bid.to(tl.int64) * stride_bz
+    # ----------------------------------------------------------
+    # Create block pointers for the first blocks of A and B.
+    # We will advance this pointer as we move in the K direction and accumulate.
+    # See above `Make a Block Pointer` section for details.
+    a_block_ptr = tl.make_block_ptr(base=a_ptr + offset_a, shape=(M, K), strides=(stride_am, stride_ak),
+                                    offsets=(pid_m * BLOCK_SIZE_M, 0), block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
+                                    order=(1, 0))
+    b_block_ptr = tl.make_block_ptr(base=b_ptr + offset_b, shape=(K, N), strides=(stride_bk, stride_bn),
+                                    offsets=(0, pid_n * BLOCK_SIZE_N), block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
+                                    order=(1, 0))
+
+    # -----------------------------------------------------------
+    # Iterate to compute a block of the C matrix.
+    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block.
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ACCUMULATOR_DTYPE)
+    for k in range(0, K, BLOCK_SIZE_K):
+        # Load with boundary checks, no need to calculate the mask manually.
+        # For better performance, you may remove some axis from the boundary
+        # check, if you can guarantee that the access is always in-bound in
+        # that axis.
+        # See above `Load/Store a Block Pointer` section for details.
+        a = tl.load(a_block_ptr, boundary_check=(0, 1))
+        b = tl.load(b_block_ptr, boundary_check=(0, 1))
+        # We accumulate along the K dimension.
+        accumulator += tl.dot(a, b, out_dtype=ACCUMULATOR_DTYPE)
+        # Advance the block pointer to the next K block.
+        # See above `Advance a Block Pointer` section for details.
+        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
+        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
+    c = accumulator.to(c_ptr.type.element_ty)
+    # ----------------------------------------------------------------
+    # Write back the block of the output matrix C with boundary checks.
+    # See above `Load/Store a Block Pointer` section for details.
+    offset_c = bid.to(tl.int64) * stride_cz
+    c_block_ptr = tl.make_block_ptr(base=c_ptr + offset_c, shape=(M, N), strides=(stride_cm, stride_cn),
+                                    offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
+                                    block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
+    tl.store(c_block_ptr, c, boundary_check=(0, 1))
+
+
 # We can now create a convenience wrapper function that only takes two input tensors,
 # and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 def matmul(a, b, accum_dtype, res_dtype):
     # Check constraints.
-    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
-    assert a.is_contiguous(), "Matrix A must be contiguous"
-    assert b.is_contiguous(), "Matrix B must be contiguous"
-    M, K = a.shape
-    K, N = b.shape
+    if len(a.shape) == 3 and len(b.shape) == 3:
+        assert a.shape[0] == b.shape[0], "Incompatible Batch dimension"
+        assert a.shape[2] == b.shape[1], "Incompatible dimensions"
+        assert a.is_contiguous(), "Matrix A must be contiguous"
+        assert b.is_contiguous(), "Matrix B must be contiguous"
+        B, M, K = a.shape
+        B, K, N = b.shape
+        c = torch.empty((B, M, N), device=a.device, dtype=res_dtype)
+        # Map accumulator type, e.g. `torch.float16` -> `tl.fp16`
+        triton_accum_dtype = tl.dtype(str(accum_dtype)[6:].replace('bfloat', 'bf').replace('float', 'fp'))
+        # 1D launch kernel where each block gets its own program.
+        grid = lambda META: (
+            B,
+            triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+        )
+        matmul_kernel_with_block_pointers_batched[grid](
+            a, b, c,  #
+            B, M, N, K,  #
+            a.stride(0), a.stride(1), a.stride(2),  #
+            b.stride(0), b.stride(1), b.stride(2),  #
+            c.stride(0), c.stride(1), c.stride(2),  #
+            threads_per_warp=16, ACCUMULATOR_DTYPE=triton_accum_dtype)
+    elif len(a.shape) == 2 and len(b.shape) == 2:
+        assert a.shape[1] == b.shape[0], "Incompatible dimensions"
+        assert a.is_contiguous(), "Matrix A must be contiguous"
+        assert b.is_contiguous(), "Matrix B must be contiguous"
+        M, K = a.shape
+        K, N = b.shape
+        B = 1
+        c = torch.empty((M, N), device=a.device, dtype=res_dtype)
+        # Map accumulator type, e.g. `torch.float16` -> `tl.fp16`
+        triton_accum_dtype = tl.dtype(str(accum_dtype)[6:].replace('bfloat', 'bf').replace('float', 'fp'))
+        print(triton_accum_dtype)
+        # 1D launch kernel where each block gets its own program.
+        grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
+        matmul_kernel_with_block_pointers[grid](
+            a, b, c,  #
+            M, N, K,  #
+            a.stride(0), a.stride(1),  #
+            b.stride(0), b.stride(1),  #
+            c.stride(0), c.stride(1),  #
+            threads_per_warp=16, ACCUMULATOR_DTYPE=triton_accum_dtype)
+    else:
+        assert False, "Input matrixs dimensions mismatch"
     # Allocates output.
-    c = torch.empty((M, N), device=a.device, dtype=res_dtype)
-    # Map accumulator type, e.g. `torch.float16` -> `tl.fp16`
-    triton_accum_dtype = tl.dtype(str(accum_dtype)[6:].replace('bfloat', 'bf').replace('float', 'fp'))
-    # 1D launch kernel where each block gets its own program.
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-    matmul_kernel_with_block_pointers[grid](
-        a, b, c,  #
-        M, N, K,  #
-        a.stride(0), a.stride(1),  #
-        b.stride(0), b.stride(1),  #
-        c.stride(0), c.stride(1),  #
-        threads_per_warp=16, ACCUMULATOR_DTYPE=triton_accum_dtype)
     return c
 
 
@@ -222,39 +337,45 @@ for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float
                                       (torch.bfloat16, torch.float32, torch.bfloat16),
                                       (torch.float32, torch.float32, torch.float32),
                                       (torch.int8, torch.int32, torch.int32)]:
-    if dtype.is_floating_point:
-        if accum_dtype in [torch.float16, torch.bfloat16]:
-            # 16-bit accumulation across 512 multiplications is error-prone,
-            # hence we multiply a matrix of random numbers with
-            # [[ 1  1  0 ... ],
-            #  [ 1  1  1 ... ],
-            #  [ 0  1  1 ... ], ... ]
-            # in order only add 3 values per result matrix element.
-            a = torch.randn((512, 512), device='xpu', dtype=dtype)
-            b = torch.eye(512, device='xpu', dtype=dtype) + torch.diag(
-                torch.ones(511, device='xpu', dtype=dtype), diagonal=1) + torch.diag(
-                    torch.ones(511, device='xpu', dtype=dtype), diagonal=-1)
+
+    for shape in [(512, 512), (4, 512, 512)]:
+        assert shape[-1] == shape[-2], "Only square matrices are supported"
+        if dtype.is_floating_point:
+            if accum_dtype in [torch.float16, torch.bfloat16]:
+                # 16-bit accumulation across 512 multiplications is error-prone,
+                # hence we multiply a matrix of random numbers with
+                # [[ 1  1  0 ... ],
+                #  [ 1  1  1 ... ],
+                #  [ 0  1  1 ... ], ... ]
+                # in order only add 3 values per result matrix element.
+                a = torch.randn(shape, device='xpu', dtype=dtype)
+                b = torch.eye(shape[-2], device='xpu', dtype=dtype) + torch.diag(
+                    torch.ones(shape[-2] - 1, device='xpu', dtype=dtype), diagonal=1) + torch.diag(
+                        torch.ones(shape[-2] - 1, device='xpu', dtype=dtype), diagonal=-1)
+                # duplicate b on batch dimension.
+                if len(shape) == 3:
+                    b = b.unsqueeze(0).repeat(shape[0], 1, 1)
+            else:
+                a = torch.randn(shape, device='xpu', dtype=dtype)
+                b = torch.randn(shape, device='xpu', dtype=dtype)
+            torch_output = torch.matmul(a, b).to(dtype=res_dtype)
         else:
-            a = torch.randn((512, 512), device='xpu', dtype=dtype)
-            b = torch.randn((512, 512), device='xpu', dtype=dtype)
-        torch_output = torch.matmul(a, b).to(dtype=res_dtype)
-    else:
-        a = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
-        b = torch.randint(low=-127, high=128, size=(512, 512), device='xpu', dtype=dtype)
-        # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
-        torch_output = torch.matmul(a.to(device='cpu', dtype=accum_dtype),
-                                    b.to(device='cpu', dtype=accum_dtype)).to(device='xpu', dtype=res_dtype)
+            a = torch.randint(low=-127, high=128, size=shape, device='xpu', dtype=dtype)
+            b = torch.randint(low=-127, high=128, size=shape, device='xpu', dtype=dtype)
+            # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
+            torch_output = torch.matmul(a.to(device='cpu', dtype=accum_dtype),
+                                        b.to(device='cpu', dtype=accum_dtype)).to(device='xpu', dtype=res_dtype)
 
-    triton_output = matmul(a, b, accum_dtype, res_dtype)
+        triton_output = matmul(a, b, accum_dtype, res_dtype)
 
-    print(f"triton_output={triton_output}")
-    print(f"torch_output={torch_output}")
+        print(f"triton_output={triton_output}")
+        print(f"torch_output={torch_output}")
 
-    # Note: the torch.matmul and Triton implementations uses different
-    # algorithms so we need to adjust tolerance.
-    rtol = 1e-2 if dtype == torch.bfloat16 or accum_dtype in [torch.float16, torch.bfloat16] else 1e-3
-    atol = 1e-2 if accum_dtype == torch.bfloat16 else 1e-3 if accum_dtype == torch.float16 else 1e-4
-    if torch.allclose(triton_output, torch_output, atol=atol, rtol=rtol):
-        print("✅ Triton and Torch match")
-    else:
-        exit("❌ Triton and Torch differ")
+        # Note: the torch.matmul and Triton implementations uses different
+        # algorithms so we need to adjust tolerance.
+        rtol = 1e-2 if dtype == torch.bfloat16 or accum_dtype in [torch.float16, torch.bfloat16] else 1e-3
+        atol = 1e-2 if accum_dtype == torch.bfloat16 else 1e-3 if accum_dtype == torch.float16 else 1e-4
+        if torch.allclose(triton_output, torch_output, atol=atol, rtol=rtol):
+            print("✅ Triton and Torch match")
+        else:
+            exit("❌ Triton and Torch differ")
