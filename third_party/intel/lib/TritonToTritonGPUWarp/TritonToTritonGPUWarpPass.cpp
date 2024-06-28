@@ -176,7 +176,7 @@ public:
         LLVM_DEBUG(loopDotInfo.dump());
         loopMap[loop] = loopDotInfo;
         // DAG pattern match
-        auto workLoadKind = matchLoopWorkload(loop, loopDotInfo);
+        Workload workLoadKind = matchLoopWorkload(loop, loopDotInfo);
         if (workLoadKind == Workload::None) {
           LDBG("\n");
           LDBG("***********************************************\n");
@@ -218,9 +218,11 @@ public:
             valueAttrMap[info0.advanceB] = dotBLayout;
           break;
         }
-        case Workload::Attention: {
+        case Workload::None:
+        case Workload::ElementWise:
+        case Workload::Reduction:
+        case Workload::Attention:
           break;
-        }
         }
       }
 
