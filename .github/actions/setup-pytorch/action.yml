@@ -63,6 +63,13 @@ runs:
         submodules: recursive
         path: pytorch
 
+    # FIXME: Old PyTorch does not work with numpy==2.0.0
+    - name: Install numpy < 2.0.0
+      if: ${{ inputs.repository == 'Stonepia/pytorch' }}
+      shell: bash
+      run: |
+        pip install 'numpy<2.0.0'
+
     - name: Build PyTorch
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
       shell: bash
