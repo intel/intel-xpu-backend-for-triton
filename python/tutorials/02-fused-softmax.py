@@ -63,7 +63,7 @@ def naive_softmax(x):
 # Compute Kernel
 # --------------
 #
-# Our softmax kernel works as follows: each program loads a set of rows of the input matrix X strided by number of programs,
+# Our softmax kernel works as follows: each program loads a row of the input matrix X,
 # normalizes it and writes back the result to the output Y.
 #
 # Note that one important limitation of Triton is that each block must have a
@@ -72,31 +72,28 @@ def naive_softmax(x):
 
 
 @triton.jit
-def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols,
-                   BLOCK_SIZE: tl.constexpr):
-    # starting row of the program
-    row_start = tl.program_id(0)
-    row_step = tl.num_programs(0)
-    for row_idx in tl.range(row_start, n_rows, row_step):
-        # The stride represents how much we need to increase the pointer to advance 1 row
-        row_start_ptr = input_ptr + row_idx * input_row_stride
-        # The block size is the next power of two greater than n_cols, so we can fit each
-        # row in a single block
-        col_offsets = tl.arange(0, BLOCK_SIZE)
-        input_ptrs = row_start_ptr + col_offsets
-        # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
-        mask = col_offsets < n_cols
-        row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
-        # Subtract maximum for numerical stability
-        row_minus_max = row - tl.max(row, axis=0)
-        # Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)
-        numerator = tl.exp(row_minus_max)
-        denominator = tl.sum(numerator, axis=0)
-        softmax_output = numerator / denominator
-        # Write back output to DRAM
-        output_row_start_ptr = output_ptr + row_idx * output_row_stride
-        output_ptrs = output_row_start_ptr + col_offsets
-        tl.store(output_ptrs, softmax_output, mask=mask)
+def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, BLOCK_SIZE: tl.constexpr):
+    # The rows of the softmax are independent, so we parallelize across those
+    row_idx = tl.program_id(0)
+    # The stride represents how much we need to increase the pointer to advance 1 row
+    row_start_ptr = input_ptr + row_idx * input_row_stride
+    # The block size is the next power of two greater than n_cols, so we can fit each
+    # row in a single block
+    col_offsets = tl.arange(0, BLOCK_SIZE)
+    input_ptrs = row_start_ptr + col_offsets
+    # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
+    mask = col_offsets < n_cols
+    row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
+    # Subtract maximum for numerical stability
+    row_minus_max = row - tl.max(row, axis=0)
+    # Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)
+    numerator = tl.exp(row_minus_max)
+    denominator = tl.sum(numerator, axis=0)
+    softmax_output = numerator / denominator
+    # Write back output to DRAM
+    output_row_start_ptr = output_ptr + row_idx * output_row_stride
+    output_ptrs = output_row_start_ptr + col_offsets
+    tl.store(output_ptrs, softmax_output, mask=mask)
 
 
 # %%
@@ -111,8 +108,7 @@ target = triton.runtime.driver.active.get_current_target()
 
 def softmax(x):
     n_rows, n_cols = x.shape
-
-    # The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`
+    # The block size is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
 
     # Simple heuristic depending on `BLOCK_SIZE`. We aim for 4 elements per
@@ -127,7 +123,7 @@ def softmax(x):
     y = torch.empty_like(x)
 
     # Create a number of persistent programs.
-    softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_rows, n_cols, num_warps=num_warps,
+    softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_cols, num_warps=num_warps,
                                threads_per_warp=WARP_SIZE, BLOCK_SIZE=BLOCK_SIZE)
     return y
 
