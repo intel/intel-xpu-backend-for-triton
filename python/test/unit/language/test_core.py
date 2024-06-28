@@ -1045,8 +1045,6 @@ def test_math_divide_op(expr, num_ctas, device):
                           ('tl.math.div_rn(x,y)', '(x.to(tl.float64) / y.to(tl.float64)).to(tl.float32)')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_precise_math(expr_prec, expr_ref, num_ctas, device):
-    if expr_prec == 'tl.math.sqrt_rn(x)':
-        pytest.skip("FIXME: Fail accuracy")
 
     @triton.jit
     def kernel(X, Y, OUT, OUT_REF, BLOCK: tl.constexpr):
@@ -1748,9 +1746,6 @@ def test_store_constant(dtype_str, num_ctas, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_store_constant_default_dtype(num_ctas, device):
     """Tests that boolean True is stored as 1"""
-
-    if is_interpreter():
-        pytest.skip("FIXME: Incorrect result on XPU")
 
     @triton.jit
     def kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -3356,8 +3351,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 @pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
                                                          ('float16', 'float32'), ('float32', 'float32')])
 def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
-    if is_xpu():
-        pytest.skip("FIXME: Incorrect result on XPU")
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
         input_precision = "ieee"
@@ -3644,9 +3637,6 @@ def test_const(device, choose_const, constexpr, mode):
 @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 def test_dot_without_load(dtype_str, device):
 
-    if is_interpreter() and dtype_str == "float16":
-        pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
-
     @triton.jit
     def _kernel(out):
         a = GENERATE_TEST_HERE
@@ -3765,10 +3755,6 @@ def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
 def test_masked_load_shared_memory(dtype, device):
 
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
-
-    if is_interpreter() and dtype == torch.float16:
-        pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
-
     M = 32
     N = 32
     K = 16
@@ -5233,9 +5219,6 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 
     check_type_supported(in_type_str, device)
 
-    if is_interpreter():
-        pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
-
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
     C = torch.empty((M, N), dtype=torch.float32, device=device)
@@ -5432,8 +5415,6 @@ def test_static_range(device):
 def test_tl_range(device):
     if is_hip():
         pytest.skip("test_tl_range is not supported in HIP")
-    if is_interpreter():
-        pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
     M, N, K = 64, 64, 512
     BLOCK_M, BLOCK_N, BLOCK_K = M, N, 64
     a = torch.randn((M, K), device=device, dtype=torch.float16)
