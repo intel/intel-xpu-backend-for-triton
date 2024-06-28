@@ -436,56 +436,8 @@ nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-ve
 with open(nvidia_version_path, "r") as nvidia_version_file:
     NVIDIA_TOOLCHAIN_VERSION = nvidia_version_file.read().strip()
 
-download_and_copy(
-    name="ptxas",
-    src_path="bin/ptxas",
-    variable="TRITON_PTXAS_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
-)
-download_and_copy(
-    name="cuobjdump",
-    src_path="bin/cuobjdump",
-    variable="TRITON_CUOBJDUMP_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
-)
-download_and_copy(
-    name="nvdisasm",
-    src_path="bin/nvdisasm",
-    variable="TRITON_NVDISASM_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
-)
-download_and_copy(
-    name="cudacrt",
-    src_path="include",
-    variable="TRITON_CUDACRT_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2",
-)
-download_and_copy(
-    name="cudart",
-    src_path="include",
-    variable="TRITON_CUDART_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-cudart-dev/{version}/download/linux-{arch}/cuda-cudart-dev-{version}-0.tar.bz2",
-)
-download_and_copy(
-    name="cupti",
-    src_path="include",
-    variable="TRITON_CUPTI_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION,
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2",
-)
 
-backends = [*BackendInstaller.copy(["intel", "nvidia", "amd"]), *BackendInstaller.copy_externals()]
+backends = [*BackendInstaller.copy(["intel"]), *BackendInstaller.copy_externals()]
 
 
 def add_link_to_backends():
@@ -563,7 +515,7 @@ def get_packages():
         "triton/tools",
     ]
     packages += [f'triton/backends/{backend.name}' for backend in backends]
-    packages += ["triton/profiler"]
+    #packages += ["triton/profiler"]
     return packages
 
 

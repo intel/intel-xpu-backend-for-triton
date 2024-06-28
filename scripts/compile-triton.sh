@@ -180,6 +180,8 @@ build_triton() {
     export TRITON_BUILD_WITH_CCACHE=true
   fi
 
+  export TRITON_BUILD_PROTON=OFF
+
   cd python
   pip install -e .
 
