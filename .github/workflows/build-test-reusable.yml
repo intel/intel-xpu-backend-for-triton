@@ -157,6 +157,22 @@ jobs:
         if: ${{ !inputs.install_ipex }}
         uses: ./.github/actions/setup-fake-ipex
 
+      - name: Prepare Triton cache
+        run: |
+          mkdir -p ~/.triton
+          TRITON_CACHE_KEY="$(sha256sum python/setup.py | cut -d\  -f1)"
+          echo "TRITON_CACHE_KEY=$TRITON_CACHE_KEY" | tee -a $GITHUB_ENV
+
+      - name: Load Triton cache
+        id: triton-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        with:
+          path: $HOME/.triton/nvidia
+          key: triton-nvidia-${{ env.TRITON_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+
       - name: Build Triton
         run: |
           export DEBUG=1
@@ -164,6 +180,13 @@ jobs:
           pip install wheel pytest pytest-xdist pytest-rerunfailures pytest-select
           pip install --no-build-isolation '.[build,tests,tutorials]'
           pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
+
+      - name: Save Triton cache
+        if: steps.triton-cache.outputs.status == 'miss'
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.triton-cache.outputs.path }}
+          dest: ${{ steps.triton-cache.outputs.dest }}
 
       - name: Run lit tests
         run: |
