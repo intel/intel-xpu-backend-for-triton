@@ -176,6 +176,64 @@ module attributes {
 
 // -----
 
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_exclusive_addi(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_exclusive_muli(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_exclusive_maxi(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_exclusive_mini(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_exclusive_andi(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z27sub_group_scan_exclusive_ori(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_exclusive_xori(i32) -> i32 attributes {passthrough = ["convergent"]}
+
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_inclusive_addi(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_inclusive_muli(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_inclusive_maxi(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_inclusive_mini(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_inclusive_andi(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z27sub_group_scan_inclusive_ori(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z28sub_group_scan_inclusive_xori(i32) -> i32 attributes {passthrough = ["convergent"]}
+
+module attributes {
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
+} {
+  llvm.func @triton_gen.sub_group_scan() {
+    %0 = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[VAL:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_exclusive_addi([[VAL]]) {{.*}} : (i32) -> i32
+    %1 = triton_gen.sub_group_scan add %0 {kind = exclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_exclusive_muli([[VAL]]) {{.*}} : (i32) -> i32
+    %2 = triton_gen.sub_group_scan mul %0 {kind = exclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_exclusive_mini([[VAL]]) {{.*}} : (i32) -> i32
+    %3 = triton_gen.sub_group_scan min %0 {kind = exclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_exclusive_maxi([[VAL]]) {{.*}} : (i32) -> i32
+    %4 = triton_gen.sub_group_scan max %0 {kind = exclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_exclusive_andi([[VAL]]) {{.*}} : (i32) -> i32
+    %5 = triton_gen.sub_group_scan and %0 {kind = exclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z27sub_group_scan_exclusive_ori([[VAL]]) {{.*}} : (i32) -> i32
+    %6 = triton_gen.sub_group_scan or %0 {kind = exclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_exclusive_xori([[VAL]]) {{.*}} : (i32) -> i32
+    %7 = triton_gen.sub_group_scan xor %0 {kind = exclusive} : i32
+
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_inclusive_addi([[VAL]]) {{.*}} : (i32) -> i32
+    %8 = triton_gen.sub_group_scan add %0 {kind = inclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_inclusive_muli([[VAL]]) {{.*}} : (i32) -> i32
+    %9 = triton_gen.sub_group_scan mul %0 {kind = inclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_inclusive_mini([[VAL]]) {{.*}} : (i32) -> i32
+    %10 = triton_gen.sub_group_scan min %0 {kind = inclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_inclusive_maxi([[VAL]]) {{.*}} : (i32) -> i32
+    %11 = triton_gen.sub_group_scan max %0 {kind = inclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_inclusive_andi([[VAL]]) {{.*}} : (i32) -> i32
+    %12 = triton_gen.sub_group_scan and %0 {kind = inclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z27sub_group_scan_inclusive_ori([[VAL]]) {{.*}} : (i32) -> i32
+    %13 = triton_gen.sub_group_scan or %0 {kind = inclusive} : i32
+    // CHECK: llvm.call spir_funccc @_Z28sub_group_scan_inclusive_xori([[VAL]]) {{.*}} : (i32) -> i32
+    %14 = triton_gen.sub_group_scan xor %0 {kind = inclusive} : i32
+
+    llvm.return
+  }
+}
+
+// -----
+
 // CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xordj(f64, i32) -> f64 attributes {passthrough = ["convergent"]}
 // CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorfj(f32, i32) -> f32 attributes {passthrough = ["convergent"]}
 // CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorDhj(f16, i32) -> f16 attributes {passthrough = ["convergent"]}
