@@ -394,7 +394,7 @@ private:
   // ==================== // store_Oi // ====================== //
 
   /// @brief store raw Oi to global memory. [B,N,F,H]
-  inline void store_Oi(const matAccOi_t &matAccOi, const arguments_t &args) {
+  inline void store_Oi(matAccOi_t &matAccOi, const arguments_t &args) {
     using epilogue_t =
         group::epilogue_t<group::epilogue_policy_default<gpu_arch::Xe>,
                           tile_shape_BrHm, mem_desc_Oi_t>;
