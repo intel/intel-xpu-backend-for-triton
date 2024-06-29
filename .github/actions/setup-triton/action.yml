@@ -1,0 +1,90 @@
+# Builds and installs Triton. Uses git clone in the current directory.
+# Sets the following environment variables:
+# * LLVM_COMMIT_ID
+description: Build and install IPEX wheels
+inputs:
+  build_llvm:
+    description: Build LLVM
+    default: false
+  command:
+    description: Command to execute
+    default: DEBUG=1 pip install --no-build-isolation '.[build,tests,tutorials]'
+runs:
+  using: "composite"
+  steps:
+    - name: Get LLVM commit id
+      shell: bash
+      run: |
+        LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
+        echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" | tee -a $GITHUB_ENV
+
+    - name: Load LLVM cache
+      if: inputs.build_llvm
+      id: llvm-cache
+      uses: ./.github/actions/load
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: 2
+      with:
+        path: $HOME/packages
+        key: packages-${{ env.LLVM_COMMIT_ID }}-${{ env.CACHE_NUMBER }}
+
+    - name: Clone LLVM
+      if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
+      uses: actions/checkout@v4
+      with:
+        repository: llvm/llvm-project
+        ref: ${{ env.LLVM_COMMIT_ID }}
+        path: llvm
+        submodules: recursive
+
+    - name: Build LLVM
+      if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
+      shell: bash
+      run: |
+        export BASE=$HOME
+        ln -s $PWD/llvm $BASE/llvm
+        ./scripts/compile-triton.sh --llvm
+
+    - name: Set LLVM_SYSPATH
+      if: inputs.build_llvm
+      shell: bash
+      run: |
+        echo "LLVM_SYSPATH=$HOME/packages/llvm" | tee -a $GITHUB_ENV
+
+    - name: Save LLVM cache
+      if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.llvm-cache.outputs.path }}
+        dest: ${{ steps.llvm-cache.outputs.dest }}
+
+    - name: Prepare Triton cache
+      shell: bash
+      run: |
+        mkdir -p ~/.triton
+        TRITON_CACHE_KEY="$(sha256sum python/setup.py | cut -d\  -f1)"
+        echo "TRITON_CACHE_KEY=$TRITON_CACHE_KEY" | tee -a $GITHUB_ENV
+
+    - name: Load Triton cache
+      id: triton-cache
+      uses: ./.github/actions/load
+      env:
+        # Increase this value to reset cache
+        CACHE_NUMBER: 1
+      with:
+        path: $HOME/.triton/nvidia
+        key: triton-nvidia-${{ env.TRITON_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
+
+    - name: Build Triton
+      shell: bash
+      run: |
+        cd python
+        ${{ inputs.command }}
+
+    - name: Save Triton cache
+      if: steps.triton-cache.outputs.status == 'miss'
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.triton-cache.outputs.path }}
+        dest: ${{ steps.triton-cache.outputs.dest }}
