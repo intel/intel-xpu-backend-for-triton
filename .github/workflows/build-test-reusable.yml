@@ -126,7 +126,7 @@ jobs:
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
         with:
-          build_llvm: ${{ inputs.build_llvm}}
+          build_llvm: ${{ inputs.build_llvm }}
 
       - name: Run lit tests
         run: |
