@@ -223,6 +223,12 @@ jobs:
         run: |
           echo "TRITON_TEST_SKIPLIST_DIR=$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}" | tee -a $GITHUB_ENV
 
+      # TODO: spirv-dis will be in the runner image
+      - name: Ensure spirv-dir exists
+        run: |
+          source ./scripts/pytest-utils.sh
+          ensure_spirv_dis
+
       - name: Run core tests
         run: |
           source ./scripts/pytest-utils.sh
