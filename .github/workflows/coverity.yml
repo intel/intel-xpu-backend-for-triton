@@ -36,7 +36,7 @@ jobs:
         with:
           path: $HOME/coverity
           # Update coverity each month
-          key: coverity-$(date +%Y%m)
+          key: coverity-$(date +%Y%m)-$CACHE_NUMBER
 
       - name: Download coverity
         if: ${{ steps.coverity-cache.outputs.status == 'miss' }}
