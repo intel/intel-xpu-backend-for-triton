@@ -63,7 +63,6 @@ jobs:
           dest: ${{ steps.coverity-cache.outputs.dest }}
 
       - name: Run coverity build
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/setup-triton
         with:
           command: cov-build --dir $HOME/cov-int pip install -e .
