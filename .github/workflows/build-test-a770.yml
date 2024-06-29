@@ -37,6 +37,11 @@ on:
         description: Custom run name
         type: string
         default: "Build and test on A770"
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
+
   schedule:
     # Every midnight PST (UTC-8)
     - cron: "0 8 * * *"
@@ -61,3 +66,4 @@ jobs:
       ignore_errors: ${{ inputs.ignore_errors || false }}
       skip_list: ${{ inputs.skip_list }}
       run_name: ${{ inputs.run_name }}
+      enable_unskip: ${{ inputs.enable_unskip || false }}
