@@ -19,7 +19,7 @@ runs:
         echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" | tee -a $GITHUB_ENV
 
     - name: Load LLVM cache
-      if: inputs.build_llvm
+      if: ${{ inputs.build_llvm }}
       id: llvm-cache
       uses: ./.github/actions/load
       env:
@@ -30,7 +30,7 @@ runs:
         key: packages-${{ env.LLVM_COMMIT_ID }}-${{ env.CACHE_NUMBER }}
 
     - name: Clone LLVM
-      if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
+      if: ${{ inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss' }}
       uses: actions/checkout@v4
       with:
         repository: llvm/llvm-project
@@ -39,7 +39,7 @@ runs:
         submodules: recursive
 
     - name: Build LLVM
-      if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
+      if: ${{ inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss' }}
       shell: bash
       run: |
         export BASE=$HOME
@@ -47,13 +47,13 @@ runs:
         ./scripts/compile-triton.sh --llvm
 
     - name: Set LLVM_SYSPATH
-      if: inputs.build_llvm
+      if: ${{ inputs.build_llvm }}
       shell: bash
       run: |
         echo "LLVM_SYSPATH=$HOME/packages/llvm" | tee -a $GITHUB_ENV
 
     - name: Save LLVM cache
-      if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
+      if: ${{ inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss' }}
       uses: ./.github/actions/save
       with:
         path: ${{ steps.llvm-cache.outputs.path }}
@@ -80,6 +80,7 @@ runs:
       shell: bash
       run: |
         cd python
+        pip install wheel
         ${{ inputs.command }}
 
     - name: Save Triton cache
