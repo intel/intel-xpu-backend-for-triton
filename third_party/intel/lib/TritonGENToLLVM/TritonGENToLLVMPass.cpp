@@ -49,6 +49,14 @@ using namespace mlir::triton::gpu;
 // Helper Functions
 //===----------------------------------------------------------------------===//
 
+static std::string getGenISATypeMangling(Type ty) {
+  if (auto vecTy = dyn_cast<VectorType>(ty))
+    return "v" + std::to_string(vecTy.getNumElements()) +
+           getGenISATypeMangling(vecTy.getElementType());
+  return (ty.isInteger() ? "i" : "f") +
+         std::to_string(ty.getIntOrFloatBitWidth());
+}
+
 static intel::AttributeList
 getAttrList(const intel::AttrBuilder &funcAttrBuilder,
             ArrayRef<NamedAttrList> paramAttrs = {}) {
@@ -82,6 +90,46 @@ createDeviceFunctionCall(ConversionPatternRewriter &rewriter,
   callOp->setAttrs(funcOp->getAttrs());
 
   return callOp;
+}
+
+static LLVM::CallOp
+createGenISASubGroupReduce(TritonGEN::SubGroupReduceOp op, Value val,
+                           ConversionPatternRewriter &rewriter) {
+  Location loc = op.getLoc();
+  auto getKindVal = [](TritonGEN::ReduceKind kind) -> int {
+    switch (kind) {
+    case TritonGEN::ReduceKind::ADD:
+      return 0;
+    case TritonGEN::ReduceKind::MUL:
+      return 1;
+    case TritonGEN::ReduceKind::MIN:
+      return 2;
+    case TritonGEN::ReduceKind::MAX:
+      return 3;
+    case TritonGEN::ReduceKind::AND:
+      return 8;
+    case TritonGEN::ReduceKind::OR:
+      return 6;
+    case TritonGEN::ReduceKind::XOR:
+      return 7;
+    }
+    llvm_unreachable("unsupported reduce kind");
+  };
+  auto kind =
+      rewriter.create<LLVM::ConstantOp>(loc, i8_ty, getKindVal(op.getKind()));
+
+  std::string funcName =
+      "llvm.genx.GenISA.WaveAll." + getGenISATypeMangling(val.getType());
+  SmallVector<Type> argTypes = {val.getType(), i8_ty, i32_ty};
+  SmallVector<Value> args = {val, kind, i32_val(0)};
+
+  MLIRContext *ctx = rewriter.getContext();
+  intel::AttrBuilder funcAttrBuilder(*ctx);
+  funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
+  intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+
+  return createDeviceFunctionCall(rewriter, funcName, val.getType(), argTypes,
+                                  args, attrs);
 }
 
 static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
@@ -352,9 +400,7 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   Value y = op.getY();
 
   std::string funcName =
-      "llvm.genx.GenISA.LSC2DBlockRead.v" +
-      std::to_string(resType.getNumElements()) + "i" +
-      std::to_string(resType.getElementType().getIntOrFloatBitWidth());
+      "llvm.genx.GenISA.LSC2DBlockRead." + getGenISATypeMangling(resType);
   IntegerType int1Ty = rewriter.getIntegerType(1);
   IntegerType int32Ty = rewriter.getIntegerType(32);
   IntegerType int64Ty = rewriter.getIntegerType(64);
@@ -588,9 +634,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
 
   VectorType storeValType = op.getStoredVal().getType();
   std::string funcName =
-      "llvm.genx.GenISA.LSC2DBlockWrite.v" +
-      std::to_string(storeValType.getNumElements()) + "i" +
-      std::to_string(storeValType.getElementType().getIntOrFloatBitWidth());
+      "llvm.genx.GenISA.LSC2DBlockWrite." + getGenISATypeMangling(storeValType);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -1070,10 +1114,9 @@ struct TritonGENNamedBarrierSignalLowering
     Value barrierId = op.getBarrierId();
     Value threadGroupCount = op.getThreadGroupCount();
 
-    std::string funcName =
-        "llvm.genx.GenISA.threadgroupnamedbarriers.signal.i" +
-        std::to_string(barrierId.getType().getIntOrFloatBitWidth()) + ".i" +
-        std::to_string(threadGroupCount.getType().getIntOrFloatBitWidth());
+    std::string funcName = "llvm.genx.GenISA.threadgroupnamedbarriers.signal." +
+                           getGenISATypeMangling(barrierId.getType()) + "." +
+                           getGenISATypeMangling(threadGroupCount.getType());
 
     LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
         moduleOp, funcName, {barrierId.getType(), threadGroupCount.getType()},
@@ -1108,9 +1151,8 @@ struct TritonGENNamedBarrierWaitLowering
 
     Value barrierId = op.getBarrierId();
 
-    std::string funcName =
-        "llvm.genx.GenISA.threadgroupnamedbarriers.wait.i" +
-        std::to_string(barrierId.getType().getIntOrFloatBitWidth());
+    std::string funcName = "llvm.genx.GenISA.threadgroupnamedbarriers.wait." +
+                           getGenISATypeMangling(barrierId.getType());
 
     LLVM::LLVMFuncOp funcOp =
         LLVM::lookupOrCreateFn(moduleOp, funcName, {barrierId.getType()},
@@ -1186,6 +1228,15 @@ protected:
   }
 };
 
+static bool isOCLBuiltinAvailable(TritonGEN::SubGroupReduceOp op) {
+  bool useCluster = (getSubgroupSize(op) != op.getSize());
+  if (useCluster)
+    return true;
+  return (op.getKind() == TritonGEN::ReduceKind::ADD ||
+          op.getKind() == TritonGEN::ReduceKind::MIN ||
+          op.getKind() == TritonGEN::ReduceKind::MAX);
+}
+
 struct TritonSubGroupReduceLowering
     : public ConvertOpToLLVMPattern<TritonGEN::SubGroupReduceOp>,
       public TritonSubGroupBase {
@@ -1203,28 +1254,36 @@ struct TritonSubGroupReduceLowering
     SmallVector<Type> argTypes{valTy};
     SmallVector<Value> args{val};
     bool useCluster = (getSubgroupSize(op) != op.getSize());
-    std::string fnName = "sub_group_";
-    if (useCluster)
-      fnName += "clustered_";
-    fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
-    fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             intel::getTypeMangling(valTy);
-    if (useCluster) {
-      fnName += "j";
-      argTypes.push_back(i32_ty);
-      auto size = rewriter.create<LLVM::ConstantOp>(
-          loc, i32_ty, static_cast<int>(op.getSize()));
-      args.push_back(size);
+
+    Value result;
+    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
+    const bool useGenISA = env ? (bool)std::atoi(env) : false;
+    if ((useGenISA && !useCluster) || !isOCLBuiltinAvailable(op)) {
+      result = createGenISASubGroupReduce(op, val, rewriter).getResult();
+    } else {
+      std::string fnName = "sub_group_";
+      if (useCluster)
+        fnName += "clustered_";
+      fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
+      fnName = "_Z" + std::to_string(fnName.size()) + fnName +
+               intel::getTypeMangling(valTy);
+      if (useCluster) {
+        fnName += "j";
+        argTypes.push_back(i32_ty);
+        auto size = rewriter.create<LLVM::ConstantOp>(
+            loc, i32_ty, static_cast<int>(op.getSize()));
+        args.push_back(size);
+      }
+
+      MLIRContext *ctx = rewriter.getContext();
+      intel::AttrBuilder funcAttrBuilder(*ctx);
+      funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
+      intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+
+      result = createDeviceFunctionCall(rewriter, fnName, valTy, argTypes, args,
+                                        attrs)
+                   .getResult();
     }
-
-    MLIRContext *ctx = rewriter.getContext();
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
-
-    Value result =
-        createDeviceFunctionCall(rewriter, fnName, valTy, argTypes, args, attrs)
-            .getResult();
     result = truncate(op, result, origTy, rewriter);
     rewriter.replaceOp(op, result);
     return success();

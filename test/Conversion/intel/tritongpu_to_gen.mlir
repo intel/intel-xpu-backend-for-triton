@@ -1390,14 +1390,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z20sub_group_reduce_mulf
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.f32
     %2 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.mulf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z20sub_group_reduce_muli
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32
     %3 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.muli %arg4, %arg5 : i32
@@ -1418,21 +1418,21 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z20sub_group_reduce_andi
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32
     %6 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.andi %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z19sub_group_reduce_ori
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32
     %7 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.ori %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z20sub_group_reduce_xori
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32
     %8 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.xori %arg4, %arg5 : i32
