@@ -32,10 +32,11 @@ jobs:
         uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
-          CACHE_NUMBER: 2
+          CACHE_NUMBER: 1
         with:
           path: $HOME/coverity
-          key: coverity-$CACHE_NUMBER
+          # Update coverity each month
+          key: coverity-$(date +%Y%m)
 
       - name: Download coverity
         if: ${{ steps.coverity-cache.outputs.status == 'miss' }}
