@@ -59,12 +59,6 @@ jobs:
       - spr
       - cpu
     steps:
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -102,22 +96,38 @@ jobs:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
 
+  prepare-matrix:
+    name: Prepare matrix
+    runs-on: Linux
+    output:
+      matrix: ${{ steps.prepare-matrix.outputs.matrix }}
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Prepare matrix
+        id: prepare-matrix
+        run: |
+          if [[ -n "${{ inputs.runner_label }}" ]]; then
+            matrix='{"python": ["3.9"]}'
+          else
+            if [[ "${{ github.ref_name }}" = "llvm-target" ]]; then
+              matrix='{"python": ["3.9", "3.10", "3.11"], "driver": ["rolling", "lts"]}'
+            else
+              matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
+            fi
+          fi
+          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
+
   integration-tests:
     name: Matrix
-
-    env:
-      default_matrix: >
-        {
-          "python": ${{ github.ref_name == 'llvm-target' && '["3.9", "3.10", "3.11"]' || '["3.9"]' }}",
-          "driver": ["rolling", "lts"]
-        }
-      custom_matrix: >
-        {
-          "python": ["3.9"]
-        }
+    needs: prepare-matrix
 
     strategy:
-      matrix: ${{ inputs.runner_label && env.custom_matrix || env.default_matrix }}
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
