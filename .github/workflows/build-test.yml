@@ -99,8 +99,10 @@ jobs:
   prepare:
     name: Prepare
     runs-on: Linux
+
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+
     steps:
       - name: Inputs
         run: |
@@ -120,10 +122,10 @@ jobs:
               matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
             fi
           fi
-          echo "matrix='$matrix'" | tee -a $GITHUB_OUTPUT
+          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
 
   integration-tests:
-    name: Matrix
+    name: Integration tests matrix
     needs: prepare
 
     strategy:
