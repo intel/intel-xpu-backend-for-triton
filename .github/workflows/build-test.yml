@@ -120,7 +120,7 @@ jobs:
               matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
             fi
           fi
-          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
+          echo "matrix='$matrix'" | tee -a $GITHUB_OUTPUT
 
   integration-tests:
     name: Matrix
