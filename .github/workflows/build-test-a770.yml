@@ -58,7 +58,7 @@ jobs:
     with:
       device: a770
       runner_label: ${{ inputs.runner_label }}
-      install_ipex: ${{ inputs.install_ipex == 'true' || github.event_name == 'schedule' }}
+      install_ipex: ${{ inputs.install_ipex || github.event_name == 'schedule' }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports || false }}
