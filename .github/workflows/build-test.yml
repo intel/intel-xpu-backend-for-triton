@@ -99,7 +99,7 @@ jobs:
   prepare:
     name: Prepare
     runs-on: Linux
-    output:
+    outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Inputs
