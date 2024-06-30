@@ -96,20 +96,20 @@ jobs:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
 
-  prepare-matrix:
-    name: Prepare matrix
+  prepare:
+    name: Prepare
     runs-on: Linux
     output:
-      matrix: ${{ steps.prepare-matrix.outputs.matrix }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-      - name: Print inputs
+      - name: Inputs
         run: |
           cat <<EOF
           ${{ toJSON(inputs) }}
           EOF
 
-      - name: Prepare matrix
-        id: prepare-matrix
+      - name: Matrix
+        id: matrix
         run: |
           if [[ -n "${{ inputs.runner_label }}" ]]; then
             matrix='{"python": ["3.9"]}'
@@ -124,10 +124,10 @@ jobs:
 
   integration-tests:
     name: Matrix
-    needs: prepare-matrix
+    needs: prepare
 
     strategy:
-      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
