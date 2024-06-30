@@ -103,14 +103,25 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
   integration-tests:
-    name: Integration tests matrix
+    name: Matrix
+
+    env:
+      default_matrix: >
+        {
+          "python": ${{ github.ref_name == 'llvm-target' && '["3.9", "3.10", "3.11"]' || '["3.9"]' }}",
+          "driver": ["rolling", "lts"]
+        }
+      custom_matrix: >
+        {
+          "python": ["3.9"]
+        }
+
     strategy:
-      matrix:
-        python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
-        drivers: ${{ inputs.runner_label && fromJson(format('["{0}"]', inputs.runner_label)) || fromJson('["rolling", "lts"]') }}
+      matrix: ${{ inputs.runner_label && env.custom_matrix || env.default_matrix }}
+
     uses: ./.github/workflows/build-test-reusable.yml
     with:
-      driver_version: ${{ matrix.drivers }}
+      driver_version: ${{ matrix.driver }}
       runner_label: ${{ inputs.runner_label }}
       install_ipex: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
       pytorch_ref: ${{ inputs.pytorch_ref }}

@@ -4,10 +4,14 @@ run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.ins
 on:
   workflow_call:
     inputs:
+      device:
+        description: Device
+        type: string
+        default: max1100
       driver_version:
         description: Driver version
         type: string
-        default: "rolling"
+        default: rolling
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -44,7 +48,7 @@ on:
       run_name:
         description: Custom run name
         type: string
-        default: "Build and test"
+        default: Build and test
       build_llvm:
         description: Build LLVM
         type: boolean
@@ -64,9 +68,7 @@ env:
 jobs:
   integration-tests:
     name: Integration tests
-    runs-on:
-      - ${{ inputs.runner_label || 'Linux' }}
-      - ${{ inputs.driver_version }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}"]', inputs.device, inputs.driver_version)) }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -261,12 +263,12 @@ jobs:
         if: github.ref_name == 'llvm-target'
         uses: actions/upload-artifact@v4
         with:
-          name: pass_rate-${{ inputs.python_version }}-${{ inputs.driver_version }}
+          name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate.json
 
       - name: Upload test reports
         if: inputs.upload_test_reports
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports-${{ inputs.python_version }}-${{ inputs.driver_version }}
+          name: test-reports-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: reports
