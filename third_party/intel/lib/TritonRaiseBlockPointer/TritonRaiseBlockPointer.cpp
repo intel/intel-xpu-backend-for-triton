@@ -585,8 +585,8 @@ TritonRaiseBlockPointer::visitAddPointerOperand(triton::BroadcastOp broadcastOp,
     llvm::copy(dstShape, state.sizes.begin());
   } else {
     // Offset must be equal, otherwise we don.t know which offset should be
-    // propagate to the new axis.
-    for (int i = 1; i < state.offsets.size(); i++) {
+    // propagated to the new axis.
+    for (int i = 1; i < state.offsets.size(); ++i) {
       if (state.offsets[0] != state.offsets[i]) {
         broadcastOp->emitRemark(
             "TritonRaiseBlockPointer: Unsupported broadcast with different "
@@ -599,24 +599,24 @@ TritonRaiseBlockPointer::visitAddPointerOperand(triton::BroadcastOp broadcastOp,
     // The positions of the new axis are determined based and the shape values.
     // If shape are the same, the new axis are added at the end.
     size_t srcAxis = 0;
-    for (size_t axis = 0; axis < dstShape.size(); axis++) {
+    for (size_t axis = 0; axis < dstShape.size(); ++axis) {
       if ((srcAxis < srcShape.size()) &&
           (srcShape[srcAxis] == dstShape[axis])) {
-        srcAxis++;
-      } else {
-        Value c0i32 =
-            builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
-        Value c0i64 = builder.create<arith::ConstantIntOp>(
-            loc, 0, shapeAndStridesBitwidth);
-        state.offsets.insert(state.offsets.begin() + axis,
-                             getValueOrCreateCastToIndexLike(
-                                 builder, loc,
-                                 builder.getIntegerType(offsetBitwidth),
-                                 state.offsets[0]));
-        state.sizes.insert(state.sizes.begin() + axis, dstShape[axis]);
-        state.strides.insert(state.strides.begin() + axis, c0i64);
-        state.shape.insert(state.shape.begin() + axis, c0i64);
+        ++srcAxis;
+        continue;
       }
+      Value c0i32 =
+          builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
+      Value c0i64 =
+          builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth);
+      state.offsets.insert(state.offsets.begin() + axis,
+                           getValueOrCreateCastToIndexLike(
+                               builder, loc,
+                               builder.getIntegerType(offsetBitwidth),
+                               state.offsets[0]));
+      state.sizes.insert(state.sizes.begin() + axis, dstShape[axis]);
+      state.strides.insert(state.strides.begin() + axis, c0i64);
+      state.shape.insert(state.shape.begin() + axis, c0i64);
     }
 
     // The following condition has been duplicated from the expand_dim support
