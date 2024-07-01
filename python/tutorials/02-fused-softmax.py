@@ -104,6 +104,7 @@ properties = driver.active.utils.get_device_properties(device)
 WARP_SIZE = properties["sub_group_sizes"][-1]
 WG_SIZE = properties["max_work_group_size"]
 target = triton.runtime.driver.active.get_current_target()
+max_num_warps = WG_SIZE // WARP_SIZE
 
 
 def softmax(x):
@@ -111,20 +112,17 @@ def softmax(x):
     # The block size is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
 
-    # Simple heuristic depending on `BLOCK_SIZE`. We aim for 4 elements per
-    # thread. As the maximum number of warps is limited by hardware, we need to
-    # make sure we do not surpass that limit.
-    # You will see in the next tutorial how to auto-tune this value in a more natural
-    # way so you don't have to come up with manual heuristics yourself.
-    max_num_warps = WG_SIZE // WARP_SIZE
+    # Simple heuristic depending on `BLOCK_SIZE`. We aim for 4 elements per thread. As the maximum number of warps is
+    # limited by hardware, we need to make sure we do not surpass that limit.
+    # You will see in the next tutorial how to auto-tune this value in a more natural way so you don't have to come up
+    # with manual heuristics yourself.
     num_warps = min(max_num_warps, BLOCK_SIZE // (WARP_SIZE * 4))
 
     # Allocate output
     y = torch.empty_like(x)
-
-    # Create a number of persistent programs.
-    softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_cols, num_warps=num_warps,
-                               threads_per_warp=WARP_SIZE, BLOCK_SIZE=BLOCK_SIZE)
+    # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row of the input matrix
+    softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_cols, num_warps=num_warps, threads_per_warp=WARP_SIZE,
+                               BLOCK_SIZE=BLOCK_SIZE)
     return y
 
 
