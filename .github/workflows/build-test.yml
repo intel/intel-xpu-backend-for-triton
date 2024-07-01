@@ -59,12 +59,6 @@ jobs:
       - spr
       - cpu
     steps:
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -102,15 +96,44 @@ jobs:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
 
+  prepare:
+    name: Prepare
+    runs-on: Linux
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+      - name: Inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Matrix
+        id: matrix
+        run: |
+          if [[ -n "${{ inputs.runner_label }}" ]]; then
+            matrix='{"python": ["3.9"]}'
+          else
+            if [[ "${{ github.ref_name }}" = "llvm-target" ]]; then
+              matrix='{"python": ["3.9", "3.10", "3.11"], "driver": ["rolling", "lts"]}'
+            else
+              matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
+            fi
+          fi
+          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
+
   integration-tests:
     name: Integration tests matrix
+    needs: prepare
+
     strategy:
-      matrix:
-        python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
-        drivers: ${{ inputs.runner_label && fromJson(format('["{0}"]', inputs.runner_label)) || fromJson('["rolling", "lts"]') }}
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
     uses: ./.github/workflows/build-test-reusable.yml
     with:
-      driver_version: ${{ matrix.drivers }}
+      driver_version: ${{ matrix.driver }}
       runner_label: ${{ inputs.runner_label }}
       install_ipex: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
