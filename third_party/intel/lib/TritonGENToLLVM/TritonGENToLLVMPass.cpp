@@ -49,22 +49,16 @@ using namespace mlir::triton::gpu;
 // Helper Functions
 //===----------------------------------------------------------------------===//
 
-static void addToAttrList(intel::AttributeList &functionAttrs,
-                          llvm::ArrayRef<NamedAttrList> paramAttrs) {
-  functionAttrs.addParamAttributes(paramAttrs);
-}
-
 intel::AttributeList createFunctionAttributes(
-    const ArrayRef<
-        std::pair<llvm::Attribute::AttrKind, std::optional<uint64_t>>>
+    ArrayRef<std::pair<llvm::Attribute::AttrKind, std::optional<uint64_t>>>
         attributes,
     MLIRContext *ctx) {
   intel::AttrBuilder funcAttrBuilder(*ctx);
-  for (auto &attr : attributes) {
-    if (attr.second)
-      funcAttrBuilder.addPassthroughAttribute(attr.first, *attr.second);
+  for (auto [kind, optValue] : attributes) {
+    if (optValue)
+      funcAttrBuilder.addPassthroughAttribute(kind, *optValue);
     else
-      funcAttrBuilder.addPassthroughAttribute(attr.first);
+      funcAttrBuilder.addPassthroughAttribute(kind);
   }
 
   intel::AttributeList attrs;
@@ -73,7 +67,7 @@ intel::AttributeList createFunctionAttributes(
 }
 
 NamedAttrList
-createParameterAttributes(const ArrayRef<llvm::Attribute::AttrKind> attributes,
+createParameterAttributes(ArrayRef<llvm::Attribute::AttrKind> attributes,
                           MLIRContext *ctx) {
   intel::AttrBuilder paramAttrBuilder(*ctx);
   for (auto &attr : attributes)
@@ -1248,6 +1242,9 @@ struct TritonSubGroupShuffleLowering
                   ConversionPatternRewriter &rewriter) const override {
     Value val = op.getValue();
     auto origTy = val.getType();
+
+    origTy.print(llvm::errs());
+
     val = TritonSubGroupBase::extend(op, op.getValue(), origTy, rewriter);
     Value result =
         createSubGroupShuffle(rewriter, val, op.getMask(), op.getKind())
