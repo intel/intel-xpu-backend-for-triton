@@ -52,11 +52,6 @@ jobs:
       - name: Setup IPEX
         uses: ./.github/actions/setup-ipex
 
-      - name: Get LLVM commit id
-        run: |
-          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
-          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
-
       - name: Identify Triton commit id
         run: |
           echo "TRITON_COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
@@ -76,15 +71,12 @@ jobs:
 
       - name: Build Triton wheels
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        run: |
-          export DEBUG=1
-          export TRITON_WHEEL_VERSION_SUFFIX="+git$(git rev-parse --short HEAD)"
-          cd python
-          python setup.py bdist_wheel
-
-      - name: Install Triton
-        run: |
-          pip install python/dist/*.whl
+        uses: ./.github/actions/setup-triton
+        with:
+          command: >
+            DEBUG=1
+            TRITON_WHEEL_VERSION_SUFFIX="+git$(git rev-parse --short HEAD)"
+            python setup.py bdist_wheel && pip install dist/*.whl
 
       - name: Save Triton wheels to a cache
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}
