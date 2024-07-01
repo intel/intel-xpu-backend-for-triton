@@ -236,4 +236,3 @@ tt.func @test_addptr_broadcast_rank_3(%arg0 : !tt.ptr<f32>) -> tensor<128x2x128x
   %3 = tt.load %2 : tensor<128x2x128x!tt.ptr<f32>>
   tt.return %3 : tensor<128x2x128xf32>
 }
-
