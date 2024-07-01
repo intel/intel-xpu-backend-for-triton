@@ -72,28 +72,31 @@ def naive_softmax(x):
 
 
 @triton.jit
-def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, BLOCK_SIZE: tl.constexpr):
-    # The rows of the softmax are independent, so we parallelize across those
-    row_idx = tl.program_id(0)
-    # The stride represents how much we need to increase the pointer to advance 1 row
-    row_start_ptr = input_ptr + row_idx * input_row_stride
-    # The block size is the next power of two greater than n_cols, so we can fit each
-    # row in a single block
-    col_offsets = tl.arange(0, BLOCK_SIZE)
-    input_ptrs = row_start_ptr + col_offsets
-    # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
-    mask = col_offsets < n_cols
-    row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
-    # Subtract maximum for numerical stability
-    row_minus_max = row - tl.max(row, axis=0)
-    # Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)
-    numerator = tl.exp(row_minus_max)
-    denominator = tl.sum(numerator, axis=0)
-    softmax_output = numerator / denominator
-    # Write back output to DRAM
-    output_row_start_ptr = output_ptr + row_idx * output_row_stride
-    output_ptrs = output_row_start_ptr + col_offsets
-    tl.store(output_ptrs, softmax_output, mask=mask)
+def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols,
+                   BLOCK_SIZE: tl.constexpr):
+    # starting row of the program
+    row_start = tl.program_id(0)
+    row_step = tl.num_programs(0)
+    for row_idx in tl.range(row_start, n_rows, row_step):
+        # The stride represents how much we need to increase the pointer to advance 1 row
+        row_start_ptr = input_ptr + row_idx * input_row_stride
+        # The block size is the next power of two greater than n_cols, so we can fit each
+        # row in a single block
+        col_offsets = tl.arange(0, BLOCK_SIZE)
+        input_ptrs = row_start_ptr + col_offsets
+        # Load the row into SRAM, using a mask since BLOCK_SIZE may be > than n_cols
+        mask = col_offsets < n_cols
+        row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
+        # Subtract maximum for numerical stability
+        row_minus_max = row - tl.max(row, axis=0)
+        # Note that exponentiation in Triton is fast but approximate (i.e., think __expf in CUDA)
+        numerator = tl.exp(row_minus_max)
+        denominator = tl.sum(numerator, axis=0)
+        softmax_output = numerator / denominator
+        # Write back output to DRAM
+        output_row_start_ptr = output_ptr + row_idx * output_row_stride
+        output_ptrs = output_row_start_ptr + col_offsets
+        tl.store(output_ptrs, softmax_output, mask=mask)
 
 
 # %%
@@ -101,28 +104,57 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
 
 device = torch.xpu.current_device()
 properties = driver.active.utils.get_device_properties(device)
+NUM_SM = properties["multiprocessor_count"]
+WARPS_PER_EU = 8  # TODO: Get from properties
+EU_PER_SM = 8  # TODO: Get from properties
+MAX_NUM_WG = 64  # TODO: Get from properties
 WARP_SIZE = properties["sub_group_sizes"][-1]
 WG_SIZE = properties["max_work_group_size"]
-target = triton.runtime.driver.active.get_current_target()
 max_num_warps = WG_SIZE // WARP_SIZE
+target = triton.runtime.driver.active.get_current_target()
+warps_per_sm = WARPS_PER_EU * EU_PER_SM
+max_num_resident_warps = NUM_SM * warps_per_sm
+slm_size_per_sub_slice = 128  # TODO: Get from properties
+kernels = {}
 
 
 def softmax(x):
+    def can_reach_max_occupancy(num_warps, size_smem):
+        num_wg_threads = warps_per_sm // num_warps
+        num_wg_slm = MAX_NUM_WG if size_smem == 0 else slm_size_per_sub_slice // size_smem
+        num_wg = min(num_wg_threads, num_wg_slm, 64)
+        return num_warps * num_wg == warps_per_sm
+
     n_rows, n_cols = x.shape
     # The block size is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
 
-    # Simple heuristic depending on `BLOCK_SIZE`. We aim for 4 elements per thread. As the maximum number of warps is
-    # limited by hardware, we need to make sure we do not surpass that limit.
-    # You will see in the next tutorial how to auto-tune this value in a more natural way so you don't have to come up
-    # with manual heuristics yourself.
+    # Simple heuristic depending on `BLOCK_SIZE`. We aim for 4 elements per
+    # thread. As the maximum number of warps is limited by hardware, we need to
+    # make sure we do not surpass that limit.
+    # You will see in the next tutorial how to auto-tune this value in a more natural
+    # way so you don't have to come up with manual heuristics yourself.
     num_warps = min(max_num_warps, BLOCK_SIZE // (WARP_SIZE * 4))
 
     # Allocate output
     y = torch.empty_like(x)
-    # Enqueue kernel. The 1D launch grid is simple: we have one kernel instance per row of the input matrix
-    softmax_kernel[(n_rows, )](y, x, x.stride(0), y.stride(0), n_cols, num_warps=num_warps, threads_per_warp=WARP_SIZE,
-                               BLOCK_SIZE=BLOCK_SIZE)
+
+    # pre-compile kernel to get register usage and compute thread occupancy.
+    kernel, num_programs = kernels.get(BLOCK_SIZE, (None, 0))
+    if kernel is None:
+        kernel = softmax_kernel.warmup(y, x, x.stride(0), y.stride(0), n_rows, n_cols, num_warps=num_warps,
+                                       threads_per_warp=WARP_SIZE, BLOCK_SIZE=BLOCK_SIZE, grid=(1, ))
+        kernel._init_handles()
+        size_smem = kernel.metadata.shared
+        # If we cannot reach maximum occupancy, we will not go with persistent programs and schedule a program per row.
+        # Occupancy could be maximized by tweaking `num_warps` and `threads_per_warp`, but it is worth remembering
+        # higher occupancy does not always translate to better performance.
+        num_programs = min(n_rows, max_num_resident_warps // num_warps) if can_reach_max_occupancy(num_warps, size_smem) else n_rows
+        kernels[BLOCK_SIZE] = (kernel, num_programs)
+
+    # Create a number of persistent programs.
+    softmax_kernel[(num_programs, )](y, x, x.stride(0), y.stride(0), n_rows, n_cols, num_warps=num_warps,
+                                     threads_per_warp=WARP_SIZE, BLOCK_SIZE=BLOCK_SIZE)
     return y
 
 
