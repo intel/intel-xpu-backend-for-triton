@@ -8,6 +8,7 @@ from typing import Any, Tuple
 import hashlib
 import re
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from packaging.version import Version
@@ -16,8 +17,9 @@ from packaging.version import Version
 @functools.lru_cache()
 def _path_to_binary(binary: str):
     paths = [
-        os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
+        os.environ.get(f"TRITON_{binary.upper().replace('-', '_')}_PATH", ""),
         os.path.join(os.path.dirname(__file__), "bin", binary),
+        shutil.which(binary) or "",
     ]
 
     for p in paths:
@@ -240,5 +242,4 @@ class XPUBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"], text=True).strip()
-        return f'{version}-{self.properties}'
+        return f'SPIR-V 1.5-{self.properties}'

@@ -150,7 +150,9 @@ run_core_tests() {
   if [ ! -d "${CORE_TEST_DIR}" ]; then
     echo "Not found '${CORE_TEST_DIR}'. Build Triton please" ; exit 3
   fi
+
   cd ${CORE_TEST_DIR}
+  ensure_spirv_dis
   export TEST_UNSKIP
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
