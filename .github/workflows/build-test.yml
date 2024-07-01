@@ -37,6 +37,11 @@ on:
         description: Custom run name
         type: string
         default: "Build and test"
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
+
   pull_request:
     branches:
       - llvm-target
@@ -114,3 +119,4 @@ jobs:
       ignore_errors: ${{ inputs.ignore_errors || false }}
       skip_list: ${{ inputs.skip_list }}
       run_name: ${{ inputs.run_name }}
+      enable_unskip: ${{ inputs.enable_unskip || false }}
