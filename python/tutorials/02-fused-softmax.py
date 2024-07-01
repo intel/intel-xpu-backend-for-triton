@@ -119,6 +119,7 @@ kernels = {}
 
 
 def softmax(x):
+
     def can_reach_max_occupancy(num_warps, size_smem):
         num_wg_threads = warps_per_sm // num_warps
         num_wg_slm = MAX_NUM_WG if size_smem == 0 else slm_size_per_sub_slice // size_smem
@@ -149,7 +150,8 @@ def softmax(x):
         # If we cannot reach maximum occupancy, we will not go with persistent programs and schedule a program per row.
         # Occupancy could be maximized by tweaking `num_warps` and `threads_per_warp`, but it is worth remembering
         # higher occupancy does not always translate to better performance.
-        num_programs = min(n_rows, max_num_resident_warps // num_warps) if can_reach_max_occupancy(num_warps, size_smem) else n_rows
+        num_programs = min(n_rows, max_num_resident_warps //
+                           num_warps) if can_reach_max_occupancy(num_warps, size_smem) else n_rows
         kernels[BLOCK_SIZE] = (kernel, num_programs)
 
     # Create a number of persistent programs.
