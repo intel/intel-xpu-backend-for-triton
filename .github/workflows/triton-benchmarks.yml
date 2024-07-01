@@ -136,6 +136,11 @@ jobs:
         with:
           ref: 'perf_attn'
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: llvm-target
+
       - name: Load pip cache
         id: pip-cache
         uses: ./.github/actions/load
@@ -181,7 +186,7 @@ jobs:
 
       - name: Build Triton wheels
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/setup-triton
+        uses: ./llvm-target/.github/actions/setup-triton
         with:
           command: DEBUG=1 python setup.py bdist_wheel
 
@@ -246,6 +251,11 @@ jobs:
         with:
           ref: 'triton_perf_poc'
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: llvm-target
+
       - name: Load pip cache
         id: pip-cache
         uses: ./.github/actions/load
@@ -291,7 +301,7 @@ jobs:
 
       - name: Build Triton wheels
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/setup-triton
+        uses: ./llvm-target/.github/actions/setup-triton
         with:
           command: DEBUG=1 python setup.py bdist_wheel
 
