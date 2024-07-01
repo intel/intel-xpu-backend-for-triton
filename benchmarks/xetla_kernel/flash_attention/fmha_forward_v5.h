@@ -602,7 +602,8 @@ sycl::event fmha_forward_impl(sycl::queue &q, T *query, T *key, T *value,
       fmha_forward_op_t::get_nd_range(num_batches * num_heads, num_queries);
 
   auto context = q.get_info<sycl::info::queue::context>();
-  std::vector<sycl::kernel_id> kernelId = {sycl::get_kernel_id<fmha_policy>()};
+  std::vector<sycl::kernel_id> kernelId = {sycl::get_kernel_id<class FmhaForwardKernel<fmha_policy, T, kUseBias,
+          kIsCausal, kIsTraining>>()};
 
   static std::once_flag jit_once;
   std::call_once(jit_once, [&]() {
