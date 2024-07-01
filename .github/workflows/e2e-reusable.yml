@@ -15,10 +15,22 @@ on:
         description: Inference/Training
         type: string
         default: all
+      test_mode:
+        description: accuracy or performance
+        type: string
+        default: accuracy
       dtype:
         description: Data type
         type: string
         default: all
+      models:
+        description: Run all models or a subset
+        type: string
+        default: all
+      only_one_model:
+        description: Run only this one model
+        type: string
+        default: ""
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -209,18 +221,33 @@ jobs:
           python install.py
           pip install -e .
 
-      - name: Run e2e tests
+      - name: Run e2e ${{ inputs.test_mode }} tests
         env:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
           export WORKSPACE=$GITHUB_WORKSPACE
+
           if [[ "${{ inputs.TORCH_COMPILE_DEBUG }}" == "1" ]] ; then
             export TORCH_COMPILE_DEBUG="1"
             # torch will save debug logs to $TORCH_COMPILE_DEBUG_DIR/torch_compile_debug
             export TORCH_COMPILE_DEBUG_DIR=$GITHUB_WORKSPACE
           fi
+
           cd pytorch
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} accuracy xpu 0
+
+          # if "only_one_model" is set, then test this model
+          # if "models" == "subset", then test the models from .github/models/performance/{suite}.txt
+          # otherwise test all models.
+
+          if [[ "${{ inputs.only_one_model }}" ]]; then
+            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} ${{ test_mode }} xpu 0 static 1 0 ${{ inputs.only_one_model }}
+          elif [[ "${{ needs.setup.outputs.models }}" == "subset" ]]; then
+            while read model; do
+              $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} ${{ test_mode }} xpu 0 static 1 0 $model
+            done < $GITHUB_WORKSPACE/.github/models/performance/${{ matrix.suite }}.txt
+          else
+            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} ${{ test_mode }} xpu 0 static 1 0
+          fi
 
       - name: Report environment details
         run: |
