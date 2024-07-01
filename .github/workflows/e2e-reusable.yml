@@ -59,7 +59,7 @@ jobs:
           echo "${{ toJSON(inputs) }}"
 
   build:
-    name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} accuracy
+    name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }}
     runs-on:
       - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
@@ -234,13 +234,13 @@ jobs:
           # otherwise test all models.
 
           if [[ "${{ inputs.only_one_model }}" ]]; then
-            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 ${{ inputs.only_one_model }}
+            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 ${{ inputs.only_one_model }}
           elif [[ "${{ needs.setup.outputs.models }}" == "subset" ]]; then
             while read model; do
-              $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 $model
-            done < $GITHUB_WORKSPACE/.github/models/performance/${{ matrix.suite }}.txt
+              $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 $model
+            done < $GITHUB_WORKSPACE/.github/models/performance/${{ inputs.suite }}.txt
           else
-            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ matrix.suite }} ${{ matrix.dtype }} ${{ matrix.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0
+            $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0
           fi
 
       - name: Report environment details
