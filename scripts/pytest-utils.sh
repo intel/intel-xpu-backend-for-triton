@@ -128,3 +128,15 @@ capture_runtime_env() {
     python -c 'import torch; print(torch.__version__)' > $TRITON_TEST_REPORTS_DIR/pytorch_version.txt
     python -c 'import intel_extension_for_pytorch as ipex; print(ipex.__version__)' > $TRITON_TEST_REPORTS_DIR/IPEX_version.txt
 }
+
+ensure_spirv_dis() {
+    local spirv_dis="$(which spirv-dis || true)"
+    if [[ $spirv_dis ]]; then
+        echo "Found spirv-dis at $spirv_dis"
+        return
+    fi
+    echo "Installing spirv-dis to $HOME/.local/bin"
+    mkdir -p ~/.local/bin
+    curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C ~/.local/bin --strip-components 3 --no-anchored spirv-dis
+    export PATH="$HOME/.local/bin:$PATH"
+}
