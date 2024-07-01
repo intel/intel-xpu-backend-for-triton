@@ -28,11 +28,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get LLVM commit id
-        run: |
-          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
-          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
-
       - name: Load pip cache
         id: pip-cache
         uses: ./.github/actions/load
@@ -59,7 +54,7 @@ jobs:
       - name: Generate Triton cache key
         id: triton-key
         run: |
-          COMPOSITE_KEY=$(echo $PYTHON_VERSION $LLVM_COMMIT_ID $GITHUB_SHA | sha256sum - | cut -d\  -f1)
+          COMPOSITE_KEY=$(echo $PYTHON_VERSION $GITHUB_SHA | sha256sum - | cut -d\  -f1)
           echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
 
       - name: Load Triton wheels from a cache
@@ -71,10 +66,9 @@ jobs:
 
       - name: Build Triton wheels
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        run: |
-          export DEBUG=1
-          cd python
-          python setup.py bdist_wheel
+        uses: ./.github/actions/setup-triton
+        with:
+          command: DEBUG=1 python setup.py bdist_wheel
 
       - name: Install Triton
         run: |
