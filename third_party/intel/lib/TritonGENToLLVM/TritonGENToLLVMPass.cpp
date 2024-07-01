@@ -598,11 +598,11 @@ struct TritonGENThreadIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
                   ConversionPatternRewriter &rewriter) const override {
     Value res;
     if (isa<TritonGEN::ThreadIdXOp>(op))
-      res = rewrite(op, "_Z12get_local_idj", 0, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_local_idj", 0, rewriter);
     else if (isa<TritonGEN::ThreadIdYOp>(op))
-      res = rewrite(op, "_Z12get_local_idj", 1, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_local_idj", 1, rewriter);
     else if (isa<TritonGEN::ThreadIdZOp>(op))
-      res = rewrite(op, "_Z12get_local_idj", 2, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_local_idj", 2, rewriter);
     else
       llvm_unreachable("Unexpected operation");
 
@@ -633,11 +633,11 @@ struct TritonGENBlockIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
                   ConversionPatternRewriter &rewriter) const override {
     Value res;
     if (isa<TritonGEN::BlockIdXOp>(op))
-      res = rewrite(op, "_Z12get_group_idj", 0, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_group_idj", 0, rewriter);
     else if (isa<TritonGEN::BlockIdYOp>(op))
-      res = rewrite(op, "_Z12get_group_idj", 1, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_group_idj", 1, rewriter);
     else if (isa<TritonGEN::BlockIdZOp>(op))
-      res = rewrite(op, "_Z12get_group_idj", 2, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_group_idj", 2, rewriter);
     else
       llvm_unreachable("Unexpected operation");
 
@@ -668,11 +668,11 @@ struct TritonGENBlockDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
                   ConversionPatternRewriter &rewriter) const override {
     Value res;
     if (isa<TritonGEN::BlockDimXOp>(op))
-      res = rewrite(op, "_Z14get_local_sizej", 0, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_local_sizej", 0, rewriter);
     else if (isa<TritonGEN::BlockDimYOp>(op))
-      res = rewrite(op, "_Z14get_local_sizej", 1, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_local_sizej", 1, rewriter);
     else if (isa<TritonGEN::BlockDimZOp>(op))
-      res = rewrite(op, "_Z14get_local_sizej", 2, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_local_sizej", 2, rewriter);
     else
       llvm_unreachable("Unexpected operation");
 
@@ -703,11 +703,11 @@ struct TritonGENGridDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
                   ConversionPatternRewriter &rewriter) const override {
     Value res;
     if (isa<TritonGEN::GridDimXOp>(op))
-      res = rewrite(op, "_Z14get_num_groupsj", 0, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_num_groupsj", 0, rewriter);
     else if (isa<TritonGEN::GridDimYOp>(op))
-      res = rewrite(op, "_Z14get_num_groupsj", 1, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_num_groupsj", 1, rewriter);
     else if (isa<TritonGEN::GridDimZOp>(op))
-      res = rewrite(op, "_Z14get_num_groupsj", 2, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_num_groupsj", 2, rewriter);
     else
       llvm_unreachable("Unexpected operation");
 
