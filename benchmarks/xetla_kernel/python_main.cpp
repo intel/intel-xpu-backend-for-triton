@@ -2,6 +2,7 @@
 #include "flash_attention/fmha_forward_v5.h"
 #include "softmax/softmax.h"
 #include <CL/sycl.hpp>
+#include <cstdint>
 #include <ipex.h>
 #include <random>
 #include <torch/extension.h>
@@ -139,14 +140,26 @@ T *flash_attn(const int64_t num_batches, const int64_t num_heads,
   uint32_t size_ml = shape.get_ml_size();
 
   // forward
-  T *query = sycl::malloc_shared<T>(size_query, queue);
-  T *key = sycl::malloc_shared<T>(size_key, queue);
-  T *value = sycl::malloc_shared<T>(size_key, queue);
-  T *attn_mask = sycl::malloc_shared<T>(size_attn_mask, queue);
-  uint8_t *dropout_mask = sycl::malloc_shared<uint8_t>(size_score, queue);
-  T *output = sycl::malloc_shared<T>(size_query, queue);
-  float *m = sycl::malloc_shared<float>(size_ml, queue);
-  float *l = sycl::malloc_shared<float>(size_ml, queue);
+  void *query_ptr = at::empty(size_query, at::kBFloat16).data_ptr();
+  void *key_ptr = at::empty(size_key, at::kBFloat16).data_ptr();
+  void *value_ptr = at::empty(size_key, at::kBFloat16).data_ptr();
+  void *attn_mask_ptr = at::empty(size_attn_mask, at::kBFloat16).data_ptr();
+  void *dropout_mask_ptr = at::empty(size_score, torch::kUInt8).data_ptr();
+
+  void *output_ptr = at::empty(size_query, at::kBFloat16).data_ptr();
+  void *m_ptr = at::empty(size_ml, at::kFloat).data_ptr();
+  void *l_ptr = at::empty(size_ml, at::kFloat).data_ptr();
+
+  // Type cast
+  T *query = static_cast<T *>(query_ptr);
+  T *key = static_cast<T *>(key_ptr);
+  T *value = static_cast<T *>(value_ptr);
+  T *attn_mask = static_cast<T *>(attn_mask_ptr);
+  uint8_t *dropout_mask = static_cast<uint8_t *>(dropout_mask_ptr);
+
+  T *output = static_cast<T *>(output_ptr);
+  float *m = static_cast<float *>(m_ptr);
+  float *l = static_cast<float *>(l_ptr);
 
   random_init_forward(shape, query, key, value, attn_mask, dropout_mask,
                       use_mask, use_dropout);
@@ -156,13 +169,6 @@ T *flash_attn(const int64_t num_batches, const int64_t num_heads,
       m, l, shape.num_batches, shape.num_heads, shape.head_size,
       shape.num_queries, shape.num_keys, head_scale);
 
-  queue.wait();
-  sycl::free(query, queue);
-  sycl::free(key, queue);
-  sycl::free(value, queue);
-  sycl::free(attn_mask, queue);
-  sycl::free(dropout_mask, queue);
-  sycl::free(output, queue);
   return output;
 }
 
