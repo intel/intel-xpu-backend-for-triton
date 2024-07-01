@@ -163,6 +163,7 @@ jobs:
       - name: Run core tests
         run: |
           source ./scripts/pytest-utils.sh
+          ensure_spirv_dis
           cd python/test/unit
           TRITON_TEST_SUITE=language \
             pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
