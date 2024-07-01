@@ -14,6 +14,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
@@ -188,14 +189,13 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
   unsigned executionSize = dpasLayout.getExecutionSize();
   unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
 
-  unsigned rowsPerWarp = 0, numElemPerInstPerRowPerThread = 0;
+  unsigned rowsPerWarp = 0u, numElemPerInstPerRowPerThread = 0u;
   switch (opIdx) {
   case 0: {
     assert((opsPerChannel == 1 || opsPerChannel == 2 || opsPerChannel == 4) &&
            "invalid opsPerChannel number.");
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
-    // Unlike the operand B, to pack the value to i16 for scalar bit width
-    // <=16.
+    // Unlike the operand B, to pack the value to i16 for scalar bit width <=16.
     unsigned packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
     unsigned packedColNum = shapeA[1] / packedOpsPerLane;
     if (warpSize < packedColNum)
@@ -216,7 +216,11 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
     rowsPerWarp = rowsPerWarp * opsPerChannel;
     numElemPerInstPerRowPerThread = 1;
   } break;
+  default:
+    llvm_unreachable("unexpected operand index");
   }
+  assert(numElemPerInstPerRowPerThread != 0 &&
+         "numElemPerInstPerRowPerThread should not be zero");
 
   SmallVector<unsigned> shapePerCTATile =
       triton::gpu::getShapePerCTATile(dotLayout);

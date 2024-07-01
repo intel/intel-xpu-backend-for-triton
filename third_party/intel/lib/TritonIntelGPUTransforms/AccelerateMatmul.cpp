@@ -36,28 +36,32 @@ struct IntelDPASCapability {
   uint32_t opsChanBitWidths;
 };
 
-static IntelDPASCapability caps[] = {
-    [(uint32_t)DeviceArch::UNKNOWN] = {},
-
-    [(uint32_t)DeviceArch::ATS] =
-        {
-            .systolicDepth = 8,
-            .repeatCount = 8,
-            .executionSize = 8,
-            .opsChanBitWidths = 32,
-        },
-
-    [(uint32_t)DeviceArch::PVC] =
-        {
-            .systolicDepth = 8,
-            .repeatCount = 8,
-            .executionSize = 16,
-            .opsChanBitWidths = 32,
-        },
-};
-
 IntelDPASCapability getDPASCapability(DeviceArch arch) {
-  return caps[(uint32_t)arch];
+  switch (arch) {
+  case DeviceArch::UNKNOWN:
+    return IntelDPASCapability();
+
+  case DeviceArch::ATS: {
+    IntelDPASCapability cap;
+    cap.systolicDepth = 8;
+    cap.repeatCount = 8;
+    cap.executionSize = 8;
+    cap.opsChanBitWidths = 32;
+    return cap;
+  }
+
+  case DeviceArch::PVC: {
+    IntelDPASCapability cap;
+    cap.systolicDepth = 8;
+    cap.repeatCount = 8;
+    cap.executionSize = 16;
+    cap.opsChanBitWidths = 32;
+    return cap;
+  }
+
+  default:
+    llvm_unreachable("Invalid DeviceArch value");
+  }
 }
 
 SmallVector<unsigned> getWarpsPerTile(tt::DotOp dotOp,
@@ -145,9 +149,10 @@ public:
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
 
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    DpasEncodingAttr dpasEnc = DpasEncodingAttr::get(
-        oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
-        dpasCap.executionSize, opsPerChan, warpsPerTile, threadsPerWarp);
+    DpasEncodingAttr dpasEnc =
+        DpasEncodingAttr::get(oldRetType.getContext(), dpasCap.repeatCount,
+                              dpasCap.systolicDepth, dpasCap.executionSize,
+                              opsPerChan, warpsPerTile, {1, 1}, threadsPerWarp);
 
     RankedTensorType newRetType =
         RankedTensorType::get(retShape, oldRetType.getElementType(), dpasEnc);

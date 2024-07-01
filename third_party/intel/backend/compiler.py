@@ -113,6 +113,10 @@ class XPUBackend(BaseBackend):
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
         dev_prop['device_arch'] = self.parse_device_arch(tgt_prop.get('device_arch', 0))
+        dev_prop['support_cl_bf16_conversion'] = tgt_prop.get('support_cl_bf16_conversion', False)
+        dev_prop['support_cl_sg_matmul_acc'] = tgt_prop.get('support_cl_sg_matmul_acc', False)
+        dev_prop['support_cl_sg_matmul_acc_tf32'] = tgt_prop.get('support_cl_sg_matmul_acc_tf32', False)
+        dev_prop['support_cl_sg_2d_block_io'] = tgt_prop.get('support_cl_sg_2d_block_io', False)
         return dev_prop
 
     def parse_options(self, opts) -> Any:

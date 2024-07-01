@@ -69,11 +69,15 @@ along the row (resp. col) dimension.
     "unsigned":$executionSize,
     "unsigned":$opsPerChannel,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$repCluster,
     "unsigned":$subGroupSize
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
 
+    SmallVector<unsigned> getDPASInstShapeA() const;
+    SmallVector<unsigned> getDPASInstShapeB() const;
+    SmallVector<unsigned> getDPASInstShapeC() const;
     SmallVector<unsigned> getShapeA() const;
     SmallVector<unsigned> getShapeB() const;
     SmallVector<unsigned> getShapeC() const;

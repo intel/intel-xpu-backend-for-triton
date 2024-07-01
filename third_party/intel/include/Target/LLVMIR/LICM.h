@@ -6,7 +6,7 @@ class Module;
 } // namespace llvm
 
 namespace mlir::triton::intel {
-void LICM(llvm::Module &module);
+void LICM(llvm::Module &module, bool trace);
 } // namespace mlir::triton::intel
 
 #endif // TRITON_TARGET_LLVMIR_LICM_H
