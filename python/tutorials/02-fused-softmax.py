@@ -63,7 +63,7 @@ def naive_softmax(x):
 # Compute Kernel
 # --------------
 #
-# Our softmax kernel works as follows: each program loads a row of the input matrix X,
+# Our softmax kernel works as follows: each program loads a set of rows of the input matrix X strided by number of programs,
 # normalizes it and writes back the result to the output Y.
 #
 # Note that one important limitation of Triton is that each block must have a
@@ -127,7 +127,7 @@ def softmax(x):
         return NUM_SM * num_wg
 
     n_rows, n_cols = x.shape
-    # The block size is the smallest power of two greater than the number of columns in `x`
+    # The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
 
     # Simple heuristic depending on `BLOCK_SIZE`. We aim for 16 elements per
