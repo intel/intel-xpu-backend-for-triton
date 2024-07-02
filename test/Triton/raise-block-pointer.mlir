@@ -417,3 +417,40 @@ module {
     tt.return
   }
 }
+
+// `triton::ExpandDims` ops on tensor of pointers are currently not supported in for loops.
+// Consequently, the pass should fail cleanly.
+// CHECK:       tt.func @test_fail_addptr_for_expand_ptr([[PARAM_0_:%.+]]: !tt.ptr<bf16>) {
+// CHECK-NOT:       tt.make_tensor_ptr 
+module {
+  tt.func @test_fail_addptr_for_expand_ptr(
+    %arg0 : !tt.ptr<bf16>
+  )
+  {
+    %c0 = arith.constant 0 : index
+    %c12 = arith.constant 12 : index
+    %c3 = arith.constant 3 : index
+    %i_c3 = arith.constant 3 : i32
+    %0 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x!tt.ptr<bf16>>
+    %1 = tt.make_range {end = 1280 : i32, start = 1024 : i32}:tensor<256xi32>
+    %2 = tt.addptr %0, %1 : tensor<256x!tt.ptr<bf16>>, tensor<256xi32>
+    %_ptr = scf.for %i = %c0 to %c12 step %c3 iter_args(%ptr = %2) -> (tensor<256x!tt.ptr<bf16>>) {
+      %6 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+      %7 = tt.expand_dims %6 {axis = 1 : i32} : tensor<256xi32> -> tensor<256x1xi32>
+      %8 = tt.broadcast %7 : tensor<256x1xi32> -> tensor<256x256xi32>
+      %9 = tt.make_range {end = 512 : i32, start = 256 : i32} : tensor<256xi32>
+      %10 = tt.expand_dims %9 {axis = 0 : i32} : tensor<256xi32> -> tensor<1x256xi32>
+      %11 = tt.broadcast %10 : tensor<1x256xi32> -> tensor<256x256xi32>
+      %12 = arith.addi %8, %11 : tensor<256x256xi32>
+      %13 = tt.expand_dims %ptr {axis = 1 : i32} : tensor<256x!tt.ptr<bf16>> -> tensor<256x1x!tt.ptr<bf16>>
+      %14 = tt.broadcast %13 : tensor<256x1x!tt.ptr<bf16>> -> tensor<256x256x!tt.ptr<bf16>>
+      %15 = tt.addptr %14, %12 : tensor<256x256x!tt.ptr<bf16>>, tensor<256x256xi32>
+      %16 = tt.load %15 {cache = 1 : i32, evict = 1 : i32, isVolatile = false}: tensor<256x256x!tt.ptr<bf16>>
+      tt.store %15, %16 : tensor<256x256x!tt.ptr<bf16>>
+      %17 = tt.splat %i_c3 : i32 -> tensor<256xi32>
+      %ptr_iter = tt.addptr %ptr, %17 : tensor<256x!tt.ptr<bf16>>, tensor<256xi32>
+      scf.yield %ptr_iter : tensor<256x!tt.ptr<bf16>>
+    }
+    tt.return
+  }
+}
