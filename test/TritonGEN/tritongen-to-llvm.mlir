@@ -142,10 +142,13 @@ module attributes {
 
 // -----
 
-// CHECK-DAG: llvm.func spir_funccc @_Z20sub_group_reduce_addi(i32) -> i32 attributes {passthrough = ["convergent"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z20sub_group_reduce_maxi(i32) -> i32 attributes {passthrough = ["convergent"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z20sub_group_reduce_mini(i32) -> i32 attributes {passthrough = ["convergent"]}
-// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.WaveAll.i32(i32, i8, i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_addi(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_muli(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_mini(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_maxi(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_andi(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z31sub_group_non_uniform_reduce_ori(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_xori(i32) -> i32 attributes {passthrough = ["convergent"]}
 
 module attributes {
   spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
@@ -153,27 +156,19 @@ module attributes {
   llvm.func @triton_gen.sub_group_reduce() {
     %0 = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VAL:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.call spir_funccc @_Z20sub_group_reduce_addi([[VAL]]) {{.*}} : (i32) -> i32
+    // CHECK: llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_addi([[VAL]]) {{.*}} : (i32) -> i32
     %1 = triton_gen.sub_group_reduce add %0 {size = 16} : i32
-    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(1 : i8) : i8
-    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) {{.*}} : (i32, i8, i32) -> i32
+    // CHECK: llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_muli([[VAL]]) {{.*}} : (i32) -> i32
     %2 = triton_gen.sub_group_reduce mul %0 {size = 16} : i32
-    // CHECK: llvm.call spir_funccc @_Z20sub_group_reduce_mini([[VAL]]) {{.*}} : (i32) -> i32
+    // CHECK: llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_mini([[VAL]]) {{.*}} : (i32) -> i32
     %3 = triton_gen.sub_group_reduce min %0 {size = 16} : i32
-    // CHECK: llvm.call spir_funccc @_Z20sub_group_reduce_maxi([[VAL]]) {{.*}} : (i32) -> i32
+    // CHECK: llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_maxi([[VAL]]) {{.*}} : (i32) -> i32
     %4 = triton_gen.sub_group_reduce max %0 {size = 16} : i32
-    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(8 : i8) : i8
-    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) {{.*}} : (i32, i8, i32) -> i32
+    // CHECK: llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_andi([[VAL]]) {{.*}} : (i32) -> i32
     %5 = triton_gen.sub_group_reduce and %0 {size = 16} : i32
-    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(6 : i8) : i8
-    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) {{.*}} : (i32, i8, i32) -> i32
+    // CHECK: llvm.call spir_funccc @_Z31sub_group_non_uniform_reduce_ori([[VAL]]) {{.*}} : (i32) -> i32
     %6 = triton_gen.sub_group_reduce or %0 {size = 16} : i32
-    // CHECK: [[KIND:%.*]] = llvm.mlir.constant(7 : i8) : i8
-    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32([[VAL]], [[KIND]], [[ZERO]]) {{.*}} : (i32, i8, i32) -> i32
+    // CHECK: llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_xori([[VAL]]) {{.*}} : (i32) -> i32
     %7 = triton_gen.sub_group_reduce xor %0 {size = 16} : i32
     llvm.return
   }
