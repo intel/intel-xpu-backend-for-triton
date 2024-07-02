@@ -1,4 +1,4 @@
-name: E2E accuracy reusable workflow
+name: E2E reusable workflow
 
 on:
   workflow_call:
