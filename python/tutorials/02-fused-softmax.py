@@ -160,8 +160,8 @@ def softmax(x):
     num_programs = min(num_programs, n_rows)
 
     # Create a number of persistent programs.
-    softmax_kernel[(num_programs, )](y, x, x.stride(0), y.stride(0), n_rows, n_cols, num_warps=num_warps,
-                                     threads_per_warp=WARP_SIZE, BLOCK_SIZE=BLOCK_SIZE)
+    kernel[(num_programs, )](y, x, x.stride(0), y.stride(0), n_rows, n_cols, num_warps=num_warps,
+                             threads_per_warp=WARP_SIZE, BLOCK_SIZE=BLOCK_SIZE)
     return y
 
 
