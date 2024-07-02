@@ -1,6 +1,3 @@
-
-
-
 """
 Fused Softmax
 =============
@@ -177,6 +174,10 @@ def softmax(x):
 # This will allow us to verify that our padding mechanism works.
 
 torch.manual_seed(0)
+x = torch.randn(1823, 781, device='xpu')
+y_triton = softmax(x)
+y_torch = torch.softmax(x, axis=1)
+assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 
 # %%
 # As expected, the results are identical.
@@ -216,7 +217,7 @@ def benchmark(M, N, provider):
     return gbps(ms)
 
 
-benchmark.run(show_plots=True, print_data=True, save_path='.')
+benchmark.run(show_plots=True, print_data=True)
 
 # %%
 # In the above plot, we can see that:
