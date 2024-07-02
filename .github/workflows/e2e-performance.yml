@@ -130,14 +130,14 @@ jobs:
         mode: ${{ fromJson(needs.setup.outputs.mode) }}
         dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
       fail-fast: false
-      uses: ./.github/workflows/e2e-reusable.yml
-      with:
-        install_ipex: ${{ inputs.install_ipex }}
-        suite: ${{ matrix.suite }}
-        mode: ${{ matrix.mode }}
-        test_mode: performance
-        dtype: ${{ matrix.dtype }}
-        models: ${{ inputs.models }}
-        only_one_model: ${{ inputs.only_one_model }}
-        runner_label: ${{ inputs.runner_label }}
-        TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
+    uses: ./.github/workflows/e2e-reusable.yml
+    with:
+      install_ipex: ${{ inputs.install_ipex }}
+      suite: ${{ matrix.suite }}
+      mode: ${{ matrix.mode }}
+      test_mode: performance
+      dtype: ${{ matrix.dtype }}
+      models: ${{ inputs.models }}
+      only_one_model: ${{ inputs.only_one_model }}
+      runner_label: ${{ inputs.runner_label }}
+      TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
