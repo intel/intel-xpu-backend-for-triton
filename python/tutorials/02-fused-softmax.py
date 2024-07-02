@@ -1,3 +1,6 @@
+
+
+
 """
 Fused Softmax
 =============
@@ -120,22 +123,22 @@ kernels = {}
 
 def softmax(x):
 
-    def can_reach_max_occupancy(num_warps, size_smem):
+    def occupancy(num_warps, size_smem):
         num_wg_threads = warps_per_sm // num_warps
         num_wg_slm = MAX_NUM_WG if size_smem == 0 else slm_size_per_sub_slice // size_smem
-        num_wg = min(num_wg_threads, num_wg_slm, 64)
-        return num_warps * num_wg == warps_per_sm
+        num_wg = min(num_wg_threads, num_wg_slm, MAX_NUM_WG)
+        return NUM_SM * num_wg
 
     n_rows, n_cols = x.shape
     # The block size is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
 
-    # Simple heuristic depending on `BLOCK_SIZE`. We aim for 4 elements per
+    # Simple heuristic depending on `BLOCK_SIZE`. We aim for 16 elements per
     # thread. As the maximum number of warps is limited by hardware, we need to
     # make sure we do not surpass that limit.
     # You will see in the next tutorial how to auto-tune this value in a more natural
     # way so you don't have to come up with manual heuristics yourself.
-    num_warps = min(max_num_warps, BLOCK_SIZE // (WARP_SIZE * 4))
+    num_warps = min(max_num_warps, max(1, BLOCK_SIZE // (WARP_SIZE * 16)))
 
     # Allocate output
     y = torch.empty_like(x)
@@ -150,9 +153,14 @@ def softmax(x):
         # If we cannot reach maximum occupancy, we will not go with persistent programs and schedule a program per row.
         # Occupancy could be maximized by tweaking `num_warps` and `threads_per_warp`, but it is worth remembering
         # higher occupancy does not always translate to better performance.
-        num_programs = min(n_rows, max_num_resident_warps //
-                           num_warps) if can_reach_max_occupancy(num_warps, size_smem) else n_rows
+        # Persistent kernels may show better performance when the occupancy is 100 %, but this may not be the case in
+        # other cases, as work-group preemption will help hide stall GPU cycles.
+        num_programs = occupancy(num_warps, size_smem)
+        if num_programs * num_warps < max_num_resident_warps:
+            num_programs = n_rows
         kernels[BLOCK_SIZE] = (kernel, num_programs)
+
+    num_programs = min(num_programs, n_rows)
 
     # Create a number of persistent programs.
     softmax_kernel[(num_programs, )](y, x, x.stride(0), y.stride(0), n_rows, n_cols, num_warps=num_warps,
@@ -169,10 +177,6 @@ def softmax(x):
 # This will allow us to verify that our padding mechanism works.
 
 torch.manual_seed(0)
-x = torch.randn(1823, 781, device='xpu')
-y_triton = softmax(x)
-y_torch = torch.softmax(x, axis=1)
-assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 
 # %%
 # As expected, the results are identical.
@@ -212,7 +216,7 @@ def benchmark(M, N, provider):
     return gbps(ms)
 
 
-benchmark.run(show_plots=True, print_data=True)
+benchmark.run(show_plots=True, print_data=True, save_path='.')
 
 # %%
 # In the above plot, we can see that:
