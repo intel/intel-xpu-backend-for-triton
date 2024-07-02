@@ -50,15 +50,7 @@ env:
   TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
-  print_inputs:
-    name: Print inputs
-    runs-on: Linux
-    steps:
-      - name: Print inputs
-        run: |
-          echo "${{ toJSON(inputs) }}"
-
-  build:
+  run_tests:
     name: Test ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }}
     runs-on:
       - ${{ inputs.runner_label || 'max1550' }}
@@ -67,7 +59,13 @@ jobs:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
-      - name: Checkout repository
+      - name: Print inputs
+        runs-on: Linux
+        steps:
+          - name: Print inputs
+            run: |
+              echo "${{ toJSON(inputs) }}"
+- name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Get benchmark commit id
@@ -288,7 +286,7 @@ jobs:
       - name: Upload test logs
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ join(inputs.*, '-') }}
+          name: logs-${{ join([inputs.suite, inputs.dtype, inputs.mode, inputs.test_mode], '-') }}
           path: inductor_log
 
       - name: Save pip cache
