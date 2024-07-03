@@ -139,12 +139,12 @@ def softmax(x):
     # The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
 
-    # Simple heuristic depending on `BLOCK_SIZE`. We aim for 16 elements per
-    # thread. As the maximum number of warps is limited by hardware, we need to
-    # make sure we do not surpass that limit.
+    # Simple heuristic depending on `BLOCK_SIZE`. We aim for 2 elements per thread as the block size may be almost twice
+    # as larger as the row size. This way, we ensure each thread will do some work.
+    # As the maximum number of warps is limited by hardware, we need to make sure we do not surpass that limit.
     # You will see in the next tutorial how to auto-tune this value in a more natural
     # way so you don't have to come up with manual heuristics yourself.
-    num_warps = min(max_num_warps, max(1, BLOCK_SIZE // (WARP_SIZE * 16)))
+    num_warps = min(max_num_warps, max(1, BLOCK_SIZE // (WARP_SIZE * 2)))
 
     # Allocate output
     y = torch.empty_like(x)
