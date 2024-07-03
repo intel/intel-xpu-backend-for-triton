@@ -4,7 +4,7 @@ add_triton_library(TritonIntelAnalysis
     DEPENDS
     TritonTableGen
     TritonGPUAttrDefsIncGen
-  
+
     LINK_LIBS PUBLIC
     TritonIR
 )

@@ -16,7 +16,7 @@ add_triton_library(TritonIntelGPUTransforms
   MLIRSCFTransforms
   MLIRTransforms
   MLIRTransformUtils
-  TritonIntelAnalysis  
+  TritonIntelAnalysis
   TritonIR
   TritonGENIR
   TritonGPUIR
