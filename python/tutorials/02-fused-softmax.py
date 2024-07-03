@@ -159,7 +159,6 @@ def softmax(x):
         num_programs = occupancy(num_warps, size_smem)
         kernels[BLOCK_SIZE] = (kernel, num_programs)
 
-
     # We will *not* launch a persistent kernel if the number of rows is lower (not needed) or that would imply each
     # program would need to process more than 2 rows. Persistent kernels save thread dispatch overhead, but cannot
     # hide stalling. Overdispatching will help hiding this thanks to work-group level preemption. That's why, as a
