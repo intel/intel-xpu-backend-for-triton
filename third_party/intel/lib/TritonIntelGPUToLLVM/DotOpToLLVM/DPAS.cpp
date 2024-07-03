@@ -2,8 +2,10 @@
 #include "../Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
 
+#include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
@@ -28,7 +30,8 @@ public:
         typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
 
   std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
-      DPASEngineType dpasType, MLIRContext *ctx, DpasEncodingAttr layout) {
+      DPASAnalysis::DPASEngineType dpasType, MLIRContext *ctx,
+      DpasEncodingAttr layout) {
     Type fp32Ty = type::f32Ty(ctx);
     Type fp16Ty = type::f16Ty(ctx);
     Type bf16Ty = type::bf16Ty(ctx);
@@ -45,43 +48,43 @@ public:
     SmallVector<unsigned> shapeB = layout.getShapeB();
     unsigned elemNumB = product<unsigned>(shapeB) / threadsPerWarp;
     switch (dpasType) {
-    case DPASEngineType::FP32_FP32_FP16_FP16: {
+    case DPASAnalysis::DPASEngineType::FP32_FP32_FP16_FP16: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
       Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
-    case DPASEngineType::FP16_FP16_FP16_FP16: {
+    case DPASAnalysis::DPASEngineType::FP16_FP16_FP16_FP16: {
       Type cTy = vec_ty(fp16Ty, elemNumC);
       Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
-    case DPASEngineType::FP32_FP32_BF16_BF16: {
+    case DPASAnalysis::DPASEngineType::FP32_FP32_BF16_BF16: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
       Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
-    case DPASEngineType::BF16_BF16_BF16_BF16: {
+    case DPASAnalysis::DPASEngineType::BF16_BF16_BF16_BF16: {
       Type cTy = vec_ty(bf16Ty, elemNumC);
       Type aTy = vec_ty(i16Ty, elemNumA);                 // pack scalar to i16.
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
-    case DPASEngineType::FP32_FP32_TF32_TF32: {
+    case DPASAnalysis::DPASEngineType::FP32_FP32_TF32_TF32: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
       Type aTy = vec_ty(i32Ty, elemNumA);                 // pack scalar to i32.
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
-    case DPASEngineType::U32_U32_U8_U8: {
+    case DPASAnalysis::DPASEngineType::U32_U32_U8_U8: {
       Type cTy = vec_ty(i32Ty, elemNumC);
       Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
       return {cTy, cTy, aTy, bTy};
     }
-    case DPASEngineType::S32_S32_S8_S8: {
+    case DPASAnalysis::DPASEngineType::S32_S32_S8_S8: {
       Type cTy = vec_ty(s32Ty, elemNumC);
       Type aTy = vec_ty(i16Ty, elemNumA / 2);             // pack 2 i8 to i16.
       Type bTy = vec_ty(i32Ty, elemNumB / opsPerChannel); // pack scalar to i32.
@@ -138,7 +141,7 @@ public:
 
     unsigned repM = repA[0], repN = repB[1], repK = repA[1];
 
-    auto dpasType = getDPASType(op);
+    auto dpasType = DPASAnalysis::getDPASType(op);
     auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
     Type aTy, bTy, cTy, dTy;
     std::tie(dTy, cTy, aTy, bTy) =

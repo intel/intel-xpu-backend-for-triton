@@ -3,11 +3,12 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
-#include "triton/Analysis/Utility.h"
+// #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -122,7 +123,9 @@ public:
         isa<DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
-    if (!supportDPAS(dotOp, arch))
+    auto funcOp = op->getParentOfType<FunctionOpInterface>();
+    if (ttgi::DPASAnalysis(funcOp).canUseDPAS() !=
+        ttgi::DPASAnalysis::Result::True)
       return failure();
 
     // Create DPAS encoding for the given number of warps
