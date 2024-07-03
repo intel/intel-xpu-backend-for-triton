@@ -59,7 +59,7 @@ jobs:
       - name: Generate Triton cache key
         id: triton-key
         run: |
-          COMPOSITE_KEY=$(echo ${{ matrix.python }} $LLVM_COMMIT_ID $TRITON_COMMIT_ID | sha256sum - | cut -d\  -f1)
+          COMPOSITE_KEY=$(echo ${{ matrix.python }} $TRITON_COMMIT_ID | sha256sum - | cut -d\  -f1)
           echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
 
       - name: Load Triton wheels from a cache
