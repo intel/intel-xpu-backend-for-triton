@@ -1197,10 +1197,10 @@ struct TritonSubGroupReduceLowering
     SmallVector<Type> argTypes{valTy};
     SmallVector<Value> args{val};
     bool useCluster = (getSubgroupSize(op) != op.getSize());
+
     char *env = std::getenv("TRITONGEN_FORCE_GENISA");
     const bool useGenISA = env ? (bool)std::atoi(env) : false;
-
-    if ((useGenISA && !useCluster) || !isOCLBuiltinAvailable(op)) {
+    if (useGenISA && !useCluster) {
       Value result = createGenISASubGroupReduce(op, val, rewriter).getResult();
       result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
       rewriter.replaceOp(op, result);
@@ -1208,8 +1208,7 @@ struct TritonSubGroupReduceLowering
     }
 
     std::string fnName = "sub_group_";
-    if (useCluster)
-      fnName += "clustered_";
+    fnName += useCluster ? "clustered_" : "non_uniform_";
     fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
     fnName = "_Z" + std::to_string(fnName.size()) + fnName +
              intel::getTypeMangling(valTy);
@@ -1231,16 +1230,6 @@ struct TritonSubGroupReduceLowering
     rewriter.replaceOp(op, result);
     return success();
   }
-
-private:
-  bool isOCLBuiltinAvailable(TritonGEN::SubGroupReduceOp op) const {
-    bool useCluster = (getSubgroupSize(op) != op.getSize());
-    if (useCluster)
-      return true;
-    return (op.getKind() == TritonGEN::ReduceKind::ADD ||
-            op.getKind() == TritonGEN::ReduceKind::MIN ||
-            op.getKind() == TritonGEN::ReduceKind::MAX);
-  }
 };
 
 struct TritonSubGroupScanLowering
@@ -1259,7 +1248,7 @@ struct TritonSubGroupScanLowering
     SmallVector<Type> argTypes{valTy};
     SmallVector<Value> args{val};
 
-    std::string fnName = "sub_group_scan_";
+    std::string fnName = "sub_group_non_uniform_scan_";
     switch (op.getScanKind()) {
     case TritonGEN::ScanKind::EXCLUSIVE:
       fnName += "exclusive_";
