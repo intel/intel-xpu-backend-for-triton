@@ -1489,6 +1489,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for num_ctas in num_ctas_list
                           for dtype_x_str in ['float32', 'uint64', 'int64', 'float64']])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
+    check_type_supported(dtype_x_str, device)
     shape0, shape1 = shape
     # triton kernel
 
