@@ -4,9 +4,7 @@
 #include <CL/sycl.hpp>
 #include <cstdint>
 #include <ipex.h>
-#include <random>
 #include <torch/extension.h>
-#include <vector>
 
 static constexpr float kNegInfinity = INFINITY * -1;
 
@@ -49,38 +47,6 @@ struct Shape {
   }
 };
 
-template <typename T> void init_random(T *arr, size_t nelems) {
-  std::vector<float> vec(nelems);
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_real_distribution<float> rg(-1.0f, 1.0f);
-  std::generate(vec.begin(), vec.end(), [&] { return rg(gen); });
-
-  for (uint32_t i = 0; i < nelems; ++i)
-    arr[i] = static_cast<T>(vec[i]);
-}
-
-template <typename T>
-void random_init_forward(const Shape &shape, T *query, T *key, T *value,
-                         T *attn_mask, uint8_t *dropout_mask,
-                         const bool use_mask, const bool use_dropout) {
-  uint32_t size_query = shape.get_query_size();
-  uint32_t size_key = shape.get_key_size();
-  uint32_t size_score = shape.get_score_size();
-  uint32_t size_attn_mask = shape.get_attn_mask_size();
-
-  init_random(query, size_query);
-  init_random(key, size_key);
-  init_random(value, size_key);
-  if (use_mask) {
-    init_random(attn_mask, size_attn_mask);
-  }
-  if (use_dropout) {
-    for (uint32_t i = 0; i < size_score; ++i)
-      dropout_mask[i] = (i & 1) == 0;
-  }
-}
-
 #define CHECK_XPU(x)                                                           \
   TORCH_CHECK(x.device().is_xpu(), #x " must be a XPU tensor")
 #define CHECK_CONTIGUOUS(x)                                                    \
@@ -119,9 +85,9 @@ at::Tensor bgemm(const at::Tensor &a, const at::Tensor &b, const at::Tensor &c,
 
 // refers to test_fmha.cpp::test_fmha_forward()
 template <typename T, bool IsCausal>
-T *flash_attn(const int64_t num_batches, const int64_t num_heads,
-              const int64_t head_size, const int64_t num_queries,
-              const int64_t num_keys) {
+void flash_attn(const int64_t num_batches, const int64_t num_heads,
+                const int64_t head_size, const int64_t num_queries,
+                const int64_t num_keys) {
   Shape shape(num_batches, num_heads, num_queries, num_keys, head_size);
   auto queue = get_current_sycl_queue();
 
@@ -161,15 +127,12 @@ T *flash_attn(const int64_t num_batches, const int64_t num_heads,
   float *m = static_cast<float *>(m_ptr);
   float *l = static_cast<float *>(l_ptr);
 
-  random_init_forward(shape, query, key, value, attn_mask, dropout_mask,
-                      use_mask, use_dropout);
-
   fmha_forward<T, use_mask, IsCausal, use_dropout>(
       queue, query, key, value, attn_mask, dropout_mask, dropout_prob, output,
       m, l, shape.num_batches, shape.num_heads, shape.head_size,
       shape.num_queries, shape.num_keys, head_scale);
 
-  return output;
+  return;
 }
 
 PYBIND11_MODULE(xetla_kernel, m) {
