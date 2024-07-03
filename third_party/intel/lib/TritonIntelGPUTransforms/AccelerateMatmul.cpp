@@ -122,14 +122,17 @@ public:
         isa<DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
+    using Result = ttgi::DPASAnalysis::Result;
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
-    if (ttgi::DPASAnalysis(funcOp).canUseDPAS() !=
-        ttgi::DPASAnalysis::Result::True)
+    Result canUseDPAS = ttgi::DPASAnalysis(funcOp).canUseDPAS();
+    assert(canUseDPAS != Result::Maybe &&
+           "Result::Maybe is unexpected at this point in the pass pipeline");
+    if (canUseDPAS != Result::True)
       return failure();
 
     // Create DPAS encoding for the given number of warps
     ArrayRef<int64_t> retShape = oldRetType.getShape();
-    ModuleOp mod = op->getParentOfType<mlir::ModuleOp>();
+    ModuleOp mod = funcOp->getParentOfType<mlir::ModuleOp>();
     unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
 
     // operands
