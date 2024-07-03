@@ -1248,7 +1248,7 @@ struct TritonSubGroupScanLowering
     SmallVector<Type> argTypes{valTy};
     SmallVector<Value> args{val};
 
-    std::string fnName = "sub_group_scan_";
+    std::string fnName = "sub_group_non_uniform_scan_";
     switch (op.getScanKind()) {
     case TritonGEN::ScanKind::EXCLUSIVE:
       fnName += "exclusive_";
