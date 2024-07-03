@@ -105,6 +105,7 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
 device = torch.xpu.current_device()
 properties = driver.active.utils.get_device_properties(device)
 NUM_SM = properties["multiprocessor_count"]
+SIZE_SMEM = properties["max_shared_mem"]
 WARPS_PER_EU = 8  # TODO: Get from properties
 EU_PER_SM = 8  # TODO: Get from properties
 MAX_NUM_WG = 64  # TODO: Get from properties
@@ -114,15 +115,23 @@ max_num_warps = WG_SIZE // WARP_SIZE
 target = triton.runtime.driver.active.get_current_target()
 warps_per_sm = WARPS_PER_EU * EU_PER_SM
 max_num_resident_warps = NUM_SM * warps_per_sm
-slm_size_per_sub_slice = 128  # TODO: Get from properties
 kernels = {}
+# Possible SLM allocation sizes in kB
+tg_slm_sizes = [i * 2**i for i in [0, 1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128]]  # TODO: Get from properties
 
 
 def softmax(x):
 
     def occupancy(num_warps, size_smem):
+
+        def allocated_slm_size(size_smem):
+            for size in tg_slm_sizes:
+                if size_smem <= size:
+                    return size
+            raise RuntimeError("Exceeded max SLM allocation size")
+
         num_wg_threads = warps_per_sm // num_warps
-        num_wg_slm = MAX_NUM_WG if size_smem == 0 else slm_size_per_sub_slice // size_smem
+        num_wg_slm = MAX_NUM_WG if size_smem == 0 else SIZE_SMEM // allocated_slm_size(size_smem)
         num_wg = min(num_wg_threads, num_wg_slm, MAX_NUM_WG)
         return NUM_SM * num_wg
 
@@ -147,20 +156,20 @@ def softmax(x):
                                        threads_per_warp=WARP_SIZE, BLOCK_SIZE=BLOCK_SIZE, grid=(1, ))
         kernel._init_handles()
         size_smem = kernel.metadata.shared
-        # If we cannot reach maximum occupancy, we will not go with persistent programs and schedule a program per row.
-        # Occupancy could be maximized by tweaking `num_warps` and `threads_per_warp`, but it is worth remembering
-        # higher occupancy does not always translate to better performance.
-        # Persistent kernels may show better performance when the occupancy is 100 %, but this may not be the case in
-        # other cases, as work-group preemption will help hide stall GPU cycles.
         num_programs = occupancy(num_warps, size_smem)
-        if num_programs * num_warps < max_num_resident_warps:
-            num_programs = n_rows
         kernels[BLOCK_SIZE] = (kernel, num_programs)
 
-    num_programs = min(num_programs, n_rows)
+
+    # We will *not* launch a persistent kernel if the number of rows is lower (not needed) or that would imply each
+    # program would need to process more than 2 rows. Persistent kernels save thread dispatch overhead, but cannot
+    # hide stalling. Overdispatching will help hiding this thanks to work-group level preemption. That's why, as a
+    # heuristic, if each work-group would need to process at least more than 2 rows, we do not schedule a persistent
+    # kernel.
+    if n_rows < num_programs or n_rows // num_programs > 2:
+        num_programs = n_rows
 
     # Create a number of persistent programs.
-    kernel[(num_programs, )](y, x, x.stride(0), y.stride(0), n_rows, n_cols)
+    kernel[(num_programs, 1, 1)](y, x, x.stride(0), y.stride(0), n_rows, n_cols)
     return y
 
 
