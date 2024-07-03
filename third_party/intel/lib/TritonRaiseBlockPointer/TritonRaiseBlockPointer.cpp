@@ -254,7 +254,7 @@ struct TritonRaiseBlockPointer
             if (rewriteForOp(forOp).failed()) {
               forOp->emitRemark(
                   "TritonRaiseToBlockPointer: Failed to rewrite ForOp");
-              return WalkResult::advance();
+              return WalkResult::interrupt();
             }
             return WalkResult::skip();
           })
@@ -281,6 +281,16 @@ struct TritonRaiseBlockPointer
       if (mappedV) {
         if (auto makeTensorPtrOp =
                 mappedV.getDefiningOp<triton::MakeTensorPtrOp>()) {
+
+          if (llvm::any_of(op.getRegionIterArgs()[i].getUsers(),
+                           [&](Operation *user) {
+                             return isa<triton::ExpandDimsOp>(user);
+                           })) {
+            op->emitRemark("TritonRaiseToBlockPointer: ExpandDims Ops in loops "
+                           "are currently not supported");
+            return failure();
+          }
+
           if (visitOperandMakeTensorPtr(makeTensorPtrOp, state, op.getLoc(),
                                         builder, true)
                   .succeeded()) {
