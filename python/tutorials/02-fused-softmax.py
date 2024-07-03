@@ -144,7 +144,7 @@ def softmax(x):
     # As the maximum number of warps is limited by hardware, we need to make sure we do not surpass that limit.
     # You will see in the next tutorial how to auto-tune this value in a more natural
     # way so you don't have to come up with manual heuristics yourself.
-    num_warps = min(max_num_warps, max(1, BLOCK_SIZE // (WARP_SIZE * 2)))
+    num_warps = min(max_num_warps, max(1, BLOCK_SIZE // (WARP_SIZE * 4)))
 
     # Allocate output
     y = torch.empty_like(x)
