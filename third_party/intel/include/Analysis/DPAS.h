@@ -33,7 +33,7 @@ public:
   /// Analyze the dpasMap and return:
   ///  - Result::True if the function associated with this analysis contains
   ///     DotOp operations that can be lowered to DPAS instructions,
-  ///  - Result::False if it it contains DotOp operations that cannot be lowered
+  ///  - Result::False if it contains DotOp operations that cannot be lowered
   ///    to DPAS instructions, and
   ///  - Result::Maybe if it contains DotOp operations that could be lowered to
   ///    DPAS instructions if the module was executed with a different subgroup
