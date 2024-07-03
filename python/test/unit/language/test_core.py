@@ -1489,6 +1489,9 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for num_ctas in num_ctas_list
                           for dtype_x_str in ['float32', 'uint64', 'int64', 'float64']])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
+    if device == "xpu" and dtype_x_str in (
+            "float64", ) and not triton.runtime.driver.active.get_current_target().arch['has_fp64']:
+        pytest.xfail("float64 not supported on current xpu hardware")
     shape0, shape1 = shape
     # triton kernel
 
