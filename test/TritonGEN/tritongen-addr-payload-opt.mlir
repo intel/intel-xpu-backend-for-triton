@@ -20,17 +20,17 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 33792 
     // CHECK: llvm.cond_br [[CMP]], ^bb2, ^bb3
     // CHECK: ^bb2:
     // CHECK:     [[PTRTOINT_1:%.*]] = llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
-    // CHECK:     [[ADDR_PAYLOAD_1:%.*]] = llvm.call spir_funccc @__builtin_IB_subgroup_createBlock2DAddressPayload([[PTRTOINT_1]], {{.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32) -> !llvm.ptr
-    // CHECK-DAG: llvm.call spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX([[ADDR_PAYLOAD_1]], {{.*}}) {{.*}} : (!llvm.ptr, i32) -> ()
+    // CHECK:     [[ADDR_PAYLOAD_1:%.*]] = llvm.call spir_funccc @__builtin_IB_subgroup_createBlock2DAddressPayload([[PTRTOINT_1]], {{.*}}) : (i64, i32, i32, i32, i32, i32, i32, i32, i32) -> !llvm.ptr
+    // CHECK-DAG: llvm.call spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX([[ADDR_PAYLOAD_1]], {{.*}}) : (!llvm.ptr, i32) -> ()
     // CHECK:     [[ZERO_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:     llvm.call spir_funccc @__builtin_IB_subgroup_block_read_ap_u16_m8k16v1([[ADDR_PAYLOAD_1]], [[ZERO_1]], [[ZERO_1]], [[ZERO_1]]) {{.*}} : (!llvm.ptr, i32, i32, i32) -> vector<8xi16>
+    // CHECK:     llvm.call spir_funccc @__builtin_IB_subgroup_block_read_ap_u16_m8k16v1([[ADDR_PAYLOAD_1]], [[ZERO_1]], [[ZERO_1]], [[ZERO_1]]) : (!llvm.ptr, i32, i32, i32) -> vector<8xi16>
     //
     // CHECK:     [[PTRTOINT_2:%.*]] = llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
-    // CHECK:     [[ADDR_PAYLOAD_2:%.*]] = llvm.call spir_funccc @__builtin_IB_subgroup_createBlock2DAddressPayload([[PTRTOINT_2]], {{.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32) -> !llvm.ptr
-    // CHECK-DAG: llvm.call spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX([[ADDR_PAYLOAD_2]], {{.*}}) {{.*}} : (!llvm.ptr, i32) -> ()
-    // CHECK-DAG: llvm.call spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockY([[ADDR_PAYLOAD_2]], {{.*}}) {{.*}} : (!llvm.ptr, i32) -> ()
+    // CHECK:     [[ADDR_PAYLOAD_2:%.*]] = llvm.call spir_funccc @__builtin_IB_subgroup_createBlock2DAddressPayload([[PTRTOINT_2]], {{.*}}) : (i64, i32, i32, i32, i32, i32, i32, i32, i32) -> !llvm.ptr
+    // CHECK-DAG: llvm.call spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX([[ADDR_PAYLOAD_2]], {{.*}}) : (!llvm.ptr, i32) -> ()
+    // CHECK-DAG: llvm.call spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockY([[ADDR_PAYLOAD_2]], {{.*}}) : (!llvm.ptr, i32) -> ()
     // CHECK:     [[ZERO_2:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:     llvm.call spir_funccc @__builtin_IB_subgroup_block_read_ap_transform_u16_m16k16v1([[ADDR_PAYLOAD_2]], [[ZERO_2]], [[ZERO_2]], [[ZERO_2]]) {{.*}} : (!llvm.ptr, i32, i32, i32) -> vector<8xi32>
+    // CHECK:     llvm.call spir_funccc @__builtin_IB_subgroup_block_read_ap_transform_u16_m16k16v1([[ADDR_PAYLOAD_2]], [[ZERO_2]], [[ZERO_2]], [[ZERO_2]]) : (!llvm.ptr, i32, i32, i32) -> vector<8xi32>
     // CHECK: ^bb3:
     // CHECK: llvm.return
 

@@ -48,13 +48,16 @@ public:
     Operation *newOp;
     switch (op.getDimension()) {
     case gpu::Dimension::x:
-      newOp = rewriter.create<XOp>(loc, IntegerType::get(context, 32));
+      newOp =
+          rewriter.create<XOp>(loc, IntegerType::get(context, indexBitwidth));
       break;
     case gpu::Dimension::y:
-      newOp = rewriter.create<YOp>(loc, IntegerType::get(context, 32));
+      newOp =
+          rewriter.create<YOp>(loc, IntegerType::get(context, indexBitwidth));
       break;
     case gpu::Dimension::z:
-      newOp = rewriter.create<ZOp>(loc, IntegerType::get(context, 32));
+      newOp =
+          rewriter.create<ZOp>(loc, IntegerType::get(context, indexBitwidth));
       break;
     }
 
@@ -69,14 +72,6 @@ public:
         int32_t maximum = attr[static_cast<uint32_t>(op.getDimension())];
         newOp->setAttr("range", rewriter.getDenseI32ArrayAttr({0, maximum}));
       }
-    }
-
-    if (indexBitwidth > 32) {
-      newOp = rewriter.create<LLVM::SExtOp>(
-          loc, IntegerType::get(context, indexBitwidth), newOp->getResult(0));
-    } else if (indexBitwidth < 32) {
-      newOp = rewriter.create<LLVM::TruncOp>(
-          loc, IntegerType::get(context, indexBitwidth), newOp->getResult(0));
     }
 
     rewriter.replaceOp(op, newOp->getResults());

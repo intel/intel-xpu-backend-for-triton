@@ -97,7 +97,7 @@ createDeviceFunctionCall(ConversionPatternRewriter &rewriter,
   }
 
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-  callOp->setAttrs(funcOp->getAttrs());
+  callOp.setCConv(funcOp.getCConv());
 
   return callOp;
 }
@@ -606,14 +606,10 @@ protected:
          {llvm::Attribute::WillReturn, std::nullopt},
          {llvm::Attribute::Memory, llvm::MemoryEffects::none().toIntValue()}},
         ctx);
+
     LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, funcName, retType,
                                                    {argType}, {arg}, attrs);
-    Type resType = op->getResult(0).getType();
-    if (resType == callOp.getResult().getType())
-      return callOp.getResult();
-
-    return rewriter.create<LLVM::TruncOp>(op->getLoc(), resType,
-                                          callOp.getResult());
+    return callOp.getResult();
   }
 };
 
