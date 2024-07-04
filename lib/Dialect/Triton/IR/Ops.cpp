@@ -34,19 +34,6 @@ void LoadOp::getEffects(
 namespace mlir {
 namespace triton {
 
-//-- AdvanceOp --
-OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
-  // advance(ptr, 0, 0) -> ptr
-  SmallVector<OpFoldResult> rawOffsets = getOffsets();
-  auto offsets = getConstantIntValues(rawOffsets);
-  if (!offsets.has_value())
-    return {};
-  for (int64_t offset : offsets.value())
-    if (offset != 0)
-      return {};
-  return getPtr();
-}
-
 //-- LoadOp --
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    CacheModifier cache, EvictionPolicy evict, bool isVolatile) {
