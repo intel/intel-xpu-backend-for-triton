@@ -321,7 +321,7 @@ struct TritonRaiseBlockPointer
     // For each of the PtrState recorded in the last step, insert new
     // instructions to describe offset and stride for each dimension and append
     // them to init args
-    for (auto [i, state] : initArgIndexState) {
+    for (auto &[i, state] : initArgIndexState) {
       // For each dimension, if the corresponding offset and stride is an
       // integer attribute, create a constant value and append them at the
       // end of init arg list.
@@ -342,7 +342,7 @@ struct TritonRaiseBlockPointer
 
       // Note that we want the knownPtrs to be indexed by block arg, but we
       // only have index for now. Also, the state we record is the init
-      // arg, but want to to use newly created block arg. These block args
+      // arg, but want to use the newly created block arg. These block args
       // are not created yet. We will translate this mapping later.
       knownPtrsTmp.push_back(std::make_pair(i, state));
       levelToBlockArgIndex[level].insert(i);
@@ -368,7 +368,7 @@ struct TritonRaiseBlockPointer
     // Value's PtrState fields are converted from init arg to newly created
     // block arg
     int cnt = op.getRegionIterArgs().size();
-    for (auto [i, state] : knownPtrsTmp) {
+    for (auto &[i, state] : knownPtrsTmp) {
       for (auto it = state.offsets.begin(); it != state.offsets.end(); it++) {
         *it = newOp.getRegionIterArgs()[cnt];
         cnt++;
@@ -395,7 +395,8 @@ struct TritonRaiseBlockPointer
       // used by tt.load/tt.store in the loop body before pointer updates, this
       // will make sure rewriteLoadOp/rewriteStoreOp can use the analysis
       // result. E.g., given the following input (%tensor_of_ptr is a block
-      // arg): scf.for (%tensor_of_ptr) {
+      // arg):
+      // scf.for (%tensor_of_ptr) {
       //   %data = tt.load %tensor_of_ptr
       //   // more operations to update %tensor_of_ptr
       // }
@@ -481,7 +482,7 @@ struct TritonRaiseBlockPointer
     SmallVector<PtrState, 5> initArgState;
     for (auto [i, v] : llvm::enumerate(op->getOperands())) {
       // If this operand is not rewritten by forOp, skip
-      auto thisSet = levelToBlockArgIndex.find(level)->second;
+      auto &thisSet = levelToBlockArgIndex.find(level)->second;
       if (thisSet.find(i) == thisSet.end())
         continue;
 
@@ -615,11 +616,10 @@ struct TritonRaiseBlockPointer
 
     for (int64_t i = 0; i < pointeeType.getRank(); i++) {
       state.sizes.push_back(shape[i]);
-
-      state.strides = makeTPtrOp.getStrides();
-      state.offsets = makeTPtrOp.getOffsets();
-      state.shape = makeTPtrOp.getShape();
     }
+    state.strides = makeTPtrOp.getStrides();
+    state.offsets = makeTPtrOp.getOffsets();
+    state.shape = makeTPtrOp.getShape();
     state.order = SmallVector<int32_t>(makeTPtrOp.getOrder());
 
     return success();
@@ -654,7 +654,6 @@ struct TritonRaiseBlockPointer
 
   LogicalResult visitOperand(Value operand, PtrState &state, const Location loc,
                              OpBuilder &builder) {
-
     if (knownPtrs.find(operand) != knownPtrs.end()) {
       state = knownPtrs.lookup(operand);
       return success();
