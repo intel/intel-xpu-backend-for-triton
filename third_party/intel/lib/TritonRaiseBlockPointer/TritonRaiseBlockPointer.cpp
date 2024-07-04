@@ -962,15 +962,62 @@ TritonRaiseBlockPointer::visitAddPointerOperand(triton::BroadcastOp broadcastOp,
   ArrayRef<int64_t> srcShape = cast<ShapedType>(src.getType()).getShape();
   ArrayRef<int64_t> dstShape = cast<ShapedType>(dst.getType()).getShape();
 
-  // TODO: Implement srcShape.size() < dstShape.size() case
-  assert(srcShape.size() == dstShape.size() &&
-         "rank of source cannot be different to rank of destination");
+  assert(srcShape.size() <= dstShape.size() &&
+         "rank of source cannot be greater than the rank of destination");
 
   if (failed(visitOperand(src, state, loc, builder))) {
     return failure();
   }
 
-  llvm::copy(dstShape, state.sizes.begin());
+  if (srcShape.size() == dstShape.size()) {
+    llvm::copy(dstShape, state.sizes.begin());
+  } else {
+    // Offset must be equal, otherwise we don.t know which offset should be
+    // propagated to the new axis.
+    for (int i = 1; i < state.offsets.size(); ++i) {
+      if (state.offsets[0] != state.offsets[i]) {
+        broadcastOp->emitRemark(
+            "TritonRaiseBlockPointer: Unsupported broadcast with different "
+            "offsets while source rank and destination rank differ.");
+        return failure();
+      }
+    }
+
+    // Create the new axis.
+    // The positions of the new axis are determined based and the shape values.
+    // If shape are the same, the new axis are added at the end.
+    size_t srcAxis = 0;
+    for (size_t axis = 0; axis < dstShape.size(); ++axis) {
+      if ((srcAxis < srcShape.size()) &&
+          (srcShape[srcAxis] == dstShape[axis])) {
+        ++srcAxis;
+        continue;
+      }
+      Value c0i32 =
+          builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
+      Value c0i64 =
+          builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth);
+      state.offsets.insert(state.offsets.begin() + axis,
+                           getValueOrCreateCastToIndexLike(
+                               builder, loc,
+                               builder.getIntegerType(offsetBitwidth),
+                               state.offsets[0]));
+      state.sizes.insert(state.sizes.begin() + axis, dstShape[axis]);
+      state.strides.insert(state.strides.begin() + axis, c0i64);
+      state.shape.insert(state.shape.begin() + axis, c0i64);
+    }
+
+    // The following condition has been duplicated from the expand_dim support
+    // TODO : Verify if we need still need it given that triton `make_block_ptr`
+    // op differs from triton-shared `make_block_ptr` op regarding how address
+    // wrap around are handled.
+    if (state.hasModulo() && state.getRank() > 2) {
+      broadcastOp->emitRemark("TritonRaiseBlockPointer: unsupported scenario "
+                              "where broadcast result "
+                              "has modulo and rank > 2");
+      return failure();
+    }
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "Broadcast state: " << state << "\n";);
 

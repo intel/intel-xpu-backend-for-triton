@@ -1489,6 +1489,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for num_ctas in num_ctas_list
                           for dtype_x_str in ['float32', 'uint64', 'int64', 'float64']])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
+    check_type_supported(dtype_x_str, device)
     shape0, shape1 = shape
     # triton kernel
 
@@ -2180,8 +2181,6 @@ reduce_bool = [(op, 'bool', shape, axis, False) for op in ['xor_sum'] for shape 
                          [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
-    if is_xpu() and op == 'xor_sum':
-        pytest.skip("FIXME: Incorrect result on XPU")
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
