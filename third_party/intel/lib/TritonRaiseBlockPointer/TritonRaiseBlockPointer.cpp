@@ -208,7 +208,7 @@ struct TritonRaiseBlockPointer
   void runOnOperation() final {
     auto moduleOp = getOperation();
 
-    if (rewriteOp(moduleOp).failed()) {
+    if (failed(rewriteOp(moduleOp))) {
       moduleOp->emitWarning("TritonRaiseToBlockPointer failed");
     }
 
@@ -236,7 +236,7 @@ struct TritonRaiseBlockPointer
             return WalkResult::advance();
           })
           .Case<triton::MakeTensorPtrOp>([&](auto maketptr) {
-            if (remapMakeTensorPtrOp(maketptr).failed()) {
+            if (failed(remapMakeTensorPtrOp(maketptr))) {
               maketptr->emitRemark("TritonRaiseToBlockPointer: Failed to "
                                    "rewrite MakeTensorPtrOp");
             }
@@ -251,7 +251,7 @@ struct TritonRaiseBlockPointer
             return WalkResult::skip();
           })
           .Case<scf::ForOp>([&](auto forOp) {
-            if (rewriteForOp(forOp).failed()) {
+            if (failed(rewriteForOp(forOp))) {
               forOp->emitRemark(
                   "TritonRaiseToBlockPointer: Failed to rewrite ForOp");
               return WalkResult::interrupt();
@@ -291,9 +291,8 @@ struct TritonRaiseBlockPointer
             return failure();
           }
 
-          if (visitOperandMakeTensorPtr(makeTensorPtrOp, state, op.getLoc(),
-                                        builder, true)
-                  .succeeded()) {
+          if (succeeded(visitOperandMakeTensorPtr(
+                  makeTensorPtrOp, state, op.getLoc(), builder, true))) {
             newInitArgs.push_back(mappedV);
             // Record the PtrState for later processing
             initArgIndexState.push_back(std::make_pair(i, state));
@@ -304,8 +303,8 @@ struct TritonRaiseBlockPointer
           // tt.addptr and we have a non-scalar pointer, something must have
           // gone wrong with the pass.
           assert(!isa<RankedTensorType>(addptrOp.getResult().getType()));
-          if (visitOperandAddptr(addptrOp, state, op.getLoc(), builder)
-                  .succeeded()) {
+          if (succeeded(
+                  visitOperandAddptr(addptrOp, state, op.getLoc(), builder))) {
             newInitArgs.push_back(mappedV);
             // Record the PtrState for later processing
             initArgIndexState.push_back(std::make_pair(i, state));
@@ -430,7 +429,7 @@ struct TritonRaiseBlockPointer
       }
     }
     // Update the loop body.
-    if (rewriteOp(newOp).failed()) {
+    if (failed(rewriteOp(newOp))) {
       newOp->erase();
       op->emitRemark("TritonRaiseToBlockPointer: update loop body failed when "
                      "rewriting for op");
@@ -438,7 +437,7 @@ struct TritonRaiseBlockPointer
     }
     if (op.getNumRegionIterArgs()) {
       auto yieldOp = cast<scf::YieldOp>(newOp.getBody()->getTerminator());
-      if (rewriteYieldOp(yieldOp, initArgIndexMap).failed()) {
+      if (failed(rewriteYieldOp(yieldOp, initArgIndexMap))) {
         newOp->erase();
         return failure();
       };
@@ -569,7 +568,7 @@ struct TritonRaiseBlockPointer
     OpBuilder builder(op);
 
     PtrState state;
-    if (visitOperandMakeTensorPtr(op, state, op.getLoc(), builder).failed()) {
+    if (failed(visitOperandMakeTensorPtr(op, state, op.getLoc(), builder))) {
       return failure();
     }
 
