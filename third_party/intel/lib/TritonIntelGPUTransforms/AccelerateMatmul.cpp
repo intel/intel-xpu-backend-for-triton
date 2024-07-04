@@ -125,8 +125,6 @@ public:
     using Result = ttgi::DPASAnalysis::Result;
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
     Result canUseDPAS = ttgi::DPASAnalysis(funcOp).canUseDPAS();
-    assert(canUseDPAS != Result::Maybe &&
-           "Result::Maybe is unexpected at this point in the pass pipeline");
     if (canUseDPAS != Result::True)
       return failure();
 
