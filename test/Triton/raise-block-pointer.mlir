@@ -468,7 +468,7 @@ module {
 // `triton::ExpandDims` ops on tensor of pointers are currently not supported in for loops.
 // Consequently, the pass should fail cleanly.
 // CHECK:       tt.func @test_fail_addptr_for_expand_ptr([[PARAM_0_:%.+]]: !tt.ptr<bf16>) {
-// CHECK-NOT:       tt.make_tensor_ptr 
+// CHECK-NOT:       tt.make_tensor_ptr
 module {
   tt.func @test_fail_addptr_for_expand_ptr(
     %arg0 : !tt.ptr<bf16>
