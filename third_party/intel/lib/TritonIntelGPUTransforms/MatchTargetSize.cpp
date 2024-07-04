@@ -193,6 +193,8 @@ public:
     });
 
     LLVM_DEBUG(llvm::dbgs() << "Canonicalizing...\n");
+    LLVM_DEBUG(llvm::dbgs() << "Module before canonicalization:\n"
+                            << m << "\n\n");
     canonicalize();
     LLVM_DEBUG(llvm::dbgs() << "Module after canonicalization:\n"
                             << m << "\n\n");
@@ -282,13 +284,14 @@ public:
     DenseMap<Value, int> userIndexMap;
     auto idx = 0;
     for (auto [arg, init] : llvm::zip(op.getRegionIterArgs(), op.getInits())) {
-      auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
-      if (!glue) {
+      Operation *definingOp = init.getDefiningOp();
+      if (!isa_and_nonnull<ttgi::GlueOp>(definingOp)) {
         newInits.push_back(init);
-        userIndexMap[arg] = idx;
-        idx++;
+        userIndexMap[arg] = idx++;
         continue;
       }
+
+      auto glue = cast<ttgi::GlueOp>(definingOp);
       auto numSplit = glue->getOperands().size();
       for (auto i = 0; i < numSplit; i++) {
         newInits.push_back(glue->getOperand(i));
@@ -597,24 +600,14 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
   Attribute layout = type.getEncoding();
   assert(layout && "Expecting a valid layout");
 
-  int64_t colLimit = 0;
-  const auto &dotShape = nativeSizes.getDotShape();
-  // Dot operation.
+  // Dot related operation.
+  const TargetArchNativeSizes::DotShape &dotShape =
+      nativeSizes.getDotShape(type.getElementTypeBitWidth());
   if (dotAttrs.count(layout)) {
-    //    const TargetArchNativeSizes::DotShape &dotShape =
-    //        nativeSizes.getDotShape(type.getElementTypeBitWidth());
-    SmallVector<int64_t> nativeDotSize{dotShape.m, dotShape.n};
-    return nativeDotSize;
-    // 32 = 2 * 16(subgroupSize) which is for large load/store
-  } else if (auto warpAttr = dyn_cast<ttgi::WarpEncodingAttr>(layout)) {
-    colLimit = 32;
+    return {dotShape.m, dotShape.n};
   } else if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
     if (dotAttr.getKWidth() != 0 && dotAttr.getOpIdx() == 1)
       return {dotShape.k, dotShape.n};
-    colLimit = 32;
-    // hack for attn
-    if (dotAttr.getOpIdx() == 1 && type.getShape()[1] == 64)
-      colLimit = 16;
   }
 
   // Load/Store operations.
@@ -630,34 +623,30 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
     subSize[0] = std::min(max, shape[0]);
   } break;
   case 2: {
-    // if (isa<ttgi::WarpEncodingAttr>(layout)) {
-    //   // 32 = 2 * 16(subgroupSize) which is for large load/store
-    //   // max 2d block prefetch width is 16 for 32-bit datatype
-    //   subSize[1] = std::min(sizeInBits == 32 ? 16L : 32L, shape[1]);
-    //   // FIXME: From gfxspec, max 2d block load height is 32
-    //   subSize[0] = std::min(32L, shape[0]);
-    // } else if (auto dotLayout =
-    // dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    //   const TargetArchNativeSizes::BlockMemShape &memShape =
-    //       nativeSizes.getBlockMemShape(sizeInBits);
-    //   switch (dotLayout.getOpIdx()) {
-    //   case 0:
-    //     subSize[1] =
-    //         std::min(static_cast<int64_t>(memShape.columnsA), shape[1]);
-    //     subSize[0] = std::min(static_cast<int64_t>(memShape.rowsA),
-    //     shape[0]); break;
-    //   case 1:
-    //     subSize[1] =
-    //         std::min(static_cast<int64_t>(memShape.columnsB), shape[1]);
-    //     subSize[0] = std::min(static_cast<int64_t>(memShape.rowsB),
-    //     shape[0]); break;
-    //   }
-    // } else {
-    //   llvm_unreachable("Unsupported layout");
-    // }
-    subSize[1] = (shape[1] > colLimit) ? colLimit : shape[1];
-    int64_t max = maxLoadStoreSize * 4 / sizeInBytes / subSize[1];
-    subSize[0] = std::min(max, shape[0]);
+    if (isa<ttgi::WarpEncodingAttr>(layout)) {
+      // 32 = 2 * 16(subgroupSize) which is for large load/store
+      // max 2d block prefetch width is 16 for 32-bit datatype
+      subSize[1] = std::min(sizeInBits == 32 ? 16L : 32L, shape[1]);
+      // max 2d block load height is 32
+      subSize[0] = std::min(32L, shape[0]);
+    } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+      const TargetArchNativeSizes::BlockMemShape &memShape =
+          nativeSizes.getBlockMemShape(sizeInBits);
+      switch (dotLayout.getOpIdx()) {
+      case 0:
+        subSize[1] =
+            std::min(static_cast<int64_t>(memShape.columnsA), shape[1]);
+        subSize[0] = std::min(static_cast<int64_t>(memShape.rowsA), shape[0]);
+        break;
+      case 1:
+        subSize[1] =
+            std::min(static_cast<int64_t>(memShape.columnsB), shape[1]);
+        subSize[0] = std::min(static_cast<int64_t>(memShape.rowsB), shape[0]);
+        break;
+      }
+    } else {
+      llvm_unreachable("Unsupported layout");
+    }
   } break;
   default:
     llvm_unreachable("Unsupported shape");
@@ -723,12 +712,12 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
   auto outer = dims == 2 ? srcTy.getShape()[0] : 1;
   auto combine = op.getCombineOp().front().getOperations().begin();
   auto id = combine->getName().getIdentifier();
-  // FIXME: 16 is the supported IR reduce length
   SmallVector<Value> glueVals;
   // fixed 8 for now
   unsigned step = 8;
   for (unsigned i = 0; i < outer; i += step) {
     SmallVector<Value> subVals;
+    // FIXME: 16 is the supported IR reduce length
     for (unsigned j = 0; j < srcTy.getShape()[axis]; j += 16) {
       Value subVal = getSubVal(op, src, {i, j}, {step, 16});
       subVals.push_back(subVal);
@@ -766,8 +755,6 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
       b.cloneRegionBefore(op.getCombineOp(), subRegion, subRegion.end());
       subOps.push_back(subRed.getResult()[0]);
     }
-    // auto glue = b.create<ttgi::GlueOp>(loc, op.getResultTypes()[0],
-    // subOps);
     glueVals.append(subOps);
   }
   auto glue = b.create<ttgi::GlueOp>(loc, op.getResultTypes()[0], glueVals);

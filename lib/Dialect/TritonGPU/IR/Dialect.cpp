@@ -1062,18 +1062,15 @@ LogicalResult DotOperandEncodingAttr::verify(
   }
 
   if (auto parentAttr = mlir::dyn_cast<intel::WarpEncodingAttr>(parent)) {
-    if (kWidth != 0)
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is not supported "
-                "when the parent is a warp layout";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
-    if (kWidth != 0)
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is not supported "
-                "when the parent is a blocked layout";
+    // intel: parent can be blocked layout
+    // if (kWidth != 0)
+    //   return emitError()
+    //          << "triton_gpu.dot_op kWidth parameter is not supported "
+    //             "when the parent is a blocked layout";
     return success();
   }
 
@@ -2118,43 +2115,6 @@ SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
         "supported yet");
     return {};
   }
-}
-
-Attribute DotOperandEncodingAttr::parse(AsmParser &parser, Type type) {
-  if (parser.parseLess().failed())
-    return {};
-  NamedAttrList attrs;
-  if (parser.parseOptionalAttrDict(attrs).failed())
-    return {};
-  if (parser.parseGreater().failed())
-    return {};
-  unsigned opIdx = mlir::cast<IntegerAttr>(attrs.get("opIdx")).getInt();
-  Attribute parent = attrs.get("parent");
-  auto mmaParent = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
-  unsigned kWidth = 0;
-  Attribute _kWidth = attrs.get("kWidth");
-  if (_kWidth) {
-    // if (!mmaParent || mmaParent.isVolta()) {
-    //   auto loc = parser.getNameLoc();
-    //   parser.emitError(loc, "kWidth only supported for MMAv2+ parent");
-    //   return Attribute();
-    // }
-    kWidth = mlir::cast<IntegerAttr>(_kWidth).getInt();
-  }
-  if (mlir::isa<AMDWmmaEncodingAttr>(parent)) {
-    kWidth = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr()[2];
-  }
-  return parser.getChecked<DotOperandEncodingAttr>(parser.getContext(), opIdx,
-                                                   parent, kWidth);
-}
-
-void DotOperandEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  auto mmaParent = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent());
-  printer << "<{"
-          << "opIdx = " << getOpIdx() << ", parent = " << getParent();
-  if (mmaParent && mmaParent.isAmpere())
-    printer << ", kWidth = " << getKWidth();
-  printer << "}>";
 }
 
 //===----------------------------------------------------------------------===//

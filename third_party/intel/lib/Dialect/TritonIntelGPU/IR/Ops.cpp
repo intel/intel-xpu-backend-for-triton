@@ -59,16 +59,13 @@ static SmallVector<int64_t> getShape(Type type) {
 /// Return the element type of an input tensor (or ptr to tensor).
 static Type getElementType(Type type) {
   return TypeSwitch<Type, Type>(type)
-      .Case<RankedTensorType>([](auto ty) { return ty.getElementType(); })
+      .Case<ShapedType>([](auto ty) { return ty.getElementType(); })
       .Case<triton::PointerType>([](auto ty) {
         assert(isa<RankedTensorType>(ty.getPointeeType()) &&
                "Expecting ptr to tensor");
         return cast<RankedTensorType>(ty.getPointeeType()).getElementType();
       })
-      .Default([](auto) {
-        llvm_unreachable("Unexpected type");
-        return Type();
-      });
+      .Default([](auto ty) { return ty; });
 }
 
 /// Return the size of the specified dimension of an input tensor (or ptr to
@@ -90,10 +87,15 @@ static unsigned getDimSize(Type type, unsigned dim) {
 namespace mlir::triton::gpu::intel {
 
 LogicalResult GlueOp::verify() {
-  /*
   SmallVector<Type> inputTypes;
   for (auto input : getOperands())
     inputTypes.push_back(input.getType());
+  Type inputType = inputTypes[0];
+
+  if (!llvm::all_of(inputTypes, [&](Type type) { return type == inputType; }))
+    return emitOpError("operands type should be the same");
+  else
+    return success();
 
   Type resultType = getRes().getType();
   unsigned resultRank = getRank(resultType);
@@ -124,7 +126,6 @@ LogicalResult GlueOp::verify() {
     return emitOpError(
         "operands cannot exceed result size along any dimension");
 
-  auto inputType = inputTypes[0];
   for (unsigned i = 0; i < resultRank; ++i) {
     unsigned resultSize = getDimSize(resultType, i);
     unsigned inputSize = getDimSize(inputType, i);
@@ -140,14 +141,17 @@ LogicalResult GlueOp::verify() {
 
   if (inputTypes.size() * numInputElems != numResultElems)
     return emitOpError("glued operands do not exactly cover the result shape");
-  */
   return success();
 }
 
 LogicalResult ExtractOp::verify() {
-  /*
   Type resultType = getRes().getType();
   Type operandType = getBase().getType();
+
+  if (getElementType(resultType) == getElementType(operandType))
+    return success();
+  else
+    return emitOpError("operand and reslut should have the same element type");
 
   unsigned resultRank = getRank(resultType);
   unsigned operandRank = getRank(operandType);
@@ -181,7 +185,6 @@ LogicalResult ExtractOp::verify() {
   unsigned index = getIndex();
   if (index >= numTiles)
     return emitOpError("index must be less than ") << numTiles;
-  */
   return success();
 }
 
