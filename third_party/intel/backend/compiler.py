@@ -161,6 +161,11 @@ class XPUBackend(BaseBackend):
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        # This pass will annotate the module with the threads_per_warp...
+        intel.passes.ttir.add_triton_annotate_module(pm, opt.threads_per_warp)
+        # ... therefore there is not need for this pass to receives the opt.threads_per_warp (TODO remove it from the pass,
+        # or we may pass the option in anyway and just do not overwrite the module attribute if it is different ?).
+        # We need to ensure that the pass itself does not use the opt.threads_per_Warp to steer the transformation.
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         intel.set_device_properties(mod, is_lts)
 
