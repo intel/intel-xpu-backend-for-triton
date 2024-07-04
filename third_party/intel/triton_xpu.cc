@@ -94,12 +94,18 @@ void init_triton_intel(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
-  // FIXME: Use SYCL runtime to query supported OpenCL extensions, instead of
-  // checking driver version.
-  m.def("set_device_properties", [](mlir::ModuleOp mod, bool isLTS) {
+  m.def("set_device_properties", [](mlir::ModuleOp mod, bool isLTS,
+                                    bool supportSG2DBlock, bool supportDPAS) {
     auto i1_ty = mlir::IntegerType::get(mod->getContext(), 1);
+    // FIXME: Use SYCL runtime to query supported OpenCL extensions, instead of
+    // checking driver version.
     if (isLTS)
       mod->setAttr("triton_gpu.is_lts", mlir::IntegerAttr::get(i1_ty, 1));
+    if (supportSG2DBlock)
+      mod->setAttr("triton_gpu.support_sg_2d_block",
+                   mlir::IntegerAttr::get(i1_ty, 1));
+    if (supportDPAS)
+      mod->setAttr("triton_gpu.support_dpas", mlir::IntegerAttr::get(i1_ty, 1));
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {

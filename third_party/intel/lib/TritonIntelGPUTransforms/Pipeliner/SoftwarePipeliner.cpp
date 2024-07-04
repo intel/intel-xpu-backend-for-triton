@@ -66,7 +66,7 @@ struct IntelGPUPipelinePass
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
-    if (m->hasAttr("triton_gpu.is_lts"))
+    if (!m->hasAttr("triton_gpu.support_sg_2d_block"))
       return;
 
     auto deviceArch = ttgi::getDeviceArch(m);

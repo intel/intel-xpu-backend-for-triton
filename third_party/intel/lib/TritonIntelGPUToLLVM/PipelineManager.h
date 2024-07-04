@@ -181,7 +181,8 @@ public:
   TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx)
       : mod(mod), ctx(ctx),
         blockPtrPathIsEnabled(
-            !mod->hasAttr("triton_gpu.is_lts") &&
+            mod->hasAttr("triton_gpu.support_sg_2d_block") &&
+            mod->hasAttr("triton_gpu.support_dpas") &&
             mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling

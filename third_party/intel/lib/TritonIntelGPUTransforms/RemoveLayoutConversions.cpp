@@ -795,7 +795,8 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
 
 bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   // Disable 2D block store on LTS.
-  if (storeOp->getParentOfType<ModuleOp>()->hasAttr("triton_gpu.is_lts"))
+  if (!storeOp->getParentOfType<ModuleOp>()->hasAttr(
+          "triton_gpu.support_sg_2d_block"))
     return false;
 
   // If storeOp is a pointer to a tensor, we try to find out if the
