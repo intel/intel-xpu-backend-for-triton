@@ -186,12 +186,12 @@ public:
       fc.at({m, n}) = ret;
     };
 
-    auto repCluster = dpasEncoding.getRepCluster();
+    ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
     for (int k = 0; k < repK; ++k)
       for (int m = 0; m < repM; ++m)
         for (int n = 0; n < repN; ++n)
-          for (int repRow = 0; repRow < repCluster[0]; repRow++)
-            for (int repCol = 0; repCol < repCluster[1]; repCol++)
+          for (int repRow = 0; repRow < repCluster[0]; ++repRow)
+            for (int repCol = 0; repCol < repCluster[1]; ++repCol)
               generateDPASOp(m * repCluster[0] + repRow,
                              n * repCluster[1] + repCol, k);
 
@@ -230,18 +230,18 @@ private:
   Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals,
                                               int64_t dim0, int64_t dim1,
                                               Type elemTy) const {
-    auto repCluster = dpasLayout.getRepCluster();
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     std::vector<Value> elems;
     for (int m = 0; m < dim0; ++m)
       for (int k = 0; k < dim1; ++k)
-        for (int repRow = 0; repRow < repCluster[0]; repRow++)
-          for (int repCol = 0; repCol < repCluster[1]; repCol++) {
-            auto matVal = vals.at(
+        for (int repRow = 0; repRow < repCluster[0]; ++repRow)
+          for (int repCol = 0; repCol < repCluster[1]; ++repCol) {
+            Value matVal = vals.at(
                 {m * repCluster[0] + repRow, k * repCluster[1] + repCol});
-            auto vecType = cast<mlir::VectorType>(matVal.getType());
-            auto valTy = vecType.getElementType();
+            VectorType vecType = cast<mlir::VectorType>(matVal.getType());
+            Type valTy = vecType.getElementType();
             for (int i = 0; i < vecType.getNumElements(); ++i) {
-              auto val = extract_element(valTy, matVal, i32_val(i));
+              Value val = extract_element(valTy, matVal, i32_val(i));
 
               elems.push_back(val);
             }
@@ -260,31 +260,40 @@ private:
                                                  Type dotOperandType,
                                                  uint32_t opIdx) const {
     SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
-    auto repCluster = dpasLayout.getRepCluster();
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     unsigned repClusterOuter;
     unsigned repClusterInner;
-    if (opIdx == 0) {
+    switch (opIdx) {
+    case 0:
+      // operand A
       repClusterOuter = repCluster[0];
       repClusterInner = 1;
-    } else if (opIdx == 1) {
+      break;
+    case 1:
+      // operand B
       repClusterInner = 1;
       repClusterOuter = repCluster[1];
-    } else {
-      assert(opIdx == 2);
+      break;
+    case 2:
+      // operand C
       repClusterOuter = repCluster[0];
       repClusterInner = repCluster[1];
+      break;
+    default:
+      assert(false && "invalid operand type in lowering");
+      break;
     }
     int offset{};
     ValueTable vals;
     size_t totalElems = elems.size();
     size_t numElemsPerOperand =
-        totalElems / (outer * inner) / (repClusterOuter * repClusterInner);
+        totalElems / ((outer * inner) * (repClusterOuter * repClusterInner));
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
 
     for (int i = 0; i < outer; ++i) {
       for (int j = 0; j < inner; ++j) {
-        for (int repOuter = 0; repOuter < repClusterOuter; repOuter++) {
-          for (int repInner = 0; repInner < repClusterInner; repInner++) {
+        for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
+          for (int repInner = 0; repInner < repClusterInner; ++repInner) {
             Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
             for (int k = 0; k < numElemsPerOperand; ++k) {
               matVal =
