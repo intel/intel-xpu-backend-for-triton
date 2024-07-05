@@ -4,10 +4,14 @@ run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.ins
 on:
   workflow_call:
     inputs:
+      device:
+        description: Device
+        type: string
+        default: max1100
       driver_version:
         description: Driver version
         type: string
-        default: "rolling"
+        default: rolling
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -44,9 +48,13 @@ on:
       run_name:
         description: Custom run name
         type: string
-        default: "Build and test"
+        default: Build and test
       build_llvm:
         description: Build LLVM
+        type: boolean
+        default: false
+      enable_unskip:
+        description: Ignore pytest.skip
         type: boolean
         default: false
 
@@ -55,13 +63,12 @@ permissions: read-all
 env:
   TRITON_DISABLE_LINE_INFO: 1
   TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
+  TEST_UNSKIP: ${{ inputs.enable_unskip }}
 
 jobs:
   integration-tests:
     name: Integration tests
-    runs-on:
-      - ${{ inputs.runner_label || 'Linux' }}
-      - ${{ inputs.driver_version }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}"]', inputs.device, inputs.driver_version)) }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -90,50 +97,6 @@ jobs:
         with:
           python-version: ${{ inputs.python_version }}
 
-      - name: Get LLVM commit id
-        run: |
-          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
-          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" | tee -a $GITHUB_ENV
-
-      - name: Load LLVM cache
-        if: inputs.build_llvm
-        id: llvm-cache
-        uses: ./.github/actions/load
-        env:
-          # Increase this value to reset cache
-          CACHE_NUMBER: 2
-        with:
-          path: $HOME/packages
-          key: packages-${{ env.LLVM_COMMIT_ID }}-${{ env.CACHE_NUMBER }}
-
-      - name: Clone LLVM
-        if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
-        uses: actions/checkout@v4
-        with:
-          repository: llvm/llvm-project
-          ref: ${{ env.LLVM_COMMIT_ID }}
-          path: llvm
-          submodules: recursive
-
-      - name: Build LLVM
-        if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
-        run: |
-          export BASE=$HOME
-          ln -s $PWD/llvm $BASE/llvm
-          ./scripts/compile-triton.sh --llvm
-
-      - name: Set LLVM_SYSPATH
-        if: inputs.build_llvm
-        run: |
-          echo "LLVM_SYSPATH=$HOME/packages/llvm" | tee -a $GITHUB_ENV
-
-      - name: Save LLVM cache
-        if: inputs.build_llvm && steps.llvm-cache.outputs.status == 'miss'
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.llvm-cache.outputs.path }}
-          dest: ${{ steps.llvm-cache.outputs.dest }}
-
       - name: Setup PyTorch with IPEX
         if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
@@ -157,36 +120,15 @@ jobs:
         if: ${{ !inputs.install_ipex }}
         uses: ./.github/actions/setup-fake-ipex
 
-      - name: Prepare Triton cache
+      - name: Install test dependencies
         run: |
-          mkdir -p ~/.triton
-          TRITON_CACHE_KEY="$(sha256sum python/setup.py | cut -d\  -f1)"
-          echo "TRITON_CACHE_KEY=$TRITON_CACHE_KEY" | tee -a $GITHUB_ENV
-
-      - name: Load Triton cache
-        id: triton-cache
-        uses: ./.github/actions/load
-        env:
-          # Increase this value to reset cache
-          CACHE_NUMBER: 1
-        with:
-          path: $HOME/.triton/nvidia
-          key: triton-nvidia-${{ env.TRITON_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
-
-      - name: Build Triton
-        run: |
-          export DEBUG=1
-          cd python
-          pip install wheel pytest pytest-xdist pytest-rerunfailures pytest-select
-          pip install --no-build-isolation '.[build,tests,tutorials]'
+          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout
           pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
 
-      - name: Save Triton cache
-        if: steps.triton-cache.outputs.status == 'miss'
-        uses: ./.github/actions/save
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
         with:
-          path: ${{ steps.triton-cache.outputs.path }}
-          dest: ${{ steps.triton-cache.outputs.dest }}
+          build_llvm: ${{ inputs.build_llvm }}
 
       - name: Run lit tests
         run: |
@@ -221,6 +163,7 @@ jobs:
       - name: Run core tests
         run: |
           source ./scripts/pytest-utils.sh
+          ensure_spirv_dis
           cd python/test/unit
           TRITON_TEST_SUITE=language \
             pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
@@ -321,12 +264,12 @@ jobs:
         if: github.ref_name == 'llvm-target'
         uses: actions/upload-artifact@v4
         with:
-          name: pass_rate-${{ inputs.python_version }}-${{ inputs.driver_version }}
+          name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate.json
 
       - name: Upload test reports
         if: inputs.upload_test_reports
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports-${{ inputs.python_version }}-${{ inputs.driver_version }}
+          name: test-reports-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: reports
