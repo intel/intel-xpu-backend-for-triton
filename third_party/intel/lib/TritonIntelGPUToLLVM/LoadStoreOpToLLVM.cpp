@@ -382,10 +382,10 @@ struct LoadOpConversion
     SmallVector<unsigned> dpasInstShape = isOperandA
                                               ? dpasLayout.getDPASInstShapeA()
                                               : dpasLayout.getDPASInstShapeB();
-    SmallVector<int64_t> elemsPerDPASInst = {dpasInstShape[0],
-                                             dpasInstShape[1]};
-    int64_t elemsPerLanePerDPASInst =
-        product<int64_t>(elemsPerDPASInst) / threadsPerWarp;
+    SmallVector<unsigned> elemsPerDPASInst = {dpasInstShape[0],
+                                              dpasInstShape[1]};
+    unsigned elemsPerLanePerDPASInst =
+        product<unsigned>(elemsPerDPASInst) / threadsPerWarp;
     TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
     Type unpackedDPASOperandType = LLVM::getFixedVectorType(
         typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
@@ -393,7 +393,7 @@ struct LoadOpConversion
     // pack scalars for operand A and B.
     Type elemType = (isOperandA && eltTy != f32_ty) ? i16_ty : i32_ty;
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
-    int64_t packedElemsPerLanePerDPASInst =
+    unsigned packedElemsPerLanePerDPASInst =
         isOperandA ? elemsPerLanePerDPASInst / (opsPerChannel == 4 ? 2 : 1)
                    : elemsPerLanePerDPASInst / opsPerChannel;
     Type packedDPASOperandType =
@@ -406,8 +406,8 @@ struct LoadOpConversion
         isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
     unsigned outerDimRequiredWarpNum =
         mlir::ceil<unsigned>(tensorShape[opIdx], warpShape[opIdx]);
-    int outerDimWarpNum =
-        std::min<int>(warpsPerCTA[opIdx], outerDimRequiredWarpNum);
+    unsigned outerDimWarpNum =
+        std::min<unsigned>(warpsPerCTA[opIdx], outerDimRequiredWarpNum);
     Value outerDimWarpId =
         urem(multiDimWarpId[opIdx], i32_val(outerDimWarpNum));
 
@@ -416,8 +416,8 @@ struct LoadOpConversion
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
 
     // Load the operand.
-    int64_t numRepOuter = numReps[opIdx];
-    int64_t numRepK = numReps[!opIdx];
+    unsigned numRepOuter = numReps[opIdx];
+    unsigned numRepK = numReps[!opIdx];
 
     unsigned tileHeight;
     unsigned vBlocks;
@@ -522,8 +522,8 @@ struct LoadOpConversion
               opIdx == 0 ? numOperandsKDimPerLoad : numOperandsOuterDimPerLoad;
           unsigned offset = 0;
           // The register value returned by 2D load is contiguous on the row.
-          for (int col = 0; col < packedColNum; col++) {
-            for (int row = 0; row < packedRowNum; row++) {
+          for (int col = 0; col < packedColNum; ++col) {
+            for (int row = 0; row < packedRowNum; ++row) {
 
               Value loadVal = undef(packedDPASOperandType);
               for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
