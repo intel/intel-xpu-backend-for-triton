@@ -35,9 +35,22 @@ std::string getTypeMangling(Type ty) {
 std::string mangle(StringRef baseName, ArrayRef<Type> types) {
   std::string s;
   llvm::raw_string_ostream os(s);
+  llvm::SmallDenseMap<Type, unsigned> substitutions;
   os << "_Z" << baseName.size() << baseName;
-  for (Type type : types)
-    os << getTypeMangling(type);
+  for (Type type : types) {
+    auto it = substitutions.find(type);
+    if (it != substitutions.end()) {
+      os << "S";
+      // First substitution is `S_`, second is `S0_`, and so on.
+      if (unsigned firstIdx = it->getSecond(); firstIdx > 0)
+        os << firstIdx - 1;
+      os << "_";
+    } else {
+      if (!type.isIntOrFloat())
+        substitutions[type] = substitutions.size();
+      os << getTypeMangling(type);
+    }
+  }
   return os.str();
 }
 } // namespace mlir::triton::gpu::intel

@@ -158,19 +158,19 @@ static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
   std::string fnName = "";
   switch (kind) {
   case TritonGEN::ShflKind::XOR:
-    fnName = "_Z21sub_group_shuffle_xor";
+    fnName = "sub_group_shuffle_xor";
     break;
   case TritonGEN::ShflKind::UP:
-    fnName = "_Z20sub_group_shuffle_up";
+    fnName = "sub_group_shuffle_up";
     break;
   case TritonGEN::ShflKind::DOWN:
-    fnName = "_Z22sub_group_shuffle_down";
+    fnName = "sub_group_shuffle_down";
     break;
   case TritonGEN::ShflKind::IDX:
-    fnName = "_Z17sub_group_shuffle";
+    fnName = "sub_group_shuffle";
     break;
   }
-  fnName += intel::getTypeMangling(value.getType()) + "j";
+  fnName = intel::mangle(fnName, {value.getType()}) + "j";
 
   intel::AttributeList attrs = createFunctionAttributes(
       {{llvm::Attribute::Convergent, std::nullopt}}, rewriter.getContext());
@@ -246,18 +246,10 @@ static Value createGenISADPAS(TritonGEN::MatrixDPASOp op,
       std::to_string(8 /*systolic depth*/ * getNumOperandsPerDword(precisionA));
   if (precisionA == TritonGEN::PrecisionType::TF32)
     fnName += "_f32";
-  std::string aMangledTy = intel::getTypeMangling(aTy);
-  std::string bMangledTy = intel::getTypeMangling(bTy);
-  std::string cMangledTy = intel::getTypeMangling(cTy);
-  if (bMangledTy == cMangledTy)
-    cMangledTy = "S0_";
-  else if (aMangledTy == cMangledTy)
-    cMangledTy = "S_";
-  fnName = "_Z" + std::to_string(fnName.size()) + fnName + aMangledTy +
-           bMangledTy + cMangledTy;
   SmallVector<Type> argTypes{aTy, bTy, cTy};
-  SmallVector<Value> args{a, b, c};
+  fnName = intel::mangle(fnName, argTypes);
 
+  SmallVector<Value> args{a, b, c};
   intel::AttributeList attrs = createFunctionAttributes(
       {{llvm::Attribute::Convergent, std::nullopt}}, rewriter.getContext());
 
@@ -1210,8 +1202,7 @@ struct TritonSubGroupReduceLowering
     std::string fnName = "sub_group_";
     fnName += useCluster ? "clustered_" : "non_uniform_";
     fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
-    fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             intel::getTypeMangling(valTy);
+    fnName = intel::mangle(fnName, {valTy});
     if (useCluster) {
       fnName += "j";
       argTypes.push_back(i32_ty);
@@ -1261,8 +1252,7 @@ struct TritonSubGroupScanLowering
     };
 
     fnName += stringifyReduceKind(op.getReduceKind()).str();
-    fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             intel::getTypeMangling(valTy);
+    fnName = intel::mangle(fnName, {valTy});
 
     MLIRContext *ctx = rewriter.getContext();
     intel::AttributeList attrs = createFunctionAttributes(
