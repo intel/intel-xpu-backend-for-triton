@@ -10,6 +10,7 @@
 #include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 #include "intel/include/Target/LLVMIR/PostProcess.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
+#include "intel/include/TritonRaiseBlockPointer/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
 
 #include "triton/Target/SPIRV/SPIRVTranslation.h"
@@ -47,6 +48,8 @@ static uint32_t findKernels(llvm::Module &M,
 void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
                          intel::createConvertTritonToTritonGPUWarp, unsigned);
+  ADD_PASS_WRAPPER_0("add_raise_block_pointer",
+                     intel::createTritonRaiseBlockPointer);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {

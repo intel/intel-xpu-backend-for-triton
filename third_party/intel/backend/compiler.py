@@ -149,6 +149,8 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         passes.common.add_symbol_dce(pm)
+        if (os.getenv("TRITON_RAISE_BLOCK_POINTER", "0") == "1"):
+            intel.passes.ttir.add_raise_block_pointer(pm)
         pm.run(mod)
         return mod
 
