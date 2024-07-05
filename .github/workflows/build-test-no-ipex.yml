@@ -28,6 +28,10 @@ on:
         description: Custom run name
         type: string
         default: "Build and test upstream pytorch with no IPEX"
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
   schedule:
     # Every midnight PST (UTC-8)
     - cron: "0 8 * * *"
@@ -40,10 +44,10 @@ jobs:
     strategy:
       matrix:
         python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
-        drivers: ["rolling", "lts"]
+        driver: ["rolling", "lts"]
     uses: ./.github/workflows/build-test-reusable.yml
     with:
-      driver_version: ${{ matrix.drivers }}
+      driver_version: ${{ matrix.driver }}
       runner_label: ${{ inputs.runner_label }}
       install_ipex: false
       pytorch_ref: ${{ inputs.pytorch_ref }}
@@ -52,3 +56,4 @@ jobs:
       ignore_errors: ${{ inputs.ignore_errors || false }}
       skip_list: ${{ inputs.skip_list }}
       run_name: ${{ inputs.run_name }}
+      enable_unskip: ${{ inputs.enable_unskip || false }}
