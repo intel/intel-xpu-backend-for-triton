@@ -149,8 +149,7 @@ emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
                               SmallVector<SmallVector<unsigned>> &offsets,
                               unsigned ctaOffsetX, unsigned ctaOffsetY) {
   // clang-format off
-  // For C operand the layout illustration.
-  //                      sub-group size 16
+  // For operand C the layout is:
   //               execution size = 16
   // <------------------------------------------------------------->
   // t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15       ^
@@ -171,8 +170,8 @@ emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
 
   unsigned repNumber = product<unsigned>(repCluster);
   unsigned elemNumberPerRep = product<unsigned>(sizePerDPASInst);
-  for (unsigned repId = 0; repId < repNumber; repId++) {
-    for (unsigned elemId = 0; elemId < elemNumberPerRep; elemId++) {
+  for (unsigned repId = 0; repId < repNumber; ++repId) {
+    for (unsigned elemId = 0; elemId < elemNumberPerRep; ++elemId) {
       // Follows the C++ order for the dpas layout.
       SmallVector<unsigned> repOffset = {
           (repId / repCluster[1]) * instShapeC[0],

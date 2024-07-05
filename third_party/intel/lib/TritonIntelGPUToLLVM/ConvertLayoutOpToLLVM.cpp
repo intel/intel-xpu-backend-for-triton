@@ -302,20 +302,6 @@ private:
 
     auto llvmElemTy = getTypeConverter()->convertType(elemTy);
 
-    //    llvm::outs() << "johnlu accumNumCTAsEachRep:" << accumNumCTAsEachRep
-    //                 << "\n";
-    //    llvm::outs().flush();
-    //    llvm::outs() << "johnlu layout:" << layout << "\n";
-    //    llvm::outs().flush();
-    //    llvm::outs() << "johnlu accumSizePerThread:" << accumSizePerThread <<
-    //    "\n"; llvm::outs().flush(); llvm::outs() << "johnlu the
-    //    numCTAsEachRep:"; llvm::outs().flush(); for (auto size :
-    //    numCTAsEachRep) {
-    //      llvm::outs() << size << ", ";
-    //    }
-    //    llvm::outs() << "\n";
-    //    llvm::outs().flush();
-
     for (unsigned ctaId = 0; ctaId < accumNumCTAsEachRep; ++ctaId) {
       auto multiDimCTAInRepId =
           getMultiDimIndex<unsigned>(ctaId, numCTAsEachRep, order);
@@ -399,8 +385,6 @@ private:
     auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
 
-    //    llvm::outs() << "johnlu the convert layout op: " << op << "\n";
-    //    llvm::outs().flush();
     for (unsigned d = 0; d < rank; ++d) {
       unsigned inPerCTA =
           std::min<unsigned>(shapePerCTA[d], srcShapePerCTATile[d]);
