@@ -19,6 +19,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/Pass.h"
@@ -27,7 +28,6 @@
 #include "mlir/Target/LLVMIR/TypeToLLVM.h"
 
 #include "llvm/IR/Attributes.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ModRef.h"
 
@@ -35,8 +35,6 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "intel/include/TritonGENToLLVM/GenIntrinsicEnum.h"
-#include "intel/include/TritonGENToLLVM/GenIntrinsics.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 
 namespace mlir::triton {
@@ -51,14 +49,31 @@ using namespace mlir::triton::gpu;
 // Helper Functions
 //===----------------------------------------------------------------------===//
 
-static intel::AttributeList
-getAttrList(const intel::AttrBuilder &funcAttrBuilder,
-            ArrayRef<NamedAttrList> paramAttrs = {}) {
+static intel::AttributeList createFunctionAttributes(
+    ArrayRef<std::pair<llvm::Attribute::AttrKind, std::optional<uint64_t>>>
+        attributes,
+    MLIRContext *ctx) {
+  intel::AttrBuilder funcAttrBuilder(*ctx);
+  for (auto [kind, optValue] : attributes) {
+    if (optValue)
+      funcAttrBuilder.addPassthroughAttribute(kind, *optValue);
+    else
+      funcAttrBuilder.addPassthroughAttribute(kind);
+  }
+
   intel::AttributeList attrs;
   attrs.addFnAttributes(funcAttrBuilder);
-  if (!paramAttrs.empty())
-    attrs.addParamAttributes(paramAttrs);
   return attrs;
+}
+
+NamedAttrList
+createParameterAttributes(ArrayRef<llvm::Attribute::AttrKind> attributes,
+                          MLIRContext *ctx) {
+  intel::AttrBuilder paramAttrBuilder(*ctx);
+  for (auto &attr : attributes)
+    paramAttrBuilder.addAttribute(attr);
+
+  return paramAttrBuilder.getAttributes();
 }
 
 static LLVM::CallOp
@@ -86,6 +101,53 @@ createDeviceFunctionCall(ConversionPatternRewriter &rewriter,
   return callOp;
 }
 
+static std::string getGenISATypeMangling(Type ty) {
+  if (auto vecTy = dyn_cast<VectorType>(ty))
+    return "v" + std::to_string(vecTy.getNumElements()) +
+           getGenISATypeMangling(vecTy.getElementType());
+  return (ty.isInteger() ? "i" : "f") +
+         std::to_string(ty.getIntOrFloatBitWidth());
+}
+
+static LLVM::CallOp
+createGenISASubGroupReduce(TritonGEN::SubGroupReduceOp op, Value val,
+                           ConversionPatternRewriter &rewriter) {
+  auto getKindVal = [](TritonGEN::ReduceKind kind) -> int {
+    switch (kind) {
+    case TritonGEN::ReduceKind::ADD:
+      return 0;
+    case TritonGEN::ReduceKind::MUL:
+      return 1;
+    case TritonGEN::ReduceKind::MIN:
+      return 2;
+    case TritonGEN::ReduceKind::MAX:
+      return 3;
+    case TritonGEN::ReduceKind::AND:
+      return 8;
+    case TritonGEN::ReduceKind::OR:
+      return 6;
+    case TritonGEN::ReduceKind::XOR:
+      return 7;
+    }
+    llvm_unreachable("unsupported reduce kind");
+  };
+
+  Location loc = op.getLoc();
+  auto kind =
+      rewriter.create<LLVM::ConstantOp>(loc, i8_ty, getKindVal(op.getKind()));
+
+  std::string funcName =
+      "llvm.genx.GenISA.WaveAll." + getGenISATypeMangling(val.getType());
+  SmallVector<Type> argTypes = {val.getType(), i8_ty, i32_ty};
+  SmallVector<Value> args = {val, kind, i32_val(0)};
+
+  intel::AttributeList attrs = createFunctionAttributes(
+      {{llvm::Attribute::Convergent, std::nullopt}}, rewriter.getContext());
+
+  return createDeviceFunctionCall(rewriter, funcName, val.getType(), argTypes,
+                                  args, attrs);
+}
+
 static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
                                           Value value, Value mask,
                                           TritonGEN::ShflKind kind) {
@@ -110,10 +172,8 @@ static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
   }
   fnName += intel::getTypeMangling(value.getType()) + "j";
 
-  MLIRContext *ctx = rewriter.getContext();
-  intel::AttrBuilder funcAttrBuilder(*ctx);
-  funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
-  intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+  intel::AttributeList attrs = createFunctionAttributes(
+      {{llvm::Attribute::Convergent, std::nullopt}}, rewriter.getContext());
 
   return createDeviceFunctionCall(rewriter, fnName, value.getType(),
                                   {value.getType(), mask.getType()},
@@ -198,10 +258,8 @@ static Value createGenISADPAS(TritonGEN::MatrixDPASOp op,
   SmallVector<Type> argTypes{aTy, bTy, cTy};
   SmallVector<Value> args{a, b, c};
 
-  MLIRContext *ctx = rewriter.getContext();
-  intel::AttrBuilder funcAttrBuilder(*ctx);
-  funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
-  intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+  intel::AttributeList attrs = createFunctionAttributes(
+      {{llvm::Attribute::Convergent, std::nullopt}}, rewriter.getContext());
 
   Value result =
       createDeviceFunctionCall(rewriter, fnName, cTy, argTypes, args, attrs)
@@ -320,18 +378,14 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                             op.getBaseHeight(), op.getBasePitch(),
                             byteCoord,          dest};
 
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    intel::AttrBuilder param0AttrBuilder(*ctx);
-    intel::AttrBuilder param5AttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
-    param0AttrBuilder.addAttribute(llvm::Attribute::NonNull);
-    param0AttrBuilder.addAttribute(llvm::Attribute::ReadOnly);
-    param5AttrBuilder.addAttribute(llvm::Attribute::NonNull);
-    param5AttrBuilder.addAttribute(llvm::Attribute::WriteOnly);
-    std::vector<NamedAttrList> paramAttrs(argTypes.size());
-    paramAttrs[0] = param0AttrBuilder.getAttributes();
-    paramAttrs[5] = param5AttrBuilder.getAttributes();
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::NoUnwind, std::nullopt}}, ctx);
+    SmallVector<NamedAttrList> paramAttrs(argTypes.size());
+    paramAttrs[0] = createParameterAttributes(
+        {llvm::Attribute::NonNull, llvm::Attribute::ReadOnly}, ctx);
+    paramAttrs[5] = createParameterAttributes(
+        {llvm::Attribute::NonNull, llvm::Attribute::WriteOnly}, ctx);
+    attrs.addParamAttributes(paramAttrs);
 
     LLVM::CallOp call = createDeviceFunctionCall(rewriter, fnName, void_ty(ctx),
                                                  argTypes, args, attrs);
@@ -345,7 +399,6 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
     return rewriter.create<LLVM::LoadOp>(loc, resType, dest);
   }
 
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   Value ptr = op.getPtr();
   Value baseWidth = op.getBaseWidth();
   Value baseHeight = op.getBaseHeight();
@@ -353,13 +406,8 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   Value x = op.getX();
   Value y = op.getY();
 
-  llvm::LLVMContext llvmContext;
-  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-  auto llvmResTy = typeTranslator.translateType(resType);
-  SmallVector<llvm::Type *> llvmTypes{llvmResTy};
-  std::string funcName = llvm::GenISAIntrinsic::getName(
-      llvm::GenISAIntrinsic::GenISA_LSC2DBlockRead, llvmTypes);
-
+  std::string funcName =
+      "llvm.genx.GenISA.LSC2DBlockRead." + getGenISATypeMangling(resType);
   IntegerType int1Ty = rewriter.getIntegerType(1);
   IntegerType int32Ty = rewriter.getIntegerType(32);
   IntegerType int64Ty = rewriter.getIntegerType(64);
@@ -380,10 +428,6 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                              int1Ty,
                              int1Ty,
                              int32Ty};
-
-  LLVM::LLVMFuncOp funcOp =
-      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, resType);
-  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
   auto elemSize =
       rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getElemSizeInBits());
@@ -415,9 +459,13 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                           vnniTransform,
                           cache};
 
-  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-  return callOp.getResult();
+  intel::AttributeList attrs =
+      createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
+                                {llvm::Attribute::WillReturn, std::nullopt}},
+                               ctx);
+  LLVM::CallOp call = createDeviceFunctionCall(rewriter, funcName, resType,
+                                               argTypes, args, attrs);
+  return call.getResult();
 }
 
 // FIXME: This is a temporary solution. Remove once IGC can update the address
@@ -444,14 +492,11 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
                             i32_val(op.getTileHeight()),
                             i32_val(op.getVBlocks())};
 
-    // Function attributes.
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
-        .addPassthroughAttribute(
-            llvm::Attribute::Memory,
-            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
-                .toIntValue());
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::NoUnwind, std::nullopt},
+         {llvm::Attribute::Memory,
+          llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
+        ctx);
 
     LLVM::CallOp callOp = createDeviceFunctionCall(
         rewriter, "__builtin_IB_subgroup_createBlock2DAddressPayload",
@@ -465,18 +510,14 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
            "Expecting a pointer type");
     SmallVector<Type> argTypes{ptr.getType(), i32_ty};
 
-    // Function and parameters attributes.
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    intel::AttrBuilder paramAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
-        .addPassthroughAttribute(
-            llvm::Attribute::Memory,
-            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Mod)
-                .toIntValue());
-    paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
-    std::vector<NamedAttrList> paramAttrs(argTypes.size());
-    paramAttrs[0] = paramAttrBuilder.getAttributes();
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::NoUnwind, std::nullopt},
+         {llvm::Attribute::Memory,
+          llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Mod).toIntValue()}},
+        ctx);
+    SmallVector<NamedAttrList> paramAttrs(argTypes.size());
+    paramAttrs[0] = createParameterAttributes({llvm::Attribute::NonNull}, ctx);
+    attrs.addParamAttributes(paramAttrs);
 
     createDeviceFunctionCall(
         rewriter, "__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX",
@@ -501,18 +542,14 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     SmallVector<Type> argTypes{ptr.getType(), i32_ty, i32_ty, i32_ty};
     SmallVector<Value> args{ptr, zero, zero, zero};
 
-    // Function and parameters attributes.
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    intel::AttrBuilder paramAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
-        .addPassthroughAttribute(
-            llvm::Attribute::Memory,
-            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
-                .toIntValue());
-    paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::NoUnwind, std::nullopt},
+         {llvm::Attribute::Memory,
+          llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
+        ctx);
     SmallVector<NamedAttrList> paramAttrs(argTypes.size());
-    paramAttrs[0] = paramAttrBuilder.getAttributes();
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
+    paramAttrs[0] = createParameterAttributes({llvm::Attribute::NonNull}, ctx);
+    attrs.addParamAttributes(paramAttrs);
 
     return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
                                     attrs);
@@ -577,9 +614,8 @@ storeCacheControlToCacheControls(Builder &builder,
 static LLVM::CallOp
 createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                          ConversionPatternRewriter &rewriter) {
-  MLIRContext *context = rewriter.getContext();
+  MLIRContext *ctx = rewriter.getContext();
   Location loc = op->getLoc();
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
 
   // The IGC intrinsic requires the first argument be int64
   Value ptr = op.getPtr();
@@ -591,12 +627,9 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   Value y = op.getY();
   Value storeVal = op.getStoredVal();
 
-  llvm::LLVMContext llvmContext;
-  LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-  auto storeTy = typeTranslator.translateType(storeVal.getType());
-  SmallVector<llvm::Type *> llvmTypes{storeTy};
-  std::string funcName = llvm::GenISAIntrinsic::getName(
-      llvm::GenISAIntrinsic::GenISA_LSC2DBlockWrite, llvmTypes);
+  VectorType storeValType = op.getStoredVal().getType();
+  std::string funcName =
+      "llvm.genx.GenISA.LSC2DBlockWrite." + getGenISATypeMangling(storeValType);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -604,10 +637,6 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
       int_ty(32),          int_ty(32),          int_ty(32),
       int_ty(32),          int_ty(1),           int_ty(1),
       int_ty(32),          storeVal.getType()};
-
-  LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
-      moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(context));
-  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
   auto elemSize = i32_val(op.getElemSizeInBits());
   auto tileWidth = i32_val(op.getTileWidth());
@@ -633,9 +662,13 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                           cache,
                           storeVal};
 
-  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-  return callOp;
+  intel::AttributeList attrs =
+      createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
+                                {llvm::Attribute::WillReturn, std::nullopt}},
+                               ctx);
+  LLVM::CallOp call = createDeviceFunctionCall(rewriter, funcName, void_ty(ctx),
+                                               argTypes, args, attrs);
+  return call;
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
@@ -678,17 +711,14 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
     SmallVector<Value> args{op.getPtr(), op.getBaseWidth(), op.getBaseHeight(),
                             op.getBasePitch(), byteCoord};
 
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    intel::AttrBuilder paramAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
-        .addPassthroughAttribute(
-            llvm::Attribute::Memory,
-            llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref)
-                .toIntValue());
-    paramAttrBuilder.addAttribute(llvm::Attribute::NonNull);
-    std::vector<NamedAttrList> paramAttrs(argTypes.size());
-    paramAttrs[0] = paramAttrBuilder.getAttributes();
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::NoUnwind, std::nullopt},
+         {llvm::Attribute::Memory,
+          llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
+        ctx);
+    SmallVector<NamedAttrList> paramAttrs(argTypes.size());
+    paramAttrs[0] = createParameterAttributes({llvm::Attribute::NonNull}, ctx);
+    attrs.addParamAttributes(paramAttrs);
 
     LLVM::CallOp call = createDeviceFunctionCall(rewriter, fnName, void_ty(ctx),
                                                  argTypes, args, attrs);
@@ -731,11 +761,6 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                              int1Ty,
                              int32Ty};
 
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
-      moduleOp, funcName, argTypes, LLVM::LLVMVoidType::get(ctx));
-  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-
   auto elemSize =
       rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getElemSizeInBits());
   auto tileWidth =
@@ -764,16 +789,14 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                           vnniTransform,
                           cache};
 
-  intel::AttrBuilder funcAttrBuilder(*ctx);
-  funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
-      .addPassthroughAttribute(llvm::Attribute::WillReturn)
-      .addPassthroughAttribute(llvm::Attribute::Memory,
-                               llvm::MemoryEffects::readOnly().toIntValue());
-  intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+  intel::AttributeList attrs = createFunctionAttributes(
+      {{llvm::Attribute::NoUnwind, std::nullopt},
+       {llvm::Attribute::WillReturn, std::nullopt},
+       {llvm::Attribute::Memory, llvm::MemoryEffects::readOnly().toIntValue()}},
+      ctx);
 
-  auto retType = LLVM::LLVMVoidType::get(ctx);
-  LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, funcName, retType,
-                                                 {argTypes}, {args}, attrs);
+  LLVM::CallOp callOp = createDeviceFunctionCall(
+      rewriter, funcName, void_ty(ctx), {argTypes}, {args}, attrs);
   return callOp;
 }
 
@@ -788,16 +811,13 @@ protected:
     auto argType = rewriter.getIntegerType(32);
     auto arg = LLVM::createConstantI32(op->getLoc(), rewriter, dim);
 
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind)
-        .addPassthroughAttribute(llvm::Attribute::WillReturn)
-        .addPassthroughAttribute(llvm::Attribute::Memory,
-                                 llvm::MemoryEffects::none().toIntValue());
-
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::NoUnwind, std::nullopt},
+         {llvm::Attribute::WillReturn, std::nullopt},
+         {llvm::Attribute::Memory, llvm::MemoryEffects::none().toIntValue()}},
+        ctx);
     LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, funcName, retType,
                                                    {argType}, {arg}, attrs);
-
     Type resType = op->getResult(0).getType();
     if (resType == callOp.getResult().getType())
       return callOp.getResult();
@@ -822,11 +842,11 @@ struct TritonGENThreadIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
                   ConversionPatternRewriter &rewriter) const override {
     Value res;
     if (isa<TritonGEN::ThreadIdXOp>(op))
-      res = rewrite(op, "_Z12get_local_idj", 0, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_local_idj", 0, rewriter);
     else if (isa<TritonGEN::ThreadIdYOp>(op))
-      res = rewrite(op, "_Z12get_local_idj", 1, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_local_idj", 1, rewriter);
     else if (isa<TritonGEN::ThreadIdZOp>(op))
-      res = rewrite(op, "_Z12get_local_idj", 2, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_local_idj", 2, rewriter);
     else
       llvm_unreachable("Unexpected operation");
 
@@ -857,11 +877,11 @@ struct TritonGENBlockIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
                   ConversionPatternRewriter &rewriter) const override {
     Value res;
     if (isa<TritonGEN::BlockIdXOp>(op))
-      res = rewrite(op, "_Z12get_group_idj", 0, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_group_idj", 0, rewriter);
     else if (isa<TritonGEN::BlockIdYOp>(op))
-      res = rewrite(op, "_Z12get_group_idj", 1, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_group_idj", 1, rewriter);
     else if (isa<TritonGEN::BlockIdZOp>(op))
-      res = rewrite(op, "_Z12get_group_idj", 2, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z12get_group_idj", 2, rewriter);
     else
       llvm_unreachable("Unexpected operation");
 
@@ -892,11 +912,11 @@ struct TritonGENBlockDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
                   ConversionPatternRewriter &rewriter) const override {
     Value res;
     if (isa<TritonGEN::BlockDimXOp>(op))
-      res = rewrite(op, "_Z14get_local_sizej", 0, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_local_sizej", 0, rewriter);
     else if (isa<TritonGEN::BlockDimYOp>(op))
-      res = rewrite(op, "_Z14get_local_sizej", 1, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_local_sizej", 1, rewriter);
     else if (isa<TritonGEN::BlockDimZOp>(op))
-      res = rewrite(op, "_Z14get_local_sizej", 2, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_local_sizej", 2, rewriter);
     else
       llvm_unreachable("Unexpected operation");
 
@@ -927,11 +947,11 @@ struct TritonGENGridDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
                   ConversionPatternRewriter &rewriter) const override {
     Value res;
     if (isa<TritonGEN::GridDimXOp>(op))
-      res = rewrite(op, "_Z14get_num_groupsj", 0, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_num_groupsj", 0, rewriter);
     else if (isa<TritonGEN::GridDimYOp>(op))
-      res = rewrite(op, "_Z14get_num_groupsj", 1, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_num_groupsj", 1, rewriter);
     else if (isa<TritonGEN::GridDimZOp>(op))
-      res = rewrite(op, "_Z14get_num_groupsj", 2, rewriter);
+      res = FuncCallLowering::rewrite(op, "_Z14get_num_groupsj", 2, rewriter);
     else
       llvm_unreachable("Unexpected operation");
 
@@ -989,10 +1009,8 @@ struct TritonGENBarrierLowering
     auto argType = rewriter.getIntegerType(32);
     auto arg = LLVM::createConstantI32(op->getLoc(), rewriter, MemFence::Local);
 
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
-
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::Convergent, std::nullopt}}, ctx);
     LLVM::CallOp callOp = createDeviceFunctionCall(
         rewriter, "_Z7barrierj", {retType}, {argType}, {arg}, attrs);
     rewriter.replaceOp(op, callOp);
@@ -1022,10 +1040,8 @@ protected:
     for (auto arg : args)
       argTypes.push_back(arg.getType());
 
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
-
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::Convergent, std::nullopt}}, ctx);
     LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, funcName, retType,
                                                    argTypes, args, attrs);
     rewriter.replaceOp(op, callOp);
@@ -1068,37 +1084,19 @@ struct TritonGENNamedBarrierSignalLowering
   LogicalResult
   matchAndRewrite(TritonGEN::NamedBarrierSignalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    MLIRContext *ctx = rewriter.getContext();
-    Location loc = op->getLoc();
-
     Value barrierId = op.getBarrierId();
     Value threadGroupCount = op.getThreadGroupCount();
-
-    llvm::LLVMContext llvmContext;
-    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-    llvm::Type *barrierTy = typeTranslator.translateType(barrierId.getType());
-    llvm::Type *threadGroupCountTy =
-        typeTranslator.translateType(threadGroupCount.getType());
-    std::string funcName = llvm::GenISAIntrinsic::getName(
-        llvm::GenISAIntrinsic::GenISA_threadgroupnamedbarriers_signal,
-        {barrierTy, threadGroupCountTy});
-
-    LLVM::LLVMFuncOp funcOp = LLVM::lookupOrCreateFn(
-        moduleOp, funcName, {barrierId.getType(), threadGroupCount.getType()},
-        LLVM::LLVMVoidType::get(ctx));
-    auto convergentAttr =
-        rewriter.getArrayAttr(StringAttr::get(ctx, "convergent"));
-    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    funcOp.setPassthroughAttr(convergentAttr);
-
+    std::string funcName = "llvm.genx.GenISA.threadgroupnamedbarriers.signal." +
+                           getGenISATypeMangling(barrierId.getType()) + "." +
+                           getGenISATypeMangling(threadGroupCount.getType());
+    SmallVector<Type> argTypes{barrierId.getType(), threadGroupCount.getType()};
     SmallVector<Value> args{barrierId, threadGroupCount};
-    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    callOp->setAttr("passthrough", convergentAttr);
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::Convergent, std::nullopt}}, rewriter.getContext());
+    LLVM::CallOp callOp = createDeviceFunctionCall(
+        rewriter, funcName, void_ty(rewriter.getContext()), argTypes, args,
+        attrs);
     rewriter.replaceOp(op, callOp);
-
     return success();
   }
 };
@@ -1111,40 +1109,80 @@ struct TritonGENNamedBarrierWaitLowering
   LogicalResult
   matchAndRewrite(TritonGEN::NamedBarrierWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto moduleOp =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    MLIRContext *ctx = rewriter.getContext();
-    Location loc = op->getLoc();
-
     Value barrierId = op.getBarrierId();
-
-    llvm::LLVMContext llvmContext;
-    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-    llvm::Type *barrierTy = typeTranslator.translateType(barrierId.getType());
-    std::string funcName = llvm::GenISAIntrinsic::getName(
-        llvm::GenISAIntrinsic::GenISA_threadgroupnamedbarriers_wait,
-        {barrierTy});
-
-    LLVM::LLVMFuncOp funcOp =
-        LLVM::lookupOrCreateFn(moduleOp, funcName, {barrierId.getType()},
-                               LLVM::LLVMVoidType::get(ctx));
-    auto convergentAttr =
-        rewriter.getArrayAttr(StringAttr::get(ctx, "convergent"));
-    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    funcOp.setPassthroughAttr(convergentAttr);
-
+    std::string funcName = "llvm.genx.GenISA.threadgroupnamedbarriers.wait." +
+                           getGenISATypeMangling(barrierId.getType());
+    SmallVector<Type> argTypes{barrierId.getType()};
     SmallVector<Value> args{barrierId};
-    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    callOp->setAttr("passthrough", convergentAttr);
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::Convergent, std::nullopt}}, rewriter.getContext());
+    LLVM::CallOp callOp = createDeviceFunctionCall(
+        rewriter, funcName, void_ty(rewriter.getContext()), argTypes, args,
+        attrs);
     rewriter.replaceOp(op, callOp);
-
     return success();
   }
 };
 
+struct TritonSubGroupBase {
+protected:
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, TritonGEN::SubGroupReduceOp, TritonGEN::SubGroupScanOp,
+                TritonGEN::SubGroupShuffleOp>::value>>
+  static Value extend(OpType op, Value val, Type type,
+                      ConversionPatternRewriter &rewriter) {
+    Location loc = op.getLoc();
+    unsigned bitWidth = type.getIntOrFloatBitWidth();
+
+    if constexpr (llvm::is_one_of<OpType, TritonGEN::SubGroupReduceOp,
+                                  TritonGEN::SubGroupScanOp>::value) {
+      if (type.isInteger() && bitWidth < 8)
+        val = zext(i8_ty, val);
+    } else if constexpr (std::is_same_v<OpType, TritonGEN::SubGroupShuffleOp>) {
+      if (bitWidth < 8) {
+        if (!type.isInteger())
+          val = bitcast(val, int_ty(bitWidth));
+        val = zext(i8_ty, val);
+      } else if (isa<BFloat16Type>(type)) {
+        val = bitcast(val, i16_ty);
+      }
+    }
+
+    return val;
+  }
+
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, TritonGEN::SubGroupReduceOp, TritonGEN::SubGroupScanOp,
+                TritonGEN::SubGroupShuffleOp>::value>>
+  static Value truncate(OpType op, Value val, Type type,
+                        ConversionPatternRewriter &rewriter) {
+    Location loc = op.getLoc();
+    unsigned bitWidth = type.getIntOrFloatBitWidth();
+
+    if constexpr (llvm::is_one_of<OpType, TritonGEN::SubGroupReduceOp,
+                                  TritonGEN::SubGroupScanOp>::value) {
+      if (type.isInteger() && bitWidth < 8)
+        val = trunc(type, val);
+      return val;
+    } else if constexpr (std::is_same_v<OpType, TritonGEN::SubGroupShuffleOp>) {
+      if (bitWidth < 8) {
+        val = trunc(int_ty(bitWidth), val);
+        if (!type.isInteger())
+          val = bitcast(val, type);
+      } else if (isa<BFloat16Type>(type)) {
+        val = bitcast(val, type);
+      }
+    }
+
+    return val;
+  }
+};
+
 struct TritonSubGroupReduceLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupReduceOp> {
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupReduceOp>,
+      public TritonSubGroupBase {
   using ConvertOpToLLVMPattern<
       TritonGEN::SubGroupReduceOp>::ConvertOpToLLVMPattern;
 
@@ -1153,20 +1191,27 @@ struct TritonSubGroupReduceLowering
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value val = op.getValue();
-    Type orig_ty = val.getType();
-    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
-      val = zext(i8_ty, val);
-
-    Type val_ty = val.getType();
-    SmallVector<Type> argTypes{val_ty};
+    Type origTy = val.getType();
+    val = TritonSubGroupBase::extend(op, val, origTy, rewriter);
+    Type valTy = val.getType();
+    SmallVector<Type> argTypes{valTy};
     SmallVector<Value> args{val};
     bool useCluster = (getSubgroupSize(op) != op.getSize());
+
+    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
+    const bool useGenISA = env ? (bool)std::atoi(env) : false;
+    if (useGenISA && !useCluster) {
+      Value result = createGenISASubGroupReduce(op, val, rewriter).getResult();
+      result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     std::string fnName = "sub_group_";
-    if (useCluster)
-      fnName += "clustered_";
+    fnName += useCluster ? "clustered_" : "non_uniform_";
     fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
     fnName = "_Z" + std::to_string(fnName.size()) + fnName +
-             intel::getTypeMangling(val_ty);
+             intel::getTypeMangling(valTy);
     if (useCluster) {
       fnName += "j";
       argTypes.push_back(i32_ty);
@@ -1176,49 +1221,79 @@ struct TritonSubGroupReduceLowering
     }
 
     MLIRContext *ctx = rewriter.getContext();
-    intel::AttrBuilder funcAttrBuilder(*ctx);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::Convergent);
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder);
-
-    Value result = createDeviceFunctionCall(rewriter, fnName, val_ty, argTypes,
-                                            args, attrs)
-                       .getResult();
-    if (orig_ty.isInteger() && orig_ty.getIntOrFloatBitWidth() < 8)
-      result = trunc(orig_ty, result);
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::Convergent, std::nullopt}}, ctx);
+    Value result =
+        createDeviceFunctionCall(rewriter, fnName, valTy, argTypes, args, attrs)
+            .getResult();
+    result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
     rewriter.replaceOp(op, result);
     return success();
   }
 };
 
+struct TritonSubGroupScanLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupScanOp>,
+      public TritonSubGroupBase {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubGroupScanOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubGroupScanOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value val = op.getValue();
+    Type origTy = val.getType();
+    val = TritonSubGroupBase::extend(op, op.getValue(), origTy, rewriter);
+    Type valTy = val.getType();
+    SmallVector<Type> argTypes{valTy};
+    SmallVector<Value> args{val};
+
+    std::string fnName = "sub_group_non_uniform_scan_";
+    switch (op.getScanKind()) {
+    case TritonGEN::ScanKind::EXCLUSIVE:
+      fnName += "exclusive_";
+      break;
+    case TritonGEN::ScanKind::INCLUSIVE:
+      fnName += "inclusive_";
+      break;
+    default:
+      llvm_unreachable("unhandled scan kind");
+    };
+
+    fnName += stringifyReduceKind(op.getReduceKind()).str();
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName +
+             intel::getTypeMangling(valTy);
+
+    MLIRContext *ctx = rewriter.getContext();
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::Convergent, std::nullopt}}, ctx);
+
+    Value result =
+        createDeviceFunctionCall(rewriter, fnName, valTy, argTypes, args, attrs)
+            .getResult();
+    result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
+    rewriter.replaceOp(op, result);
+
+    return success();
+  }
+};
+
 struct TritonSubGroupShuffleLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupShuffleOp> {
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupShuffleOp>,
+      public TritonSubGroupBase {
   using ConvertOpToLLVMPattern<
       TritonGEN::SubGroupShuffleOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(TritonGEN::SubGroupShuffleOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
     Value val = op.getValue();
-    Value mask = op.getMask();
-    TritonGEN::ShflKind kind = op.getKind();
-    Type orig_type = val.getType();
-    unsigned bits = orig_type.getIntOrFloatBitWidth();
-    if (bits < 8) {
-      if (!orig_type.isInteger())
-        val = bitcast(val, int_ty(bits));
-      val = zext(i8_ty, val);
-    } else if (isa<BFloat16Type>(orig_type)) {
-      val = bitcast(val, i16_ty);
-    }
-    Value result = createSubGroupShuffle(rewriter, val, mask, kind).getResult();
-    if (bits < 8) {
-      result = trunc(int_ty(bits), result);
-      if (!orig_type.isInteger())
-        result = bitcast(result, orig_type);
-    } else if (isa<BFloat16Type>(orig_type)) {
-      result = bitcast(result, orig_type);
-    }
+    auto origTy = val.getType();
+    val = TritonSubGroupBase::extend(op, op.getValue(), origTy, rewriter);
+    Value result =
+        createSubGroupShuffle(rewriter, val, op.getMask(), op.getKind())
+            .getResult();
+    result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -1307,18 +1382,15 @@ struct TritonMatrix2DBlockStoreLowering
                             op.getBaseHeight(), op.getBasePitch(),
                             byteCoord,          storeValPtr};
 
-    intel::AttrBuilder funcAttrBuilder(*context);
-    intel::AttrBuilder param0AttrBuilder(*context);
-    intel::AttrBuilder param5AttrBuilder(*context);
-    funcAttrBuilder.addPassthroughAttribute(llvm::Attribute::NoUnwind);
-    param0AttrBuilder.addAttribute(llvm::Attribute::NonNull);
-    param0AttrBuilder.addAttribute(llvm::Attribute::WriteOnly);
-    param5AttrBuilder.addAttribute(llvm::Attribute::NonNull);
-    param5AttrBuilder.addAttribute(llvm::Attribute::ReadOnly);
-    std::vector<NamedAttrList> paramAttrs(argTypes.size());
-    paramAttrs[0] = param0AttrBuilder.getAttributes();
-    paramAttrs[5] = param5AttrBuilder.getAttributes();
-    intel::AttributeList attrs = getAttrList(funcAttrBuilder, paramAttrs);
+    MLIRContext *ctx = rewriter.getContext();
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::NoUnwind, std::nullopt}}, ctx);
+    SmallVector<NamedAttrList> paramAttrs(argTypes.size());
+    paramAttrs[0] = createParameterAttributes(
+        {llvm::Attribute::NonNull, llvm::Attribute::WriteOnly}, ctx);
+    paramAttrs[5] = createParameterAttributes(
+        {llvm::Attribute::NonNull, llvm::Attribute::ReadOnly}, ctx);
+    attrs.addParamAttributes(paramAttrs);
 
     LLVM::CallOp call = createDeviceFunctionCall(
         rewriter, fnName, void_ty(context), argTypes, args, attrs);
@@ -1416,10 +1488,10 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
       TritonGENSplitBarrierSignalLowering, TritonGENSplitBarrierWaitLowering,
       TritonGENNamedBarrierSignalLowering, TritonGENNamedBarrierWaitLowering,
-      TritonSubGroupReduceLowering, TritonSubGroupShuffleLowering,
-      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering>(
-      converter);
+      TritonSubGroupReduceLowering, TritonSubGroupScanLowering,
+      TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
+      TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+      TritonMatrix2DBlockPrefetchLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {

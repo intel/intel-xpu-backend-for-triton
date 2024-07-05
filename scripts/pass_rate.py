@@ -76,9 +76,14 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
         except FileNotFoundError:
             pass
         stats.fixme += len(testsuite_fixme_tests)
-    deselected = get_deselected(report_path)
-    stats.skipped += deselected
-    stats.total += deselected
+
+    test_unskip = os.getenv('TEST_UNSKIP')
+    if test_unskip not in ('true', 'false'):
+        raise ValueError('Error: please set TEST_UNSKIP true or false')
+    if test_unskip == 'false':
+        deselected = get_deselected(report_path)
+        stats.skipped += deselected
+        stats.total += deselected
     stats.passed = stats.total - stats.failed - stats.skipped - stats.xfailed
     return stats
 
