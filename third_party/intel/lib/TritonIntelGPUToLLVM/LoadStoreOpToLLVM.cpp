@@ -697,13 +697,13 @@ struct StoreOpConversion
     Value basePitch = mul(rowStride, elemSizeInBytes);
 
     // A warp stride for the replicates.
-    auto repClusterShape = dpasLayout.getShapeC();
-    int outerDimWarpNum =
-        std::min<int>(warpsPerCTA[0],
-                      mlir::ceil<unsigned>(tensorShape[0], repClusterShape[0]));
-    int innerDimWarpNum =
-        std::min<int>(warpsPerCTA[1],
-                      mlir::ceil<unsigned>(tensorShape[1], repClusterShape[1]));
+    SmallVector<unsigned> repClusterShape = dpasLayout.getShapeC();
+    unsigned outerDimWarpNum = std::min<unsigned>(
+        warpsPerCTA[0],
+        mlir::ceil<unsigned>(tensorShape[0], repClusterShape[0]));
+    unsigned innerDimWarpNum = std::min<unsigned>(
+        warpsPerCTA[1],
+        mlir::ceil<unsigned>(tensorShape[1], repClusterShape[1]));
     Value outerDimWarpId = urem(multiDimWarpId[0], i32_val(outerDimWarpNum));
     Value innerDimWarpId = urem(multiDimWarpId[1], i32_val(innerDimWarpNum));
     int64_t numRepOuter = numReps[0];
@@ -721,7 +721,7 @@ struct StoreOpConversion
     Value warpId0Offset = add(dimWarpId0, offsetBaseY);
     Value warpId1Offset = add(dimWarpId1, offsetBaseX);
 
-    auto repCluster = dpasLayout.getRepCluster();
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     unsigned valOffset = 0;
     for (int m = 0; m < numRepOuter; ++m) {
       for (int n = 0; n < numRepInner; ++n) {
