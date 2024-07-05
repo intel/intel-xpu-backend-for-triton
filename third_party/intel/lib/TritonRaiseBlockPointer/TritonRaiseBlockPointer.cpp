@@ -26,7 +26,7 @@ constexpr unsigned shapeAndStridesBitwidth = 64;
 
 std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
   if (ofr.is<Attribute>() && isa<IntegerAttr>(ofr.get<Attribute>()))
-    return dyn_cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
+    return cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
   return std::nullopt;
 }
 
@@ -55,26 +55,18 @@ std::optional<int64_t> getFoldedConstantValue(Operation *op) {
     return intAttr.value();
   }
 
-  auto val = dyn_cast<Value>(results[0]);
-  assert(val);
+  auto val = cast<Value>(results[0]);
   auto constOp = val.getDefiningOp<arith::ConstantOp>();
   if (!constOp)
     return std::nullopt;
 
-  intAttr = getIntAttr(constOp.getValue());
-  if (intAttr.has_value()) {
-    return intAttr.value();
-  }
-  return std::nullopt;
+  return getIntAttr(constOp.getValue());
 }
 
 // return true if the `val` value is a constant containing a value equal to zero
-bool hasConstZero(const Value val) {
+bool hasConstZero(Value val) {
   auto intVal = getFoldedConstantValue(val.getDefiningOp());
-  if (intVal.has_value()) {
-    return (intVal.value() == 0);
-  }
-  return false;
+  return (intVal.has_value() && (intVal.value() == 0));
 }
 
 // Data structure used to decode pointer arithmetics. Offsets, sizes, and
@@ -122,14 +114,7 @@ struct PtrState {
     // When PtrState describes a non-block pointer, shape field indicates how
     // address wraps around. As a result, a constant 0 indicates no wrap around
     // (i.e. modulo) for the dimension.
-    SmallVector<OpFoldResult> results;
-    Operation *op = shape[dim].getDefiningOp();
-    auto intVal = getFoldedConstantValue(op);
-    if (intVal.has_value()) {
-      return (intVal.value() != 0);
-    }
-
-    return true;
+    return !hasConstZero(shape[dim]);
   }
 
   // @return true if addresses wrap around in any of the pointer dimension.
@@ -177,18 +162,14 @@ struct PtrState {
       return failure();
     }
 
-    if (lhsState.hasModulo() || rhsState.hasModulo()) {
-      // visitOperandSplat and visitOperandExpandDims should enforce below
-      assert(lhsState.getRank() <= 2);
-    }
+    assert(
+        !(lhsState.hasModulo() || rhsState.hasModulo()) ||
+        (lhsState.getRank() <= 2) &&
+            "cannot have rank > 2 if operand one of the operands has a modulo");
 
     // dealing with modulo:
     // - If lhs has no modulo, skip
     // - If rhs has zero offset on dim i, we can just use lhs's modulo
-    // - If i == 0 and rhs is the result of a splat, we will allow the add. This
-    // is because the user may be trying to express adding a constant offset to
-    // increment dim1, but pointer analysis cannot differentiate dim1 vs dim0 in
-    // this case.
     // - Else, the analysis fails
 
     // An example for the 3rd condition above can look like:
@@ -217,19 +198,6 @@ struct PtrState {
         shape.push_back(lhs->shape[i]);
       } else if (hasConstZero(rhs->offsets[i])) {
         shape.push_back(lhs->shape[i]);
-      } else if (i == 0 && lhs->getRank() == 2 && rhs->scalar) {
-        shape.push_back(lhs->shape[1]);
-        shape.push_back(lhs->shape[0]);
-        op->emitWarning(
-            "TritonRaiseBlockPointer: allowing adding pointer state with "
-            "modulo in dim 0 to "
-            "another pointer state with offset in dim 0.\nPlease verify the "
-            "operand that contains a scalar is meant to increment pointers in "
-            "dim1. If that is not the case it WILL LEAD TO WRONG COMPILATION "
-            "RESULTS.\n\nTo avoid this warning, use expand_dims (instead of "
-            "splat) to explicitly specify which dimension contains the "
-            "scalar.");
-        break;
       } else {
         op->emitRemark("TritonRaiseBlockPointer: do not support adding to "
                        "operand with modulo");
@@ -517,7 +485,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
   assert(state.isEmpty() && "state is a return argument");
 
   PtrState rhsState;
-  if (visitOperand(remOp.getRhs(), rhsState, loc, builder).failed()) {
+  if (failed(visitOperand(remOp.getRhs(), rhsState, loc, builder))) {
     return failure();
   }
 
@@ -528,7 +496,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
     return failure();
   }
 
-  if (visitOperand(remOp.getLhs(), state, loc, builder).failed()) {
+  if (failed(visitOperand(remOp.getLhs(), state, loc, builder))) {
     return failure();
   }
 
@@ -562,8 +530,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
       state.shape[0] = rhsState.scalar;
     } else {
       remOp->emitRemark("TritonRaiseBlockPointer: taking modulo on a 2D tensor "
-                        "with no singleton "
-                        "dimension not supported");
+                        "with no singleton dimension not supported");
       return failure();
     }
   } else {

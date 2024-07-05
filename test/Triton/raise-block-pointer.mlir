@@ -239,10 +239,10 @@ tt.func @test_addptr_broadcast_rank_3(%arg0 : !tt.ptr<f32>) -> tensor<128x2x128x
 
 
 // CHECK:         tt.func public @wrap_side_by_side_masked([[PARAM_0_:%.+]]: !tt.ptr<f32>, [[PARAM_1_:%.+]]: !tt.ptr<f32>, [[PARAM_2_:%.+]]: i32, [[PARAM_3_:%.+]]: i32, [[PARAM_4_:%.+]]: i32, [[PARAM_5_:%.+]]: i32, [[PARAM_6_:%.+]]: i32) {
-// CHECK:       [[CST_6_i32:%.+]] = arith.constant 6 : i32
-// CHECK:       [[CST_0_i64:%.+]] = arith.constant 0 : i64
-// CHECK:       [[CST_0_i32:%.+]] = arith.constant 0 : i32
-// CHECK:       [[CST_2_i32:%.+]] = arith.constant 2 : i32
+// CHECK-DAG:   [[CST_6_i32:%.+]] = arith.constant 6 : i32
+// CHECK-DAG:   [[CST_0_i64:%.+]] = arith.constant 0 : i64
+// CHECK-DAG:   [[CST_0_i32:%.+]] = arith.constant 0 : i32
+// CHECK-DAG:   [[CST_2_i32:%.+]] = arith.constant 2 : i32
 // CHECK:       [[VAR_1_:%.+]] = arith.index_cast [[PARAM_3_]] : i32 to index
 // CHECK:       [[VAR_2_:%.+]] = arith.index_cast [[VAR_1_]] : index to i64
 // CHECK:       [[VAR_3_:%.+]] = arith.muli [[PARAM_3_]], [[CST_2_i32]] : i32
@@ -263,13 +263,13 @@ tt.func @test_addptr_broadcast_rank_3(%arg0 : !tt.ptr<f32>) -> tensor<128x2x128x
 // CHECK:       tt.return
 module {
 tt.func public @wrap_side_by_side_masked(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32) {
-    %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
     %c2_i32 = arith.constant 2 : i32
+    %c4_i32 = arith.constant 4 : i32
     %cst_0 = arith.constant dense<2> : tensor<4x1xi32>
     %cst_1 = arith.constant dense<6> : tensor<4xi32>
     %cst_2 = arith.constant dense<2> : tensor<4xi32>
-    %c4_i32 = arith.constant 4 : i32
     %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
     %1 = arith.addi %0, %cst_2 : tensor<4xi32>
     %2 = arith.addi %0, %cst_1 : tensor<4xi32>
@@ -310,10 +310,10 @@ tt.func public @wrap_side_by_side_masked(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32
 }
 
 // CHECK:       tt.func public @wrap_stacked_masked_loop([[PARAM_0_:%.+]]: !tt.ptr<f32>, [[PARAM_1_:%.+]]: !tt.ptr<f32>, [[PARAM_2_:%.+]]: i32, [[PARAM_3_:%.+]]: i32, [[PARAM_4_:%.+]]: i32, [[PARAM_5_:%.+]]: i32, [[PARAM_6_:%.+]]: i32) {
-// CHECK:       [[CST_3_i32:%.+]] = arith.constant 3 : i32
-// CHECK:       [[CST_2_i32:%.+]] = arith.constant 2 : i32
-// CHECK:       [[CST_0_i64:%.+]] = arith.constant 0 : i64
-// CHECK:       [[CST_0_i32:%.+]] = arith.constant 0 : i32
+// CHECK-DAG:   [[CST_3_i32:%.+]] = arith.constant 3 : i32
+// CHECK-DAG:   [[CST_2_i32:%.+]] = arith.constant 2 : i32
+// CHECK-DAG:   [[CST_0_i64:%.+]] = arith.constant 0 : i64
+// CHECK-DAG:   [[CST_0_i32:%.+]] = arith.constant 0 : i32
 // CHECK:       [[VAR_0_:%.+]] = arith.index_cast [[PARAM_2_]] : i32 to index
 // CHECK:       [[VAR_1_:%.+]] = arith.index_cast [[PARAM_3_]] : i32 to index
 // CHECK:       [[VAR_2_:%.+]] = arith.index_cast [[VAR_1_]] : index to i64
@@ -334,13 +334,13 @@ tt.func public @wrap_side_by_side_masked(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32
 // CHECK:       tt.return
 module {
   tt.func public @wrap_stacked_masked_loop(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32) {
-    %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
     %c2_i32 = arith.constant 2 : i32
+    %c4_i32 = arith.constant 4 : i32
     %cst_0 = arith.constant dense<3> : tensor<1x4xi32>
     %cst_1 = arith.constant dense<3> : tensor<4xi32>
     %cst_2 = arith.constant dense<2> : tensor<4xi32>
-    %c4_i32 = arith.constant 4 : i32
     %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
     %1 = arith.addi %0, %cst_2 : tensor<4xi32>
     %2 = tt.splat %arg2 : i32 -> tensor<4xi32>
