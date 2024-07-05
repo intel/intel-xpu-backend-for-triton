@@ -94,6 +94,48 @@ module attributes {
 
 // -----
 
+module attributes {
+  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
+} {
+  llvm.func @triton_gen.sub_group_scan() {
+    // CHECK-LABEL: triton_gen.sub_group_scan
+    %0 = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: triton_gen.sub_group_scan add %0 {kind = exclusive} : i32
+    %1 = triton_gen.sub_group_scan add %0 {kind = exclusive} : i32
+    // CHECK: triton_gen.sub_group_scan mul %0 {kind = exclusive} : i32
+    %2 = triton_gen.sub_group_scan mul %0 {kind = exclusive} : i32
+    // CHECK: triton_gen.sub_group_scan min %0 {kind = exclusive} : i32
+    %3 = triton_gen.sub_group_scan min %0 {kind = exclusive} : i32
+    // CHECK: triton_gen.sub_group_scan max %0 {kind = exclusive} : i32
+    %4 = triton_gen.sub_group_scan max %0 {kind = exclusive} : i32
+    // CHECK: triton_gen.sub_group_scan and %0 {kind = exclusive} : i32
+    %5 = triton_gen.sub_group_scan and %0 {kind = exclusive} : i32
+    // CHECK: triton_gen.sub_group_scan or %0 {kind = exclusive} : i32
+    %6 = triton_gen.sub_group_scan or %0 {kind = exclusive} : i32
+    // CHECK: triton_gen.sub_group_scan xor %0 {kind = exclusive} : i32
+    %7 = triton_gen.sub_group_scan xor %0 {kind = exclusive} : i32
+
+    // CHECK: triton_gen.sub_group_scan add %0 {kind = inclusive} : i32
+    %8 = triton_gen.sub_group_scan add %0 {kind = inclusive} : i32
+    // CHECK: triton_gen.sub_group_scan mul %0 {kind = inclusive} : i32
+    %9 = triton_gen.sub_group_scan mul %0 {kind = inclusive} : i32
+    // CHECK: triton_gen.sub_group_scan min %0 {kind = inclusive} : i32
+    %10 = triton_gen.sub_group_scan min %0 {kind = inclusive} : i32
+    // CHECK: triton_gen.sub_group_scan max %0 {kind = inclusive} : i32
+    %11 = triton_gen.sub_group_scan max %0 {kind = inclusive} : i32
+    // CHECK: triton_gen.sub_group_scan and %0 {kind = inclusive} : i32
+    %12 = triton_gen.sub_group_scan and %0 {kind = inclusive} : i32
+    // CHECK: triton_gen.sub_group_scan or %0 {kind = inclusive} : i32
+    %13 = triton_gen.sub_group_scan or %0 {kind = inclusive} : i32
+    // CHECK: triton_gen.sub_group_scan xor %0 {kind = inclusive} : i32
+    %14 = triton_gen.sub_group_scan xor %0 {kind = inclusive} : i32
+
+    llvm.return
+  }
+}
+
+// -----
+
 llvm.func @triton_gen.sub_group_shuffle() {
   // CHECK-LABEL: triton_gen.sub_group_shuffle
   %0 = llvm.mlir.constant(0 : i32) : i32

@@ -40,7 +40,11 @@ WORKDIR $HOME
 
 SHELL ["/bin/bash", "-xec"]
 
-# TODO: install only necessary components
+RUN \
+   mkdir -p ~/.local/bin; \
+   curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C ~/.local/bin --strip-components 3 --no-anchored spirv-dis; \
+   spirv-dis --version
+
 RUN \
   curl -sSLO https://registrationcenter-download.intel.com/akdlm/IRC_NAS/6758ce21-bde6-47f8-b4bf-6df4301f187d/l_intel-for-pytorch-gpu-dev_p_0.5.1.40_offline.sh; \
   sh l_intel-for-pytorch-gpu*.sh -a --silent --eula accept; \
