@@ -796,7 +796,7 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
 bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   // Disable 2D block store on LTS.
   if (!storeOp->getParentOfType<ModuleOp>()->hasAttr(
-          "triton_gpu.support_sg_2d_block"))
+          "triton_intel_gpu.support_sg_2d_block"))
     return false;
 
   // If storeOp is a pointer to a tensor, we try to find out if the
@@ -979,8 +979,8 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
-  bool isLTS =
-      convertOp->getParentOfType<ModuleOp>()->hasAttr("triton_gpu.is_lts");
+  bool isLTS = convertOp->getParentOfType<ModuleOp>()->hasAttr(
+      "triton_intel_gpu.is_lts");
   for (Value v : slice) {
     auto layoutIt = layout.find(v);
     assert(layoutIt != layout.end());

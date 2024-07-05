@@ -60,7 +60,7 @@ bool isDivisible(Value value, unsigned divisor) {
 bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch,
                   bool isUsedByStoreOp) {
   if (!op->getParentOfType<ModuleOp>()->hasAttr(
-          "triton_gpu.support_sg_2d_block"))
+          "triton_intel_gpu.support_sg_2d_block"))
     return true;
 
   // Non-PVC device should always remove the tensor pointer
