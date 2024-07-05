@@ -27,6 +27,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/TypeToLLVM.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ModRef.h"
@@ -155,22 +156,22 @@ static LLVM::CallOp createSubGroupShuffle(ConversionPatternRewriter &rewriter,
          cast<IntegerType>(mask.getType()).isInteger(32) &&
          "Expecting mask type to be i32");
 
-  std::string fnName = "";
+  StringRef func;
   switch (kind) {
   case TritonGEN::ShflKind::XOR:
-    fnName = "sub_group_shuffle_xor";
+    func = "sub_group_shuffle_xor";
     break;
   case TritonGEN::ShflKind::UP:
-    fnName = "sub_group_shuffle_up";
+    func = "sub_group_shuffle_up";
     break;
   case TritonGEN::ShflKind::DOWN:
-    fnName = "sub_group_shuffle_down";
+    func = "sub_group_shuffle_down";
     break;
   case TritonGEN::ShflKind::IDX:
-    fnName = "sub_group_shuffle";
+    func = "sub_group_shuffle";
     break;
   }
-  fnName = intel::mangle(fnName, {value.getType()}) + "j";
+  std::string fnName = intel::mangle(func, {value.getType()}) + "j";
 
   intel::AttributeList attrs = createFunctionAttributes(
       {{llvm::Attribute::Convergent, std::nullopt}}, rewriter.getContext());
