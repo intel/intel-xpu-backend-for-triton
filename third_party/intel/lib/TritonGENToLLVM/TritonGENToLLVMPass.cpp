@@ -987,8 +987,7 @@ struct TritonSubGroupReduceLowering
     SmallVector<Value> args{val};
     bool useCluster = (getSubgroupSize(op) != op.getSize());
 
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    const bool useGenISA = env ? (bool)std::atoi(env) : false;
+    const bool useGenISA = std::getenv("TRITONGEN_FORCE_GENISA");
     if (useGenISA && !useCluster) {
       Value result = createGenISASubGroupReduce(op, val, rewriter).getResult();
       result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
@@ -1233,8 +1232,7 @@ struct TritonMatrix2DBlockLoadLowering
     }
 
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    const bool useGenISA = env ? (bool)std::atoi(env) : false;
+    const bool useGenISA = std::getenv("TRITONGEN_FORCE_GENISA");
     if (useGenISA || !isOCLBuiltinAvailable(op)) {
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
@@ -1302,8 +1300,7 @@ struct TritonMatrix2DBlockStoreLowering
   matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    const bool useGenISA = env ? (bool)std::atoi(env) : false;
+    const bool useGenISA = std::getenv("TRITONGEN_FORCE_GENISA");
     if (useGenISA) {
       rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
       return success();
@@ -1373,8 +1370,7 @@ struct TritonMatrix2DBlockPrefetchLowering
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    const bool useGenISA = env ? (bool)std::atoi(env) : false;
+    const bool useGenISA = std::getenv("TRITONGEN_FORCE_GENISA");
     if (useGenISA || !isOCLBuiltinAvailable(op)) {
       rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
       return success();
