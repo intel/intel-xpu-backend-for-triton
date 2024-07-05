@@ -283,7 +283,7 @@ struct TritonRaiseBlockPointer
                 mappedV.getDefiningOp<triton::MakeTensorPtrOp>()) {
 
           if (llvm::any_of(op.getRegionIterArgs()[i].getUsers(),
-                           [&](Operation *user) {
+                           [](Operation *user) {
                              return isa<triton::ExpandDimsOp>(user);
                            })) {
             op->emitRemark("TritonRaiseToBlockPointer: ExpandDims Ops in loops "
@@ -302,7 +302,8 @@ struct TritonRaiseBlockPointer
           // We always use tt.addptr for scalar pointers. If the defininig op is
           // tt.addptr and we have a non-scalar pointer, something must have
           // gone wrong with the pass.
-          assert(!isa<RankedTensorType>(addptrOp.getResult().getType()));
+          assert(!isa<RankedTensorType>(addptrOp.getResult().getType()) &&
+                 "Result type of AddPtrOp must be a tensor!");
           if (succeeded(
                   visitOperandAddptr(addptrOp, state, op.getLoc(), builder))) {
             newInitArgs.push_back(mappedV);
@@ -333,7 +334,8 @@ struct TritonRaiseBlockPointer
       }
 
       if (state.getRank() == 0) {
-        assert(state.scalar);
+        assert(state.scalar &&
+               "The state must have a scalar if its rank is equal to zero");
         // for scalar pointers, the scalar contains the offset and is the only
         // relevant state that could be updated by the loop.
         newInitArgs.push_back(state.scalar);
@@ -379,7 +381,8 @@ struct TritonRaiseBlockPointer
       }
 
       if (state.getRank() == 0) {
-        assert(state.scalar);
+        assert(state.scalar &&
+               "The state must have a scalar if its rank is equal to zero");
         state.scalar = newOp.getRegionIterArgs()[cnt];
         cnt++;
       }
@@ -527,11 +530,7 @@ struct TritonRaiseBlockPointer
     SmallVector<Value> operands;
     for (auto opnd : op->getOperands()) {
       auto mappedV = ptrMap.lookupOrNull(opnd);
-      if (mappedV) {
-        operands.push_back(mappedV);
-      } else {
-        operands.push_back(opnd);
-      }
+      operands.push_back(mappedV ? mappedV : opnd);
     }
 
     // For each of the PtrState recorded in the last step, extract value
