@@ -80,8 +80,10 @@ struct ConvertTritonGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     bool isBlockPtrPathEnabled =
-        mod->hasAttr("triton_intel_gpu.support_sg_2d_block") &&
-        mod->hasAttr("triton_intel_gpu.support_dpas") &&
+        mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                         getSupportSG2DBlockAttrName()) &&
+        mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                         getSupportDPASAttrName()) &&
         mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR");
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
                                                     isBlockPtrPathEnabled);

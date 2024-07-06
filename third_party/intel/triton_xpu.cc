@@ -102,9 +102,13 @@ void init_triton_intel(py::module &&m) {
     if (isLTS)
       mod->setAttr("triton_intel_gpu.is_lts", b.getUnitAttr());
     if (supportSG2DBlock)
-      mod->setAttr("triton_intel_gpu.support_sg_2d_block", b.getUnitAttr());
+      mod->setAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
+                       getSupportSG2DBlockAttrName(),
+                   b.getUnitAttr());
     if (supportDPAS)
-      mod->setAttr("triton_intel_gpu.support_dpas", b.getUnitAttr());
+      mod->setAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
+                       getSupportDPASAttrName(),
+                   b.getUnitAttr());
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {
