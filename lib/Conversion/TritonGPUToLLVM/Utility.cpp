@@ -317,8 +317,9 @@ bool emitTransferBetweenRegistersAndShared(
   std::optional<LinearLayout> sharedLayout = triton::gpu::toLinearLayout(
       shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
   if (!regLayout.has_value() || !sharedLayout.has_value()) {
-    llvm::errs() << "regLayout.has_value is " << regLayout.has_value() <<
-      " sharedLayout.has_value is " << sharedLayout.has_value() << "\n";
+    llvm::errs() << "regLayout.has_value is " << regLayout.has_value()
+                 << " sharedLayout.has_value is " << sharedLayout.has_value()
+                 << "\n";
     return false;
   }
   auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());

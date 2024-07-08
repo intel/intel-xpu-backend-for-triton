@@ -731,8 +731,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 
 inline SmallVector<Value>
 loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
-                        Type elemTy, Location loc,
-                        RewriterBase &rewriter,
+                        Type elemTy, Location loc, RewriterBase &rewriter,
                         const TargetInfoBase &target, bool allowLLs = true) {
 
   auto dstTy = cast<RankedTensorType>(dst.getType());
@@ -742,14 +741,14 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
   auto dstDistributedLayout = dstTy.getEncoding();
   llvm::errs() << "dstDistributedLayout: " << dstDistributedLayout << "\n";
   if (allowLLs) {
-    //if (auto mmaLayout = dyn_cast<DpasEncodingAttr>(dstDistributedLayout)) {
-    //  assert(false &&
-    //       "ConvertLayout Shared->DPAS is not supported yet");
-    //}
+    // if (auto mmaLayout = dyn_cast<DpasEncodingAttr>(dstDistributedLayout)) {
+    //   assert(false &&
+    //        "ConvertLayout Shared->DPAS is not supported yet");
+    // }
     llvm::errs() << "loadSharedToRegisters\n";
     std::optional<SmallVector<Value>> llVals =
-        loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemTy,
-                                                shrMemObj, loc, rewriter, target);
+        loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemTy, shrMemObj,
+                                                loc, rewriter, target);
     if (llVals.has_value()) {
       return *std::move(llVals);
     }
