@@ -732,13 +732,28 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 inline SmallVector<Value>
 loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
                         Type elemTy, Location loc,
-                        ConversionPatternRewriter &rewriter,
-                        const TargetInfoBase &target) {
+                        RewriterBase &rewriter,
+                        const TargetInfoBase &target, bool allowLLs = true) {
+
   auto dstTy = cast<RankedTensorType>(dst.getType());
   auto dstShape = dstTy.getShape();
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
   auto srcTy = cast<MemDescType>(src.getType());
   auto dstDistributedLayout = dstTy.getEncoding();
+  llvm::errs() << "dstDistributedLayout: " << dstDistributedLayout << "\n";
+  if (allowLLs) {
+    //if (auto mmaLayout = dyn_cast<DpasEncodingAttr>(dstDistributedLayout)) {
+    //  assert(false &&
+    //       "ConvertLayout Shared->DPAS is not supported yet");
+    //}
+    llvm::errs() << "loadSharedToRegisters\n";
+    std::optional<SmallVector<Value>> llVals =
+        loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemTy,
+                                                shrMemObj, loc, rewriter, target);
+    if (llVals.has_value()) {
+      return *std::move(llVals);
+    }
+  }
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
            "ConvertLayout Shared->MMAv1 is not supported yet");
