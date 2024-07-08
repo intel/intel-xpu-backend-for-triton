@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: Test suite
+        description: Test suite, all if empty
         type: string
-        default: "all"
+        default: inductor/test_triton_kernels.py
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -106,7 +106,7 @@ jobs:
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
 
           test_cmd="python test/run_test.py --include "
-          if [[ "${{ github.event.inputs.suite }}" == "all" ]]; then
+          if [[ -z "${{ github.event.inputs.suite }}" ]]; then
             for test in $(ls test/inductor | grep test);
             do
               test_cmd="${test_cmd} inductor/$test";
