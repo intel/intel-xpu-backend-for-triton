@@ -12,22 +12,27 @@
 include "mlir/Pass/PassBase.td"
 
 def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
-    let summary = "Annotate the module with attributes used to steer code generation";
-    let description = [{
-        This pass analyze the kernel's workload pattern and annotates the module with
-        attributes that can be used to steer exploitation of HW features of the target
-        device by subsequent transformations.
-        For example, this pass can override the subgroup size (aka warp size) provided
-        by the driver in order to enable lowering 'tt.dot' operations to DPAS instructions.
-    }];
+  let summary = "Annotate the module with attributes used to steer code generation";
+  let description = [{
+    This pass analyze the kernel's workload pattern and annotates the module with
+    attributes that can be used to steer exploitation of HW features of the target
+    device by subsequent transformations.
+    For example, this pass can override the subgroup size (aka warp size) provided
+    by the driver in order to enable lowering 'tt.dot' operations to DPAS instructions.
+  }];
 
-    let dependentDialects = ["mlir::triton::TritonDialect"];
+  let dependentDialects = ["mlir::triton::TritonDialect"];
 
-   let options = [
-       Option<"subgroupSize", "subgroup size",
-              "unsigned", /*default*/"32",
-              "number of threads per subgroup (aka number of threads per warp)">,
-   ];
+  let options = [
+    Option<"target", "target",
+           "std::string", /*default*/"\"\"",
+           "the GPU target, e.g., PVC">,
+    Option<"isLTS", "is-lts", "bool", /*default*/"false",
+           "whether we are using an LTS driver">,
+    Option<"threadsPerWarp", "threads-per-warp",
+           "unsigned", /*default*/"32",
+           "number of threads per warp (aka subgroup size)">,
+  ];
 }
 
 #endif // TRITON_ANNOTATE_MODULE_PASSES

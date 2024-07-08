@@ -33,7 +33,7 @@ def _path_to_binary(binary: str):
     raise RuntimeError(f"Cannot find {binary}")
 
 
-@dataclass(frozen=True)
+@dataclass
 class XPUOptions:
     num_warps: int = 4
     num_ctas: int = 1
@@ -155,21 +155,24 @@ class XPUBackend(BaseBackend):
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
         is_lts = Version(metadata["target"].arch["driver_version"]) == Version("1.3.27642")
+
+        # Annotate module with information required by subsequent transformations.
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, f"xpu:{device_arch}", is_lts, opt.threads_per_warp)
+        pm.run(mod)
+
+        # Overwrite the threads_per_warp option with the module annotation.
+        opt.threads_per_warp = ir.ttgpuir.get_threads_per_warp(mod)
+
+        # Run the TTIR -> TTGIR pass pipeline.
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
         if (not is_lts and os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"):
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt)
 
-        # TTIR -> TTGIR
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
-        # This pass will annotate the module with the threads_per_warp...
-        intel.passes.ttir.add_triton_annotate_module(pm, opt.threads_per_warp)
-        # ... therefore there is not need for this pass to receives the opt.threads_per_warp (TODO remove it from the pass,
-        # or we may pass the option in anyway and just do not overwrite the module attribute if it is different ?).
-        # We need to ensure that the pass itself does not use the opt.threads_per_Warp to steer the transformation.
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
-        intel.set_device_properties(mod, is_lts)
-
-        # optimize TTGIR
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
