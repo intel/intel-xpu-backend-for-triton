@@ -22,7 +22,7 @@ else:
             self.record()
 
         def record(self):
-            self.timestamp = time.time_ns()
+            self.timestamp = time.time_ns() // 1_000_000
 
         def elapsed_time(self, end):
             return end.timestamp - self.timestamp
@@ -155,8 +155,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     for _ in range(5):
         cache.zero_()
         fn()
+        if USE_WALL_TIME:
+            synchronize()
     end_event.record()
-    synchronize()
+    if not USE_WALL_TIME:
+        synchronize()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
