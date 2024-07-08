@@ -753,16 +753,16 @@ struct TritonRaiseBlockPointer
     OpBuilder builder(op);
     if constexpr (isLoad) {
       auto loadOp = builder.create<triton::LoadOp>(
-          op.getLoc(), ptr, op.getMask(), op.getOther(), op.getBoundaryCheck(),
-          op.getPadding(), op.getCache(), op.getEvict(), op.getIsVolatile());
+          op.getLoc(), ptr, op.getBoundaryCheck(), op.getPadding(),
+          op.getCache(), op.getEvict(), op.getIsVolatile());
 
       LLVM_DEBUG(llvm::dbgs() << "creating tt.load: " << loadOp << "\n";);
 
       op.replaceAllUsesWith(loadOp.getResult());
     } else {
       [[maybe_unused]] auto storeOp = builder.create<triton::StoreOp>(
-          op.getLoc(), ptr, op.getValue(), op.getMask(), op.getBoundaryCheck(),
-          op.getCache(), op.getEvict());
+          op.getLoc(), ptr, op.getValue(), op.getBoundaryCheck(), op.getCache(),
+          op.getEvict());
 
       LLVM_DEBUG(llvm::dbgs() << "creating tt.store: " << storeOp << "\n";);
     }
