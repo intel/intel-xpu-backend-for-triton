@@ -36,11 +36,20 @@ DPASAnalysis::Result DPASAnalysis::canUseDPAS() const {
     return Result::False;
 
   // Verify whether the module has the correct number of threads per warp.
+  // Note: if the module doesn't have the warp size attribute, return
+  // Result::Maybe to allow the caller to set warp size.
   DeviceArch arch = getDeviceArch(mod);
-  if (TritonGPUDialect::getThreadsPerWarp(mod) == supportedThreadsPerWarp(arch))
+  Attribute threadsPerWarpAttr =
+      mod->getDiscardableAttr("triton_gpu.threads-per-warp");
+
+  if (!threadsPerWarpAttr)
+    return Result::Maybe;
+
+  unsigned threadsPerWarp = cast<IntegerAttr>(threadsPerWarpAttr).getInt();
+  if (threadsPerWarp == supportedThreadsPerWarp(arch))
     return Result::True;
 
-  return Result::Maybe;
+  return Result::False;
 }
 
 unsigned DPASAnalysis::supportedThreadsPerWarp(DeviceArch arch) {
