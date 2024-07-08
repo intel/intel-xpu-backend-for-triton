@@ -59,7 +59,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           repository: ${{ env.PYTORCH_REPO}}
-          pytorch_ref: ${{ inputs.pytorch_ref }}
+          ref: ${{ inputs.pytorch_ref }}
           torch_xpu_ops_commit: ${{ env.PYTORCH_XPU_OPS_COMMIT_ID }}
 
       - name: Setup Triton
