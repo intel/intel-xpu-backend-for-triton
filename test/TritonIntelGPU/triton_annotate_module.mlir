@@ -2,7 +2,7 @@
 // RUN: triton-opt %s --split-input-file -triton-annotate-module='target=xpu:DEVICE_ARCH.PVC threads-per-warp=32' | FileCheck %s
 
 module {
-  // COM: Ensure that the the 'threads-per-warp' attribute is set according to the option when the kernel doesn't 
+  // COM: Ensure that the the 'threads-per-warp' attribute is set according to the option when the kernel doesn't
   //      contain any 'tt.dot' operation.
   // CHECK: module attributes {triton_gpu.target = "xpu:DEVICE_ARCH.PVC", "triton_gpu.threads-per-warp" = 32 : i32}
   tt.func @kernel() {
