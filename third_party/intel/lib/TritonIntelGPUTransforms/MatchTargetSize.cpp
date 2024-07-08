@@ -606,7 +606,7 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
   if (dotAttrs.count(layout)) {
     return {dotShape.m, dotShape.n};
   } else if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    if (dotAttr.getKWidth() != 0 && dotAttr.getOpIdx() == 1)
+    if (dotAttr.getTranspose() == 1 && dotAttr.getOpIdx() == 1)
       return {dotShape.k, dotShape.n};
   }
 
@@ -899,7 +899,7 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
   unsigned srcDim0 = srcType.getShape()[0];
   unsigned dstDim0 = tType.getShape()[0];
   if (srcDim0 == dstDim0) {
-    Value newOp = b.create<tt::BroadcastOp>(loc, tType, op.getSrc());
+    Value newOp = b.create<ttgi::BroadcastOp>(loc, tType, op.getSrc());
     unsigned num = resType.getShape()[1] / tType.getShape()[1];
     SmallVector<Value> ops(num, newOp);
     auto glue = b.create<ttgi::GlueOp>(loc, resType, ops);
@@ -909,7 +909,7 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
     assert(srcDim0 == 2 * dstDim0);
     auto newTy = RankedTensorType::get({srcDim0, tType.getShape()[1]},
                                        tType.getElementType());
-    auto newOp = b.create<tt::BroadcastOp>(loc, newTy, op.getSrc());
+    auto newOp = b.create<ttgi::BroadcastOp>(loc, newTy, op.getSrc());
     auto extract0 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 0);
     auto extract1 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 1);
     SmallVector<Value> ops{extract0, extract1, extract0, extract1,

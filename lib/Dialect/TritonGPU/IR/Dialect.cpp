@@ -1018,7 +1018,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getShapePerCTATile(
 
 LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
-    unsigned opIdx, Attribute parent, unsigned kWidth) {
+    unsigned opIdx, Attribute parent, unsigned kWidth, unsigned transpose) {
   if (opIdx != 0 && opIdx != 1) {
     return emitError()
            << "triton_gpu.dot_op opIdx paramenter can be 0 or 1, got: "
@@ -1062,15 +1062,18 @@ LogicalResult DotOperandEncodingAttr::verify(
   }
 
   if (auto parentAttr = mlir::dyn_cast<intel::WarpEncodingAttr>(parent)) {
+    if (kWidth != 0)
+      return emitError()
+             << "triton_gpu.dot_op kWidth parameter is not supported "
+                "when the parent is a warp layout";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
-    // intel: parent can be blocked layout
-    // if (kWidth != 0)
-    //   return emitError()
-    //          << "triton_gpu.dot_op kWidth parameter is not supported "
-    //             "when the parent is a blocked layout";
+    if (kWidth != 0)
+      return emitError()
+             << "triton_gpu.dot_op kWidth parameter is not supported "
+                "when the parent is a blocked layout";
     return success();
   }
 

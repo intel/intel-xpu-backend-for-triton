@@ -1276,7 +1276,9 @@ elements along the K dim, or they use all elements of the tensor along the K dim
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    DefaultValuedParameter<"unsigned", "0">:$kWidth
+    DefaultValuedParameter<"unsigned", "0">:$kWidth,
+    // intel specific
+    DefaultValuedParameter<"unsigned", "0">:$transpose
   );
 
   let builders = [
@@ -1286,16 +1288,22 @@ elements along the K dim, or they use all elements of the tensor along the K dim
                      "Type":$eltTy), [{
       NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
       if (!parentAttr || !parentAttr.isAmpere())
-        return $_get(context, opIdx, parent, 0);
+        return $_get(context, opIdx, parent, 0, 0);
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned MMAv2kWidth = 32 / bitwidth;
-      return $_get(context, opIdx, parent, MMAv2kWidth);
+      return $_get(context, opIdx, parent, MMAv2kWidth, 0);
+    }]>,
+    AttrBuilder<(ins "unsigned":$opIdx,
+                     "Attribute":$parent,
+                     "unsigned":$kWidth), [{
+      return $_get(context, opIdx, parent, kWidth, 0);
     }]>
   ];
 
   let assemblyFormat = "`<` `{` struct(params) `}` `>`";
-  let genVerifyDecl = 1;
+  let genVerifyDecl = 0;
   let extraClassDeclaration = extraDistributedDeclaration # [{
+    static ::mlir::LogicalResult verify(::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError, unsigned opIdx, Attribute parent, unsigned kWidth, unsigned transpose = 0);
     SmallVector<unsigned> getContigPerThread() {
       return getSizePerThread();
     };

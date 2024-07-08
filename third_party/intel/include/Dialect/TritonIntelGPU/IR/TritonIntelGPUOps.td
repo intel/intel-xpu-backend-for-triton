@@ -116,4 +116,22 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
   }];
 }
 
+// same as tt.broadcast except that we don't require SameOperandsAndResultEncoding
+def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure,
+                                         SameOperandsAndResultElementType]> {
+    let summary = "broadcast a tensor";
+
+    let description = [{
+      For a given tensor, broadcast changes one or more dimensions with size 1
+      to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.  You cannot
+      change the size of a non-1 dimension.
+    }];
+
+    let arguments = (ins TT_Tensor:$src);
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+}
+
 #endif
