@@ -3,6 +3,10 @@ name: Pytorch inductor tests
 on:
   workflow_dispatch:
     inputs:
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
       suite:
         description: Test suite, all if empty
         type: string
@@ -55,6 +59,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           repository: ${{ env.PYTORCH_REPO}}
+          pytorch_ref: ${{ inputs.pytorch_ref }}
           torch_xpu_ops_commit: ${{ env.PYTORCH_XPU_OPS_COMMIT_ID }}
 
       - name: Setup Triton
@@ -85,12 +90,10 @@ jobs:
       - name: Report environment details
         if: always()
         run: |
-          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
-
           source ./scripts/capture-hw-details.sh --quiet
-
-          cat <<EOF | tee path: pytorch/test/test-reports/.env
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          mkdir -p pytorch/test/test-reports
+          cat <<EOF | tee pytorch/test/test-reports/.env
           TIMESTAMP=$TIMESTAMP
           JOB_NAME=${{ join(matrix.*, '-') }}
           GITHUB_RUN_ID=$GITHUB_RUN_ID
