@@ -297,8 +297,23 @@ struct PtrState {
 
   triton::MakeTensorPtrOp createTTMakeTensorPtrOp(OpBuilder &builder,
                                                   Location loc) {
+
+    SmallVector<Value> newOffsets;
+    SmallVector<Value> newStrides;
+    SmallVector<Value> newShape;
+    for (const auto &[offset, stride, dim] :
+         llvm::zip(offsets, strides, shape)) {
+
+      newOffsets.push_back(getValueOrCreateCastToIndexLike(
+          builder, loc, builder.getI32Type(), offset));
+      newStrides.push_back(getValueOrCreateCastToIndexLike(
+          builder, loc, builder.getI64Type(), stride));
+      newShape.push_back(getValueOrCreateCastToIndexLike(
+          builder, loc, builder.getI64Type(), dim));
+    }
+
     auto op = builder.create<triton::MakeTensorPtrOp>(
-        loc, source, shape, strides, offsets, sizes, order);
+        loc, source, newShape, newStrides, newOffsets, sizes, order);
     LLVM_DEBUG(llvm::dbgs() << "creating tt.make_tensor_ptr:\n" << op << "\n";);
     return op;
   }
