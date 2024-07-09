@@ -148,9 +148,7 @@ public:
 
     auto hasSliceAttr = [](Type type) {
       auto tType = dyn_cast<RankedTensorType>(type);
-      if (tType && isa<ttg::SliceEncodingAttr>(tType.getEncoding()))
-        return true;
-      return false;
+      return tType && isa<ttg::SliceEncodingAttr>(tType.getEncoding());
     };
 
     // Split operations to match the target architecture native shapes.
@@ -162,19 +160,20 @@ public:
       types.append(resultTypes);
 
       if (llvm::none_of(types, [this](Type type) { return isCandidate(type); }))
-        ;
-      else if (isa<scf::ForOp, scf::YieldOp>(op))
-        ;
+        return WalkResult::advance();
+      if (isa<scf::ForOp, scf::YieldOp>(op))
+        return WalkResult::advance();
+      if (auto expand = dyn_cast<tt::ExpandDimsOp>(op))
+        return WalkResult::advance();
+
       // FIXME: hack it for now
-      else if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op))
+      if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op))
         convert.getResult().replaceAllUsesWith(convert.getSrc());
       else if (auto reduce = dyn_cast<tt::ReduceOp>(op))
         transformReduceOp(reduce);
       else if (op->getNumResults() == 1 &&
                hasSliceAttr(op->getResultTypes()[0]))
-        ;
-      else if (auto expand = dyn_cast<tt::ExpandDimsOp>(op))
-        ;
+        return WalkResult::advance();
       else if (auto cstOp = dyn_cast<arith::ConstantOp>(op)) {
         recordRootSubSize(cstOp.getResult().getType());
         transformArithConstantOp(cstOp);
@@ -185,10 +184,9 @@ public:
         transformDotOp(dot);
       else if (auto bc = dyn_cast<tt::BroadcastOp>(op))
         transformBroadcastOp(bc);
-      // arith,math,tt.advance,tt.load,tt.store,tt.prefetch
-      // tt.splat
       else
         transformGenericOp(op);
+
       return WalkResult::advance();
     });
 

@@ -88,32 +88,30 @@ namespace mlir::triton::gpu::intel {
 
 LogicalResult GlueOp::verify() {
   SmallVector<Type> inputTypes;
-  for (auto input : getOperands())
+  for (Value input : getOperands())
     inputTypes.push_back(input.getType());
-  Type inputType = inputTypes[0];
-  Type resultType = getRes().getType();
 
+  Type inputType = inputTypes.front();
+  Type resultType = getRes().getType();
   if (!llvm::all_of(inputTypes, [&](Type type) { return type == inputType; }))
     return emitOpError("operands must have the same type");
+
   if (!isTensorOrTensorPointerType(inputType))
     return success();
-  else {
-    unsigned resultRank = getRank(resultType);
-    unsigned operandRank = getRank(inputType);
-    if (operandRank != resultRank)
-      return success();
-  }
 
-  /// below check works for tensor related type with same rank
-  /// try to simplify it later
+  unsigned resultRank = getRank(resultType);
+  unsigned operandRank = getRank(inputType);
+  if (operandRank != resultRank)
+    return success();
 
+  /// FIXME: the check below works for tensors with same rank, try to simplify
+  /// it later.
   Type resultElementType = getElementType(resultType);
   if (llvm::any_of(inputTypes, [&](Type type) {
         return getElementType(type) != resultElementType;
       }))
     return emitOpError("operands and result element type must match");
 
-  unsigned resultRank = getRank(resultType);
   if (llvm::any_of(inputTypes, [&](Type type) {
         for (unsigned i = 0; i < resultRank; ++i) {
           unsigned resultSize = getDimSize(resultType, i);
@@ -156,12 +154,11 @@ LogicalResult ExtractOp::verify() {
 
   if (!isTensorOrTensorPointerType(operandType))
     return success();
-  else {
-    unsigned resultRank = getRank(resultType);
-    unsigned operandRank = getRank(operandType);
-    if (operandRank != resultRank)
-      return success();
-  }
+
+  unsigned resultRank = getRank(resultType);
+  unsigned operandRank = getRank(operandType);
+  if (operandRank != resultRank)
+    return success();
 
   /// below check works for tensor related type with same rank
   /// try to simplify it later
