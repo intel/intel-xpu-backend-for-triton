@@ -739,13 +739,7 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
   auto srcTy = cast<MemDescType>(src.getType());
   auto dstDistributedLayout = dstTy.getEncoding();
-  llvm::errs() << "dstDistributedLayout: " << dstDistributedLayout << "\n";
   if (allowLLs) {
-    // if (auto mmaLayout = dyn_cast<DpasEncodingAttr>(dstDistributedLayout)) {
-    //   assert(false &&
-    //        "ConvertLayout Shared->DPAS is not supported yet");
-    // }
-    llvm::errs() << "loadSharedToRegisters\n";
     std::optional<SmallVector<Value>> llVals =
         loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemTy, shrMemObj,
                                                 loc, rewriter, target);
@@ -805,7 +799,9 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                                      Value shrMemBase, Type elemTy,
                                      Location loc,
                                      ConversionPatternRewriter &rewriter,
-                                     const TargetInfoBase &target) {
+                                     const TargetInfoBase &target,
+                                     bool allowLLs = true) {
+
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto srcShape = srcTy.getShape();
   auto rank = srcShape.size();
@@ -813,6 +809,11 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
          rank == 3 && "Unexpected rank of storeDistributedToShared");
   auto dstTy = cast<MemDescType>(dst.getType());
   auto srcDistributedLayout = srcTy.getEncoding();
+  if (allowLLs && storeDistributedToSharedUsingLinearLayouts(
+                      dstTy, srcTy, elemTy, inVals, shrMemBase, dstStrides, loc,
+                      rewriter, target)) {
+    return;
+  }
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
            "ConvertLayout MMAv1->Shared is not supported yet");

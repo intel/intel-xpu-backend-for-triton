@@ -4990,8 +4990,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
 }}
 """
 
-    #x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
-    x = to_triton(np.arange(M * N, dtype=np.float16), device=device)
+    x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
     z = torch.empty_like(x, device=device)
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
@@ -4999,9 +4998,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
         f.flush()
         kernel = triton.compile(f.name, options={'threads_per_warp': THREADS_PER_WARP})
     kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
-    if not torch.equal(z, x):
-        print(x)
-        print(z)
+
     assert torch.equal(z, x)
 
 

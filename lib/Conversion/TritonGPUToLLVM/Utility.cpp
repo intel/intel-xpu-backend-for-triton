@@ -311,15 +311,12 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
-  llvm::errs() << "Start toLinearLayout\n";
+
   std::optional<LinearLayout> regLayout =
       triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   std::optional<LinearLayout> sharedLayout = triton::gpu::toLinearLayout(
       shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
   if (!regLayout.has_value() || !sharedLayout.has_value()) {
-    llvm::errs() << "regLayout.has_value is " << regLayout.has_value()
-                 << " sharedLayout.has_value is " << sharedLayout.has_value()
-                 << "\n";
     return false;
   }
   auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
@@ -354,12 +351,10 @@ bool emitTransferBetweenRegistersAndShared(
     // offsetX1, ..., offsetXN must all be 0.
     if (!llvm::all_of(ArrayRef(idx).drop_back(1),
                       [&](auto offset) { return offset == 0; })) {
-      llvm::errs() << "There exists non-zero offsetXn\n";
       return false;
     }
     int32_t outBlock = idx.back();
     if (outBlock != inBlock) {
-      llvm::errs() << "outBlock != inBlock\n";
       return false;
     }
   }
@@ -431,7 +426,6 @@ std::optional<SmallVector<Value>> loadSharedToRegistersUsingLinearLayouts(
         }
       });
   if (!success) {
-    llvm::errs() << "emitTransferBetweenRegistersAndShared failed.\n";
     return std::nullopt;
   }
 
