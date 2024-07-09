@@ -89,7 +89,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
   const bool isLTS =
-      op->getParentOfType<ModuleOp>()->hasAttr("triton_gpu.is_lts");
+      op->getParentOfType<ModuleOp>()->hasAttr("triton_intel_gpu.is_lts");
   if (isLTS)
     return false;
   // No horizontal reduce required.

@@ -11,6 +11,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -25,7 +26,8 @@ namespace ttgi = mlir::triton::gpu::intel;
 namespace mlir::triton::gpu::intel {
 
 bool supportDPAS(DotOp op, DeviceArch arch) {
-  if (op->getParentOfType<ModuleOp>()->hasAttr("triton_gpu.is_lts"))
+  if (!op->getParentOfType<ModuleOp>()->hasAttr(
+          TritonIntelGPUDialect::getSupportDPASAttrName()))
     return false;
 
   if (arch == DeviceArch::UNKNOWN)

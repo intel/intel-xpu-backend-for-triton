@@ -98,7 +98,6 @@ class XPUBackend(BaseBackend):
         mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
         self.parse_device_arch = mod.parse_device_arch
         self.properties = self.parse_target(target.arch)
-        self.device_arch = self.properties["device_arch"]
         self.binary_ext = "spv"
 
     def parse_target(self, tgt_prop) -> dict:
@@ -153,16 +152,19 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_ttgir(mod, metadata, opt, device_arch):
+    def make_ttgir(mod, metadata, opt, properties):
         is_lts = Version(metadata["target"].arch["driver_version"]) == Version("1.3.27642")
-        if (not is_lts and os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"):
+        intel.set_device_properties(mod, is_lts, properties["support_cl_sg_2d_block_io"],
+                                    properties["support_cl_sg_matmul_acc"])
+        if (properties["support_cl_sg_2d_block_io"] and properties["support_cl_sg_matmul_acc"]
+                and os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"):
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt)
 
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        device_arch = properties["device_arch"]
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
-        intel.set_device_properties(mod, is_lts)
 
         # optimize TTGIR
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
@@ -236,7 +238,7 @@ class XPUBackend(BaseBackend):
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.device_arch)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata)
 
