@@ -985,6 +985,7 @@ struct TritonSubGroupReduceLowering
     val = TritonSubGroupBase::extend(op, val, origTy, rewriter);
     Type valTy = val.getType();
     SmallVector<Type> argTypes{valTy};
+    SmallVector<bool> argIsUnsigned{false};
     SmallVector<Value> args{val};
     bool useCluster = (getSubgroupSize(op) != op.getSize());
 
@@ -1000,14 +1001,14 @@ struct TritonSubGroupReduceLowering
     std::string fnName = "sub_group_";
     fnName += useCluster ? "clustered_" : "non_uniform_";
     fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
-    fnName = intel::mangle(fnName, valTy);
     if (useCluster) {
-      fnName += "j";
       argTypes.push_back(i32_ty);
+      argIsUnsigned.push_back(true);
       auto size = rewriter.create<LLVM::ConstantOp>(
           loc, i32_ty, static_cast<int>(op.getSize()));
       args.push_back(size);
     }
+    fnName = intel::mangle(fnName, argTypes, argIsUnsigned);
 
     MLIRContext *ctx = rewriter.getContext();
     intel::AttributeList attrs = createFunctionAttributes(
@@ -1097,7 +1098,8 @@ struct TritonSubGroupShuffleLowering
       func = "sub_group_shuffle";
       break;
     }
-    std::string fnName = intel::mangle(func, value.getType()) + "j";
+    std::string fnName = intel::mangle(func, {value.getType(), i32_ty},
+                                       /*isUnsigned=*/{false, true});
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::Convergent, std::nullopt}}, rewriter.getContext());
@@ -1174,10 +1176,10 @@ struct TritonMatrixDPASLowering
                        getNumOperandsPerDword(precisionA));
     if (precisionA == TritonGEN::PrecisionType::TF32)
       fnName += "_f32";
-    
+
     SmallVector<Type> argTypes{aTy, bTy, cTy};
     fnName = intel::mangle(fnName, argTypes);
-    
+
     SmallVector<Value> args{a, b, c};
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::Convergent, std::nullopt}}, rewriter.getContext());

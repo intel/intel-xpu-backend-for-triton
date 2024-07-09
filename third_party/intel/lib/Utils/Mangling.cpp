@@ -3,41 +3,45 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace mlir::triton::gpu::intel {
-std::string getTypeMangling(Type ty) {
+std::string getTypeMangling(Type ty, bool isUnsigned) {
   return TypeSwitch<Type, std::string>(ty)
-      .Case([](VectorType ty) -> std::string {
+      .Case([isUnsigned](VectorType ty) -> std::string {
         return "Dv" + std::to_string(ty.getNumElements()) + "_" +
-               getTypeMangling(ty.getElementType());
+               getTypeMangling(ty.getElementType(), isUnsigned);
       })
       .Case([](Float16Type) -> std::string { return "Dh"; })
       .Case([](Float32Type) -> std::string { return "f"; })
       .Case([](Float64Type) -> std::string { return "d"; })
-      .Case([](IntegerType ty) -> std::string {
+      .Case([isUnsigned](IntegerType ty) -> std::string {
         switch (ty.getWidth()) {
         case 8:
           return "c";
         case 16:
-          return "s";
+          return isUnsigned ? "t" : "s";
         case 32:
-          return "i";
+          return isUnsigned ? "j" : "i";
         case 64:
-          return "l";
+          return isUnsigned ? "m" : "l";
         default:
           llvm_unreachable("unhandled integer type");
         }
       });
 }
 
-std::string mangle(StringRef baseName, ArrayRef<Type> types) {
+std::string mangle(StringRef baseName, ArrayRef<Type> types,
+                   ArrayRef<bool> isUnsigned) {
+  assert((isUnsigned.empty() || isUnsigned.size() == types.size()) &&
+         "Signedness info doesn't match");
   std::string s;
   llvm::raw_string_ostream os(s);
   llvm::SmallDenseMap<Type, unsigned> substitutions;
   os << "_Z" << baseName.size() << baseName;
-  for (Type type : types) {
+  for (auto [idx, type] : llvm::enumerate(types)) {
     auto it = substitutions.find(type);
     if (it != substitutions.end()) {
       os << "S";
@@ -48,7 +52,7 @@ std::string mangle(StringRef baseName, ArrayRef<Type> types) {
     } else {
       if (!type.isIntOrFloat())
         substitutions[type] = substitutions.size();
-      os << getTypeMangling(type);
+      os << getTypeMangling(type, isUnsigned.empty() ? false : isUnsigned[idx]);
     }
   }
   return os.str();
