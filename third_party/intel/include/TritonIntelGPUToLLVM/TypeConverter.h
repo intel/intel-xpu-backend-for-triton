@@ -18,8 +18,7 @@ public:
   using TypeConverter::convertType;
 
   TritonIntelGPUToLLVMTypeConverter(
-      MLIRContext *ctx, LowerToLLVMOptions &option,
-      bool isExperimentalPathEnabled,
+      MLIRContext *ctx, LowerToLLVMOptions &option, bool isLTSDriver,
       const DataLayoutAnalysis *analysis = nullptr);
 };
 

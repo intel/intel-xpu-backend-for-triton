@@ -19,8 +19,6 @@ def TritonIntelGPU_Dialect : Dialect {
   ];
 
   let extraClassDeclaration = [{
-    static llvm::StringRef getSupportSG2DBlockAttrName() { return "triton_intel_gpu.support_sg_2d_block"; }
-    static llvm::StringRef getSupportDPASAttrName() { return "triton_intel_gpu.support_dpas"; }
   }];
 
   let useDefaultAttributePrinterParser = 1;
