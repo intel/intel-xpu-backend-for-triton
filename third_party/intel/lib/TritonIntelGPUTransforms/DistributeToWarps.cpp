@@ -369,7 +369,7 @@ public:
 
       func.walk<WalkOrder::PreOrder>([&](Operation *op) {
         if (!llvm::any_of(op->getResultTypes(),
-                          triton::isTensorOrTensorPointerType))
+                          tt::isTensorOrTensorPointerType))
           return WalkResult::advance();
 
         if (auto forOp = dyn_cast<scf::ForOp>(op))

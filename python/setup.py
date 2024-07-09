@@ -185,7 +185,7 @@ def get_llvm_package_info():
     with open(llvm_hash_path, "r") as llvm_hash_file:
         rev = llvm_hash_file.read(8)
     name = f"llvm-{rev}-{system_suffix}"
-    url = f"https://tritonlang.blob.core.windows.net/llvm-builds/{name}.tar.gz"
+    url = f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz"
     return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
 
 
@@ -342,7 +342,7 @@ class CMakeBuild(build_ext):
 
     def get_proton_cmake_args(self):
         cmake_args = get_thirdparty_packages([get_json_package_info(), get_pybind11_package_info()])
-        cupti_include_dir = get_env_with_keys(["CUPTI_INCLUDE_PATH"])
+        cupti_include_dir = get_env_with_keys(["TRITON_CUPTI_PATH"])
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
         cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
