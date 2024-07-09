@@ -17,10 +17,10 @@ namespace mlir::triton::gpu::intel {
 
 // Used by Triton runtime
 struct ClusterInfo {
-  ClusterInfo() : clusterDimX(1), clusterDimY(1), clusterDimZ(1) {}
-  int clusterDimX;
-  int clusterDimY;
-  int clusterDimZ;
+  ClusterInfo() = default;
+  unsigned clusterDimX = 1u;
+  unsigned clusterDimY = 1u;
+  unsigned clusterDimZ = 1u;
 };
 
 enum class DeviceArch {
