@@ -2,8 +2,10 @@
 #include "../Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
 
+#include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
@@ -28,7 +30,8 @@ public:
         typeConverter(typeConverter), loc(loc), ctx(dpasLayout.getContext()) {}
 
   std::tuple<Type, Type, Type, Type> static getDPASOperandsType(
-      DPASEngineType dpasType, MLIRContext *ctx, DpasEncodingAttr layout) {
+      DPASAnalysis::DPASEngineType dpasType, MLIRContext *ctx,
+      DpasEncodingAttr layout) {
     Type fp32Ty = type::f32Ty(ctx);
     Type fp16Ty = type::f16Ty(ctx);
     Type bf16Ty = type::bf16Ty(ctx);
@@ -44,6 +47,8 @@ public:
     unsigned elemNumA = product<unsigned>(shapeA) / threadsPerWarp;
     SmallVector<unsigned> shapeB = layout.getShapeB();
     unsigned elemNumB = product<unsigned>(shapeB) / threadsPerWarp;
+
+    using DPASEngineType = DPASAnalysis::DPASEngineType;
     switch (dpasType) {
     case DPASEngineType::FP32_FP32_FP16_FP16: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
@@ -138,7 +143,7 @@ public:
 
     unsigned repM = repA[0], repN = repB[1], repK = repA[1];
 
-    auto dpasType = getDPASType(op);
+    auto dpasType = DPASAnalysis::getDPASType(op);
     auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
     Type aTy, bTy, cTy, dTy;
     std::tie(dTy, cTy, aTy, bTy) =

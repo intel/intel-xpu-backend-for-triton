@@ -15,12 +15,6 @@
 
 namespace mlir::triton::gpu::intel {
 
-enum class DeviceArch {
-  UNKNOWN = 0,
-  ATS,
-  PVC,
-};
-
 #define GEN_PASS_DECL
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 

@@ -3,10 +3,14 @@ name: Pytorch inductor tests
 on:
   workflow_dispatch:
     inputs:
-      suite:
-        description: Test suite
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
         type: string
-        default: "all"
+        default: ""
+      suite:
+        description: Test suite, all if empty
+        type: string
+        default: inductor/test_triton_kernels.py
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -20,14 +24,6 @@ env:
   PYTORCH_XPU_OPS_COMMIT_ID: "39522db63ce045f52c9d61a286018c266cd00479"
 
 jobs:
-  print_inputs:
-    name: Print inputs
-    runs-on: Linux
-    steps:
-      - name: Print inputs
-        run: |
-          echo "${{ toJSON(github.event.inputs) }}"
-
   build:
     name: Test
     runs-on:
@@ -37,6 +33,12 @@ jobs:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -53,46 +55,15 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Python build dependencies
-        run: |
-          pip install wheel
-
-      - name: Setup PyTorch without IPEX
+      - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
           repository: ${{ env.PYTORCH_REPO}}
+          ref: ${{ inputs.pytorch_ref }}
           torch_xpu_ops_commit: ${{ env.PYTORCH_XPU_OPS_COMMIT_ID }}
 
-      - name: Generate Triton cache key
-        id: triton-key
-        run: |
-          COMPOSITE_KEY=$(echo $PYTHON_VERSION $LLVM_COMMIT_ID $GITHUB_SHA | sha256sum - | cut -d\  -f1)
-          echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
-
-      - name: Load Triton wheels from a cache
-        id: triton-cache
-        uses: ./.github/actions/load
-        with:
-          path: python/dist
-          key: ${{ steps.triton-key.outputs.key }}
-
-      - name: Build Triton wheels
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        run: |
-          export DEBUG=1
-          cd python
-          python setup.py bdist_wheel
-
-      - name: Install Triton
-        run: |
-          pip install python/dist/*.whl
-
-      - name: Save Triton wheels to a cache
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.triton-cache.outputs.path }}
-          dest: ${{ steps.triton-cache.outputs.dest }}
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
 
       - name: Install python test dependencies
         run: |
@@ -106,7 +77,7 @@ jobs:
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
 
           test_cmd="python test/run_test.py --include "
-          if [[ "${{ github.event.inputs.suite }}" == "all" ]]; then
+          if [[ -z "${{ github.event.inputs.suite }}" ]]; then
             for test in $(ls test/inductor | grep test);
             do
               test_cmd="${test_cmd} inductor/$test";
@@ -119,12 +90,10 @@ jobs:
       - name: Report environment details
         if: always()
         run: |
-          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
-
           source ./scripts/capture-hw-details.sh --quiet
-
-          cat <<EOF | tee path: pytorch/test/test-reports/.env
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          mkdir -p pytorch/test/test-reports
+          cat <<EOF | tee pytorch/test/test-reports/.env
           TIMESTAMP=$TIMESTAMP
           JOB_NAME=${{ join(matrix.*, '-') }}
           GITHUB_RUN_ID=$GITHUB_RUN_ID
