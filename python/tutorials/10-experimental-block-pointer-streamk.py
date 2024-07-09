@@ -37,9 +37,9 @@ def mac_loop(
         # Matrix dimensions
         M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
         stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
-        stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
+        stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Stream-K parameters
-    iters_per_tile, start_iter, end_iter,
+        iters_per_tile, start_iter, end_iter,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
 
@@ -81,8 +81,11 @@ def mac_loop(
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
-                      num_warps=32),
+        triton.Config(
+            {
+                'double_GRF': True, 'threads_per_warp': 16, 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K':
+                32, 'GROUP_SIZE_M': 4
+            }, num_stages=4, num_warps=32),
     ],
     key=['M', 'N', 'K'],
 )
@@ -115,8 +118,11 @@ def first_wave(
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
-                      num_warps=32),
+        triton.Config(
+            {
+                'double_GRF': True, 'threads_per_warp': 16, 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K':
+                32, 'GROUP_SIZE_M': 4
+            }, num_stages=4, num_warps=32),
     ],
     key=['M', 'N', 'K'],
 )
@@ -205,15 +211,14 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
-        streamk_full_tiles, streamk_partial_tiles, iters_per_tile,  #
-        threads_per_warp=16)
+        streamk_full_tiles, streamk_partial_tiles, iters_per_tile)
     full_tiles[(blocking_tiles, )](
         a, b, c,  #
         M, N, K,  #
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
-        streamk_tiles, threads_per_warp=16)
+        streamk_tiles)
 
     return c
 
@@ -222,7 +227,7 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
 # Unit Test
 # ---------
 #
-# Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
+# Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., OneDNN).
 
 torch.manual_seed(0)
 for dtype in [
