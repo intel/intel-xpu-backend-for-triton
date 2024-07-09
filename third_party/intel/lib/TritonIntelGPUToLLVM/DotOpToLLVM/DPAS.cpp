@@ -4,6 +4,7 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/IR/Value.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
@@ -11,8 +12,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu::intel;
-using mlir::triton::gpu::DotOperandEncodingAttr;
-using mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace {
 
@@ -44,6 +43,7 @@ public:
     unsigned elemNumA = product<unsigned>(shapeA) / threadsPerWarp;
     SmallVector<unsigned> shapeB = layout.getDPASInstShapeB();
     unsigned elemNumB = product<unsigned>(shapeB) / threadsPerWarp;
+
     switch (dpasType) {
     case DPASEngineType::FP32_FP32_FP16_FP16: {
       Type cTy = vec_ty(fp32Ty, elemNumC);
@@ -130,15 +130,15 @@ public:
     auto BDpasEncoding =
         cast<triton::gpu::intel::DpasEncodingAttr>(BEncoding.getParent());
 
-    auto repA = ADpasEncoding.getDPASRepetitions(ATensorTy.getShape(),
-                                                 AEncoding.getOpIdx());
-    auto repB = BDpasEncoding.getDPASRepetitions(BTensorTy.getShape(),
-                                                 BEncoding.getOpIdx());
+    SmallVector<int64_t> repA = ADpasEncoding.getDPASRepetitions(
+        ATensorTy.getShape(), AEncoding.getOpIdx());
+    SmallVector<int64_t> repB = BDpasEncoding.getDPASRepetitions(
+        BTensorTy.getShape(), BEncoding.getOpIdx());
     assert(repA[1] == repB[0] && "Unexpected rep for A and B operands");
 
     unsigned repM = repA[0], repN = repB[1], repK = repA[1];
 
-    auto dpasType = getDPASType(op);
+    DPASEngineType dpasType = getDPASType(op);
     auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
     Type aTy, bTy, cTy, dTy;
     std::tie(dTy, cTy, aTy, bTy) =
@@ -171,19 +171,18 @@ public:
     });
 
     auto generateDPASOp = [&](unsigned m, unsigned n, unsigned k) {
-      auto valA = ha.at({m, k});
-      auto valB = hb.at({n, k});
-      auto valc = fc.at({m, n});
+      Value valA = ha.at({m, k});
+      Value valB = hb.at({n, k});
+      Value valc = fc.at({m, n});
 
-      auto pA = TritonGEN::PrecisionTypeAttr::get(A.getContext(), APrecision);
-      auto pB = TritonGEN::PrecisionTypeAttr::get(B.getContext(), BPrecision);
+      TritonGEN::PrecisionTypeAttr pA =
+          TritonGEN::PrecisionTypeAttr::get(A.getContext(), APrecision);
+      TritonGEN::PrecisionTypeAttr pB =
+          TritonGEN::PrecisionTypeAttr::get(B.getContext(), BPrecision);
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
-
-      Value ret = rewriter.create<TritonGEN::MatrixDPASOp>(loc, dTy, valc, valA,
-                                                           valB, pA, pB, RC);
-
-      fc.at({m, n}) = ret;
+      fc.at({m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
+          loc, dTy, valc, valA, valB, pA, pB, RC);
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
@@ -232,9 +231,9 @@ private:
                                               Type elemTy) const {
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     std::vector<Value> elems;
-    for (int m = 0; m < dim0; ++m)
-      for (int k = 0; k < dim1; ++k)
-        for (int repRow = 0; repRow < repCluster[0]; ++repRow)
+    for (int m = 0; m < dim0; ++m) {
+      for (int k = 0; k < dim1; ++k) {
+        for (int repRow = 0; repRow < repCluster[0]; ++repRow) {
           for (int repCol = 0; repCol < repCluster[1]; ++repCol) {
             Value matVal = vals.at(
                 {m * repCluster[0] + repRow, k * repCluster[1] + repCol});
@@ -242,10 +241,12 @@ private:
             Type valTy = vecType.getElementType();
             for (int i = 0; i < vecType.getNumElements(); ++i) {
               Value val = extract_element(valTy, matVal, i32_val(i));
-
               elems.push_back(val);
             }
           }
+        }
+      }
+    }
 
     assert(!elems.empty() &&
            "unexpected empty result in composing the DPAS result.");
@@ -261,8 +262,8 @@ private:
                                                  uint32_t opIdx) const {
     SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
-    unsigned repClusterOuter;
-    unsigned repClusterInner;
+    unsigned repClusterOuter = 0u;
+    unsigned repClusterInner = 0u;
     switch (opIdx) {
     case 0:
       // operand A
@@ -283,13 +284,14 @@ private:
       assert(false && "invalid operand type in lowering");
       break;
     }
-    int offset{};
-    ValueTable vals;
+
     size_t totalElems = elems.size();
     size_t numElemsPerOperand =
         totalElems / ((outer * inner) * (repClusterOuter * repClusterInner));
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
 
+    int offset = 0;
+    ValueTable vals;
     for (int i = 0; i < outer; ++i) {
       for (int j = 0; j < inner; ++j) {
         for (int repOuter = 0; repOuter < repClusterOuter; ++repOuter) {
@@ -306,6 +308,7 @@ private:
         }
       }
     }
+
     return vals;
   }
 
