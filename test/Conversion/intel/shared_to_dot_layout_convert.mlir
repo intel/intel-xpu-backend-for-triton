@@ -22,7 +22,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.target = "xpu:D
 
     // CHECK:         llvm.call spir_funccc @_Z7barrierj
     // COM:   Start of triton_gpu.local_load. Load the value from SLM to register.
-    // CHECK:         %[[WORK_ITEM_ID_:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) 
+    // CHECK:         %[[WORK_ITEM_ID_:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
     // CHECK:         %[[WORK_ITEM_ID:.*]] = llvm.trunc %[[WORK_ITEM_ID_]] : i64 to i32
     // CHECK:         %[[LINEAR_WARP_ID:.*]] = llvm.udiv %[[WORK_ITEM_ID]], %[[CST_16]]  : i32
     // CHECK:         %[[LANE_ID:.*]] = llvm.urem %[[WORK_ITEM_ID]], %[[CST_16]]  : i32
