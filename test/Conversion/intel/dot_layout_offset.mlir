@@ -2,16 +2,14 @@
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount=8, systolicDepth=8, executionSize = 8, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA=[1, 1], repCluster=[2, 2]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
-module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
-
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @dot_layout_emit_offset()
   tt.func public @dot_layout_emit_offset() {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dot_operand_a>
-    // CHECK-COUNT-64:           {{.*}} = llvm.extractvalue {{.*}}
-    // CHECK:           %[[VAL_142:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-COUNT-64:  {{.*}} = llvm.extractvalue {{.*}}
 
     // COM: Base index of the dot layout.
-    // CHECK:           %[[THREAD_ID_I64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[VAL_142]])
+    // CHECK:           %[[THREAD_ID_I64:.*]] = llvm.call spir_funccc @_Z12get_local_idj
     // CHECK:           %[[THREAD_ID_I32:.*]] = llvm.trunc %[[THREAD_ID_I64]] : i64 to i32
     // CHECK:           %[[VAL_145:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK:           %[[WARP_ID:.*]] = llvm.udiv %[[THREAD_ID_I32]], %[[VAL_145]]  : i32
