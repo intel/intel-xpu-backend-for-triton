@@ -4,9 +4,9 @@
 #include "llvm/Support/ErrorHandling.h"
 
 using ValueTable = std::map<std::pair<int, int>, Value>;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::SharedEncodingAttr;
-using ::mlir::triton::gpu::intel::DpasEncodingAttr;
+using mlir::triton::gpu::getShapePerCTA;
+using mlir::triton::gpu::SharedEncodingAttr;
+using mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace {
 
@@ -72,8 +72,6 @@ template <unsigned opIdx>
 SmallVector<Value>
 DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
                                            Value cSwizzleOffset) {
-  SmallVector<Value> offs(numPtrs);
-
   unsigned systolicDepth = dpasLayout.getSystolicDepth();
   unsigned repeatCount = dpasLayout.getRepeatCount();
   unsigned executionSize = dpasLayout.getExecutionSize();
@@ -81,8 +79,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   unsigned threadsPerWarp = getThreadsPerWarp();
 
   Value laneRowIndex, laneColIndex;
-  unsigned rowsPerInst, rowsPerWarp, packedOpsPerLane;
-  unsigned repClusterSize = dpasLayout.getRepCluster()[opIdx];
+  unsigned rowsPerInst = 0u, rowsPerWarp = 0u, packedOpsPerLane = 0u;
   switch (opIdx) {
   case 0: {
     assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
@@ -104,13 +101,13 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
     assert(threadsPerWarp >= executionSize &&
            "DpasEncodingAttr sub-group size could not "
            "be smaller than the execution size for B operand.");
+    packedOpsPerLane = opsPerChannel;
     rowsPerWarp = threadsPerWarp / executionSize;
     rowsPerInst = systolicDepth / rowsPerWarp;
     rowsPerWarp = rowsPerWarp * opsPerChannel;
     laneRowIndex = udiv(laneId, i32_val(executionSize));
     laneRowIndex = mul(laneRowIndex, i32_val(opsPerChannel));
     laneColIndex = urem(laneId, i32_val(executionSize));
-    packedOpsPerLane = opsPerChannel;
   } break;
   }
 
@@ -123,16 +120,19 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   const int maxPhase = sharedLayout.getMaxPhase();
   const int vec = sharedLayout.getVec();
 
-  unsigned index = 0;
   Value rowsPerWarpVal = i32_val(rowsPerWarp);
   Value zeroVal = i32_val(0);
   Value perPhaseVal = i32_val(perPhase);
   Value maxPhaseVal = i32_val(maxPhase);
   Value vecVal = i32_val(vec);
-  auto instShape = opIdx == 0 ? dpasLayout.getDPASInstShapeA()
-                              : dpasLayout.getDPASInstShapeB();
-  auto shareMemoryShape = descTy.getShape();
-  for (int repIdx = 0; repIdx < repClusterSize; ++repIdx) {
+  SmallVector<unsigned> instShape = opIdx == 0 ? dpasLayout.getDPASInstShapeA()
+                                               : dpasLayout.getDPASInstShapeB();
+  ArrayRef<int64_t> shareMemoryShape = descTy.getShape();
+
+  SmallVector<Value> offs(numPtrs);
+  const unsigned repClusterSize = dpasLayout.getRepCluster()[opIdx];
+  unsigned index = 0u;
+  for (unsigned repIdx = 0; repIdx < repClusterSize; ++repIdx) {
     unsigned repIndex = repIdx * instShape[opIdx];
     for (int rowIdx = 0; rowIdx < rowsPerInst; ++rowIdx) {
       Value rowIndex = mul(i32_val(rowIdx), rowsPerWarpVal);
@@ -232,17 +232,16 @@ Type getSharedMemTy(Type argType) {
   MLIRContext *ctx = argType.getContext();
   if (argType.isF16())
     return type::f16Ty(ctx);
-  else if (argType.isBF16())
+  if (argType.isBF16())
     return type::i16Ty(ctx);
-  else if (argType.isF32())
+  if (argType.isF32())
     return type::f32Ty(ctx);
-  else if (argType.getIntOrFloatBitWidth() == 8)
+  if (argType.getIntOrFloatBitWidth() == 8)
     return type::i8Ty(ctx);
-  else if (argType.isF64())
+  if (argType.isF64())
     return type::f64Ty(ctx);
-  else
-    llvm::report_fatal_error(
-        "unsupported data type for the dot layout of DPAS");
+
+  llvm::report_fatal_error("unsupported data type for the dot layout of DPAS");
 }
 
 template <unsigned opIdx>
@@ -310,11 +309,11 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
 
   SmallVector<unsigned> shape;
-  if constexpr (opIdx == 0) {
+  if constexpr (opIdx == 0)
     shape = dpasLayout.getShapeA();
-  } else {
+  else
     shape = dpasLayout.getShapeB();
-  }
+
   SmallVector<int64_t> numReps =
       dpasLayout.getDPASRepetitions(shapePerCTA, opIdx);
 
@@ -323,11 +322,11 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   Value laneId = urem(threadId, warpSize);
 
   SmallVector<Value> multiDimWarpId =
-      mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+      LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
   unsigned ceilRes = mlir::ceil<unsigned>(shapePerCTA[opIdx], shape[opIdx]);
   Value outerWarpDim = urem(multiDimWarpId[opIdx], i32_val(ceilRes));
-  int warpsPerTile = std::min<int>(warpsPerCTA[opIdx], ceilRes);
+  unsigned warpsPerTile = std::min<unsigned>(warpsPerCTA[opIdx], ceilRes);
 
   // Get the function to use to load the operand.
   ValueTable vals;
