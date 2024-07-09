@@ -11,13 +11,14 @@ DPASAnalysis::DPASAnalysis(FunctionOpInterface func)
 
   // Populate the DPAS map.
   func.walk([&](DotOp dotOp) {
-    dpasMap[dotOp] =
+    DPASEngineType dpasEngineType =
         (mod->hasAttr("triton_gpu.is_lts") || arch == DeviceArch::UNKNOWN)
             ? DPASEngineType::NOT_APPLICABLE
             : DPASAnalysis::getDPASType(dotOp);
+    dpasMap[dotOp] = dpasEngineType;
 
     // Only PVC supports TF32.
-    if (dpasMap[dotOp] == DPASEngineType::FP32_FP32_TF32_TF32) {
+    if (dpasEngineType == DPASEngineType::FP32_FP32_TF32_TF32) {
       if (arch != DeviceArch::PVC ||
           dotOp.getInputPrecision() != InputPrecision::TF32)
         dpasMap[dotOp] = DPASEngineType::NOT_APPLICABLE;

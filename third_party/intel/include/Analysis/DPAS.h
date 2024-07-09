@@ -1,10 +1,9 @@
-#ifndef TRITON_ANALYSIS_INTEL_DPAS_H
-#define TRITON_ANALYSIS_INTEL_DPAS_H
+#ifndef TRITON_INTEL_ANALYSIS_DPAS_H
+#define TRITON_INTEL_ANALYSIS_DPAS_H
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include <cstdint>
 
 namespace mlir::triton::gpu::intel {
 
@@ -57,4 +56,4 @@ private:
 
 } // namespace mlir::triton::gpu::intel
 
-#endif // TRITON_ANALYSIS_INTEL_DPAS_H
+#endif // TRITON_INTEL_ANALYSIS_DPAS_H
