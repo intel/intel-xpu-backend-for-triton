@@ -15,6 +15,14 @@
 
 namespace mlir::triton::gpu::intel {
 
+// Used by Triton runtime
+struct ClusterInfo {
+  ClusterInfo() = default;
+  unsigned clusterDimX = 1u;
+  unsigned clusterDimY = 1u;
+  unsigned clusterDimZ = 1u;
+};
+
 #define GEN_PASS_DECL
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
