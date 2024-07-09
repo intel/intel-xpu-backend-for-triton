@@ -13,7 +13,7 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [T
   |OS|Ubuntu [22.04](http://releases.ubuntu.com/22.04/)| [Install Ubuntu](https://ubuntu.com/tutorials)|
   |GPU Card | Intel® Data Center GPU Max, Flex Series or Intel Arc A770 |[Max](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/max-series.html), [Flex](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/flex-series.html), [Arc](https://www.intel.com/content/www/us/en/products/sku/229151/intel-arc-a770-graphics-16gb/specifications.html)|
   |GPU Driver | [Stable 812.26](https://dgpu-docs.intel.com/releases/stable_821_36_20240430.html) or [later](https://dgpu-docs.intel.com/driver/release-streams.html#ubuntu-rolling-stable)|[Install Intel GPU driver](https://dgpu-docs.intel.com/driver/installation.html)|
-  |Toolchain |Intel® oneAPI Toolkit [2024.1.1](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html#collapseCollapsible1714409902509) or later|[Install Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html#collapseCollapsible1714409902509)|
+  |Toolchain |Intel® oneAPI Toolkit [2024.1.2](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html#collapseCollapsible1714409902509) or later|[Install Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html#collapseCollapsible1714409902509)|
 
 <!-- @endcond -->
 
