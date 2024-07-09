@@ -731,13 +731,22 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 
 inline SmallVector<Value>
 loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
-                        Type elemTy, Location loc,
-                        ConversionPatternRewriter &rewriter,
-                        const TargetInfoBase &target) {
+                        Type elemTy, Location loc, RewriterBase &rewriter,
+                        const TargetInfoBase &target, bool allowLLs = true) {
   auto dstTy = cast<RankedTensorType>(dst.getType());
+  auto srcTy = cast<MemDescType>(src.getType());
+
+  if (allowLLs) {
+    std::optional<SmallVector<Value>> llVals =
+        loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemTy, shrMemObj,
+                                                loc, rewriter, target);
+    if (llVals.has_value()) {
+      return *std::move(llVals);
+    }
+  }
+
   auto dstShape = dstTy.getShape();
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
-  auto srcTy = cast<MemDescType>(src.getType());
   auto dstDistributedLayout = dstTy.getEncoding();
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
@@ -791,13 +800,20 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                                      Value shrMemBase, Type elemTy,
                                      Location loc,
                                      ConversionPatternRewriter &rewriter,
-                                     const TargetInfoBase &target) {
+                                     const TargetInfoBase &target,
+                                     bool allowLLs = true) {
   auto srcTy = cast<RankedTensorType>(src.getType());
+  auto dstTy = cast<MemDescType>(dst.getType());
+
+  if (allowLLs && storeDistributedToSharedUsingLinearLayouts(
+                      dstTy, srcTy, elemTy, inVals, shrMemBase, dstStrides, loc,
+                      rewriter, target)) {
+    return;
+  }
+
   auto srcShape = srcTy.getShape();
   auto rank = srcShape.size();
-  assert(rank == 2 ||
-         rank == 3 && "Unexpected rank of storeDistributedToShared");
-  auto dstTy = cast<MemDescType>(dst.getType());
+  assert(rank <= 3 && "Unexpected rank of storeDistributedToShared");
   auto srcDistributedLayout = srcTy.getEncoding();
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
