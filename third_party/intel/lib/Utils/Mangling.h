@@ -14,8 +14,9 @@
 #include <string>
 
 namespace mlir::triton::gpu::intel {
-std::string getTypeMangling(mlir::Type type);
-std::string mangle(llvm::StringRef baseName, llvm::ArrayRef<mlir::Type> types);
+std::string getTypeMangling(mlir::Type type, bool isUnsigned = false);
+std::string mangle(llvm::StringRef baseName, llvm::ArrayRef<mlir::Type> types,
+                   ArrayRef<bool> isUnsigned = {});
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_INTEL_UTILS_MANGLING_H
