@@ -1,10 +1,6 @@
-#include "mlir/IR/Visitors.h"
-#include "mlir/Interfaces/FunctionInterfaces.h"
-
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONANNOTATEMODULE
@@ -18,7 +14,6 @@ namespace {
 
 constexpr char AttrLTS[] = "triton_gpu.is_lts";
 constexpr char AttrTargetName[] = "triton_gpu.target";
-constexpr char AttrNumThreadsPerWarp[] = "triton_gpu.threads-per-warp";
 
 struct TritonAnnotateModule
     : public intel::impl::TritonAnnotateModuleBase<TritonAnnotateModule> {
@@ -39,6 +34,9 @@ struct TritonAnnotateModule
     // of checking driver version.
     if (isLTS)
       mod->setAttr(AttrLTS, IntegerAttr::get(IntegerType::get(ctx, 1), 1));
+
+    std::string AttrNumThreadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarpAttrName();
 
     mod.walk([&](FunctionOpInterface funcOp) {
       using DPASAnalysis = intel::DPASAnalysis;
