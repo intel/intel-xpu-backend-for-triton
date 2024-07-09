@@ -29,6 +29,15 @@ import triton.language as tl
 from triton.runtime import driver
 
 
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+def is_cdna():
+    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942',
+                                                                                   'gfx90a', 'gfx908')
+
+
 def naive_softmax(x):
     """Compute row-wise softmax of X using native pytorch
 
