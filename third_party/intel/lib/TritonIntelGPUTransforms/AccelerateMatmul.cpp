@@ -154,7 +154,7 @@ public:
         RankedTensorType::get(retShape, oldRetType.getElementType(), dpasEnc);
 
     // convert accumulator
-    Value oldAcc = dotOp.getOperand(2);
+    Value oldAcc = dotOp.getC();
     ConvertLayoutOp newAcc =
         rewriter.create<ConvertLayoutOp>(oldAcc.getLoc(), newRetType, oldAcc);
 
@@ -218,8 +218,8 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
     Type promoteType;
     if (dpasLayout) {
       bool isNativeFP8 = AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
-      // promote operands for fp8 since fp8 DPAS is not natively supported
-      // fp8 is promoted to fp16 to use DPAS implementation
+      // fp8 is not natively supported by the the DPAS instruction, promote it
+      // to fp16.
       if (!isNativeFP8)
         return;
       promoteType = builder.getF16Type();
