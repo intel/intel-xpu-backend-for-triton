@@ -91,17 +91,21 @@ LogicalResult GlueOp::verify() {
   for (auto input : getOperands())
     inputTypes.push_back(input.getType());
   Type inputType = inputTypes[0];
+  Type resultType = getRes().getType();
 
   if (!llvm::all_of(inputTypes, [&](Type type) { return type == inputType; }))
-    return emitOpError("operands type should be the same");
-  else
+    return emitOpError("operands must have the same type");
+  if (!isTensorOrTensorPointerType(inputType))
     return success();
+  else {
+    unsigned resultRank = getRank(resultType);
+    unsigned operandRank = getRank(inputType);
+    if (operandRank != resultRank)
+      return success();
+  }
 
-  Type resultType = getRes().getType();
-  unsigned resultRank = getRank(resultType);
-  if (llvm::any_of(inputTypes,
-                   [&](Type type) { return getRank(type) != resultRank; }))
-    return emitOpError("operands and result must have the same rank");
+  /// below check works for tensor related type with same rank
+  /// try to simplify it later
 
   Type resultElementType = getElementType(resultType);
   if (llvm::any_of(inputTypes, [&](Type type) {
@@ -109,11 +113,7 @@ LogicalResult GlueOp::verify() {
       }))
     return emitOpError("operands and result element type must match");
 
-  SmallVector<int64_t> inputShape = getShape(inputTypes[0]);
-  if (llvm::any_of(inputTypes,
-                   [&](Type type) { return getShape(type) != inputShape; }))
-    return emitOpError("operands must have the same shape");
-
+  unsigned resultRank = getRank(resultType);
   if (llvm::any_of(inputTypes, [&](Type type) {
         for (unsigned i = 0; i < resultRank; ++i) {
           unsigned resultSize = getDimSize(resultType, i);
@@ -135,6 +135,7 @@ LogicalResult GlueOp::verify() {
 
   // Verify that the composition of the input operands covers the output tensor
   // shape.
+  SmallVector<int64_t> inputShape = getShape(inputTypes[0]);
   SmallVector<int64_t> resultShape = getShape(resultType);
   unsigned numResultElems = product(resultShape);
   unsigned numInputElems = product(inputShape);
@@ -148,20 +149,22 @@ LogicalResult ExtractOp::verify() {
   Type resultType = getRes().getType();
   Type operandType = getBase().getType();
 
-  if (getElementType(resultType) == getElementType(operandType))
-    return success();
-  else
-    return emitOpError("operand and reslut should have the same element type");
-
-  unsigned resultRank = getRank(resultType);
-  unsigned operandRank = getRank(operandType);
-  if (operandRank != resultRank)
-    return emitOpError("operand and result must have the same rank");
-
   Type resultElemType = getElementType(resultType);
   Type operandElemType = getElementType(operandType);
   if (operandElemType != resultElemType)
     return emitOpError("operand and result element type must match");
+
+  if (!isTensorOrTensorPointerType(operandType))
+    return success();
+  else {
+    unsigned resultRank = getRank(resultType);
+    unsigned operandRank = getRank(operandType);
+    if (operandRank != resultRank)
+      return success();
+  }
+
+  /// below check works for tensor related type with same rank
+  /// try to simplify it later
 
   // ensure the input can be partitioned by the requested result.
   SmallVector<int64_t> resultShape = getShape(resultType);
