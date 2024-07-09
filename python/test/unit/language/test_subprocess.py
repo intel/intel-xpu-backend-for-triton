@@ -5,6 +5,9 @@ import sys
 from collections import Counter
 
 import pytest
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
+
+import triton.runtime as tr
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 print_path = os.path.join(dir_path, "print_helper.py")
@@ -37,8 +40,10 @@ def is_interpreter():
     ("device_print_hex", "int64"),
     ("device_print_pointer", "int32"),
 ])
-def test_print(func_type: str, data_type: str):
-    proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE,
+def test_print(func_type: str, data_type: str, device: str):
+    if device == "xpu" and data_type == "float64" and not tr.driver.active.get_current_target().arch['has_fp64']:
+        pytest.xfail("float64 not supported on current xpu hardware")
+    proc = subprocess.Popen([sys.executable, print_path, func_type, data_type, device], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, shell=False)
     outs, err = proc.communicate()
     assert proc.returncode == 0

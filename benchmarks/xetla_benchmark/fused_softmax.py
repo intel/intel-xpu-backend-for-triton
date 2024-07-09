@@ -130,16 +130,17 @@ def benchmark(M, N, provider):
     x = torch.randn(M, N, device='xpu', dtype=torch.bfloat16)
     quantiles = [0.5, 0.0, 1.0]
     if provider == 'torch-native':
-        ms, min_ms, max_ms = benchmark_suit.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles, warmup=10,
-                                                     rep=10)
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles,
+                                                               warmup=10, rep=10)
     if provider == 'triton':
         triton_fn = lambda: softmax(x)
         torch_fn = lambda: torch.softmax(x, axis=-1)
         benchmark_suit.assert_close(triton_fn(), torch_fn(), err_msg="triton to torch")
-        ms, min_ms, max_ms = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, warmup=10, rep=10)
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, warmup=10, rep=10)
 
     if provider == 'torch-jit':
-        ms, min_ms, max_ms = benchmark_suit.do_bench(lambda: naive_softmax(x), quantiles=quantiles, warmup=10, rep=10)
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: naive_softmax(x), quantiles=quantiles, warmup=10,
+                                                               rep=10)
 
     if provider == 'xetla':
         name = "softmax_shape_{}_{}".format(M, N)
@@ -147,11 +148,12 @@ def benchmark(M, N, provider):
         xetla_fn = lambda: func(x, 0)
         torch_fn = lambda: torch.softmax(x, axis=-1)
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), err_msg="xetla to torch")
-        ms, min_ms, max_ms = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, warmup=10, rep=10)
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, warmup=10, rep=10)
 
-    gbps = lambda ms: 2 * x.nelement() * x.element_size() * 1e-9 / (ms * 1e-3)
-    tflops = lambda ms: 4 * x.nelement() * 1e-12 / (ms * 1e-3)  # reduce-max, reduce-sum, elem-wise sub, elem-wise div
-    return (gbps(ms), gbps(max_ms), gbps(min_ms)), (tflops(ms), tflops(max_ms), tflops(min_ms))
+    gbps = lambda mean: 2 * x.nelement() * x.element_size() * 1e-9 / (mean * 1e-3)
+    tflops = lambda mean: 4 * x.nelement() * 1e-12 / (mean * 1e-3
+                                                      )  # reduce-max, reduce-sum, elem-wise sub, elem-wise div
+    return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
 if __name__ == "__main__":

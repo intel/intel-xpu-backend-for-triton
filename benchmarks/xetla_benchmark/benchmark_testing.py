@@ -102,6 +102,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+        # add coefficient of the variance.
+        std = torch.std(times)
+        mean = torch.mean(times)
+        cv = std / mean
+        ret.extend([mean.tolist(), cv.tolist()])
         if len(ret) == 1:
             ret = ret[0]
         return ret
@@ -240,6 +245,7 @@ class Mark:
             y_min = [f'{x}-{label}-min' for x in bench.line_names]
             y_max = [f'{x}-{label}-max' for x in bench.line_names]
             y_vals += y_mean + y_min + y_max
+        y_vals += [f'{x}-CV' for x in bench.line_names]
         x_names = list(bench.x_names)
         df = pd.DataFrame(columns=x_names + y_vals)
         for x in bench.x_vals:
@@ -252,11 +258,11 @@ class Mark:
             x_args = dict(zip(x_names, x))
 
             row_vals = {}
-            for label in bench.ylabel:
+            for label in itertools.chain(bench.ylabel, ["CV"]):
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
                 ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwrags)
-                for id, label in enumerate(bench.ylabel):
+                for id, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:
                         y_mean, y_min, y_max = ret[id]
                     except TypeError:
@@ -266,9 +272,13 @@ class Mark:
                     row_vals[label][2].append(y_max)
             rows = []
             for label in bench.ylabel:
-                rows += row_vals[label][0]
-                rows += row_vals[label][1]
-                rows += row_vals[label][2]
+                if len(row_vals[label][0]) > 0:
+                    rows += row_vals[label][0]
+                if len(row_vals[label][1]) > 0:
+                    rows += row_vals[label][1]
+                if len(row_vals[label][2]) > 0:
+                    rows += row_vals[label][2]
+            rows += row_vals["CV"][0]
             df.loc[len(df)] = list(x) + rows
 
         if bench.plot_name:
