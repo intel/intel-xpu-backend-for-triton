@@ -527,7 +527,7 @@ struct LoadOpConversion
 
               Value loadVal = undef(packedDPASOperandType);
               for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
-                   elemIdx++) {
+                   ++elemIdx) {
                 Value loaded = extract_element(load2dOp, i32_val(offset++));
                 loadVal = insert_element(loadVal, loaded, i32_val(elemIdx));
               }
