@@ -3,6 +3,7 @@
 # Sets the following environment variables:
 # * PYTORCH_REPO
 # * PYTORCH_COMMIT_ID
+# * PYTORCH_VERSION
 name: setup-pytorch
 description: Build and install PyTorch wheels
 inputs:
@@ -125,7 +126,8 @@ runs:
       run: |
         source ${{ inputs.oneapi }}/setvars.sh
         pip install pytorch/dist/*.whl
-        python -c "import torch;print(torch.__version__)"
+        PYTORCH_VERSION="$(python -c 'import torch;print(torch.__version__)')"
+        echo "PYTORCH_VERSION=$PYTORCH_VERSION" | tee -a "$GITHUB_ENV"
 
     - name: Save PyTorch to a cache
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}

@@ -3,6 +3,7 @@
 # Sets the following environment variables:
 # * IPEX_REPO
 # * IPEX_COMMIT_ID
+# * IPEX_VERSION
 name: setup-ipex
 description: Build and install IPEX wheels
 inputs:
@@ -65,7 +66,8 @@ runs:
       run: |
         source ${{ inputs.oneapi }}/setvars.sh
         pip install intel-extension-for-pytorch/dist/*.whl
-        python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
+        IPEX_VERSION="$(python -c 'import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)')"
+        echo "IPEX_VERSION=$PYTORCH_VERSION" | tee -a "IPEX_VERSION"
 
     - name: Save IPEX wheels to a cache
       if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
