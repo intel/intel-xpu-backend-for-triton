@@ -1,4 +1,5 @@
 #include "intel/include/Analysis/DPAS.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -12,15 +13,13 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
-constexpr char AttrLTS[] = "triton_gpu.is_lts";
-constexpr char AttrTargetName[] = "triton_gpu.target";
-
 struct TritonAnnotateModule
-    : public intel::impl::TritonAnnotateModuleBase<TritonAnnotateModule> {
+    : intel::impl::TritonAnnotateModuleBase<TritonAnnotateModule> {
   using Base::Base;
 
-  void runOnOperation() override {
+  void runOnOperation() final {
     ModuleOp mod = getOperation();
+    Builder builder(mod);
 
     if (target.getValue().empty()) {
       mod.emitError("Expecting target specification");
@@ -28,12 +27,14 @@ struct TritonAnnotateModule
     }
 
     MLIRContext *ctx = &getContext();
-    mod->setAttr(AttrTargetName, StringAttr::get(ctx, target.getValue()));
+    mod->setAttr(intel::TritonIntelGPUDialect::getTargetAttrName(),
+                 builder.getStringAttr(target.getValue()));
 
     // FIXME: Use SYCL runtime to query supported OpenCL extensions, instead
     // of checking driver version.
     if (isLTS)
-      mod->setAttr(AttrLTS, IntegerAttr::get(IntegerType::get(ctx, 1), 1));
+      mod->setAttr(intel::TritonIntelGPUDialect::getLTSAttrName(),
+                   builder.getUnitAttr());
 
     std::string AttrNumThreadsPerWarp =
         TritonGPUDialect::getThreadsPerWarpAttrName();
@@ -48,9 +49,8 @@ struct TritonAnnotateModule
         // lowered to DPAS instructions.
         unsigned reqThreadsPerWarp = DPASAnalysis::supportedThreadsPerWarp(
             triton::gpu::intel::getDeviceArch(mod));
-        mod->setAttr(
-            AttrNumThreadsPerWarp,
-            IntegerAttr::get(IntegerType::get(ctx, 32), reqThreadsPerWarp));
+        mod->setAttr(AttrNumThreadsPerWarp,
+                     builder.getI32IntegerAttr(reqThreadsPerWarp));
         assert(dpasAnalysis.canUseDPAS() == DPASAnalysis::Result::True &&
                "DPASAnalysis should report that dot operations can be "
                "lowered to DPAS instructions");
@@ -62,7 +62,7 @@ struct TritonAnnotateModule
     // value.
     if (!mod->getAttr(AttrNumThreadsPerWarp))
       mod->setAttr(AttrNumThreadsPerWarp,
-                   IntegerAttr::get(IntegerType::get(ctx, 32), threadsPerWarp));
+                   builder.getI32IntegerAttr(threadsPerWarp));
   }
 };
 
