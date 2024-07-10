@@ -122,7 +122,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout
+          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout expecttest
           pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
 
       - name: Setup Triton
@@ -168,7 +168,7 @@ jobs:
           TRITON_TEST_SUITE=language \
             pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           TRITON_TEST_SUITE=subprocess \
-            pytest -vvv -n 8 language/test_subprocess.py
+            pytest -vvv -n 8 --device xpu language/test_subprocess.py
           # Run runtime tests serially to avoid race condition with cache handling
           TRITON_TEST_SUITE=runtime \
             pytest -vvv --device xpu runtime/

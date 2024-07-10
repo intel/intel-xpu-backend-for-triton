@@ -148,17 +148,42 @@ static void
 emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
                               SmallVector<SmallVector<unsigned>> &offsets,
                               unsigned ctaOffsetX, unsigned ctaOffsetY) {
+  // clang-format off
+  // For operand C the layout is:
+  //               execution size = 16
+  // <------------------------------------------------------------->
+  // t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15       ^
+  // .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .         | repeat count = 8
+  // .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .         |
+  // t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15       v
+  // Then sizePerThreads = [8, 1], and coordinate offset for each element per lane should be:
+  // [0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0]
+  // clang-format on
+  SmallVector<unsigned> instShapeC = dpasLayout.getDPASInstShapeC();
   SmallVector<unsigned> sizePerThreads = getSizePerThread(dpasLayout);
-  uint32_t elemsPerThreadPerGroup = product<unsigned>(sizePerThreads);
-  uint32_t rowsPerWarp =
-      dpasLayout.getSubGroupSize() / dpasLayout.getExecutionSize();
-  SmallVector<unsigned> shapePerCTA =
-      triton::gpu::getShapePerCTATile(dpasLayout);
+  ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+  SmallVector<unsigned> sizePerDPASInst = {sizePerThreads[0] / repCluster[0],
+                                           sizePerThreads[1] / repCluster[1]};
 
-  for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
-    uint32_t elemRowIndex = (elem / sizePerThreads[1]) * rowsPerWarp;
-    uint32_t elemColIndex = elem % sizePerThreads[1];
-    offsets.push_back({ctaOffsetX + elemRowIndex, ctaOffsetY + elemColIndex});
+  unsigned rowsPerElem = dpasLayout.getSubGroupSize() / instShapeC[1];
+  unsigned colsPerElem = 1;
+
+  unsigned repNumber = product<unsigned>(repCluster);
+  unsigned elemNumberPerRep = product<unsigned>(sizePerDPASInst);
+  for (unsigned repId = 0; repId < repNumber; ++repId) {
+    for (unsigned elemId = 0; elemId < elemNumberPerRep; ++elemId) {
+      // Follows the C++ order for the dpas layout.
+      SmallVector<unsigned> repOffset = {
+          (repId / repCluster[1]) * instShapeC[0],
+          (repId % repCluster[1]) * instShapeC[1]};
+
+      SmallVector<unsigned> elemOffset = {
+          (elemId / sizePerDPASInst[1]) * rowsPerElem,
+          (elemId % sizePerDPASInst[1]) * colsPerElem};
+
+      offsets.push_back({repOffset[0] + elemOffset[0] + ctaOffsetX,
+                         repOffset[1] + elemOffset[1] + ctaOffsetY});
+    }
   }
 }
 
@@ -706,13 +731,22 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 
 inline SmallVector<Value>
 loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
-                        Type elemTy, Location loc,
-                        ConversionPatternRewriter &rewriter,
-                        const TargetInfoBase &target) {
+                        Type elemTy, Location loc, RewriterBase &rewriter,
+                        const TargetInfoBase &target, bool allowLLs = true) {
   auto dstTy = cast<RankedTensorType>(dst.getType());
+  auto srcTy = cast<MemDescType>(src.getType());
+
+  if (allowLLs) {
+    std::optional<SmallVector<Value>> llVals =
+        loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemTy, shrMemObj,
+                                                loc, rewriter, target);
+    if (llVals.has_value()) {
+      return *std::move(llVals);
+    }
+  }
+
   auto dstShape = dstTy.getShape();
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
-  auto srcTy = cast<MemDescType>(src.getType());
   auto dstDistributedLayout = dstTy.getEncoding();
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&
@@ -766,13 +800,20 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                                      Value shrMemBase, Type elemTy,
                                      Location loc,
                                      ConversionPatternRewriter &rewriter,
-                                     const TargetInfoBase &target) {
+                                     const TargetInfoBase &target,
+                                     bool allowLLs = true) {
   auto srcTy = cast<RankedTensorType>(src.getType());
+  auto dstTy = cast<MemDescType>(dst.getType());
+
+  if (allowLLs && storeDistributedToSharedUsingLinearLayouts(
+                      dstTy, srcTy, elemTy, inVals, shrMemBase, dstStrides, loc,
+                      rewriter, target)) {
+    return;
+  }
+
   auto srcShape = srcTy.getShape();
   auto rank = srcShape.size();
-  assert(rank == 2 ||
-         rank == 3 && "Unexpected rank of storeDistributedToShared");
-  auto dstTy = cast<MemDescType>(dst.getType());
+  assert(rank <= 3 && "Unexpected rank of storeDistributedToShared");
   auto srcDistributedLayout = srcTy.getEncoding();
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcDistributedLayout)) {
     assert((!mmaLayout.isVolta()) &&

@@ -17,6 +17,7 @@ from numpy.random import RandomState
 import triton
 import triton.language as tl
 from triton.runtime.jit import TensorWrapper, reinterpret
+from triton.language.extra import libdevice
 
 
 def is_interpreter():
@@ -31,6 +32,11 @@ def is_cuda():
 def is_hip():
     return not is_interpreter() and \
         triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+def is_hip_mi300():
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == 'hip' and target.arch == 'gfx942'
 
 
 def is_xpu():
@@ -1045,8 +1051,6 @@ def test_math_divide_op(expr, num_ctas, device):
                           ('tl.math.div_rn(x,y)', '(x.to(tl.float64) / y.to(tl.float64)).to(tl.float32)')])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_precise_math(expr_prec, expr_ref, num_ctas, device):
-    if expr_prec == 'tl.math.sqrt_rn(x)':
-        pytest.skip("FIXME: Fail accuracy")
 
     @triton.jit
     def kernel(X, Y, OUT, OUT_REF, BLOCK: tl.constexpr):
@@ -1749,9 +1753,6 @@ def test_store_constant(dtype_str, num_ctas, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_store_constant_default_dtype(num_ctas, device):
     """Tests that boolean True is stored as 1"""
-
-    if is_interpreter():
-        pytest.skip("FIXME: Incorrect result on XPU")
 
     @triton.jit
     def kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
@@ -3357,8 +3358,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 @pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
                                                          ('float16', 'float32'), ('float32', 'float32')])
 def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
-    if is_xpu():
-        pytest.skip("FIXME: Incorrect result on XPU")
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
         input_precision = "ieee"
@@ -3645,9 +3644,6 @@ def test_const(device, choose_const, constexpr, mode):
 @pytest.mark.parametrize("dtype_str", ['float32', 'float16'])
 def test_dot_without_load(dtype_str, device):
 
-    if is_interpreter() and dtype_str == "float16":
-        pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
-
     @triton.jit
     def _kernel(out):
         a = GENERATE_TEST_HERE
@@ -3766,10 +3762,6 @@ def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
 def test_masked_load_shared_memory(dtype, device):
 
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
-
-    if is_interpreter() and dtype == torch.float16:
-        pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
-
     M = 32
     N = 32
     K = 16
@@ -5232,10 +5224,11 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         if in_type_str != 'float8e5':
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
-    check_type_supported(in_type_str, device)
+        ## TODO: Figure out why block size (128, 256, 128) fails on MI300
+        if is_hip_mi300() and BLOCK_M == 128:
+            pytest.skip('BLOCK size (128, 256, 128) fails on MI300')
 
-    if is_interpreter():
-        pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
+    check_type_supported(in_type_str, device)
 
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
@@ -5433,8 +5426,6 @@ def test_static_range(device):
 def test_tl_range(device):
     if is_hip():
         pytest.skip("test_tl_range is not supported in HIP")
-    if is_interpreter():
-        pytest.skip("FIXME: RuntimeError: \"addmm_impl_cpu_\" not implemented for 'Half'")
     M, N, K = 64, 64, 512
     BLOCK_M, BLOCK_N, BLOCK_K = M, N, 64
     a = torch.randn((M, K), device=device, dtype=torch.float16)
@@ -5545,3 +5536,40 @@ def test_num_programs(device):
 
     kernel[grid](input)
     assert torch.all(input == torch.tensor(grid, device=device))
+
+
+# -----------------------
+# test extern functions
+# -----------------------
+
+
+@pytest.mark.parametrize("dtype_str", ['float32', 'float64'])
+def test_math_extern(dtype_str, device):
+    if is_interpreter():
+        pytest.skip('math_extern does not work in the interpreter mode')
+
+    @triton.jit
+    def kernel(
+        x_ptr,
+        y_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = libdevice.tanh(x)
+        tl.store(y_ptr + offsets, y, mask=mask)
+
+    shape = (128, )
+    rs = RandomState(17)
+
+    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
+    y_ref = np.tanh(x)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(numpy_random(shape, dtype_str=dtype_str, rs=rs), device=device)
+    kernel[(1, )](x_tri, y_tri, shape[0], BLOCK_SIZE=shape[0])
+    # compare
+    np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)

@@ -15,10 +15,12 @@
 
 namespace mlir::triton::gpu::intel {
 
-enum class DeviceArch {
-  UNKNOWN = 0,
-  ATS,
-  PVC,
+// Used by Triton runtime
+struct ClusterInfo {
+  ClusterInfo() = default;
+  unsigned clusterDimX = 1u;
+  unsigned clusterDimY = 1u;
+  unsigned clusterDimZ = 1u;
 };
 
 #define GEN_PASS_DECL

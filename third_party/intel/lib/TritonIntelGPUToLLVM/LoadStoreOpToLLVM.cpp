@@ -17,10 +17,6 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::gpu::intel;
-
-using ::mlir::LLVM::delinearize;
-using ::mlir::triton::gpu::getTotalElemsPerThread;
-
 namespace {
 
 // Return the mask for the unique data accessed by given tensor type.
@@ -337,6 +333,8 @@ struct LoadOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::LoadOp>::ConvertTritonGPUOpToLLVMPattern;
 
+  using ValueTable = std::map<std::pair<int, int>, Value>;
+
   LoadOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
                    const triton::intel::TargetInfo &targetInfo,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
@@ -377,25 +375,35 @@ struct LoadOpConversion
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
     bool isOperandA = (opIdx == 0);
-    SmallVector<unsigned> operandShape =
-        isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
-    SmallVector<int64_t> elemsPerInstr = {operandShape[0], operandShape[1]};
-    int64_t elemsPerLane = product<int64_t>(elemsPerInstr) /
-                           product<unsigned>(getThreadsPerWarp(dpasLayout));
+    SmallVector<unsigned> dpasInstShape = isOperandA
+                                              ? dpasLayout.getDPASInstShapeA()
+                                              : dpasLayout.getDPASInstShapeB();
+    SmallVector<unsigned> elemsPerDPASInst = {dpasInstShape[0],
+                                              dpasInstShape[1]};
+    unsigned elemsPerLanePerDPASInst =
+        product<unsigned>(elemsPerDPASInst) / threadsPerWarp;
     TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
-    Type unpackType = LLVM::getFixedVectorType(
-        typeConverter->convertType(eltTy), elemsPerLane);
+    Type unpackedDPASOperandType = LLVM::getFixedVectorType(
+        typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
 
     // pack scalars for operand A and B.
     Type elemType = (isOperandA && eltTy != f32_ty) ? i16_ty : i32_ty;
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
-    elemsPerLane = isOperandA ? elemsPerLane / (opsPerChannel == 4 ? 2 : 1)
-                              : elemsPerLane / opsPerChannel;
-    Type load2DGenXType = LLVM::getFixedVectorType(elemType, elemsPerLane);
+    unsigned packedElemsPerLanePerDPASInst =
+        isOperandA ? elemsPerLanePerDPASInst / (opsPerChannel == 4 ? 2 : 1)
+                   : elemsPerLanePerDPASInst / opsPerChannel;
+    Type packedDPASOperandType =
+        LLVM::getFixedVectorType(elemType, packedElemsPerLanePerDPASInst);
 
-    // Outer dim for A is the M, for B is the N. Inner dim for both is the K.
-    int outerDimWarpNum = std::min<int>(
-        warpsPerCTA[opIdx], ceil(tensorShape[opIdx], elemsPerInstr[opIdx]));
+    // Outer dim: Dim M or N. Inner dim: Dim K.
+    // Round the warp id fit into the tensor shape.
+    auto repCluster = dpasLayout.getRepCluster();
+    SmallVector<unsigned> warpShape =
+        isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
+    unsigned outerDimRequiredWarpNum =
+        mlir::ceil<unsigned>(tensorShape[opIdx], warpShape[opIdx]);
+    unsigned outerDimWarpNum =
+        std::min<unsigned>(warpsPerCTA[opIdx], outerDimRequiredWarpNum);
     Value outerDimWarpId =
         urem(multiDimWarpId[opIdx], i32_val(outerDimWarpNum));
 
@@ -404,68 +412,156 @@ struct LoadOpConversion
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
 
     // Load the operand.
-    int64_t numRepOuter = numReps[opIdx];
-    int64_t numRepK = numReps[!opIdx];
+    unsigned numRepOuter = numReps[opIdx];
+    unsigned numRepK = numReps[!opIdx];
 
-    SmallVector<Value> rets;
+    unsigned tileHeight;
+    unsigned vBlocks;
+    unsigned numOperandsOuterDimPerLoad = 1;
+    unsigned numOperandsKDimPerLoad = 1;
+    // dot shape [M, N] = [M, K] * [K, N]
+    if (isOperandA) {
+      // Use the warp shape as the tileHeight to load multiple operands A in M
+      // dim.
+      tileHeight = warpShape[0];
+      assert(tileHeight <= 32 && "invalid tile height.");
+      numOperandsOuterDimPerLoad = repCluster[0];
+
+      // The number of bytes per row for the operand A are always 32. (PVC)
+      if (numRepK >= 2) {
+        // Use block array length 2 to load multiple operands A in K dim.
+        vBlocks = 2;
+      } else {
+        // Load one operands A in K dim.
+        vBlocks = 1;
+      }
+      numOperandsKDimPerLoad = vBlocks;
+    } else {
+      // PVC 2D load supports 32 rows at most. Load multiple operands B in K
+      // dim.
+      numOperandsKDimPerLoad = std::min(numRepK, 32 / elemsPerDPASInst[0]);
+      tileHeight = elemsPerDPASInst[0] * numOperandsKDimPerLoad;
+
+      // PVC 2D load supports 64 bytes per row at most.
+      unsigned totalBytesPerRowPerDPASOp =
+          elemsPerDPASInst[1] * eltTy.getIntOrFloatBitWidth() / 8;
+      // Use block array length to load multiple operands B in N dim if
+      // possible.
+      vBlocks = std::min(repCluster[1], 64 / totalBytesPerRowPerDPASOp);
+      numOperandsOuterDimPerLoad = vBlocks;
+    }
+
+    unsigned numLoadPerOutRepCluster =
+        mlir::ceil<unsigned>(repCluster[opIdx], numOperandsOuterDimPerLoad);
+
+    unsigned numValuesPerLoad = packedElemsPerLanePerDPASInst *
+                                numOperandsOuterDimPerLoad *
+                                numOperandsKDimPerLoad;
+    Type load2DGenXType = LLVM::getFixedVectorType(elemType, numValuesPerLoad);
+
+    // The stride for the replicates.
+    unsigned repOuterStride = warpShape[opIdx] * outerDimWarpNum;
+    unsigned repStride = elemsPerDPASInst[opIdx] * numOperandsOuterDimPerLoad;
+    unsigned warpOuterStride = warpShape[opIdx];
+    unsigned repKStride = elemsPerDPASInst[opIdx == 0 ? 1 : 0];
+
+    ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
-      for (int k = 0; k < numRepK; ++k) {
-        Value offsetX =
-            isOperandA
-                ? i32_val(k * elemsPerInstr[1])
-                : add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
-                      i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]));
-        Value offsetY =
-            isOperandA
-                ? add(mul(outerDimWarpId, i32_val(elemsPerInstr[opIdx])),
-                      i32_val(outer * outerDimWarpNum * elemsPerInstr[opIdx]))
-                : i32_val(k * elemsPerInstr[0]);
+      for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
+        for (int k = 0; k < numRepK; k += numOperandsKDimPerLoad) {
+          Value offsetX, offsetY;
+          if (opIdx == 0) {
+            // A
+            offsetY = add(mul(outerDimWarpId, i32_val(warpOuterStride)),
+                          i32_val(outer * repOuterStride + rep * repStride));
+            offsetX = i32_val(k * repKStride);
+          } else {
+            // B
+            offsetX = add(mul(outerDimWarpId, i32_val(warpOuterStride)),
+                          i32_val(outer * repOuterStride + rep * repStride));
+            offsetY = i32_val(k * repKStride);
+          }
 
-        offsetX = add(offsetX, offsetBaseX);
-        offsetY = add(offsetY, offsetBaseY);
-        baseWidth = trunc(i32_ty, baseWidth);
-        baseHeight = trunc(i32_ty, baseHeight);
-        rowStride = trunc(i32_ty, rowStride);
+          offsetX = add(offsetX, offsetBaseX);
+          offsetY = add(offsetY, offsetBaseY);
+          baseWidth = trunc(i32_ty, baseWidth);
+          baseHeight = trunc(i32_ty, baseHeight);
+          rowStride = trunc(i32_ty, rowStride);
 
-        unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-        Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
+          unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+          Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
 
-        auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
-            loc, load2DGenXType,
-            /*ptr*/ base,
-            /*base_width*/ mul(baseWidth, elemSizeInBytes),
-            /*base_height*/ baseHeight,
-            /*base_pitch*/ mul(rowStride, elemSizeInBytes),
-            /*x*/ trunc(i32_ty, offsetX),
-            /*y*/ trunc(i32_ty, offsetY),
-            /*elem_size_in_bits*/ elemSizeInBits,
-            /*tile_width*/ elemsPerInstr[1],
-            /*tile_height*/ elemsPerInstr[0],
-            /*v_blocks*/ 1,
-            /*transpose*/ false,
-            /*vnni_transform*/
-            (!isOperandA && eltTy.getIntOrFloatBitWidth() != 32));
-        if (failed(load2dOp.verify())) {
-          // Explicitly invoke verifier because `triton_gen` ops are immediately
-          // lowered further to a builtin call.
-          return failure();
+          auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
+              loc, load2DGenXType,
+              /*ptr*/ base,
+              /*base_width*/ mul(baseWidth, elemSizeInBytes),
+              /*base_height*/ baseHeight,
+              /*base_pitch*/ mul(rowStride, elemSizeInBytes),
+              /*x*/ trunc(i32_ty, offsetX),
+              /*y*/ trunc(i32_ty, offsetY),
+              /*elem_size_in_bits*/ elemSizeInBits,
+              /*tile_width*/ elemsPerDPASInst[1],
+              /*tile_height*/ tileHeight,
+              /*v_blocks*/ vBlocks,
+              /*transpose*/ false,
+              /*vnni_transform*/
+              (!isOperandA && eltTy.getIntOrFloatBitWidth() != 32));
+          if (failed(load2dOp.verify())) {
+            // Explicitly invoke verifier because `triton_gen` ops are
+            // immediately lowered further to a builtin call.
+            return failure();
+          }
+
+          unsigned packedRowNum =
+              opIdx == 0 ? numOperandsOuterDimPerLoad : numOperandsKDimPerLoad;
+          unsigned packedColNum =
+              opIdx == 0 ? numOperandsKDimPerLoad : numOperandsOuterDimPerLoad;
+          unsigned offset = 0;
+          // The register value returned by 2D load is contiguous on the row.
+          for (int col = 0; col < packedColNum; ++col) {
+            for (int row = 0; row < packedRowNum; ++row) {
+
+              Value loadVal = undef(packedDPASOperandType);
+              for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
+                   ++elemIdx) {
+                Value loaded = extract_element(load2dOp, i32_val(offset++));
+                loadVal = insert_element(loadVal, loaded, i32_val(elemIdx));
+              }
+
+              // Save the unpacked vals to the map;
+              if (opIdx == 0) {
+                loadVals[{outer * packedRowNum * numLoadPerOutRepCluster +
+                              rep * packedRowNum + row,
+                          k + col}] = bitcast(loadVal, unpackedDPASOperandType);
+              } else {
+                loadVals[{outer * packedColNum * numLoadPerOutRepCluster +
+                              rep * packedColNum + col,
+                          k + row}] = bitcast(loadVal, unpackedDPASOperandType);
+              }
+            }
+          }
         }
-
-        rets.push_back(bitcast(load2dOp, unpackType));
       }
     }
 
-    SmallVector<Value> loadedVals;
-    for (Value &ret : rets) {
-      auto loadTy = cast<VectorType>(unpackType);
-      for (size_t i = 0; i < loadTy.getNumElements(); ++i) {
-        Value loaded = extract_element(ret, i32_val(i));
-        loadedVals.push_back(loaded);
+    // Extract the value returned by the load ops. And put the values in the
+    // expected order for the layout.
+    SmallVector<Value> unpackedLoadedVals;
+    for (int outer = 0; outer < numRepOuter; ++outer) {
+      for (int k = 0; k < numRepK; ++k) {
+        for (int rep = 0; rep < repCluster[opIdx]; ++rep) {
+          Value loadVal = loadVals.at({outer * repCluster[opIdx] + rep, k});
+          VectorType loadTy = cast<VectorType>(loadVal.getType());
+          for (int i = 0; i < loadTy.getNumElements(); ++i) {
+            auto val = extract_element(loadVal, i32_val(i));
+            unpackedLoadedVals.push_back(val);
+          }
+        }
       }
     }
 
     Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
+    Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
 
@@ -664,12 +760,12 @@ struct StoreOpConversion
     Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(tensorType);
-    auto elemsPerInstr = dpasLayout.getShapeC();
+    SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, 2);
     SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
-    int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+    unsigned threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
@@ -697,58 +793,68 @@ struct StoreOpConversion
     Value basePitch = mul(rowStride, elemSizeInBytes);
 
     // A warp stride for the replicates.
-    int outerDimWarpNum = std::min<int>(
-        warpsPerCTA[0], mlir::ceil<unsigned>(tensorShape[0], elemsPerInstr[0]));
-    int innerDimWarpNum = std::min<int>(
-        warpsPerCTA[1], mlir::ceil<unsigned>(tensorShape[1], elemsPerInstr[1]));
+    SmallVector<unsigned> repClusterShape = dpasLayout.getShapeC();
+    unsigned outerDimWarpNum = std::min<unsigned>(
+        warpsPerCTA[0],
+        mlir::ceil<unsigned>(tensorShape[0], repClusterShape[0]));
+    unsigned innerDimWarpNum = std::min<unsigned>(
+        warpsPerCTA[1],
+        mlir::ceil<unsigned>(tensorShape[1], repClusterShape[1]));
     Value outerDimWarpId = urem(multiDimWarpId[0], i32_val(outerDimWarpNum));
     Value innerDimWarpId = urem(multiDimWarpId[1], i32_val(innerDimWarpNum));
     int64_t numRepOuter = numReps[0];
     int64_t numRepInner = numReps[1];
 
     std::array<unsigned, 2> replicaStride = {
-        static_cast<unsigned>(outerDimWarpNum * elemsPerInstr[0]),
-        static_cast<unsigned>(innerDimWarpNum * elemsPerInstr[1])};
-    std::array<unsigned, 2> warpStride = {
-        static_cast<unsigned>(elemsPerInstr[0]),
-        static_cast<unsigned>(elemsPerInstr[1])};
+        outerDimWarpNum * repClusterShape[0],
+        innerDimWarpNum * repClusterShape[1]};
+    std::array<unsigned, 2> warpStride = {repClusterShape[0],
+                                          repClusterShape[1]};
 
     Value dimWarpId0 = mul(outerDimWarpId, i32_val(warpStride[0]));
     Value dimWarpId1 = mul(innerDimWarpId, i32_val(warpStride[1]));
     Value warpId0Offset = add(dimWarpId0, offsetBaseY);
     Value warpId1Offset = add(dimWarpId1, offsetBaseX);
 
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     unsigned valOffset = 0;
     for (int m = 0; m < numRepOuter; ++m) {
-      Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0]));
-      for (int n = 0; n < numRepInner; ++n) {
-        Value offsetX = add(warpId1Offset, i32_val(n * replicaStride[1]));
+      for (int repM = 0; repM < repCluster[0]; ++repM) {
+        Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0] +
+                                                   repM * elemsPerInstr[0]));
+        for (int n = 0; n < numRepInner; ++n) {
+          for (int repN = 0; repN < repCluster[1]; ++repN) {
+            Value offsetX =
+                add(warpId1Offset,
+                    i32_val(n * replicaStride[1] + repN * elemsPerInstr[1]));
+            Value storeVal = rewriter.create<LLVM::UndefOp>(
+                loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
+                                              elemsPerLane));
+            for (size_t i = 0; i < elemsPerLane; ++i) {
+              storeVal = insert_element(storeVal, vals[valOffset], i32_val(i));
+              ++valOffset;
+            }
 
-        Value storeVal = rewriter.create<LLVM::UndefOp>(
-            loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
-                                          elemsPerLane));
-        for (size_t i = 0; i < elemsPerLane; ++i) {
-          storeVal = insert_element(storeVal, vals[valOffset], i32_val(i));
-          ++valOffset;
-        }
+            auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
+                loc,
+                /*ptr*/ base,
+                /*base_width*/ baseWidth,
+                /*base_height*/ height,
+                /*base_pitch*/ basePitch,
+                /*x*/ trunc(i32_ty, offsetX),
+                /*y*/ trunc(i32_ty, offsetY),
+                /*elem_size_in_bits*/ elemSizeInBits,
+                /*tile_width*/ elemsPerInstr[1],
+                /*tile_height*/ elemsPerInstr[0],
+                /*v_blocks*/ 1,
+                /*stored_val*/ bitcast(storeVal, store2DGenXType));
 
-        auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
-            loc,
-            /*ptr*/ base,
-            /*base_width*/ baseWidth,
-            /*base_height*/ height,
-            /*base_pitch*/ basePitch,
-            /*x*/ trunc(i32_ty, offsetX),
-            /*y*/ trunc(i32_ty, offsetY),
-            /*elem_size_in_bits*/ elemSizeInBits,
-            /*tile_width*/ elemsPerInstr[1],
-            /*tile_height*/ elemsPerInstr[0],
-            /*v_blocks*/ 1,
-            /*stored_val*/ bitcast(storeVal, store2DGenXType));
-        if (failed(newOp.verify())) {
-          // Explicitly invoke verifier because `triton_gen` ops are immediately
-          // lowered further to a builtin call.
-          return failure();
+            if (failed(newOp.verify())) {
+              // Explicitly invoke verifier because `triton_gen` ops are
+              // immediately lowered further to a builtin call.
+              return failure();
+            }
+          }
         }
       }
     }

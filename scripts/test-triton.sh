@@ -159,7 +159,7 @@ run_core_tests() {
   pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-  pytest -vvv -n 8 language/test_subprocess.py
+  pytest -vvv -n 8 --device xpu language/test_subprocess.py
 
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
