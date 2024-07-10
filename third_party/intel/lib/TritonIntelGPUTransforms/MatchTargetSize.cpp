@@ -272,97 +272,6 @@ public:
   }
 };
 
-class ScfPattern : public OpRewritePattern<scf::ForOp> {
-public:
-  using OpRewritePattern<scf::ForOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(scf::ForOp op,
-                                PatternRewriter &rewriter) const final {
-    SmallVector<Operation *> deleteList;
-    SmallVector<Value> newInits;
-    DenseMap<Value, int> userIndexMap;
-    auto idx = 0;
-    for (auto [arg, init] : llvm::zip(op.getRegionIterArgs(), op.getInits())) {
-      Operation *definingOp = init.getDefiningOp();
-      if (!isa_and_nonnull<ttgi::GlueOp>(definingOp)) {
-        newInits.push_back(init);
-        userIndexMap[arg] = idx++;
-        continue;
-      }
-
-      auto glue = cast<ttgi::GlueOp>(definingOp);
-      auto numSplit = glue->getOperands().size();
-      for (auto i = 0; i < numSplit; i++) {
-        newInits.push_back(glue->getOperand(i));
-      }
-      for (auto user : arg.getUsers()) {
-        auto extract = dyn_cast<ttgi::ExtractOp>(user);
-        if (extract) {
-          userIndexMap[extract] = idx + extract.getIndex();
-          deleteList.push_back(extract.getOperation());
-        }
-      }
-      idx += numSplit;
-    }
-    if (newInits.size() == op.getInits().size())
-      return failure();
-    auto newOp =
-        rewriter.create<scf::ForOp>(op.getLoc(), op.getLowerBound(),
-                                    op.getUpperBound(), op.getStep(), newInits);
-
-    for (auto [user, idx] : userIndexMap)
-      user.replaceAllUsesWith(newOp.getRegionIterArgs()[idx]);
-    op.getInductionVar().replaceAllUsesWith(newOp.getInductionVar());
-    // splice operations
-    auto *body = newOp.getBody();
-    body->getOperations().splice(body->begin(), op.getBody()->getOperations());
-    // yield op
-    auto yield = cast<scf::YieldOp>(body->getTerminator());
-    SmallVector<Value> newValues;
-    for (auto result : yield.getResults()) {
-      auto def = result.getDefiningOp();
-      if (def) {
-        if (auto glue = dyn_cast<ttgi::GlueOp>(def)) {
-          newValues.append(glue->getOperands().begin(),
-                           glue->getOperands().end());
-        } else {
-          newValues.push_back(result);
-        }
-      }
-    }
-    {
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPoint(yield);
-      rewriter.create<scf::YieldOp>(yield.getLoc(), newValues);
-      rewriter.eraseOp(yield);
-    }
-
-    // replace results
-    userIndexMap.clear();
-    idx = 0;
-    for (auto [result, init] : llvm::zip(op.getResults(), op.getInits())) {
-      auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
-      if (!glue) {
-        userIndexMap[result] = idx;
-        idx++;
-        continue;
-      }
-      for (auto user : result.getUsers()) {
-        auto extract = dyn_cast<ttgi::ExtractOp>(user);
-        if (extract) {
-          userIndexMap[extract] = idx + extract.getIndex();
-          deleteList.push_back(extract.getOperation());
-        }
-      }
-      idx += glue->getOperands().size();
-    }
-    for (auto [user, idx] : userIndexMap)
-      user.replaceAllUsesWith(newOp.getResults()[idx]);
-    for (auto op : deleteList)
-      rewriter.eraseOp(op);
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
 /// Simplify SCF for loops.
 /// Before:
 ///   %glue = triton_intel_gpu.glue %a, %b : tensor<4x4xf32>, tensor<4x4xf32>
@@ -378,7 +287,6 @@ public:
 ///     use %arg
 ///     scf.yield
 ///   }
-/*
 class ScfPattern : public OpRewritePattern<scf::ForOp> {
 public:
   using OpRewritePattern<scf::ForOp>::OpRewritePattern;
@@ -509,21 +417,9 @@ public:
       }
     }
 
-    // Bail out if any user of a loop result is not an 'extract' operation
-    // (otherwise we would have to materialize a 'glue' operation after the loop
-    // is replaced, which complicates things).
-    for (OpResult result : forOp->getResults()) {
-      if (llvm::any_of(result.getUsers(), [](Operation *user) {
-            return !isa<ttgi::ExtractOp>(user);
-          })) {
-        return false;
-      }
-    }
-
     return true;
   }
 };
-*/
 
 void MatchTargetSizePass::initNativeOperationSizes() {
   // FIXME: sets the target dot shape natively supported by the target
