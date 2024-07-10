@@ -67,7 +67,7 @@ runs:
         source ${{ inputs.oneapi }}/setvars.sh
         pip install intel-extension-for-pytorch/dist/*.whl
         IPEX_VERSION="$(python -c 'import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)')"
-        echo "IPEX_VERSION=$PYTORCH_VERSION" | tee -a "IPEX_VERSION"
+        echo "IPEX_VERSION=$IPEX_VERSION" | tee -a "$GITHUB_ENV"
 
     - name: Save IPEX wheels to a cache
       if: ${{ steps.ipex-cache.outputs.status == 'miss' }}
