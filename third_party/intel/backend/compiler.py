@@ -8,6 +8,7 @@ from typing import Any, Tuple
 import hashlib
 import re
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from packaging.version import Version
@@ -16,8 +17,9 @@ from packaging.version import Version
 @functools.lru_cache()
 def _path_to_binary(binary: str):
     paths = [
-        os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
+        os.environ.get(f"TRITON_{binary.upper().replace('-', '_')}_PATH", ""),
         os.path.join(os.path.dirname(__file__), "bin", binary),
+        shutil.which(binary) or "",
     ]
 
     for p in paths:
@@ -113,6 +115,10 @@ class XPUBackend(BaseBackend):
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
         dev_prop['device_arch'] = self.parse_device_arch(tgt_prop.get('device_arch', 0))
+        dev_prop['support_cl_bf16_conversion'] = tgt_prop.get('support_cl_bf16_conversion', False)
+        dev_prop['support_cl_sg_matmul_acc'] = tgt_prop.get('support_cl_sg_matmul_acc', False)
+        dev_prop['support_cl_sg_matmul_acc_tf32'] = tgt_prop.get('support_cl_sg_matmul_acc_tf32', False)
+        dev_prop['support_cl_sg_2d_block_io'] = tgt_prop.get('support_cl_sg_2d_block_io', False)
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -148,6 +154,12 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
+        cluster_info = intel.ClusterInfo()
+        if opt.cluster_dims is not None:
+            cluster_info.clusterDimX = opt.cluster_dims[0]
+            cluster_info.clusterDimY = opt.cluster_dims[1]
+            cluster_info.clusterDimZ = opt.cluster_dims[2]
+
         is_lts = Version(metadata["target"].arch["driver_version"]) == Version("1.3.27642")
         if (not is_lts and os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"):
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt)
@@ -178,6 +190,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
+        metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
     @staticmethod
@@ -236,5 +249,4 @@ class XPUBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output([_path_to_binary("spirv-dis")[0], "--version"], text=True).strip()
-        return f'{version}-{self.properties}'
+        return f'SPIR-V 1.5-{self.properties}'

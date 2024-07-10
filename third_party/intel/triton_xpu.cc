@@ -7,8 +7,9 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
-#include "intel/include/Target/LLVMIR/LICM.h"
+#include "intel/include/Target/LLVMIR/PostProcess.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
 
@@ -84,6 +85,19 @@ void init_triton_intel(py::module &&m) {
   init_triton_intel_passes_ttir(passes.def_submodule("ttir"));
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 
+  // cluster info
+  py::class_<gpu::intel::ClusterInfo>(m, "ClusterInfo")
+      .def(py::init<>())
+      .def_readwrite("clusterDimX", &gpu::intel::ClusterInfo::clusterDimX)
+      .def_readwrite("clusterDimY", &gpu::intel::ClusterInfo::clusterDimY)
+      .def_readwrite("clusterDimZ", &gpu::intel::ClusterInfo::clusterDimZ)
+      .def("__repr__", [](gpu::intel::ClusterInfo &self) {
+        std::ostringstream oss;
+        oss << "(" << self.clusterDimX << ", " << self.clusterDimY << ", "
+            << self.clusterDimZ << ")";
+        return oss.str();
+      });
+
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
@@ -112,7 +126,8 @@ void init_triton_intel(py::module &&m) {
     mod->setDataLayout(layout);
   });
 
-  m.def("post_process_llir", [](llvm::Module *mod) { intel::LICM(*mod); });
+  m.def("post_process_llir",
+        [](llvm::Module *mod) { intel::postProcessLLVMIR(*mod); });
 
   m.def(
       "translate_to_spirv",

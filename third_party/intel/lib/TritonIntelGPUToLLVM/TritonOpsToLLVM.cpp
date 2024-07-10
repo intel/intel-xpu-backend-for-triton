@@ -2,8 +2,11 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -151,6 +154,8 @@ public:
     if (auto cast =
             dyn_cast<mlir::UnrealizedConversionCastOp>(base.getDefiningOp()))
       base = cast.getInputs()[0];
+    else
+      base = rewriter.getRemappedValue(base);
 
     OpBuilder::InsertPoint insertPoint = rewriter.saveInsertionPoint();
     rewriter.setInsertionPointAfter(ptrOp);
@@ -187,13 +192,18 @@ public:
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
           dataSize, blockWidth, blockHeight, vBlks, false /*transpose*/, vnni);
+      if (failed(load.verify())) {
+        // Explicitly invoke verifier because `triton_gen` ops are immediately
+        // lowered further to a builtin call.
+        return failure();
+      }
       rewriter.replaceOp(op, bitcast(load, resType));
     } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, TritonGEN::LoadCacheControl::L1C_L3C);
       if (failed(newOp.verify())) {
-        // Explicitly invoke verifier because `triton_gen` ops immediately
+        // Explicitly invoke verifier because `triton_gen` ops are immediately
         // lowered further to a builtin call.
         return failure();
       }
@@ -202,10 +212,15 @@ public:
       VectorType vectorType =
           getVectorType(cast<RankedTensorType>(op.getValue().getType()),
                         rewriter.getIntegerType(dataSize));
-      rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
+      auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks,
           bitcast(adaptor.getValue(), vectorType));
+      if (failed(newOp.verify())) {
+        // Explicitly invoke verifier because `triton_gen` ops are immediately
+        // lowered further to a builtin call.
+        return failure();
+      }
       rewriter.eraseOp(op);
     }
 
@@ -345,6 +360,26 @@ public:
   }
 };
 
+class AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
+public:
+  using ConvertTritonGPUOpToLLVMPattern<
+      AddPtrOp>::ConvertTritonGPUOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(AddPtrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type resultType = op.getType();
+    LLVMTypeConverter *typeConverter = getTypeConverter();
+    Type resultPtrTy = typeConverter->convertType(resultType);
+    Type resultElmTy = typeConverter->convertType(
+        cast<PointerType>(resultType).getPointeeType());
+    Value result = rewriter.create<LLVM::GEPOp>(
+        loc, resultPtrTy, resultElmTy, adaptor.getPtr(), adaptor.getOffset());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
@@ -359,4 +394,5 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, benefit);
   patterns.add<GlueOpConversion>(typeConverter, benefit);
   patterns.add<ExtractOpConversion>(typeConverter, benefit);
+  patterns.add<AddPtrOpConversion>(typeConverter, benefit);
 }

@@ -1211,7 +1211,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             bool allowLL = true) {
   // Eventually the LinearLayout path will be the only one.  For now we allow
   // both paths so we can test that they produce the same results.
-  if (allowLL && target.enableLinearLayout()) {
+  if (allowLL) {
     std::optional<SmallVector<SmallVector<Value>>> llOffsets =
         emitIndicesUsingLinearLayouts(loc, rewriter, target, layout, type,
                                       withCTAOffset);
@@ -1625,6 +1625,33 @@ inline Value packLLElements(Location loc,
     llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
+}
+
+inline SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
+                                         RewriterBase &rewriter) {
+  assert(bool(llvmVec) && "cannot unpack null value");
+  if (llvmVec.getType().isIntOrIndexOrFloat() ||
+      isa<triton::PointerType>(llvmVec.getType()) ||
+      isa<LLVM::LLVMPointerType>(llvmVec.getType()))
+    return {llvmVec};
+
+  SmallVector<Value> results;
+  for (int i = 0; i < cast<VectorType>(llvmVec.getType()).getNumElements();
+       i++) {
+    results.push_back(extract_element(llvmVec, i32_val(i)));
+  }
+  return results;
+}
+
+inline Value packLLVector(Location loc, ValueRange vals,
+                          RewriterBase &rewriter) {
+  assert(vals.size() > 0);
+  auto vecType = vec_ty(vals[0].getType(), vals.size());
+  Value vec = undef(vecType);
+  for (int i = 0; i < vals.size(); i++) {
+    vec = insert_element(vec, vals[i], i32_val(i));
+  }
+  return vec;
 }
 
 inline bool isLayoutMmaV1(Attribute layout) {

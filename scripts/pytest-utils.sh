@@ -34,10 +34,17 @@ pytest() {
         mkdir -p "$CURRENT_SKIPLIST_DIR"
         # skip comments in the skiplist
         sed -e '/^#/d' "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt" > "$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
-        pytest_extra_args+=(
-            "--deselect-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
-            "--select-fail-on-missing"
-        )
+        if [[ $TEST_UNSKIP = false ]]; then
+            pytest_extra_args+=(
+                "--deselect-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+                "--select-fail-on-missing"
+            )
+        else
+            pytest_extra_args+=(
+                "--timeout=500"
+                "--max-worker-restart=500"
+            )
+        fi
     fi
 
     python3 -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
@@ -120,4 +127,16 @@ capture_runtime_env() {
     python -c 'import triton; print(triton.__version__)' >  $TRITON_TEST_REPORTS_DIR/triton_version.txt
     python -c 'import torch; print(torch.__version__)' > $TRITON_TEST_REPORTS_DIR/pytorch_version.txt
     python -c 'import intel_extension_for_pytorch as ipex; print(ipex.__version__)' > $TRITON_TEST_REPORTS_DIR/IPEX_version.txt
+}
+
+ensure_spirv_dis() {
+    local spirv_dis="$(which spirv-dis || true)"
+    if [[ $spirv_dis ]]; then
+        echo "Found spirv-dis at $spirv_dis"
+        return
+    fi
+    echo "Installing spirv-dis to $HOME/.local/bin"
+    mkdir -p ~/.local/bin
+    curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C ~/.local/bin --strip-components 3 --no-anchored spirv-dis
+    export PATH="$HOME/.local/bin:$PATH"
 }

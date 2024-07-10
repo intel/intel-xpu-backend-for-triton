@@ -4,10 +4,14 @@ run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.ins
 on:
   workflow_call:
     inputs:
+      device:
+        description: Device
+        type: string
+        default: max1100
       driver_version:
         description: Driver version
         type: string
-        default: "rolling"
+        default: rolling
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -37,21 +41,37 @@ on:
         description: Ignore test errors
         type: boolean
         default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
       run_name:
         description: Custom run name
         type: string
-        default: "Build and test"
+        default: Build and test
+      build_llvm:
+        description: Build LLVM
+        type: boolean
+        default: false
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
 
 permissions: read-all
 
 env:
   TRITON_DISABLE_LINE_INFO: 1
   TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
+  TEST_UNSKIP: ${{ inputs.enable_unskip }}
 
 jobs:
-  print_inputs:
-    name: Print inputs
-    runs-on: Linux
+  integration-tests:
+    name: Integration tests
+    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}"]', inputs.device, inputs.driver_version)) }}
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Print inputs
         run: |
@@ -59,15 +79,6 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
 
-  integration-tests:
-    name: Integration tests
-    runs-on:
-      - ${{ inputs.runner_label || 'Linux' }}
-      - ${{ inputs.driver_version }}
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
-    steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -85,11 +96,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python_version }}
-
-      - name: Get LLVM commit id
-        run: |
-          LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
-          echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" >> $GITHUB_ENV
 
       - name: Setup PyTorch with IPEX
         if: ${{ inputs.install_ipex }}
@@ -114,13 +120,15 @@ jobs:
         if: ${{ !inputs.install_ipex }}
         uses: ./.github/actions/setup-fake-ipex
 
-      - name: Build Triton
+      - name: Install test dependencies
         run: |
-          export DEBUG=1
-          cd python
-          pip install wheel pytest pytest-xdist pytest-rerunfailures pytest-select
-          pip install --no-build-isolation '.[build,tests,tutorials]'
+          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout expecttest
           pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          build_llvm: ${{ inputs.build_llvm }}
 
       - name: Run lit tests
         run: |
@@ -139,14 +147,28 @@ jobs:
         run: |
           echo "TRITON_TEST_IGNORE_ERRORS=true" >> $GITHUB_ENV
 
+      - name: Set a default skip list
+        if: inputs.skip_list == ''
+        run: |
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
+          if [[ -d $skiplist ]]; then
+            echo "TRITON_TEST_SKIPLIST_DIR=$skiplist" | tee -a $GITHUB_ENV
+          fi
+
+      - name: Set a custom skip list
+        if: inputs.skip_list != ''
+        run: |
+          echo "TRITON_TEST_SKIPLIST_DIR=$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}" | tee -a $GITHUB_ENV
+
       - name: Run core tests
         run: |
           source ./scripts/pytest-utils.sh
+          ensure_spirv_dis
           cd python/test/unit
           TRITON_TEST_SUITE=language \
             pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
           TRITON_TEST_SUITE=subprocess \
-            pytest -vvv -n 8 language/test_subprocess.py
+            pytest -vvv -n 8 --device xpu language/test_subprocess.py
           # Run runtime tests serially to avoid race condition with cache handling
           TRITON_TEST_SUITE=runtime \
             pytest -vvv --device xpu runtime/
@@ -191,7 +213,7 @@ jobs:
           run_tutorial_test "07-extern-functions"
           run_tutorial_test "08-grouped-gemm"
           run_tutorial_test "10-experimental-block-pointer"
-          TRITON_INTEL_ENABLE_BLOCK_PTR=1 run_tutorial_test "10-experimental-block-pointer"
+          run_tutorial_test "10i-experimental-block-pointer"
 
       - name: Run CXX unittests
         run: |
@@ -233,6 +255,7 @@ jobs:
 
       - name: Pass rate
         run: |
+          source ./scripts/capture-hw-details.sh
           python3 scripts/pass_rate.py --reports reports
           python3 scripts/pass_rate.py --reports reports --json > pass_rate.json
 
@@ -241,12 +264,12 @@ jobs:
         if: github.ref_name == 'llvm-target'
         uses: actions/upload-artifact@v4
         with:
-          name: pass_rate-${{ inputs.python_version }}
+          name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate.json
 
       - name: Upload test reports
         if: inputs.upload_test_reports
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports-${{ inputs.python_version }}
+          name: test-reports-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: reports
