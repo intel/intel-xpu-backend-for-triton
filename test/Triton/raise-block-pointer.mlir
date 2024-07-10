@@ -197,9 +197,9 @@ tt.func @test_addptr_broadcast(%arg0 : !tt.ptr<f32>) -> tensor<2x128xf32> {
 // CHECK:           %[[VAL_4:.*]] = tt.load %[[VAL_3]] : !tt.ptr<tensor<2x128xf32>>
 // CHECK:           tt.return %[[VAL_4]] : tensor<2x128xf32>
 tt.func @test_addptr_broadcast_rank(%arg0 : !tt.ptr<f32>) -> tensor<2x128xf32> {
-  %cst = arith.constant dense<1> : tensor<128xi32>
+  %cst = arith.constant dense<1> : tensor<1x128xi32>
   %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<2x128x!tt.ptr<f32>>
-  %1 = tt.broadcast %cst : tensor<128xi32> -> tensor<2x128xi32>
+  %1 = tt.broadcast %cst : tensor<1x128xi32> -> tensor<2x128xi32>
   %2 = tt.addptr %0, %1 : tensor<2x128x!tt.ptr<f32>>, tensor<2x128xi32>
   %3 = tt.load %2 : tensor<2x128x!tt.ptr<f32>>
   tt.return %3 : tensor<2x128xf32>
@@ -213,9 +213,9 @@ tt.func @test_addptr_broadcast_rank(%arg0 : !tt.ptr<f32>) -> tensor<2x128xf32> {
 // CHECK:           %[[VAL_4:.*]] = tt.load %[[VAL_3]] : !tt.ptr<tensor<128x2x128xf32>>
 // CHECK:           tt.return %[[VAL_4]] : tensor<128x2x128xf32>
 tt.func @test_addptr_broadcast_rank_2(%arg0 : !tt.ptr<f32>) -> tensor<128x2x128xf32> {
-  %cst = arith.constant dense<1> : tensor<128x128xi32>
+  %cst = arith.constant dense<1> : tensor<128x1x128xi32>
   %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x2x128x!tt.ptr<f32>>
-  %1 = tt.broadcast %cst : tensor<128x128xi32> -> tensor<128x2x128xi32>
+  %1 = tt.broadcast %cst : tensor<128x1x128xi32> -> tensor<128x2x128xi32>
   %2 = tt.addptr %0, %1 : tensor<128x2x128x!tt.ptr<f32>>, tensor<128x2x128xi32>
   %3 = tt.load %2 : tensor<128x2x128x!tt.ptr<f32>>
   tt.return %3 : tensor<128x2x128xf32>
@@ -229,9 +229,9 @@ tt.func @test_addptr_broadcast_rank_2(%arg0 : !tt.ptr<f32>) -> tensor<128x2x128x
 // CHECK:           %[[VAL_4:.*]] = tt.load %[[VAL_3]] : !tt.ptr<tensor<128x2x128xf32>>
 // CHECK:           tt.return %[[VAL_4]] : tensor<128x2x128xf32>
 tt.func @test_addptr_broadcast_rank_3(%arg0 : !tt.ptr<f32>) -> tensor<128x2x128xf32> {
-  %cst = arith.constant dense<1> : tensor<128xi32>
+  %cst = arith.constant dense<1> : tensor<128x1x1xi32>
   %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x2x128x!tt.ptr<f32>>
-  %1 = tt.broadcast %cst : tensor<128xi32> -> tensor<128x2x128xi32>
+  %1 = tt.broadcast %cst : tensor<128x1x1xi32> -> tensor<128x2x128xi32>
   %2 = tt.addptr %0, %1 : tensor<128x2x128x!tt.ptr<f32>>, tensor<128x2x128xi32>
   %3 = tt.load %2 : tensor<128x2x128x!tt.ptr<f32>>
   tt.return %3 : tensor<128x2x128xf32>
