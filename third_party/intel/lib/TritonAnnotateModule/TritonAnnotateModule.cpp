@@ -1,7 +1,6 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONANNOTATEMODULE
@@ -10,6 +9,7 @@ namespace mlir::triton::gpu::intel {
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
+using DPASAnalysis = intel::DPASAnalysis;
 
 namespace {
 
@@ -19,14 +19,12 @@ struct TritonAnnotateModule
 
   void runOnOperation() final {
     ModuleOp mod = getOperation();
-    Builder builder(mod);
-
     if (target.getValue().empty()) {
       mod.emitError("Expecting target specification");
       return signalPassFailure();
     }
 
-    MLIRContext *ctx = &getContext();
+    Builder builder(mod);
     mod->setAttr(intel::TritonIntelGPUDialect::getTargetAttrName(),
                  builder.getStringAttr(target.getValue()));
 
@@ -36,30 +34,33 @@ struct TritonAnnotateModule
       mod->setAttr(intel::TritonIntelGPUDialect::getLTSAttrName(),
                    builder.getUnitAttr());
 
-    std::string AttrNumThreadsPerWarp =
+    DPASAnalysis &dpasAnalysis = getAnalysis<DPASAnalysis>();
+    setThreadsPerWarp(mod, dpasAnalysis);
+  }
+
+private:
+  void setThreadsPerWarp(ModuleOp &mod,
+                         const DPASAnalysis &dpasAnalysis) const {
+    Builder builder(mod);
+    const std::string &AttrNumThreadsPerWarp =
         TritonGPUDialect::getThreadsPerWarpAttrName();
+    unsigned reqThreadsPerWarp =
+        DPASAnalysis::supportedThreadsPerWarp(intel::getDeviceArch(mod));
 
     mod.walk([&](FunctionOpInterface funcOp) {
-      using DPASAnalysis = intel::DPASAnalysis;
-      DPASAnalysis dpasAnalysis(funcOp);
-      DPASAnalysis::Result canUseDPAS = dpasAnalysis.canUseDPAS();
-
-      if (canUseDPAS == DPASAnalysis::Result::Maybe) {
+      if (dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::Maybe) {
         // Set the threads per warp attribute to allow dot operation to be
         // lowered to DPAS instructions.
-        unsigned reqThreadsPerWarp = DPASAnalysis::supportedThreadsPerWarp(
-            triton::gpu::intel::getDeviceArch(mod));
         mod->setAttr(AttrNumThreadsPerWarp,
                      builder.getI32IntegerAttr(reqThreadsPerWarp));
-        assert(dpasAnalysis.canUseDPAS() == DPASAnalysis::Result::True &&
+        assert(dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::True &&
                "DPASAnalysis should report that dot operations can be "
                "lowered to DPAS instructions");
         WalkResult::interrupt();
       }
     });
 
-    // If the threads per warp attribute was not set then use the option
-    // value.
+    // If the threads per warp attribute was not set, use the option value.
     if (!mod->getAttr(AttrNumThreadsPerWarp))
       mod->setAttr(AttrNumThreadsPerWarp,
                    builder.getI32IntegerAttr(threadsPerWarp));

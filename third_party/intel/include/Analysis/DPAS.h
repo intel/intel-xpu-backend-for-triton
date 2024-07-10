@@ -13,7 +13,7 @@ namespace mlir::triton::gpu::intel {
 
 class DPASAnalysis {
 public:
-  DPASAnalysis(FunctionOpInterface func);
+  explicit DPASAnalysis(Operation *root);
 
   enum class Result { True, False, Maybe };
 
@@ -29,7 +29,7 @@ public:
     NOT_APPLICABLE
   };
 
-  /// Analyze the dpasMap and return:
+  /// Analyze the 'dotToDPASEngineMap' for the given function and return:
   ///  - Result::True if the function associated with this analysis contains
   ///     DotOp operations that can be lowered to DPAS instructions,
   ///  - Result::False if it contains DotOp operations that cannot be lowered
@@ -37,21 +37,23 @@ public:
   ///  - Result::Maybe if it contains DotOp operations that could be lowered to
   ///    DPAS instructions if the module was executed with a different subgroup
   ///    (aka threads per warp) size.
-  Result canUseDPAS() const;
+  Result canUseDPAS(FunctionOpInterface funcOp) const;
 
   /// Return the threads per warp (aka subgroup size) supported by the DPAS
   /// instruction on the given device architecture.
   static unsigned supportedThreadsPerWarp(DeviceArch arch);
 
-  /// Given a DotOp operation, return the DPAS engine type.
+  /// Given a DotOp operation, return its DPAS engine type.
   static DPASEngineType getDPASType(DotOp op);
 
 private:
-  /// The module enclosing the function associated with the analysis.
   mlir::ModuleOp mod;
 
-  /// The map of DotOp to DPAS type.
-  std::map<DotOp, DPASEngineType> dpasMap;
+  /// Tracks Dot operations and their DPAS engine type.
+  std::map<DotOp, DPASEngineType> dotToDPASEngineMap;
+
+  /// Tracks the Dot operations contained in a function.
+  std::map<FunctionOpInterface, SmallVector<DotOp>> funcToDotMap;
 };
 
 } // namespace mlir::triton::gpu::intel

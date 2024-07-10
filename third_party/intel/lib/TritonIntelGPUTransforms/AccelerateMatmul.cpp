@@ -13,6 +13,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+using DPASAnalysis = intel::DPASAnalysis;
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUACCELERATEMATMUL
@@ -101,10 +102,13 @@ SmallVector<unsigned> getWarpsPerTile(DotOp dotOp,
 
 class BlockedToDPAS : public RewritePattern {
   intel::DeviceArch arch;
+  const DPASAnalysis &dpasAnalysis;
 
 public:
-  BlockedToDPAS(MLIRContext *context, intel::DeviceArch arch)
-      : RewritePattern(DotOp::getOperationName(), 2, context), arch(arch) {}
+  BlockedToDPAS(MLIRContext *context, intel::DeviceArch arch,
+                const DPASAnalysis &dpasAnalysis)
+      : RewritePattern(DotOp::getOperationName(), 2, context), arch(arch),
+        dpasAnalysis(dpasAnalysis) {}
 
   LogicalResult matchAndRewrite(Operation *op,
                                 PatternRewriter &rewriter) const override {
@@ -115,10 +119,8 @@ public:
         isa<intel::DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
-    using Result = intel::DPASAnalysis::Result;
     auto funcOp = op->getParentOfType<FunctionOpInterface>();
-    Result canUseDPAS = intel::DPASAnalysis(funcOp).canUseDPAS();
-    if (canUseDPAS != Result::True)
+    if (dpasAnalysis.canUseDPAS(funcOp) != DPASAnalysis::Result::True)
       return failure();
 
     // Create DPAS encoding for the given number of warps
@@ -250,9 +252,10 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     auto deviceArch = intel::getDeviceArch(m);
+    DPASAnalysis &dpasAnalysis = getAnalysis<DPASAnalysis>();
 
     RewritePatternSet patterns(context);
-    patterns.add<BlockedToDPAS>(context, deviceArch);
+    patterns.add<BlockedToDPAS>(context, deviceArch, dpasAnalysis);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
 

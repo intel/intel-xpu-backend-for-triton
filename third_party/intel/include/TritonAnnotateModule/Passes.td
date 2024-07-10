@@ -14,11 +14,12 @@ include "mlir/Pass/PassBase.td"
 def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
   let summary = "Annotate the module with attributes used to steer code generation";
   let description = [{
-    This pass analyze the kernel's workload pattern and annotates the module with
+    This pass analyzes the kernel's workload pattern and annotates the module with
     attributes that can be used to steer exploitation of HW features of the target
     device by subsequent transformations.
-    For example, this pass can override the subgroup size (aka warp size) provided
-    by the driver in order to enable lowering 'tt.dot' operations to DPAS instructions.
+    For example, this pass can override the number of threads per warp (aka subgroup 
+    size) provided by the driver in order to enable lowering 'tt.dot' operations to 
+    DPAS instructions.
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
