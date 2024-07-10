@@ -17,8 +17,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
     This pass analyzes the kernel's workload pattern and annotates the module with
     attributes that can be used to steer exploitation of HW features of the target
     device by subsequent transformations.
-    For example, this pass can override the number of threads per warp (aka subgroup 
-    size) provided by the driver in order to enable lowering 'tt.dot' operations to 
+    For example, this pass can override the number of threads per warp (aka subgroup
+    size) provided by the driver in order to enable lowering 'tt.dot' operations to
     DPAS instructions.
   }];
 
