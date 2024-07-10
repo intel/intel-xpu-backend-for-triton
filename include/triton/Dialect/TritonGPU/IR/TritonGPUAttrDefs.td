@@ -1296,7 +1296,7 @@ elements along the K dim, or they use all elements of the tensor along the K dim
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent,
                      "unsigned":$kWidth), [{
-      return $_get(context, opIdx, parent, kWidth, 0);
+      return $_get(context, opIdx, parent, kWidth, false);
     }]>,
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent,

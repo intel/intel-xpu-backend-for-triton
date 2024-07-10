@@ -160,8 +160,8 @@ LogicalResult ExtractOp::verify() {
   if (operandRank != resultRank)
     return success();
 
-  /// below check works for tensor related type with same rank
-  /// try to simplify it later
+  /// FIXME: the check below works for tensors with same rank, try to simplify
+  /// it later.
 
   // ensure the input can be partitioned by the requested result.
   SmallVector<int64_t> resultShape = getShape(resultType);

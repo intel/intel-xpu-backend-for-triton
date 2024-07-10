@@ -896,15 +896,14 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
   RankedTensorType srcType = op.getSrc().getType();
   unsigned srcDim0 = srcType.getShape()[0];
   unsigned dstDim0 = tType.getShape()[0];
+  Operation *glue;
   if (srcDim0 == dstDim0) {
     Value newOp = b.create<ttgi::BroadcastOp>(loc, tType, op.getSrc());
     unsigned num = resType.getShape()[1] / tType.getShape()[1];
     SmallVector<Value> ops(num, newOp);
-    auto glue = b.create<ttgi::GlueOp>(loc, resType, ops);
-    op->replaceAllUsesWith(glue->getResults());
-    op->erase();
+    glue = b.create<ttgi::GlueOp>(loc, resType, ops);
   } else {
-    assert(srcDim0 == 2 * dstDim0);
+    assert(srcDim0 == 2 * dstDim0 && "add more support");
     auto newTy = RankedTensorType::get({srcDim0, tType.getShape()[1]},
                                        tType.getElementType());
     auto newOp = b.create<ttgi::BroadcastOp>(loc, newTy, op.getSrc());
@@ -912,10 +911,10 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
     auto extract1 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 1);
     SmallVector<Value> ops{extract0, extract1, extract0, extract1,
                            extract0, extract1, extract0, extract1};
-    auto glue = b.create<ttgi::GlueOp>(loc, resType, ops);
-    op->replaceAllUsesWith(glue->getResults());
-    op->erase();
+    glue = b.create<ttgi::GlueOp>(loc, resType, ops);
   }
+  op->replaceAllUsesWith(glue->getResults());
+  op->erase();
   return;
 }
 
@@ -968,8 +967,8 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
                 Value newOp =
                     b.create<ttgi::ExtractOp>(loc, subOpndType, operand, idx);
                 return newOp;
-              } else
-                return operand;
+              }
+              return operand;
             });
         Operation *subOp;
         if (numResults == 0)
