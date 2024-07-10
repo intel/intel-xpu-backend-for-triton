@@ -1,4 +1,4 @@
-name: Build and test on A770
+name: Build and test A770
 run-name: ${{ inputs.run_name }}
 
 on:
@@ -36,7 +36,7 @@ on:
       run_name:
         description: Custom run name
         type: string
-        default: "Build and test on A770"
+        default: "Build and test A770"
       enable_unskip:
         description: Ignore pytest.skip
         type: boolean

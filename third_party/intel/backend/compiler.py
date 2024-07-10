@@ -154,6 +154,12 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, device_arch):
+        cluster_info = intel.ClusterInfo()
+        if opt.cluster_dims is not None:
+            cluster_info.clusterDimX = opt.cluster_dims[0]
+            cluster_info.clusterDimY = opt.cluster_dims[1]
+            cluster_info.clusterDimZ = opt.cluster_dims[2]
+
         is_lts = Version(metadata["target"].arch["driver_version"]) == Version("1.3.27642")
         if (not is_lts and os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"):
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt)
@@ -184,6 +190,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
+        metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
     @staticmethod

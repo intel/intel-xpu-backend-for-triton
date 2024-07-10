@@ -122,7 +122,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout
+          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout expecttest
           pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
 
       - name: Setup Triton
