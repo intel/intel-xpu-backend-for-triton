@@ -189,8 +189,8 @@ def forward(q, k, v, causal, sm_scale):
     return o
 
 
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
+@benchmark_suit.perf_report(
+    benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD'],
         x_vals=[[4, 48, 1024, 64]],
@@ -202,7 +202,7 @@ def forward(q, k, v, causal, sm_scale):
         line_names=["Triton", "XeTLA"],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel="TFLOPS",  # label name for the y-axis
+        ylabel=["GB/s", "TFlops"],  # label name for the y-axis
         plot_name="attn-performance",
         # name for the plot. Used also as a file name for saving the plot.
         args={},
@@ -216,23 +216,26 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
     sm_scale = 0.125
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'onednn':
-        ms, min_ms, max_ms = triton.testing.do_bench(
-            lambda: torch.nn.functional.scaled_dot_product_attention(
-                q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=sm_scale), rep=1000, quantiles=quantiles,
-            fast_flush=False)
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
+            lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
+                                                                     False, scale=sm_scale), warmup=10, rep=10,
+            quantiles=quantiles, fast_flush=False)
+
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: forward(q, k, v, causal, sm_scale), rep=1000,
-                                                     quantiles=quantiles, fast_flush=False)
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: forward(q, k, v, causal, sm_scale), warmup=10,
+                                                               rep=10, quantiles=quantiles, fast_flush=False)
     if provider == 'xetla':
         name = "flash_attn_shape_{}_{}_{}_{}".format(Z, H, N_CTX, D_HEAD)
         func = getattr(xetla_kernel, name)
         xetla_fn = lambda: func(Z, H, D_HEAD, N_CTX, N_CTX)
-        ms, min_ms, max_ms = triton.testing.do_bench(xetla_fn, rep=1000, quantiles=quantiles, fast_flush=False)
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                               fast_flush=False)
 
-    def perf(ms):
-        return 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * 1e-12 / (ms * 1e-3)
+    tflops = lambda mean: 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12) / (mean * 1e-3)
+    gbps = lambda mean: Z * H * (N_CTX * D_HEAD + N_CTX * D_HEAD) * 2 * 2 * (1e-9) / (mean * 1e-3)
 
-    return perf(ms), perf(max_ms), perf(min_ms)
+    return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
-benchmark.run(show_plots=False, print_data=True)
+if __name__ == "__main__":
+    benchmark.run(show_plots=False, print_data=True)
