@@ -84,7 +84,7 @@ struct ConvertTritonGPUToLLVM
                          getSupportSG2DBlockAttrName()) &&
         mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                          getSupportDPASAttrName()) &&
-        mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR");
+        mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH");
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
                                                     isAdvancedPathEnabled);
     TritonLLVMConversionTarget convTarget(*context);
