@@ -24,8 +24,17 @@ def TritonIntelGPU_Dialect : Dialect {
       return ::llvm::StringLiteral("triton_gpu.target");
     }
 
-    static llvm::StringRef getSupportSG2DBlockAttrName() { return "triton_intel_gpu.support_sg_2d_block"; }
-    static llvm::StringRef getSupportDPASAttrName() { return "triton_intel_gpu.support_dpas"; }
+    /// Get the name of the attribute used to indicate whether subgroup 2D block
+    /// operations (e.g., 2D block read/write) are available.
+    static llvm::StringRef getSupportSG2DBlockAttrName() {
+      return "triton_intel_gpu.support_sg_2d_block";
+    }
+
+    /// Get the name of the attribute used to indicate whether the DPAS
+    /// instruction is available.
+    static llvm::StringRef getSupportDPASAttrName() {
+      return "triton_intel_gpu.support_dpas";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

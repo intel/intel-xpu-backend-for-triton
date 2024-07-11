@@ -10,12 +10,12 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 TritonIntelGPUToLLVMTypeConverter::TritonIntelGPUToLLVMTypeConverter(
-    MLIRContext *ctx, LowerToLLVMOptions &option, bool isAdvancePathEnabled,
+    MLIRContext *ctx, LowerToLLVMOptions &option, bool isAdvancedPathEnabled,
     const DataLayoutAnalysis *analysis)
     : TritonGPUToLLVMTypeConverter(ctx, option, analysis) {
   // Augment/overwrite type conversions required for the Intel conversion
   // passes.
-  if (isAdvancePathEnabled) {
+  if (isAdvancedPathEnabled) {
     // tt::pointer to v2i32.
     addConversion([&](PointerType type) -> std::optional<Type> {
       if (isa<RankedTensorType>(type.getPointeeType())) {

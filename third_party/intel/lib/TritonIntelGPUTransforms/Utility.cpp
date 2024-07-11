@@ -11,7 +11,6 @@
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
