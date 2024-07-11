@@ -47,7 +47,7 @@ private:
     unsigned reqThreadsPerWarp =
         DPASAnalysis::supportedThreadsPerWarp(intel::getDeviceArch(mod));
 
-    mod.walk([&](FunctionOpInterface funcOp) {
+    auto result = mod.walk([&](FunctionOpInterface funcOp) {
       if (dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::Maybe) {
         // Set the threads per warp attribute to allow dot operation to be
         // lowered to DPAS instructions.
@@ -58,12 +58,15 @@ private:
                "lowered to DPAS instructions");
         return WalkResult::interrupt();
       }
+      return WalkResult::advance();
     });
 
     // If the threads per warp attribute was not set, use the option value.
-    if (!mod->getAttr(AttrNumThreadsPerWarp))
+    if (!result.wasInterrupted()) {
+      assert(!mod->getAttr(AttrNumThreadsPerWarp) && "Unexpected attribute");
       mod->setAttr(AttrNumThreadsPerWarp,
                    builder.getI32IntegerAttr(threadsPerWarp));
+    }
   }
 };
 
