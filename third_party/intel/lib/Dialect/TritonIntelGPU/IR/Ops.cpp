@@ -100,18 +100,6 @@ LogicalResult GlueOp::verify() {
     return success();
 
   unsigned resultRank = getRank(resultType);
-  unsigned operandRank = getRank(inputType);
-  if (operandRank != resultRank)
-    return success();
-
-  /// FIXME: the check below works for tensors with same rank, try to simplify
-  /// it later.
-  Type resultElementType = getElementType(resultType);
-  if (llvm::any_of(inputTypes, [&](Type type) {
-        return getElementType(type) != resultElementType;
-      }))
-    return emitOpError("operands and result element type must match");
-
   if (llvm::any_of(inputTypes, [&](Type type) {
         for (unsigned i = 0; i < resultRank; ++i) {
           unsigned resultSize = getDimSize(resultType, i);
