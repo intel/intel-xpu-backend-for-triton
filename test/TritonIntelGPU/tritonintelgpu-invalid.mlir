@@ -1,13 +1,15 @@
 // RUN: triton-opt -split-input-file -verify-diagnostics %s
 
-tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16x8xf16>, %tensor2 : tensor<16x8xf32>) {
+// COM: Ensure that tensors with different shape cannot be glued.
+tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16xf16>, %tensor2 : tensor<16x8xf32>) {
   // expected-error @+1 {{'triton_intel_gpu.glue' op operands must have the same type}}
-  triton_intel_gpu.glue %tensor1, %tensor2 : (tensor<16x8xf16>, tensor<16x8xf32>) -> tensor<16x16xf16>
+  triton_intel_gpu.glue %tensor1, %tensor2 : (tensor<16xf16>, tensor<16x8xf32>) -> tensor<16x16xf16>
   tt.return
 }
 
 // -----
 
+// COM: Ensure that tensors with the different element types cannot be glued.
 tt.func @triton_intel_gpu.glue(%ptr1 : !tt.ptr<tensor<16x8xf16>>, %ptr2 : !tt.ptr<tensor<16x8xf32>>) {
   // expected-error @+1 {{'triton_intel_gpu.glue' op operands must have the same type}}
   triton_intel_gpu.glue %ptr1, %ptr2 : (!tt.ptr<tensor<16x8xf16>>, !tt.ptr<tensor<16x8xf32>>) -> !tt.ptr<tensor<16x16xf16>>
