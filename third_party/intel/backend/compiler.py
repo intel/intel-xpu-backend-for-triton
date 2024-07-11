@@ -105,7 +105,6 @@ class XPUBackend(BaseBackend):
         dev_prop['name'] = tgt_prop.get('name', 'xpu')
         dev_prop['platform_name'] = tgt_prop.get('platform_name', None)
         dev_prop['vendor'] = tgt_prop.get('vendor', None)
-        dev_prop['driver_version'] = tgt_prop.get('driver_version', None)
         dev_prop['version'] = tgt_prop.get('version', None)
         dev_prop['gpu_eu_count'] = tgt_prop.get('gpu_eu_count', None)
         dev_prop['gpu_subslice_count'] = tgt_prop.get('gpu_subslice_count', None)
