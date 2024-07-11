@@ -19,6 +19,15 @@ def TritonIntelGPU_Dialect : Dialect {
   ];
 
   let extraClassDeclaration = [{
+    /// Get the name of the attribute used to indicate the target architecture.
+    static constexpr ::llvm::StringLiteral getTargetAttrName() {
+      return ::llvm::StringLiteral("triton_gpu.target");
+    }
+
+    /// Get the name of the attribute used to indicate the LTS driver.
+    static ::llvm::StringLiteral getLTSAttrName() {
+      return ::llvm::StringLiteral("triton_gpu.is_lts");
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

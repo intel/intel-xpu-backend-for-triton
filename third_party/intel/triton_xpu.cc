@@ -10,6 +10,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 #include "intel/include/Target/LLVMIR/PostProcess.h"
+#include "intel/include/TritonAnnotateModule/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
 
@@ -31,6 +32,10 @@ using ret = py::return_value_policy;
 #define ADD_PASS_WRAPPER_OPT_2(name, builder, ty0, ty1)                        \
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
     pm.addPass(builder({val0, val1}));                                         \
+  })
+#define ADD_PASS_WRAPPER_OPT_3(name, builder, ty0, ty1, ty2)                   \
+  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2) {        \
+    pm.addPass(builder({val0, val1, val2}));                                   \
   })
 
 static uint32_t findKernels(llvm::Module &M,
@@ -78,6 +83,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUDistributeToWarps);
   ADD_PASS_WRAPPER_0("add_match_target_size",
                      gpu::intel::createTritonIntelGPUMatchTargetSize);
+  ADD_PASS_WRAPPER_OPT_3("add_triton_annotate_module",
+                         gpu::intel::createTritonAnnotateModule,
+                         const std::string &, bool, unsigned);
 }
 
 void init_triton_intel(py::module &&m) {
@@ -106,14 +114,6 @@ void init_triton_intel(py::module &&m) {
     mlir::registerTritonGENDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
-  });
-
-  // FIXME: Use SYCL runtime to query supported OpenCL extensions, instead of
-  // checking driver version.
-  m.def("set_device_properties", [](mlir::ModuleOp mod, bool isLTS) {
-    auto i1_ty = mlir::IntegerType::get(mod->getContext(), 1);
-    if (isLTS)
-      mod->setAttr("triton_gpu.is_lts", mlir::IntegerAttr::get(i1_ty, 1));
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {
