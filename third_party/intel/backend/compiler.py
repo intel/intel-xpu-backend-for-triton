@@ -68,8 +68,8 @@ class XPUOptions:
 
 class XPUBackend(BaseBackend):
 
-    # Experimental pass pipeline for kernels using block pointers.
-    class Experimental:
+    # AdvancedPath pass pipeline for kernels using block pointers.
+    class AdvancedPath:
 
         @staticmethod
         def make_ttgir(mod, metadata, opt):
@@ -175,7 +175,7 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
 
         if (not is_lts and os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"):
-            return XPUBackend.Experimental.make_ttgir(mod, metadata, opt)
+            return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
