@@ -65,30 +65,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set benchmark repository (IPEX)
-        if: ${{ inputs.install_ipex }}
-        run: |
-          echo "BENCHMARK_REPO=weishi-deng/benchmark" | tee -a "$GITHUB_ENV"
-
-      - name: Set benchmark repository (PyTorch)
-        if: ${{ !inputs.install_ipex }}
-        run: |
-          echo "BENCHMARK_REPO=pytorch/benchmark" | tee -a "$GITHUB_ENV"
-
-      - name: Get benchmark commit id (IPEX)
-        if: ${{ inputs.install_ipex }}
-        uses: ./.github/actions/get-commit-id
-        with:
-          repository: ${{ env.BENCHMARK_REPO }}
-          branch: main
-          variable: BENCHMARK_COMMIT_ID
-
-      - name: Get benchmark commit id (PyTorch)
-        if: ${{ !inputs.install_ipex }}
-        run: |
-          cd pytorch
-          echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
-
       - name: Load pip cache
         id: pip-cache
         uses: ./.github/actions/load
@@ -116,6 +92,30 @@ jobs:
         with:
           repository: pytorch/pytorch
           torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
+
+      - name: Set benchmark repository (IPEX)
+        if: ${{ inputs.install_ipex }}
+        run: |
+          echo "BENCHMARK_REPO=weishi-deng/benchmark" | tee -a "$GITHUB_ENV"
+
+      - name: Set benchmark repository (PyTorch)
+        if: ${{ !inputs.install_ipex }}
+        run: |
+          echo "BENCHMARK_REPO=pytorch/benchmark" | tee -a "$GITHUB_ENV"
+
+      - name: Get benchmark commit id (IPEX)
+        if: ${{ inputs.install_ipex }}
+        uses: ./.github/actions/get-commit-id
+        with:
+          repository: ${{ env.BENCHMARK_REPO }}
+          branch: main
+          variable: BENCHMARK_COMMIT_ID
+
+      - name: Get benchmark commit id (PyTorch)
+        if: ${{ !inputs.install_ipex }}
+        run: |
+          cd pytorch
+          echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
 
       - name: Identify pinned versions
         run: |
