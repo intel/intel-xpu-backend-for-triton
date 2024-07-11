@@ -603,12 +603,10 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
   unsigned axis = op.getAxis();
   assert(axis == dims - 1 && "only support last axis");
   assert(dims <= 2 && "only support 1D/2D tensor");
-  auto outer = dims == 2 ? srcTy.getShape()[0] : 1;
-  auto combine = op.getCombineOp().front().getOperations().begin();
-  auto id = combine->getName().getIdentifier();
+  int64_t outer = dims == 2 ? srcTy.getShape()[0] : 1;
+
   SmallVector<Value> glueVals;
-  // fixed 8 for now
-  unsigned step = 8;
+  unsigned step = 8; // FIXME: fixed to 8 for now.
   for (unsigned i = 0; i < outer; i += step) {
     SmallVector<Value> subVals;
     // FIXME: 16 is the supported IR reduce length
@@ -625,35 +623,38 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
       acc = subVals[0];
       break;
     case 2: {
-      auto acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
+      Operation *acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
       acc = acc01->getResult(0);
       break;
     }
     case 4: {
-      auto acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
-      auto acc23 = b.create(loc, id, {subVals[2], subVals[3]}, subType);
-      auto accOp = b.create(loc, id, {acc01->getResult(0), acc23->getResult(0)},
-                            subType);
+      Operation *acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
+      Operation *acc23 = b.create(loc, id, {subVals[2], subVals[3]}, subType);
+      Operation *accOp = b.create(
+          loc, id, {acc01->getResult(0), acc23->getResult(0)}, subType);
       acc = accOp->getResult(0);
       break;
     }
     default:
       assert(false && "add more reduce size support");
     }
+
     SmallVector<Value> subOps;
     for (unsigned j = 0; j < step; j++) {
       auto subType = RankedTensorType::get(16, srcTy.getElementType());
       Value subAcc = b.create<ttgi::ExtractOp>(loc, subType, acc, j);
       auto subRed = b.create<tt::ReduceOp>(loc, subAcc, 0);
-      auto &subRegion = subRed.getCombineOp();
+      Region &subRegion = subRed.getCombineOp();
       b.cloneRegionBefore(op.getCombineOp(), subRegion, subRegion.end());
       subOps.push_back(subRed.getResult()[0]);
     }
     glueVals.append(subOps);
   }
+
   auto glue = b.create<ttgi::GlueOp>(loc, op.getResultTypes()[0], glueVals);
   op->replaceAllUsesWith(glue->getResults());
   op->erase();
+
   return;
 }
 
@@ -785,7 +786,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
 
 void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
   OpBuilder b(op);
-  auto loc = op->getLoc();
+  Location loc = op->getLoc();
   RankedTensorType resType = op.getResult().getType();
   auto [shape, subType, subSize] = getSubTypeAndShape(resType);
   auto tType = cast<RankedTensorType>(subType);
@@ -809,8 +810,10 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
                            extract0, extract1, extract0, extract1};
     glue = b.create<ttgi::GlueOp>(loc, resType, ops);
   }
+
   op->replaceAllUsesWith(glue->getResults());
   op->erase();
+
   return;
 }
 
@@ -852,21 +855,20 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
     case 2: {
       for (unsigned j = 0; j < shape[0]; j += subSize[0]) {
         SmallVector<Value> newOperands;
-        llvm::transform(
-            op->getOperands(), std::back_inserter(newOperands),
-            [&](Value operand) {
-              Type type = operand.getType();
-              if (isa<tt::BroadcastOp>(op))
-                return operand;
-              else if (isa<tt::PointerType, RankedTensorType>(type)) {
-                Type subOpndType = std::get<1>(getSubTypeAndShape(type));
-                Value newOp =
-                    b.create<ttgi::ExtractOp>(loc, subOpndType, operand, idx);
-                return newOp;
-              }
-              return operand;
-            });
-        Operation *subOp;
+        llvm::transform(op->getOperands(), std::back_inserter(newOperands),
+                        [&](Value operand) {
+                          Type type = operand.getType();
+                          if (isa<tt::PointerType, RankedTensorType>(type)) {
+                            Type subOpndType =
+                                std::get<1>(getSubTypeAndShape(type));
+                            Value newOp = b.create<ttgi::ExtractOp>(
+                                loc, subOpndType, operand, idx);
+                            return newOp;
+                          }
+                          return operand;
+                        });
+
+        Operation *subOp = nullptr;
         if (numResults == 0)
           subOp = b.create(loc, op->getName().getIdentifier(), newOperands, {},
                            op->getAttrs());
@@ -885,9 +887,9 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
     }
   }
 
-  if (numResults == 1) {
+  if (numResults == 1)
     op->replaceAllUsesWith(b.create<ttgi::GlueOp>(loc, type, subOps));
-  }
+
   op->erase();
 }
 
