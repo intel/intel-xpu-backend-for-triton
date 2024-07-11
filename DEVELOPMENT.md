@@ -4,7 +4,7 @@ This short guide covers creating a basic development environment, installing nee
 
 ## Dependencies
 
-The primary software dependency is oneAPI. The best way to get oneAPI for PyTorch / Triton development is to use the [Intel PyTorch Dependency Bundle](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html). Scroll down to "Step 2: Install Intel Support Packages" and choose an appropriate option for your system. 
+The primary software dependency is oneAPI. The best way to get oneAPI for PyTorch / Triton development is to use the [Intel PyTorch Dependency Bundle](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html). Scroll down to "Step 2: Install Intel Support Packages" and choose an appropriate option for your system.
 * **Option 2A-2C: Install using System Package Manager** is recommended for system-wide installs of the currently released packages with automatic updates.
 * **Option 2D: Offline Install** is recommended for more control over package versions, or to have multiple installations of different versions of the oneAPI dependency bundle on the same machine.
 
