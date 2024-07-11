@@ -80,7 +80,10 @@ struct ConvertTritonGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
     bool isAdvancedPathEnabled =
-        !mod->hasAttr("triton_gpu.is_lts") &&
+        mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                         getSupportSG2DBlockAttrName()) &&
+        mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                         getSupportDPASAttrName()) &&
         mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR");
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
                                                     isAdvancedPathEnabled);

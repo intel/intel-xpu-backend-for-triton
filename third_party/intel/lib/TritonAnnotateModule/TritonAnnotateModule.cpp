@@ -28,10 +28,11 @@ struct TritonAnnotateModule
     mod->setAttr(intel::TritonIntelGPUDialect::getTargetAttrName(),
                  builder.getStringAttr(target.getValue()));
 
-    // FIXME: Use SYCL runtime to query supported OpenCL extensions, instead
-    // of checking driver version.
-    if (isLTS)
-      mod->setAttr(intel::TritonIntelGPUDialect::getLTSAttrName(),
+    if (supportSG2DBlock)
+      mod->setAttr(intel::TritonIntelGPUDialect::getSupportSG2DBlockAttrName(),
+                   builder.getUnitAttr());
+    if (supportDPAS)
+      mod->setAttr(intel::TritonIntelGPUDialect::getSupportDPASAttrName(),
                    builder.getUnitAttr());
 
     DPASAnalysis &dpasAnalysis = getAnalysis<DPASAnalysis>();
