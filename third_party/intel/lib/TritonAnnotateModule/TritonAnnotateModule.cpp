@@ -56,7 +56,7 @@ private:
         assert(dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::True &&
                "DPASAnalysis should report that dot operations can be "
                "lowered to DPAS instructions");
-        WalkResult::interrupt();
+        return WalkResult::interrupt();
       }
     });
 
