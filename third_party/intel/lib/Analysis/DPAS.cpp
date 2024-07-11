@@ -10,7 +10,8 @@ DPASAnalysis::DPASAnalysis(Operation *root) {
     mod = root->getParentOfType<ModuleOp>();
 
   DeviceArch arch = getDeviceArch(mod);
-  bool isLTS = mod->hasAttr(TritonIntelGPUDialect::getLTSAttrName());
+  bool supportDPAS =
+      mod->hasAttr(TritonIntelGPUDialect::getSupportDPASAttrName());
 
   // Populate the maps.
   mod.walk([&](FunctionOpInterface funcOp) {
@@ -22,9 +23,10 @@ DPASAnalysis::DPASAnalysis(Operation *root) {
       else
         funcToDotMap[funcOp] = {dotOp};
 
-      DPASEngineType dpasEngineType = (isLTS || arch == DeviceArch::UNKNOWN)
-                                          ? DPASEngineType::NOT_APPLICABLE
-                                          : DPASAnalysis::getDPASType(dotOp);
+      DPASEngineType dpasEngineType =
+          (!supportDPAS || arch == DeviceArch::UNKNOWN)
+              ? DPASEngineType::NOT_APPLICABLE
+              : DPASAnalysis::getDPASType(dotOp);
       dotToDPASEngineMap[dotOp] = dpasEngineType;
 
       // Only PVC supports TF32.

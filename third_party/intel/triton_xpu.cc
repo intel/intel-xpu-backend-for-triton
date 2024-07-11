@@ -33,10 +33,11 @@ using ret = py::return_value_policy;
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
     pm.addPass(builder({val0, val1}));                                         \
   })
-#define ADD_PASS_WRAPPER_OPT_3(name, builder, ty0, ty1, ty2)                   \
-  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2) {        \
-    pm.addPass(builder({val0, val1, val2}));                                   \
-  })
+#define ADD_PASS_WRAPPER_OPT_4(name, builder, ty0, ty1, ty2, ty3)              \
+  m.def(name,                                                                  \
+        [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2, ty3 val3) {    \
+          pm.addPass(builder({val0, val1, val2, val3}));                       \
+        })
 
 static uint32_t findKernels(llvm::Module &M,
                             std::set<llvm::Function *> &functions) {
@@ -83,9 +84,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUDistributeToWarps);
   ADD_PASS_WRAPPER_0("add_match_target_size",
                      gpu::intel::createTritonIntelGPUMatchTargetSize);
-  ADD_PASS_WRAPPER_OPT_3("add_triton_annotate_module",
+  ADD_PASS_WRAPPER_OPT_4("add_triton_annotate_module",
                          gpu::intel::createTritonAnnotateModule,
-                         const std::string &, bool, unsigned);
+                         const std::string &, bool, bool, unsigned);
 }
 
 void init_triton_intel(py::module &&m) {

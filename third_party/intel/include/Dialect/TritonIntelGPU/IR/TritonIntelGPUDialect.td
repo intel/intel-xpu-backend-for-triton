@@ -24,10 +24,8 @@ def TritonIntelGPU_Dialect : Dialect {
       return ::llvm::StringLiteral("triton_gpu.target");
     }
 
-    /// Get the name of the attribute used to indicate the LTS driver.
-    static ::llvm::StringLiteral getLTSAttrName() {
-      return ::llvm::StringLiteral("triton_gpu.is_lts");
-    }
+    static llvm::StringRef getSupportSG2DBlockAttrName() { return "triton_intel_gpu.support_sg_2d_block"; }
+    static llvm::StringRef getSupportDPASAttrName() { return "triton_intel_gpu.support_dpas"; }
   }];
 
   let useDefaultAttributePrinterParser = 1;
