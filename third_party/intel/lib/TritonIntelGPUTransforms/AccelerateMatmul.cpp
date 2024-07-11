@@ -153,23 +153,13 @@ public:
     if (arch == intel::DeviceArch::PVC) {
       // Enlarge the repCluster size to use the large 2D load for A and B
       // operands.
-      auto repA = dpasEnc.getDPASRepetitions(oldAType.getShape(), 0);
-      unsigned repClusterDimM;
-      if (repA[0] >= 4) {
-        repClusterDimM = 4;
-      } else if (repA[0] == 2) {
-        repClusterDimM = 2;
-      } else {
-        repClusterDimM = 1;
-      }
+      SmallVector<int64_t> repA =
+          dpasEnc.getDPASRepetitions(oldAType.getShape(), 0);
+      unsigned repClusterDimM = std::min(4u, static_cast<unsigned>(repA[0]));
 
-      unsigned repClusterDimN;
-      auto repB = dpasEnc.getDPASRepetitions(oldBType.getShape(), 1);
-      if (repB[1] >= 2) {
-        repClusterDimN = 2;
-      } else {
-        repClusterDimN = 1;
-      }
+      SmallVector<int64_t> repB =
+          dpasEnc.getDPASRepetitions(oldBType.getShape(), 1);
+      unsigned repClusterDimN = std::min(2u, static_cast<unsigned>(repB[1]));
 
       dpasEnc = intel::DpasEncodingAttr::get(
           oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
