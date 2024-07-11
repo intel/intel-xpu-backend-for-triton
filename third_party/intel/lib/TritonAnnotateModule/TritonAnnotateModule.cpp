@@ -44,13 +44,13 @@ private:
     Builder builder(mod);
     const std::string &AttrNumThreadsPerWarp =
         TritonGPUDialect::getThreadsPerWarpAttrName();
-    unsigned reqThreadsPerWarp =
-        DPASAnalysis::supportedThreadsPerWarp(intel::getDeviceArch(mod));
 
     auto result = mod.walk([&](FunctionOpInterface funcOp) {
       if (dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::Maybe) {
         // Set the threads per warp attribute to allow dot operation to be
         // lowered to DPAS instructions.
+        unsigned reqThreadsPerWarp =
+            DPASAnalysis::supportedThreadsPerWarp(intel::getDeviceArch(mod));
         mod->setAttr(AttrNumThreadsPerWarp,
                      builder.getI32IntegerAttr(reqThreadsPerWarp));
         assert(dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::True &&
