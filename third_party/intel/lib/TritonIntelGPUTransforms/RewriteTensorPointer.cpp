@@ -2,6 +2,7 @@
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
@@ -59,7 +60,8 @@ bool isDivisible(Value value, unsigned divisor) {
 ///   - the tensor pointer is not contiguous on memory
 bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch,
                   bool isUsedByStoreOp) {
-  if (op->getParentOfType<ModuleOp>()->hasAttr("triton_gpu.is_lts"))
+  if (!op->getParentOfType<ModuleOp>()->hasAttr(
+          ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
     return true;
 
   // Non-PVC device should always remove the tensor pointer

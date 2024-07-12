@@ -2597,7 +2597,7 @@ def test_scan_layouts(M, N, src_layout, axis, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name, options={'threads_per_warp': THREADS_PER_WARP})
+        kernel = triton.compile(f.name)
     rs = RandomState(17)
     x = rs.randint(-100, 100, (M, N)).astype('int32')
 
@@ -2731,7 +2731,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name, options={'threads_per_warp': THREADS_PER_WARP})
+        kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = numpy_random((M, N), dtype_str=dtype_str, rs=rs, low=0, high=10)
@@ -2785,7 +2785,7 @@ def test_store_op(M, src_layout, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        store_kernel = triton.compile(f.name, options={'threads_per_warp': THREADS_PER_WARP})
+        store_kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, 1)).astype('float32')
@@ -2835,7 +2835,7 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name, options={'threads_per_warp': THREADS_PER_WARP})
+        kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, )).astype('int32')
@@ -2917,7 +2917,7 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name, options={'threads_per_warp': THREADS_PER_WARP})
+        kernel = triton.compile(f.name)
 
     rs = RandomState(17)
     x = rs.randint(0, 4, (M, N)).astype('int32')
@@ -3252,8 +3252,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     if is_hip():
         kern_kwargs['kpack'] = kpack
-    if is_xpu():
-        kern_kwargs['threads_per_warp'] = 16
 
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
                          w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), **kern_kwargs)
@@ -3762,6 +3760,7 @@ def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
 def test_masked_load_shared_memory(dtype, device):
 
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
+
     M = 32
     N = 32
     K = 16
@@ -4996,7 +4995,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        kernel = triton.compile(f.name, options={'threads_per_warp': THREADS_PER_WARP})
+        kernel = triton.compile(f.name)
     kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
     assert torch.equal(z, x)
@@ -5229,7 +5228,6 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
             pytest.skip('BLOCK size (128, 256, 128) fails on MI300')
 
     check_type_supported(in_type_str, device)
-
     A = numpy_random((M, K), dtype_str=in_type_str)
     B = numpy_random((K, N), dtype_str=in_type_str)
     C = torch.empty((M, N), dtype=torch.float32, device=device)
@@ -5237,12 +5235,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     a = to_triton(A, device=device, dst_type=in_type_str)
     b = to_triton(B, device=device, dst_type=in_type_str)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    kern_kwargs = {}
-    if is_xpu():
-        kern_kwargs['threads_per_warp'] = 16
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
-                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps,
-                            **kern_kwargs)
+                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)

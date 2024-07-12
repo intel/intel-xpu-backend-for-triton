@@ -181,7 +181,6 @@ def group_gemm_fn(group_A, group_B):
         d_g_sizes,
         d_g_lds,
         group_size,
-        threads_per_warp=16,
     )
 
     return group_C
@@ -222,7 +221,6 @@ def triton_perf_fn(a_ptrs, b_ptrs, c_ptrs, sizes, lds, group_size):
         sizes,
         lds,
         group_size,
-        threads_per_warp=16,
     )
 
 

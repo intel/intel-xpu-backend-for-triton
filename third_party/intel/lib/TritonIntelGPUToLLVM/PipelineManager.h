@@ -180,13 +180,16 @@ class TritonGPUToLLVMPipelineManager {
 public:
   TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx)
       : mod(mod), ctx(ctx),
-        blockPtrPathIsEnabled(
-            !mod->hasAttr("triton_gpu.is_lts") &&
-            mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {}
+        isAdvancedPathEnabled(
+            mod->hasAttr(gpu::intel::TritonIntelGPUDialect::
+                             getSupportSG2DBlockAttrName()) &&
+            mod->hasAttr(
+                gpu::intel::TritonIntelGPUDialect::getSupportDPASAttrName()) &&
+            mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH")) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
-  bool skipSharedMemoryAllocation() const { return blockPtrPathIsEnabled; }
+  bool skipSharedMemoryAllocation() const { return isAdvancedPathEnabled; }
 
   /// Populate the conversion pipeline for function operations.
   void populateFunctionConversionPatterns(
@@ -194,7 +197,7 @@ public:
       TritonIntelGPUToLLVMTypeConverter &typeConverter, int numWarps) const {
     funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                        /*benefit=*/1);
-    if (!blockPtrPathIsEnabled)
+    if (!isAdvancedPathEnabled)
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
   }
@@ -213,7 +216,7 @@ public:
     patterns.add<AddSPIRVEnvPattern>(&typeConverter.getContext(),
                                      patternBenefitAddSPIRVEnv);
 
-    if (blockPtrPathIsEnabled) {
+    if (isAdvancedPathEnabled) {
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 benefit);
@@ -267,7 +270,7 @@ private:
   /// Selects which conversion pipeline to use.
   /// FIXME: this is temporary and should be removed once we have an analysis to
   /// determine whether a kernel uses block pointers.
-  bool blockPtrPathIsEnabled = false;
+  bool isAdvancedPathEnabled = false;
 };
 
 } // namespace mlir::triton::intel

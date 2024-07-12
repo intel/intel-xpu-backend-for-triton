@@ -7,6 +7,7 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 # Select which tests to run.
 TEST_MICRO_BENCHMARKS=false
 TEST_CORE=false
+TEST_INTERPRETER=false
 TEST_TUTORIAL=false
 TEST_UNIT=false
 VENV=false
@@ -28,6 +29,10 @@ for arg in "$@"; do
       ;;
     --core)
       TEST_CORE=true
+      shift
+      ;;
+    --interpreter)
+      TEST_INTERPRETER=true
       shift
       ;;
     --tutorial)
@@ -69,7 +74,8 @@ for arg in "$@"; do
   esac
 done
 
-if [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_UNIT" = false ]; then
+# Only run interpreter test when $TEST_INTERPRETER is ture
+if [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_UNIT" = false ]; then
   TEST_MICRO_BENCHMARKS=true
   TEST_CORE=true
   TEST_TUTORIAL=true
@@ -186,6 +192,22 @@ run_regression_tests() {
   pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
 }
 
+run_interpreter_tests() {
+  echo "***************************************************"
+  echo "******   Running Triton Interpreter tests    ******"
+  echo "***************************************************"
+  INTERPRETER_TEST_DIR=$TRITON_PROJ/python/test/unit
+
+  if [ ! -d "${INTERPRETER_TEST_DIR}" ]; then
+    echo "Not found '${INTERPRETER_TEST_DIR}'. Build Triton please" ; exit 3
+  fi
+  cd ${INTERPRETER_TEST_DIR}
+  export TEST_UNSKIP
+  TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
+  pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+  language/test_random.py --device cpu
+}
+
 run_tutorial_tests() {
   echo "***************************************************"
   echo "**** Running Triton Tutorial tests           ******"
@@ -217,6 +239,9 @@ test_triton() {
   if [ "$TEST_CORE" = true ]; then
     run_core_tests
     run_regression_tests
+  fi
+  if [ "$TEST_INTERPRETER" = true ]; then
+    run_interpreter_tests
   fi
   if [ "$TEST_TUTORIAL" = true ]; then
     run_tutorial_tests

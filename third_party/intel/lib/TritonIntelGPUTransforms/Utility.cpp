@@ -203,7 +203,7 @@ DeviceArch getDeviceArch(Operation *module) {
   return llvm::StringSwitch<DeviceArch>(archAttr)
       .Case("xpu:DEVICE_ARCH.PVC", DeviceArch::PVC)
       .Case("xpu:DEVICE_ARCH.ATS", DeviceArch::ATS)
-      .Case("xpu:DEVICE_ARCH.UNKNOWN", DeviceArch::UNKNOWN);
+      .Default(DeviceArch::UNKNOWN);
 }
 
 } // namespace mlir::triton::gpu::intel
