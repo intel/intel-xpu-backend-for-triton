@@ -7,6 +7,9 @@ TRITON_TEST_SKIPLIST_DIR="${TRITON_TEST_SKIPLIST_DIR:-$SCRIPTS_DIR/skiplist/defa
 TRITON_TEST_WARNING_REPORTS="${TRITON_TEST_WARNING_REPORTS:-false}"
 TRITON_TEST_IGNORE_ERRORS="${TRITON_TEST_IGNORE_ERRORS:-false}"
 
+if [[ $TEST_UNSKIP = true ]]; then
+    TRITON_TEST_IGNORE_ERRORS=true
+fi
 # absolute path for the selected skip list
 TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
 # absolute path for the current skip list
