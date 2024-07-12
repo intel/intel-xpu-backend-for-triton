@@ -23,9 +23,11 @@ struct TritonAnnotateModule
 
     mod->setAttr(intel::TritonIntelGPUDialect::getMinSGSizeAttrName(),
                  builder.getI32IntegerAttr(minSGSize));
+
     if (supportSG2DBlock)
       mod->setAttr(intel::TritonIntelGPUDialect::getSupportSG2DBlockAttrName(),
                    builder.getUnitAttr());
+
     if (supportDPAS)
       mod->setAttr(intel::TritonIntelGPUDialect::getSupportDPASAttrName(),
                    builder.getUnitAttr());
@@ -42,8 +44,10 @@ private:
         TritonGPUDialect::getThreadsPerWarpAttrName();
 
     mod.walk([&](FunctionOpInterface funcOp) {
-      // TODO: DPAS lowering only implemented for 16 threads per warp.
-      if (minSGSize != 16)
+      // FIXME: DPAS lowering only implemented for 16 threads per warp, i.e.,
+      // DPAS is not used for devices like ATS.
+      constexpr unsigned supportedThreadsPerWarp = 16;
+      if (minSGSize != supportedThreadsPerWarp)
         return WalkResult::interrupt();
 
       if (dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::Maybe) {

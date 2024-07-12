@@ -22,9 +22,9 @@ DPASAnalysis::DPASAnalysis(Operation *root) {
       else
         funcToDotMap[funcOp] = {dotOp};
 
-      DPASEngineType dpasEngineType = DPASEngineType::NOT_APPLICABLE;
-      if (supportDPAS)
-        dpasEngineType = DPASAnalysis::getDPASType(dotOp);
+      DPASEngineType dpasEngineType = supportDPAS
+                                          ? DPASAnalysis::getDPASType(dotOp)
+                                          : DPASEngineType::NOT_APPLICABLE;
       if (dpasEngineType == DPASEngineType::FP32_FP32_TF32_TF32 &&
           dotOp.getInputPrecision() != InputPrecision::TF32)
         dpasEngineType = DPASEngineType::NOT_APPLICABLE;
@@ -59,10 +59,9 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
     return Result::Maybe;
 
   unsigned threadsPerWarp = cast<IntegerAttr>(threadsPerWarpAttr).getInt();
-  unsigned minSGSize =
-      cast<IntegerAttr>(
-          mod->getAttr(TritonIntelGPUDialect::getMinSGSizeAttrName()))
-          .getInt();
+  unsigned minSGSize = mod->getAttrOfType<IntegerAttr>(
+                              TritonIntelGPUDialect::getMinSGSizeAttrName())
+                           .getInt();
   return (threadsPerWarp == minSGSize) ? Result::True : Result::False;
 }
 
