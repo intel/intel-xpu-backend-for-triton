@@ -13,6 +13,9 @@ inputs:
   try-tag-prefix:
     description: Try to use a tag with this prefix if commit/branch specified in `ref` doesn't exist
     default: ""
+  extra-cache-key:
+    description: Cache key suffix
+    default: ""
 runs:
   using: "composite"
   steps:
@@ -37,7 +40,7 @@ runs:
       uses: ./.github/actions/load
       with:
         path: ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}
-        key: ${{ inputs.package }}-$PYTHON_VERSION-${{ steps.commit-id.outputs.commit_id }}
+        key: ${{ inputs.package }}-$PYTHON_VERSION-${{ steps.commit-id.outputs.commit_id }}${{ inputs.extra-cache-key }}
 
     - name: Clone package repo
       if: ${{ steps.cache-load.outputs.status == 'miss' }}
