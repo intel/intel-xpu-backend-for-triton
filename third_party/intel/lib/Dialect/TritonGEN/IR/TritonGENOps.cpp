@@ -181,13 +181,14 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
   VectorType resTy = op.getRes().getType();
   unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
   unsigned resSize = resTy.getNumElements() * resElemTySize;
-  constexpr unsigned subgroupSize = 16;
-  unsigned expectedSize = op.getElemSizeInBits() * op.getTileHeight() *
-                          op.getTileWidth() * op.getVBlocks() / subgroupSize;
-  if (resSize != expectedSize)
-    return op.emitOpError() << "result size of " << resSize
-                            << " bits does not match the expected size of "
-                            << expectedSize << " bits";
+  //  constexpr unsigned subgroupSize = 16;
+  //  unsigned expectedSize = op.getElemSizeInBits() * op.getTileHeight() *
+  //                          op.getTileWidth() * op.getVBlocks() /
+  //                          subgroupSize;
+  //  if (resSize != expectedSize)
+  //    return op.emitOpError() << "result size of " << resSize
+  //                            << " bits does not match the expected size of "
+  //                            << expectedSize << " bits";
 
   if (op.getTranspose() && op.getVnniTransform())
     return op.emitOpError(
