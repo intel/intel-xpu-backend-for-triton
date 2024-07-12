@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
+#include <triton/Tools/Sys/GetEnv.hpp>
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONANNOTATEMODULE
@@ -53,25 +54,31 @@ private:
   void setThreadsPerWarp(ModuleOp &mod,
                          const DPASAnalysis &dpasAnalysis) const {
     Builder builder(mod);
-    mod.walk([&](FunctionOpInterface funcOp) {
-      // FIXME: DPAS lowering only implemented for 16 threads per warp, i.e.,
-      // DPAS is not used for devices like ATS.
-      constexpr unsigned supportedThreadsPerWarp = 16;
-      if (minSGSize != supportedThreadsPerWarp)
-        return WalkResult::interrupt();
 
-      if (dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::Maybe) {
-        // Set the threads per warp attribute to allow dot operation to be
-        // lowered to DPAS instructions.
-        mod->setAttr(AttrNumThreadsPerWarp,
-                     builder.getI32IntegerAttr(minSGSize));
-        assert(dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::True &&
-               "DPASAnalysis should report that dot operations can be "
-               "lowered to DPAS instructions");
-        return WalkResult::interrupt();
-      }
-      return WalkResult::advance();
-    });
+    bool enableWarp32 = mlir::triton::tools::getBoolEnv(
+        "TRITON_INTEL_ENABLE_DPAS_WARP_SIZE_32");
+    if (!enableWarp32) {
+      mod.walk([&](FunctionOpInterface funcOp) {
+        // FIXME: DPAS lowering only implemented for 16 threads per warp, i.e.,
+        // DPAS is not used for devices like ATS.
+        constexpr unsigned supportedThreadsPerWarp = 16;
+        if (minSGSize != supportedThreadsPerWarp)
+          return WalkResult::interrupt();
+
+        if (dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::Maybe) {
+          // Set the threads per warp attribute to allow dot operation to be
+          // lowered to DPAS instructions.
+          mod->setAttr(AttrNumThreadsPerWarp,
+                       builder.getI32IntegerAttr(minSGSize));
+          assert(dpasAnalysis.canUseDPAS(funcOp) ==
+                     DPASAnalysis::Result::True &&
+                 "DPASAnalysis should report that dot operations can be "
+                 "lowered to DPAS instructions");
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      });
+    }
 
     // If the threads per warp attribute was not set, use the option value.
     if (!mod->hasAttr(AttrNumThreadsPerWarp))
