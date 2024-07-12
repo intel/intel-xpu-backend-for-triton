@@ -243,8 +243,10 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
   unsigned resSize = resTy.getNumElements() * resElemTySize;
   constexpr unsigned subgroupSize = 16;
   unsigned expectedSize = op.getElemSizeInBits() * op.getTileHeight() *
-                          op.getTileWidth() * op.getVBlocks() / subgroupSize;
-  if (resSize != expectedSize)
+    op.getTileWidth() * op.getVBlocks() / subgroupSize;
+  bool enableWarp32 =
+      mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_WARP_SIZE_32");
+  if (!enableWarp32 && resSize != expectedSize)
     return op->emitOpError() << "result size of " << resSize
                              << " bits does not match the expected size of "
                              << expectedSize << " bits";
