@@ -28,4 +28,4 @@ The Rolling Stable release stream is supported. Other release streams may not wo
 ## Tips and Tricks
 
 * Building Triton with `compile-triton.sh` can be memory intensive due to compiling several large dependencies from source. Use the environment variable `MAX_JOBS=8` on machines with < 64GB of memory.
-* Pre-installed wheels can be fetched with the GitHub CLI tool `gh`. The default version on Ubuntu 22.04 is too old to support some flags we use, so install the latest from GitHub APT repo using [these instructions](https://github.com/cli/cli/blob/trunk/docs/install_linux.md).
+* Pre-built wheels will be fetched during invocation of the `test-triton.sh` script if the GitHub CLI tool `gh` is installed. The default version on Ubuntu 22.04 is too old to support some flags we use, so install the latest from GitHub APT repo using [these instructions](https://github.com/cli/cli/blob/trunk/docs/install_linux.md).
