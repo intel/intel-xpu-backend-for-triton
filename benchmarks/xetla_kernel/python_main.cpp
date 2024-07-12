@@ -1,8 +1,12 @@
-#include "bgemm.h"
-#include "softmax.h"
+#include "bgemm/bgemm.h"
+#include "flash_attention/fmha_forward_v5.h"
+#include "softmax/softmax.h"
+#include <CL/sycl.hpp>
+#include <cstdint>
 #include <ipex.h>
 #include <torch/extension.h>
-#include <vector>
+
+static constexpr float kNegInfinity = INFINITY * -1;
 
 sycl::queue get_current_sycl_queue() {
   // submit kernel
@@ -11,6 +15,37 @@ sycl::queue get_current_sycl_queue() {
 
   return xpu::get_queue_from_stream(stream);
 }
+
+struct Shape {
+  Shape(int B, int N, int F, int T, int H)
+      : num_batches(B), num_heads(N), num_queries(F), num_keys(T),
+        head_size(H) {}
+  const int num_batches;
+  const int num_heads;
+  const int num_queries;
+  const int num_keys;
+  const int head_size;
+
+  inline uint32_t get_query_size() const {
+    return num_batches * num_heads * num_queries * head_size;
+  }
+  inline uint32_t get_key_size() const {
+    return num_batches * num_heads * num_keys * head_size;
+  }
+  inline uint32_t get_score_size() const {
+    return num_batches * num_heads * num_queries * num_keys;
+  }
+  inline uint32_t get_ml_size() const {
+    return num_batches * num_heads * num_queries;
+  }
+  inline uint32_t get_attn_mask_size() const {
+#if _BIAS_AS_INPUT
+    return num_batches * num_heads * num_queries * num_keys;
+#else
+    return num_batches * num_queries * num_keys;
+#endif
+  }
+};
 
 #define CHECK_XPU(x)                                                           \
   TORCH_CHECK(x.device().is_xpu(), #x " must be a XPU tensor")
@@ -46,6 +81,58 @@ at::Tensor bgemm(const at::Tensor &a, const at::Tensor &b, const at::Tensor &c,
                cnt.data_ptr(), queue);
 
   return d;
+}
+
+// refers to test_fmha.cpp::test_fmha_forward()
+template <typename T, bool IsCausal>
+void flash_attn(const int64_t num_batches, const int64_t num_heads,
+                const int64_t head_size, const int64_t num_queries,
+                const int64_t num_keys) {
+  Shape shape(num_batches, num_heads, num_queries, num_keys, head_size);
+  auto queue = get_current_sycl_queue();
+
+  constexpr bool use_mask = false;
+  constexpr bool use_dropout = false;
+  float dropout_prob = 0.0f;
+  if constexpr (use_dropout)
+    dropout_prob = 0.5f;
+  const float scale = 1 / (1 - dropout_prob);
+  const float head_scale = sycl::rsqrt(float(shape.head_size));
+
+  uint32_t size_query = shape.get_query_size();
+  uint32_t size_key = shape.get_key_size();
+  uint32_t size_score = shape.get_score_size();
+  uint32_t size_attn_mask = shape.get_attn_mask_size();
+  uint32_t size_ml = shape.get_ml_size();
+
+  // forward
+  void *query_ptr = at::empty(size_query, at::kBFloat16).data_ptr();
+  void *key_ptr = at::empty(size_key, at::kBFloat16).data_ptr();
+  void *value_ptr = at::empty(size_key, at::kBFloat16).data_ptr();
+  void *attn_mask_ptr = at::empty(size_attn_mask, at::kBFloat16).data_ptr();
+  void *dropout_mask_ptr = at::empty(size_score, torch::kUInt8).data_ptr();
+
+  void *output_ptr = at::empty(size_query, at::kBFloat16).data_ptr();
+  void *m_ptr = at::empty(size_ml, at::kFloat).data_ptr();
+  void *l_ptr = at::empty(size_ml, at::kFloat).data_ptr();
+
+  // Type cast
+  T *query = static_cast<T *>(query_ptr);
+  T *key = static_cast<T *>(key_ptr);
+  T *value = static_cast<T *>(value_ptr);
+  T *attn_mask = static_cast<T *>(attn_mask_ptr);
+  uint8_t *dropout_mask = static_cast<uint8_t *>(dropout_mask_ptr);
+
+  T *output = static_cast<T *>(output_ptr);
+  float *m = static_cast<float *>(m_ptr);
+  float *l = static_cast<float *>(l_ptr);
+
+  fmha_forward<T, use_mask, IsCausal, use_dropout>(
+      queue, query, key, value, attn_mask, dropout_mask, dropout_prob, output,
+      m, l, shape.num_batches, shape.num_heads, shape.head_size,
+      shape.num_queries, shape.num_keys, head_scale);
+
+  return;
 }
 
 PYBIND11_MODULE(xetla_kernel, m) {
@@ -96,4 +183,15 @@ PYBIND11_MODULE(xetla_kernel, m) {
         "bgemm (XeTLA)");
   m.def("bgemm_shape_4096_4096_4096", &bgemm<Test_4096x4096x4096_row_row>,
         "bgemm (XeTLA)");
+  // flash_attn_shape_$Z_$H_${N_CTX}_${D_HEAD}
+  m.def(
+      "flash_attn_shape_4_48_1024_64",
+      [](const int64_t num_batches, const int64_t num_heads,
+         const int64_t head_size, const int64_t num_queries,
+         const int64_t num_keys) {
+        return flash_attn<sycl::half, false>(num_batches, num_heads, head_size,
+                                             num_queries, num_keys);
+      },
+      py::arg("num_batches"), py::arg("num_heads"), py::arg("head_size"),
+      py::arg("num_queries"), py::arg("num_keys"), "flash attn (XeTLA)");
 }

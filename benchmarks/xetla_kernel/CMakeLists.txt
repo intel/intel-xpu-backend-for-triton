@@ -14,3 +14,4 @@ target_include_directories(xetla_kernel PUBLIC "${XeTLALibrary_INCLUDE_DIR}")
 
 add_subdirectory(softmax)
 add_subdirectory(bgemm)
+add_subdirectory(flash_attention)
