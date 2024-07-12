@@ -35,12 +35,18 @@ runs:
           echo "PYTHON_VERSION=$PYTHON_VERSION" >> "$GITHUB_ENV"
         fi
 
+    - name: Generate cache key
+      shell: bash
+      run: |
+        DEPENDENCY_CACHE_KEY="${{ inputs.package }}-$PYTHON_VERSION-$(echo ${{ steps.commit-id.outputs.commit_id }} ${{ inputs.extra-cache-key }} | sha256sum - | cut -d\  -f1)"
+        echo "DEPENDENCY_CACHE_KEY=$DEPENDENCY_CACHE_KEY" | tee -a "$GITHUB_ENV"
+
     - name: Try to load package from a cache
       id: cache-load
       uses: ./.github/actions/load
       with:
         path: ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}
-        key: ${{ inputs.package }}-$PYTHON_VERSION-${{ steps.commit-id.outputs.commit_id }}${{ inputs.extra-cache-key }}
+        key: ${{ env.DEPENDENCY_CACHE_KEY }}
 
     - name: Clone package repo
       if: ${{ steps.cache-load.outputs.status == 'miss' }}
