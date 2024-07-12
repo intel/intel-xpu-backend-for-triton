@@ -2,6 +2,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include <triton/Tools/Sys/GetEnv.hpp>
 #include <type_traits>
 
 namespace mlir::triton::gpu::intel {
@@ -66,7 +67,13 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
   unsigned minSGSize = mod->getAttrOfType<IntegerAttr>(
                               TritonIntelGPUDialect::getMinSGSizeAttrName())
                            .getInt();
-  return (threadsPerWarp == minSGSize) ? Result::True : Result::False;
+
+  bool enableWarp32 =
+      mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_WARP_SIZE_32");
+  if (enableWarp32)
+    return Result::True; // We can support threads_per_warp=16 or 32 on PVC.
+  else
+    return (threadsPerWarp == minSGSize) ? Result::True : Result::False;
 }
 
 DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(Operation *op) {
