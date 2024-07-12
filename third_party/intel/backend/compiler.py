@@ -233,10 +233,11 @@ class XPUBackend(BaseBackend):
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
-                                                        properties["has_subgroup_2d_block_io"],
-                                                        properties["has_subgroup_matrix_multiply_accumulate"],
-                                                        properties["has_bfloat16_conversions"], opt.threads_per_warp)
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, 16, # min(properties["sub_group_sizes"]),
+                                                        True, # properties["has_subgroup_2d_block_io"],
+                                                        True, # properties["has_subgroup_matrix_multiply_accumulate"],
+                                                        True, # properties["has_bfloat16_conversions"],
+                                                        opt.threads_per_warp)
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
@@ -246,8 +247,7 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        if (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]
-                and (os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1" or opt.advanced_path)):
+        if ((os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1" or opt.advanced_path)):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)

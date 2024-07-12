@@ -48,25 +48,28 @@ private:
     const std::string &AttrNumThreadsPerWarp =
         TritonGPUDialect::getThreadsPerWarpAttrName();
 
-    mod.walk([&](FunctionOpInterface funcOp) {
-      // FIXME: DPAS lowering only implemented for 16 threads per warp, i.e.,
-      // DPAS is not used for devices like ATS.
-      constexpr unsigned supportedThreadsPerWarp = 16;
-      if (minSGSize != supportedThreadsPerWarp)
-        return WalkResult::interrupt();
-
-      if (dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::Maybe) {
-        // Set the threads per warp attribute to allow dot operation to be
-        // lowered to DPAS instructions.
-        mod->setAttr(AttrNumThreadsPerWarp,
-                     builder.getI32IntegerAttr(minSGSize));
-        assert(dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::True &&
-               "DPASAnalysis should report that dot operations can be "
-               "lowered to DPAS instructions");
-        return WalkResult::interrupt();
-      }
-      return WalkResult::advance();
-    });
+    //    mod.walk([&](FunctionOpInterface funcOp) {
+    //      // FIXME: DPAS lowering only implemented for 16 threads per warp,
+    //      i.e.,
+    //      // DPAS is not used for devices like ATS.
+    //      constexpr unsigned supportedThreadsPerWarp = 16;
+    //      if (minSGSize != supportedThreadsPerWarp)
+    //        return WalkResult::interrupt();
+    //
+    //      if (dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::Maybe)
+    //      {
+    //        // Set the threads per warp attribute to allow dot operation to be
+    //        // lowered to DPAS instructions.
+    //        mod->setAttr(AttrNumThreadsPerWarp,
+    //                     builder.getI32IntegerAttr(minSGSize));
+    //        assert(dpasAnalysis.canUseDPAS(funcOp) ==
+    //        DPASAnalysis::Result::True &&
+    //               "DPASAnalysis should report that dot operations can be "
+    //               "lowered to DPAS instructions");
+    //        return WalkResult::interrupt();
+    //      }
+    //      return WalkResult::advance();
+    //    });
 
     // If the threads per warp attribute was not set, use the option value.
     if (!mod->hasAttr(AttrNumThreadsPerWarp))
