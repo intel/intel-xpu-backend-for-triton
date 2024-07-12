@@ -185,7 +185,7 @@ public:
                              getSupportSG2DBlockAttrName()) &&
             mod->hasAttr(
                 gpu::intel::TritonIntelGPUDialect::getSupportDPASAttrName()) &&
-            mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_BLOCK_PTR")) {}
+            mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH")) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.

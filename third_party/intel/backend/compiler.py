@@ -174,7 +174,7 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
 
         if (properties["support_cl_sg_2d_block_io"] and properties["support_cl_sg_matmul_acc"]
-                and os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"):
+                and os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1"):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
