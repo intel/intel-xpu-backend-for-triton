@@ -25,9 +25,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
   let dependentDialects = ["mlir::triton::TritonDialect"];
 
   let options = [
-    Option<"target", "target",
-           "std::string", /*default*/"\"\"",
-           "the GPU target, e.g., PVC">,
+    Option<"minSGSize", "min-sg-size", "unsigned", /*default*/"32",
+           "minimum subgroup size supported by the target device">,
     Option<"supportSG2DBlock", "support-sg-2d-block", "bool", /*default*/"false",
            "whether subgroup 2D block operations (e.g., 2D block read/write) are available">,
     Option<"supportDPAS", "support-dpas", "bool", /*default*/"false",

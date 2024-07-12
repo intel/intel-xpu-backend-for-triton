@@ -85,8 +85,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_match_target_size",
                      gpu::intel::createTritonIntelGPUMatchTargetSize);
   ADD_PASS_WRAPPER_OPT_4("add_triton_annotate_module",
-                         gpu::intel::createTritonAnnotateModule,
-                         const std::string &, bool, bool, unsigned);
+                         gpu::intel::createTritonAnnotateModule, unsigned, bool,
+                         bool, unsigned);
 }
 
 void init_triton_intel(py::module &&m) {
