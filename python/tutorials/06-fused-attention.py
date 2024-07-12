@@ -468,7 +468,6 @@ class _attention(torch.autograd.Function):
             N_CTX=q.shape[2],  #
             HEAD_DIM=HEAD_DIM_K,  #
             STAGE=stage,  #
-            threads_per_warp=16,  #
             **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
@@ -515,8 +514,7 @@ class _attention(torch.autograd.Function):
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
             HEAD_DIM=ctx.HEAD_DIM,  #
             num_warps=NUM_WARPS,  #
-            num_stages=NUM_STAGES,  #
-            threads_per_warp=16  #
+            num_stages=NUM_STAGES  #
         )
 
         return dq, dk, dv, None, None

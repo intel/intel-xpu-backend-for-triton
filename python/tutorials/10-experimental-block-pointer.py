@@ -294,7 +294,7 @@ def matmul(a, b, accum_dtype, res_dtype):
             a.stride(0), a.stride(1), a.stride(2),  #
             b.stride(0), b.stride(1), b.stride(2),  #
             c.stride(0), c.stride(1), c.stride(2),  #
-            threads_per_warp=16, ACCUMULATOR_DTYPE=triton_accum_dtype)
+            ACCUMULATOR_DTYPE=triton_accum_dtype)
     elif len(a.shape) == 2 and len(b.shape) == 2:
         assert a.shape[1] == b.shape[0], "Incompatible dimensions"
         assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -313,7 +313,7 @@ def matmul(a, b, accum_dtype, res_dtype):
             a.stride(0), a.stride(1),  #
             b.stride(0), b.stride(1),  #
             c.stride(0), c.stride(1),  #
-            threads_per_warp=16, ACCUMULATOR_DTYPE=triton_accum_dtype)
+            ACCUMULATOR_DTYPE=triton_accum_dtype)
     else:
         assert False, "Input matrixs dimensions mismatch"
     # Allocates output.
