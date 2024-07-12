@@ -500,7 +500,7 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
   if (dotAttrs.count(layout)) {
     return {dotShape.m, dotShape.n};
   } else if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    if (dotAttr.getTranspose() == 1 && dotAttr.getOpIdx() == 1)
+    if (dotAttr.getIsTransposed() == 1 && dotAttr.getOpIdx() == 1)
       return {dotShape.k, dotShape.n};
   }
 

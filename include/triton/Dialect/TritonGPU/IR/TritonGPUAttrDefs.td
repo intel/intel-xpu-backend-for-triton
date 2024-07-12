@@ -1270,6 +1270,9 @@ The parent field is the layout of d.
 kWidth defines number of consecutive elements stored by one thread along k dimension.
 Some layouts do not use this parameter, either because they have a fixed number of
 elements along the K dim, or they use all elements of the tensor along the K dim.
+
+`isTransposed` indicates the result tensor is transposed so that it can be loaded with
+a transpose flag. This is used in the case of chained dot (E.g. Flash-Attention kernel).
   }];
 
   let parameters = (
@@ -1278,7 +1281,7 @@ elements along the K dim, or they use all elements of the tensor along the K dim
     "Attribute":$parent,
     DefaultValuedParameter<"unsigned", "0">:$kWidth,
     // intel specific
-    DefaultValuedParameter<"bool", "false">:$transpose
+    DefaultValuedParameter<"bool", "false">:$isTransposed
   );
 
   let builders = [
@@ -1301,8 +1304,8 @@ elements along the K dim, or they use all elements of the tensor along the K dim
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent,
                      "unsigned":$kWidth,
-                     "bool":$transpose), [{
-      return $_get(context, opIdx, parent, kWidth, transpose);
+                     "bool":$isTransposed), [{
+      return $_get(context, opIdx, parent, kWidth, isTransposed);
     }]>
   ];
 
