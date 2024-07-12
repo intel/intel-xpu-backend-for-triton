@@ -62,7 +62,11 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
   unsigned minSGSize = mod->getAttrOfType<IntegerAttr>(
                               TritonIntelGPUDialect::getMinSGSizeAttrName())
                            .getInt();
-  return (threadsPerWarp == minSGSize) ? Result::True : Result::False;
+  //  return (threadsPerWarp == minSGSize) ? Result::True : Result::False;
+  //  return (threadsPerWarp == 16) ? Result::True : Result::False;
+  return (threadsPerWarp == 16) || (threadsPerWarp == 32) ? Result::True
+                                                          : Result::False;
+  ;
 }
 
 DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(DotOp op) {
