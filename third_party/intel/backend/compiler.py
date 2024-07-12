@@ -161,7 +161,7 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         device_arch = properties["device_arch"]
-        intel.passes.ttgpuir.add_triton_annotate_module(pm, f"xpu:{device_arch}",
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
                                                         properties["support_cl_sg_2d_block_io"],
                                                         properties["support_cl_sg_matmul_acc"], opt.threads_per_warp)
         pm.run(mod)

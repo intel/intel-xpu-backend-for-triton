@@ -9,7 +9,6 @@ DPASAnalysis::DPASAnalysis(Operation *root) {
   else
     mod = root->getParentOfType<ModuleOp>();
 
-  DeviceArch arch = getDeviceArch(mod);
   bool supportDPAS =
       mod->hasAttr(TritonIntelGPUDialect::getSupportDPASAttrName());
 
@@ -23,18 +22,13 @@ DPASAnalysis::DPASAnalysis(Operation *root) {
       else
         funcToDotMap[funcOp] = {dotOp};
 
-      DPASEngineType dpasEngineType =
-          (!supportDPAS || arch == DeviceArch::UNKNOWN)
-              ? DPASEngineType::NOT_APPLICABLE
-              : DPASAnalysis::getDPASType(dotOp);
+      DPASEngineType dpasEngineType = DPASEngineType::NOT_APPLICABLE;
+      if (supportDPAS)
+        dpasEngineType = DPASAnalysis::getDPASType(dotOp);
+      if (dpasEngineType == DPASEngineType::FP32_FP32_TF32_TF32 &&
+          dotOp.getInputPrecision() != InputPrecision::TF32)
+        dpasEngineType = DPASEngineType::NOT_APPLICABLE;
       dotToDPASEngineMap[dotOp] = dpasEngineType;
-
-      // Only PVC supports TF32.
-      if (dpasEngineType == DPASEngineType::FP32_FP32_TF32_TF32) {
-        if (arch != DeviceArch::PVC ||
-            dotOp.getInputPrecision() != InputPrecision::TF32)
-          dotToDPASEngineMap[dotOp] = DPASEngineType::NOT_APPLICABLE;
-      }
     });
   });
 }
@@ -65,22 +59,11 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
     return Result::Maybe;
 
   unsigned threadsPerWarp = cast<IntegerAttr>(threadsPerWarpAttr).getInt();
-  DeviceArch arch = getDeviceArch(mod);
-  if (threadsPerWarp == supportedThreadsPerWarp(arch))
-    return Result::True;
-
-  return Result::False;
-}
-
-unsigned DPASAnalysis::supportedThreadsPerWarp(DeviceArch arch) {
-  switch (arch) {
-  case DeviceArch::PVC:
-    return 16;
-  case DeviceArch::ATS:
-    return 8;
-  default:
-    llvm_unreachable("Unexpected target architecture");
-  }
+  unsigned minSGSize =
+      cast<IntegerAttr>(
+          mod->getAttr(TritonIntelGPUDialect::getMinSGSizeAttrName()))
+          .getInt();
+  return (threadsPerWarp == minSGSize) ? Result::True : Result::False;
 }
 
 DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(DotOp op) {

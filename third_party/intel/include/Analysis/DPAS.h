@@ -39,10 +39,6 @@ public:
   ///    (aka threads per warp) size.
   Result canUseDPAS(FunctionOpInterface funcOp) const;
 
-  /// Return the threads per warp (aka subgroup size) supported by the DPAS
-  /// instruction on the given device architecture.
-  static unsigned supportedThreadsPerWarp(DeviceArch arch);
-
   /// Given a DotOp operation, return its DPAS engine type.
   static DPASEngineType getDPASType(DotOp op);
 

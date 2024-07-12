@@ -19,15 +19,10 @@ struct TritonAnnotateModule
 
   void runOnOperation() final {
     ModuleOp mod = getOperation();
-    if (target.getValue().empty()) {
-      mod.emitError("Expecting target specification");
-      return signalPassFailure();
-    }
-
     Builder builder(mod);
-    mod->setAttr(intel::TritonIntelGPUDialect::getTargetAttrName(),
-                 builder.getStringAttr(target.getValue()));
 
+    mod->setAttr(intel::TritonIntelGPUDialect::getMinSGSizeAttrName(),
+                 builder.getI32IntegerAttr(minSGSize));
     if (supportSG2DBlock)
       mod->setAttr(intel::TritonIntelGPUDialect::getSupportSG2DBlockAttrName(),
                    builder.getUnitAttr());
@@ -46,14 +41,16 @@ private:
     const std::string &AttrNumThreadsPerWarp =
         TritonGPUDialect::getThreadsPerWarpAttrName();
 
-    auto result = mod.walk([&](FunctionOpInterface funcOp) {
+    mod.walk([&](FunctionOpInterface funcOp) {
+      // TODO: DPAS lowering only implemented for 16 threads per warp.
+      if (minSGSize != 16)
+        return WalkResult::interrupt();
+
       if (dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::Maybe) {
         // Set the threads per warp attribute to allow dot operation to be
         // lowered to DPAS instructions.
-        unsigned reqThreadsPerWarp =
-            DPASAnalysis::supportedThreadsPerWarp(intel::getDeviceArch(mod));
         mod->setAttr(AttrNumThreadsPerWarp,
-                     builder.getI32IntegerAttr(reqThreadsPerWarp));
+                     builder.getI32IntegerAttr(minSGSize));
         assert(dpasAnalysis.canUseDPAS(funcOp) == DPASAnalysis::Result::True &&
                "DPASAnalysis should report that dot operations can be "
                "lowered to DPAS instructions");
@@ -63,11 +60,9 @@ private:
     });
 
     // If the threads per warp attribute was not set, use the option value.
-    if (!result.wasInterrupted()) {
-      assert(!mod->getAttr(AttrNumThreadsPerWarp) && "Unexpected attribute");
+    if (!mod->hasAttr(AttrNumThreadsPerWarp))
       mod->setAttr(AttrNumThreadsPerWarp,
                    builder.getI32IntegerAttr(threadsPerWarp));
-    }
   }
 };
 

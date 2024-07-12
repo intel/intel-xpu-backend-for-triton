@@ -19,9 +19,10 @@ def TritonIntelGPU_Dialect : Dialect {
   ];
 
   let extraClassDeclaration = [{
-    /// Get the name of the attribute used to indicate the target architecture.
-    static constexpr ::llvm::StringLiteral getTargetAttrName() {
-      return ::llvm::StringLiteral("triton_gpu.target");
+    /// Get the name of the attribute used to indicate the minimum subgroup
+    /// size supported by the target device.
+    static llvm::StringRef getMinSGSizeAttrName() {
+      return "triton_intel_gpu.min_sg_size";
     }
 
     /// Get the name of the attribute used to indicate whether subgroup 2D block
