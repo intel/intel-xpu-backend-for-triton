@@ -126,16 +126,6 @@ jobs:
           echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" >> "${GITHUB_ENV}"
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" >> "${GITHUB_ENV}"
 
-      # TIMM depends on torch and torchvision, so, in general, it needs to be installed before
-      # installing custom torch and torchvision, but instead we install its dependencies except
-      # torch and torchvision.
-      - name: Install TIMM Models
-        run: |
-          # install timm without dependencies
-          pip install --no-deps git+https://github.com/huggingface/pytorch-image-models@$TIMM_COMMIT_ID
-          # install timm dependencies without torch and torchvision
-          pip install $(curl -sSL https://raw.githubusercontent.com/huggingface/pytorch-image-models/$TIMM_COMMIT_ID/requirements.txt | grep -vE torch)
-
       - name: Setup IPEX
         if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-ipex
@@ -213,6 +203,15 @@ jobs:
           package: torchaudio
           repository: pytorch/audio
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+
+      - name: Install timm package
+        if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}
+        uses: ./.github/actions/install-dependency
+        with:
+          package: timm
+          repository: huggingface/pytorch-image-models
+          ref: ${{ env.TIMM_COMMIT_ID }}
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
       - name: Clone pytorch benchmark
