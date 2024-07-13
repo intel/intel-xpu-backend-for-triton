@@ -60,7 +60,9 @@ jobs:
     steps:
       - name: Print inputs
         run: |
-          echo "${{ toJSON(inputs) }}"
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
 
       - name: Checkout repository
         uses: actions/checkout@v4
