@@ -2104,7 +2104,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
         'argmax-tie-break-left': np.argmax,
     }[op]
     if 'tie-break-left' in op:
-        x[3:10] = numpy_op(x)
+        x[3:10] = x[numpy_op(x)]
     x_tri = to_triton(x, device=device)
     # numpy result
     z_dtype_str = 'int32' if op in ('argmin', 'argmax') else dtype_str
