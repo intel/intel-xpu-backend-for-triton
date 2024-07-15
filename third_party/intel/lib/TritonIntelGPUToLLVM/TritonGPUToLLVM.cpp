@@ -84,7 +84,6 @@ struct ConvertTritonGPUToLLVM
         mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                          getSupportDPASAttrName()) &&
         mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH");
-    bool isLTSDriver = mod->hasAttr("triton_gpu.is_lts");
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
                                                     isAdvancedPathEnabled);
     TritonLLVMConversionTarget convTarget(*context);
