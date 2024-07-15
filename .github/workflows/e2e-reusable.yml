@@ -7,6 +7,10 @@ on:
         description: Install Intel PyTorch Extension
         type: boolean
         default: true
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
       suite:
         description: Test suite
         type: string
@@ -87,12 +91,16 @@ jobs:
       - name: Setup PyTorch with IPEX
         if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
+        with:
+          repository: Stonepia/pytorch
+          ref: ${{ inputs.pytorch_ref }}
 
       - name: Setup PyTorch without IPEX
         if: ${{ !inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
+          ref: ${{ inputs.pytorch_ref }}
           torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
 
       - name: Set benchmark repository (IPEX)
