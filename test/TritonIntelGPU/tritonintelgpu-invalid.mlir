@@ -1,48 +1,18 @@
 // RUN: triton-opt -split-input-file -verify-diagnostics %s
 
-tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16x8xf16>, %tensor2 : tensor<8xf16>) {
-  // expected-error @+1 {{'triton_intel_gpu.glue' op operands and result must have the same rank}}
-  triton_intel_gpu.glue %tensor1, %tensor2 : (tensor<16x8xf16>, tensor<8xf16>) -> tensor<24x8xf16>
+// COM: Ensure that tensors with different shape cannot be glued.
+tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16xf16>, %tensor2 : tensor<16x8xf32>) {
+  // expected-error @+1 {{'triton_intel_gpu.glue' op operands must have the same type}}
+  triton_intel_gpu.glue %tensor1, %tensor2 : (tensor<16xf16>, tensor<16x8xf32>) -> tensor<16x16xf16>
   tt.return
 }
 
 // -----
 
-tt.func @triton_intel_gpu.glue(%ptr1 : !tt.ptr<tensor<16x8xf16>>, %ptr2 : !tt.ptr<tensor<16xf16>>) {
-  // expected-error @+1 {{'triton_intel_gpu.glue' op operands and result must have the same rank}}
-  triton_intel_gpu.glue %ptr1, %ptr2 : (!tt.ptr<tensor<16x8xf16>>, !tt.ptr<tensor<16xf16>>) -> !tt.ptr<tensor<16x24xf16>>
-  tt.return
-}
-
-// -----
-
-tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16x8xf16>, %tensor2 : tensor<16x8xf32>) {
-  // expected-error @+1 {{'triton_intel_gpu.glue' op operands and result element type must match}}
-  triton_intel_gpu.glue %tensor1, %tensor2 : (tensor<16x8xf16>, tensor<16x8xf32>) -> tensor<16x16xf16>
-  tt.return
-}
-
-// -----
-
+// COM: Ensure that tensors with the different element types cannot be glued.
 tt.func @triton_intel_gpu.glue(%ptr1 : !tt.ptr<tensor<16x8xf16>>, %ptr2 : !tt.ptr<tensor<16x8xf32>>) {
-  // expected-error @+1 {{'triton_intel_gpu.glue' op operands and result element type must match}}
+  // expected-error @+1 {{'triton_intel_gpu.glue' op operands must have the same type}}
   triton_intel_gpu.glue %ptr1, %ptr2 : (!tt.ptr<tensor<16x8xf16>>, !tt.ptr<tensor<16x8xf32>>) -> !tt.ptr<tensor<16x16xf16>>
-  tt.return
-}
-
-// -----
-
-tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16x8xf16>, %tensor2 : tensor<8x8xf16>) {
-  // expected-error @+1 {{'triton_intel_gpu.glue' op operands must have the same shape}}
-  triton_intel_gpu.glue %tensor1, %tensor2 : (tensor<16x8xf16>, tensor<8x8xf16>) -> tensor<24x8xf16>
-  tt.return
-}
-
-// -----
-
-tt.func @triton_intel_gpu.glue(%ptr1 : !tt.ptr<tensor<16x8xf16>>, %ptr2 : !tt.ptr<tensor<16x16xf16>>) {
-  // expected-error @+1 {{'triton_intel_gpu.glue' op operands must have the same shape}}
-  triton_intel_gpu.glue %ptr1, %ptr2 : (!tt.ptr<tensor<16x8xf16>>, !tt.ptr<tensor<16x16xf16>>) -> !tt.ptr<tensor<16x24xf16>>
   tt.return
 }
 
@@ -83,22 +53,6 @@ tt.func @triton_intel_gpu.glue(%tensor1 : !tt.ptr<tensor<16x8xf16>>, %tensor2 : 
 tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16x8xf16>, %tensor2 : tensor<16x8xf16>, %tensor3 : tensor<16x8xf16>) {
   // expected-error @+1 {{'triton_intel_gpu.glue' op glued operands do not exactly cover the result shape}}
   triton_intel_gpu.glue %tensor1, %tensor1, %tensor3 : (tensor<16x8xf16>, tensor<16x8xf16>, tensor<16x8xf16>) -> tensor<32x32xf16>
-  tt.return
-}
-
-// -----
-
-tt.func @triton_intel_gpu.extract(%tensor : tensor<16x16xf16>) {
-  // expected-error @+1 {{'triton_intel_gpu.extract' op operand and result must have the same rank}}
-  triton_intel_gpu.extract %tensor[0] : tensor<16x16xf16> -> tensor<4xf16>
-  tt.return
-}
-
-// -----
-
-tt.func @triton_intel_gpu.extract(%ptr : !tt.ptr<tensor<16x16xf16>>) {
-  // expected-error @+1 {{'triton_intel_gpu.extract' op operand and result must have the same rank}}
-  triton_intel_gpu.extract %ptr[0] : !tt.ptr<tensor<16x16xf16>> -> !tt.ptr<tensor<4xf16>>
   tt.return
 }
 

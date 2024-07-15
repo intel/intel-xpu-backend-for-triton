@@ -42,10 +42,8 @@ def TTIG_GlueOp : TTIG_Op<"glue", [Pure]> {
     The `glue` operation glues its input operands to form the result tensor (ptr
     to tensor) shape. Input operands are first concatenated along the first
     (leftmost) dimension until the result shape along that dimension is reached,
-    then along the next dimension, and so on. The result tensor and all input
-    operands must have the same rank and element type. Furthermore all the input
-    tensors must have the same shape. Concatenation of the input operands must
-    yield the exact tensor shape of the result.
+    then along the next dimension, and so on. Input operands must have the same type.
+    Concatenation of the input operands must yield the exact tensor shape of the result.
 
     Examples:
       ```mlir
@@ -57,9 +55,12 @@ def TTIG_GlueOp : TTIG_Op<"glue", [Pure]> {
       %res3 = triton_intel_gpu.glue %p1, %p2, %p3
             : (ptr<tensor<16x8xf16>>, ptr<tensor<16x8xf16>>, ptr<tensor<16x8xf16>>)
             -> ptr<tensor<16x24xf16>>
+      %res4 = triton_intel_gpu.glue %f1, %f2 : (f16, f16) -> tensor<2xf16>
+      %res5 = triton_intel_gpu.glue %t1, %t2 : (tensor<8xf16>, tensor<8xf16>) -> tensor<2x8xf16>
+      %res6 = triton_intel_gpu.glue %t1, %t2 : (tensor<8xf16>, tensor<8xf16>) -> tensor<16xf16>
       ```
   }];
-  let arguments = (ins Variadic<TT_TensorOrTensorPtr>:$operands);
+  let arguments = (ins Variadic<TT_Type>:$operands);
   let results = (outs TT_TensorOrTensorPtr:$res);
   let assemblyFormat = [{
     operands attr-dict `:` functional-type(operands, results)
@@ -90,7 +91,7 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
         column-major order
   }];
   let arguments = (ins TT_TensorOrTensorPtr:$base, I32Attr:$index);
-  let results = (outs TT_TensorOrTensorPtr:$res);
+  let results = (outs TT_Type:$res);
   let assemblyFormat = [{
     $base `[` $index `]` attr-dict `:` type($base) `->` type($res)
   }];
@@ -113,6 +114,22 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
   let results = (outs);
   let assemblyFormat = [{
     operands attr-dict `:` type($ptr)
+  }];
+}
+
+// same as tt.broadcast except that we don't require SameOperandsAndResultEncoding
+def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure, SameOperandsAndResultElementType]> {
+  let summary = "broadcast a tensor";
+  let description = [{
+    For a given tensor, broadcast changes one or more dimensions with size 1
+    to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.  You cannot
+    change the size of a non-1 dimension.
+  }];
+
+  let arguments = (ins TT_Tensor:$src);
+  let results = (outs TT_Tensor:$result);
+  let assemblyFormat = [{
+    $src attr-dict `:` type($src) `->` type($result)
   }];
 }
 
