@@ -71,19 +71,21 @@ struct GPUSubgroupReduceOpLowering
           op, "cannot be lowered as the op must be run "
               "uniformly (entire subgroup).");
 
-    unsigned kind = 0;
+    TritonGEN::ReduceKind reduceKind;
     switch (op.getOp()) {
     case mlir::gpu::AllReduceOperation::ADD:
-      kind = 9;
+      reduceKind = TritonGEN::ReduceKind::ADD;
       break;
     case mlir::gpu::AllReduceOperation::MAXNUMF:
-      kind = 12;
+      reduceKind = TritonGEN::ReduceKind::MAX;
       break;
     default:
       return rewriter.notifyMatchFailure(op, "unsupported reduction mode");
     }
-    auto red = rewriter.create<TritonGEN::SubgroupReduceOp>(
-        op.getLoc(), op.getResult().getType(), op.getValue(), kind);
+
+    auto red = rewriter.create<TritonGEN::SubGroupReduceOp>(
+        op.getLoc(), op.getResult().getType(), op.getValue(), reduceKind,
+        32); // take 32 as default numLaneToReduce
     rewriter.replaceOp(op, red);
     return success();
   }

@@ -9,8 +9,8 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 
 using namespace mlir;
-using namespace mlir::triton;
-using namespace mlir::triton::gpu::intel;
+namespace tt = mlir::triton;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
@@ -25,12 +25,12 @@ VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
 
 /// v2i32 [offsetX, offsetY] for 2D tensor desc.
 class MakeTensorPtrOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<MakeTensorPtrOp> {
+    : public ConvertTritonGPUOpToLLVMPattern<tt::MakeTensorPtrOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      MakeTensorPtrOp>::ConvertTritonGPUOpToLLVMPattern;
+      tt::MakeTensorPtrOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(MakeTensorPtrOp op, OpAdaptor adaptor,
+  matchAndRewrite(tt::MakeTensorPtrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     VectorType v2i32 = vec_ty(i32_ty, 2);
@@ -47,12 +47,13 @@ public:
 /// %oldOffset = llvm.extract %v2i32, 0/1
 /// %newOffset = llvm.add %oldOffset, %advanceStep
 /// offset = llvm.insert %v2i32, 0/1
-class AdvanceOpConversion : public ConvertTritonGPUOpToLLVMPattern<AdvanceOp> {
+class AdvanceOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<tt::AdvanceOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      AdvanceOp>::ConvertTritonGPUOpToLLVMPattern;
+      tt::AdvanceOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(AdvanceOp op, OpAdaptor adaptor,
+  matchAndRewrite(tt::AdvanceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     ValueRange offsets = adaptor.getOffsets();
@@ -110,8 +111,9 @@ public:
 ///         elemSize 32)
 /// Arg 12: cache controls options (LSC_CACHE_OPTS)
 /// Arg 13: stored value
-template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                               OpType, PrefetchOp, LoadOp, StoreOp>::value>>
+template <typename OpType,
+          typename = std::enable_if_t<llvm::is_one_of<
+              OpType, ttgi::PrefetchOp, tt::LoadOp, tt::StoreOp>::value>>
 class LoadStorePrefetchOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<OpType> {
 public:
@@ -183,7 +185,7 @@ public:
     Value offsetX = extract_element(tensorPtr, i32_val(0));
     Value offsetY = extract_element(tensorPtr, i32_val(1));
 
-    if constexpr (std::is_same_v<OpType, LoadOp>) {
+    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
       assert(idxAttr && "Dot index attribute missing");
       unsigned idx = idxAttr.getInt();
       Type resType =
@@ -213,7 +215,7 @@ public:
         return failure();
       }
       rewriter.replaceOp(op, bitcast(load, resType));
-    } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
+    } else if constexpr (std::is_same_v<OpType, ttgi::PrefetchOp>) {
       if (ptrOp.getOrder()[0] == 0) {
         // transpose = false;
         // vnni = false;
@@ -314,12 +316,12 @@ public:
 /// %glue = ttgi.glue %a, %b : tensor<4xf16>, tensor<4xf16> : tensor<8xf16>
 /// is converted to:
 /// %glue = llvm.shufflevector %a, %b : [0, 1, 2, 3, 4, 5, 6, 7] : vector<8xf16>
-class GlueOpConversion : public ConvertTritonGPUOpToLLVMPattern<GlueOp> {
+class GlueOpConversion : public ConvertTritonGPUOpToLLVMPattern<ttgi::GlueOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      GlueOp>::ConvertTritonGPUOpToLLVMPattern;
+      ttgi::GlueOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(GlueOp op, OpAdaptor adaptor,
+  matchAndRewrite(ttgi::GlueOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     SmallVector<Value> operands = adaptor.getOperands();
@@ -371,12 +373,13 @@ public:
 /// %extract = ttgi.extract %a[0] : tensor<8xf16> -> tensor<4xf16>
 /// is converted to
 /// %extract = llvm.shufflevector %a, %a : [0, 1, 2, 3] : vector<4xf16>
-class ExtractOpConversion : public ConvertTritonGPUOpToLLVMPattern<ExtractOp> {
+class ExtractOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<ttgi::ExtractOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      ExtractOp>::ConvertTritonGPUOpToLLVMPattern;
+      ttgi::ExtractOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(ExtractOp op, OpAdaptor adaptor,
+  matchAndRewrite(ttgi::ExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value base = adaptor.getBase();
@@ -437,33 +440,12 @@ class ArithConstantOpLowering
   }
 };
 
-class AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
+class SplatOpConversion : public ConvertTritonGPUOpToLLVMPattern<tt::SplatOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      AddPtrOp>::ConvertTritonGPUOpToLLVMPattern;
+      tt::SplatOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(AddPtrOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto resultType = op.getType();
-    assert(isa<PointerType>(resultType));
-    auto typeConverter = getTypeConverter();
-    auto resultPtrTy = typeConverter->convertType(resultType);
-    auto resultElmTy = typeConverter->convertType(
-        cast<PointerType>(resultType).getPointeeType());
-    Value result = rewriter.create<LLVM::GEPOp>(
-        loc, resultPtrTy, resultElmTy, adaptor.getPtr(), adaptor.getOffset());
-    rewriter.replaceOp(op, result);
-    return success();
-  }
-};
-
-class SplatOpConversion : public ConvertTritonGPUOpToLLVMPattern<SplatOp> {
-public:
-  using ConvertTritonGPUOpToLLVMPattern<
-      SplatOp>::ConvertTritonGPUOpToLLVMPattern;
-  LogicalResult
-  matchAndRewrite(SplatOp op, OpAdaptor adaptor,
+  matchAndRewrite(tt::SplatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto resultType = op.getType();
@@ -475,7 +457,7 @@ public:
         loc, vecTy, undef, adaptor.getSrc(),
         rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), 0));
     auto convertedTy = typeConverter->convertType(resultType);
-    auto num = convertedTy.cast<VectorType>().getNumElements();
+    auto num = cast<VectorType>(convertedTy).getNumElements();
     SmallVector<int32_t> indices(num, 0);
     auto attr = rewriter.getDenseI32ArrayAttr(indices);
     Value result = rewriter.create<LLVM::ShuffleVectorOp>(loc, convertedTy,
@@ -485,12 +467,13 @@ public:
   }
 };
 
-class ReduceOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReduceOp> {
+class ReduceOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<tt::ReduceOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      ReduceOp>::ConvertTritonGPUOpToLLVMPattern;
+      tt::ReduceOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(ReduceOp op, OpAdaptor adaptor,
+  matchAndRewrite(tt::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto resultType = op.getType(0);
@@ -516,12 +499,12 @@ public:
 };
 
 class ExpandDimsOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp> {
+    : public ConvertTritonGPUOpToLLVMPattern<tt::ExpandDimsOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      ExpandDimsOp>::ConvertTritonGPUOpToLLVMPattern;
+      tt::ExpandDimsOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
+  matchAndRewrite(tt::ExpandDimsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOp(op, adaptor.getSrc());
     return success();
@@ -529,12 +512,12 @@ public:
 };
 
 class BroadcastOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<BroadcastOp> {
+    : public ConvertTritonGPUOpToLLVMPattern<tt::BroadcastOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      BroadcastOp>::ConvertTritonGPUOpToLLVMPattern;
+      tt::BroadcastOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(BroadcastOp op, OpAdaptor adaptor,
+  matchAndRewrite(tt::BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // keep it simple for now
     auto src = adaptor.getSrc();
@@ -543,12 +526,13 @@ public:
   }
 };
 
-class AddPtrOpConversion : public ConvertTritonGPUOpToLLVMPattern<AddPtrOp> {
+class AddPtrOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<tt::AddPtrOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      AddPtrOp>::ConvertTritonGPUOpToLLVMPattern;
+      tt::AddPtrOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(AddPtrOp op, OpAdaptor adaptor,
+  matchAndRewrite(tt::AddPtrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Type resultType = op.getType();
@@ -594,10 +578,12 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
   patterns.add<AdvanceOpConversion>(typeConverter, benefit);
   patterns.add<DotOpConversion>(typeConverter, benefit);
-  patterns.add<LoadStorePrefetchOpConversion<PrefetchOp>>(typeConverter,
+  patterns.add<LoadStorePrefetchOpConversion<ttgi::PrefetchOp>>(typeConverter,
+                                                                benefit);
+  patterns.add<LoadStorePrefetchOpConversion<tt::LoadOp>>(typeConverter,
                                                           benefit);
-  patterns.add<LoadStorePrefetchOpConversion<LoadOp>>(typeConverter, benefit);
-  patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, benefit);
+  patterns.add<LoadStorePrefetchOpConversion<tt::StoreOp>>(typeConverter,
+                                                           benefit);
   patterns.add<GlueOpConversion>(typeConverter, benefit);
   patterns.add<ExtractOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantOpLowering>(typeConverter, benefit);

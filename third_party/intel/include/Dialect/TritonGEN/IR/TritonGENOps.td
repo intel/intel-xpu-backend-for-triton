@@ -307,22 +307,6 @@ def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
   }];
 }
 
-def TritonGEN_SubgroupReduceOp : TritonGEN_Op<"subgroup_reduce", [
-      TypesMatchWith<"result and value have the same type",
-                     "res", "value", "$_self">]>,
-  Results<(outs IntegerOrFloatType:$res)>,
-  Arguments<(ins IntegerOrFloatType:$value,
-                 I32Attr:$kind
-                 )> {
-  let summary = "Subgroup reduce";
-  string baseDescription = [{
-  }];
-
-  let assemblyFormat = [{
-    $kind $value attr-dict `:` type($value) `->` type($res)
-  }];
-}
-
 //===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
