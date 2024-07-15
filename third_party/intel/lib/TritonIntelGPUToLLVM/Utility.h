@@ -547,17 +547,13 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
 // [elemsPerThread X rank] index matrix.
 inline SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-            Attribute layout, RankedTensorType type, bool withCTAOffset,
-            bool allowLL = true) {
-  // Eventually the LinearLayout path will be the only one.  For now we allow
-  // both paths so we can test that they produce the same results.
-  if (allowLL) {
-    std::optional<SmallVector<SmallVector<Value>>> llOffsets =
-        emitIndicesUsingLinearLayouts(loc, rewriter, target, layout, type,
-                                      withCTAOffset);
-    if (llOffsets.has_value())
-      return *llOffsets;
-  }
+            Attribute layout, RankedTensorType type, bool withCTAOffset) {
+  MLIRContext *ctx = rewriter.getContext();
+  auto shape = type.getShape();
+  std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(shape, layout);
+  if (ll.has_value())
+    return mlir::emitIndices(loc, rewriter, target, layout, type,
+                             withCTAOffset);
 
   // step 1, delinearize threadId to get the base index
   auto multiDimBase = ::intel::emitBaseIndexForLayout(
@@ -567,7 +563,6 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   // step 3, add offset to base, and reorder the sequence
   // of indices to guarantee that elems in the same
   // sizePerThread are adjacent in order
-  auto shape = type.getShape();
   unsigned rank = shape.size();
   unsigned elemsPerThread = offset.size();
   SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
@@ -747,18 +742,24 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 inline SmallVector<Value>
 loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
                         Type elemTy, Location loc, RewriterBase &rewriter,
-                        const TargetInfoBase &target, bool allowLLs = true) {
+                        const TargetInfoBase &target) {
   auto dstTy = cast<RankedTensorType>(dst.getType());
   auto srcTy = cast<MemDescType>(src.getType());
 
-  if (allowLLs) {
-    std::optional<SmallVector<Value>> llVals =
-        loadSharedToRegistersUsingLinearLayouts(dstTy, srcTy, elemTy, shrMemObj,
-                                                loc, rewriter, target);
-    if (llVals.has_value()) {
-      return *std::move(llVals);
-    }
-  }
+  SmallVector<Value> ret;
+  if (emitTransferBetweenRegistersAndShared(
+          dstTy, srcTy, elemTy, /*maxVecElems=*/std::nullopt,
+          shrMemObj.getBase(), shrMemObj.getStrides(), loc, rewriter, target,
+          [&](VectorType vecTy, Value vecAddr) {
+            auto vecVal = load(vecTy, vecAddr);
+            vecVal.setAlignment(vecTy.getNumElements() *
+                                elemTy.getIntOrFloatBitWidth() / 8);
+
+            for (int v = 0; v < vecTy.getNumElements(); v++) {
+              ret.push_back(extract_element(elemTy, vecVal, i32_val(v)));
+            }
+          }))
+    return ret;
 
   auto dstShape = dstTy.getShape();
   assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
@@ -815,16 +816,26 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                                      Value shrMemBase, Type elemTy,
                                      Location loc,
                                      ConversionPatternRewriter &rewriter,
-                                     const TargetInfoBase &target,
-                                     bool allowLLs = true) {
-  auto srcTy = cast<RankedTensorType>(src.getType());
+                                     const TargetInfoBase &target) {
   auto dstTy = cast<MemDescType>(dst.getType());
+  auto srcTy = cast<RankedTensorType>(src.getType());
 
-  if (allowLLs && storeDistributedToSharedUsingLinearLayouts(
-                      dstTy, srcTy, elemTy, inVals, shrMemBase, dstStrides, loc,
-                      rewriter, target)) {
+  if (emitTransferBetweenRegistersAndShared(
+          srcTy, dstTy, elemTy, /*maxVecElems=*/std::nullopt, shrMemBase,
+          dstStrides, loc, rewriter, target,
+          [&](VectorType vecTy, Value vecAddr) {
+            ArrayRef<Value> vals = inVals.take_front(vecTy.getNumElements());
+            inVals = inVals.drop_front(vecTy.getNumElements());
+
+            Value vec = undef(vecTy);
+            for (int i = 0; i < vals.size(); i++) {
+              vec = insert_element(vec, vals[i], i32_val(i));
+            }
+            store(vec, vecAddr)
+                .setAlignment(vecTy.getNumElements() *
+                              elemTy.getIntOrFloatBitWidth() / 8);
+          }))
     return;
-  }
 
   auto srcShape = srcTy.getShape();
   auto rank = srcShape.size();

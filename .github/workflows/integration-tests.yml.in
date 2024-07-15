@@ -292,7 +292,7 @@ jobs:
         run: |
           cd python/test/unit
           python3 -m pytest -s -n 16 -m interpreter language/test_core.py language/test_standard.py \
-           language/test_random.py language/test_block_pointer.py language/test_subprocess.py \
+           language/test_random.py language/test_block_pointer.py language/test_subprocess.py runtime/test_autotuner::test_kwargs[False]\
            ../../tutorials/06-fused-attention.py::test_op --device cpu
 
       - &run-cpp-unittests-step
@@ -411,6 +411,11 @@ jobs:
       - *run-cpp-unittests-step
       - *save-build-artifacts-step
       - *inspect-cache-directories-step
+
+      - name: Clean up caches
+        run: |
+          rm -rf ~/.triton
+          rm -rf ~/.cache
 
   Build-Tests:
     needs: Runner-Preparation

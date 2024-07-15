@@ -560,9 +560,8 @@ std::optional<LinearLayout> sliceToLinearLayout(ArrayRef<int64_t> shape,
   parentShape.insert(parentShape.begin() + slice.getDim(), 1);
   std::optional<LinearLayout> parentLL =
       triton::gpu::toLinearLayout(parentShape, slice.getParent());
-  if (!parentLL) {
+  if (!parentLL.has_value())
     return std::nullopt;
-  }
 
   // Remove dimension slice.getDim() from the parent layout.
   //
