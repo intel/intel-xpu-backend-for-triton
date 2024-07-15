@@ -47,6 +47,10 @@ bool isDivisible(Value value, unsigned divisor) {
   if (auto extSIOp = value.getDefiningOp<arith::ExtSIOp>())
     return isDivisible(extSIOp->getOperand(0), divisor);
 
+  // Case 4: Value is defined by a castOp
+  if (auto castOp = value.getDefiningOp<arith::IndexCastOp>())
+    return isDivisible(castOp->getOperand(0), divisor);
+
   return false;
 }
 
@@ -101,6 +105,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch,
     if (auto strideInt = dyn_cast<IntegerAttr>(stride.getValue()))
       return strideInt.getInt() != 1;
   }
+
 
   return true;
 }
