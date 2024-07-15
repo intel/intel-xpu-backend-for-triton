@@ -26,6 +26,23 @@ static bool preCondition(scf::ForOp forOp) {
                      return !def;
                    }))
     return false;
+  if (forOp
+          ->walk([&](Operation *op) {
+            if (isa<triton::MakeTensorPtrOp>(op)) {
+              if (llvm::any_of(op->getOperands(), [&](Value operand) {
+                    if (auto defOp = operand.getDefiningOp()) {
+                      return !isa<arith::ConstantOp>(defOp) &&
+                             (op->getBlock() != defOp->getBlock());
+                    }
+                    return false;
+                  }))
+                return WalkResult::interrupt();
+              return WalkResult::advance();
+            }
+            return WalkResult::advance();
+          })
+          .wasInterrupted())
+    return false;
   // Don't pipeline outer loops.
   if (forOp
           ->walk([&](Operation *op) {
