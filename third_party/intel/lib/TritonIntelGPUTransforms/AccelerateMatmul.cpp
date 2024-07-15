@@ -10,6 +10,9 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 
+#define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
+#define PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS 64
+
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
@@ -155,13 +158,20 @@ public:
     if (arch == intel::DeviceArch::PVC) {
       // Enlarge the repCluster size to use the large 2D load for A and B
       // operands.
+      unsigned maxRepClusterM =
+          PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS / dpasCap.repeatCount;
       SmallVector<int64_t> repA =
           dpasEnc.getDPASRepetitions(oldAType.getShape(), 0);
-      unsigned repClusterDimM = std::min(4u, static_cast<unsigned>(repA[0]));
+      unsigned repClusterDimM =
+          std::min(maxRepClusterM, static_cast<unsigned>(repA[0]));
 
+      unsigned maxRepClusterN =
+          PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
+          ((dpasElemBitWidths / 8) * dpasCap.executionSize);
       SmallVector<int64_t> repB =
           dpasEnc.getDPASRepetitions(oldBType.getShape(), 1);
-      unsigned repClusterDimN = std::min(2u, static_cast<unsigned>(repB[1]));
+      unsigned repClusterDimN =
+          std::min(maxRepClusterN, static_cast<unsigned>(repB[1]));
 
       dpasEnc = intel::DpasEncodingAttr::get(
           oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
