@@ -145,16 +145,20 @@ LogicalResult ExtractOp::verify() {
 
   unsigned resultRank = getRank(resultType);
   unsigned operandRank = getRank(operandType);
-  if (operandRank != resultRank)
-    return success();
+  if (resultRank > operandRank)
+    return emitOpError("result rank cannot be greater than operand rank");
 
-  /// FIXME: the check below works for tensors with same rank, try to simplify
-  /// it later.
-
-  // ensure the input can be partitioned by the requested result.
   SmallVector<int64_t> resultShape = getShape(resultType);
   SmallVector<int64_t> operandShape = getShape(operandType);
 
+  // Make the result have the same rank as the operand.
+  while (resultRank < operandRank) {
+    resultShape.insert(resultShape.begin(), operandRank - resultRank, 1);
+    resultRank++;
+  }
+  assert(operandRank == resultRank && "Expecting same rank");
+
+  // Ensure the input can be partitioned by the requested result.
   unsigned i = 0;
   for (auto [resDim, operandDim] : zip(resultShape, operandShape)) {
     if (operandDim < resDim)
@@ -173,6 +177,7 @@ LogicalResult ExtractOp::verify() {
   unsigned index = getIndex();
   if (index >= numTiles)
     return emitOpError("index must be less than ") << numTiles;
+
   return success();
 }
 

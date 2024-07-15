@@ -71,17 +71,25 @@ def TTIG_GlueOp : TTIG_Op<"glue", [Pure]> {
 def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
   let summary = "Tensor extract operation";
   let description = [{
-    The `extract` operation extracts a subtensor (or ptr to subtensor) from an
-    input tensor (or ptr to tensor) as specified by the given index.
-    The value extracted has shape as specified by the result type and the same
-    element type as the input tensor.
+    The `extract` operation extracts a subtensor (or ptr to subtensor) from an input tensor
+    (or ptr to tensor) as specified by the given index.
+    The value extracted has shape as specified by the result type and the same element type
+    as the input tensor. The operand must have the same element type as the result and rank
+    that is equal to or greater than the result rank.
 
     Example:
      ```mlir
+      // Partition tensor<32x32xf16>into 4 16x16xf16 subtensors and extract the
+      // 3rd one (column major order)
       %val = triton_intel_gpu.extract %tensor1[2] : tensor<32x32xf16>
            -> tensor<16x16xf16>
+      // Same as above but with ptr to tensor.
       %ptr = triton_intel_gpu.extract %ptr1[2] : !tt.ptr<tensor<32x32xf16>>
            -> !tt.ptr<tensor<16x16xf16>>
+      // Partition tensor<32x32xf16> into 32x2 16xf16 subtensors and extract the
+      // 3rd one (column major order).
+      %val1 = triton_intel_gpu.extract %tensor1[2] : tensor<32x32xf16>
+           -> tensor<16xf16>
       ```
 
     In the examples above the result tensor (ptr to tensor) is obtained by:
