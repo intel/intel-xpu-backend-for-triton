@@ -160,7 +160,6 @@ class XPUBackend(BaseBackend):
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        device_arch = properties["device_arch"]
         intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
                                                         properties["support_cl_sg_2d_block_io"],
                                                         properties["support_cl_sg_matmul_acc"], opt.threads_per_warp)
@@ -177,6 +176,7 @@ class XPUBackend(BaseBackend):
                 and os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1"):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
+        device_arch = properties["device_arch"]
         passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
