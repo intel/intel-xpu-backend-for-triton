@@ -126,9 +126,10 @@ public:
     RankedTensorType oldAType = cast<RankedTensorType>(a.getType());
     RankedTensorType oldBType = cast<RankedTensorType>(b.getType());
 
-    unsigned minSGSize = mod->getAttrOfType<IntegerAttr>(
-                                intel::TritonIntelGPUDialect::getMinSGSizeAttrName())
-                             .getInt();
+    unsigned minSGSize =
+        mod->getAttrOfType<IntegerAttr>(
+               intel::TritonIntelGPUDialect::getMinSGSizeAttrName())
+            .getInt();
     IntelDPASCapability dpasCap = getDPASCapability(minSGSize);
     unsigned dpasElemBitWidths =
         oldAType.getElementType().getIntOrFloatBitWidth();
