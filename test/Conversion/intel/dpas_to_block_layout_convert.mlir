@@ -18,7 +18,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // CHECK-DAG:           %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK-DAG:           %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COM: The following operations is generated for the conversion of DPAS layout to blocked layout.  The conversion replica size is 128*256. So there is 1 round of load/store with synchronization.
-    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {function_type = !llvm.func<i64 (i32)>, linkage = #llvm.linkage<external>, passthrough = ["nounwind", "willreturn", ["memory", "0"]], sym_name = "_Z12get_local_idj", visibility_ = 0 : i64} : (i32) -> i64
+    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) : (i32) -> i64
     // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
     // CHECK:           %[[warpId:.*]] = llvm.udiv %[[threadId]], %[[CST_16]]  : i32
     // CHECK:           %[[laneId:.*]] = llvm.urem %[[threadId]], %[[CST_16]]  : i32
@@ -46,7 +46,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // COM: Total 64 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16) = 64
     // CHECK:           llvm.store %[[VAL_66]], %[[VAL_65]] : vector<1xf16>, !llvm.ptr<3>
     // CHECK-COUNT-63:  llvm.store {{.*}}, {{.*}} : vector<1xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {function_type = !llvm.func<void (i32)>, linkage = #llvm.linkage<external>, passthrough = ["convergent"], sym_name = "_Z7barrierj", visibility_ = 0 : i64} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) : (i32) -> ()
 
     // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
     // COM: Total 8 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*8) = 8
@@ -82,7 +82,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // CHECK-DAG:           %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
 
     // COM: The following operations is generated for the conversion of DPAS layout to blocked layout. The conversion replica size is 64*256. So there are 2 round of load/store with synchronization.
-    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {function_type = !llvm.func<i64 (i32)>, linkage = #llvm.linkage<external>, passthrough = ["nounwind", "willreturn", ["memory", "0"]], sym_name = "_Z12get_local_idj", visibility_ = 0 : i64} : (i32) -> i64
+    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) : (i32) -> i64
     // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
     // CHECK:           %[[warpId:.*]] = llvm.udiv %[[threadId]], %[[CST_16]]  : i32
     // CHECK:           %[[laneId:.*]] = llvm.urem %[[threadId]], %[[CST_16]]  : i32
@@ -110,16 +110,16 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 64*256/(4*8*16) = 32
     // CHECK:           llvm.store %[[VAL_66]], %[[VAL_65]] : vector<1xf16>, !llvm.ptr<3>
     // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<1xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {function_type = !llvm.func<void (i32)>, linkage = #llvm.linkage<external>, passthrough = ["convergent"], sym_name = "_Z7barrierj", visibility_ = 0 : i64} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) : (i32) -> ()
 
     // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
     // COM: Total 4 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*8) = 8
     // CHECK-COUNT-4:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<8xf16>
 
     // COM: The 2nd round of exchanging values.
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {function_type = !llvm.func<void (i32)>, linkage = #llvm.linkage<external>, passthrough = ["convergent"], sym_name = "_Z7barrierj", visibility_ = 0 : i64} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) : (i32) -> ()
     // CHECK-COUNT-32:  llvm.store {{.*}}, {{.*}} : vector<1xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {function_type = !llvm.func<void (i32)>, linkage = #llvm.linkage<external>, passthrough = ["convergent"], sym_name = "_Z7barrierj", visibility_ = 0 : i64} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) : (i32) -> ()
     // CHECK-COUNT-4:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<8xf16>
 
     %93 = triton_gpu.convert_layout %cst {allocation.offset = 0 : i32} : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
