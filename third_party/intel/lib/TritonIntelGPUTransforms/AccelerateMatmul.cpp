@@ -32,12 +32,9 @@ struct IntelDPASCapability {
   uint32_t opsChanBitWidths;
 };
 
-IntelDPASCapability getDPASCapability(intel::DeviceArch arch) {
-  switch (arch) {
-  case intel::DeviceArch::UNKNOWN:
-    return IntelDPASCapability();
-
-  case intel::DeviceArch::ATS: {
+IntelDPASCapability getDPASCapability(unsigned minSGSize) {
+  switch (minSGSize) {
+  case 8: {
     IntelDPASCapability cap;
     cap.systolicDepth = 8;
     cap.repeatCount = 8;
@@ -45,8 +42,7 @@ IntelDPASCapability getDPASCapability(intel::DeviceArch arch) {
     cap.opsChanBitWidths = 32;
     return cap;
   }
-
-  case intel::DeviceArch::PVC: {
+  case 16: {
     IntelDPASCapability cap;
     cap.systolicDepth = 8;
     cap.repeatCount = 8;
@@ -54,9 +50,8 @@ IntelDPASCapability getDPASCapability(intel::DeviceArch arch) {
     cap.opsChanBitWidths = 32;
     return cap;
   }
-
   default:
-    llvm_unreachable("Invalid DeviceArch value");
+    return IntelDPASCapability();
   }
 }
 
@@ -104,13 +99,11 @@ SmallVector<unsigned> getWarpsPerTile(DotOp dotOp,
 }
 
 class BlockedToDPAS : public RewritePattern {
-  intel::DeviceArch arch;
   const DPASAnalysis &dpasAnalysis;
 
 public:
-  BlockedToDPAS(MLIRContext *context, intel::DeviceArch arch,
-                const DPASAnalysis &dpasAnalysis)
-      : RewritePattern(DotOp::getOperationName(), 2, context), arch(arch),
+  BlockedToDPAS(MLIRContext *context, const DPASAnalysis &dpasAnalysis)
+      : RewritePattern(DotOp::getOperationName(), 2, context),
         dpasAnalysis(dpasAnalysis) {}
 
   LogicalResult matchAndRewrite(Operation *op,
@@ -136,7 +129,11 @@ public:
     RankedTensorType oldAType = cast<RankedTensorType>(a.getType());
     RankedTensorType oldBType = cast<RankedTensorType>(b.getType());
 
-    IntelDPASCapability dpasCap = getDPASCapability(arch);
+    unsigned minSGSize =
+        mod->getAttrOfType<IntegerAttr>(
+               intel::TritonIntelGPUDialect::getMinSGSizeAttrName())
+            .getInt();
+    IntelDPASCapability dpasCap = getDPASCapability(minSGSize);
     unsigned dpasElemBitWidths =
         oldAType.getElementType().getIntOrFloatBitWidth();
 
@@ -278,11 +275,10 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
-    auto deviceArch = intel::getDeviceArch(m);
     DPASAnalysis &dpasAnalysis = getAnalysis<DPASAnalysis>();
 
     RewritePatternSet patterns(context);
-    patterns.add<BlockedToDPAS>(context, deviceArch, dpasAnalysis);
+    patterns.add<BlockedToDPAS>(context, dpasAnalysis);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
 

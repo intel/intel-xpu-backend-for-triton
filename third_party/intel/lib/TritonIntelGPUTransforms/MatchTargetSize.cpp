@@ -146,6 +146,11 @@ public:
         dotAttrs.insert(resultType.getEncoding());
     });
 
+    auto hasSliceAttr = [](Type type) {
+      auto tType = dyn_cast<RankedTensorType>(type);
+      return tType && isa<ttg::SliceEncodingAttr>(tType.getEncoding());
+    };
+
     // Split operations to match the target architecture native shapes.
     m.walk<WalkOrder::PreOrder>([&](Operation *op) {
       SmallVector<Type> types(op->getOperandTypes().begin(),
@@ -158,13 +163,18 @@ public:
         return WalkResult::advance();
       if (isa<scf::ForOp, scf::YieldOp>(op))
         return WalkResult::advance();
+      if (auto expand = dyn_cast<tt::ExpandDimsOp>(op))
+        return WalkResult::advance();
 
-      LLVM_DEBUG({
-        llvm::dbgs() << "Processing operation: " << *op << "\n";
-        llvm::dbgs() << "Module before transformation:\n" << m << "\n\n";
-      });
-
-      if (auto cstOp = dyn_cast<arith::ConstantOp>(op)) {
+      // FIXME: hack it for now
+      if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op))
+        convert.getResult().replaceAllUsesWith(convert.getSrc());
+      else if (auto reduce = dyn_cast<tt::ReduceOp>(op))
+        transformReduceOp(reduce);
+      else if (op->getNumResults() == 1 &&
+               hasSliceAttr(op->getResultTypes()[0]))
+        return WalkResult::advance();
+      else if (auto cstOp = dyn_cast<arith::ConstantOp>(op)) {
         recordRootSubSize(cstOp.getResult().getType());
         transformArithConstantOp(cstOp);
       } else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
@@ -172,17 +182,17 @@ public:
         transformMakeTensorPtrOp(ptrOp);
       } else if (auto dot = dyn_cast<tt::DotOp>(op))
         transformDotOp(dot);
+      else if (auto bc = dyn_cast<tt::BroadcastOp>(op))
+        transformBroadcastOp(bc);
       else
         transformGenericOp(op);
-
-      LLVM_DEBUG({
-        llvm::dbgs() << "Module after transformation:\n" << m << "\n\n";
-      });
 
       return WalkResult::advance();
     });
 
     LLVM_DEBUG(llvm::dbgs() << "Canonicalizing...\n");
+    LLVM_DEBUG(llvm::dbgs() << "Module before canonicalization:\n"
+                            << m << "\n\n");
     canonicalize();
     LLVM_DEBUG(llvm::dbgs() << "Module after canonicalization:\n"
                             << m << "\n\n");
@@ -212,11 +222,15 @@ private:
   SmallVector<int64_t> getSubOpSize(RankedTensorType type) const;
   std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
   getSubTypeAndShape(Type type) const;
+  Value getSubVal(Operation *op, Value val, ArrayRef<int64_t> srcOffset,
+                  ArrayRef<int64_t> dstSize);
 
   /// Transformations for specific operations.
   void transformMakeTensorPtrOp(tt::MakeTensorPtrOp op);
   void transformArithConstantOp(arith::ConstantOp op);
   void transformDotOp(tt::DotOp dot);
+  void transformReduceOp(tt::ReduceOp op);
+  void transformBroadcastOp(tt::BroadcastOp op);
 
   /// Generic transformation.
   void transformGenericOp(Operation *op);
@@ -403,17 +417,6 @@ public:
       }
     }
 
-    // Bail out if any user of a loop result is not an 'extract' operation
-    // (otherwise we would have to materialize a 'glue' operation after the loop
-    // is replaced, which complicates things).
-    for (OpResult result : forOp->getResults()) {
-      if (llvm::any_of(result.getUsers(), [](Operation *user) {
-            return !isa<ttgi::ExtractOp>(user);
-          })) {
-        return false;
-      }
-    }
-
     return true;
   }
 };
@@ -491,12 +494,14 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
   Attribute layout = type.getEncoding();
   assert(layout && "Expecting a valid layout");
 
-  // Dot operation.
+  // Dot related operation.
+  const TargetArchNativeSizes::DotShape &dotShape =
+      nativeSizes.getDotShape(type.getElementTypeBitWidth());
   if (dotAttrs.count(layout)) {
-    const TargetArchNativeSizes::DotShape &dotShape =
-        nativeSizes.getDotShape(type.getElementTypeBitWidth());
-    SmallVector<int64_t> nativeDotSize{dotShape.m, dotShape.n};
-    return nativeDotSize;
+    return {dotShape.m, dotShape.n};
+  } else if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+    if (dotAttr.getIsTransposed() == 1 && dotAttr.getOpIdx() == 1)
+      return {dotShape.k, dotShape.n};
   }
 
   // Load/Store operations.
@@ -516,7 +521,7 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
       // 32 = 2 * 16(subgroupSize) which is for large load/store
       // max 2d block prefetch width is 16 for 32-bit datatype
       subSize[1] = std::min(sizeInBits == 32 ? 16L : 32L, shape[1]);
-      // FIXME: From gfxspec, max 2d block load height is 32
+      // max 2d block load height is 32
       subSize[0] = std::min(32L, shape[0]);
     } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
       const TargetArchNativeSizes::BlockMemShape &memShape =
@@ -544,6 +549,7 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
   return subSize;
 }
 
+/// FIXME: add a map for look up
 /// return [shape, subType, subSize] for a tensor (or pointer to tensor)
 std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
 MatchTargetSizePass::getSubTypeAndShape(Type type) const {
@@ -565,6 +571,91 @@ MatchTargetSizePass::getSubTypeAndShape(Type type) const {
   }
 
   return {{0}, type, {0}};
+}
+
+Value MatchTargetSizePass::getSubVal(Operation *op, Value val,
+                                     ArrayRef<int64_t> srcOffset,
+                                     ArrayRef<int64_t> dstSize) {
+  OpBuilder b(op);
+  Location loc = op->getLoc();
+  auto elmTy = cast<RankedTensorType>(val.getType()).getElementType();
+  auto [shape, subType, subSize] = getSubTypeAndShape(val.getType());
+  unsigned srcIdx = (srcOffset[1] / subSize[1]) * (shape[0] / subSize[0]) +
+                    srcOffset[0] / subSize[0];
+  Value subSrcVal = b.create<ttgi::ExtractOp>(loc, subType, val, srcIdx);
+  assert(dstSize[0] <= subSize[0] && "add more support");
+  unsigned dstIdx =
+      ((srcOffset[1] % subSize[1]) / dstSize[1]) * (subSize[0] / dstSize[0]) +
+      (srcOffset[0] % subSize[0]) / dstSize[0];
+  auto dstType = dstSize[0] == 1 ? RankedTensorType::get(dstSize[1], elmTy)
+                                 : RankedTensorType::get(dstSize, elmTy);
+  Value dstVal = b.create<ttgi::ExtractOp>(loc, dstType, subSrcVal, dstIdx);
+  return dstVal;
+}
+
+void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
+  Location loc = op.getLoc();
+  OpBuilder b(op);
+  assert(op.getSrcs().size() == 1 && "only support one src");
+  Value src = op.getSrcs().front();
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  unsigned dims = srcTy.getShape().size();
+  unsigned axis = op.getAxis();
+  assert(axis == dims - 1 && "only support last axis");
+  assert(dims <= 2 && "only support 1D/2D tensor");
+  int64_t outer = dims == 2 ? srcTy.getShape()[0] : 1;
+
+  SmallVector<Value> glueVals;
+  unsigned step = 8; // FIXME: fixed to 8 for now.
+  for (unsigned i = 0; i < outer; i += step) {
+    SmallVector<Value> subVals;
+    // FIXME: 16 is the supported IR reduce length
+    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += 16) {
+      Value subVal = getSubVal(op, src, {i, j}, {step, 16});
+      subVals.push_back(subVal);
+    }
+    auto subType = RankedTensorType::get({step, 16}, srcTy.getElementType());
+    auto combine = op.getCombineOp().front().getOperations().begin();
+    StringAttr id = combine->getName().getIdentifier();
+    Value acc;
+    switch (subVals.size()) {
+    case 1:
+      acc = subVals[0];
+      break;
+    case 2: {
+      Operation *acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
+      acc = acc01->getResult(0);
+      break;
+    }
+    case 4: {
+      Operation *acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
+      Operation *acc23 = b.create(loc, id, {subVals[2], subVals[3]}, subType);
+      Operation *accOp = b.create(
+          loc, id, {acc01->getResult(0), acc23->getResult(0)}, subType);
+      acc = accOp->getResult(0);
+      break;
+    }
+    default:
+      assert(false && "add more reduce size support");
+    }
+
+    SmallVector<Value> subOps;
+    for (unsigned j = 0; j < step; j++) {
+      auto subType = RankedTensorType::get(16, srcTy.getElementType());
+      Value subAcc = b.create<ttgi::ExtractOp>(loc, subType, acc, j);
+      auto subRed = b.create<tt::ReduceOp>(loc, subAcc, 0);
+      Region &subRegion = subRed.getCombineOp();
+      b.cloneRegionBefore(op.getCombineOp(), subRegion, subRegion.end());
+      subOps.push_back(subRed.getResult()[0]);
+    }
+    glueVals.append(subOps);
+  }
+
+  auto glue = b.create<ttgi::GlueOp>(loc, op.getResultTypes()[0], glueVals);
+  op->replaceAllUsesWith(glue->getResults());
+  op->erase();
+
+  return;
 }
 
 void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
@@ -693,6 +784,39 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   dot->erase();
 }
 
+void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
+  OpBuilder b(op);
+  Location loc = op->getLoc();
+  RankedTensorType resType = op.getResult().getType();
+  auto [shape, subType, subSize] = getSubTypeAndShape(resType);
+  auto tType = cast<RankedTensorType>(subType);
+  RankedTensorType srcType = op.getSrc().getType();
+  unsigned srcDim0 = srcType.getShape()[0];
+  unsigned dstDim0 = tType.getShape()[0];
+  Operation *glue;
+  if (srcDim0 == dstDim0) {
+    Value newOp = b.create<ttgi::BroadcastOp>(loc, tType, op.getSrc());
+    unsigned num = resType.getShape()[1] / tType.getShape()[1];
+    SmallVector<Value> ops(num, newOp);
+    glue = b.create<ttgi::GlueOp>(loc, resType, ops);
+  } else {
+    assert(srcDim0 == 2 * dstDim0 && "add more support");
+    auto newTy = RankedTensorType::get({srcDim0, tType.getShape()[1]},
+                                       tType.getElementType());
+    auto newOp = b.create<ttgi::BroadcastOp>(loc, newTy, op.getSrc());
+    auto extract0 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 0);
+    auto extract1 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 1);
+    SmallVector<Value> ops{extract0, extract1, extract0, extract1,
+                           extract0, extract1, extract0, extract1};
+    glue = b.create<ttgi::GlueOp>(loc, resType, ops);
+  }
+
+  op->replaceAllUsesWith(glue->getResults());
+  op->erase();
+
+  return;
+}
+
 void MatchTargetSizePass::transformGenericOp(Operation *op) {
   unsigned numResults = op->getResults().size();
   unsigned dotIdx = 2;
@@ -743,7 +867,8 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
                           }
                           return operand;
                         });
-        Operation *subOp;
+
+        Operation *subOp = nullptr;
         if (numResults == 0)
           subOp = b.create(loc, op->getName().getIdentifier(), newOperands, {},
                            op->getAttrs());
@@ -762,9 +887,9 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
     }
   }
 
-  if (numResults == 1) {
+  if (numResults == 1)
     op->replaceAllUsesWith(b.create<ttgi::GlueOp>(loc, type, subOps));
-  }
+
   op->erase();
 }
 
