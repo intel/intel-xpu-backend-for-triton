@@ -79,7 +79,7 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
 
     Example:
      ```mlir
-      // Partition tensor<32x32xf16>into 4 16x16xf16 subtensors and extract the
+      // Partition tensor<32x32xf16> into 4 16x16xf16 subtensors and extract the
       // 3rd one (column major order)
       %val = triton_intel_gpu.extract %tensor1[2] : tensor<32x32xf16>
            -> tensor<16x16xf16>
