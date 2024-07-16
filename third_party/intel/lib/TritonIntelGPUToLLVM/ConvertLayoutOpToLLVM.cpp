@@ -144,7 +144,7 @@ private:
         getStridesFromShapeAndOrder(srcTy.getShape(), inOrd, loc, rewriter);
     auto dstIndices =
         ::intel::emitIndices(loc, rewriter, targetInfo, dstLayout, dstTy, true);
-
+    llvm::errs() << "loadSharedToDistributed of op " << op << '\n';
     SmallVector<Value> outVals =
         ::intel::loadSharedToDistributed(op.getResult(), op.getSrc(), smemObj,
                                          elemTy, loc, rewriter, targetInfo);
