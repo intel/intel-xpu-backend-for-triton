@@ -7,7 +7,6 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Tools/LinearLayout.h"
 
 namespace mlir::triton::gpu {
@@ -43,7 +42,7 @@ namespace mlir::triton::gpu {
 // TODO(jlebar): Remove the std::optional once all layouts are supported.
 //
 std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
-                                               Attribute layout, int opidx = 0);
+                                               Attribute layout, int opidx);
 
 } // namespace mlir::triton::gpu
 

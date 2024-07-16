@@ -8,6 +8,7 @@
 
 #include "Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -161,14 +162,30 @@ bool emitTransferBetweenDPASAndShared(
 
   std::optional<LinearLayout> regLayout;
   if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(registerTy.getEncoding())) {
-    regLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout);
+    // Check whether the layout specifies the opidx.
+    unsigned opIdx = 0;
+    if (triton::gpu::intel::hasDotDpasEncoding(registerTy)) {
+      DotOperandEncodingAttr dotLayout = triton::gpu::intel::getDotEncoding(registerTy).value();
+      llvm::errs() << "emitTransferBetweenDPASAndShared: has dotencoding of " << dotLayout;
+      opIdx = dotLayout.getOpIdx();
+      llvm::errs() << " and its opidx is " << opIdx << '\n';
+    }
+    regLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout, opIdx);
   } else {
     regLayout = triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   }
 
   std::optional<LinearLayout> sharedLayout;
   if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(sharedTy.getEncoding())) {
-    sharedLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout);
+    auto tensorTy = dyn_cast<RankedTensorType>(sharedTy);
+    unsigned opIdx = 0;
+    if (tensorTy && triton::gpu::intel::hasDotDpasEncoding(tensorTy)) {
+      DotOperandEncodingAttr dotLayout = triton::gpu::intel::getDotEncoding(tensorTy).value();
+      llvm::errs() << "emitTransferBetweenDPASAndShared: has dotencoding of " << dotLayout;
+      opIdx = dotLayout.getOpIdx();
+      llvm::errs() << " and its opidx is " << opIdx << '\n';
+    }
+    sharedLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout, opIdx);
   } else {
     sharedLayout = triton::gpu::toLinearLayout(
         shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
