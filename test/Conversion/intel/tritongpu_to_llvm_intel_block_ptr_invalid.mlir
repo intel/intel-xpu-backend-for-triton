@@ -1,6 +1,6 @@
-// RUN: TRITON_INTEL_ENABLE_BLOCK_PTR=1 triton-opt %s --convert-triton-intel-gpu-to-llvm --verify-diagnostics --split-input-file
+// RUN: TRITON_INTEL_ADVANCED_PATH=1 triton-opt %s --convert-triton-intel-gpu-to-llvm --verify-diagnostics --split-input-file
 
-module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f32>, %arg1: i64, %arg2: i32) {
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
@@ -14,7 +14,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
 
 // -----
 
-module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f32>, %arg1: i64, %arg2: i32) {
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
@@ -28,7 +28,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
 
 // -----
 
-module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f32>, %arg1: i64, %arg2: i32) {
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32

@@ -46,7 +46,6 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   PYTHON_VERSION: "3.10"
   BENCHMARK_REPO: weishi-deng/benchmark.git
-  BENCHMARK_BRANCH: main
   TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
@@ -65,13 +64,6 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Get benchmark commit id
-        uses: ./.github/actions/get-commit-id
-        with:
-          repository: ${{ env.BENCHMARK_REPO }}
-          branch: ${{ env.BENCHMARK_BRANCH }}
-          variable: BENCHMARK_COMMIT_ID
 
       - name: Load pip cache
         id: pip-cache
@@ -100,6 +92,30 @@ jobs:
         with:
           repository: pytorch/pytorch
           torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
+
+      - name: Set benchmark repository (IPEX)
+        if: ${{ inputs.install_ipex }}
+        run: |
+          echo "BENCHMARK_REPO=weishi-deng/benchmark" | tee -a "$GITHUB_ENV"
+
+      - name: Set benchmark repository (PyTorch)
+        if: ${{ !inputs.install_ipex }}
+        run: |
+          echo "BENCHMARK_REPO=pytorch/benchmark" | tee -a "$GITHUB_ENV"
+
+      - name: Get benchmark commit id (IPEX)
+        if: ${{ inputs.install_ipex }}
+        uses: ./.github/actions/get-commit-id
+        with:
+          repository: ${{ env.BENCHMARK_REPO }}
+          branch: main
+          variable: BENCHMARK_COMMIT_ID
+
+      - name: Get benchmark commit id (PyTorch)
+        if: ${{ !inputs.install_ipex }}
+        run: |
+          cd pytorch
+          echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
 
       - name: Identify pinned versions
         run: |
@@ -170,6 +186,7 @@ jobs:
           repository: huggingface/transformers
           ref: ${{ env.TRANSFORMERS_VERSION }}
           try-tag-prefix: v
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
       - name: Install torchvision package
         if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}
@@ -178,6 +195,7 @@ jobs:
           package: torchvision
           repository: pytorch/vision
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
       - name: Install torchtext package
         if: ${{ inputs.suite == 'torchbench' }}
@@ -186,6 +204,7 @@ jobs:
           package: torchtext
           repository: pytorch/text
           ref: ${{ env.TORCHTEXT_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
       - name: Install torchaudio package
         if: ${{ inputs.suite == 'torchbench' }}
@@ -194,13 +213,14 @@ jobs:
           package: torchaudio
           repository: pytorch/audio
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
       - name: Clone pytorch benchmark
         if: ${{ inputs.suite == 'torchbench' }}
         uses: actions/checkout@v4
         with:
           repository: ${{ env.BENCHMARK_REPO }}
-          ref: ${{ env.BENCHMARK_BRANCH }}
+          ref: ${{ env.BENCHMARK_COMMIT_ID }}
           submodules: recursive
           path: benchmark
 
@@ -231,7 +251,7 @@ jobs:
 
           if [[ "${{ inputs.only_one_model }}" ]]; then
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 ${{ inputs.only_one_model }}
-          elif [[ "${{ needs.setup.outputs.models }}" == "subset" ]]; then
+          elif [[ "${{ inputs.models }}" == "subset" ]]; then
             while read model; do
               bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 $model
             done < $GITHUB_WORKSPACE/.github/models/performance/${{ inputs.suite }}.txt
@@ -256,8 +276,10 @@ jobs:
           PYTHON_VERSION=$PYTHON_VERSION
           PYTORCH_REPO=$PYTORCH_REPO
           PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$PYTORCH_VERSION
           IPEX_REPO=$IPEX_REPO
           IPEX_COMMIT_ID=$IPEX_COMMIT_ID
+          IPEX_VERSION=$IPEX_VERSION
           LLVM_REPO=llvm/llvm-project
           LLVM_COMMIT_ID=$LLVM_COMMIT_ID
           BENCHMARK_REPO=$BENCHMARK_REPO

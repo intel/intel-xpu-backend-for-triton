@@ -19,6 +19,23 @@ def TritonIntelGPU_Dialect : Dialect {
   ];
 
   let extraClassDeclaration = [{
+    /// Get the name of the attribute used to indicate the minimum subgroup
+    /// size supported by the target device.
+    static constexpr llvm::StringRef getMinSGSizeAttrName() {
+      return "triton_intel_gpu.min_sg_size";
+    }
+
+    /// Get the name of the attribute used to indicate whether subgroup 2D block
+    /// operations (e.g., 2D block read/write) are available.
+    static constexpr llvm::StringRef getSupportSG2DBlockAttrName() {
+      return "triton_intel_gpu.support_sg_2d_block";
+    }
+
+    /// Get the name of the attribute used to indicate whether the DPAS
+    /// instruction is available.
+    static constexpr llvm::StringRef getSupportDPASAttrName() {
+      return "triton_intel_gpu.support_dpas";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

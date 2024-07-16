@@ -1376,63 +1376,63 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func public @reduce_all(%arg: tensor<256x1xi32, #blocked>, %arg_0: tensor<256x1xf32, #blocked>) {
 
-    // CHECK: @_Z20sub_group_reduce_addf
+    // CHECK: @_Z32sub_group_non_uniform_reduce_addf
     %0 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.addf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z20sub_group_reduce_addi
+    // CHECK: @_Z32sub_group_non_uniform_reduce_addi
     %1 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.addi %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.f32
+    // CHECK: @_Z32sub_group_non_uniform_reduce_mulf
     %2 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.mulf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32
+    // CHECK: @_Z32sub_group_non_uniform_reduce_muli
     %3 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.muli %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z20sub_group_reduce_maxf
+    // CHECK: @_Z32sub_group_non_uniform_reduce_maxf
     %4 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.maxnumf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z20sub_group_reduce_minf
+    // CHECK: @_Z32sub_group_non_uniform_reduce_minf
     %5 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.minnumf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32
+    // CHECK: @_Z32sub_group_non_uniform_reduce_andi
     %6 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.andi %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32
+    // CHECK: @_Z31sub_group_non_uniform_reduce_ori
     %7 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.ori %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.WaveAll.i32
+    // CHECK: @_Z32sub_group_non_uniform_reduce_xori
     %8 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.xori %arg4, %arg5 : i32

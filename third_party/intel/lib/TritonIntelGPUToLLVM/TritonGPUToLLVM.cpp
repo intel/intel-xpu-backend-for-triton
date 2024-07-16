@@ -79,9 +79,14 @@ struct ConvertTritonGPUToLLVM
     intel::TritonGPUToLLVMPipelineManager pipelineManager(mod, context);
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
-    bool isLTSDriver = mod->hasAttr("triton_gpu.is_lts");
+    bool isAdvancedPathEnabled =
+        mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                         getSupportSG2DBlockAttrName()) &&
+        mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                         getSupportDPASAttrName()) &&
+        mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH");
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
-                                                    isLTSDriver);
+                                                    isAdvancedPathEnabled);
     TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
@@ -98,7 +103,7 @@ struct ConvertTritonGPUToLLVM
     {
       mlir::LowerToLLVMOptions option(context);
       TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
-                                                      isLTSDriver);
+                                                      isAdvancedPathEnabled);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       pipelineManager.populateFunctionConversionPatterns(

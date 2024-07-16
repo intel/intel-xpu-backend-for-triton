@@ -1018,7 +1018,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getShapePerCTATile(
 
 LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
-    unsigned opIdx, Attribute parent, unsigned kWidth) {
+    unsigned opIdx, Attribute parent, unsigned kWidth, bool isTransposed) {
   if (opIdx != 0 && opIdx != 1) {
     return emitError()
            << "triton_gpu.dot_op opIdx paramenter can be 0 or 1, got: "
@@ -2899,6 +2899,21 @@ void LocalAllocOp::getEffects(
   if (getSrc())
     effects.emplace_back(MemoryEffects::Write::get(), getResult(),
                          mlir::triton::gpu::SharedMemory::get());
+}
+
+OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
+  if (getType().getMutableMemory())
+    return {};
+  auto src = getSrc();
+  if (!src)
+    return {};
+  auto localLoadOp = src.getDefiningOp<LocalLoadOp>();
+  if (!localLoadOp)
+    return {};
+  auto loadSrc = localLoadOp.getSrc();
+  if (loadSrc.getType() != getType())
+    return {};
+  return loadSrc;
 }
 
 // LocalLoadOp

@@ -7,8 +7,10 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 #include "intel/include/Target/LLVMIR/PostProcess.h"
+#include "intel/include/TritonAnnotateModule/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
 
@@ -31,6 +33,11 @@ using ret = py::return_value_policy;
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
     pm.addPass(builder({val0, val1}));                                         \
   })
+#define ADD_PASS_WRAPPER_OPT_4(name, builder, ty0, ty1, ty2, ty3)              \
+  m.def(name,                                                                  \
+        [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2, ty3 val3) {    \
+          pm.addPass(builder({val0, val1, val2, val3}));                       \
+        })
 
 static uint32_t findKernels(llvm::Module &M,
                             std::set<llvm::Function *> &functions) {
@@ -77,12 +84,28 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUDistributeToWarps);
   ADD_PASS_WRAPPER_0("add_match_target_size",
                      gpu::intel::createTritonIntelGPUMatchTargetSize);
+  ADD_PASS_WRAPPER_OPT_4("add_triton_annotate_module",
+                         gpu::intel::createTritonAnnotateModule, unsigned, bool,
+                         bool, unsigned);
 }
 
 void init_triton_intel(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_intel_passes_ttir(passes.def_submodule("ttir"));
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
+
+  // cluster info
+  py::class_<gpu::intel::ClusterInfo>(m, "ClusterInfo")
+      .def(py::init<>())
+      .def_readwrite("clusterDimX", &gpu::intel::ClusterInfo::clusterDimX)
+      .def_readwrite("clusterDimY", &gpu::intel::ClusterInfo::clusterDimY)
+      .def_readwrite("clusterDimZ", &gpu::intel::ClusterInfo::clusterDimZ)
+      .def("__repr__", [](gpu::intel::ClusterInfo &self) {
+        std::ostringstream oss;
+        oss << "(" << self.clusterDimX << ", " << self.clusterDimY << ", "
+            << self.clusterDimZ << ")";
+        return oss.str();
+      });
 
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
@@ -92,14 +115,6 @@ void init_triton_intel(py::module &&m) {
     mlir::registerTritonGENDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
-  });
-
-  // FIXME: Use SYCL runtime to query supported OpenCL extensions, instead of
-  // checking driver version.
-  m.def("set_device_properties", [](mlir::ModuleOp mod, bool isLTS) {
-    auto i1_ty = mlir::IntegerType::get(mod->getContext(), 1);
-    if (isLTS)
-      mod->setAttr("triton_gpu.is_lts", mlir::IntegerAttr::get(i1_ty, 1));
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {

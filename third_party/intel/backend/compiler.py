@@ -33,7 +33,7 @@ def _path_to_binary(binary: str):
     raise RuntimeError(f"Cannot find {binary}")
 
 
-@dataclass(frozen=True)
+@dataclass
 class XPUOptions:
     num_warps: int = 4
     num_ctas: int = 1
@@ -68,8 +68,8 @@ class XPUOptions:
 
 class XPUBackend(BaseBackend):
 
-    # Experimental pass pipeline for kernels using block pointers.
-    class Experimental:
+    # AdvancedPath pass pipeline for kernels using block pointers.
+    class AdvancedPath:
 
         @staticmethod
         def make_ttgir(mod, metadata, opt):
@@ -98,7 +98,6 @@ class XPUBackend(BaseBackend):
         mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
         self.parse_device_arch = mod.parse_device_arch
         self.properties = self.parse_target(target.arch)
-        self.device_arch = self.properties["device_arch"]
         self.binary_ext = "spv"
 
     def parse_target(self, tgt_prop) -> dict:
@@ -106,7 +105,6 @@ class XPUBackend(BaseBackend):
         dev_prop['name'] = tgt_prop.get('name', 'xpu')
         dev_prop['platform_name'] = tgt_prop.get('platform_name', None)
         dev_prop['vendor'] = tgt_prop.get('vendor', None)
-        dev_prop['driver_version'] = tgt_prop.get('driver_version', None)
         dev_prop['version'] = tgt_prop.get('version', None)
         dev_prop['gpu_eu_count'] = tgt_prop.get('gpu_eu_count', None)
         dev_prop['gpu_subslice_count'] = tgt_prop.get('gpu_subslice_count', None)
@@ -115,7 +113,6 @@ class XPUBackend(BaseBackend):
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
         dev_prop['device_arch'] = self.parse_device_arch(tgt_prop.get('device_arch', 0))
-        dev_prop['support_cl_bf16_conversion'] = tgt_prop.get('support_cl_bf16_conversion', False)
         dev_prop['support_cl_sg_matmul_acc'] = tgt_prop.get('support_cl_sg_matmul_acc', False)
         dev_prop['support_cl_sg_matmul_acc_tf32'] = tgt_prop.get('support_cl_sg_matmul_acc_tf32', False)
         dev_prop['support_cl_sg_2d_block_io'] = tgt_prop.get('support_cl_sg_2d_block_io', False)
@@ -153,18 +150,34 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_ttgir(mod, metadata, opt, device_arch):
-        is_lts = Version(metadata["target"].arch["driver_version"]) == Version("1.3.27642")
-        if (not is_lts and os.getenv("TRITON_INTEL_ENABLE_BLOCK_PTR", "0") == "1"):
-            return XPUBackend.Experimental.make_ttgir(mod, metadata, opt)
+    def make_ttgir(mod, metadata, opt, properties):
+        cluster_info = intel.ClusterInfo()
+        if opt.cluster_dims is not None:
+            cluster_info.clusterDimX = opt.cluster_dims[0]
+            cluster_info.clusterDimY = opt.cluster_dims[1]
+            cluster_info.clusterDimZ = opt.cluster_dims[2]
 
-        # TTIR -> TTGIR
+        # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
-        intel.set_device_properties(mod, is_lts)
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
+                                                        properties["support_cl_sg_2d_block_io"],
+                                                        properties["support_cl_sg_matmul_acc"], opt.threads_per_warp)
+        pm.run(mod)
 
-        # optimize TTGIR
+        # Overwrite the threads_per_warp option with the module annotation.
+        opt.threads_per_warp = ir.ttgpuir.get_threads_per_warp(mod)
+
+        # Run the TTIR -> TTGIR pass pipeline.
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
+        if (properties["support_cl_sg_2d_block_io"] and properties["support_cl_sg_matmul_acc"]
+                and os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1"):
+            return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
+
+        device_arch = properties["device_arch"]
+        passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
@@ -184,6 +197,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
+        metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
     @staticmethod
@@ -236,7 +250,7 @@ class XPUBackend(BaseBackend):
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.device_arch)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata)
 

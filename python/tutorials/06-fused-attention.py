@@ -468,7 +468,6 @@ class _attention(torch.autograd.Function):
             N_CTX=q.shape[2],  #
             HEAD_DIM=HEAD_DIM_K,  #
             STAGE=stage,  #
-            threads_per_warp=16,  #
             **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
@@ -515,8 +514,7 @@ class _attention(torch.autograd.Function):
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
             HEAD_DIM=ctx.HEAD_DIM,  #
             num_warps=NUM_WARPS,  #
-            num_stages=NUM_STAGES,  #
-            threads_per_warp=16  #
+            num_stages=NUM_STAGES  #
         )
 
         return dq, dk, dv, None, None
@@ -592,7 +590,7 @@ for mode in ["fwd", "bwd"]:
                 (["flash"] if HAS_FLASH else []),
                 line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
                 (["Flash-2"] if HAS_FLASH else []),
-                styles=[("red", "-"), ("blue", "-")],
+                styles=[("red", "-"), ("blue", "-"), ("green", "-")],
                 ylabel="ms",
                 plot_name=f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}",
                 args={

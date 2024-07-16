@@ -1,4 +1,5 @@
 name: E2E accuracy
+run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -54,6 +55,10 @@ on:
         description: TORCH_COMPILE_DEBUG
         type: string
         default: ""
+      run_name:
+        description: Custom run name
+        type: string
+        default: "E2E accuracy"
 
 permissions: read-all
 
