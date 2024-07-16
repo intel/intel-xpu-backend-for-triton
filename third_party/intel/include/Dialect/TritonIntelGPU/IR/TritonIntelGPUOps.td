@@ -99,7 +99,7 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
   let hasFolder = 1;
 }
 
-def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
+def TTIG_PrefetchOp : TTIG_Op<"prefetch", [MemoryEffects<[MemWrite, MemRead]>]> {
   let summary = "Tensor prefetch operation";
   let description = [{
     The `prefetch` operation prefetches an input tensor.
