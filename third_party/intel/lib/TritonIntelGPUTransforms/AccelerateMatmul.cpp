@@ -152,7 +152,7 @@ public:
         dpasCap.executionSize, opsPerChan, warpsPerTile, {1, 1},
         threadsPerWarp);
 
-    if (arch == intel::DeviceArch::PVC) {
+    if (dpasCap.executionSize == 16 /* PVC */) {
       // Enlarge the repCluster size to use the large 2D load for A and B
       // operands.
       unsigned maxRepClusterM =
