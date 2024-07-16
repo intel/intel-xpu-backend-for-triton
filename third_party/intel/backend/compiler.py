@@ -49,7 +49,6 @@ class XPUOptions:
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
-    large_grf: bool = False
     backend_name: str = 'intel'
 
     def __post_init__(self):

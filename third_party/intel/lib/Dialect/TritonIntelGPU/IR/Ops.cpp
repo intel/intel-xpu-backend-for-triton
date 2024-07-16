@@ -154,7 +154,7 @@ LogicalResult ExtractOp::verify() {
   // Make the result have the same rank as the operand.
   while (resultRank < operandRank) {
     resultShape.insert(resultShape.begin(), operandRank - resultRank, 1);
-    resultRank++;
+    ++resultRank;
   }
   assert(operandRank == resultRank && "Expecting same rank");
 
