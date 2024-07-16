@@ -59,16 +59,13 @@ static SmallVector<int64_t> getShape(Type type) {
 /// Return the element type of an input tensor (or ptr to tensor).
 static Type getElementType(Type type) {
   return TypeSwitch<Type, Type>(type)
-      .Case<RankedTensorType>([](auto ty) { return ty.getElementType(); })
+      .Case<ShapedType>([](auto ty) { return ty.getElementType(); })
       .Case<triton::PointerType>([](auto ty) {
         assert(isa<RankedTensorType>(ty.getPointeeType()) &&
                "Expecting ptr to tensor");
         return cast<RankedTensorType>(ty.getPointeeType()).getElementType();
       })
-      .Default([](auto) {
-        llvm_unreachable("Unexpected type");
-        return Type();
-      });
+      .Default([](auto ty) { return ty; });
 }
 
 /// Return the size of the specified dimension of an input tensor (or ptr to
@@ -91,26 +88,18 @@ namespace mlir::triton::gpu::intel {
 
 LogicalResult GlueOp::verify() {
   SmallVector<Type> inputTypes;
-  for (auto input : getOperands())
+  for (Value input : getOperands())
     inputTypes.push_back(input.getType());
 
+  Type inputType = inputTypes.front();
   Type resultType = getRes().getType();
+  if (!llvm::all_of(inputTypes, [&](Type type) { return type == inputType; }))
+    return emitOpError("operands must have the same type");
+
+  if (!isTensorOrTensorPointerType(inputType))
+    return success();
+
   unsigned resultRank = getRank(resultType);
-  if (llvm::any_of(inputTypes,
-                   [&](Type type) { return getRank(type) != resultRank; }))
-    return emitOpError("operands and result must have the same rank");
-
-  Type resultElementType = getElementType(resultType);
-  if (llvm::any_of(inputTypes, [&](Type type) {
-        return getElementType(type) != resultElementType;
-      }))
-    return emitOpError("operands and result element type must match");
-
-  SmallVector<int64_t> inputShape = getShape(inputTypes[0]);
-  if (llvm::any_of(inputTypes,
-                   [&](Type type) { return getShape(type) != inputShape; }))
-    return emitOpError("operands must have the same shape");
-
   if (llvm::any_of(inputTypes, [&](Type type) {
         for (unsigned i = 0; i < resultRank; ++i) {
           unsigned resultSize = getDimSize(resultType, i);
@@ -123,7 +112,6 @@ LogicalResult GlueOp::verify() {
     return emitOpError(
         "operands cannot exceed result size along any dimension");
 
-  auto inputType = inputTypes[0];
   for (unsigned i = 0; i < resultRank; ++i) {
     unsigned resultSize = getDimSize(resultType, i);
     unsigned inputSize = getDimSize(inputType, i);
@@ -133,13 +121,13 @@ LogicalResult GlueOp::verify() {
 
   // Verify that the composition of the input operands covers the output tensor
   // shape.
+  SmallVector<int64_t> inputShape = getShape(inputTypes[0]);
   SmallVector<int64_t> resultShape = getShape(resultType);
   unsigned numResultElems = product(resultShape);
   unsigned numInputElems = product(inputShape);
 
   if (inputTypes.size() * numInputElems != numResultElems)
     return emitOpError("glued operands do not exactly cover the result shape");
-
   return success();
 }
 
@@ -147,15 +135,21 @@ LogicalResult ExtractOp::verify() {
   Type resultType = getRes().getType();
   Type operandType = getBase().getType();
 
-  unsigned resultRank = getRank(resultType);
-  unsigned operandRank = getRank(operandType);
-  if (operandRank != resultRank)
-    return emitOpError("operand and result must have the same rank");
-
   Type resultElemType = getElementType(resultType);
   Type operandElemType = getElementType(operandType);
   if (operandElemType != resultElemType)
     return emitOpError("operand and result element type must match");
+
+  if (!isTensorOrTensorPointerType(operandType))
+    return success();
+
+  unsigned resultRank = getRank(resultType);
+  unsigned operandRank = getRank(operandType);
+  if (operandRank != resultRank)
+    return success();
+
+  /// FIXME: the check below works for tensors with same rank, try to simplify
+  /// it later.
 
   // ensure the input can be partitioned by the requested result.
   SmallVector<int64_t> resultShape = getShape(resultType);
@@ -179,7 +173,6 @@ LogicalResult ExtractOp::verify() {
   unsigned index = getIndex();
   if (index >= numTiles)
     return emitOpError("index must be less than ") << numTiles;
-
   return success();
 }
 

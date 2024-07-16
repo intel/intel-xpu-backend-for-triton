@@ -1018,7 +1018,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getShapePerCTATile(
 
 LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
-    unsigned opIdx, Attribute parent, unsigned kWidth) {
+    unsigned opIdx, Attribute parent, unsigned kWidth, bool isTransposed) {
   if (opIdx != 0 && opIdx != 1) {
     return emitError()
            << "triton_gpu.dot_op opIdx paramenter can be 0 or 1, got: "
