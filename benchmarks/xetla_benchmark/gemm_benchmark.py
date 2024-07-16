@@ -365,8 +365,8 @@ def benchmark(B, M, N, K, provider):
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), warmup=100, rep=100, quantiles=quantiles,
                                                      fast_flush=False)
     if provider == 'xetla':
-        c = torch.empty((M, N), device='xpu', dtype=torch.float16)
-        d = torch.empty((M, N), device='xpu', dtype=torch.float16)
+        c = torch.empty((M, N), device='xpu', dtype=torch.bfloat16)
+        d = torch.empty((M, N), device='xpu', dtype=torch.bfloat16)
         cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
         name = "bgemm_shape_{}_{}_{}".format(M, N, K)
         func = getattr(xetla_kernel, name)
