@@ -264,15 +264,16 @@ createSchedule(scf::ForOp forOp, int numStages) {
   addOps(forOp, 1, schedule,
          [&](Operation *op) { return stage1deps.count(op); });
 
-  // Then Schedule stage 0.
-  addOps(forOp, 0, schedule,
-         [&](Operation *op) { return prefetchAndDeps.count(op); });
-
   // Schedule stage `numStage - 1` first.
   // Finally schedule the dot ops in stage `numStage - 1` so that they get
   // pre-fetched and play well with pretech pass.
   addOps(forOp, numStages - 1, schedule,
          [&](Operation *op) { return loadAndDeps.count(op); });
+
+  // Then Schedule stage 0.
+  addOps(forOp, 0, schedule,
+         [&](Operation *op) { return prefetchAndDeps.count(op); } );
+
 
   addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
     return prefetchAndDeps.count(op) == 0 && stage1deps.count(op) == 0 &&
