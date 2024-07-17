@@ -57,6 +57,10 @@ on:
         description: Ignore pytest.skip
         type: boolean
         default: false
+      runner_version:
+        description: Runner label for version
+        type: string
+        default: runner-0.0.17
 
 permissions: read-all
 
@@ -68,7 +72,7 @@ env:
 jobs:
   integration-tests:
     name: Integration tests
-    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}"]', inputs.device, inputs.driver_version)) }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -150,7 +154,11 @@ jobs:
       - name: Set a default skip list
         if: inputs.skip_list == ''
         run: |
-          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
+          if [[ -n "${{ inputs.driver_version }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
+          else
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
+          fi
           if [[ -d $skiplist ]]; then
             echo "TRITON_TEST_SKIPLIST_DIR=$skiplist" | tee -a $GITHUB_ENV
           fi

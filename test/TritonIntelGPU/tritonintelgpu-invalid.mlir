@@ -66,9 +66,9 @@ tt.func @triton_intel_gpu.extract(%tensor : tensor<16x16xf16>) {
 
 // -----
 
-tt.func @triton_intel_gpu.extract(%ptr : !tt.ptr<tensor<16x16xf16>>) {
-  // expected-error @+1 {{'triton_intel_gpu.extract' op operand and result element type must match}}
-  triton_intel_gpu.extract %ptr[0] : !tt.ptr<tensor<16x16xf16>> -> !tt.ptr<tensor<8x8xf32>>
+tt.func @triton_intel_gpu.extract(%ptr : !tt.ptr<tensor<16xf16>>) {
+  // expected-error @+1 {{'triton_intel_gpu.extract' op result rank cannot be greater than operand rank}}
+  triton_intel_gpu.extract %ptr[0] : !tt.ptr<tensor<16xf16>> -> !tt.ptr<tensor<2x8xf16>>
   tt.return
 }
 
@@ -117,5 +117,13 @@ tt.func @triton_intel_gpu.extract(%tensor : tensor<16x16xf16>) {
 tt.func @triton_intel_gpu.extract(%ptr : !tt.ptr<tensor<16x16xf16>>) {
   // expected-error @+1 {{'triton_intel_gpu.extract' op index must be less than 2}}
   triton_intel_gpu.extract %ptr[2] : !tt.ptr<tensor<16x16xf16>> -> !tt.ptr<tensor<8x16xf16>>
+  tt.return
+}
+
+// -----
+
+tt.func @triton_intel_gpu.extract(%ptr : !tt.ptr<tensor<32x32xf16>>) {
+  // expected-error @+1 {{'triton_intel_gpu.extract' op operands shape is not divisible by result shape along dimension 1}}
+  triton_intel_gpu.extract %ptr[2] : !tt.ptr<tensor<32x32xf16>> -> !tt.ptr<tensor<24xf16>>
   tt.return
 }
