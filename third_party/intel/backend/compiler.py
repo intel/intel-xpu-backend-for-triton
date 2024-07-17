@@ -130,6 +130,8 @@ class XPUBackend(BaseBackend):
         from triton.language.extra.intel import convert_custom_float8
         codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8
+        # FIXME: Implement min_dot_size for XPU.
+        codegen_fns["min_dot_size"] = lambda lhsType, rhsType: (16, 16, 16)
         return codegen_fns
 
     def load_dialects(self, ctx):

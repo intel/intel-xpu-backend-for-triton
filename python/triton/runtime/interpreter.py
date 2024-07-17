@@ -81,6 +81,7 @@ class InterpreterOptions:
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
+    backend_name: str = "interpreter"
 
 
 def _get_signed_np_dtype(dtype):
@@ -240,6 +241,7 @@ class InterpreterBuilder:
         self.options = InterpreterOptions()
         self.codegen_fns = {}
         self.codegen_fns["convert_custom_types"] = ExtraFunctions._convert_custom_types
+        self.codegen_fns["min_dot_size"] = lambda lhsType, rhsType: (16, 16, 16)
 
     def set_grid_idx(self, x, y, z):
         if not x < self.grid_dim[0]:
