@@ -48,7 +48,7 @@ RUN \
    spirv-dis --version
 
 RUN \
-  curl -sSLO https://registrationcenter-download.intel.com/akdlm/IRC_NAS/6758ce21-bde6-47f8-b4bf-6df4301f187d/l_intel-for-pytorch-gpu-dev_p_0.5.1.40_offline.sh; \
+  curl -sSLO https://registrationcenter-download.intel.com/akdlm/IRC_NAS/a8532c15-864f-4eac-88f2-a5c7e7998bbd/l_intel-for-pytorch-gpu-dev_p_0.5.2.18_offline.sh; \
   sh l_intel-for-pytorch-gpu*.sh -a --silent --eula accept; \
   rm l_intel-for-pytorch-gpu*.sh
 
