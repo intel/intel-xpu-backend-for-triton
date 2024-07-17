@@ -345,11 +345,11 @@ def matmul(a, b):
     ))
 def benchmark(B, M, N, K, provider):
     if B == 1:
-        a = torch.randn((M, K), device='xpu', dtype=torch.float16)
-        b = torch.randn((K, N), device='xpu', dtype=torch.float16)
+        a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
+        b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
     else:
-        a = torch.randn((B, M, K), device='xpu', dtype=torch.float16)
-        b = torch.randn((B, K, N), device='xpu', dtype=torch.float16)
+        a = torch.rand((B, M, K), device='xpu', dtype=torch.bfloat16)
+        b = torch.rand((B, K, N), device='xpu', dtype=torch.bfloat16)
 
     quantiles = [0.5, 0.2, 0.8]
 
@@ -358,19 +358,19 @@ def benchmark(B, M, N, K, provider):
         return 2 * M * N * K * 1e-12 / (ms * 1e-3)
 
     if provider == 'onednn':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10, quantiles=quantiles,
-                                                     fast_flush=False)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), warmup=100, rep=100,
+                                                     quantiles=quantiles, fast_flush=False)
         # print(f"oneDNN Peak TFlops {calculate_tflops(min_ms)}")
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), warmup=10, rep=10, quantiles=quantiles,
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), warmup=100, rep=100, quantiles=quantiles,
                                                      fast_flush=False)
     if provider == 'xetla':
-        c = torch.empty((M, N), device='xpu', dtype=torch.float16)
-        d = torch.empty((M, N), device='xpu', dtype=torch.float16)
+        c = torch.empty((M, N), device='xpu', dtype=torch.bfloat16)
+        d = torch.empty((M, N), device='xpu', dtype=torch.bfloat16)
         cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
         name = "bgemm_shape_{}_{}_{}".format(M, N, K)
         func = getattr(xetla_kernel, name)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: func(a, b, c, d, cnt), warmup=10, rep=10,
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: func(a, b, c, d, cnt), warmup=100, rep=100,
                                                      quantiles=quantiles, fast_flush=False)
 
     return calculate_tflops(ms), calculate_tflops(min_ms), calculate_tflops(max_ms)
