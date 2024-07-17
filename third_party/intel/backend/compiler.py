@@ -171,6 +171,11 @@ class XPUBackend(BaseBackend):
         # optimize TTGIR
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.common.add_cse(pm)
+        # Raised memory accesses generate extra layout conversion.
+        # We need a second run to ensure DPAS layout are correctly
+        # propagated to load/store ops.
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
 
