@@ -269,25 +269,13 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
     return failure();
 
   uint32_t tileWidth = getTileWidth();
-  switch (getElemSizeInBits()) {
-  case 8:
-    if (tileWidth != 16 && tileWidth != 32)
-      return emitOpError("tile_width for 8 bit elements should be equal to "
-                         "16 or 32");
-    break;
-  case 16:
-    if (tileWidth != 16)
-      return emitOpError("tile_width for 16 bit elements should be equal "
-                         "to 16");
-    break;
-  case 32:
-    if (tileWidth != 8 && tileWidth != 16)
-      return emitOpError(
-          "tile_width for 32 bit elements should be equal to 8 or 16");
-    break;
-  default:
-    llvm_unreachable("unexpected element size");
-  }
+  uint32_t elemSizeInBytes = getElemSizeInBits() / 8;
+  uint32_t vBlocks = getVBlocks();
+  if ((vBlocks * tileWidth * elemSizeInBytes) > 64)
+    return emitOpError() << "total number of bytes per row should be <= 64."
+                            "But got tile_width:"
+                         << tileWidth << ", v_blocks:" << vBlocks
+                         << ", element bytes:" << elemSizeInBytes;
 
   return success();
 }

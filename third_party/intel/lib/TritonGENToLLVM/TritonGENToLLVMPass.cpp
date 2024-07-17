@@ -501,6 +501,30 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   return call;
 }
 
+static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
+
+  bool isAvailable = true;
+  uint32_t tileWidth = op.getTileWidth();
+  switch (op.getElemSizeInBits()) {
+  case 8:
+    if (tileWidth != 16 && tileWidth != 32)
+      isAvailable = false;
+    break;
+  case 16:
+    if (tileWidth != 16)
+      isAvailable = false;
+    break;
+  case 32:
+    if (tileWidth != 8 && tileWidth != 16)
+      isAvailable = false;
+    break;
+  default:
+    llvm_unreachable("unexpected element size");
+  }
+
+  return isAvailable;
+}
+
 static LLVM::CallOp
 createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                             ConversionPatternRewriter &rewriter) {
@@ -1333,7 +1357,7 @@ struct TritonMatrix2DBlockPrefetchLowering
     // TODO: Remove GenISA lowering after PoC productization is completed.
     char *env = std::getenv("TRITONGEN_FORCE_GENISA");
     const bool useGenISA = env ? (bool)std::atoi(env) : false;
-    if (useGenISA) {
+    if (useGenISA || !isOCLBuiltinAvailable(op)) {
       rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
       return success();
     }
