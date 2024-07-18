@@ -163,10 +163,12 @@ bool emitTransferBetweenDPASAndShared(
   std::optional<LinearLayout> regLayout;
   if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(registerTy.getEncoding())) {
     // Check whether the layout specifies the opidx.
-    unsigned opIdx = 0;
+    unsigned opIdx = 2;
     if (triton::gpu::intel::hasDotDpasEncoding(registerTy)) {
-      DotOperandEncodingAttr dotLayout = triton::gpu::intel::getDotEncoding(registerTy).value();
-      llvm::errs() << "emitTransferBetweenDPASAndShared: has dotencoding of " << dotLayout;
+      DotOperandEncodingAttr dotLayout =
+          triton::gpu::intel::getDotEncoding(registerTy).value();
+      llvm::errs() << "emitTransferBetweenDPASAndShared: has dotencoding of "
+                   << dotLayout;
       opIdx = dotLayout.getOpIdx();
       llvm::errs() << " and its opidx is " << opIdx << '\n';
     }
@@ -178,10 +180,12 @@ bool emitTransferBetweenDPASAndShared(
   std::optional<LinearLayout> sharedLayout;
   if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(sharedTy.getEncoding())) {
     auto tensorTy = dyn_cast<RankedTensorType>(sharedTy);
-    unsigned opIdx = 0;
+    unsigned opIdx = 2;
     if (tensorTy && triton::gpu::intel::hasDotDpasEncoding(tensorTy)) {
-      DotOperandEncodingAttr dotLayout = triton::gpu::intel::getDotEncoding(tensorTy).value();
-      llvm::errs() << "emitTransferBetweenDPASAndShared: has dotencoding of " << dotLayout;
+      DotOperandEncodingAttr dotLayout =
+          triton::gpu::intel::getDotEncoding(tensorTy).value();
+      llvm::errs() << "emitTransferBetweenDPASAndShared: has dotencoding of "
+                   << dotLayout;
       opIdx = dotLayout.getOpIdx();
       llvm::errs() << " and its opidx is " << opIdx << '\n';
     }

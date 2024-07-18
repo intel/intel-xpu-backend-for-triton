@@ -445,6 +445,51 @@ DPASLaneBasesB(int opsPerChannel, int threadsPerWarp, int executionSize) {
   return laneBases;
 }
 
+// For C operand:
+//        execution size = 16
+//<---------------------------------->
+// t0  t1  t2  t3  ~ t12 t13 t14 t15          ^
+// t16 t17 t18 t19 ~ t28 t29 t30 t31          |
+// .   .   .   .   .   .   .   .   .          |
+// .   .   .   .   .   .   .   .   .          | repeatCount = 8
+// t0  t1  t2  t3  ~ t12 t13 t14 t15          |
+// t16 t17 t18 t19 ~ t28 t29 t30 t31          v
+// In this case, the LinearLayout bases are:
+// Register:  {{2,0}, {4,0}}
+// Lane:      {{0,1}, {0,2}, {0,4}, {0,8}, {1,0}}
+std::vector<std::vector<int32_t>>
+DPASRegBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
+  int rowsPerWarp = threadsPerWarp / executionSize;
+
+  std::vector<std::vector<int32_t>> regBases;
+  llvm::errs() << "regbaseC: {";
+
+  for (int rid = rowsPerWarp; rid < repeatCount; rid = rid * 2) {
+    regBases.push_back({rid, 0});
+    llvm::errs() << "{" << rid << ",0},";
+  }
+  llvm::errs() << "}\n";
+  return regBases;
+}
+
+std::vector<std::vector<int32_t>>
+DPASLaneBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
+
+  std::vector<std::vector<int32_t>> laneBases;
+  llvm::errs() << "lanebaseC: {";
+  for (int tid = 1; tid < executionSize; tid = tid * 2) {
+    laneBases.push_back({0, tid});
+    llvm::errs() << "{0, " << tid << "},";
+  }
+  int rowsPerWarp = threadsPerWarp / executionSize;
+  for (int row = 1; row < rowsPerWarp; row = row * 2) {
+    laneBases.push_back({row, 0});
+    llvm::errs() << "{" << row << ",0},";
+  }
+  llvm::errs() << "}\n";
+  return laneBases;
+}
+
 std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
                                                Attribute layout, int opidx) {
 
@@ -480,13 +525,21 @@ std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
         DPASLaneBasesA(opsPerChannel, threadsPerWarp, systolicDepth);
     tileLayout = LinearLayout({{kRegister, regBasesA}, {kLane, laneBasesA}},
                               outDimNames);
-  } else { // Operand B
+  } else if (opidx == 1) { // Operand B
     int executionSize = dpas.getExecutionSize();
     auto regBasesB = DPASRegBasesB(opsPerChannel, executionSize, threadsPerWarp,
                                    systolicDepth);
     auto laneBasesB =
         DPASLaneBasesB(opsPerChannel, threadsPerWarp, executionSize);
     tileLayout = LinearLayout({{kRegister, regBasesB}, {kLane, laneBasesB}},
+                              outDimNames);
+  } else { // opidx=2 -> Operand C
+    int repeatCount = dpas.getRepeatCount();
+    int executionSize = dpas.getExecutionSize();
+    auto regBasesC = DPASRegBasesC(repeatCount, executionSize, threadsPerWarp);
+    auto laneBasesC =
+        DPASLaneBasesC(repeatCount, executionSize, threadsPerWarp);
+    tileLayout = LinearLayout({{kRegister, regBasesC}, {kLane, laneBasesC}},
                               outDimNames);
   }
 
