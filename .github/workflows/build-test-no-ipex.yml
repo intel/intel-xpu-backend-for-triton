@@ -32,9 +32,6 @@ on:
         description: Ignore pytest.skip
         type: boolean
         default: false
-  schedule:
-    # Every midnight PST (UTC-8)
-    - cron: "0 8 * * *"
 
 permissions: read-all
 
