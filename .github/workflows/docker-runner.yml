@@ -7,7 +7,7 @@ permissions: read-all
 
 env:
   REGISTRY: docker-registry.docker-registry.svc.cluster.local:5000
-  TAG: triton-runner-base:0.0.17
+  TAG: triton-runner-base:0.0.18
 
 jobs:
   build:
