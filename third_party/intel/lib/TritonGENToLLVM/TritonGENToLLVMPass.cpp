@@ -546,11 +546,10 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                           vnniTransform,
                           cache};
 
-  intel::AttributeList attrs = createFunctionAttributes(
-      {{llvm::Attribute::NoUnwind, std::nullopt},
-       {llvm::Attribute::WillReturn, std::nullopt},
-       {llvm::Attribute::Memory, llvm::MemoryEffects::readOnly().toIntValue()}},
-      ctx);
+  intel::AttributeList attrs =
+      createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
+                                {llvm::Attribute::WillReturn, std::nullopt}},
+                               ctx);
 
   const StringLiteral funcName = "llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid";
   return createDeviceFunctionCall(rewriter, funcName, void_ty(ctx), {argTypes},
