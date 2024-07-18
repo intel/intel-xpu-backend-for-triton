@@ -42,13 +42,6 @@ on:
         type: boolean
         default: false
 
-  pull_request:
-    branches:
-      - llvm-target
-  push:
-    branches:
-      - llvm-target
-
 permissions: read-all
 
 jobs:
