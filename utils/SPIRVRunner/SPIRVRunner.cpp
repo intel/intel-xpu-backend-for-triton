@@ -3,8 +3,10 @@
 #include <torch/torch.h>
 
 #include <fstream>
+#include <ios>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "sycl_functions.h"
 
@@ -104,8 +106,9 @@ loadBinary(const std::string &kernel_name, uint32_t *binary_ptr,
   auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-  auto l0_module = checkSyclErrors(
-      create_module(l0_context, l0_device, binary_ptr, binary_size));
+  const char *build_flags = "";
+  auto l0_module = checkSyclErrors(create_module(
+      l0_context, l0_device, binary_ptr, binary_size, build_flags));
   auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
 
   ze_kernel_properties_t props;
