@@ -819,10 +819,10 @@ struct StoreOpConversion
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     unsigned valOffset = 0;
     for (int m = 0; m < numRepOuter; ++m) {
-      for (int repM = 0; repM < repCluster[0]; ++repM) {
-        Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0] +
-                                                   repM * elemsPerInstr[0]));
-        for (int n = 0; n < numRepInner; ++n) {
+      for (int n = 0; n < numRepInner; ++n) {
+        for (int repM = 0; repM < repCluster[0]; ++repM) {
+          Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0] +
+                                                     repM * elemsPerInstr[0]));
           for (int repN = 0; repN < repCluster[1]; ++repN) {
             Value offsetX =
                 add(warpId1Offset,
