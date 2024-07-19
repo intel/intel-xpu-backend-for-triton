@@ -1,6 +1,8 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
+#include "mlir/Target/LLVMIR/TypeToLLVM.h"
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -130,6 +132,10 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto ptrType = cast<PointerType>(op.getPtr().getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    auto addrSpace = ptrType.getAddressSpace();
+    const bool isLocalSpace = (addrSpace == 3);
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     assert(tensorType.getRank() == 2 &&
            "only support 2d load/store/prefetch for now");
 
@@ -171,7 +177,57 @@ public:
     bool transpose = ptrOp.getOrder()[0] == 0;
     Value bytes =
         i32_val(tensorType.getElementType().getIntOrFloatBitWidth() / 8);
+    if (isLocalSpace) {
+      Value llPtr = adaptor.getPtr();
+      // sg_size(16) x i64 = 64 x i16
+      VectorType v64i16Ty = VectorType::get(64, i16_ty);
+      LLVM::LLVMPointerType iPtrTy =
+          LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+      Value offsetX = extract_element(llPtr, i32_val(0));
+      Value offsetY = extract_element(llPtr, i32_val(1));
 
+      Value blkId = add(mul(udiv(offsetY, i32_val(8)), i32_val(4)),
+                        udiv(offsetX, i32_val(16)));
+      Value index = mul(blkId, i32_val(128));
+      base = gep(ptr_ty(rewriter.getContext(), 3), i16_ty, base, index);
+
+      if constexpr (std::is_same_v<OpType, LoadOp>) {
+        VectorType v64f16Ty = VectorType::get(64, f16_ty);
+
+        std::string funcName = "llvm.genx.GenISA.simdBlockRead";
+        SmallVector<Type> argTypes{iPtrTy};
+        LLVM::LLVMFuncOp funcOp =
+            LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, v64i16Ty);
+        funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+        rewriter.restoreInsertionPoint(insertPoint);
+
+        SmallVector<Value> args{base};
+        auto localLoad = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+        rewriter.replaceOp(op, bitcast(localLoad.getResult(), v64f16Ty));
+
+        return success();
+      } else if constexpr (std::is_same_v<OpType, StoreOp>) {
+        auto voidTy = LLVM::LLVMVoidType::get(rewriter.getContext());
+
+        std::string funcName = "llvm.genx.GenISA.simdBlockWrite";
+        rewriter.restoreInsertionPoint(insertPoint);
+        Value val = adaptor.getValue();
+
+        SmallVector<Type> argTypes{iPtrTy, v64i16Ty};
+        LLVM::LLVMFuncOp funcOp =
+            LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, voidTy);
+        funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+
+        Value res = cast<LLVM::ShuffleVectorOp>(val.getDefiningOp()).getRes();
+        res = bitcast(res, v64i16Ty);
+
+        SmallVector<Value> args{base, res};
+        auto localStore = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+
+        rewriter.eraseOp(op);
+        return success();
+      }
+    } // isLocalSpace
     auto calculateSurface = [&](Value shape, bool multiplyBytes) {
       Value truncatedShape = trunc(i32_ty, shape);
       if (multiplyBytes)
