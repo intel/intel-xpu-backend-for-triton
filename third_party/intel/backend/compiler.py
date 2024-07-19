@@ -46,7 +46,7 @@ class XPUOptions:
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
-    grf_mode: tuple = ('small', 'large', 'default')
+    grf_mode: tuple = ('small', 'large', 'auto', 'default')
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -253,6 +253,8 @@ class XPUBackend(BaseBackend):
             metadata["build_flags"] = "-cl-intel-128-GRF-per-thread"
         elif options.grf_mode == 'large':
             metadata["build_flags"] = "-cl-intel-256-GRF-per-thread"
+        elif options.grf_mode == 'auto':
+            metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
         else:
             metadata["build_flags"] = ""
 

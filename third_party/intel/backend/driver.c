@@ -153,8 +153,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     return l0_kernel;
   };
 
+  // Retrieve the kernel properties (e.g. register spills).
   ze_kernel_handle_t l0_kernel = checkL0Errors(l0_module);
-
   ze_kernel_properties_t props;
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   props.pNext = nullptr;
@@ -162,13 +162,25 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
   int32_t n_spills = props.spillMemSize;
   int32_t n_regs = 0;
-  bool is_GRF_mode_specified =
-      (std::string(build_flags).find("GRF-per-thread") != std::string::npos);
-  constexpr unsigned max_reg_spill = 1000;
+  constexpr int32_t max_reg_spill = 1000;
+  auto build_flags_str = std::string(build_flags);
+  bool is_GRF_mode_specified = false;
 
+  // Check whether the GRF mode is specified by the build flags.
+  if (build_flags_str.find("-cl-intel-256-GRF-per-thread") !=
+          std::string::npos ||
+      build_flags_str.find("-cl-intel-128-GRF-per-thread") !=
+          std::string::npos ||
+      build_flags_str.find("-cl-intel-enable-auto-large-GRF-mode") !=
+          std::string::npos) {
+    is_GRF_mode_specified = true;
+  }
+
+  // If the register mode isn't set, and the number of spills is greater
+  // than the threshold, recompile the kernel using large GRF mode.
   if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
     const std::string new_build_flags =
-        std::string(build_flags).append(" -cl-intel-256-GRF-per-thread");
+        build_flags_str.append(" -cl-intel-256-GRF-per-thread");
     l0_module =
         checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
                                       binary_size, new_build_flags.c_str()));

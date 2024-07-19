@@ -48,8 +48,8 @@ std::tuple<ze_module_handle_t, ze_result_t>
 create_module(ze_context_handle_t context, ze_device_handle_t device,
               uint8_t *binary_ptr, size_t binary_size,
               const char *build_flags) {
-  assert(binary_ptr != nullptr);
-  assert(build_flags != nullptr);
+  assert(binary_ptr != nullptr && "binary_ptr should not be NULL");
+  assert(build_flags != nullptr && "build_flags should not be NULL");
 
   const ze_module_format_t format = ZE_MODULE_FORMAT_IL_SPIRV;
   ze_module_desc_t module_description = {};

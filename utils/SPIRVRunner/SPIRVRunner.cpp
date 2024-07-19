@@ -90,7 +90,7 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
 /** SYCL Functions **/
 std::tuple<sycl::kernel_bundle<sycl::bundle_state::executable> *,
            sycl::kernel *, int32_t, int32_t>
-loadBinary(const std::string &kernel_name, uint32_t *binary_ptr,
+loadBinary(const std::string &kernel_name, uint8_t *binary_ptr,
            const size_t binary_size, const size_t deviceId) {
   int32_t n_regs = 0;
   int32_t n_spills = 0;
@@ -343,7 +343,7 @@ int main() {
   std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
 
   auto [kernel_bundle, kernel, n_regs, n_spills] =
-      loadBinary("_kernel", reinterpret_cast<uint32_t *>(spirv.data()),
+      loadBinary("_kernel", reinterpret_cast<uint8_t *>(spirv.data()),
                  spirv.size() / sizeof(uint32_t), 0);
 
   // TODO: this seems wrong from upstream code?
