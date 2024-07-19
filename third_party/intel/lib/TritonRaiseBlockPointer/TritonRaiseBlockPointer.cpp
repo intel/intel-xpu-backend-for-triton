@@ -301,15 +301,21 @@ struct PtrState {
     SmallVector<Value> newOffsets;
     SmallVector<Value> newStrides;
     SmallVector<Value> newShape;
+    ArithBuilder abuilder(builder, loc);
     for (const auto &[offset, stride, dim] :
-         llvm::zip(offsets, strides, shape)) {
+         llvm::zip(offsets, strides, sizes)) {
 
-      newOffsets.push_back(getValueOrCreateCastToIndexLike(
-          builder, loc, builder.getI32Type(), offset));
+      auto divOffset = builder.create<arith::DivUIOp>(
+          loc, builder.getI32Type(),
+          getValueOrCreateCastToIndexLike(builder, loc, builder.getI32Type(),
+                                          offset),
+          getValueOrCreateCastToIndexLike(builder, loc, builder.getI32Type(),
+                                          stride));
+      newOffsets.push_back(divOffset);
       newStrides.push_back(getValueOrCreateCastToIndexLike(
           builder, loc, builder.getI64Type(), stride));
-      newShape.push_back(getValueOrCreateCastToIndexLike(
-          builder, loc, builder.getI64Type(), dim));
+      newShape.push_back(builder.create<arith::ConstantIntOp>(
+          loc, dim, shapeAndStridesBitwidth));
     }
 
     auto op = builder.create<triton::MakeTensorPtrOp>(
@@ -653,7 +659,8 @@ struct TritonRaiseBlockPointer
       // Verify that shape is not updated during the for loop
       auto forState = knownPtrsFor[i];
       for (auto i = 0; i < forState.getRank(); ++i) {
-        if (forState.shape[i] != state.shape[i]) {
+        if (!hasConstZero(state.shape[i]) &&
+            forState.shape[i] != state.shape[i]) {
           // Special case, see comments in addState in dealing with shape/modulo
           if (i == 0 && forState.getRank() == 2) {
             if (forState.shape[1] == state.shape[0] &&
@@ -756,10 +763,12 @@ struct TritonRaiseBlockPointer
 
     for (int64_t i = 0; i < pointeeType.getRank(); i++) {
       state.sizes.push_back(shape[i]);
+      state.shape.push_back(builder.create<arith::ConstantIntOp>(
+          loc, 0, shapeAndStridesBitwidth));
     }
     state.strides = makeTPtrOp.getStrides();
     state.offsets = makeTPtrOp.getOffsets();
-    state.shape = makeTPtrOp.getShape();
+    // state.shape = makeTPtrOp.getShape();
     state.order = SmallVector<int32_t>(makeTPtrOp.getOrder());
 
     return success();
@@ -1115,7 +1124,11 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   Value offset = convertScalarToDtype(builder, loc, state.scalar, offsetType,
                                       /*isUnsignedCast=*/true);
   for (int32_t dim : resultType.getShape()) {
-    state.offsets.push_back(offset);
+    if (dim == 0)
+      state.offsets.push_back(offset);
+    else
+      state.offsets.push_back(
+          builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth));
     state.sizes.push_back(dim);
     state.strides.push_back(
         builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
