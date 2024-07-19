@@ -1,4 +1,4 @@
-name: Build and test
+name: Build and test Python
 run-name: ${{ inputs.run_name }}
 
 on:
@@ -42,60 +42,9 @@ on:
         type: boolean
         default: false
 
-  pull_request:
-    branches:
-      - llvm-target
-  push:
-    branches:
-      - llvm-target
-
 permissions: read-all
 
 jobs:
-  pre-commit:
-    name: Pre-commit checks
-    runs-on:
-      - glados
-      - spr
-      - cpu
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Load pip cache
-        id: pip-cache
-        uses: ./.github/actions/load
-        env:
-          # Increase this value to reset cache
-          CACHE_NUMBER: 2
-        with:
-          path: $HOME/.cache/pip
-          key: pip-3.10-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.INSTALL_IPEX }}-${{ env.CACHE_NUMBER }}
-
-      - name: Install Python 3.10
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Run pre-commit checks
-        run: |
-          set -x
-          pip install --upgrade pre-commit
-
-          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
-          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
-          # If first run of yapf worked and made changes reset the tree to the original state
-          git reset --hard
-
-          python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
-
-      - name: Save pip cache
-        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.pip-cache.outputs.path }}
-          dest: ${{ steps.pip-cache.outputs.dest }}
-
   prepare:
     name: Prepare
     runs-on: Linux
@@ -114,9 +63,9 @@ jobs:
         id: matrix
         run: |
           if [[ -n "${{ inputs.runner_label }}" ]]; then
-            matrix='{"python": ["3.9"]}'
+            matrix='{"python": ["3.9", "3.10", "3.11"]}'
           else
-            matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
+            matrix='{"python": ["3.9", "3.10", "3.11"], "driver": ["rolling", "lts"]}'
           fi
           echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
 

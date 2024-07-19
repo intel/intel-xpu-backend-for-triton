@@ -471,3 +471,8 @@ test/unit/language/test_core.py::test_dot[1-64-128-128-2-False-False-none-tf32-f
 test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e5-float32-1]
 test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e4nv-float32-1]
 test/unit/language/test_core.py::test_math_extern[float64]
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/1617
+test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-True-none-tf32-float16-float16-1_0]
+test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-True-none-tf32-float16-float16-1_1]
+test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-none-tf32-float16-float16-1_0]
+test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-none-tf32-float16-float16-1_1]
