@@ -99,17 +99,8 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     MLIRContext *context = rewriter.getContext();
-    const unsigned resBitWidth = 32;
-    Operation *newOp =
-        rewriter.create<TargetOp>(loc, IntegerType::get(context, resBitWidth));
-
-    if (indexBitwidth > resBitWidth) {
-      newOp = rewriter.create<LLVM::SExtOp>(
-          loc, IntegerType::get(context, indexBitwidth), newOp->getResult(0));
-    } else if (indexBitwidth < resBitWidth) {
-      newOp = rewriter.create<LLVM::TruncOp>(
-          loc, IntegerType::get(context, indexBitwidth), newOp->getResult(0));
-    }
+    Operation *newOp = rewriter.create<TargetOp>(
+        loc, IntegerType::get(context, indexBitwidth));
 
     rewriter.replaceOp(op, newOp->getResults());
     return success();

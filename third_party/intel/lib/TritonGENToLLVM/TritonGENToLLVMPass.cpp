@@ -734,7 +734,7 @@ struct TritonGENSubgroupIdLowering
   LogicalResult
   matchAndRewrite(TritonGEN::SubgroupIdOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto retType = rewriter.getIntegerType(32);
+    auto retType = getTypeConverter()->getIndexType();
 
     intel::AttributeList attrs;
     LLVM::CallOp callOp = createDeviceFunctionCall(

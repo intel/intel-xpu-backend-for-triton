@@ -137,7 +137,7 @@ def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
     number from 0 to the number of subgroups minus one.
   }];
   let arguments = (ins);
-  let results = (outs I32:$res);
+  let results = (outs IndexType:$res);
   let assemblyFormat = [{
     attr-dict `:` type($res)
   }];
