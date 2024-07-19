@@ -765,10 +765,20 @@ struct TritonRaiseBlockPointer
       state.sizes.push_back(shape[i]);
       state.shape.push_back(builder.create<arith::ConstantIntOp>(
           loc, 0, shapeAndStridesBitwidth));
+
+      auto strideCst = builder.create<arith::IndexCastOp>(
+          loc, builder.getIndexType(), makeTPtrOp.getStrides()[i]);
+      auto offsetCst = builder.create<arith::IndexCastOp>(
+          loc, builder.getIndexType(), makeTPtrOp.getOffsets()[i]);
+      auto scaledOffset = builder.create<arith::MulIOp>(
+          loc, offsetCst.getResult(), strideCst.getResult());
+      state.offsets.push_back(getValueOrCreateCastToIndexLike(
+          builder, loc, builder.getIntegerType(offsetBitwidth),
+          scaledOffset.getResult()));
     }
     state.strides = makeTPtrOp.getStrides();
-    state.offsets = makeTPtrOp.getOffsets();
-    // state.shape = makeTPtrOp.getShape();
+    // state.offsets = makeTPtrOp.getOffsets();
+    //  state.shape = makeTPtrOp.getShape();
     state.order = SmallVector<int32_t>(makeTPtrOp.getOrder());
 
     return success();
@@ -1046,19 +1056,24 @@ TritonRaiseBlockPointer::visitAddPointerOperand(triton::SplatOp splatOp,
     Value c0i32 = builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
     Value c0i64 =
         builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth);
-    state.offsets.push_back(c0i32);
+    if (state.scalar) {
+      state.offsets.push_back(getValueOrCreateCastToIndexLike(
+          builder, loc, builder.getIntegerType(offsetBitwidth), state.scalar));
+    } else {
+      state.offsets.push_back(c0i32);
+    }
     state.strides.push_back(c0i64);
     state.shape.push_back(c0i64);
     state.sizes.push_back(s);
   }
-
+  /*
   // If we splat a integer value, scalar should become the offset of the
   // outer most dimension
   if (state.scalar) {
     state.offsets[0] = getValueOrCreateCastToIndexLike(
         builder, loc, builder.getIntegerType(offsetBitwidth), state.scalar);
   }
-
+  */
   LLVM_DEBUG(llvm::dbgs() << "Splat state: " << state << "\n";);
 
   return success();
@@ -1124,11 +1139,11 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   Value offset = convertScalarToDtype(builder, loc, state.scalar, offsetType,
                                       /*isUnsignedCast=*/true);
   for (int32_t dim : resultType.getShape()) {
-    if (dim == 0)
-      state.offsets.push_back(offset);
-    else
-      state.offsets.push_back(
-          builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth));
+    // if (dim == 0)
+    state.offsets.push_back(offset);
+    // else
+    // state.offsets.push_back(
+    //     builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth));
     state.sizes.push_back(dim);
     state.strides.push_back(
         builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
