@@ -31,6 +31,12 @@ runs:
           echo "PYTHON_VERSION=$PYTHON_VERSION" >> "$GITHUB_ENV"
         fi
 
+    # IPEX requires setuptools for Python 3.12
+    - name: Install setuptools (Python 3.12)
+      if: ${{ env.PYTHON_VERSION == '3.12' }}
+      run: |
+        pip install setuptools
+
     - name: Load IPEX wheels from a cache
       id: ipex-cache
       uses: ./.github/actions/load
@@ -59,10 +65,6 @@ runs:
         cd intel-extension-for-pytorch
         pip install wheel
         pip install -r requirements.txt
-        # IPEX requires setuptools for Python 3.12
-        if [[ $PYTHON_VERSION = "3.12" ]]; then
-          pip install setuptools
-        fi
         python setup.py bdist_wheel
 
     - name: Install IPEX
