@@ -34,6 +34,7 @@ runs:
     # IPEX requires setuptools for Python 3.12
     - name: Install setuptools (Python 3.12)
       if: ${{ env.PYTHON_VERSION == '3.12' }}
+      shell: bash
       run: |
         pip install setuptools
 
