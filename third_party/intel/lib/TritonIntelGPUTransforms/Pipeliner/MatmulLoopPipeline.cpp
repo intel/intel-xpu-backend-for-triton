@@ -272,8 +272,7 @@ createSchedule(scf::ForOp forOp, int numStages) {
 
   // Then Schedule stage 0.
   addOps(forOp, 0, schedule,
-         [&](Operation *op) { return prefetchAndDeps.count(op); } );
-
+         [&](Operation *op) { return prefetchAndDeps.count(op); });
 
   addOps(forOp, numStages - 1, schedule, [&](Operation *op) {
     return prefetchAndDeps.count(op) == 0 && stage1deps.count(op) == 0 &&
