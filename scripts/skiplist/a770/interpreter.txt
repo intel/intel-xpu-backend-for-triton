@@ -1,5 +1,4 @@
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/1434
-test/unit/language/test_core.py::test_store_constant_default_dtype[1]
 test/unit/language/test_core.py::test_dot_without_load[float16]
 test/unit/language/test_core.py::test_masked_load_shared_memory[dtype1]
 test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[32-float8e4nv-64-64-64-128-256-256]
