@@ -579,7 +579,6 @@ def get_entry_points():
 
 def get_install_requires():
     install_requires = [
-        "filelock",
         "packaging",  # used by third_party/intel/backend/compiler.py
     ]  # yapf: disable
     return install_requires
