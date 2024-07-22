@@ -74,26 +74,15 @@ def min_dot_size(device_props: dict):
 
     # default 8 because 1,2,4 is not supported by our backend now.
     repeat_count = 8
-    exec_size = 16
     sdepth = 8
-    arch = device_props["device_arch"]
-    if arch == "ATS":
-        exec_size = 8
-    def get_ops_per_channel(lhs_type, rhs_type):
-        l_type = lhs_type.scalar
-        r_type = rhs_type.scalar
-        if (l_type.is_fp32() and r_type.is_fp32()):
-            # TF32 type
-            return 1
-        elif (l_type.is_fp16() and r_type.is_fp16()) or (l_type.is_bf16() and r_type.is_bf16()):
-            return 2
-        elif (l_type.is_int8() or l_type.is_uint8()) and (r_type.is_int8() or r_type.is_uint8()):
-            return 4
-        # default
-        # FIXME: support more types(bf8/u4/s4/u2/s2 etc.)
-        return 2
+    exec_size = min(device_props["sub_group_sizes"])
 
-    # default (8, 16, 16)
+    def get_ops_per_channel(lhs_type, rhs_type):
+        l_bitwidth = lhs_type.scalar.primitive_bitwidth
+        r_bitwidth = rhs_type.scalar.primitive_bitwidth
+        max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
+        return min(8, max_ops_per_chan)
+
     return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
 
 
