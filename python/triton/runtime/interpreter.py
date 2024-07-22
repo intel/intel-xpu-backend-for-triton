@@ -1130,9 +1130,6 @@ class FunctionRewriter:
         self.def_file_lineno: int = 0
 
     def rewrite_ast(self):
-        # FIXME: This is a temporary workaround to avoid compilation failures.
-        return self.fn
-
         # If exception is raise, it means the function does not have source code available,
         # e.g., dynamically generated functions, we cannot rewrite it so just return the original function
         try:
