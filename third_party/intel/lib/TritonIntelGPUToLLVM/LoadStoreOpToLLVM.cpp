@@ -261,7 +261,8 @@ struct PrefetchOpConversion
     unsigned tileHeightInElem = shapePerWarp[0];
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
-        loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
+        loc, i32_ty,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
     SmallVector<Value> multiDimWarpId =
         mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, {1, 0});
 
@@ -370,7 +371,8 @@ struct LoadOpConversion
     int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
-        loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
+        loc, i32_ty,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
@@ -768,7 +770,8 @@ struct StoreOpConversion
     unsigned threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
-        loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
+        loc, i32_ty,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
     SmallVector<Value> multiDimWarpId =
         mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 

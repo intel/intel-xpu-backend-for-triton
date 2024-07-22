@@ -356,7 +356,8 @@ public:
       auto b = OpBuilder::atBlockBegin(&func.getBody().front());
       Location loc = func.getLoc();
       auto warpId = b.create<arith::IndexCastOp>(
-          loc, b.getI32Type(), b.create<gpu::SubgroupIdOp>(loc));
+          loc, b.getI32Type(),
+          b.create<gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
 
       // record old type before transform
       DenseMap<Operation *, RankedTensorType> typeMap;

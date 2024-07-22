@@ -158,7 +158,7 @@ def reset_tmp_dir():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def test_reuse():
+def test_reuse(device):
     counter = 0
 
     def inc_counter(*args, **kwargs):
@@ -167,14 +167,14 @@ def test_reuse():
 
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
-    x = torch.empty(1, dtype=torch.int32, device='xpu')
+    x = torch.empty(1, dtype=torch.int32, device=device)
     for i in range(10):
         kernel[(1, )](x, 1, BLOCK=1024)
     assert counter == 1
 
 
 @pytest.mark.parametrize('mode', ['enable', 'disable'])
-def test_specialize(mode):
+def test_specialize(mode, device):
     counter = 0
 
     def inc_counter(*args, **kwargs):
@@ -183,7 +183,7 @@ def test_specialize(mode):
 
     JITFunction.cache_hook = inc_counter
     reset_tmp_dir()
-    x = torch.empty(1, dtype=torch.int32, device='xpu')
+    x = torch.empty(1, dtype=torch.int32, device=device)
     function = {'enable': kernel, 'disable': kernel_nospec}[mode]
     target = {'enable': 3, 'disable': 1}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
@@ -191,13 +191,13 @@ def test_specialize(mode):
     assert counter == target
 
 
-def test_annotation():
+def test_annotation(device):
 
     @triton.jit
     def kernel(X, i: tl.int32):
         tl.store(X, i)
 
-    x = torch.empty(1, dtype=torch.int32, device='xpu')
+    x = torch.empty(1, dtype=torch.int32, device=device)
 
     device = torch.xpu.current_device()
     kernel[(1, )](x, 1)
@@ -386,13 +386,13 @@ def test_no_cache_callable():
     assert not kernel.used_global_vals
 
 
-def test_constexpr_not_callable() -> None:
+def test_constexpr_not_callable(device) -> None:
 
     @triton.jit
     def kernel(X, c: tl.constexpr):
         tl.store(X, 2)
 
-    x = torch.empty(1, dtype=torch.int32, device='xpu')
+    x = torch.empty(1, dtype=torch.int32, device=device)
     error = False
     try:
         kernel[(1, )](x, c="str")
@@ -407,7 +407,7 @@ def test_constexpr_not_callable() -> None:
     assert error is True
 
 
-def test_jit_warmup_cache() -> None:
+def test_jit_warmup_cache(device) -> None:
 
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr):
@@ -415,9 +415,9 @@ def test_jit_warmup_cache() -> None:
         tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
     args = [
-        torch.randn(32, dtype=torch.float32, device="xpu"),
-        torch.randn(32, dtype=torch.float32, device="xpu"),
-        torch.randn(32, dtype=torch.float32, device="xpu"),
+        torch.randn(32, dtype=torch.float32, device=device),
+        torch.randn(32, dtype=torch.float32, device=device),
+        torch.randn(32, dtype=torch.float32, device=device),
         32,
     ]
     device = torch.xpu.current_device()
