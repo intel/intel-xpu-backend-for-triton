@@ -66,6 +66,26 @@ class XPUOptions:
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
+def min_dot_size(device_props: dict):
+    # (M, N, K)
+    # M: repeatCount. 1,2,4,8
+    # N: executionSize. 16 for PVC, 8 for ATS
+    # K: systolicDepth x opsPerChan. systolicDepth must be 8
+
+    # default 8 because 1,2,4 is not supported by our backend now.
+    repeat_count = 8
+    sdepth = 8
+    exec_size = min(device_props["sub_group_sizes"])
+
+    def get_ops_per_channel(lhs_type, rhs_type):
+        l_bitwidth = lhs_type.scalar.primitive_bitwidth
+        r_bitwidth = rhs_type.scalar.primitive_bitwidth
+        max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
+        return min(8, max_ops_per_chan)
+
+    return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
+
+
 class XPUBackend(BaseBackend):
 
     # AdvancedPath pass pipeline for kernels using block pointers.
@@ -130,8 +150,7 @@ class XPUBackend(BaseBackend):
         from triton.language.extra.intel import convert_custom_float8
         codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8
-        # FIXME: Implement min_dot_size for XPU.
-        codegen_fns["min_dot_size"] = lambda lhsType, rhsType: (16, 16, 16)
+        codegen_fns["min_dot_size"] = min_dot_size(self.properties)
         return codegen_fns
 
     def load_dialects(self, ctx):
