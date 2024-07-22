@@ -172,6 +172,12 @@ jobs:
         run: |
           source ./scripts/pytest-utils.sh
           ensure_spirv_dis
+
+          SHARED_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/_C"
+          if [ ! -d "${SHARED_LIB_DIR}" ]; then
+            echo "Coult not find '${SHARED_LIB_DIR}'" ; exit -1
+          fi
+
           cd python/test/unit
           TRITON_TEST_SUITE=language \
             pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
@@ -183,6 +189,9 @@ jobs:
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
             pytest -vvv --device xpu language/test_line_info.py
+
+          TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
+            pytest -vvv --device xpu instrumentation/test_gpuhello.py
 
       - name: Clear cache
         run: |
