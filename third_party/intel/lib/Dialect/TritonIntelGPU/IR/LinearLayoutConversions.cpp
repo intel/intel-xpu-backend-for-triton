@@ -359,16 +359,15 @@ std::vector<std::vector<int32_t>> DPASRegBasesA(int opsPerChannel,
   int rowPerWarp = threadsPerWarp / systolicDepth;
   int warpRepeats = repeatCount / rowPerWarp;
   std::vector<std::vector<int32_t>> regBases;
-  llvm::errs() << "regbaseA: {";
+
   for (int opc = 1; opc < opsPerChannel; opc = opc * 2) {
     regBases.push_back({0, opc});
-    llvm::errs() << "{0, " << opc << "},";
   }
+
   for (int warp = 1; warp < warpRepeats; warp = warp * 2) {
     regBases.push_back({warp * rowPerWarp, 0});
-    llvm::errs() << "{" << warp * rowPerWarp << ",0},";
   }
-  llvm::errs() << "}\n";
+
   return regBases;
 }
 
@@ -376,16 +375,14 @@ std::vector<std::vector<int32_t>>
 DPASLaneBasesA(int opsPerChannel, int threadsPerWarp, int systolicDepth) {
 
   std::vector<std::vector<int32_t>> laneBases;
-  llvm::errs() << "lanebaseA: {";
+
   for (int tid = 1; tid < systolicDepth; tid = tid * 2) {
     laneBases.push_back({0, opsPerChannel * tid});
-    llvm::errs() << "{0, " << opsPerChannel * tid << "},";
   }
   for (int tid = systolicDepth; tid < threadsPerWarp; tid = tid * 2) {
     laneBases.push_back({tid / systolicDepth, 0});
-    llvm::errs() << "{" << tid / systolicDepth << ",0},";
   }
-  llvm::errs() << "}\n";
+
   return laneBases;
 }
 
@@ -414,16 +411,14 @@ std::vector<std::vector<int32_t>> DPASRegBasesB(int opsPerChannel,
   int rowsPerWarp = threadsPerWarp / executionSize;
   int warpRepeats = systolicDepth / rowsPerWarp;
   std::vector<std::vector<int32_t>> regBases;
-  llvm::errs() << "regbaseB: {";
+
   for (int opc = 1; opc < opsPerChannel; opc = opc * 2) {
     regBases.push_back({opc, 0});
-    llvm::errs() << "{" << opc << ",0},";
   }
   for (int rid = rowsPerWarp; rid < systolicDepth; rid = rid * 2) {
     regBases.push_back({rid * opsPerChannel, 0});
-    llvm::errs() << "{" << rid * opsPerChannel << ",0},";
   }
-  llvm::errs() << "}\n";
+
   return regBases;
 }
 
@@ -431,17 +426,15 @@ std::vector<std::vector<int32_t>>
 DPASLaneBasesB(int opsPerChannel, int threadsPerWarp, int executionSize) {
 
   std::vector<std::vector<int32_t>> laneBases;
-  llvm::errs() << "lanebaseB: {";
+
   for (int tid = 1; tid < executionSize; tid = tid * 2) {
     laneBases.push_back({0, tid});
-    llvm::errs() << "{0, " << tid << "},";
   }
   int rowsPerWarp = threadsPerWarp / executionSize;
   for (int row = 1; row < rowsPerWarp; row = row * 2) {
     laneBases.push_back({row * opsPerChannel, 0});
-    llvm::errs() << "{" << row * opsPerChannel << ",0},";
   }
-  llvm::errs() << "}\n";
+
   return laneBases;
 }
 
@@ -462,13 +455,11 @@ DPASRegBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
   int rowsPerWarp = threadsPerWarp / executionSize;
 
   std::vector<std::vector<int32_t>> regBases;
-  llvm::errs() << "regbaseC: {";
 
   for (int rid = rowsPerWarp; rid < repeatCount; rid = rid * 2) {
     regBases.push_back({rid, 0});
-    llvm::errs() << "{" << rid << ",0},";
   }
-  llvm::errs() << "}\n";
+
   return regBases;
 }
 
@@ -476,17 +467,15 @@ std::vector<std::vector<int32_t>>
 DPASLaneBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
 
   std::vector<std::vector<int32_t>> laneBases;
-  llvm::errs() << "lanebaseC: {";
+
   for (int tid = 1; tid < executionSize; tid = tid * 2) {
     laneBases.push_back({0, tid});
-    llvm::errs() << "{0, " << tid << "},";
   }
   int rowsPerWarp = threadsPerWarp / executionSize;
   for (int row = 1; row < rowsPerWarp; row = row * 2) {
     laneBases.push_back({row, 0});
-    llvm::errs() << "{" << row << ",0},";
   }
-  llvm::errs() << "}\n";
+
   return laneBases;
 }
 
@@ -506,13 +495,8 @@ std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
 
-  SmallVector<int64_t> numReps = dpas.getDPASRepetitions(shape, opidx);
   const SmallVector<unsigned> warpsPerCTA = dpas.getWarpsPerCTA();
   int threadsPerWarp = triton::gpu::getWarpSize(dpas);
-  SmallVector<unsigned> dpasInstShape =
-      opidx == 0 ? dpas.getDPASInstShapeA() : dpas.getDPASInstShapeB();
-  unsigned elemsPerThread =
-      dpasInstShape[0] * dpasInstShape[1] / threadsPerWarp;
   unsigned opsPerChannel = dpas.getOpsPerChannel();
 
   auto tileLayout = LinearLayout::empty();

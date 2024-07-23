@@ -848,36 +848,44 @@ inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
                                      Location loc, RewriterBase &rewriter,
                                      const TargetInfoBase &target) {
   if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcTy.getEncoding())) {
-    if (emitTransferBetweenDPASAndShared(
-            srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
-            dstStrides, loc, rewriter, target,
-            [&](VectorType vecTy, Value vecAddr) {
-              ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
-              srcVals = srcVals.drop_front(vecTy.getNumElements());
-              Value vec = undef(vecTy);
-              for (int i = 0; i < vals.size(); i++) {
-                vec = insert_element(vec, vals[i], i32_val(i));
-              }
-              store(vec, vecAddr)
-                  .setAlignment(vecTy.getNumElements() *
-                                elemLlvmTy.getIntOrFloatBitWidth() / 8);
-            }))
-      return;
+    // FIXME: Temporary workaround to avoid test failures for
+    // test_core.py::test_dot chain-dot test cases.
+    // Need to debug why it fails with DPAS->LinearLayout conversion.
+    auto srcShape = srcTy.getShape();
+    if (srcShape[0] == 1 || srcShape[1] == 1) {
+      if (emitTransferBetweenDPASAndShared(
+              srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
+              dstStrides, loc, rewriter, target,
+              [&](VectorType vecTy, Value vecAddr) {
+                ArrayRef<Value> vals =
+                    srcVals.take_front(vecTy.getNumElements());
+                srcVals = srcVals.drop_front(vecTy.getNumElements());
+                Value vec = undef(vecTy);
+                for (int i = 0; i < vals.size(); i++) {
+                  vec = insert_element(vec, vals[i], i32_val(i));
+                }
+                store(vec, vecAddr)
+                    .setAlignment(vecTy.getNumElements() *
+                                  elemLlvmTy.getIntOrFloatBitWidth() / 8);
+              }))
+        return;
+    }
   } else if (emitTransferBetweenRegistersAndShared(
-                 srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
-                 dstStrides, loc, rewriter, target,
+                 srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt,
+                 smemBase, dstStrides, loc, rewriter, target,
                  [&](VectorType vecTy, Value vecAddr) {
-                   ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
-            srcVals = srcVals.drop_front(vecTy.getNumElements());
+                   ArrayRef<Value> vals =
+                       srcVals.take_front(vecTy.getNumElements());
+                   srcVals = srcVals.drop_front(vecTy.getNumElements());
 
-            Value vec = undef(vecTy);
-            for (int i = 0; i < vals.size(); i++) {
-              vec = insert_element(vec, vals[i], i32_val(i));
-            }
-            store(vec, vecAddr)
-                .setAlignment(vecTy.getNumElements() *
-                              elemLlvmTy.getIntOrFloatBitWidth() / 8);
-            })) {
+                   Value vec = undef(vecTy);
+                   for (int i = 0; i < vals.size(); i++) {
+                     vec = insert_element(vec, vals[i], i32_val(i));
+                   }
+                   store(vec, vecAddr)
+                       .setAlignment(vecTy.getNumElements() *
+                                     elemLlvmTy.getIntOrFloatBitWidth() / 8);
+                 })) {
     return;
   }
 

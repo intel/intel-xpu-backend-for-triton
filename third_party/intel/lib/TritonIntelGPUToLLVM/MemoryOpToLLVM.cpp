@@ -27,7 +27,6 @@ void lowerDistributedToShared(Location loc, Value src, Value dst,
   auto smemBase = smemObj.getBase();
   auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  llvm::errs() << "lowerDistributedToShared of op " << op << "\n";
   mlir::triton::intel::storeDistributedToShared(dstTy, srcTy, elemTy, inVals,
                                                 smemBase, dstStrides, loc,
                                                 rewriter, targetInfo);

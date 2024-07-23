@@ -167,10 +167,7 @@ bool emitTransferBetweenDPASAndShared(
     if (triton::gpu::intel::hasDotDpasEncoding(registerTy)) {
       DotOperandEncodingAttr dotLayout =
           triton::gpu::intel::getDotEncoding(registerTy).value();
-      llvm::errs() << "emitTransferBetweenDPASAndShared: has dotencoding of "
-                   << dotLayout;
       opIdx = dotLayout.getOpIdx();
-      llvm::errs() << " and its opidx is " << opIdx << '\n';
     }
     regLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout, opIdx);
   } else {
@@ -184,10 +181,7 @@ bool emitTransferBetweenDPASAndShared(
     if (tensorTy && triton::gpu::intel::hasDotDpasEncoding(tensorTy)) {
       DotOperandEncodingAttr dotLayout =
           triton::gpu::intel::getDotEncoding(tensorTy).value();
-      llvm::errs() << "emitTransferBetweenDPASAndShared: has dotencoding of "
-                   << dotLayout;
       opIdx = dotLayout.getOpIdx();
-      llvm::errs() << " and its opidx is " << opIdx << '\n';
     }
     sharedLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout, opIdx);
   } else {
