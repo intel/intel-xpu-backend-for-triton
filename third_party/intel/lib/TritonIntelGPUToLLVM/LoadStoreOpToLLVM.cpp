@@ -250,6 +250,30 @@ struct PrefetchOpConversion
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned tileWidthInElem = shapePerWarp[1];
     unsigned tileHeightInElem = shapePerWarp[0];
+    unsigned vBlocks;
+    switch (elemSizeInBits) {
+    case 8:
+      if (tileWidthInElem == 64) {
+        // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 32;
+      } else
+        vBlocks = 1;
+      break;
+    case 16:
+      if (tileWidthInElem == 32) {
+        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 8 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 16;
+      } else
+        vBlocks = 1;
+      break;
+    default:
+      // for the default case.
+      vBlocks = 1;
+    }
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty, rewriter.create<mlir::gpu::SubgroupIdOp>(loc));
@@ -302,7 +326,7 @@ struct PrefetchOpConversion
             /*elem_size_in_bits*/ elemSizeInBits,
             /*tile_width*/ tileWidthInElem,
             /*tile_height*/ tileHeightInElem,
-            /*v_blocks*/ 1,
+            /*v_blocks*/ vBlocks,
             /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
         if (failed(newOp.verify())) {
           // Explicitly invoke verifier because `triton_gen` ops are immediately
