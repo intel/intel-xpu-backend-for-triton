@@ -13,15 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *******************************************************************************/
-#ifndef TRITONBENCHMARK_BGEMM_H
-#define TRITONBENCHMARK_BGEMM_H
+#ifndef TRITONBENCHMARK_GEMM_H
+#define TRITONBENCHMARK_GEMM_H
 
-#include "bgemm_config.hpp"
+#include "gemm_config.hpp"
 #include "kernel_func.hpp"
 
+#define BARNUM (32)
+#define SLMSIZE (128 * 1024)
+
 template <class Test>
-sycl::event bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
-                      sycl::queue &queue) {
+sycl::event gemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
+                     sycl::queue &queue) {
   // Accept incoming parameters
   size_t matrix_m = Test::mat_m;
   size_t matrix_n = Test::mat_n;
@@ -35,32 +38,12 @@ sycl::event bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
   using data_type_b = typename Test::data_type_b;
   using data_type_c = typename Test::data_type_c;
   using data_type_acc = float;
-  using bgemm_functor =
-      bgemm_test_func<data_type_a, data_type_b, data_type_c, data_type_acc,
-                      wg_tile_m, wg_tile_n, sg_tile_m, sg_tile_n, sg_tile_k,
-                      Test::layout_a, Test::layout_b, Test::global_kslicing,
-                      Test::local_kslicing>;
-  using gemm_op_t = typename bgemm_functor::gemm_op_t;
-
-  size_t lda =
-      Test::layout_a == gpu::xetla::mem_layout::col_major ? matrix_m : matrix_k;
-  size_t ldb =
-      Test::layout_b == gpu::xetla::mem_layout::col_major ? matrix_k : matrix_n;
-  size_t ldc = matrix_n;
-
-  std::string mem_layout_a_str =
-      Test::layout_a == gpu::xetla::mem_layout::col_major
-          ? "gpu::xetla::mem_layout::col_major"
-          : "gpu::xetla::mem_layout::row_major";
-  std::string mem_layout_b_str =
-      Test::layout_b == gpu::xetla::mem_layout::col_major
-          ? "gpu::xetla::mem_layout::col_major"
-          : "gpu::xetla::mem_layout::row_major";
-
-  constexpr bool is_col_major_a =
-      Test::layout_a == gpu::xetla::mem_layout::col_major;
-  constexpr bool is_col_major_b =
-      Test::layout_b == gpu::xetla::mem_layout::col_major;
+  using gemm_functor =
+      bf16_gemm_test_func<data_type_a, data_type_b, data_type_c, data_type_acc,
+                          wg_tile_m, wg_tile_n, sg_tile_m, sg_tile_n, sg_tile_k,
+                          Test::layout_a, Test::layout_b, Test::global_kslicing,
+                          Test::local_kslicing>;
+  using gemm_op_t = typename gemm_functor::gemm_op_t;
 
   size_t size_a = matrix_m * matrix_k;
   size_t size_b = matrix_k * matrix_n;
@@ -69,14 +52,12 @@ sycl::event bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
   size_t size_cnt = gemm_op_t::get_cnt_buf_size(matrix_m, matrix_n);
 
   auto context = queue.get_info<sycl::info::queue::context>();
+  auto device = queue.get_info<sycl::info::queue::device>();
   data_type_a *A = static_cast<data_type_a *>(_A);
   data_type_b *B = static_cast<data_type_b *>(_B);
   data_type_c *C = static_cast<data_type_c *>(_C);
   data_type_acc *Acc = static_cast<data_type_acc *>(_Acc);
   uint32_t *Cnt = static_cast<uint32_t *>(_Cnt);
-  //  uint32_t *Cnt = static_cast<uint32_t *>(
-  //      malloc_shared(size_cnt * sizeof(uint32_t), queue.get_device(),
-  //      context));
 
   // here keep the same dim in CM and esimd, diff the index in kernel code
   size_t group_range_m = (matrix_m % wg_tile_m == 0)
@@ -118,28 +99,28 @@ sycl::event bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
     auto e_esimd = queue.submit([&](sycl::handler &cgh) {
       cgh.use_kernel_bundle(exeBundle);
       cgh.parallel_for<Test>(nd_range, [=](sycl::nd_item<3> item) KERNEL_MAIN {
-        constexpr uint32_t barrier_count = bgemm_functor::barrier_count;
-        constexpr uint32_t slm_size = bgemm_functor::slm_size;
-        if constexpr (barrier_count != 0) {
-          gpu::xetla::xetla_nbarrier_init<barrier_count>();
-        }
-        if constexpr (slm_size != 0) {
-          gpu::xetla::xetla_local_init<slm_size>();
-        }
-        bgemm_functor::run(item, A, B, C, matrix_m, matrix_n, matrix_k, lda,
-                           ldb, ldc, Acc, Cnt);
+        gpu::xetla::xetla_local_init<SLMSIZE>();
+        gpu::xetla::xetla_nbarrier_init<BARNUM>();
+        gemm_functor::run(item, A, B, C, matrix_m, matrix_n, matrix_k, Acc,
+                          Cnt);
       });
     });
-    // e_esimd.wait();
-    // double time = (e_esimd.template get_profiling_info<
-    //                    sycl::info::event_profiling::command_end>() -
-    //                e_esimd.template get_profiling_info<
-    //                    sycl::info::event_profiling::command_start>()) /
-    //               (1000.0f * 1000.0f * 1000.f);
+    e_esimd.wait();
+    double time = (e_esimd.template get_profiling_info<
+                       sycl::info::event_profiling::command_end>() -
+                   e_esimd.template get_profiling_info<
+                       sycl::info::event_profiling::command_start>()) /
+                  (1000.0f * 1000.0f * 1000.f);
 
-    // printf("matrix_m: %d, Data_type_in(A): %lu, tflops: %f \n", matrix_m,
-    // sizeof(data_type_a), ((matrix_m * matrix_n * matrix_k *
-    // sizeof(data_type_a) * 2 / 1e12) / time));
+    printf("m: %d, k: %d, n: %d, Tflops is: %f, HBM (GBs) "
+           "is %f\n",
+           matrix_m, matrix_k, matrix_n,
+           2.0 * matrix_m * matrix_n * matrix_k / 1e12 / time,
+           (matrix_m * matrix_k * sizeof(data_type_a) +
+            matrix_k * matrix_n * sizeof(data_type_b) +
+            matrix_m * matrix_n * sizeof(data_type_c)) /
+               time / 1e9);
+
     return e_esimd;
   } catch (cl::sycl::exception const &e) {
     std::cout << "SYCL exception caught: " << e.what() << '\n';
@@ -147,4 +128,4 @@ sycl::event bgemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
   }
 }
 
-#endif // TRITONBENCHMARK_BGEMM_H
+#endif // TRITONBENCHMARK_GEMM_H
