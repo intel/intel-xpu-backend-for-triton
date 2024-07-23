@@ -195,13 +195,13 @@ public:
           getVectorType(cast<RankedTensorType>(op.getResult().getType()),
                         isDword ? i32_ty : i16_ty);
       bool vnni = (idx == 1) && dataSize < 32;
-      // fixed f16 for now
+
+      // FIXME: only support fp16/bf16 for now, add more support like tf32, fp8
       if (ptrOp.getOrder()[0] == 0) {
         transpose = true;
         vnni = false;
         dataSize = 32;
         blockWidth /= 2;
-        // auto one = createIntConstant(i32Type, 1);
         Value tmp = offsetX;
         offsetX = rewriter.create<LLVM::LShrOp>(loc, offsetY, i32_val(1));
         offsetY = tmp;
@@ -219,9 +219,7 @@ public:
       if (ptrOp.getOrder()[0] == 0) {
         // transpose = false;
         // vnni = false;
-        Value tmp = offsetX;
-        offsetX = offsetY;
-        offsetY = tmp;
+        std::swap(offsetX, offsetY);
       }
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
@@ -262,11 +260,12 @@ public:
 /// Arg 5: systolic depth
 /// Arg 6: repeat count
 /// Arg 7: isDpasw
-class DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<DotOp> {
+class DotOpConversion : public ConvertTritonGPUOpToLLVMPattern<tt::DotOp> {
 public:
-  using ConvertTritonGPUOpToLLVMPattern<DotOp>::ConvertTritonGPUOpToLLVMPattern;
+  using ConvertTritonGPUOpToLLVMPattern<
+      tt::DotOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(DotOp op, OpAdaptor adaptor,
+  matchAndRewrite(tt::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto encodePrecision =
         [&](Type type, InputPrecisionAttr attr) -> TritonGEN::PrecisionType {
@@ -352,8 +351,8 @@ public:
       rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(op, dstType, shfl01,
                                                          shfl23, attr);
     } break;
-    case 8: {
-      unsigned num = 8;
+    default: {
+      unsigned num = operands.size();
       Value undef = rewriter.create<LLVM::UndefOp>(loc, dstType);
       for (auto i = 0; i < num; i++) {
         undef = rewriter.create<LLVM::InsertElementOp>(
@@ -361,10 +360,8 @@ public:
             rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), i));
       }
       rewriter.replaceOp(op, undef);
-    } break;
-    default:
-      llvm_unreachable("add more support for glue op to llvm");
     }
+    };
 
     return success();
   }
@@ -404,7 +401,7 @@ public:
   }
 };
 
-// fixme: support it in upstream constantOpLowering
+// FIXME: remove this when upstream ConstantOpLowering has such lowering
 class ArithConstantOpLowering
     : public ConvertTritonGPUOpToLLVMPattern<mlir::arith::ConstantOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -418,7 +415,8 @@ class ArithConstantOpLowering
       return failure();
 
     // arith.constant should only have vector or tenor types.
-    assert((isa<VectorType, RankedTensorType>(srcType)));
+    if (!isa<VectorType, RankedTensorType>(srcType))
+      return failure();
 
     Type dstType = getTypeConverter()->convertType(srcType);
     if (!dstType)
@@ -428,11 +426,11 @@ class ArithConstantOpLowering
     if (!dstElementsAttr)
       return failure();
 
-    ShapedType dstAttrType = dstElementsAttr.getType();
+    // ShapedType dstAttrType = dstElementsAttr.getType();
     auto vecType = cast<VectorType>(dstType);
-    dstAttrType =
-        VectorType::get(vecType.getNumElements(), vecType.getElementType());
-    dstElementsAttr = dstElementsAttr.resizeSplat(dstAttrType);
+    // dstAttrType =
+    //     VectorType::get(vecType.getNumElements(), vecType.getElementType());
+    dstElementsAttr = dstElementsAttr.resizeSplat(vecType);
     auto newOp =
         rewriter.create<LLVM::ConstantOp>(loc, dstType, dstElementsAttr);
     rewriter.replaceOp(op, newOp);
@@ -452,16 +450,16 @@ public:
     auto typeConverter = getTypeConverter();
     auto srcTy = adaptor.getSrc().getType();
     auto vecTy = VectorType::get(1, srcTy);
-    auto undef = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+    auto poison = rewriter.create<LLVM::PoisonOp>(loc, vecTy);
     auto splat = rewriter.create<LLVM::InsertElementOp>(
-        loc, vecTy, undef, adaptor.getSrc(),
+        loc, vecTy, poison, adaptor.getSrc(),
         rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), 0));
     auto convertedTy = typeConverter->convertType(resultType);
     auto num = cast<VectorType>(convertedTy).getNumElements();
     SmallVector<int32_t> indices(num, 0);
     auto attr = rewriter.getDenseI32ArrayAttr(indices);
     Value result = rewriter.create<LLVM::ShuffleVectorOp>(loc, convertedTy,
-                                                          splat, splat, attr);
+                                                          splat, poison, attr);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -484,6 +482,8 @@ public:
         combineOp.front().getOperations().size() != 2)
       return failure();
     auto combine = &*combineOp.front().getOperations().begin();
+
+    // FIXME: support all possible reduction modes
     mlir::gpu::AllReduceOperation redKind;
     if (isa<arith::AddFOp>(combine))
       redKind = mlir::gpu::AllReduceOperation::ADD;

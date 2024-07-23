@@ -107,45 +107,6 @@ class XPUBackend(BaseBackend):
             pm.run(mod)
             return mod
 
-        @staticmethod
-        def make_llir(mod, metadata, opt):
-            # warp-specialization mutates num_warps
-            num_warp_groups = mod.get_int_attr("triton_gpu.num-warp-groups-per-cta")
-            if num_warp_groups is not None:
-                metadata["num_warps"] *= num_warp_groups
-            threads_per_warp = ir.ttgpuir.get_threads_per_warp(mod)
-            metadata["threads_per_warp"] = threads_per_warp
-            # TritonGPU -> LLVM-IR (MLIR)
-            pm = ir.pass_manager(mod.context)
-            pm.enable_debug()
-            passes.convert.add_scf_to_cf(pm)
-            passes.convert.add_index_to_llvmir(pm)
-            intel.passes.ttgpuir.add_to_llvmir(pm)
-            passes.convert.add_arith_to_llvmir(pm)
-            passes.common.add_canonicalizer(pm)
-            passes.common.add_cse(pm)
-            passes.common.add_symbol_dce(pm)
-            if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
-                passes.llvmir.add_di_scope(pm)
-            pm.run(mod)
-            # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
-            llvm.init_targets()
-            context = llvm.context()
-            llvm_mod = llvm.to_module(mod, context)
-            intel.set_spv_target_triple(llvm_mod)
-            if opt.extern_libs:
-                paths = [path for (name, path) in opt.extern_libs]
-                llvm.link_extern_libs(llvm_mod, paths)
-            llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
-            intel.post_process_llir(llvm_mod)
-
-            # Get some metadata
-            metadata["shared"] = mod.get_int_attr("triton_gpu.shared")
-            ret = str(llvm_mod)
-            del llvm_mod
-            del context
-            return ret
-
     @staticmethod
     def supports_target(target: tuple):
         return target.backend == 'xpu'
@@ -262,9 +223,6 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options, properties):
-        if (properties["support_cl_sg_2d_block_io"] and properties["support_cl_sg_matmul_acc"]
-                and os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1"):
-            return XPUBackend.AdvancedPath.make_llir(src, metadata, options)
 
         # warp-specialization mutates num_warps
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")

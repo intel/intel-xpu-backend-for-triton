@@ -36,6 +36,8 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/FormatVariadic.h"
+#include <cstdint>
+#include <optional>
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
@@ -62,8 +64,8 @@ struct GPUSubgroupReduceOpLowering
     : public ConvertOpToLLVMPattern<mlir::gpu::SubgroupReduceOp> {
   using ConvertOpToLLVMPattern<
       mlir::gpu::SubgroupReduceOp>::ConvertOpToLLVMPattern;
-  LogicalResult
 
+  LogicalResult
   matchAndRewrite(mlir::gpu::SubgroupReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     if (!op.getUniform())
@@ -72,6 +74,8 @@ struct GPUSubgroupReduceOpLowering
               "uniformly (entire subgroup).");
 
     TritonGEN::ReduceKind reduceKind;
+    // FIXME: support all possible reduction modes, current cases are for
+    // FlashAttention usage
     switch (op.getOp()) {
     case mlir::gpu::AllReduceOperation::ADD:
       reduceKind = TritonGEN::ReduceKind::ADD;
@@ -83,9 +87,12 @@ struct GPUSubgroupReduceOpLowering
       return rewriter.notifyMatchFailure(op, "unsupported reduction mode");
     }
 
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    int sgSize = mod->getAttrOfType<IntegerAttr>("triton_intel_gpu.min_sg_size")
+                     .getInt();
     auto red = rewriter.create<TritonGEN::SubGroupReduceOp>(
         op.getLoc(), op.getResult().getType(), op.getValue(), reduceKind,
-        32); // take 32 as default numLaneToReduce
+        sgSize);
     rewriter.replaceOp(op, red);
     return success();
   }
