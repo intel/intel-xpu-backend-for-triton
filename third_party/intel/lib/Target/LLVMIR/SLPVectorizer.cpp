@@ -76,6 +76,7 @@
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/PassInstrumentation.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
@@ -15446,6 +15447,21 @@ bool SLPVectorizerPass::vectorizeChainsInBlock(BasicBlock *BB, BoUpSLP &R) {
   return Changed;
 }
 
+static bool isCandidate(llvm::Function &F) {
+  if (F.getCallingConv() != CallingConv::SPIR_KERNEL)
+    return false;
+
+  // Limit the optimization to kernels that contain DPAS instructions.
+  return any_of(instructions(F), [](llvm::Instruction &I) {
+    if (auto CI = llvm::dyn_cast<llvm::CallInst>(&I)) {
+      auto Callee = CI->getCalledFunction()->getName();
+      if (Callee.contains("intel_sub_group_") && Callee.contains("_matrix_mad"))
+        return true;
+    }
+    return false;
+  });
+}
+
 /// FIXME: This is a temporary workaround (should be done by IGC). We should
 /// remove it once that feature is implemented.
 void mlir::triton::intel::SLPVectorizer(llvm::Module &mod, bool trace) {
@@ -15474,7 +15490,7 @@ void mlir::triton::intel::SLPVectorizer(llvm::Module &mod, bool trace) {
   FPM.addPass(SLPVectorizerPass(trace));
 
   for (llvm::Function &function : mod.functions()) {
-    if (function.getCallingConv() == CallingConv::SPIR_KERNEL)
+    if (isCandidate(function))
       FPM.run(function, FAM);
   }
 }
