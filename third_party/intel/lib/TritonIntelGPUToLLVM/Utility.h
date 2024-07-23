@@ -837,11 +837,6 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
   return outVals;
 }
 
-[[nodiscard]] bool storeDPASToSharedUsingLinearLayouts(
-    MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
-    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target);
-
 inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
                                      Type elemLlvmTy, ArrayRef<Value> srcVals,
                                      Value smemBase, ArrayRef<Value> dstStrides,
