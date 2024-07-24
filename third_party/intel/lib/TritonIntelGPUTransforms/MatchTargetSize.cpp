@@ -165,7 +165,8 @@ public:
         Location loc = load.getLoc();
         OpBuilder b(load);
         b.setInsertionPointAfter(load);
-        auto subgroupId = b.create<gpu::SubgroupIdOp>(loc);
+        auto subgroupId =
+            b.create<gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr);
         auto warpId =
             b.create<arith::IndexCastOp>(loc, b.getI32Type(), subgroupId);
         // hardcode: we use i16ptr here, so bytes / 2
