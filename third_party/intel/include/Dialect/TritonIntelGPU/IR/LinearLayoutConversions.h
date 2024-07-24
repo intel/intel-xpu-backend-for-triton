@@ -15,7 +15,7 @@ namespace mlir::triton::gpu {
 //
 //   OperandA (opidx==0)
 //   OperandB (opidx==1)
-//   OperandC (no opidx. default to -1)
+//   OperandC (Default. opidx==2)
 //
 std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
                                                Attribute layout, int opidx = 2);
