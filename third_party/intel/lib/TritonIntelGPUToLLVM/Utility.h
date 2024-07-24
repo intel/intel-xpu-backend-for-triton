@@ -773,68 +773,22 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
               }
             }))
       return ret;
-  } else if (emitTransferBetweenRegistersAndShared(
-                 dstTy, srcTy, elemTy, /*maxVecElems=*/std::nullopt,
-                 shrMemObj.getBase(), shrMemObj.getStrides(), loc, rewriter,
-                 target, [&](VectorType vecTy, Value vecAddr) {
-                   auto vecVal = load(vecTy, vecAddr);
-                   vecVal.setAlignment(vecTy.getNumElements() *
-                                       elemTy.getIntOrFloatBitWidth() / 8);
-                   for (int v = 0; v < vecTy.getNumElements(); v++) {
-                     ret.push_back(extract_element(elemTy, vecVal, i32_val(v)));
-                   }
-                 })) {
-    return ret;
   }
+  bool success = emitTransferBetweenRegistersAndShared(
+      dstTy, srcTy, elemTy, /*maxVecElems=*/std::nullopt, shrMemObj.getBase(),
+      shrMemObj.getStrides(), loc, rewriter, target,
+      [&](VectorType vecTy, Value vecAddr) {
+        auto vecVal = load(vecTy, vecAddr);
+        vecVal.setAlignment(vecTy.getNumElements() *
+                            elemTy.getIntOrFloatBitWidth() / 8);
+        for (int v = 0; v < vecTy.getNumElements(); v++) {
+          ret.push_back(extract_element(elemTy, vecVal, i32_val(v)));
+        }
+      });
+  if (!success)
+    llvm::report_fatal_error("Failed to emit transfer from shared to register");
 
-  auto dstShape = dstTy.getShape();
-  assert(dstShape.size() <= 2 && "Unexpected rank of loadSharedToDistributed");
-  auto dstDistributedLayout = dstTy.getEncoding();
-  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstDistributedLayout)) {
-    assert((!mmaLayout.isVolta()) &&
-           "ConvertLayout Shared->MMAv1 is not supported yet");
-  }
-  auto srcSharedLayout =
-      cast<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding());
-  auto srcElemTy = srcTy.getElementType();
-  auto dstElemTy = dstTy.getElementType();
-  LDBG("loadSharedToDistributed elemTy " << elemTy << " srcElemTy " << srcElemTy
-                                         << " dstElemTy " << dstElemTy);
-  auto inOrd = triton::gpu::getOrder(srcSharedLayout);
-  auto outOrd = triton::gpu::getOrder(dstDistributedLayout);
-  unsigned outVec = inOrd == outOrd
-                        ? triton::gpu::getUniqueContigPerThread(
-                              dstDistributedLayout, dstShape)[outOrd[0]]
-                        : 1;
-
-  // If the shmem layout is not swizzled, we can trivially vectorize loads
-  // across the whole width of the most-minor dimension of the shape, because
-  // Triton requires all the dims are powers of 2.
-  unsigned inVec = srcSharedLayout.getMaxPhase() == 1
-                       ? srcTy.getShape()[inOrd[0]]
-                       : srcSharedLayout.getVec();
-  unsigned minVec = std::min(outVec, inVec);
-  unsigned outElems = triton::gpu::getTotalElemsPerThread(dstTy);
-  SmallVector<Value> offsetVals = {shrMemObj.strides.size(), i32_val(0)};
-
-  DenseMap<unsigned, Value> sharedPtrs = ::intel::getSwizzledSharedPtrs(
-      loc, target, outVec, dstTy, srcSharedLayout, elemTy, shrMemObj, rewriter,
-      offsetVals, shrMemObj.strides);
-  assert(outElems % minVec == 0 && "Unexpected number of elements");
-  unsigned numVecs = outElems / minVec;
-  auto wordTy = vec_ty(elemTy, minVec);
-  SmallVector<Value> outVals(outElems);
-  for (unsigned i = 0; i < numVecs; ++i) {
-    Value shrMemAddr = sharedPtrs[i * minVec];
-    shrMemAddr = bitcast(shrMemAddr, ptr_ty(rewriter.getContext(), 3));
-    auto valVec = load(wordTy, shrMemAddr);
-    valVec.setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
-    for (unsigned v = 0; v < minVec; ++v) {
-      Value currVal = extract_element(elemTy, valVec, i32_val(v));
-      outVals[i * minVec + v] = currVal;
-    }
-  }
-  return outVals;
+  return ret;
 }
 
 inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
