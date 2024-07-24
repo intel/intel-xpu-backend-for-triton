@@ -1,8 +1,9 @@
-#include "bgemm/bgemm.h"
 #include "flash_attention/fmha_forward_v5.h"
+#include "gemm/gemm.h"
 #include "softmax/softmax.h"
 #include <CL/sycl.hpp>
 #include <cstdint>
+
 #include <ipex.h>
 #include <torch/extension.h>
 
@@ -69,18 +70,20 @@ at::Tensor softmax(const at::Tensor &input, const int64_t dim) {
 }
 
 template <typename T>
-at::Tensor bgemm(const at::Tensor &a, const at::Tensor &b, const at::Tensor &c,
-                 const at::Tensor &d, const at::Tensor &cnt) {
+at::Tensor bf16_gemm(const at::Tensor &a, const at::Tensor &b,
+                     const at::Tensor &c, const at::Tensor &acc,
+                     const at::Tensor &cnt) {
   CHECK_INPUT(a);
   CHECK_INPUT(b);
   CHECK_INPUT(c);
-  CHECK_INPUT(d);
+  CHECK_INPUT(acc);
+  RECORD_FUNCTION("xetla gemm", {a, b, c, acc});
 
   auto queue = get_current_sycl_queue();
-  bgemm_run<T>(a.data_ptr(), b.data_ptr(), c.data_ptr(), d.data_ptr(),
-               cnt.data_ptr(), queue);
-
-  return d;
+  auto evt = gemm_run<T>(a.data_ptr(), b.data_ptr(), c.data_ptr(),
+                         acc.data_ptr(), cnt.data_ptr(), queue);
+  xpu::profiler_record("xetla kernel", evt);
+  return acc;
 }
 
 // refers to test_fmha.cpp::test_fmha_forward()
@@ -136,6 +139,7 @@ void flash_attn(const int64_t num_batches, const int64_t num_heads,
 }
 
 PYBIND11_MODULE(xetla_kernel, m) {
+  // softmax
   m.def("softmax_shape_4096_256", &softmax<mat1_4096x256_bf16_cfg0>,
         "softmax forward (XeTLA)");
   m.def("softmax_shape_4096_1024", &softmax<mat1_4096x1024_bf16_cfg0>,
@@ -150,39 +154,55 @@ PYBIND11_MODULE(xetla_kernel, m) {
         "softmax forward (XeTLA)");
   m.def("softmax_shape_4096_32768", &softmax<mat1_4096x32k_bf16_cfg0>,
         "softmax forward (XeTLA)");
-  // bgemm: M=N=K [256, 512 ... 4096]
-  m.def("bgemm_shape_256_256_256", &bgemm<Test_256x256x256_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_512_512_512", &bgemm<Test_512x512x512_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_768_768_768", &bgemm<Test_768x768x768_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_1024_1024_1024", &bgemm<Test_1024x1024x1024_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_1280_1280_1280", &bgemm<Test_1280x1280x1280_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_1536_1536_1536", &bgemm<Test_1536x1536x1536_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_1792_1792_1792", &bgemm<Test_1792x1792x1792_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_2048_2048_2048", &bgemm<Test_2048x2048x2048_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_2304_2304_2304", &bgemm<Test_2304x2304x2304_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_2560_2560_2560", &bgemm<Test_2560x2560x2560_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_2816_2816_2816", &bgemm<Test_2816x2816x2816_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_3072_3072_3072", &bgemm<Test_3072x3072x3072_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_3328_3328_3328", &bgemm<Test_3328x3328x3328_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_3584_3584_3584", &bgemm<Test_3584x3584x3584_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_3840_3840_3840", &bgemm<Test_3840x3840x3840_row_row>,
-        "bgemm (XeTLA)");
-  m.def("bgemm_shape_4096_4096_4096", &bgemm<Test_4096x4096x4096_row_row>,
-        "bgemm (XeTLA)");
+  // gemm
+  m.def("gemm_shape_1_1024_1024_1024",
+        &bf16_gemm<Test_1x1024x1024x1024_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_2048_2048_2048",
+        &bf16_gemm<Test_1x2048x2048x2048_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_4096_4096_4096",
+        &bf16_gemm<Test_1x4096x4096x4096_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_8192_8192_8192",
+        &bf16_gemm<Test_1x8192x8192x8192_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_1_5120_13824", &bf16_gemm<Test_1x1x5120x13824_row_row>,
+        "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_4_4096_12288", &bf16_gemm<Test_1x4x4096x12288_row_row>,
+        "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_512_8192_8192", &bf16_gemm<Test_1x512x8192x8192_row_row>,
+        "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_512_8192_32768",
+        &bf16_gemm<Test_1x512x8192x32768_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_512_32768_8192",
+        &bf16_gemm<Test_1x512x32768x8192_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_1024_16384_8192",
+        &bf16_gemm<Test_1x1024x16384x8192_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_1024_28672_8192",
+        &bf16_gemm<Test_1x1024x28672x8192_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_3072_4096_3072",
+        &bf16_gemm<Test_1x3072x4096x3072_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_4096_16384_8192",
+        &bf16_gemm<Test_1x4096x16384x8192_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_8192_16384_1024",
+        &bf16_gemm<Test_1x8192x16384x1024_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_8192_16384_4096",
+        &bf16_gemm<Test_1x8192x16384x4096_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_16384_1024_8192",
+        &bf16_gemm<Test_1x16384x1024x8192_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_16384_4096_8192",
+        &bf16_gemm<Test_1x16384x4096x8192_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_16384_8192_1024",
+        &bf16_gemm<Test_1x16384x8192x1024_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_1_16384_8192_4096",
+        &bf16_gemm<Test_1x16384x8192x4096_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_4_32768_128_4096",
+        &bf16_gemm<Test_4x32768x128x4096_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_4_32768_4096_128",
+        &bf16_gemm<Test_4x32768x4096x128_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_32_4096_4096_128",
+        &bf16_gemm<Test_32x4096x4096x128_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_4096_8_128_16384",
+        &bf16_gemm<Test_4096x8x128x16384_row_row>, "bf16_gemm (XeTLA)");
+  m.def("gemm_shape_4096_8_16384_128",
+        &bf16_gemm<Test_4096x8x16384x128_row_row>, "bf16_gemm (XeTLA)");
   // flash_attn_shape_$Z_$H_${N_CTX}_${D_HEAD}
   m.def(
       "flash_attn_shape_4_48_1024_64",

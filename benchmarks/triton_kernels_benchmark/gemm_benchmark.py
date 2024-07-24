@@ -96,8 +96,10 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.language as tl
 
-import xetla_benchmark
-import xetla_benchmark.xetla_kernel as xetla_kernel
+import triton_kernels_benchmark
+import triton_kernels_benchmark.xetla_kernel as xetla_kernel
+
+benchmark_suit = triton_kernels_benchmark  # triton.testing
 
 
 @triton.autotune(
@@ -326,9 +328,9 @@ def matmul(a, b):
     return c
 
 
-#### Benchmark Performance
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
+# Benchmark Performance
+@benchmark_suit.perf_report(
+    benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['B', 'M', 'K', 'N'],
         # different possible values for `x_name`
@@ -356,12 +358,12 @@ def matmul(a, b):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['onednn', 'triton', 'xetla'],
+        line_vals=['triton', 'xetla'],
         # label name for the lines
-        line_names=["oneDNN", "Triton", "XeTLA"],
+        line_names=["Triton", "XeTLA"],
         # line styles
-        #styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel="TFLOPS",  # label name for the y-axis
+        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+        ylabel=["GB/s", "TFlops"],  # label name for the y-axis
         plot_name="matmul-performance",
         # name for the plot. Used also as a file name for saving the plot.
         args={},
@@ -376,27 +378,40 @@ def benchmark(B, M, N, K, provider):
 
     quantiles = [0.5, 0.0, 1.0]
 
-    # calculate tflops for oneDNN kernel
-    def calculate_tflops(ms):
-        return 2 * M * N * K * 1e-12 / (ms * 1e-3)
-
     if provider == 'onednn':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), warmup=100, rep=100,
-                                                     quantiles=quantiles, fast_flush=False)
-        # print(f"oneDNN Peak TFlops {calculate_tflops(min_ms)}")
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=100, rep=100,
+                                                               quantiles=quantiles, fast_flush=False)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), warmup=100, rep=100, quantiles=quantiles,
-                                                     fast_flush=False)
+        triton_fn = lambda: matmul(a, b)
+        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg="triton to torch")
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=100, rep=100, quantiles=quantiles,
+                                                               fast_flush=False)
     if provider == 'xetla':
-        c = torch.empty((M, N), device='xpu', dtype=torch.bfloat16)
-        d = torch.empty((M, N), device='xpu', dtype=torch.bfloat16)
-        cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
-        name = "bgemm_shape_{}_{}_{}".format(M, N, K)
+        if B == 1:
+            c = torch.empty((M, N), device='xpu', dtype=torch.float32)
+            acc = torch.empty((M, N), device='xpu', dtype=torch.float32)
+            cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
+        else:
+            c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
+            acc = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
+            cnt = torch.empty((B, M, N), device='xpu', dtype=torch.int32)
+        name = "gemm_shape_{}_{}_{}_{}".format(B, M, K, N)
         func = getattr(xetla_kernel, name)
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: func(a, b, c, d, cnt), warmup=100, rep=100,
-                                                     quantiles=quantiles, fast_flush=False)
+        xetla_fn = lambda: func(a, b, c, acc, cnt)
+        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+        # FIXME: XeTLA batch GEMM implemention
+        benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg="xetla to torch")
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=100, rep=100, quantiles=quantiles,
+                                                               fast_flush=False)
 
-    return calculate_tflops(ms), calculate_tflops(min_ms), calculate_tflops(max_ms)
+    tflops = lambda mean: 2 * B * M * N * K * (1e-12) / (mean * 1e-3)
+    gbps = lambda mean: B * (2 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (mean * 1e-3)
+
+    return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
-benchmark.run(show_plots=True, print_data=True)
+if __name__ == "__main__":
+    benchmark.run(show_plots=False, print_data=True)
