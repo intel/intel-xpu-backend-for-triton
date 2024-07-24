@@ -71,19 +71,19 @@ at::Tensor softmax(const at::Tensor &input, const int64_t dim) {
 
 template <typename T>
 at::Tensor bf16_gemm(const at::Tensor &a, const at::Tensor &b,
-                     const at::Tensor &c, const at::Tensor &d,
+                     const at::Tensor &c, const at::Tensor &acc,
                      const at::Tensor &cnt) {
   CHECK_INPUT(a);
   CHECK_INPUT(b);
   CHECK_INPUT(c);
-  CHECK_INPUT(d);
-  RECORD_FUNCTION("xetla gemm", {a, b, c, d});
+  CHECK_INPUT(acc);
+  RECORD_FUNCTION("xetla gemm", {a, b, c, acc});
 
   auto queue = get_current_sycl_queue();
-  auto evt = gemm_run<T>(a.data_ptr(), b.data_ptr(), c.data_ptr(), d.data_ptr(),
-                         cnt.data_ptr(), queue);
+  auto evt = gemm_run<T>(a.data_ptr(), b.data_ptr(), c.data_ptr(),
+                         acc.data_ptr(), cnt.data_ptr(), queue);
   xpu::profiler_record("xetla kernel", evt);
-  return d;
+  return acc;
 }
 
 // refers to test_fmha.cpp::test_fmha_forward()

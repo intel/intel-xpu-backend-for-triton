@@ -29,6 +29,7 @@ sycl::event gemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
   size_t matrix_m = Test::mat_m;
   size_t matrix_n = Test::mat_n;
   size_t matrix_k = Test::mat_k;
+  size_t batch = Test::batch;
   constexpr size_t wg_tile_m = Test::wg_m;
   constexpr size_t wg_tile_n = Test::wg_n;
   constexpr size_t sg_tile_m = Test::sg_m;
@@ -99,28 +100,18 @@ sycl::event gemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
     auto e_esimd = queue.submit([&](sycl::handler &cgh) {
       cgh.use_kernel_bundle(exeBundle);
       cgh.parallel_for<Test>(nd_range, [=](sycl::nd_item<3> item) KERNEL_MAIN {
+        int batch_idx = item.get_group(0);
+        auto A_ptr = A + batch_idx * size_a;
+        auto B_ptr = B + batch_idx * size_b;
+        auto C_ptr = C + batch_idx * size_c;
+        auto Acc_ptr = Acc + batch_idx * size_acc;
+        auto Cnt_ptr = Cnt + batch_idx * size_cnt;
         gpu::xetla::xetla_local_init<SLMSIZE>();
         gpu::xetla::xetla_nbarrier_init<BARNUM>();
-        gemm_functor::run(item, A, B, C, matrix_m, matrix_n, matrix_k, Acc,
-                          Cnt);
+        gemm_functor::run(item, A_ptr, B_ptr, C_ptr, matrix_m, matrix_n,
+                          matrix_k, Acc_ptr, Cnt_ptr);
       });
     });
-    e_esimd.wait();
-    double time = (e_esimd.template get_profiling_info<
-                       sycl::info::event_profiling::command_end>() -
-                   e_esimd.template get_profiling_info<
-                       sycl::info::event_profiling::command_start>()) /
-                  (1000.0f * 1000.0f * 1000.f);
-
-    printf("m: %d, k: %d, n: %d, Tflops is: %f, HBM (GBs) "
-           "is %f\n",
-           matrix_m, matrix_k, matrix_n,
-           2.0 * matrix_m * matrix_n * matrix_k / 1e12 / time,
-           (matrix_m * matrix_k * sizeof(data_type_a) +
-            matrix_k * matrix_n * sizeof(data_type_b) +
-            matrix_m * matrix_n * sizeof(data_type_c)) /
-               time / 1e9);
-
     return e_esimd;
   } catch (cl::sycl::exception const &e) {
     std::cout << "SYCL exception caught: " << e.what() << '\n';

@@ -386,16 +386,26 @@ def benchmark(B, M, N, K, provider):
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg="triton to torch")
-        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: matmul(a, b), warmup=100, rep=100,
-                                                               quantiles=quantiles, fast_flush=False)
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=100, rep=100, quantiles=quantiles,
+                                                               fast_flush=False)
     if provider == 'xetla':
-        c = torch.empty((M, N), device='xpu', dtype=torch.bfloat16)
-        d = torch.empty((M, N), device='xpu', dtype=torch.bfloat16)
-        cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
+        if B == 1:
+            c = torch.empty((M, N), device='xpu', dtype=torch.float32)
+            acc = torch.empty((M, N), device='xpu', dtype=torch.float32)
+            cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
+        else:
+            c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
+            acc = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
+            cnt = torch.empty((B, M, N), device='xpu', dtype=torch.int32)
         name = "gemm_shape_{}_{}_{}_{}".format(B, M, K, N)
         func = getattr(xetla_kernel, name)
-        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: func(a, b, c, d, cnt), warmup=100, rep=100,
-                                                               quantiles=quantiles, fast_flush=False)
+        xetla_fn = lambda: func(a, b, c, acc, cnt)
+        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+        # FIXME: XeTLA batch GEMM implemention
+        benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg="xetla to torch")
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=100, rep=100, quantiles=quantiles,
+                                                               fast_flush=False)
 
     tflops = lambda mean: 2 * B * M * N * K * (1e-12) / (mean * 1e-3)
     gbps = lambda mean: B * (2 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (mean * 1e-3)

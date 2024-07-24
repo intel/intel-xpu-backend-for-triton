@@ -22,6 +22,7 @@
 
 class Test_1x1024x1024x1024_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 1024;
   static constexpr size_t mat_k = 1024;
   static constexpr size_t mat_n = 1024;
@@ -44,6 +45,7 @@ public:
 
 class Test_1x2048x2048x2048_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 2048;
   static constexpr size_t mat_k = 2048;
   static constexpr size_t mat_n = 2048;
@@ -66,6 +68,7 @@ public:
 
 class Test_1x4096x4096x4096_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 4096;
   static constexpr size_t mat_k = 4096;
   static constexpr size_t mat_n = 4096;
@@ -88,6 +91,7 @@ public:
 
 class Test_1x8192x8192x8192_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 8192;
   static constexpr size_t mat_k = 8192;
   static constexpr size_t mat_n = 8192;
@@ -110,6 +114,7 @@ public:
 
 class Test_1x1x5120x13824_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 1;
   static constexpr size_t mat_k = 5120;
   static constexpr size_t mat_n = 13824;
@@ -132,6 +137,7 @@ public:
 
 class Test_1x4x4096x12288_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 4;
   static constexpr size_t mat_k = 4096;
   static constexpr size_t mat_n = 12288;
@@ -154,6 +160,7 @@ public:
 
 class Test_1x512x8192x8192_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 512;
   static constexpr size_t mat_k = 8192;
   static constexpr size_t mat_n = 8192;
@@ -176,6 +183,7 @@ public:
 
 class Test_1x512x8192x32768_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 512;
   static constexpr size_t mat_k = 8192;
   static constexpr size_t mat_n = 32768;
@@ -198,6 +206,7 @@ public:
 
 class Test_1x512x32768x8192_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 512;
   static constexpr size_t mat_k = 32768;
   static constexpr size_t mat_n = 8192;
@@ -220,6 +229,7 @@ public:
 
 class Test_1x1024x16384x8192_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 1024;
   static constexpr size_t mat_k = 16384;
   static constexpr size_t mat_n = 8192;
@@ -242,6 +252,7 @@ public:
 
 class Test_1x1024x28672x8192_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 1024;
   static constexpr size_t mat_k = 28672;
   static constexpr size_t mat_n = 8192;
@@ -264,6 +275,7 @@ public:
 
 class Test_1x3072x4096x3072_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 3072;
   static constexpr size_t mat_k = 4096;
   static constexpr size_t mat_n = 3072;
@@ -286,6 +298,7 @@ public:
 
 class Test_1x4096x16384x8192_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 4096;
   static constexpr size_t mat_k = 16384;
   static constexpr size_t mat_n = 8192;
@@ -308,6 +321,7 @@ public:
 
 class Test_1x8192x16384x1024_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 8192;
   static constexpr size_t mat_k = 16384;
   static constexpr size_t mat_n = 1024;
@@ -330,6 +344,7 @@ public:
 
 class Test_1x8192x16384x4096_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 8192;
   static constexpr size_t mat_k = 16384;
   static constexpr size_t mat_n = 4096;
@@ -352,6 +367,7 @@ public:
 
 class Test_1x16384x1024x8192_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 16384;
   static constexpr size_t mat_k = 1024;
   static constexpr size_t mat_n = 8192;
@@ -374,6 +390,7 @@ public:
 
 class Test_1x16384x4096x8192_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 16384;
   static constexpr size_t mat_k = 4096;
   static constexpr size_t mat_n = 8192;
@@ -396,6 +413,7 @@ public:
 
 class Test_1x16384x8192x1024_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 16384;
   static constexpr size_t mat_k = 8192;
   static constexpr size_t mat_n = 1024;
@@ -418,6 +436,7 @@ public:
 
 class Test_1x16384x8192x4096_row_row {
 public:
+  static constexpr size_t batch = 1;
   static constexpr size_t mat_m = 16384;
   static constexpr size_t mat_k = 8192;
   static constexpr size_t mat_n = 4096;
@@ -438,7 +457,6 @@ public:
   using data_type_acc = float;
 };
 
-// XeTLA batch gemm support Not implemented in main branch
 class Test_4x32768x128x4096_row_row {
 public:
   static constexpr size_t batch = 4;
@@ -510,6 +528,7 @@ public:
 
 class Test_4096x8x128x16384_row_row {
 public:
+  static constexpr size_t batch = 4096;
   static constexpr size_t mat_m = 8;
   static constexpr size_t mat_k = 128;
   static constexpr size_t mat_n = 16384;
@@ -532,6 +551,7 @@ public:
 
 class Test_4096x8x16384x128_row_row {
 public:
+  static constexpr size_t batch = 4096;
   static constexpr size_t mat_m = 8;
   static constexpr size_t mat_k = 16384;
   static constexpr size_t mat_n = 128;
