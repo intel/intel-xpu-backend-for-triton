@@ -22,7 +22,7 @@ unsigned getPointeeBitWidth(Type type);
 
 Type getPointeeType(Type type);
 
-Type getPointerType(Type type, int addressSpace = 1);
+Type getPointerType(Type type, unsigned addressSpace = 1);
 
 int getAddressSpace(Type type);
 
