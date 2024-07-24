@@ -250,7 +250,7 @@ struct PrefetchOpConversion
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned tileWidthInElem = shapePerWarp[1];
     unsigned tileHeightInElem = shapePerWarp[0];
-    unsigned vBlocks;
+    unsigned vBlocks = 1;
     switch (elemSizeInBits) {
     case 8:
       if (tileWidthInElem == 64) {
@@ -258,21 +258,16 @@ struct PrefetchOpConversion
         // element.
         vBlocks = 2;
         tileWidthInElem = 32;
-      } else
-        vBlocks = 1;
+      }
       break;
     case 16:
       if (tileWidthInElem == 32) {
-        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 8 bits
+        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
         // element.
         vBlocks = 2;
         tileWidthInElem = 16;
-      } else
-        vBlocks = 1;
+      }
       break;
-    default:
-      // for the default case.
-      vBlocks = 1;
     }
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
