@@ -413,8 +413,12 @@ void init_triton_llvm(py::module &&m) {
           // FIXME: Temporary workaround to avoid __devicelib_assert_fail
           // optimization with InternalLinkage, which causes
           // test_subprocess.py::test_assert to fail.
-          if (fn.getName().str() == "__devicelib_assert_fail")
-            continue;
+          // Adding noinline and naked disables inlining and DAE.
+          if (fn.getName().str() == "__devicelib_assert_fail") {
+            fn.addFnAttr(llvm::Attribute::Naked);
+            fn.addFnAttr(llvm::Attribute::NoInline);
+          }
+
           fn.setLinkage(llvm::GlobalValue::InternalLinkage);
         }
       }
