@@ -60,4 +60,3 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
     tt.return
   }
 }
-
