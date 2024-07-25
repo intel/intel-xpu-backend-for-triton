@@ -4,6 +4,9 @@
 # Example usage:
 # ./triton-opt.sh --triton-opt=<path to triton-opt> 01-vector-add-xpu.ttir --target=llir -mlir-print-ir-after-all
 
+echo "Warning: This script is deprecated, if you think it could be still helpful and needs to be updated, please create a GitHub issue." >&2
+exit 1
+
 for i in "$@"; do
   case $i in
     --triton-opt=*)
