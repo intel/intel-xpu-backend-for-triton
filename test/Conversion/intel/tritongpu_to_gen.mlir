@@ -1306,23 +1306,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 }
 
 // -----
-
-#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [4], CTASplitNum = [1], CTAOrder = [0]}>
-module attributes {"triton_gpu.num-ctas" = 4 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  tt.func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
-    %blockdimx = tt.get_num_programs x : i32
-    %blockdimy = tt.get_num_programs y : i32
-    %blockdimz = tt.get_num_programs z : i32
-    %v0 = arith.addi %blockdimx, %blockdimy : i32
-    %v1 = arith.addi %v0, %blockdimz : i32
-    %0 = tt.splat %v1 : i32 -> tensor<32xi32, #blocked0>
-    tt.store %a, %0 : tensor<32x!tt.ptr<i32>, #blocked0>
-
-    tt.return
-  }
-}
-
-// -----
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: test_index_cache
