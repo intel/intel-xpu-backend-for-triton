@@ -402,7 +402,7 @@ def benchmark(B, M, N, K, provider):
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         # FIXME: XeTLA batch GEMM implemention
-        # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1.0, rtol=1.0, err_msg="xetla to torch")
+        # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg="xetla to torch")
         ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=100, rep=100, quantiles=quantiles,
                                                                fast_flush=False)
 
