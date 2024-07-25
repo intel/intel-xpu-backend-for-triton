@@ -323,7 +323,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     // CHECK:           %[[VAL_436:.*]] = llvm.add %[[VAL_181]], %[[VAL_435]] : i32
     // CHECK:           %[[VAL_437:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK:           %[[VAL_438:.*]] = llvm.add %[[VAL_182]], %[[VAL_437]] : i32
-    tt.print " x: " {hex = false} : %cst : tensor<32x32xf16, #dot_operand_a>
+    tt.print " x: " {hex = false, isSigned = array<i32: 0>} : %cst : tensor<32x32xf16, #dot_operand_a>
     tt.return
   }
 }
@@ -655,7 +655,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 :
     // CHECK:           %[[VAL_436:.*]] = llvm.add %[[VAL_181]], %[[VAL_435]] : i32
     // CHECK:           %[[VAL_437:.*]] = llvm.mlir.constant(24 : i32) : i32
     // CHECK:           %[[VAL_438:.*]] = llvm.add %[[VAL_182]], %[[VAL_437]] : i32
-    tt.print " x: " {hex = false} : %cst : tensor<32x32xf16, #dot_operand_b>
+    tt.print " x: " {hex = false, isSigned = array<i32: 0>} : %cst : tensor<32x32xf16, #dot_operand_b>
     tt.return
   }
 }
