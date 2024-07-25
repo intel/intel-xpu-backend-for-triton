@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory  --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --dump-input fail --dump-input-context 5
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory  --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_kernelcc @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>)
@@ -241,6 +241,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: store_with_cache_attr
   tt.func @store_with_cache_attr(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
+    // CHECK llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // CHECK llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     tt.store %a_ptr_init, %cst_0, %cst evictionPolicy = evict_last cacheModifier = ca : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -1166,6 +1168,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32
   tt.func @atomic_add_f32_sys_scope(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
+    // CHECK: llvm.atomicrmw fadd %{{.*}}, %{{.*}} acq_rel : !llvm.ptr<1>, f32
+    // CHECK: llvm.atomicrmw fadd %{{.*}}, %{{.*}} acq_rel : !llvm.ptr<1>, f32
     %0 = tt.atomic_rmw fadd, relaxed, sys, %arg0, %arg2, %arg1 : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
     tt.return
   }
@@ -1252,6 +1256,15 @@ tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
 module attributes {"triton_gpu.num-ctas" = 4 : i32, "triton_gpu.num-warps" = 4 : i32} {
 // CHECK-LABEL: test_get_program_id
 tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
+  // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: [[GRP_ID_X:%.*]] = llvm.call spir_funccc @_Z12get_group_idj([[ZERO]]) {{.*}} : (i32) -> i64
+  // CHECK: llvm.trunc [[GRP_ID_X]] : i64 to i32
+  // CHECK: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: [[GRP_ID_Y:%.*]] = llvm.call spir_funccc @_Z12get_group_idj([[ONE]]) {{.*}} : (i32) -> i64
+  // CHECK: llvm.trunc [[GRP_ID_Y]] : i64 to i32
+  // CHECK: [[TWO:%.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK: [[GRP_ID_Z:%.*]] = llvm.call spir_funccc @_Z12get_group_idj([[TWO]]) {{.*}} : (i32) -> i64
+  // CHECK: llvm.trunc [[GRP_ID_Z]] : i64 to i32
   %blockidx = tt.get_program_id x: i32
   %blockidy = tt.get_program_id y: i32
   %blockidz = tt.get_program_id z : i32
@@ -1434,6 +1447,10 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
   // CHECK-LABEL: test_s8_to_bf16_vectorized_conversion
   tt.func @test_s8_to_bf16_vectorized_conversion(%in: tensor<16x16xi8, #dpas>) {
+     // CHECK: %[[F32:.+]] = llvm.sitofp %{{.*}} : i8 to f32
+     // CHECK: %[[I16:.+]] = llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) : (f32) -> i16
+     // CHECK: llvm.bitcast %[[I16]] : i16 to bf16
+     // CHECK-COUNT-15: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) : (f32) -> i16
     %out = arith.sitofp %in : tensor<16x16xi8, #dpas> to tensor<16x16xbf16, #dpas>
     tt.return
   }
