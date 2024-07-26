@@ -10,32 +10,7 @@ using namespace mlir::triton::gpu;
 // blocked -> shared.
 // Swizzling in shared memory to avoid bank conflict. Normally used for
 // A/B operands of dots.
-void lowerDistributedToShared(LocalAllocOp op, LocalAllocOpAdaptor adaptor,
-                              const LLVMTypeConverter *typeConverter,
-                              ConversionPatternRewriter &rewriter,
-                              const TargetInfoBase &targetInfo) {
-  auto loc = op.getLoc();
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getType();
-  auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
-  auto srcLayout = srcTy.getEncoding();
-  auto outOrd = cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
-  assert(srcTy.getShape().size() == 2 ||
-         (srcTy.getShape().size() <= 3 && outOrd[2] == 0) &&
-             "Unexpected rank of ConvertLayout(blocked->shared)");
-  Value smemBase =
-      LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
-  auto elemTy = typeConverter->convertType(srcTy.getElementType());
-
-  auto dstStrides =
-      LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
-  auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-  mlir::triton::intel::storeDistributedToShared(
-      op.getSrc(), inVals, dstStrides, op.getResult(), smemBase, elemTy, loc,
-      rewriter, targetInfo);
-}
-
-void lowerDistributedToShared2(Location loc, Value src, Value dst,
+void lowerDistributedToShared(Location loc, Value src, Value dst,
                               Value adaptorSrc,
                               const SharedMemoryObject &smemObj,
                               const LLVMTypeConverter *typeConverter,
@@ -54,9 +29,9 @@ void lowerDistributedToShared2(Location loc, Value src, Value dst,
   auto dstStrides =
       LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  mlir::triton::intel::storeDistributedToShared(
-      src, inVals, dstStrides, dst, smemBase, elemTy, loc,
-      rewriter, targetInfo);
+  mlir::triton::intel::storeDistributedToShared(src, inVals, dstStrides, dst,
+                                                smemBase, elemTy, loc, rewriter,
+                                                targetInfo);
 }
 
 struct LocalAllocOpConversion
@@ -93,16 +68,16 @@ struct LocalAllocOpConversion
       newOrder = SmallVector<unsigned>(order.begin(), order.end());
     }
 
-    // If there is an initial tensor, store it into the shared memory.
-    if (op.getSrc()) {
-      lowerDistributedToShared(op, adaptor, typeConverter, rewriter,
-                               targetInfo);
-    }
-
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
                                       newOrder, loc, rewriter);
+    // If there is an initial tensor, store it into the shared memory.
+    if (op.getSrc()) {
+      lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
+                               adaptor.getSrc(), smemObj, typeConverter,
+                               rewriter, targetInfo);
+    }
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -134,7 +109,8 @@ public:
   LocalStoreOpConversion(const LLVMTypeConverter &converter,
                          const TargetInfoBase &targetInfo,
                          PatternBenefit benefit = 1)
-      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::LocalStoreOp>(converter, benefit),
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::LocalStoreOp>(converter,
+                                                                   benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
@@ -145,7 +121,7 @@ public:
         getTypeConverter()->convertType(op.getDst().getType().getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
-    lowerDistributedToShared2(op.getLoc(), op.getSrc(), op.getDst(),
+    lowerDistributedToShared(op.getLoc(), op.getSrc(), op.getDst(),
                              adaptor.getSrc(), smemObj, getTypeConverter(),
                              rewriter, targetInfo);
     rewriter.eraseOp(op);
@@ -155,7 +131,6 @@ public:
 private:
   const TargetInfoBase &targetInfo;
 };
-
 
 } // namespace
 
