@@ -92,13 +92,8 @@ struct ConvertTritonGPUToLLVM
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-    // FIXME: set SLM to 0 since we do not use SLM for GEMM and Attention for
-    // now
-    if (pipelineManager.skipSharedMemoryAllocation()) {
-      Builder builder(context);
-      mod->setAttr("triton_gpu.shared", builder.getI32IntegerAttr(0));
-    } else {
-      // Allocate shared memory and set barrier
+    // Allocate shared memory and set barrier
+    if (!pipelineManager.skipSharedMemoryAllocation()) {
       ModuleAllocation allocation(mod);
       ModuleMembarAnalysis membarPass(&allocation);
       membarPass.run();

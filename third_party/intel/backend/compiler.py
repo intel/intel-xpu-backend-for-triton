@@ -222,8 +222,7 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_llir(src, metadata, options, properties):
-
+    def make_llir(src, metadata, options):
         # warp-specialization mutates num_warps
         num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
         if num_warp_groups is not None:
@@ -258,7 +257,7 @@ class XPUBackend(BaseBackend):
         intel.post_process_llir(llvm_mod)
 
         # Get some metadata
-        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+        metadata["shared"] = src.get_int_attr("triton_gpu.shared") if src.get_int_attr("triton_gpu.shared") else 0
         ret = str(llvm_mod)
         del llvm_mod
         del context
@@ -273,7 +272,7 @@ class XPUBackend(BaseBackend):
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.properties)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata)
 
     @functools.lru_cache()

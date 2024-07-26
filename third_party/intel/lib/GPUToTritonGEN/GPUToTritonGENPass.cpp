@@ -36,8 +36,6 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/FormatVariadic.h"
-#include <cstdint>
-#include <optional>
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
@@ -88,11 +86,11 @@ struct GPUSubgroupReduceOpLowering
     }
 
     auto mod = op->getParentOfType<mlir::ModuleOp>();
-    int sgSize = mod->getAttrOfType<IntegerAttr>("triton_intel_gpu.min_sg_size")
-                     .getInt();
+    int threadsPerWarp =
+        mod->getAttrOfType<IntegerAttr>("triton_gpu.threads-per-warp").getInt();
     auto red = rewriter.create<TritonGEN::SubGroupReduceOp>(
         op.getLoc(), op.getResult().getType(), op.getValue(), reduceKind,
-        sgSize);
+        threadsPerWarp);
     rewriter.replaceOp(op, red);
     return success();
   }

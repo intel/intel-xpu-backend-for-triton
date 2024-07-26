@@ -19,7 +19,7 @@ class ArithConstantOpLowering
     if (!srcType || srcType.getNumElements() == 1)
       return failure();
 
-    // arith.constant should only have vector or tenor types.
+    // arith.constant should only have vector or tensor types.
     if (!isa<VectorType, RankedTensorType>(srcType))
       return failure();
 
@@ -31,10 +31,7 @@ class ArithConstantOpLowering
     if (!dstElementsAttr)
       return failure();
 
-    // ShapedType dstAttrType = dstElementsAttr.getType();
     auto vecType = cast<VectorType>(dstType);
-    // dstAttrType =
-    //     VectorType::get(vecType.getNumElements(), vecType.getElementType());
     dstElementsAttr = dstElementsAttr.resizeSplat(vecType);
     auto newOp =
         rewriter.create<LLVM::ConstantOp>(loc, dstType, dstElementsAttr);
