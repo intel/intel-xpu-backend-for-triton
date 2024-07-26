@@ -324,6 +324,10 @@ jobs:
       - name: Run triton gemm kernel benchmark
         run: |
           cd benchmarks/triton_kernels_benchmark
+          # Dry run to validate no functionality regression for splitk and streamk in defaul path
+          python gemm_splitk_benchmark.py
+          python gemm_streamk_benchmark.py
+          # GEMM Advanced path benchmark
           rm -rf ./tt_cache
           TRITON_CACHE_DIR=./tt_cache \
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
