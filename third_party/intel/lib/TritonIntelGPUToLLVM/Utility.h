@@ -105,12 +105,16 @@ static Value getSharedMemoryBase(Location loc,
   auto ptrTy = LLVM::LLVMPointerType::get(
       rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
   FunctionOpInterface func = op->getParentOfType<FunctionOpInterface>();
-  size_t offset = 0;
-  if (op->hasAttr("allocation.offset")) {
-    offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
-                 .getValue()
-                 .getZExtValue();
+  // CI debugging usage here
+  if (!op->hasAttr("allocation.offset")) {
+    auto mod = op->getParentOfType<ModuleOp>();
+    llvm::errs() << "op: " << *op << "\n";
+    llvm::errs() << "mod:" << mod << "\n";
+    llvm_unreachable("missing allocation.offset");
   }
+  size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
+                      .getValue()
+                      .getZExtValue();
   Value offVal = i32_val(offset);
   Value base =
       gep(ptrTy, i8_ty, LLVM::intel::getStackPointer(rewriter, func), offVal);
