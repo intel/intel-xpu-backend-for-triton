@@ -159,6 +159,14 @@ struct PtrState {
 
     source = lhsState.source ? lhsState.source : rhsState.source;
 
+    if (lhsState.scalar && rhsState.scalar) {
+      auto addOp =
+          builder.create<arith::AddIOp>(loc, lhsState.scalar, rhsState.scalar);
+      scalar = addOp.getResult();
+    } else if (lhsState.getRank() == 0) { // both lhs and rhs are scalars
+      scalar = lhsState.scalar ? lhsState.scalar : rhsState.scalar;
+    }
+
     ArithBuilder abuilder(builder, loc);
     for (uint64_t i = 0; i < lhsState.getRank(); ++i) {
       Value newOffset = abuilder.add(lhsState.offsets[i], rhsState.offsets[i]);
@@ -569,6 +577,7 @@ struct TritonRaiseBlockPointer
         builder.setInsertionPointToStart(&newOp.getRegion().front());
         auto maketptrOp = state.createTTMakeTensorPtrOp(builder, op.getLoc());
         ptrMap.map(key, maketptrOp.getResult());
+        knownPtrs[maketptrOp.getResult()] = state;
       }
     }
 
@@ -737,8 +746,9 @@ struct TritonRaiseBlockPointer
     Value result = op.getResult();
     Value mapped = result;
     if (isa<RankedTensorType>(result.getType())) {
-      Value maketptrOp = state.createTTMakeTensorPtrOp(builder, loc);
-      mapped = maketptrOp;
+      auto maketptrOp = state.createTTMakeTensorPtrOp(builder, loc);
+      knownPtrs[maketptrOp.getResult()] = state;
+      mapped = maketptrOp.getResult();
     }
 
     ptrMap.map(result, mapped);
@@ -755,6 +765,12 @@ struct TritonRaiseBlockPointer
                                           OpBuilder &builder,
                                           bool addedByPass = false) {
     assert(state.isEmpty() && "state is a return argument");
+
+    if (knownPtrs.find(makeTPtrOp.getResult()) != knownPtrs.end()) {
+      state = knownPtrs.lookup(makeTPtrOp.getResult());
+      return success();
+    }
+
     state.source = makeTPtrOp.getBase();
 
     auto resType = cast<triton::PointerType>(makeTPtrOp.getResult().getType());
@@ -909,15 +925,15 @@ struct TritonRaiseBlockPointer
     OpBuilder builder(op);
     if constexpr (isLoad) {
       auto loadOp = builder.create<triton::LoadOp>(
-          op.getLoc(), ptr, newBoundaryCheck, op.getPadding(), op.getCache(),
-          op.getEvict(), op.getIsVolatile());
+          op.getLoc(), ptr, op.getBoundaryCheck(), op.getPadding(),
+          op.getCache(), op.getEvict(), op.getIsVolatile());
 
       LLVM_DEBUG(llvm::dbgs() << "creating tt.load: " << loadOp << "\n";);
 
       op.replaceAllUsesWith(loadOp.getResult());
     } else {
       [[maybe_unused]] auto storeOp = builder.create<triton::StoreOp>(
-          op.getLoc(), ptr, op.getValue(), newBoundaryCheck, op.getCache(),
+          op.getLoc(), ptr, op.getValue(), op.getBoundaryCheck(), op.getCache(),
           op.getEvict());
 
       LLVM_DEBUG(llvm::dbgs() << "creating tt.store: " << storeOp << "\n";);
@@ -1143,8 +1159,10 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   auto resultType = cast<ShapedType>(op.getResult().getType());
   Value offset = convertScalarToDtype(builder, loc, state.scalar, offsetType,
                                       /*isUnsignedCast=*/true);
+
+  size_t i = 0;
   for (int32_t dim : resultType.getShape()) {
-    if (dim == 0)
+    if (i == 0)
       state.offsets.push_back(offset);
     else
       state.offsets.push_back(
@@ -1154,6 +1172,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
         builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
     state.shape.push_back(
         builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
+    i++;
   }
 
   return success();
