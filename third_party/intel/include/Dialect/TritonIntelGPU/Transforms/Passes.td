@@ -247,9 +247,10 @@ def TritonIntelGPUReduceDataDuplication: Pass<"tritonintelgpu-reduce-data-duplic
   let summary = "Reduce data duplication in register by decomposing convert[distributed -> dotOperand] "
                 "into convert[distributed -> shared -> dotOperand]";
 
-  let description = [{Decomposing conversions this way makes it possible to use CSE and reuse #shared tensors.
-                      This Intel pass supports the Intel DPAS layout which is not supported by upstream Triton pass.
-                    }];
+  let description = [{
+    Decomposing conversions this way makes it possible to use CSE and reuse #shared tensors.
+    This Intel pass supports the Intel DPAS layout in additional to the upstream Triton pass.
+  }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
