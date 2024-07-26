@@ -498,9 +498,13 @@ std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
   const SmallVector<unsigned> warpsPerCTA = dpas.getWarpsPerCTA();
   int threadsPerWarp = triton::gpu::getWarpSize(dpas);
   unsigned opsPerChannel = dpas.getOpsPerChannel();
+  auto repCluster = dpas.getRepCluster();
+  SmallVector<int64_t> numReps = dpas.getDPASRepetitions(shape, opidx);
 
   auto tileLayout = LinearLayout::empty();
   int systolicDepth = dpas.getSystolicDepth();
+  int KDim = 1;
+  int nonKDim = 0;
   if (opidx == 0) { // Operand A
     int repeatCount = dpas.getRepeatCount();
     auto regBasesA = DPASRegBasesA(opsPerChannel, repeatCount, threadsPerWarp,
@@ -509,6 +513,10 @@ std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
         DPASLaneBasesA(opsPerChannel, threadsPerWarp, systolicDepth);
     tileLayout = LinearLayout({{kRegister, regBasesA}, {kLane, laneBasesA}},
                               outDimNames);
+    tileLayout *=
+        LinearLayout::identity1D(repCluster[0], kRegister, outDimNames[0]);
+    nonKDim = 0;
+    KDim = 1;
   } else if (opidx == 1) { // Operand B
     int executionSize = dpas.getExecutionSize();
     auto regBasesB = DPASRegBasesB(opsPerChannel, executionSize, threadsPerWarp,
@@ -517,6 +525,10 @@ std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
         DPASLaneBasesB(opsPerChannel, threadsPerWarp, executionSize);
     tileLayout = LinearLayout({{kRegister, regBasesB}, {kLane, laneBasesB}},
                               outDimNames);
+    tileLayout *=
+        LinearLayout::identity1D(repCluster[1], kRegister, outDimNames[1]);
+    nonKDim = 1;
+    KDim = 0;
   } else { // opidx=2 -> Operand C
     int repeatCount = dpas.getRepeatCount();
     int executionSize = dpas.getExecutionSize();
@@ -525,7 +537,17 @@ std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
         DPASLaneBasesC(repeatCount, executionSize, threadsPerWarp);
     tileLayout = LinearLayout({{kRegister, regBasesC}, {kLane, laneBasesC}},
                               outDimNames);
+    tileLayout *=
+        LinearLayout::identity1D(repCluster[1], kRegister, outDimNames[1]);
+    tileLayout *=
+        LinearLayout::identity1D(repCluster[0], kRegister, outDimNames[0]);
+    nonKDim = 0;
+    KDim = 1;
   }
+  tileLayout *=
+      LinearLayout::identity1D(numReps[KDim], kRegister, outDimNames[KDim]);
+  tileLayout *= LinearLayout::identity1D(numReps[nonKDim], kRegister,
+                                         outDimNames[nonKDim]);
 
   // And each warp takes the same register and lane sub-layout. So mulitply with
   // an identity layout for the warp.

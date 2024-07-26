@@ -11,6 +11,7 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -760,7 +761,8 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
   auto srcTy = cast<MemDescType>(src.getType());
 
   SmallVector<Value> ret;
-  if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(dstTy.getEncoding())) {
+  if (triton::gpu::intel::hasDotDpasEncoding(dstTy) ||
+      isa<DpasEncodingAttr>(dstTy.getEncoding())) {
     if (emitTransferBetweenDPASAndShared(
             dstTy, srcTy, elemTy, /*maxVecElems=*/std::nullopt,
             shrMemObj.getBase(), shrMemObj.getStrides(), loc, rewriter, target,
@@ -796,29 +798,23 @@ inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
                                      Value smemBase, ArrayRef<Value> dstStrides,
                                      Location loc, RewriterBase &rewriter,
                                      const TargetInfoBase &target) {
-  if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcTy.getEncoding())) {
-    // FIXME: Temporary workaround to avoid test failures for
-    // test_core.py::test_dot chain-dot test cases.
-    // Need to debug why it fails with DPAS->LinearLayout conversion.
-    auto srcShape = srcTy.getShape();
-    if (srcShape[0] == 1 || srcShape[1] == 1) {
-      if (emitTransferBetweenDPASAndShared(
-              srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
-              dstStrides, loc, rewriter, target,
-              [&](VectorType vecTy, Value vecAddr) {
-                ArrayRef<Value> vals =
-                    srcVals.take_front(vecTy.getNumElements());
-                srcVals = srcVals.drop_front(vecTy.getNumElements());
-                Value vec = undef(vecTy);
-                for (int i = 0; i < vals.size(); i++) {
-                  vec = insert_element(vec, vals[i], i32_val(i));
-                }
-                store(vec, vecAddr)
-                    .setAlignment(vecTy.getNumElements() *
-                                  elemLlvmTy.getIntOrFloatBitWidth() / 8);
-              }))
-        return;
-    }
+  if (triton::gpu::intel::hasDotDpasEncoding(srcTy) ||
+      isa<DpasEncodingAttr>(srcTy.getEncoding())) {
+    if (emitTransferBetweenDPASAndShared(
+            srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
+            dstStrides, loc, rewriter, target,
+            [&](VectorType vecTy, Value vecAddr) {
+              ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
+              srcVals = srcVals.drop_front(vecTy.getNumElements());
+              Value vec = undef(vecTy);
+              for (int i = 0; i < vals.size(); i++) {
+                vec = insert_element(vec, vals[i], i32_val(i));
+              }
+              store(vec, vecAddr)
+                  .setAlignment(vecTy.getNumElements() *
+                                elemLlvmTy.getIntOrFloatBitWidth() / 8);
+            }))
+      return;
   } else if (emitTransferBetweenRegistersAndShared(
                  srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt,
                  smemBase, dstStrides, loc, rewriter, target,
