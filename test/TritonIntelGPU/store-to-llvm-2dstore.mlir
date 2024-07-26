@@ -23,7 +23,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %12 = arith.truncf %11#0 : tensor<64x64xf32, #dpas> to tensor<64x64xf16, #dpas>
     %13 = tt.make_tensor_ptr %arg2, [%arg3, %arg5], [%arg6, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf16, #dpas>>
     // The next two lines is used to start checking constant related to the BlockStore.
-    // CHECK-COUNT-3: llvm.call spir_funccc @_Z25__spirv_BuiltInSubgroupIdv
+    // CHECK-COUNT-3: llvm.call spir_funccc @_Z16get_sub_group_idv
     // CHECK-COUNT-39: llvm.extractvalue
     // Next constant must be equal to warpsPerCTA[0]
     // CHECK: %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -83,7 +83,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     // CHECK:           %[[VAL_80:.*]] = llvm.insertvalue %[[CST_1]], %[[VAL_79]][5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[BLOCK_PTR:.*]] = llvm.insertvalue %[[base]], %[[VAL_80]][6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:           %[[SUB_GROUP_ID:.*]] = llvm.call spir_funccc @_Z25__spirv_BuiltInSubgroupIdv()
+    // CHECK:           %[[SUB_GROUP_ID:.*]] = llvm.call spir_funccc @_Z16get_sub_group_idv()
     // CHECK:           %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[SUB_GROUP_ID_N:.*]] = llvm.urem %[[SUB_GROUP_ID]], %[[CST_1]]  : i32
     // CHECK:           %[[SUB_GROUP_ID_M_:.*]] = llvm.udiv %[[SUB_GROUP_ID]], %[[CST_1]]  : i32
