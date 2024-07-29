@@ -6,12 +6,13 @@
 using namespace mlir;
 
 /// Custom lowering for converting arith ops to LLVMIR dialect.
-/// These ops lowering ONLY works for Advanced Path.
+/// These ops lowering ONLY works for the advanced path.
 /// This is a temporary solution until we have done upstreaming or have other
-/// proper lowering stratefy for these ops.
+/// proper lowering strategy for these ops.
 
 namespace {
-// FIXME: remove this when upstream ConstantOpLowering has such lowering
+// FIXME: Remove this lowering when upstream ConstantOpLowering has such
+// lowering.
 class ArithConstantOpLowering
     : public ConvertTritonGPUOpToLLVMPattern<mlir::arith::ConstantOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -24,8 +25,8 @@ class ArithConstantOpLowering
     if (!srcType || srcType.getNumElements() == 1)
       return failure();
 
-    // arith.constant should only have vector or tensor types.
-    if (!isa<VectorType, RankedTensorType>(srcType))
+    // Only handle constant with tensor types.
+    if (!isa<RankedTensorType>(srcType))
       return failure();
 
     Type dstType = getTypeConverter()->convertType(srcType);
@@ -45,6 +46,7 @@ class ArithConstantOpLowering
   }
 };
 
+// FIXME: This optimization should be done in IGC.
 class ArithDivFOpLowering
     : public ConvertTritonGPUOpToLLVMPattern<mlir::arith::DivFOp> {
   using ConvertTritonGPUOpToLLVMPattern<
@@ -54,7 +56,13 @@ class ArithDivFOpLowering
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto srcType = dyn_cast<ShapedType>(op.getType());
+    if (!srcType)
+      return failure();
+
     Type dstType = getTypeConverter()->convertType(srcType);
+    if (!dstType)
+      return failure();
+
     auto vecType = cast<VectorType>(dstType);
     auto attr = rewriter.getFloatAttr(vecType.getElementType(), 1.0);
     auto dstAttr = DenseElementsAttr::get(vecType, attr.getValue());
