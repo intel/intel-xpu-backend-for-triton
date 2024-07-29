@@ -32,6 +32,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "NVPTX_ENABLE_DUMP",
     "TRITON_INTEL_ADVANCED_PATH",
     "TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT",
+    "TRITON_INTEL_ENABLE_INSTR_SCHED",
     // clang-format on
 };
 

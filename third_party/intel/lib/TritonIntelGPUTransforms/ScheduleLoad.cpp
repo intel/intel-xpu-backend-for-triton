@@ -24,6 +24,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUSCHEDULELOAD
@@ -43,32 +44,12 @@ class ScheduleLoadPass
     : public triton::gpu::intel::impl::TritonIntelGPUScheduleLoadBase<
           ScheduleLoadPass> {
 public:
-  SmallVector<Value> getNotVisitedUsesA(SmallVector<tt::DotOp> dots) {
+  // hack!!! only trace dot A/B, only back 1 level
+  SmallVector<Value> getNotVisitedUses(SmallVector<tt::DotOp> dots,
+                                       unsigned opIdx = 0) {
     SmallVector<Value> notVisited;
     for (auto &dot : dots) {
-      auto val = dot.getA();
-      if (visited.count(val) != 0)
-        continue;
-      auto def = val.getDefiningOp();
-      if (auto extract = dyn_cast<ttgi::ExtractOp>(def)) {
-        auto base = extract.getBase();
-        if (visited.count(base) == 0) {
-          notVisited.push_back(base);
-          visited.insert(base);
-        }
-      }
-      notVisited.push_back(val);
-      visited.insert(val);
-    }
-    return notVisited;
-  }
-
-  // hack!!! only trace dotB, only back 1 level
-  SmallVector<Value> getNotVisitedUses(SmallVector<tt::DotOp> dots) {
-    SmallVector<Value> notVisited;
-    for (auto &dot : dots) {
-      // for (auto operand : dot->getOperands())
-      auto val = dot.getB();
+      Value val = opIdx == 1 ? dot.getB() : dot.getA();
       if (visited.count(val) != 0)
         continue;
       auto def = val.getDefiningOp();
@@ -86,6 +67,8 @@ public:
   }
 
   void runOnOperation() override {
+    if (!triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_INSTR_SCHED"))
+      return;
     auto *ctx = &getContext();
     ModuleOp m = getOperation();
     m.walk<WalkOrder::PreOrder>([&](scf::ForOp loop) {
@@ -101,7 +84,7 @@ public:
           dots.clear();
         }
         if (currGroup == 0)
-          getNotVisitedUses({dot});
+          getNotVisitedUses({dot}, 1);
         dots.push_back(dot);
         group = currGroup;
       }
@@ -111,9 +94,9 @@ public:
       unsigned i = 0;
       Operation *start = &loop.getBody()->front();
       for (auto dots : dotsGroup) {
-        auto notVisited = getNotVisitedUses(dots);
+        auto notVisited = getNotVisitedUses(dots, 1);
         if (i == 0)
-          notVisited.append(getNotVisitedUsesA(dots));
+          notVisited.append(getNotVisitedUses(dots));
         for (auto val : notVisited) {
           auto op = val.getDefiningOp();
           if (i == 0)
@@ -127,14 +110,14 @@ public:
       }
     });
 
-    //
+    // HoHo, move trunc forward
     m.walk([&](arith::TruncFOp op) {
       auto def = op.getIn().getDefiningOp();
       op->moveAfter(def);
     });
 
     // HoHo, add fastmath for all
-    // maybe after llvm ir
+    // may do this after llvm ir according to user fmath flag
     m.walk([&](Operation *op) {
       if (auto fmIf = dyn_cast<arith::ArithFastMathInterface>(op))
         op->setAttr(

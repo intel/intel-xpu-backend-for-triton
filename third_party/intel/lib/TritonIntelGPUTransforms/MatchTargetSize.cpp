@@ -52,6 +52,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUMATCHTARGETSIZE
@@ -775,9 +776,10 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
                                       dot.getInputPrecisionAttr(),
                                       dot.getMaxNumImpreciseAccAttr());
         // hack for attention
-        subDotC.getDefiningOp()->setAttr(
-            "schedule-group",
-            b.getIntegerAttr(b.getI32Type(), nn / dotShape.n));
+        if (triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_INSTR_SCHED"))
+          subDotC.getDefiningOp()->setAttr(
+              "schedule-group",
+              b.getIntegerAttr(b.getI32Type(), nn / dotShape.n));
       }
       subCs.push_back(subDotC);
     }
