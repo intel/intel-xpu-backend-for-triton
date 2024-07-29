@@ -13,7 +13,7 @@ include "mlir/Pass/PassBase.td"
 
 def ConvertGPUToTritonGEN : Pass<"convert-gpu-to-tritongen", "mlir::gpu::GPUModuleOp"> {
   let summary = "Generate TritonGEN operations for gpu operations";
-  let constructor = "mlir::createLowerGPUToTritonGENPass()";
+  let constructor = "mlir::triton::createLowerGPUToTritonGENPass(0)";
   // TODO: attempt to remove CF and memref dialect.
   let dependentDialects = [
     "mlir::cf::ControlFlowDialect",
