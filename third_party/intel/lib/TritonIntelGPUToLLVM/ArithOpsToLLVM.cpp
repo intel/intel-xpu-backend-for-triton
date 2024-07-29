@@ -5,6 +5,11 @@
 
 using namespace mlir;
 
+/// Custom lowering for converting arith ops to LLVMIR dialect.
+/// These ops lowering ONLY works for Advanced Path.
+/// This is a temporary solution until we have done upstreaming or have other
+/// proper lowering stratefy for these ops.
+
 namespace {
 // FIXME: remove this when upstream ConstantOpLowering has such lowering
 class ArithConstantOpLowering
