@@ -49,7 +49,10 @@ struct PrintOpConversion
       LLVM::intel::llPrintf(rewriter, formatStr,
                             {pid[0], pid[1], pid[2], prefixStr});
     } else {
+      assert(op.getNumOperands() == op.getIsSigned().size());
+
       for (size_t i = 0; i < op.getNumOperands(); i++) {
+        bool isSigned = op.getIsSigned()[i] > 0;
         // Elements of the tensor that are resident in this GPU thread.
         auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
 
@@ -82,7 +85,7 @@ struct PrintOpConversion
         if (!elems.empty()) {
           printTensor(prefixStr, /*operand=*/i,
                       /*numOperands=*/op.getNumOperands(), elems, pid, indices,
-                      dimWidths, op.getHex(), rewriter);
+                      dimWidths, op.getHex(), rewriter, isSigned);
         }
       }
     }
@@ -94,7 +97,7 @@ struct PrintOpConversion
                    ArrayRef<Value> elems, std::array<Value, 3> pid,
                    ArrayRef<SmallVector<Value>> indices,
                    ArrayRef<int> dimWidths, bool hex,
-                   ConversionPatternRewriter &rewriter) const {
+                   ConversionPatternRewriter &rewriter, bool isSigned) const {
     assert(!elems.empty());
     assert(elems.size() == indices.size());
     assert(dimWidths.size() == indices.front().size());
@@ -161,7 +164,7 @@ struct PrintOpConversion
       }
 
       auto elem = elems[i];
-      os << getFormatSubstr(elem, hex);
+      os << getFormatSubstr(elem, hex, /*width=*/std::nullopt, isSigned);
       printfOperands.push_back(elem);
 
       // It's the same format string each iteration, but it's a lot easier if we
@@ -179,8 +182,10 @@ struct PrintOpConversion
   }
 
   std::string getFormatSubstr(Value value, bool hex = false,
-                              std::optional<int> width = std::nullopt) const {
+                              std::optional<int> width = std::nullopt,
+                              bool isSigned = false) const {
     Type type = value.getType();
+    // If the `value` is a pointer, just return %p.
     if (isa<LLVM::PointerType>(type)) {
       return "%p";
     }
@@ -207,16 +212,11 @@ struct PrintOpConversion
       return prefix + "p";
     } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
       return prefix + "f";
-    } else if (type.isSignedInteger()) {
+    } else if (type.isInteger()) {
       if (type.getIntOrFloatBitWidth() == 64)
-        return prefix + "lli";
+        return prefix + (isSigned ? "lli" : "llu");
       else
-        return prefix + "i";
-    } else if (type.isUnsignedInteger() || type.isSignlessInteger()) {
-      if (type.getIntOrFloatBitWidth() == 64)
-        return prefix + "llu";
-      else
-        return prefix + "u";
+        return prefix + (isSigned ? "i" : "u");
     }
     assert(false && "not supported type");
     return "";
