@@ -153,8 +153,8 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
 #warp = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
 
-// CHECK:   llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_maxf(f32) -> f32 attributes {passthrough = ["convergent"]}
-// CHECK:   llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_addf(f32) -> f32 attributes {passthrough = ["convergent"]}
+// CHECK:   llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_maxf(f32) -> f32
+// CHECK:   llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_addf(f32) -> f32
 
 // CHECK-LABEL:   llvm.func spir_kernelcc @reduce_sum(
 // CHECK-SAME:                                        %[[VAL_0:.*]]: vector<8xf32>) -> f32 attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [128 : i32, 1 : i32, 1 : i32]}
