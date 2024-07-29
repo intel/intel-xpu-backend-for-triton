@@ -817,21 +817,18 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
   return outVals;
 }
 
-inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
-                                     ArrayRef<Value> dstStrides, Value dst,
-                                     Value shrMemBase, Type elemTy,
-                                     Location loc,
-                                     ConversionPatternRewriter &rewriter,
+inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
+                                     Type elemLlvmTy, ArrayRef<Value> srcVals,
+                                     Value smemBase, ArrayRef<Value> dstStrides,
+                                     Location loc, RewriterBase &rewriter,
                                      const TargetInfoBase &target) {
-  auto dstTy = cast<MemDescType>(dst.getType());
-  auto srcTy = cast<RankedTensorType>(src.getType());
 
   if (emitTransferBetweenRegistersAndShared(
-          srcTy, dstTy, elemTy, /*maxVecElems=*/std::nullopt, shrMemBase,
+          srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
           dstStrides, loc, rewriter, target,
           [&](VectorType vecTy, Value vecAddr) {
-            ArrayRef<Value> vals = inVals.take_front(vecTy.getNumElements());
-            inVals = inVals.drop_front(vecTy.getNumElements());
+            ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
+            srcVals = srcVals.drop_front(vecTy.getNumElements());
 
             Value vec = undef(vecTy);
             for (int i = 0; i < vals.size(); i++) {
@@ -839,7 +836,7 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
             }
             store(vec, vecAddr)
                 .setAlignment(vecTy.getNumElements() *
-                              elemTy.getIntOrFloatBitWidth() / 8);
+                              elemLlvmTy.getIntOrFloatBitWidth() / 8);
           }))
     return;
 
@@ -868,27 +865,27 @@ inline void storeDistributedToShared(Value src, ArrayRef<Value> inVals,
                         : dstSharedLayout.getVec();
   unsigned minVec = std::min(outVec, inVec);
   unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
-  auto wordTy = vec_ty(elemTy, minVec);
+  auto wordTy = vec_ty(elemLlvmTy, minVec);
   Value word;
 
   SmallVector<Value, 3> srcStrides(dstStrides);
   SmallVector<Value, 3> offsetVals(rank, i32_val(0));
-  SharedMemoryObject shrMemObj(shrMemBase, elemTy, srcStrides, offsetVals);
+  SharedMemoryObject shrMemObj(smemBase, elemLlvmTy, srcStrides, offsetVals);
 
   DenseMap<unsigned, Value> sharedPtrs = ::intel::getSwizzledSharedPtrs(
-      loc, target, inVec, srcTy, dstSharedLayout, elemTy, std::move(shrMemObj),
-      rewriter, offsetVals, srcStrides);
+      loc, target, inVec, srcTy, dstSharedLayout, elemLlvmTy,
+      std::move(shrMemObj), rewriter, offsetVals, srcStrides);
   LDBG("storeDistributedToShared: numElems = " << numElems << " minVec = "
                                                << minVec << " " << wordTy);
   for (unsigned i = 0; i < numElems; ++i) {
     if (i % minVec == 0)
       word = undef(wordTy);
-    word = insert_element(wordTy, word, inVals[i], i32_val(i % minVec));
+    word = insert_element(wordTy, word, srcVals[i], i32_val(i % minVec));
     if (i % minVec == minVec - 1) {
       Value shrMemAddr = sharedPtrs[i / minVec * minVec];
       shrMemAddr = bitcast(shrMemAddr, ptr_ty(rewriter.getContext(), 3));
       store(word, shrMemAddr)
-          .setAlignment(minVec * elemTy.getIntOrFloatBitWidth() / 8);
+          .setAlignment(minVec * elemLlvmTy.getIntOrFloatBitWidth() / 8);
     }
   }
 }

@@ -22,16 +22,14 @@ void lowerDistributedToShared(Location loc, Value src, Value dst,
   assert(srcTy.getShape().size() <= 2 ||
          (srcTy.getShape().size() == 3 && outOrd[2] == 0) &&
              "Unexpected rank of ConvertLayout(blocked->shared)");
-  auto dstShapePerCTA = triton::gpu::getShapePerCTA(dstTy);
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   auto smemBase = smemObj.getBase();
-  auto dstStrides =
-      LLVM::getStridesFromShapeAndOrder(dstShapePerCTA, outOrd, loc, rewriter);
+  auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  mlir::triton::intel::storeDistributedToShared(src, inVals, dstStrides, dst,
-                                                smemBase, elemTy, loc, rewriter,
-                                                targetInfo);
+  mlir::triton::intel::storeDistributedToShared(dstTy, srcTy, elemTy, inVals,
+                                                smemBase, dstStrides, loc,
+                                                rewriter, targetInfo);
 }
 
 struct LocalAllocOpConversion
