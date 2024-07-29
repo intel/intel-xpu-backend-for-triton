@@ -1,0 +1,93 @@
+
+name: Automate Pull Request On Translator CID
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '*/10 * * * *' # triggered every 10 min
+  pull_request:
+    branches:
+      - junhui/auto_pr
+  push:
+    branches:
+      - junhui/auto_pr
+
+jobs:
+  update-config:
+    runs-on:
+      - glados
+      - spr
+      - runner-0.0.18
+    # outputs:
+    #   pr_id: ${{ steps.create-pr.outputs.pr_id }}
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # downlaod the file from the latest run
+      - name: Download PRID from previous workflow
+        uses: actions/download-artifact@v4
+        with:
+          name: file_saved
+          path: file_downloaded
+        continue-on-error: true
+
+      - name: Read PRID from the file
+        run: |
+          if [ -f file_downloaded/PRID.txt ]; then
+            echo "TARGET_PRID=$(<file_downloaded/PRID.txt)" >> $GITHUB_ENV
+          else
+            echo "TARGET_PRID=-1" >> $GITHUB_ENV
+          fi
+          echo "TARGET_PRID: ${{ env.TARGET_PRID }}"
+
+      # check if the PR with the TARGET_PRID is merged
+      - name: Check if PR is merged
+        id: check-pr
+        if: ${{ env.TARGET_PRID != '-1' }}
+        run: |
+          is_merged=$(gh pr view ${{ env.TARGET_PRID }} --json merged --jq '.merged')
+          echo "PR is merged: $is_merged"
+          echo "MERGED=$is_merged" >> $GITHUB_ENV
+          echo "MERGED=$is_merged"
+
+      # make change
+      - name: Update config content
+        if: ${{ env.MERGED == 'true' || env.TARGET_PRID == '-1' }}
+        run: |
+          echo "aaaaa$(date +%s)" > ./config
+          echo "Config content updated."
+
+      # PR by bot
+      - name: Create PR if config is updated
+        id: create-pr
+        if: ${{ env.MERGED == 'true' || env.TARGET_PRID == '-1' }}
+        run: |
+          git branch --show-current # llvm-targte
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git checkout -b bot/update_cid
+          git branch --show-current # bot/update_cid
+          git status
+          git add ./config
+          git commit -m "Update config"
+          git push origin bot/update_cid
+          echo "=== git push done"
+          pr_status=$(gh pr create --title "Update config" --body "Automated PR to update translator commit id." --head bot/update_cid --base llvm-target)
+          echo "=== pr create done"
+          pr_id=$(echo "$pr_status" | grep -oP 'pull request \K(\d+)')
+          echo "=== got pr id"
+          echo "Created PR with ID: $pr_id"
+          echo "$pr_id" > PRID.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # store PRID
+      - name: Upload PRID
+        if: ${{ env.MERGED == 'true' || env.TARGET_PRID == '-1' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: PRID.txt
+          path: file_saved
