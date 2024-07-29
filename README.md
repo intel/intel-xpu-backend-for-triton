@@ -20,18 +20,27 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [T
 # Install from source
 
 ```
-git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
-cd intel-xpu-backend-for-triton
-scripts/compile-triton.sh
+git clone https://github.com/intel/intel-xpu-backend-for-triton.git;
+cd intel-xpu-backend-for-triton;
+
+pip install ninja cmake wheel; # build-time dependencies
+pip install -e python
 ```
 
 Or with a virtualenv:
 
 ```
-git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
-cd intel-xpu-backend-for-triton
-scripts/compile-triton.sh --venv
+git clone https://github.com/intel/intel-xpu-backend-for-triton.git;
+cd intel-xpu-backend-for-triton;
+
+python -m venv .venv --prompt triton;
+source .venv/bin/activate;
+
+pip install ninja cmake wheel; # build-time dependencies
+pip install -e python
 ```
+
+Note that `$HOME/.triton` folder is used as default cache location at build time. Developers might find `scripts/compile-triton.sh` script useful for advanced build options.
 
 # Building with a custom LLVM
 

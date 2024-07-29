@@ -1,6 +1,6 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
-// CHECK-DAG: llvm.func spir_funccc @_Z25__spirv_BuiltInSubgroupIdv() -> i32
+// CHECK-DAG: llvm.func spir_funccc @_Z16get_sub_group_idv() -> i32
 // CHECK-DAG: llvm.func spir_funccc @_Z14get_num_groupsj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
 // CHECK-DAG: llvm.func spir_funccc @_Z14get_local_sizej(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
 // CHECK-DAG: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
@@ -49,7 +49,7 @@ llvm.func @gen_special_regs() -> i32 {
   // CHECK: llvm.call spir_funccc @_Z14get_num_groupsj([[TWO3]]) {{.*}} : (i32) -> i64
   %12 = triton_gen.grid.dim.z : i32
 
-  // CHECK: llvm.call spir_funccc @_Z25__spirv_BuiltInSubgroupIdv() {{.*}} : () -> i32
+  // CHECK: llvm.call spir_funccc @_Z16get_sub_group_idv() {{.*}} : () -> i32
   %13 = triton_gen.subgroup.id : i32
 
   llvm.return %1 : i32
@@ -142,13 +142,13 @@ module attributes {
 
 // -----
 
-// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_addi(i32) -> i32 attributes {passthrough = ["convergent"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_muli(i32) -> i32 attributes {passthrough = ["convergent"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_mini(i32) -> i32 attributes {passthrough = ["convergent"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_maxi(i32) -> i32 attributes {passthrough = ["convergent"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_andi(i32) -> i32 attributes {passthrough = ["convergent"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z31sub_group_non_uniform_reduce_ori(i32) -> i32 attributes {passthrough = ["convergent"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_xori(i32) -> i32 attributes {passthrough = ["convergent"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_addi(i32) -> i32
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_muli(i32) -> i32
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_mini(i32) -> i32
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_maxi(i32) -> i32
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_andi(i32) -> i32
+// CHECK-DAG: llvm.func spir_funccc @_Z31sub_group_non_uniform_reduce_ori(i32) -> i32
+// CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_xori(i32) -> i32
 
 module attributes {
   spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>

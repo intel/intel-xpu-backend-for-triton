@@ -5,3 +5,7 @@ test/unit/language/test_subprocess.py::test_print[device_print-float64]
 test/unit/language/test_subprocess.py::test_print[device_print_scalar-float16]
 test/unit/language/test_subprocess.py::test_print[device_print_scalar-float64]
 test/unit/language/test_subprocess.py::test_print[device_print_scalar-float32]
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/1704
+test/unit/language/test_subprocess.py::test_print[device_print_uint-uint32]
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/1705
+test/unit/language/test_subprocess.py::test_print[device_print_negative-int32]

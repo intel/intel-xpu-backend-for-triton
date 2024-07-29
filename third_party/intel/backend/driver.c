@@ -108,17 +108,16 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 std::vector<std::unique_ptr<sycl::kernel>> compiled_kernels;
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
-  const char *name;
+  const char *name, *build_flags;
   int shared;
   PyObject *py_bytes;
   int devId;
 
-  if (!PyArg_ParseTuple(args, "sSii", &name, &py_bytes, &shared, &devId)) {
+  if (!PyArg_ParseTuple(args, "sSisi", &name, &py_bytes, &shared, &build_flags,
+                        &devId)) {
     std::cerr << "loadBinary arg parse failed" << std::endl;
     return NULL;
   }
-  int32_t n_regs = 0;
-  int32_t n_spills = 0;
 
   if (devId > sycl_l0_device_list.size()) {
     std::cerr << "Device is not found " << std::endl;
@@ -132,31 +131,68 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   size_t binary_size = PyBytes_Size(py_bytes);
   binary_size = binary_size / sizeof(uint32_t);
 
-  uint32_t *binary_ptr = (uint32_t *)PyBytes_AsString(py_bytes);
-  ;
+  uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
   auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
   auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-  auto l0_module = checkSyclErrors(
-      create_module(l0_context, l0_device, binary_ptr, binary_size));
-  if (PyErr_Occurred()) {
-    // check for errors from module creation
-    return NULL;
-  }
+  auto l0_module = checkSyclErrors(create_module(
+      l0_context, l0_device, binary_ptr, binary_size, build_flags));
 
-  auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
-  if (PyErr_Occurred()) {
-    // check for errors from kernel creation
-    return NULL;
-  }
+  auto checkL0Errors = [&](auto l0_module) -> ze_kernel_handle_t {
+    if (PyErr_Occurred()) {
+      // check for errors from module creation
+      return NULL;
+    }
+    ze_kernel_handle_t l0_kernel =
+        checkSyclErrors(create_function(l0_module, kernel_name));
+    if (PyErr_Occurred()) {
+      // check for errors from kernel creation
+      return NULL;
+    }
+    return l0_kernel;
+  };
 
+  // Retrieve the kernel properties (e.g. register spills).
+  ze_kernel_handle_t l0_kernel = checkL0Errors(l0_module);
   ze_kernel_properties_t props;
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   props.pNext = nullptr;
   gpuAssert(zeKernelGetProperties(l0_kernel, &props));
 
-  n_spills = props.spillMemSize;
+  int32_t n_spills = props.spillMemSize;
+  int32_t n_regs = 0;
+  constexpr int32_t max_reg_spill = 1000;
+  std::string build_flags_str(build_flags);
+  bool is_GRF_mode_specified = false;
+
+  // Check whether the GRF mode is specified by the build flags.
+  if (build_flags_str.find("-cl-intel-256-GRF-per-thread") !=
+          std::string::npos ||
+      build_flags_str.find("-cl-intel-128-GRF-per-thread") !=
+          std::string::npos ||
+      build_flags_str.find("-cl-intel-enable-auto-large-GRF-mode") !=
+          std::string::npos) {
+    is_GRF_mode_specified = true;
+  }
+
+  // If the register mode isn't set, and the number of spills is greater
+  // than the threshold, recompile the kernel using large GRF mode.
+  if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
+    std::cout << "(I): Detected " << n_spills
+              << " spills, recompiling the kernel using large GRF mode"
+              << std::endl;
+    const std::string new_build_flags =
+        build_flags_str.append(" -cl-intel-256-GRF-per-thread");
+    l0_module =
+        checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
+                                      binary_size, new_build_flags.c_str()));
+    l0_kernel = checkL0Errors(l0_module);
+    gpuAssert(zeKernelGetProperties(l0_kernel, &props));
+    n_spills = props.spillMemSize;
+    std::cout << "(I): Kernel has now " << n_spills << " spills" << std::endl;
+  }
+
   auto mod = sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
                                       sycl::bundle_state::executable>(
       {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer}, ctx);
@@ -165,6 +201,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       ctx);
   compiled_kernels.push_back(std::make_unique<sycl::kernel>(fun));
   sycl::kernel *ptr = compiled_kernels[compiled_kernels.size() - 1].get();
+
   if (getBoolEnv("MLIR_ENABLE_DUMP")) {
     std::cout << "compiled kernel ptr: " << ptr << std::endl;
     std::cout << "total kernels:" << compiled_kernels.size() << std::endl;
@@ -174,9 +211,11 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
                 << k.get() << std::endl;
     }
   }
+
   sycl::kernel *k = new sycl::kernel(*ptr);
   sycl::kernel_bundle<sycl::bundle_state::executable> *kb =
       new sycl::kernel_bundle<sycl::bundle_state::executable>(mod);
+
   return Py_BuildValue("(KKii)", (uint64_t)kb, (uint64_t)k, n_regs, n_spills);
 }
 

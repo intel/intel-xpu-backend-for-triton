@@ -738,7 +738,7 @@ struct TritonGENSubgroupIdLowering
 
     intel::AttributeList attrs;
     LLVM::CallOp callOp = createDeviceFunctionCall(
-        rewriter, "_Z25__spirv_BuiltInSubgroupIdv", retType, {}, {}, attrs);
+        rewriter, "_Z16get_sub_group_idv", retType, {}, {}, attrs);
     rewriter.replaceOp(op, callOp);
     return success();
   }
@@ -967,18 +967,19 @@ struct TritonSubGroupReduceLowering
     std::string fnName = "sub_group_";
     fnName += useCluster ? "clustered_" : "non_uniform_";
     fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
+    intel::AttributeList attrs;
     if (useCluster) {
       argTypes.push_back(i32_ty);
       argIsUnsigned.push_back(true);
       auto size = rewriter.create<LLVM::ConstantOp>(
           loc, i32_ty, static_cast<int>(op.getSize()));
       args.push_back(size);
+      MLIRContext *ctx = rewriter.getContext();
+      attrs = createFunctionAttributes(
+          {{llvm::Attribute::Convergent, std::nullopt}}, ctx);
     }
     fnName = intel::mangle(fnName, argTypes, argIsUnsigned);
 
-    MLIRContext *ctx = rewriter.getContext();
-    intel::AttributeList attrs = createFunctionAttributes(
-        {{llvm::Attribute::Convergent, std::nullopt}}, ctx);
     Value result =
         createDeviceFunctionCall(rewriter, fnName, valTy, argTypes, args, attrs)
             .getResult();
