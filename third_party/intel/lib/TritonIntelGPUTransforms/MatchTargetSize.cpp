@@ -361,6 +361,9 @@ public:
     rewriter.create<scf::YieldOp>(yield.getLoc(), newValues);
     rewriter.eraseOp(yield);
 
+    auto mod = forOp->getParentOfType<ModuleOp>();
+    llvm::errs() << "Module after scf pattern:\n" << *mod << "\n";
+
     // Replace uses of the original loop results with the new loop results.
     userIndexMap.clear();
     idx = 0;
@@ -373,11 +376,12 @@ public:
       }
 
       auto glue = cast<ttgi::GlueOp>(definingOp);
-      for (Operation *user : result.getUsers())
+      for (Operation *user : result.getUsers()) {
         if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
           userIndexMap[extract] = idx + extract.getIndex();
           deleteList.push_back(extract.getOperation());
         }
+      }
 
       idx += glue->getOperands().size();
     }
@@ -387,6 +391,13 @@ public:
 
     for (Operation *deleteOp : deleteList)
       rewriter.eraseOp(deleteOp);
+
+    //    llvm::errs() << "forOp:\n" << forOp << "\n";
+    for (auto result : forOp.getResults()) {
+      for (auto *user : result.getUsers()) {
+        llvm::errs() << "ettore: " << *user << "\n";
+      }
+    }
 
     rewriter.eraseOp(forOp);
 
@@ -412,10 +423,16 @@ public:
 
       if (llvm::any_of(arg.getUsers(), [](Operation *user) {
             return !isa<ttgi::ExtractOp>(user);
-          })) {
+          }))
         return false;
-      }
     }
+
+    // Bail out if any user of the loop result is not an 'extract' operation.
+    if (forOp->getNumResults() == 1 &&
+        llvm::any_of(forOp.getResult(0).getUsers(), [](Operation *user) {
+          return !isa<ttgi::ExtractOp>(user);
+        }))
+      return false;
 
     return true;
   }
