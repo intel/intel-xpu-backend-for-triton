@@ -502,9 +502,8 @@ void MatchTargetSizePass::recordRootSubSize(Operation *op) {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Attribute layout = tensorType.getEncoding();
     assert(layout && "Expecting a valid layout");
-    if (isTransposed && sizePerAttrMapTransposed.count(layout) == 0) {
+    if (isTransposed && sizePerAttrMapTransposed.count(layout) == 0)
       sizePerAttrMapTransposed[layout] = getSubOpSize(tensorType, isTransposed);
-    }
     if (!isTransposed && sizePerAttrMap.count(layout) == 0)
       sizePerAttrMap[layout] = getSubOpSize(tensorType, isTransposed);
     return;
