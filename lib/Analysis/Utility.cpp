@@ -2,6 +2,7 @@
 
 #include <deque>
 
+#include "intel/include/Analysis/Utility.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -619,7 +620,8 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
 
   // TODO(jlebar): Remove these special cases once they're fully subsumed by the
   // linear-layout check above.
-  return !isMmaToMmaShortcut(srcTy, dstTy) &&
+  return !triton::gpu::intel::isDpasToDotShortcut(srcTy, dstTy) &&
+         !isMmaToMmaShortcut(srcTy, dstTy) &&
          !isMmaToDotShortcut(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
 }
