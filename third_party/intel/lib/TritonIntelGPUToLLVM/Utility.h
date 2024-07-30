@@ -761,8 +761,7 @@ loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
   auto srcTy = cast<MemDescType>(src.getType());
 
   SmallVector<Value> ret;
-  if (triton::gpu::intel::hasDotDpasEncoding(dstTy) ||
-      isa<DpasEncodingAttr>(dstTy.getEncoding())) {
+  if (isa<DpasEncodingAttr>(dstTy.getEncoding())) {
     if (emitTransferBetweenDPASAndShared(
             dstTy, srcTy, elemTy, /*maxVecElems=*/std::nullopt,
             shrMemObj.getBase(), shrMemObj.getStrides(), loc, rewriter, target,
@@ -798,8 +797,7 @@ inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
                                      Value smemBase, ArrayRef<Value> dstStrides,
                                      Location loc, RewriterBase &rewriter,
                                      const TargetInfoBase &target) {
-  if (triton::gpu::intel::hasDotDpasEncoding(srcTy) ||
-      isa<DpasEncodingAttr>(srcTy.getEncoding())) {
+  if (isa<DpasEncodingAttr>(srcTy.getEncoding())) {
     if (emitTransferBetweenDPASAndShared(
             srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
             dstStrides, loc, rewriter, target,

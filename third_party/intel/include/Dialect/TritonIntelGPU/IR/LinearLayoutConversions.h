@@ -11,14 +11,8 @@
 
 namespace mlir::triton::gpu {
 
-// - DPASLayout has three derivatives
-//
-//   OperandA (opidx==0)
-//   OperandB (opidx==1)
-//   OperandC (Default. opidx==2)
-//
 std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
-                                               Attribute layout, int opidx = 2);
+                                               Attribute layout);
 
 } // namespace mlir::triton::gpu
 

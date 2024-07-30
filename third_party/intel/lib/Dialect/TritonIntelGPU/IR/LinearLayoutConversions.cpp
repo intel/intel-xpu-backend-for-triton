@@ -336,109 +336,7 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
 
 // The layout example repeat_count=8, systolic_depth=8,
 // execution_size=16 and operands_per_chan=2 for warp size 32.
-// For A operand:
-//                   systolic depth = 8
-//<----------------------------------------------------->
-// opsPerChan=2
-//<--------->
-// t0  ...  t0   t1  ... t1  ~  t6  ... t6  t7  ... t7   ^
-// t8  ...  t8   t9  ... t9  ~ t14 ... t14 t15 ... t15   |
-// t16 ...  t16  t17 ... t17 ~ t22 ... t22 t23 ... t23   |
-// t24 ...  t24  t25 ... t25 ~ t30 ... t30 t31 ... t31   | repeat count <= 8
-// t0  ...  t0   t1  ... t1  ~ t6  ... t6  t7  ... t7    |
-// t8  ...  t8   t9  ... t9  ~ t14 ... t14 t15 ... t15   |
-// t16 ...  t16  t17 ... t17 ~ t22 ... t22 t23 ... t23   |
-// t24 ...  t24  t25 ... t25 ~ t30 ... t30 t31 ... t31   v
-// In this case, the LinearLayout bases are:
-// Register:  {{0,1}, {4,0}}
-// Lane:      {{0,2}, {0,4}, {0,8}, {1,0}, {2,0}}
-std::vector<std::vector<int32_t>> DPASRegBasesA(int opsPerChannel,
-                                                int repeatCount,
-                                                int threadsPerWarp,
-                                                int systolicDepth) {
-  int rowPerWarp = threadsPerWarp / systolicDepth;
-  int warpRepeats = repeatCount / rowPerWarp;
-  std::vector<std::vector<int32_t>> regBases;
-
-  for (int opc = 1; opc < opsPerChannel; opc = opc * 2) {
-    regBases.push_back({0, opc});
-  }
-
-  for (int warp = 1; warp < warpRepeats; warp = warp * 2) {
-    regBases.push_back({warp * rowPerWarp, 0});
-  }
-
-  return regBases;
-}
-
-std::vector<std::vector<int32_t>>
-DPASLaneBasesA(int opsPerChannel, int threadsPerWarp, int systolicDepth) {
-
-  std::vector<std::vector<int32_t>> laneBases;
-
-  for (int tid = 1; tid < systolicDepth; tid = tid * 2) {
-    laneBases.push_back({0, opsPerChannel * tid});
-  }
-  for (int tid = systolicDepth; tid < threadsPerWarp; tid = tid * 2) {
-    laneBases.push_back({tid / systolicDepth, 0});
-  }
-
-  return laneBases;
-}
-
-// For B operand:
-//               execution size = 16
-//<-------------------------------------------------->
-// t0  t1  t2  t3  ~ t12 t13 t14 t15   ^              ^
-//.   .   .   .   .   .   .   .   .   | opsPerChan=2 |
-// t0  t1  t2  t3  ~ t12 t13 t14 t15   v              |
-// t16 t17 t18 t19 ~ t28 t29 t30 t31                  |
-//.   .   .   .   .   .   .   .   .                  |
-// t16 t17 t18 t19 ~ t28 t29 t30 t31                  | systolic depth = 8
-// t0  t1  t2  t3  ~ t12 t13 t14 t15                  |
-//.   .   .   .   .   .   .   .   .                  |
-// t0  t1  t2  t3  ~ t12 t13 t14 t15                  |
-// t16 t17 t18 t19 ~ t28 t29 t30 t31                  |
-//.   .   .   .   .   .   .   .   .                  |
-// t16 t17 t18 t19 ~ t28 t29 t30 t31                  v
-// In this case, the LinearLayout bases are:
-// Register:  {{1,0}, {4,0}, {8,0}}
-// Lane:      {{0,1}, {0,2}, {0,4}, {0,8}, {2,0}}
-std::vector<std::vector<int32_t>> DPASRegBasesB(int opsPerChannel,
-                                                int executionSize,
-                                                int threadsPerWarp,
-                                                int systolicDepth) {
-  int rowsPerWarp = threadsPerWarp / executionSize;
-  int warpRepeats = systolicDepth / rowsPerWarp;
-  std::vector<std::vector<int32_t>> regBases;
-
-  for (int opc = 1; opc < opsPerChannel; opc = opc * 2) {
-    regBases.push_back({opc, 0});
-  }
-  for (int rid = rowsPerWarp; rid < systolicDepth; rid = rid * 2) {
-    regBases.push_back({rid * opsPerChannel, 0});
-  }
-
-  return regBases;
-}
-
-std::vector<std::vector<int32_t>>
-DPASLaneBasesB(int opsPerChannel, int threadsPerWarp, int executionSize) {
-
-  std::vector<std::vector<int32_t>> laneBases;
-
-  for (int tid = 1; tid < executionSize; tid = tid * 2) {
-    laneBases.push_back({0, tid});
-  }
-  int rowsPerWarp = threadsPerWarp / executionSize;
-  for (int row = 1; row < rowsPerWarp; row = row * 2) {
-    laneBases.push_back({row * opsPerChannel, 0});
-  }
-
-  return laneBases;
-}
-
-// For C operand:
+// DPASInst layout of C operand:
 //        execution size = 16
 //<---------------------------------->
 // t0  t1  t2  t3  ~ t12 t13 t14 t15          ^
@@ -450,6 +348,8 @@ DPASLaneBasesB(int opsPerChannel, int threadsPerWarp, int executionSize) {
 // In this case, the LinearLayout bases are:
 // Register:  {{2,0}, {4,0}}
 // Lane:      {{0,1}, {0,2}, {0,4}, {0,8}, {1,0}}
+// Currently, LinearLayout is not supported for DotOperandEncoding
+// so only Operand C conversion is implemented.
 std::vector<std::vector<int32_t>>
 DPASRegBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
   int rowsPerWarp = threadsPerWarp / executionSize;
@@ -480,10 +380,10 @@ DPASLaneBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
 }
 
 std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
-                                               Attribute layout, int opidx) {
+                                               Attribute layout) {
 
   auto dpas = dyn_cast<DpasEncodingAttr>(layout);
-  assert(dpas && "Must be DPAS layout");
+  assert(dpas && "Must be DPAS Operand C layout");
 
   int rank = shape.size();
   assert(rank == dpas.getWarpsPerCTA().size());
@@ -497,60 +397,31 @@ std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
 
   const SmallVector<unsigned> warpsPerCTA = dpas.getWarpsPerCTA();
   int threadsPerWarp = triton::gpu::getWarpSize(dpas);
-  unsigned opsPerChannel = dpas.getOpsPerChannel();
   auto repCluster = dpas.getRepCluster();
-  SmallVector<int64_t> numReps = dpas.getDPASRepetitions(shape, opidx);
+  SmallVector<int64_t> numReps = dpas.getDPASRepetitions(shape, 2);
 
   auto tileLayout = LinearLayout::empty();
-  int systolicDepth = dpas.getSystolicDepth();
-  int KDim = 1;
-  int nonKDim = 0;
-  if (opidx == 0) { // Operand A
-    int repeatCount = dpas.getRepeatCount();
-    auto regBasesA = DPASRegBasesA(opsPerChannel, repeatCount, threadsPerWarp,
-                                   systolicDepth);
-    auto laneBasesA =
-        DPASLaneBasesA(opsPerChannel, threadsPerWarp, systolicDepth);
-    tileLayout = LinearLayout({{kRegister, regBasesA}, {kLane, laneBasesA}},
-                              outDimNames);
-    tileLayout *=
-        LinearLayout::identity1D(repCluster[0], kRegister, outDimNames[0]);
-    nonKDim = 0;
-    KDim = 1;
-  } else if (opidx == 1) { // Operand B
-    int executionSize = dpas.getExecutionSize();
-    auto regBasesB = DPASRegBasesB(opsPerChannel, executionSize, threadsPerWarp,
-                                   systolicDepth);
-    auto laneBasesB =
-        DPASLaneBasesB(opsPerChannel, threadsPerWarp, executionSize);
-    tileLayout = LinearLayout({{kRegister, regBasesB}, {kLane, laneBasesB}},
-                              outDimNames);
-    tileLayout *=
-        LinearLayout::identity1D(repCluster[1], kRegister, outDimNames[1]);
-    nonKDim = 1;
-    KDim = 0;
-  } else { // opidx=2 -> Operand C
-    int repeatCount = dpas.getRepeatCount();
-    int executionSize = dpas.getExecutionSize();
-    auto regBasesC = DPASRegBasesC(repeatCount, executionSize, threadsPerWarp);
-    auto laneBasesC =
-        DPASLaneBasesC(repeatCount, executionSize, threadsPerWarp);
-    tileLayout = LinearLayout({{kRegister, regBasesC}, {kLane, laneBasesC}},
-                              outDimNames);
-    tileLayout *=
-        LinearLayout::identity1D(repCluster[1], kRegister, outDimNames[1]);
-    tileLayout *=
-        LinearLayout::identity1D(repCluster[0], kRegister, outDimNames[0]);
-    nonKDim = 0;
-    KDim = 1;
-  }
-  tileLayout *=
-      LinearLayout::identity1D(numReps[KDim], kRegister, outDimNames[KDim]);
-  tileLayout *= LinearLayout::identity1D(numReps[nonKDim], kRegister,
-                                         outDimNames[nonKDim]);
+  int repeatCount = dpas.getRepeatCount();
+  int executionSize = dpas.getExecutionSize();
 
-  // And each warp takes the same register and lane sub-layout. So mulitply with
-  // an identity layout for the warp.
+  auto regBases = DPASRegBasesC(repeatCount, executionSize, threadsPerWarp);
+  auto laneBases = DPASLaneBasesC(repeatCount, executionSize, threadsPerWarp);
+  tileLayout =
+      LinearLayout({{kRegister, regBases}, {kLane, laneBases}}, outDimNames);
+
+  // The per-inst layout is repeated at each repCluster.
+  // Hence, multiply with the identity layouts starting from the
+  // least significant dimension.
+  tileLayout *=
+      LinearLayout::identity1D(repCluster[1], kRegister, outDimNames[1]);
+  tileLayout *=
+      LinearLayout::identity1D(repCluster[0], kRegister, outDimNames[0]);
+
+  // Then, it is repeated by DPASRepetitions to form per-Warp layout.
+  tileLayout *= LinearLayout::identity1D(numReps[1], kRegister, outDimNames[1]);
+  tileLayout *= LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
+
+  // Finally, per-warp layout is repeated among the warps in the CTA.
   LinearLayout warpLayout =
       identityND(S("warp"), dpas.getWarpsPerCTA(), {0, 1}, outDimNames);
   LinearLayout ctaLayout = tileLayout * warpLayout;

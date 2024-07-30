@@ -161,36 +161,16 @@ bool emitTransferBetweenDPASAndShared(
   StringAttr kWarp = str_attr("warp");
 
   std::optional<LinearLayout> regLayout;
-  if (triton::gpu::intel::hasDotDpasEncoding(registerTy)) {
-    DotOperandEncodingAttr dotLayout =
-        triton::gpu::intel::getDotEncoding(registerTy).value();
-    unsigned opIdx = dotLayout.getOpIdx();
-    auto dpasLayout = cast<DpasEncodingAttr>(dotLayout.getParent());
-    regLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout, opIdx);
-  } else if (auto dpasLayout =
-                 dyn_cast<DpasEncodingAttr>(registerTy.getEncoding())) {
+  if (auto dpas = dyn_cast<DpasEncodingAttr>(registerTy.getEncoding())) {
     // Default is operandC (opidx == 2)
-    regLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout, 2);
+    regLayout = triton::gpu::DPAStoLinearLayout(shape, dpas);
   } else {
     regLayout = triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   }
 
   std::optional<LinearLayout> sharedLayout;
-  if (auto tensorTy = dyn_cast<RankedTensorType>(sharedTy)) {
-    if (triton::gpu::intel::hasDotDpasEncoding(tensorTy)) {
-      DotOperandEncodingAttr dotLayout =
-          triton::gpu::intel::getDotEncoding(tensorTy).value();
-      unsigned opIdx = dotLayout.getOpIdx();
-      auto dpasLayout = cast<DpasEncodingAttr>(dotLayout.getParent());
-      sharedLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout, opIdx);
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(
-          shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
-    }
-  } else if (auto dpasLayout =
-                 dyn_cast<DpasEncodingAttr>(sharedTy.getEncoding())) {
-    auto tensorTy = dyn_cast<RankedTensorType>(sharedTy);
-    sharedLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout, 2);
+  if (auto dpas = dyn_cast<DpasEncodingAttr>(sharedTy.getEncoding())) {
+    sharedLayout = triton::gpu::DPAStoLinearLayout(shape, dpas);
   } else {
     sharedLayout = triton::gpu::toLinearLayout(
         shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());

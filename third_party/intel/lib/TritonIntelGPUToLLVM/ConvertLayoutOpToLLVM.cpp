@@ -113,12 +113,8 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    // FIXME: lowerSharedToDotOperand should be replaced with LinearLayout
-    // conversion, but the conversions for operandA/B are yet incorrect.
     if (isa<DotOperandEncodingAttr>(dstLayout))
       return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
-    // return lowerSharedToDistributed(op, adaptor,
-    // getTypeConverter(),rewriter);
     if (isa<SharedEncodingAttr>(srcLayout) && isaDistributedLayout(dstLayout))
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
@@ -481,30 +477,16 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     std::optional<LinearLayout> srcLayout;
     auto srcTy = op.getSrc().getType();
 
-    if (triton::gpu::intel::hasDotDpasEncoding(srcTy)) {
-      DotOperandEncodingAttr dotLayout =
-          triton::gpu::intel::getDotEncoding(srcTy).value();
-      auto opIdx = dotLayout.getOpIdx();
-      auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcTy.getEncoding());
-      srcLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout, opIdx);
-    } else if (auto dpasLayout =
-                   dyn_cast<DpasEncodingAttr>(srcTy.getEncoding())) {
-      srcLayout = triton::gpu::DPAStoLinearLayout(shape, dpasLayout, 2);
+    if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcTy.getEncoding())) {
+      srcLayout = gpu::DPAStoLinearLayout(shape, dpasLayout);
     } else {
       srcLayout = gpu::toLinearLayout(shape, srcTy.getEncoding());
     }
 
     std::optional<LinearLayout> dstLayout;
     auto dstTy = op.getType();
-    if (gpu::intel::hasDotDpasEncoding(dstTy)) {
-      DotOperandEncodingAttr dotLayout =
-          gpu::intel::getDotEncoding(dstTy).value();
-      auto opIdx = dotLayout.getOpIdx();
-      auto dpasLayout = dyn_cast<DpasEncodingAttr>(dstTy.getEncoding());
-      dstLayout = gpu::DPAStoLinearLayout(shape, dpasLayout, opIdx);
-    } else if (auto dpasLayout =
-                   dyn_cast<DpasEncodingAttr>(dstTy.getEncoding())) {
-      dstLayout = gpu::DPAStoLinearLayout(shape, dpasLayout, 2);
+    if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(dstTy.getEncoding())) {
+      dstLayout = gpu::DPAStoLinearLayout(shape, dpasLayout);
     } else {
       dstLayout = gpu::toLinearLayout(shape, dstTy.getEncoding());
     }
