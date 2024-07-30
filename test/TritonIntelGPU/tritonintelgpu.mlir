@@ -10,6 +10,8 @@ tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16x8xf16>, %tensor2 : tensor<16
   tt.return
 }
 
+// -----
+
 tt.func @triton_intel_gpu.extract(%tensor : tensor<16x16xf16>, %ptr : !tt.ptr<tensor<16x8xf16>>) {
   // CHECK-LABEL: @triton_intel_gpu.extract
   // CHECK: %0 = triton_intel_gpu.extract %arg0[0] : tensor<16x16xf16> -> tensor<4x4xf16>
@@ -18,6 +20,8 @@ tt.func @triton_intel_gpu.extract(%tensor : tensor<16x16xf16>, %ptr : !tt.ptr<te
   %ptrRes = triton_intel_gpu.extract %ptr[1] : !tt.ptr<tensor<16x8xf16>> -> !tt.ptr<tensor<8x8xf16>>
   tt.return
 }
+
+// -----
 
 tt.func @simplify_scf_for(%arg0: tensor<16x8xf16>, %arg1: tensor<16x8xf16>, %arg2: !tt.ptr<f16, 1>,
                           %arg3: i64, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32) {
