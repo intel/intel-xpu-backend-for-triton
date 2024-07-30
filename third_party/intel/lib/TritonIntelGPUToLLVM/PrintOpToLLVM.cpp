@@ -48,46 +48,47 @@ struct PrintOpConversion
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
       LLVM::intel::llPrintf(rewriter, formatStr,
                             {pid[0], pid[1], pid[2], prefixStr});
-    } else {
-      assert(op.getNumOperands() == op.getIsSigned().size() &&
-             "All operands must have 'isSigned' attribute");
+      rewriter.eraseOp(op);
+      return success();
+    }
 
-      for (size_t i = 0; i < op.getNumOperands(); i++) {
-        bool isSigned = op.getIsSigned()[i] > 0;
-        // Elements of the tensor that are resident in this GPU thread.
-        auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
+    assert(op.getNumOperands() == op.getIsSigned().size() &&
+           "All operands must have 'isSigned' attribute");
 
-        // Get the indices of `elems` within the tensor.  Note that if `elems`
-        // has an "interesting" layout, then these will not be in any
-        // particularly nice order.
+    for (size_t i = 0; i < op.getNumOperands(); i++) {
+      bool isSigned = op.getIsSigned()[i] > 0;
+      // Elements of the tensor that are resident in this GPU thread.
+      auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
 
-        // Extract the shape of the tensor being printed and use it to figure
-        // out how many digits we need for each of the dimensions.
-        SmallVector<int, 8> dimWidths;
-        SmallVector<SmallVector<Value>> indices;
-        if (auto rankedTy =
-                dyn_cast<RankedTensorType>(op.getOperand(i).getType())) {
-          indices =
-              ::intel::emitIndices(loc, rewriter, targetInfo,
-                                   rankedTy.getEncoding(), rankedTy, true);
-          for (int64_t dim : rankedTy.getShape()) {
-            if (dim > 0) {
-              dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
-            } else {
-              dimWidths.push_back(0);
-            }
+      // Get the indices of `elems` within the tensor.  Note that if `elems`
+      // has an "interesting" layout, then these will not be in any
+      // particularly nice order.
+
+      // Extract the shape of the tensor being printed and use it to figure
+      // out how many digits we need for each of the dimensions.
+      SmallVector<int, 8> dimWidths;
+      SmallVector<SmallVector<Value>> indices;
+      if (auto rankedTy =
+              dyn_cast<RankedTensorType>(op.getOperand(i).getType())) {
+        indices = ::intel::emitIndices(loc, rewriter, targetInfo,
+                                       rankedTy.getEncoding(), rankedTy, true);
+        for (int64_t dim : rankedTy.getShape()) {
+          if (dim > 0) {
+            dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
+          } else {
+            dimWidths.push_back(0);
           }
-        } else {
-          // We're printing a scalar.
-          assert(elems.size() == 1);
-          indices.push_back({});
         }
+      } else {
+        // We're printing a scalar.
+        assert(elems.size() == 1);
+        indices.push_back({});
+      }
 
-        if (!elems.empty()) {
-          printTensor(prefixStr, /*operand=*/i,
-                      /*numOperands=*/op.getNumOperands(), elems, pid, indices,
-                      dimWidths, op.getHex(), rewriter, isSigned);
-        }
+      if (!elems.empty()) {
+        printTensor(prefixStr, /*operand=*/i,
+                    /*numOperands=*/op.getNumOperands(), elems, pid, indices,
+                    dimWidths, op.getHex(), rewriter, isSigned);
       }
     }
     rewriter.eraseOp(op);
@@ -190,7 +191,6 @@ struct PrintOpConversion
     if (isa<LLVM::PointerType>(type)) {
       return "%p";
     }
-
     // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
     // type (so 4 for fp16, 8 for int32, 16 for int64).
     if (hex) {
