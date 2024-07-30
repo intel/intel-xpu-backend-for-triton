@@ -1,8 +1,14 @@
 #ifndef SYCL_FUNCTIONS_INCLUDE_H_
 #define SYCL_FUNCTIONS_INCLUDE_H_
 
+#include <algorithm>
+#include <cassert>
 #include <iostream>
+#include <memory>
+#include <sstream>
 #include <string>
+#include <unordered_map>
+#include <variant>
 
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
@@ -40,15 +46,18 @@ bool getBoolEnv(const std::string &env) {
 
 std::tuple<ze_module_handle_t, ze_result_t>
 create_module(ze_context_handle_t context, ze_device_handle_t device,
-              uint32_t *binary_ptr, size_t binary_size) {
-  const char *build_flags = "";
+              uint8_t *binary_ptr, size_t binary_size,
+              const char *build_flags) {
+  assert(binary_ptr != nullptr && "binary_ptr should not be NULL");
+  assert(build_flags != nullptr && "build_flags should not be NULL");
+
   const ze_module_format_t format = ZE_MODULE_FORMAT_IL_SPIRV;
   ze_module_desc_t module_description = {};
   module_description.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
   module_description.format = format;
   module_description.inputSize =
       static_cast<uint32_t>(binary_size * sizeof(uint32_t));
-  module_description.pInputModule = (uint8_t *)binary_ptr;
+  module_description.pInputModule = binary_ptr;
   module_description.pBuildFlags = build_flags;
   ze_module_build_log_handle_t buildlog;
   ze_module_handle_t module;
@@ -136,4 +145,4 @@ std::vector<sycl::device> update(sycl::queue sycl_queue,
   return sycl_devices;
 }
 
-#endif
+#endif // SYCL_FUNCTIONS_INCLUDE_H_
