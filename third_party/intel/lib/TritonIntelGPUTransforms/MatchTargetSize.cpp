@@ -48,9 +48,11 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir::triton::gpu::intel {
@@ -63,6 +65,7 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonintelgpu-match-target-size"
 
 namespace {
@@ -156,17 +159,21 @@ public:
             type.getNumElements() * type.getElementTypeBitWidth() / 8;
         unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(m);
         unsigned slmSize = numWarps * bytes;
-        m->setAttr(
-            "triton_gpu.shared",
-            mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32), slmSize));
+
+        static constexpr char sharedAttr[] = "triton_gpu.shared";
+        m->setAttr(sharedAttr, mlir::IntegerAttr::get(
+                                   mlir::IntegerType::get(ctx, 32), slmSize));
         auto func = load->getParentOfType<FunctionOpInterface>();
-        auto slmTy = tt::PointerType::get(type.getElementType(), 3);
-        func.insertArgument(func.getNumArguments(), slmTy, {}, func.getLoc());
+
+        auto ptrToSharedMemTy = tt::PointerType::get(
+            type.getElementType(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
+        func.insertArgument(func.getNumArguments(), ptrToSharedMemTy, {},
+                            func.getLoc());
         Location loc = load.getLoc();
         OpBuilder b(load);
         b.setInsertionPointAfter(load);
         auto subgroupId =
-            b.create<gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr);
+            b.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr);
         auto warpId =
             b.create<arith::IndexCastOp>(loc, b.getI32Type(), subgroupId);
         // hardcode: we use i16ptr here, so bytes / 2
@@ -174,7 +181,7 @@ public:
         auto offset = b.create<arith::MulIOp>(loc, warpId, warpSize);
         auto block = load->getBlock();
         auto arg = block->getArgument(block->getNumArguments() - 1);
-        auto base = b.create<tt::AddPtrOp>(loc, slmTy, arg, offset);
+        auto base = b.create<tt::AddPtrOp>(loc, ptrToSharedMemTy, arg, offset);
         SmallVector<Value> shape;
         shape.push_back(
             b.create<arith::ConstantIntOp>(loc, type.getShape()[0], 64));
@@ -777,11 +784,8 @@ void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
   ArrayRef<int32_t> order = op.getOrder();
   auto rank = order.size();
   bool isTransposed = (order[rank - 2] != 1);
-  bool useSLM = false;
-  if (cast<tt::PointerType>(resultType).getAddressSpace() == 3) {
-    useSLM = true;
-  }
-
+  bool useSLM = (cast<tt::PointerType>(resultType).getAddressSpace() ==
+                 TritonGEN::TritonGENMemorySpace::kWorkgroup);
   auto [shape, subType, subSize] =
       getSubTypeAndShape(resultType, isTransposed, useSLM);
 
@@ -1004,19 +1008,17 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
     llvm_unreachable("Unexpected operation");
   }
 
-  // for attension SLM
+  // for attention SLM
   bool useSLM = false;
   if (auto store = dyn_cast<tt::StoreOp>(op)) {
     auto ptrTy = store.getPtr().getType();
-    if (cast<tt::PointerType>(ptrTy).getAddressSpace() == 3) {
-      useSLM = true;
-    }
+    useSLM = (cast<tt::PointerType>(ptrTy).getAddressSpace() ==
+              TritonGEN::TritonGENMemorySpace::kWorkgroup);
   }
   if (auto load = dyn_cast<tt::LoadOp>(op)) {
     auto ptrTy = load.getPtr().getType();
-    if (cast<tt::PointerType>(ptrTy).getAddressSpace() == 3) {
-      useSLM = true;
-    }
+    useSLM = (cast<tt::PointerType>(ptrTy).getAddressSpace() ==
+              TritonGEN::TritonGENMemorySpace::kWorkgroup);
   }
   auto [shape, subType, subSize] =
       getSubTypeAndShape(type, isTransposed, useSLM);

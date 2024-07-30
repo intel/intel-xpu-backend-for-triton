@@ -26,7 +26,7 @@ namespace {
 
 VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
   // Determine a vector type of the given `elemType` that covers 1/16 of
-  // `tensorType`, i.e. the amout of data a single subgroup lane will work on.
+  // `tensorType`, i.e. the amount of data a single subgroup lane will work on.
   size_t tensorSize =
       tensorType.getNumElements() * tensorType.getElementTypeBitWidth();
   size_t num = (tensorSize / 16) / elemType.getIntOrFloatBitWidth();
@@ -130,10 +130,11 @@ public:
   LogicalResult
   matchAndRewrite(OpType op, typename OpType::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
     auto ptrType = cast<PointerType>(op.getPtr().getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-    auto addrSpace = ptrType.getAddressSpace();
-    const bool isLocalSpace = (addrSpace == 3);
+    const bool isLocalSpace = (ptrType.getAddressSpace() ==
+                               TritonGEN::TritonGENMemorySpace::kWorkgroup);
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     assert(tensorType.getRank() == 2 &&
@@ -181,39 +182,43 @@ public:
       Value llPtr = adaptor.getPtr();
       // sg_size(16) x i64 = 64 x i16
       VectorType v64i16Ty = VectorType::get(64, i16_ty);
-      LLVM::LLVMPointerType iPtrTy =
-          LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+      LLVM::LLVMPointerType ptrToSharedMemTy =
+          ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kWorkgroup);
       Value offsetX = extract_element(llPtr, i32_val(0));
       Value offsetY = extract_element(llPtr, i32_val(1));
 
       Value blkId = add(mul(udiv(offsetY, i32_val(8)), i32_val(4)),
                         udiv(offsetX, i32_val(16)));
       Value index = mul(blkId, i32_val(128));
-      base = gep(ptr_ty(rewriter.getContext(), 3), i16_ty, base, index);
+      base = gep(ptrToSharedMemTy, i16_ty, base, index);
 
       if constexpr (std::is_same_v<OpType, LoadOp>) {
         VectorType v64f16Ty = VectorType::get(64, f16_ty);
 
-        std::string funcName = "llvm.genx.GenISA.simdBlockRead";
-        SmallVector<Type> argTypes{iPtrTy};
+        // FIXME: need to add an operation in the TritonGen dialect for this.
+        constexpr char funcName[] = "llvm.genx.GenISA.simdBlockRead";
+        SmallVector<Type> argTypes{ptrToSharedMemTy};
         LLVM::LLVMFuncOp funcOp =
             LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, v64i16Ty);
         funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
         rewriter.restoreInsertionPoint(insertPoint);
 
         SmallVector<Value> args{base};
-        auto localLoad = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+        LLVM::CallOp localLoad = call(funcOp, args);
         rewriter.replaceOp(op, bitcast(localLoad.getResult(), v64f16Ty));
 
         return success();
-      } else if constexpr (std::is_same_v<OpType, StoreOp>) {
-        auto voidTy = LLVM::LLVMVoidType::get(rewriter.getContext());
+      }
 
-        std::string funcName = "llvm.genx.GenISA.simdBlockWrite";
+      if constexpr (std::is_same_v<OpType, StoreOp>) {
+        LLVM::LLVMVoidType voidTy = void_ty(ctx);
+
+        // FIXME: Should add an operation in the TritonGen dialect for this.
+        constexpr char funcName[] = "llvm.genx.GenISA.simdBlockWrite";
         rewriter.restoreInsertionPoint(insertPoint);
         Value val = adaptor.getValue();
 
-        SmallVector<Type> argTypes{iPtrTy, v64i16Ty};
+        SmallVector<Type> argTypes{ptrToSharedMemTy, v64i16Ty};
         LLVM::LLVMFuncOp funcOp =
             LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, voidTy);
         funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
@@ -222,12 +227,13 @@ public:
         res = bitcast(res, v64i16Ty);
 
         SmallVector<Value> args{base, res};
-        auto localStore = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
+        LLVM::CallOp localStore = call(funcOp, args);
 
         rewriter.eraseOp(op);
         return success();
       }
-    } // isLocalSpace
+    }
+
     auto calculateSurface = [&](Value shape, bool multiplyBytes) {
       Value truncatedShape = trunc(i32_ty, shape);
       if (multiplyBytes)
@@ -270,7 +276,10 @@ public:
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
           dataSize, blockWidth, blockHeight, vBlks, false /*transpose*/, vnni);
-      VERIFY_OPERATION(load)
+      // Explicitly invoke verifier because `triton_gen` ops are immediately
+      // lowered further to a builtin call.
+      if (failed(load.verify()))
+        return failure();
 
       rewriter.replaceOp(op, bitcast(load, resType));
     } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
@@ -279,7 +288,10 @@ public:
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, TritonGEN::LoadCacheControl::L1C_L3C);
-      VERIFY_OPERATION(newOp);
+      // Explicitly invoke verifier because `triton_gen` ops are immediately
+      // lowered further to a builtin call.
+      if (failed(newOp.verify()))
+        return failure();
 
       rewriter.eraseOp(op);
     } else {
@@ -290,7 +302,11 @@ public:
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks,
           bitcast(adaptor.getValue(), vectorType));
-      VERIFY_OPERATION(newOp);
+
+      // Explicitly invoke verifier because `triton_gen` ops are immediately
+      // lowered further to a builtin call.
+      if (failed(newOp.verify()))
+        return failure();
 
       rewriter.eraseOp(op);
     }
