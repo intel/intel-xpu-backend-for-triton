@@ -183,8 +183,11 @@ LogicalResult ExtractOp::verify() {
 
 OpFoldResult ExtractOp::fold(FoldAdaptor adaptor) {
   // extract (glue %t1, %t2)[1] -> %t2
-  if (auto glueOp = getBase().getDefiningOp<GlueOp>())
-    return glueOp->getOperand(getIndex());
+  if (auto glueOp = getBase().getDefiningOp<GlueOp>()) {
+    auto operand = glueOp->getOperand(getIndex());
+    if (operand.getType() == getType())
+      return operand;
+  }
 
   // %0 =  .... : tensor<16x8xf16>
   // extract %0[0] : tensor<16x8xf16> -> %0
