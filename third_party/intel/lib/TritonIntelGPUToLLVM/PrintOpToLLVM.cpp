@@ -49,7 +49,8 @@ struct PrintOpConversion
       LLVM::intel::llPrintf(rewriter, formatStr,
                             {pid[0], pid[1], pid[2], prefixStr});
     } else {
-      assert(op.getNumOperands() == op.getIsSigned().size());
+      assert(op.getNumOperands() == op.getIsSigned().size() &&
+             "All operands must have 'isSigned' attribute");
 
       for (size_t i = 0; i < op.getNumOperands(); i++) {
         bool isSigned = op.getIsSigned()[i] > 0;
