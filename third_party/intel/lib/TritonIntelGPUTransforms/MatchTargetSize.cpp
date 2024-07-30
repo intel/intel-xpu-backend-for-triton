@@ -361,9 +361,6 @@ public:
     rewriter.create<scf::YieldOp>(yield.getLoc(), newValues);
     rewriter.eraseOp(yield);
 
-    auto mod = forOp->getParentOfType<ModuleOp>();
-    llvm::errs() << "Module after scf pattern:\n" << *mod << "\n";
-
     // Replace uses of the original loop results with the new loop results.
     userIndexMap.clear();
     idx = 0;
@@ -391,13 +388,6 @@ public:
 
     for (Operation *deleteOp : deleteList)
       rewriter.eraseOp(deleteOp);
-
-    //    llvm::errs() << "forOp:\n" << forOp << "\n";
-    for (auto result : forOp.getResults()) {
-      for (auto *user : result.getUsers()) {
-        llvm::errs() << "ettore: " << *user << "\n";
-      }
-    }
 
     rewriter.eraseOp(forOp);
 
