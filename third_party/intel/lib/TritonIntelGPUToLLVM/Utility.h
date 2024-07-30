@@ -746,7 +746,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   return ret;
 }
 
-bool emitTransferBetweenDPASAndShared(
+[[nodiscard]] bool emitTransferBetweenDPASAndShared(
     RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
     std::optional<int32_t> maxVecElems, Value shmemBase,
     ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
@@ -813,73 +813,23 @@ inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
                                 elemLlvmTy.getIntOrFloatBitWidth() / 8);
             }))
       return;
-  } else if (emitTransferBetweenRegistersAndShared(
-                 srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt,
-                 smemBase, dstStrides, loc, rewriter, target,
-                 [&](VectorType vecTy, Value vecAddr) {
-                   ArrayRef<Value> vals =
-                       srcVals.take_front(vecTy.getNumElements());
-                   srcVals = srcVals.drop_front(vecTy.getNumElements());
-
-                   Value vec = undef(vecTy);
-                   for (int i = 0; i < vals.size(); i++) {
-                     vec = insert_element(vec, vals[i], i32_val(i));
-                   }
-                   store(vec, vecAddr)
-                       .setAlignment(vecTy.getNumElements() *
-                                     elemLlvmTy.getIntOrFloatBitWidth() / 8);
-                 })) {
-    return;
   }
+  bool success = emitTransferBetweenRegistersAndShared(
+      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
+      dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {
+        ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
+        srcVals = srcVals.drop_front(vecTy.getNumElements());
 
-  auto srcShape = srcTy.getShape();
-  auto rank = srcShape.size();
-  assert(rank <= 3 && "Unexpected rank of storeDistributedToShared");
-  auto srcDistributedLayout = srcTy.getEncoding();
-  if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcDistributedLayout)) {
-    assert((!mmaLayout.isVolta()) &&
-           "ConvertLayout MMAv1->Shared is not supported yet");
-  }
-  auto dstSharedLayout =
-      cast<triton::gpu::SharedEncodingAttr>(dstTy.getEncoding());
-  auto dstElemTy = dstTy.getElementType();
-  auto inOrd = triton::gpu::getOrder(srcDistributedLayout);
-  auto outOrd = dstSharedLayout.getOrder();
-  unsigned inVec = inOrd == outOrd
-                       ? triton::gpu::getUniqueContigPerThread(
-                             srcDistributedLayout, srcShape)[inOrd[0]]
-                       : 1;
-  // If the shmem layout is not swizzled, we can trivially vectorize stores
-  // across the whole width of the most-minor dimension of the shape, because
-  // Triton requires all the dims are powers of 2.
-  unsigned outVec = dstSharedLayout.getMaxPhase() == 1
-                        ? dstTy.getShape()[inOrd[0]]
-                        : dstSharedLayout.getVec();
-  unsigned minVec = std::min(outVec, inVec);
-  unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
-  auto wordTy = vec_ty(elemLlvmTy, minVec);
-  Value word;
-
-  SmallVector<Value, 3> srcStrides(dstStrides);
-  SmallVector<Value, 3> offsetVals(rank, i32_val(0));
-  SharedMemoryObject shrMemObj(smemBase, elemLlvmTy, srcStrides, offsetVals);
-
-  DenseMap<unsigned, Value> sharedPtrs = ::intel::getSwizzledSharedPtrs(
-      loc, target, inVec, srcTy, dstSharedLayout, elemLlvmTy,
-      std::move(shrMemObj), rewriter, offsetVals, srcStrides);
-  LDBG("storeDistributedToShared: numElems = " << numElems << " minVec = "
-                                               << minVec << " " << wordTy);
-  for (unsigned i = 0; i < numElems; ++i) {
-    if (i % minVec == 0)
-      word = undef(wordTy);
-    word = insert_element(wordTy, word, srcVals[i], i32_val(i % minVec));
-    if (i % minVec == minVec - 1) {
-      Value shrMemAddr = sharedPtrs[i / minVec * minVec];
-      shrMemAddr = bitcast(shrMemAddr, ptr_ty(rewriter.getContext(), 3));
-      store(word, shrMemAddr)
-          .setAlignment(minVec * elemLlvmTy.getIntOrFloatBitWidth() / 8);
-    }
-  }
+        Value vec = undef(vecTy);
+        for (int i = 0; i < vals.size(); i++) {
+          vec = insert_element(vec, vals[i], i32_val(i));
+        }
+        store(vec, vecAddr)
+            .setAlignment(vecTy.getNumElements() *
+                          elemLlvmTy.getIntOrFloatBitWidth() / 8);
+      });
+  if (!success)
+    llvm::report_fatal_error("Failed to emit transfer from register to shared");
 }
 
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
