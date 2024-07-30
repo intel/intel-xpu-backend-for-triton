@@ -196,11 +196,10 @@ public:
       bool vnni = (idx == 1) && dataSize < 32;
 
       // FIXME: only support fp16/bf16 transpose for now, add more support like
-      // tf32, fp8
-      if (ptrOp.getOrder()[0] == 0) {
+      // tf32 and fp8.
+      if (transpose) {
         assert(getElementBitWidth(tensorType) == 16 &&
                "only support 16-bit element type for now");
-        transpose = true;
         vnni = false;
         dataSize = 32;
         blockWidth /= 2;
@@ -218,9 +217,8 @@ public:
       }
       rewriter.replaceOp(op, bitcast(load, resType));
     } else if constexpr (std::is_same_v<OpType, ttgi::PrefetchOp>) {
-      if (ptrOp.getOrder()[0] == 0) {
+      if (transpose)
         std::swap(offsetX, offsetY);
-      }
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, TritonGEN::LoadCacheControl::L1C_L3C);
@@ -354,7 +352,7 @@ public:
     default: {
       unsigned num = operands.size();
       Value undef = rewriter.create<LLVM::UndefOp>(loc, dstType);
-      for (auto i = 0; i < num; i++) {
+      for (auto i = 0; i < num; ++i) {
         undef = rewriter.create<LLVM::InsertElementOp>(
             loc, dstType, undef, operands[i],
             rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), i));
@@ -438,8 +436,7 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int subgroupSize =
-        mod->getAttrOfType<IntegerAttr>("triton_intel_gpu.min_sg_size")
-            .getInt();
+        mod->getAttrOfType<IntegerAttr>("triton_gpu.threads-per-warp").getInt();
     int axis = op.getAxis();
     llvm::ArrayRef<int64_t> shape =
         cast<RankedTensorType>(op.getInputTypes()[0]).getShape();
@@ -463,7 +460,7 @@ public:
     else if (isa<arith::MaxNumFOp>(combine))
       redKind = mlir::gpu::AllReduceOperation::MAXNUMF;
     else
-      assert(0 && "add more support");
+      llvm_unreachable("Unhandled reduction kind");
     Value result = rewriter.create<mlir::gpu::SubgroupReduceOp>(
         loc, convertedTy, adaptor.getSrcs()[0], redKind, true);
     rewriter.replaceOp(op, result);
