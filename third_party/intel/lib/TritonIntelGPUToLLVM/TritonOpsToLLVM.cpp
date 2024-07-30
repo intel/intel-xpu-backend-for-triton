@@ -7,6 +7,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/ArrayRef.h"
 
 using namespace mlir;
@@ -174,12 +175,9 @@ public:
       return truncatedShape;
     };
 
-    Value surfaceW = calculateSurface(
-        transpose ? ptrOp.getShape()[0] : ptrOp.getShape()[1], true);
-    Value surfaceH = calculateSurface(
-        transpose ? ptrOp.getShape()[1] : ptrOp.getShape()[0], false);
-    Value surfaceP = calculateSurface(
-        transpose ? ptrOp.getStrides()[1] : ptrOp.getStrides()[0], true);
+    Value surfaceW = calculateSurface(ptrOp.getShape()[!transpose], true);
+    Value surfaceH = calculateSurface(ptrOp.getShape()[transpose], false);
+    Value surfaceP = calculateSurface(ptrOp.getShape()[transpose], true);
     rewriter.restoreInsertionPoint(insertPoint);
 
     Value tensorPtr = adaptor.getPtr();
@@ -197,8 +195,11 @@ public:
                         isDword ? i32_ty : i16_ty);
       bool vnni = (idx == 1) && dataSize < 32;
 
-      // FIXME: only support fp16/bf16 for now, add more support like tf32, fp8
+      // FIXME: only support fp16/bf16 transpose for now, add more support like
+      // tf32, fp8
       if (ptrOp.getOrder()[0] == 0) {
+        assert(getElementBitWidth(tensorType) == 16 &&
+               "only support 16-bit element type for now");
         transpose = true;
         vnni = false;
         dataSize = 32;
@@ -218,8 +219,6 @@ public:
       rewriter.replaceOp(op, bitcast(load, resType));
     } else if constexpr (std::is_same_v<OpType, ttgi::PrefetchOp>) {
       if (ptrOp.getOrder()[0] == 0) {
-        // transpose = false;
-        // vnni = false;
         std::swap(offsetX, offsetY);
       }
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(

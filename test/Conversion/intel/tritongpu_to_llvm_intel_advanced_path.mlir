@@ -226,3 +226,23 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     tt.return %2 : !tt.ptr<f16>
   }
 }
+
+// -----
+
+// COM: Checks the correct custom lowering of arithmetic operations.
+
+module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+// CHECK-LABEL:   llvm.func spir_kernelcc @custom_arith_lowering(
+// CHECK-SAME:                                                   %[[VAL_0:.*]]: vector<8xf32>) -> vector<8xf32> attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [128 : i32, 1 : i32, 1 : i32]} {
+  tt.func public @custom_arith_lowering(%arg0: tensor<8x16xf32>) -> tensor<8x16xf32> {
+
+// CHECK:           %[[VAL_1:.*]] = builtin.unrealized_conversion_cast %[[VAL_0]] : vector<8xf32> to tensor<8x16xf32>
+// CHECK:           %[[VAL_2:.*]] = llvm.mlir.constant(dense<2.000000e+00> : vector<8xf32>) : vector<8xf32>
+// CHECK:           %[[VAL_3:.*]] = llvm.mlir.constant(dense<1.000000e+00> : vector<8xf32>) : vector<8xf32>
+// CHECK:           %[[VAL_4:.*]] = llvm.fdiv %[[VAL_3]], %[[VAL_0]]  : vector<8xf32>
+// CHECK:           %[[VAL_5:.*]] = llvm.fmul %[[VAL_2]], %[[VAL_4]]  : vector<8xf32>
+    %cst = arith.constant dense<2.000000e+00> : tensor<8x16xf32>
+    %0 = arith.divf %cst, %arg0 fastmath<fast> : tensor<8x16xf32>
+    tt.return %0 : tensor<8x16xf32>
+  }
+}
