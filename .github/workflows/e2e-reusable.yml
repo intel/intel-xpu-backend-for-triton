@@ -50,7 +50,6 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   PYTHON_VERSION: "3.10"
   BENCHMARK_REPO: weishi-deng/benchmark.git
-  TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
   run_tests:
@@ -101,7 +100,6 @@ jobs:
         with:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
-          torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
 
       - name: Set benchmark repository (IPEX)
         if: ${{ inputs.install_ipex }}
