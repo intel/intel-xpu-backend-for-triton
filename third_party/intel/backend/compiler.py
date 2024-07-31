@@ -258,7 +258,7 @@ class XPUBackend(BaseBackend):
         intel.post_process_llir(llvm_mod)
 
         # Get some metadata
-        metadata["shared"] = src.get_int_attr("triton_gpu.shared") or 0
+        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
         ret = str(llvm_mod)
         del llvm_mod
         del context

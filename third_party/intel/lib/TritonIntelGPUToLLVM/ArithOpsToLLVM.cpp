@@ -1,6 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 using namespace mlir;
@@ -21,16 +22,12 @@ class ArithConstantOpLowering
   matchAndRewrite(mlir::arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto srcType = dyn_cast<ShapedType>(op.getType());
+    auto srcType = dyn_cast<RankedTensorType>(op.getType());
     if (!srcType || srcType.getNumElements() == 1)
       return failure();
 
-    // Only handle constant with tensor types.
-    if (!isa<RankedTensorType>(srcType))
-      return failure();
-
     Type dstType = getTypeConverter()->convertType(srcType);
-    if (!dstType)
+    if (!dstType || !dyn_cast_or_null<VectorType>(dstType))
       return failure();
 
     auto dstElementsAttr = dyn_cast<DenseElementsAttr>(op.getValue());
@@ -38,10 +35,8 @@ class ArithConstantOpLowering
       return failure();
 
     auto vecType = cast<VectorType>(dstType);
-    dstElementsAttr = dstElementsAttr.resizeSplat(vecType);
-    auto newOp =
-        rewriter.create<LLVM::ConstantOp>(loc, dstType, dstElementsAttr);
-    rewriter.replaceOp(op, newOp);
+    rewriter.replaceOpWithNewOp<LLVM::ConstantOp>(
+        op, dstType, dstElementsAttr.resizeSplat(vecType));
     return success();
   }
 };
@@ -54,24 +49,23 @@ class ArithDivFOpLowering
   LogicalResult
   matchAndRewrite(mlir::arith::DivFOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
     auto srcType = dyn_cast<ShapedType>(op.getType());
     if (!srcType)
       return failure();
 
     Type dstType = getTypeConverter()->convertType(srcType);
-    if (!dstType)
+    if (!dstType || !dyn_cast_or_null<VectorType>(dstType))
       return failure();
 
+    Location loc = op->getLoc();
     auto vecType = cast<VectorType>(dstType);
     auto attr = rewriter.getFloatAttr(vecType.getElementType(), 1.0);
     auto dstAttr = DenseElementsAttr::get(vecType, attr.getValue());
     auto one = rewriter.create<LLVM::ConstantOp>(loc, dstType, dstAttr);
     auto rcp =
         rewriter.create<LLVM::FDivOp>(loc, dstType, one, adaptor.getRhs());
-    auto res =
-        rewriter.create<LLVM::FMulOp>(loc, dstType, adaptor.getLhs(), rcp);
-    rewriter.replaceOp(op, res);
+    rewriter.replaceOpWithNewOp<LLVM::FMulOp>(op, dstType, adaptor.getLhs(),
+                                              rcp);
     return success();
   }
 };
