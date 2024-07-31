@@ -378,11 +378,12 @@ public:
       }
 
       auto glue = cast<ttgi::GlueOp>(definingOp);
-      for (Operation *user : result.getUsers())
+      for (Operation *user : result.getUsers()) {
         if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
           userIndexMap[extract] = idx + extract.getIndex();
           deleteList.push_back(extract.getOperation());
         }
+      }
 
       idx += glue->getOperands().size();
     }
@@ -417,10 +418,16 @@ public:
 
       if (llvm::any_of(arg.getUsers(), [](Operation *user) {
             return !isa<ttgi::ExtractOp>(user);
-          })) {
+          }))
         return false;
-      }
     }
+
+    // Bail out if the loop result is not used by an 'extract' operation.
+    if (forOp->getNumResults() == 1 &&
+        llvm::any_of(forOp.getResult(0).getUsers(), [](Operation *user) {
+          return !isa<ttgi::ExtractOp>(user);
+        }))
+      return false;
 
     return true;
   }
