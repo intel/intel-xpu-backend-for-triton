@@ -177,7 +177,7 @@ public:
 
     Value surfaceW = calculateSurface(ptrOp.getShape()[!transpose], true);
     Value surfaceH = calculateSurface(ptrOp.getShape()[transpose], false);
-    Value surfaceP = calculateSurface(ptrOp.getShape()[transpose], true);
+    Value surfaceP = calculateSurface(ptrOp.getStrides()[transpose], true);
     rewriter.restoreInsertionPoint(insertPoint);
 
     Value tensorPtr = adaptor.getPtr();
