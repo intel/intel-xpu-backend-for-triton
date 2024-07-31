@@ -16,6 +16,10 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
+#define VERIFY_OPERATION(op)                                                   \
+  if (failed(op.verify()))                                                     \
+    return failure();
+
 VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
   // Determine a vector type of the given `elemType` that covers 1/16 of
   // `tensorType`, i.e. the amout of data a single subgroup lane will work on.
@@ -202,17 +206,16 @@ public:
         dataSize = 32;
         blockWidth /= 2;
         Value tmp = offsetX;
-        offsetX = rewriter.create<LLVM::LShrOp>(loc, offsetY, i32_val(1));
+        offsetX = lshr(offsetY, i32_val(1));
         offsetY = tmp;
       }
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
           dataSize, blockWidth, blockHeight, vBlks, false /*transpose*/, vnni);
-      if (failed(load.verify())) {
-        // Explicitly invoke verifier because `triton_gen` ops are immediately
-        // lowered further to a builtin call.
-        return failure();
-      }
+      // Explicitly invoke verifier because `triton_gen` ops are immediately
+      // lowered further to a builtin call.
+      VERIFY_OPERATION(load)
+
       rewriter.replaceOp(op, bitcast(load, resType));
     } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
       if (transpose)
@@ -220,11 +223,11 @@ public:
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, TritonGEN::LoadCacheControl::L1C_L3C);
-      if (failed(newOp.verify())) {
-        // Explicitly invoke verifier because `triton_gen` ops are immediately
-        // lowered further to a builtin call.
+      // Explicitly invoke verifier because `triton_gen` ops are immediately
+      // lowered further to a builtin call.
+      if (failed(newOp.verify()))
         return failure();
-      }
+
       rewriter.eraseOp(op);
     } else {
       VectorType vectorType =
@@ -234,11 +237,11 @@ public:
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks,
           bitcast(adaptor.getValue(), vectorType));
-      if (failed(newOp.verify())) {
-        // Explicitly invoke verifier because `triton_gen` ops are immediately
-        // lowered further to a builtin call.
+      // Explicitly invoke verifier because `triton_gen` ops are immediately
+      // lowered further to a builtin call.
+      if (failed(newOp.verify()))
         return failure();
-      }
+
       rewriter.eraseOp(op);
     }
 
@@ -348,15 +351,15 @@ public:
     } break;
     default: {
       unsigned num = operands.size();
-      Value undef = rewriter.create<LLVM::UndefOp>(loc, dstType);
-      for (auto i = 0; i < num; ++i) {
-        undef = rewriter.create<LLVM::InsertElementOp>(
-            loc, dstType, undef, operands[i],
+      Value undef = undef(dstType);
+      for (int i = 0; i < num; ++i) {
+        undef = insert_element(
+            dstType, undef, operands[i],
             rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), i));
       }
       rewriter.replaceOp(op, undef);
     }
-    };
+    }
 
     return success();
   }
@@ -382,13 +385,12 @@ public:
       SmallVector<int32_t> indices(numElts);
       unsigned start = idx * numElts;
       std::iota(indices.begin(), indices.end(), start);
-      DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
-      result =
-          rewriter.create<LLVM::ShuffleVectorOp>(loc, vecTy, base, base, attr);
+      result = rewriter.create<LLVM::ShuffleVectorOp>(
+          loc, vecTy, base, base, rewriter.getDenseI32ArrayAttr(indices));
     } else {
-      Type i32Ty = rewriter.getI32Type();
-      Value idxVal = rewriter.create<LLVM::ConstantOp>(loc, i32Ty, idx);
-      result = rewriter.create<LLVM::ExtractElementOp>(loc, base, idxVal);
+      Value idxVal =
+          rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), idx);
+      result = extract_element(base, idxVal);
     }
     rewriter.replaceOp(op, result);
     return success();
@@ -408,15 +410,15 @@ public:
     Type srcTy = adaptor.getSrc().getType();
     VectorType vecTy = VectorType::get(1, srcTy);
     auto poison = rewriter.create<LLVM::PoisonOp>(loc, vecTy);
-    auto splat = rewriter.create<LLVM::InsertElementOp>(
-        loc, vecTy, poison, adaptor.getSrc(),
+    auto splat = insert_element(
+        vecTy, poison, adaptor.getSrc(),
         rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), 0));
     Type convertedTy = typeConverter->convertType(resultType);
     int64_t num = cast<VectorType>(convertedTy).getNumElements();
     SmallVector<int32_t> indices(num, 0);
-    DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
-    Value result = rewriter.create<LLVM::ShuffleVectorOp>(loc, convertedTy,
-                                                          splat, poison, attr);
+    Value result = rewriter.create<LLVM::ShuffleVectorOp>(
+        loc, convertedTy, splat, poison,
+        rewriter.getDenseI32ArrayAttr(indices));
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -430,10 +432,9 @@ public:
   matchAndRewrite(ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto mod = op->getParentOfType<mlir::ModuleOp>();
-    int subgroupSize =
-        mod->getAttrOfType<IntegerAttr>("triton_gpu.threads-per-warp").getInt();
+    int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     int axis = op.getAxis();
-    llvm::ArrayRef<int64_t> shape =
+    ArrayRef<int64_t> shape =
         cast<RankedTensorType>(op.getInputTypes()[0]).getShape();
     assert(shape[axis] <= subgroupSize &&
            "Reduce size should be split into subgroups");
@@ -446,16 +447,19 @@ public:
     if (!combineOp.hasOneBlock() ||
         combineOp.front().getOperations().size() != 2)
       return failure();
+
     Operation *combine = &*combineOp.front().getOperations().begin();
 
     // FIXME: support all possible reduction modes
-    mlir::gpu::AllReduceOperation redKind;
+    using AllReduceOperation = mlir::gpu::AllReduceOperation;
+    AllReduceOperation redKind;
     if (isa<arith::AddFOp>(combine))
-      redKind = mlir::gpu::AllReduceOperation::ADD;
+      redKind = AllReduceOperation::ADD;
     else if (isa<arith::MaxNumFOp>(combine))
-      redKind = mlir::gpu::AllReduceOperation::MAXNUMF;
+      redKind = AllReduceOperation::MAXNUMF;
     else
       llvm_unreachable("Unhandled reduction kind");
+
     Value result = rewriter.create<mlir::gpu::SubgroupReduceOp>(
         loc, convertedTy, adaptor.getSrcs()[0], redKind, true);
     rewriter.replaceOp(op, result);
@@ -484,7 +488,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // keep it simple for now
     rewriter.replaceOp(op, adaptor.getSrc());
     return success();
   }
@@ -503,8 +506,8 @@ public:
     Type resultPtrTy = typeConverter->convertType(resultType);
     Type resultElmTy = typeConverter->convertType(
         cast<PointerType>(resultType).getPointeeType());
-    Value result = rewriter.create<LLVM::GEPOp>(
-        loc, resultPtrTy, resultElmTy, adaptor.getPtr(), adaptor.getOffset());
+    Value result =
+        gep(resultPtrTy, resultElmTy, adaptor.getPtr(), adaptor.getOffset());
     rewriter.replaceOp(op, result);
     return success();
   }
