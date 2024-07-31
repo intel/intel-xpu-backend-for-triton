@@ -477,7 +477,8 @@ private:
     Type elemTy =
         this->getTypeConverter()->convertType(srcType.getElementType());
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
-    auto repetitions = dpasLayout.getDPASRepetitions(srcType.getShape(), 2);
+    auto repetitions =
+        dpasLayout.getDPASRepetitions(srcType.getShape(), 2 /*operand C*/);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
 
     int offset = 0;
@@ -555,21 +556,21 @@ private:
   LogicalResult
   lowerDpasToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                         ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
+    Location loc = op.getLoc();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
 
-    if (intel::isDpasToDotShortcut(srcTy, dstTy)) {
-      // reorder the elements to match the dot_operand layout.
-      ValueTable values =
-          getValuesFromDpasLayoutStruct(loc, rewriter, adaptor.getSrc(), srcTy);
-      Value view =
-          composeValuesToDotOperandLayoutStruct(loc, rewriter, values, dstTy);
+    if (!intel::isDpasToDotShortcut(srcTy, dstTy))
+      return failure();
 
-      rewriter.replaceOp(op, view);
-      return success();
-    }
-    return failure();
+    // reorder the elements to match the dot_operand layout.
+    ValueTable values =
+        getValuesFromDpasLayoutStruct(loc, rewriter, adaptor.getSrc(), srcTy);
+    Value view =
+        composeValuesToDotOperandLayoutStruct(loc, rewriter, values, dstTy);
+
+    rewriter.replaceOp(op, view);
+    return success();
   }
 
 private:
