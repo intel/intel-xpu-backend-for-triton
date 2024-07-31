@@ -490,8 +490,7 @@ public:
   matchAndRewrite(tt::BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // keep it simple for now
-    Value src = adaptor.getSrc();
-    rewriter.replaceOp(op, src);
+    rewriter.replaceOp(op, adaptor.getSrc());
     return success();
   }
 };

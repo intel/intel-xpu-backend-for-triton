@@ -34,7 +34,7 @@ class ArithConstantOpLowering
       return failure();
 
     auto dstElementsAttr = dyn_cast<DenseElementsAttr>(op.getValue());
-    if (!dstElementsAttr)
+    if (!dstElementsAttr || !dstElementsAttr.isSplat())
       return failure();
 
     auto vecType = cast<VectorType>(dstType);
