@@ -417,7 +417,7 @@ public:
         return false;
     }
 
-    // Bail out if any user of the loop result is not an 'extract' operation.
+    // Bail out if the loop result is not used by an 'extract' operation.
     if (forOp->getNumResults() == 1 &&
         llvm::any_of(forOp.getResult(0).getUsers(), [](Operation *user) {
           return !isa<ttgi::ExtractOp>(user);
