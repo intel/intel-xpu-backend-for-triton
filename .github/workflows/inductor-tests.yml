@@ -21,7 +21,6 @@ permissions: read-all
 env:
   PYTHON_VERSION: "3.10"
   PYTORCH_REPO: "pytorch/pytorch"
-  PYTORCH_XPU_OPS_COMMIT_ID: "39522db63ce045f52c9d61a286018c266cd00479"
 
 jobs:
   build:
@@ -60,7 +59,6 @@ jobs:
         with:
           repository: ${{ env.PYTORCH_REPO}}
           ref: ${{ inputs.pytorch_ref }}
-          torch_xpu_ops_commit: ${{ env.PYTORCH_XPU_OPS_COMMIT_ID }}
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton

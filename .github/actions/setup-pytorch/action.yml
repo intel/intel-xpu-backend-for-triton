@@ -16,9 +16,6 @@ inputs:
   ref:
     description: Branch, tag, commit id
     default: ""
-  torch_xpu_ops_commit:
-    description: Commit id of third_party/xpu_ops repository
-    default: ""
 runs:
   using: "composite"
   steps:
@@ -89,13 +86,6 @@ runs:
         ref: ${{ env.PYTORCH_COMMIT_ID }}
         submodules: recursive
         path: pytorch
-
-    - name: Update third_party/xpu_ops
-      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.repository == 'pytorch/pytorch' }}
-      shell: bash
-      run: |
-        cd pytorch/third_party
-        echo ${{ inputs.torch_xpu_ops_commit }} > xpu.txt
 
     - name: Apply additional PR patches
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.repository == 'pytorch/pytorch' }}
