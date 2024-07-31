@@ -471,13 +471,13 @@ private:
     auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcType.getEncoding());
 
     size_t totalElems = elems.size();
-    size_t numElemsPerOperand =
+    auto numElemsPerOperand =
         product<unsigned>(dpasLayout.getDPASInstShapeC()) /
         dpasLayout.getSubGroupSize();
     Type elemTy =
         this->getTypeConverter()->convertType(srcType.getElementType());
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
-    auto repetitions =
+    SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(srcType.getShape(), 2 /*operand C*/);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
 
@@ -508,7 +508,8 @@ private:
     auto dotLayout = dyn_cast<DotOperandEncodingAttr>(dstType.getEncoding());
     auto dpasLayout = dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
     unsigned opIdx = dotLayout.getOpIdx();
-    auto repetitions = dpasLayout.getDPASRepetitions(dstType.getShape(), opIdx);
+    SmallVector<int64_t> repetitions =
+        dpasLayout.getDPASRepetitions(dstType.getShape(), opIdx);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     unsigned repOuter = 0u;
     unsigned repInner = 0u;
@@ -526,7 +527,7 @@ private:
     }
 
     // TODO: Operands B requires extra steps to combine [8, 16] to [16, 16].
-    std::vector<Value> elems;
+    SmallVector<Value> elems;
     for (int m = 0; m < repOuter; ++m) {
       for (int k = 0; k < repInner; ++k) {
         for (int repOuterIdx = 0; repOuterIdx < repClusterOuter;

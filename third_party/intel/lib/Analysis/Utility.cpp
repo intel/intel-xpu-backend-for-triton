@@ -10,8 +10,8 @@ bool isDpasToDotShortcut(RankedTensorType dpasTy, RankedTensorType dotTy) {
   // dpas -> dot_operand conversion when:
   if (dpasLayout && dotOperandLayout &&
       dotOperandLayout.getParent() == dpasLayout) {
-    auto shapeC = dpasLayout.getDPASInstShapeC();
-    auto shapeA = dpasLayout.getDPASInstShapeA();
+    SmallVector<unsigned> shapeC = dpasLayout.getDPASInstShapeC();
+    SmallVector<unsigned> shapeA = dpasLayout.getDPASInstShapeA();
     if (dotOperandLayout.getOpIdx() == 0 && /* A operands. */
         dpasLayout.getWarpsPerCTA().back() ==
             1 && /* The warpsPerCTA is [..., 1]. */
