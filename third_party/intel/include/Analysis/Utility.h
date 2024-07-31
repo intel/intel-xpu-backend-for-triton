@@ -3,16 +3,10 @@
 
 #include "triton/Analysis/Utility.h"
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-namespace intel {
+namespace mlir::triton::gpu::intel {
 
-bool isDpasToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
+bool isDpasToDotShortcut(RankedTensorType dpasTy, RankedTensorType dotTy);
 
-}
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_INTEL_ANALYSIS_UTILITY_H

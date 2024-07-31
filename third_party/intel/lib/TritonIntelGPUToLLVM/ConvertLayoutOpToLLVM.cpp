@@ -512,18 +512,15 @@ private:
     unsigned repOuter = 0u;
     unsigned repInner = 0u;
     unsigned repClusterOuter = 0u;
-    unsigned repClusterInner = 0u;
     if (opIdx == 0) {
       // operand A
       repOuter = repetitions[0];
       repInner = repetitions[1];
       repClusterOuter = repCluster[0];
-      repClusterInner = 1;
     } else {
       // operand B
       repOuter = repetitions[1];
       repInner = repetitions[0];
-      repClusterInner = 1;
       repClusterOuter = repCluster[1];
     }
 
@@ -533,21 +530,19 @@ private:
       for (int k = 0; k < repInner; ++k) {
         for (int repOuterIdx = 0; repOuterIdx < repClusterOuter;
              ++repOuterIdx) {
-          for (int repInnerIdx = 0; repInnerIdx < repClusterInner;
-               ++repInnerIdx) {
-            unsigned offsetM = m * repClusterOuter + repOuterIdx;
-            unsigned offsetN = k * repClusterInner + repInnerIdx;
-            Value matVal = vals.at({offsetM, offsetN});
-            VectorType vecType = cast<mlir::VectorType>(matVal.getType());
-            Type valTy = vecType.getElementType();
-            for (int i = 0; i < vecType.getNumElements(); ++i) {
-              Value val = extract_element(valTy, matVal, i32_val(i));
-              elems.push_back(val);
-            }
+          unsigned offsetM = m * repClusterOuter + repOuterIdx;
+          unsigned offsetN = k;
+          Value matVal = vals.at({offsetM, offsetN});
+          VectorType vecType = cast<mlir::VectorType>(matVal.getType());
+          Type valTy = vecType.getElementType();
+          for (int i = 0; i < vecType.getNumElements(); ++i) {
+            Value val = extract_element(valTy, matVal, i32_val(i));
+            elems.push_back(val);
           }
         }
       }
     }
+
     Type elemTy =
         this->getTypeConverter()->convertType(dstType.getElementType());
     Type structTy = LLVM::LLVMStructType::getLiteral(
