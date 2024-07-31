@@ -48,42 +48,47 @@ struct PrintOpConversion
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
       LLVM::intel::llPrintf(rewriter, formatStr,
                             {pid[0], pid[1], pid[2], prefixStr});
-    } else {
-      for (size_t i = 0; i < op.getNumOperands(); i++) {
-        // Elements of the tensor that are resident in this GPU thread.
-        auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
+      rewriter.eraseOp(op);
+      return success();
+    }
 
-        // Get the indices of `elems` within the tensor.  Note that if `elems`
-        // has an "interesting" layout, then these will not be in any
-        // particularly nice order.
+    assert(op.getNumOperands() == op.getIsSigned().size() &&
+           "All operands must have 'isSigned' attribute");
 
-        // Extract the shape of the tensor being printed and use it to figure
-        // out how many digits we need for each of the dimensions.
-        SmallVector<int, 8> dimWidths;
-        SmallVector<SmallVector<Value>> indices;
-        if (auto rankedTy =
-                dyn_cast<RankedTensorType>(op.getOperand(i).getType())) {
-          indices =
-              ::intel::emitIndices(loc, rewriter, targetInfo,
-                                   rankedTy.getEncoding(), rankedTy, true);
-          for (int64_t dim : rankedTy.getShape()) {
-            if (dim > 0) {
-              dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
-            } else {
-              dimWidths.push_back(0);
-            }
+    for (size_t i = 0; i < op.getNumOperands(); i++) {
+      bool isSigned = op.getIsSigned()[i] > 0;
+      // Elements of the tensor that are resident in this GPU thread.
+      auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
+
+      // Get the indices of `elems` within the tensor.  Note that if `elems`
+      // has an "interesting" layout, then these will not be in any
+      // particularly nice order.
+
+      // Extract the shape of the tensor being printed and use it to figure
+      // out how many digits we need for each of the dimensions.
+      SmallVector<int, 8> dimWidths;
+      SmallVector<SmallVector<Value>> indices;
+      if (auto rankedTy =
+              dyn_cast<RankedTensorType>(op.getOperand(i).getType())) {
+        indices = ::intel::emitIndices(loc, rewriter, targetInfo,
+                                       rankedTy.getEncoding(), rankedTy, true);
+        for (int64_t dim : rankedTy.getShape()) {
+          if (dim > 0) {
+            dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
+          } else {
+            dimWidths.push_back(0);
           }
-        } else {
-          // We're printing a scalar.
-          assert(elems.size() == 1);
-          indices.push_back({});
         }
+      } else {
+        // We're printing a scalar.
+        assert(elems.size() == 1);
+        indices.push_back({});
+      }
 
-        if (!elems.empty()) {
-          printTensor(prefixStr, /*operand=*/i,
-                      /*numOperands=*/op.getNumOperands(), elems, pid, indices,
-                      dimWidths, op.getHex(), rewriter);
-        }
+      if (!elems.empty()) {
+        printTensor(prefixStr, /*operand=*/i,
+                    /*numOperands=*/op.getNumOperands(), elems, pid, indices,
+                    dimWidths, op.getHex(), rewriter, isSigned);
       }
     }
     rewriter.eraseOp(op);
@@ -94,7 +99,7 @@ struct PrintOpConversion
                    ArrayRef<Value> elems, std::array<Value, 3> pid,
                    ArrayRef<SmallVector<Value>> indices,
                    ArrayRef<int> dimWidths, bool hex,
-                   ConversionPatternRewriter &rewriter) const {
+                   ConversionPatternRewriter &rewriter, bool isSigned) const {
     assert(!elems.empty());
     assert(elems.size() == indices.size());
     assert(dimWidths.size() == indices.front().size());
@@ -161,7 +166,7 @@ struct PrintOpConversion
       }
 
       auto elem = elems[i];
-      os << getFormatSubstr(elem, hex);
+      os << getFormatSubstr(elem, hex, /*width=*/std::nullopt, isSigned);
       printfOperands.push_back(elem);
 
       // It's the same format string each iteration, but it's a lot easier if we
@@ -179,12 +184,13 @@ struct PrintOpConversion
   }
 
   std::string getFormatSubstr(Value value, bool hex = false,
-                              std::optional<int> width = std::nullopt) const {
+                              std::optional<int> width = std::nullopt,
+                              bool isSigned = false) const {
     Type type = value.getType();
+    // If the `value` is a pointer, just return %p.
     if (isa<LLVM::PointerType>(type)) {
       return "%p";
     }
-
     // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
     // type (so 4 for fp16, 8 for int32, 16 for int64).
     if (hex) {
@@ -207,16 +213,11 @@ struct PrintOpConversion
       return prefix + "p";
     } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
       return prefix + "f";
-    } else if (type.isSignedInteger()) {
+    } else if (type.isInteger()) {
       if (type.getIntOrFloatBitWidth() == 64)
-        return prefix + "lli";
+        return prefix + (isSigned ? "lli" : "llu");
       else
-        return prefix + "i";
-    } else if (type.isUnsignedInteger() || type.isSignlessInteger()) {
-      if (type.getIntOrFloatBitWidth() == 64)
-        return prefix + "llu";
-      else
-        return prefix + "u";
+        return prefix + (isSigned ? "i" : "u");
     }
     assert(false && "not supported type");
     return "";

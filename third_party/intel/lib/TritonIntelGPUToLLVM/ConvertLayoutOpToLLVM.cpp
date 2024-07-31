@@ -4,6 +4,8 @@
 
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -591,12 +593,24 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = op.getContext();
-
     const auto &shape = op.getType().getShape();
-    std::optional<LinearLayout> srcLayout =
-        gpu::toLinearLayout(shape, op.getSrc().getType().getEncoding());
-    std::optional<LinearLayout> dstLayout =
-        gpu::toLinearLayout(shape, op.getType().getEncoding());
+    std::optional<LinearLayout> srcLayout;
+    auto srcTy = op.getSrc().getType();
+
+    if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcTy.getEncoding())) {
+      srcLayout = gpu::DPAStoLinearLayout(shape, dpasLayout);
+    } else {
+      srcLayout = gpu::toLinearLayout(shape, srcTy.getEncoding());
+    }
+
+    std::optional<LinearLayout> dstLayout;
+    auto dstTy = op.getType();
+    if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(dstTy.getEncoding())) {
+      dstLayout = gpu::DPAStoLinearLayout(shape, dpasLayout);
+    } else {
+      dstLayout = gpu::toLinearLayout(shape, dstTy.getEncoding());
+    }
+
     if (!srcLayout.has_value() || !dstLayout.has_value()) {
       return failure();
     }
