@@ -89,6 +89,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_OPT_4("add_triton_annotate_module",
                          gpu::intel::createTritonAnnotateModule, unsigned, bool,
                          bool, unsigned);
+  ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
+                     gpu::intel::createTritonIntelGPUReduceDataDuplication);
 }
 
 void init_triton_intel(py::module &&m) {

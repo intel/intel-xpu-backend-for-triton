@@ -1270,18 +1270,13 @@ The parent field is the layout of d.
 kWidth defines number of consecutive elements stored by one thread along k dimension.
 Some layouts do not use this parameter, either because they have a fixed number of
 elements along the K dim, or they use all elements of the tensor along the K dim.
-
-`isTransposed` indicates the result tensor is transposed so that it can be loaded with
-a transpose flag. This is used in the case of chained dot (E.g. Flash-Attention kernel).
   }];
 
   let parameters = (
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    DefaultValuedParameter<"unsigned", "0">:$kWidth,
-    // intel specific
-    DefaultValuedParameter<"bool", "false">:$isTransposed
+    DefaultValuedParameter<"unsigned", "0">:$kWidth
   );
 
   let builders = [
@@ -1291,27 +1286,15 @@ a transpose flag. This is used in the case of chained dot (E.g. Flash-Attention 
                      "Type":$eltTy), [{
       NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
       if (!parentAttr || !parentAttr.isAmpere())
-        return $_get(context, opIdx, parent, 0, false);
+        return $_get(context, opIdx, parent, 0);
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned MMAv2kWidth = 32 / bitwidth;
-      return $_get(context, opIdx, parent, MMAv2kWidth, false);
-    }]>,
-    AttrBuilder<(ins "unsigned":$opIdx,
-                     "Attribute":$parent,
-                     "unsigned":$kWidth), [{
-      return $_get(context, opIdx, parent, kWidth, false);
-    }]>,
-    AttrBuilder<(ins "unsigned":$opIdx,
-                     "Attribute":$parent,
-                     "unsigned":$kWidth,
-                     "bool":$isTransposed), [{
-      return $_get(context, opIdx, parent, kWidth, isTransposed);
+      return $_get(context, opIdx, parent, MMAv2kWidth);
     }]>
   ];
 
   let assemblyFormat = "`<` `{` struct(params) `}` `>`";
   let genVerifyDecl = 1;
-  let skipDefaultBuilders = 1;
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getContigPerThread() {
       return getSizePerThread();

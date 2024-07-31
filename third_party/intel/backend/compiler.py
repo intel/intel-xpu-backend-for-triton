@@ -46,6 +46,7 @@ class XPUOptions:
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
+    grf_mode: tuple = ('small', 'large', 'auto', 'default')
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -267,16 +268,27 @@ class XPUBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def make_spv(src, metadata):
+    def make_spv(src, metadata, options):
         ret, name = intel.translate_to_spirv(src)
         metadata["name"] = name
+        if options.grf_mode == 'small':
+            metadata["build_flags"] = "-cl-intel-128-GRF-per-thread"
+        elif options.grf_mode == 'large':
+            if options.num_warps > 32:
+                raise RuntimeError(f"grf_mode = large cannot be used with num_warps > 32")
+            metadata["build_flags"] = "-cl-intel-256-GRF-per-thread"
+        elif options.grf_mode == 'auto':
+            metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
+        else:
+            metadata["build_flags"] = ""
+
         return ret
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
-        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata)
+        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
 
     @functools.lru_cache()
     def hash(self):

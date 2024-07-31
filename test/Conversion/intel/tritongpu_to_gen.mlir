@@ -1592,7 +1592,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 // -----
 
 // CHECK-LABEL: sum_reduction
-// CHECK: llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_addi(%{{.*}}) {{.*}}passthrough = ["convergent"]{{.*}} : (i32) -> i32
+// CHECK: llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_addi(%{{.*}}) {{.*}} : (i32) -> i32
 // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
 // CHECK: llvm.call spir_funccc @_Z30sub_group_clustered_reduce_addij(%{{.*}}, %{{.*}}) {{.*}}passthrough = ["convergent"]{{.*}} : (i32, i32) -> i32
 
@@ -1791,6 +1791,35 @@ module attributes {"triton_gpu.target" = "xpu:DEVICE_ARCH.PVC", "triton_gpu.num-
 }
 
 // -----
+#blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: test_local_store
+  // CHECK: llvm.store
+  tt.func public @test_local_store(%arg0: tensor<1xf32, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %0 = triton_gpu.local_alloc {allocation.offset = 0 : i32} : () -> !tt.memdesc<1xf32, #shared, #triton_gpu.shared_memory, mutable>
+    triton_gpu.local_store %arg0, %0 : tensor<1xf32, #blocked> -> !tt.memdesc<1xf32, #shared, #triton_gpu.shared_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+#blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #triton_gpu.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:90", "triton_gpu.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: test_local_store_subview
+  // CHECK: llvm.store
+  tt.func public @test_local_store_subview(%arg0: tensor<1xf32, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %0 = triton_gpu.local_alloc {allocation.offset = 0 : i32} : () -> !tt.memdesc<1xf32, #shared, #triton_gpu.shared_memory, mutable>
+    %sv = triton_gpu.memdesc_subview %0[%c0_i32] : !tt.memdesc<1xf32, #shared, #triton_gpu.shared_memory, mutable> -> !tt.memdesc<1xf32, #shared, #triton_gpu.shared_memory, mutable>
+    triton_gpu.local_store %arg0, %sv : tensor<1xf32, #blocked> -> !tt.memdesc<1xf32, #shared, #triton_gpu.shared_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
 
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
@@ -1799,6 +1828,34 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK: llvm.call @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32, !llvm.ptr<2>, !llvm.ptr<1>) -> i32
     // CHECK-NEXT: llvm.call @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32, !llvm.ptr<2>, !llvm.ptr<1>) -> i32
     tt.print "ptr: " {hex = false, isSigned = array<i32: 0>} : %arg0 : tensor<256x!tt.ptr<i32>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // Test that %u format specifier is used if isSigned is false
+  // CHECK: llvm.mlir.global internal constant @printfFormat_0("{{.*}}%s%u\0A\00")
+  // CHECK-NEXT: llvm.mlir.global internal constant @printfPrefix_0("int32 tensor: \00")
+  // CHECK-LABEL: print_int32_tensor_issigned_off
+  // CHECK: llvm.call @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, !llvm.ptr<2>, i32) -> i32
+  tt.func @print_int32_tensor_issigned_off(%arg0 : i32) {
+    tt.print "int32 tensor: " {hex = false, isSigned = array<i32: 0>} : %arg0 : i32
+    tt.return
+  }
+}
+
+// -----
+#blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+  // Test that %i format specifier is used if isSigned is true
+  // CHECK: llvm.mlir.global internal constant @printfFormat_0("{{.*}}%s%i\0A\00")
+  // CHECK-NEXT: llvm.mlir.global internal constant @printfPrefix_0("int32 tensor: \00")
+  // CHECK-LABEL: print_int32_tensor_issigned_on
+  // CHECK: llvm.call @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, !llvm.ptr<2>, i32) -> i32
+  tt.func @print_int32_tensor_issigned_on(%arg0 : i32) {
+    tt.print "int32 tensor: " {hex = false, isSigned = array<i32: 1>} : %arg0 : i32
     tt.return
   }
 }

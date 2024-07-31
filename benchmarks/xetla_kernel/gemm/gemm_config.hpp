@@ -533,10 +533,10 @@ public:
   static constexpr size_t mat_k = 128;
   static constexpr size_t mat_n = 16384;
   static constexpr size_t wg_m = 8;
-  static constexpr size_t wg_n = 1024;
+  static constexpr size_t wg_n = 512;
   static constexpr size_t sg_m = 8;
-  static constexpr size_t sg_n = 32;
-  static constexpr size_t sg_k = 32;
+  static constexpr size_t sg_n = 16;
+  static constexpr size_t sg_k = 16;
   static constexpr uint32_t local_kslicing = 1;
   static constexpr uint32_t global_kslicing = 1;
   static constexpr gpu::xetla::mem_layout layout_a =
