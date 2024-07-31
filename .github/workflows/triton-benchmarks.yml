@@ -51,21 +51,7 @@ jobs:
       - name: Setup IPEX
         uses: ./.github/actions/setup-ipex
 
-      - name: Generate Triton cache key
-        id: triton-key
-        run: |
-          COMPOSITE_KEY=$(echo $PYTHON_VERSION $GITHUB_SHA | sha256sum - | cut -d\  -f1)
-          echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
-
-      - name: Load Triton wheels from a cache
-        id: triton-cache
-        uses: ./.github/actions/load
-        with:
-          path: python/dist
-          key: ${{ steps.triton-key.outputs.key }}
-
       - name: Build Triton wheels
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/setup-triton
         with:
           command: DEBUG=1 python setup.py bdist_wheel
@@ -73,13 +59,6 @@ jobs:
       - name: Install Triton
         run: |
           pip install python/dist/*.whl
-
-      - name: Save Triton wheels to a cache
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.triton-cache.outputs.path }}
-          dest: ${{ steps.triton-cache.outputs.dest }}
 
       - name: Install benchmark dependencies
         run: |
@@ -171,21 +150,7 @@ jobs:
       - name: Setup IPEX
         uses: ./.github/actions/setup-ipex
 
-      - name: Generate Triton cache key
-        id: triton-key
-        run: |
-          COMPOSITE_KEY=$(echo $PYTHON_VERSION $GITHUB_SHA | sha256sum - | cut -d\  -f1)
-          echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
-
-      - name: Load Triton wheels from a cache
-        id: triton-cache
-        uses: ./.github/actions/load
-        with:
-          path: python/dist
-          key: ${{ steps.triton-key.outputs.key }}
-
       - name: Build Triton wheels
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
         uses: ./llvm-target/.github/actions/setup-triton
         with:
           command: DEBUG=1 python setup.py bdist_wheel
@@ -193,13 +158,6 @@ jobs:
       - name: Install Triton
         run: |
           pip install python/dist/*.whl
-
-      - name: Save Triton wheels to a cache
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.triton-cache.outputs.path }}
-          dest: ${{ steps.triton-cache.outputs.dest }}
 
       - name: Install benchmark dependencies
         run: |
@@ -277,21 +235,7 @@ jobs:
       - name: Setup IPEX
         uses: ./.github/actions/setup-ipex
 
-      - name: Generate Triton cache key
-        id: triton-key
-        run: |
-          COMPOSITE_KEY=$(echo $PYTHON_VERSION $GITHUB_SHA | sha256sum - | cut -d\  -f1)
-          echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
-
-      - name: Load Triton wheels from a cache
-        id: triton-cache
-        uses: ./.github/actions/load
-        with:
-          path: python/dist
-          key: ${{ steps.triton-key.outputs.key }}
-
       - name: Build Triton wheels
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
         uses: ./llvm-target/.github/actions/setup-triton
         with:
           command: DEBUG=1 python setup.py bdist_wheel
@@ -299,13 +243,6 @@ jobs:
       - name: Install Triton
         run: |
           pip install python/dist/*.whl
-
-      - name: Save Triton wheels to a cache
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.triton-cache.outputs.path }}
-          dest: ${{ steps.triton-cache.outputs.dest }}
 
       - name: Install benchmark dependencies
         run: |
