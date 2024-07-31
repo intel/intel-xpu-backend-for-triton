@@ -27,7 +27,7 @@ class ArithConstantOpLowering
       return failure();
 
     Type dstType = getTypeConverter()->convertType(srcType);
-    if (!dstType || !dyn_cast_or_null<VectorType>(dstType))
+    if (!dyn_cast_or_null<VectorType>(dstType))
       return failure();
 
     auto dstElementsAttr = dyn_cast<DenseElementsAttr>(op.getValue());
@@ -54,7 +54,7 @@ class ArithDivFOpLowering
       return failure();
 
     Type dstType = getTypeConverter()->convertType(srcType);
-    if (!dstType || !dyn_cast_or_null<VectorType>(dstType))
+    if (!dyn_cast_or_null<VectorType>(dstType))
       return failure();
 
     Location loc = op->getLoc();
