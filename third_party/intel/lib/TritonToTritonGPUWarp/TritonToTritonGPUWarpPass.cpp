@@ -23,11 +23,13 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "llvm/ADT/APSInt.h"
@@ -140,6 +142,7 @@ public:
     MLIRContext *ctx = &getContext();
     ModuleOp mod = getOperation();
     auto i32Ty = IntegerType::get(ctx, 32);
+    ttg::BlockedEncodingAttr defaultLayout;
     // sub-function should be inlined up to now
     for (auto func : mod.getOps<tt::FuncOp>()) {
       bool hasBlockPointer = false;
@@ -201,6 +204,7 @@ public:
           auto ctaLayout = ttg::CTALayoutAttr::get(ctx, {1, 1}, {1, 1}, {1, 0});
           auto dotCLayout = ttg::BlockedEncodingAttr::get(
               ctx, sizePerWarp, {1, 1}, warpsPerCTA, {1, 0}, ctaLayout);
+          defaultLayout = dotCLayout;
           auto dotALayout = ttg::DotOperandEncodingAttr::get(
               ctx, 0, dotCLayout, aType.getElementType());
           auto dotBLayout = ttg::DotOperandEncodingAttr::get(
@@ -252,7 +256,7 @@ public:
           transformStoreOp(store);
         } else if (numResults != 0) {
           assert(numResults == 1 && "only support 1 result");
-          transformGenericOp(op, valueAttrMap);
+          transformGenericOp(op, valueAttrMap, defaultLayout);
         }
         return WalkResult::advance();
       });
@@ -267,7 +271,8 @@ public:
                  IntegerAttr::get(i32Ty, llvm::APInt(32, 1)));
   }
 
-  void transformGenericOp(Operation *op, DenseMap<Value, Attribute> &map) {
+  void transformGenericOp(Operation *op, DenseMap<Value, Attribute> &map,
+                          ttg::BlockedEncodingAttr defaultLayout) {
     Dialect *arithDialect = op->getContext()->getLoadedDialect("arith");
     Dialect *mathDialect = op->getContext()->getLoadedDialect("math");
     auto result = op->getResults()[0];
@@ -288,6 +293,34 @@ public:
       auto newType = addAttrToType(result.getType(), attr);
       result.setType(newType);
     }
+    // add LayoutAttr to non-dot related tt.make_tensor_ptr
+    else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
+      auto result = ptrOp.getResult();
+      auto ptrType = cast<tt::PointerType>(result.getType());
+      if (cast<RankedTensorType>(ptrType.getPointeeType()).getEncoding())
+        return;
+      auto newType = addAttrToType(result.getType(), defaultLayout);
+      result.setType(cast<tt::PointerType>(newType));
+    } else if (auto load = dyn_cast<tt::LoadOp>(op)) {
+      transformLoadOp(load);
+    }
+  }
+
+  // assume the below code sequence for now
+  // %ptr = tt.make_tensor_ptr
+  // tt.store %ptr, %value
+  void transformLoadOp(tt::LoadOp op) {
+
+    auto result = op.getResult();
+    for (auto &use : result.getUses()) {
+      if (!dyn_cast<arith::AddFOp>(use.getOwner())) {
+        return;
+      }
+    }
+    auto ptrType = dyn_cast<tt::PointerType>(op.getPtr().getType());
+    auto attr = cast<RankedTensorType>(ptrType.getPointeeType()).getEncoding();
+    auto newType = addAttrToType(result.getType(), attr);
+    result.setType(newType);
   }
 
   // assume the below code sequence for now
@@ -300,6 +333,7 @@ public:
     auto newType = addAttrToType(result.getType(), attr);
     result.setType(cast<tt::PointerType>(newType));
   }
+
   void transformScfForOp(scf::ForOp op) {
     auto body = op.getBody();
     for (auto [lhs, rhs] :

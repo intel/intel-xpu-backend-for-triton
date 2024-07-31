@@ -189,8 +189,10 @@ public:
     Value offsetY = extract_element(tensorPtr, i32_val(1));
 
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      assert(idxAttr && "Dot index attribute missing");
-      unsigned idx = idxAttr.getInt();
+      // assert(idxAttr && "Dot index attribute missing");
+      // unsigned idx = idxAttr.getInt();
+      /// if no DotIdx attribute, assume it is 0
+      unsigned idx = idxAttr ? idxAttr.getInt() : 0;
       Type resType =
           this->getTypeConverter()->convertType(op->getResult(0).getType());
       bool isDword = idx == 1 || elemType == f32_ty;
