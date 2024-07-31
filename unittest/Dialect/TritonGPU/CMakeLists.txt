@@ -13,3 +13,9 @@ add_triton_ut(
 	SRCS LinearLayoutConversionsTest.cpp
 	LIBS TritonGPUIR
 )
+
+add_triton_ut(
+	NAME DPAStoLinearLayout
+	SRCS DPAStoLinearLayoutTest.cpp
+	LIBS TritonIntelGPUIR
+)
