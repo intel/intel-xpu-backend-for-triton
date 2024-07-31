@@ -44,9 +44,9 @@ run_benchmark 8 32 2048 64
 run_benchmark 4 32 4096 64
 run_benchmark 2 32 8192 64
 run_benchmark 1 32 16384 64
-run_benchmark 32 16 512 128
-run_benchmark 16 16 1024 128
-run_benchmark 8 16 2048 128
-run_benchmark 4 16 4096 128
-run_benchmark 2 16 8192 128
-run_benchmark 1 16 16384 128
+#run_benchmark 32 16 512 128
+#run_benchmark 16 16 1024 128
+#run_benchmark 8 16 2048 128
+#run_benchmark 4 16 4096 128
+#run_benchmark 2 16 8192 128
+#run_benchmark 1 16 16384 128
