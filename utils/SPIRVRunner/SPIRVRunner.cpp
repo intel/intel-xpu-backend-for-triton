@@ -3,8 +3,10 @@
 #include <torch/torch.h>
 
 #include <fstream>
+#include <ios>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "sycl_functions.h"
 
@@ -88,7 +90,7 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
 /** SYCL Functions **/
 std::tuple<sycl::kernel_bundle<sycl::bundle_state::executable> *,
            sycl::kernel *, int32_t, int32_t>
-loadBinary(const std::string &kernel_name, uint32_t *binary_ptr,
+loadBinary(const std::string &kernel_name, uint8_t *binary_ptr,
            const size_t binary_size, const size_t deviceId) {
   int32_t n_regs = 0;
   int32_t n_spills = 0;
@@ -104,8 +106,9 @@ loadBinary(const std::string &kernel_name, uint32_t *binary_ptr,
   auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-  auto l0_module = checkSyclErrors(
-      create_module(l0_context, l0_device, binary_ptr, binary_size));
+  const char *build_flags = "";
+  auto l0_module = checkSyclErrors(create_module(
+      l0_context, l0_device, binary_ptr, binary_size, build_flags));
   auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
 
   ze_kernel_properties_t props;
@@ -340,7 +343,7 @@ int main() {
   std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
 
   auto [kernel_bundle, kernel, n_regs, n_spills] =
-      loadBinary("_kernel", reinterpret_cast<uint32_t *>(spirv.data()),
+      loadBinary("_kernel", reinterpret_cast<uint8_t *>(spirv.data()),
                  spirv.size() / sizeof(uint32_t), 0);
 
   // TODO: this seems wrong from upstream code?

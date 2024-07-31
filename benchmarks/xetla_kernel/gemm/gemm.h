@@ -60,24 +60,12 @@ sycl::event gemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
   data_type_acc *Acc = static_cast<data_type_acc *>(_Acc);
   uint32_t *Cnt = static_cast<uint32_t *>(_Cnt);
 
-  // here keep the same dim in CM and esimd, diff the index in kernel code
-  size_t group_range_m = (matrix_m % wg_tile_m == 0)
-                             ? matrix_m / wg_tile_m
-                             : (matrix_m / wg_tile_m) + 1;
-  size_t group_range_n = (matrix_n % wg_tile_n == 0)
-                             ? matrix_n / wg_tile_n
-                             : (matrix_n / wg_tile_n) + 1;
-  size_t subgroup_range_m = (wg_tile_m % sg_tile_m == 0)
-                                ? wg_tile_m / sg_tile_m
-                                : (wg_tile_m / sg_tile_m) + 1;
-  size_t subgroup_range_n = (wg_tile_n % sg_tile_n == 0)
-                                ? wg_tile_n / sg_tile_n
-                                : (wg_tile_n / sg_tile_n) + 1;
-  cl::sycl::range<3> group_range{Test::global_kslicing, group_range_m,
-                                 group_range_n};
-  cl::sycl::range<3> local_range{Test::local_kslicing, subgroup_range_m,
-                                 subgroup_range_n};
-  cl::sycl::nd_range<3> nd_range(group_range * local_range, local_range);
+  cl::sycl::range<3> group_range = {batch,
+                                    (matrix_m + wg_tile_m - 1) / wg_tile_m,
+                                    (matrix_n + wg_tile_n - 1) / wg_tile_n};
+  cl::sycl::range<3> local_range = {1, (wg_tile_m + sg_tile_m - 1) / sg_tile_m,
+                                    (wg_tile_n + sg_tile_n - 1) / sg_tile_n};
+  cl::sycl::nd_range<3> nd_range = {group_range * local_range, local_range};
 
   std::vector<sycl::kernel_id> kernelId = {sycl::get_kernel_id<Test>()};
 

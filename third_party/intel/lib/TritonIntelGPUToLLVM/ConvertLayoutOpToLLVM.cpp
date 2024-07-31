@@ -3,6 +3,8 @@
 #include "Utility.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -401,10 +403,11 @@ private:
     // Potentially we need to store for multiple CTAs in this replication
     auto accumNumReplicates = product<unsigned>(numReplicates);
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    unsigned inVec = 0;
-    unsigned outVec = 0;
-    auto origRepShape = getRepShapeForCvtLayout(op);
-    auto paddedRepShape = getScratchConfigForCvtLayout(op, inVec, outVec);
+    auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
+    unsigned inVec = scratchConfig.inVec;
+    unsigned outVec = scratchConfig.outVec;
+    auto paddedRepShape = scratchConfig.paddedRepShape;
+    auto origRepShape = scratchConfig.repShape;
     if (isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>(
             getElementTypeOrSelf(op.getType()))) {
       assert(inVec % 4 == 0 && "conversion not supported for FP8E4M3B15");
@@ -470,12 +473,24 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = op.getContext();
-
     const auto &shape = op.getType().getShape();
-    std::optional<LinearLayout> srcLayout =
-        gpu::toLinearLayout(shape, op.getSrc().getType().getEncoding());
-    std::optional<LinearLayout> dstLayout =
-        gpu::toLinearLayout(shape, op.getType().getEncoding());
+    std::optional<LinearLayout> srcLayout;
+    auto srcTy = op.getSrc().getType();
+
+    if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcTy.getEncoding())) {
+      srcLayout = gpu::DPAStoLinearLayout(shape, dpasLayout);
+    } else {
+      srcLayout = gpu::toLinearLayout(shape, srcTy.getEncoding());
+    }
+
+    std::optional<LinearLayout> dstLayout;
+    auto dstTy = op.getType();
+    if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(dstTy.getEncoding())) {
+      dstLayout = gpu::DPAStoLinearLayout(shape, dpasLayout);
+    } else {
+      dstLayout = gpu::toLinearLayout(shape, dstTy.getEncoding());
+    }
+
     if (!srcLayout.has_value() || !dstLayout.has_value()) {
       return failure();
     }

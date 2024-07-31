@@ -1396,6 +1396,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
 
     M = lhs.type.shape[-2]
     N = rhs.type.shape[-1]
+    K = lhs.type.shape[-1]
     B = lhs.type.shape[0] if lhs_rank == 3 else None
     ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
     if acc is None:
@@ -1410,6 +1411,9 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
             max_num_imprecise_acc = builder.options.max_num_imprecise_acc_default
         else:
             max_num_imprecise_acc = 0
+    else:
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and max_num_imprecise_acc > K:
+            raise ValueError(f"max_num_imprecise_acc ({max_num_imprecise_acc}) must be <= K ({K})")
 
     return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc),
                      ret_ty)
@@ -1550,6 +1554,10 @@ def device_assert(cond: tl.tensor, msg: str, file_name: str, func_name, lineno: 
         cond_ty = tl.block_type(cond_ty.scalar, (1, ))
         cond = tl.tensor(builder.create_splat(cond.handle, (1, )), cond_ty)
     return tl.tensor(builder.create_assert(cond.handle, msg, file_name, func_name, lineno), tl.void)
+
+
+def assume(cond, builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_assume(cond.handle), tl.void)
 
 
 def _convert_elem_to_ir_value(builder, elem, require_i64):

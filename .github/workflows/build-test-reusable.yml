@@ -66,7 +66,6 @@ permissions: read-all
 
 env:
   TRITON_DISABLE_LINE_INFO: 1
-  TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
   TEST_UNSKIP: ${{ inputs.enable_unskip }}
 
 jobs:
@@ -114,7 +113,6 @@ jobs:
         with:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
-          torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
 
       - name: Setup IPEX
         if: ${{ inputs.install_ipex }}

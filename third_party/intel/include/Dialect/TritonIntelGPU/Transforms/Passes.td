@@ -243,4 +243,18 @@ def TritonIntelGPUMatchTargetSize : Pass<"tritonintelgpu-match-target-size", "ml
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 }
 
+def TritonIntelGPUReduceDataDuplication: Pass<"tritonintelgpu-reduce-data-duplication", "mlir::ModuleOp"> {
+  let summary = "Reduce data duplication in register by decomposing convert[distributed -> dotOperand] "
+                "into convert[distributed -> shared -> dotOperand]";
+
+  let description = [{
+    Decomposing conversions this way makes it possible to use CSE and reuse #shared tensors.
+    This Intel pass supports the Intel DPAS layout in additional to the upstream Triton pass.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
