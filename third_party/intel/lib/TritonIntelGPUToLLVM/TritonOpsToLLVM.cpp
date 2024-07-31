@@ -16,6 +16,8 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
+// Note: this macro is used to explicitly invoke the verifier because
+// `triton_gen` ops are immediately lowered further to a builtin call.
 #define VERIFY_OPERATION(op)                                                   \
   if (failed(op.verify()))                                                     \
     return failure();
@@ -212,8 +214,6 @@ public:
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
           dataSize, blockWidth, blockHeight, vBlks, false /*transpose*/, vnni);
-      // Explicitly invoke verifier because `triton_gen` ops are immediately
-      // lowered further to a builtin call.
       VERIFY_OPERATION(load)
 
       rewriter.replaceOp(op, bitcast(load, resType));
@@ -223,10 +223,7 @@ public:
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, TritonGEN::LoadCacheControl::L1C_L3C);
-      // Explicitly invoke verifier because `triton_gen` ops are immediately
-      // lowered further to a builtin call.
-      if (failed(newOp.verify()))
-        return failure();
+      VERIFY_OPERATION(newOp);
 
       rewriter.eraseOp(op);
     } else {
@@ -237,10 +234,7 @@ public:
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks,
           bitcast(adaptor.getValue(), vectorType));
-      // Explicitly invoke verifier because `triton_gen` ops are immediately
-      // lowered further to a builtin call.
-      if (failed(newOp.verify()))
-        return failure();
+      VERIFY_OPERATION(newOp);
 
       rewriter.eraseOp(op);
     }
@@ -352,11 +346,11 @@ public:
     default: {
       unsigned num = operands.size();
       Value undef = undef(dstType);
-      for (int i = 0; i < num; ++i) {
-        undef = insert_element(
-            dstType, undef, operands[i],
-            rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), i));
-      }
+      for (unsigned i = 0; i < num; ++i)
+        undef =
+            insert_element(dstType, undef, operands[i],
+                           rewriter.create<LLVM::ConstantOp>(loc, i32_ty, i));
+
       rewriter.replaceOp(op, undef);
     }
     }
@@ -388,8 +382,7 @@ public:
       result = rewriter.create<LLVM::ShuffleVectorOp>(
           loc, vecTy, base, base, rewriter.getDenseI32ArrayAttr(indices));
     } else {
-      Value idxVal =
-          rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), idx);
+      Value idxVal = rewriter.create<LLVM::ConstantOp>(loc, i32_ty, idx);
       result = extract_element(base, idxVal);
     }
     rewriter.replaceOp(op, result);
@@ -410,9 +403,9 @@ public:
     Type srcTy = adaptor.getSrc().getType();
     VectorType vecTy = VectorType::get(1, srcTy);
     auto poison = rewriter.create<LLVM::PoisonOp>(loc, vecTy);
-    auto splat = insert_element(
-        vecTy, poison, adaptor.getSrc(),
-        rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), 0));
+    auto splat =
+        insert_element(vecTy, poison, adaptor.getSrc(),
+                       rewriter.create<LLVM::ConstantOp>(loc, i32_ty, 0));
     Type convertedTy = typeConverter->convertType(resultType);
     int64_t num = cast<VectorType>(convertedTy).getNumElements();
     SmallVector<int32_t> indices(num, 0);
