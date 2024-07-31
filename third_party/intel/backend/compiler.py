@@ -35,11 +35,12 @@ def _path_to_binary(binary: str):
 
 @dataclass
 class XPUOptions:
-    num_warps: int = 4
+    threads_per_warp = int(os.environ.get('XPU_SG_SIZE', 32))
+    num_warps: int = 128 / threads_per_warp
+    print(f"Threads per warp: {threads_per_warp}, number of warps: {num_warps}")
     num_ctas: int = 1
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
-    threads_per_warp: int = 32
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     default_dot_input_precision: str = "tf32"
