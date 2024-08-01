@@ -2,6 +2,7 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 
+#include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -180,8 +181,11 @@ public:
     if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
       return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
-    // TODO: to be implemented
-    llvm_unreachable("unsupported layout conversion");
+    if (isa<DpasEncodingAttr>(srcLayout) &&
+        isa<DotOperandEncodingAttr>(dstLayout)) {
+      return lowerDpasToDotOperand(op, adaptor, rewriter);
+    }
+
     return failure();
   }
 
@@ -454,6 +458,119 @@ private:
         packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
 
+    return success();
+  }
+
+  using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
+
+  ValueTable getValuesFromDpasLayoutStruct(Location loc,
+                                           ConversionPatternRewriter &rewriter,
+                                           Value vals,
+                                           RankedTensorType srcType) const {
+    SmallVector<Value> elems = unpackLLElements(loc, vals, rewriter);
+    auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcType.getEncoding());
+
+    size_t totalElems = elems.size();
+    auto numElemsPerOperand =
+        product<unsigned>(dpasLayout.getDPASInstShapeC()) /
+        dpasLayout.getSubGroupSize();
+    Type elemTy =
+        this->getTypeConverter()->convertType(srcType.getElementType());
+    VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
+    SmallVector<int64_t> repetitions =
+        dpasLayout.getDPASRepetitions(srcType.getShape(), 2 /*operand C*/);
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+
+    int offset = 0;
+    ValueTable result;
+    for (int i = 0; i < repetitions[0]; ++i) {
+      for (int j = 0; j < repetitions[1]; ++j) {
+        for (int repOuter = 0; repOuter < repCluster[0]; ++repOuter) {
+          for (int repInner = 0; repInner < repCluster[1]; ++repInner) {
+            Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
+            for (int k = 0; k < numElemsPerOperand; ++k) {
+              matVal =
+                  insert_element(dotOpTy, matVal, elems[offset++], i32_val(k));
+            }
+            result[{i * repCluster[0] + repOuter,
+                    j * repCluster[1] + repInner}] = matVal;
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  Value composeValuesToDotOperandLayoutStruct(
+      Location loc, ConversionPatternRewriter &rewriter, const ValueTable &vals,
+      RankedTensorType dstType) const {
+    auto dotLayout = dyn_cast<DotOperandEncodingAttr>(dstType.getEncoding());
+    auto dpasLayout = dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
+    unsigned opIdx = dotLayout.getOpIdx();
+    SmallVector<int64_t> repetitions =
+        dpasLayout.getDPASRepetitions(dstType.getShape(), opIdx);
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    unsigned repOuter = 0u;
+    unsigned repInner = 0u;
+    unsigned repClusterOuter = 0u;
+    if (opIdx == 0) {
+      // operand A
+      repOuter = repetitions[0];
+      repInner = repetitions[1];
+      repClusterOuter = repCluster[0];
+    } else {
+      // operand B
+      repOuter = repetitions[1];
+      repInner = repetitions[0];
+      repClusterOuter = repCluster[1];
+    }
+
+    // TODO: Operands B requires extra steps to combine [8, 16] to [16, 16].
+    SmallVector<Value> elems;
+    for (int m = 0; m < repOuter; ++m) {
+      for (int k = 0; k < repInner; ++k) {
+        for (int repOuterIdx = 0; repOuterIdx < repClusterOuter;
+             ++repOuterIdx) {
+          unsigned offsetM = m * repClusterOuter + repOuterIdx;
+          unsigned offsetN = k;
+          Value matVal = vals.at({offsetM, offsetN});
+          VectorType vecType = cast<mlir::VectorType>(matVal.getType());
+          Type valTy = vecType.getElementType();
+          for (int i = 0; i < vecType.getNumElements(); ++i) {
+            Value val = extract_element(valTy, matVal, i32_val(i));
+            elems.push_back(val);
+          }
+        }
+      }
+    }
+
+    Type elemTy =
+        this->getTypeConverter()->convertType(dstType.getElementType());
+    Type structTy = LLVM::LLVMStructType::getLiteral(
+        this->getContext(), SmallVector<Type>(elems.size(), elemTy));
+    return packLLElements(loc, this->getTypeConverter(), elems, rewriter,
+                          structTy);
+  }
+
+  // dpas -> dot_operand
+  LogicalResult
+  lowerDpasToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                        ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    RankedTensorType srcTy = op.getSrc().getType();
+    RankedTensorType dstTy = op.getType();
+
+    if (!intel::isDpasToDotShortcut(srcTy, dstTy))
+      return failure();
+
+    // reorder the elements to match the dot_operand layout.
+    ValueTable values =
+        getValuesFromDpasLayoutStruct(loc, rewriter, adaptor.getSrc(), srcTy);
+    Value view =
+        composeValuesToDotOperandLayoutStruct(loc, rewriter, values, dstTy);
+
+    rewriter.replaceOp(op, view);
     return success();
   }
 

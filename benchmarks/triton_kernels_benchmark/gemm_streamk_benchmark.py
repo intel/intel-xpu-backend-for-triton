@@ -101,7 +101,7 @@ def mac_loop(
 @triton.autotune(
     configs=[
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, "threads_per_warp": 16},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
@@ -136,7 +136,7 @@ def first_wave(
 @triton.autotune(
     configs=[
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, "threads_per_warp": 16},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
