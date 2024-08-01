@@ -61,8 +61,8 @@ def _kernel(A, B, C, M, N, K,  #
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
         c_block_ptr = tl.make_block_ptr(base=C, shape=(M, N), strides=(stride_cm, stride_cn),
-                                        offsets=(pid_m * BLOCK_M, pid_n * BLOCK_N),
-                                        block_shape=(BLOCK_M, BLOCK_N), order=(1, 0))
+                                        offsets=(pid_m * BLOCK_M, pid_n * BLOCK_N), block_shape=(BLOCK_M, BLOCK_N),
+                                        order=(1, 0))
         tl.store(c_block_ptr, acc, boundary_check=(0, 1))
     else:
         # rematerialize rm and rn to save registers
