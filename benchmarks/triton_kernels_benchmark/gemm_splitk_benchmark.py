@@ -37,38 +37,39 @@ def _kernel(A, B, C, M, N, K,  #
     pid_m = group_id * GROUP_M + (pid % group_size)
     pid_n = (pid % width) // (group_size)
 
-    # do matrix multiplication
-    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    ram = tl.max_contiguous(tl.multiple_of(rm % M, BLOCK_M), BLOCK_M)
-    rbn = tl.max_contiguous(tl.multiple_of(rn % N, BLOCK_N), BLOCK_N)
-    rk = pid_z * BLOCK_K + tl.arange(0, BLOCK_K)
-    # pointers
-    A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
-    B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
+    a_block_ptr = tl.make_block_ptr(base=A, shape=(M, K), strides=(stride_am, stride_ak),
+                                    offsets=(pid_m * BLOCK_M, pid_z * BLOCK_K), block_shape=(BLOCK_M, BLOCK_K),
+                                    order=(1, 0))
+    b_block_ptr = tl.make_block_ptr(base=B, shape=(K, N), strides=(stride_bk, stride_bn),
+                                    offsets=(pid_z * BLOCK_K, pid_n * BLOCK_N), block_shape=(BLOCK_K, BLOCK_N),
+                                    order=(1, 0))
+
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
-    for k in range(0, tl.cdiv(K, BLOCK_K * SPLIT_K)):
+    for k in range(0, K, BLOCK_K * SPLIT_K):
         if EVEN_K:
-            a = tl.load(A)
-            b = tl.load(B)
+            a = tl.load(a_block_ptr)
+            b = tl.load(b_block_ptr)
         else:
             k_remaining = K - k * (BLOCK_K * SPLIT_K)
             _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
-            a = tl.load(A, mask=rk[None, :] < k_remaining, other=_0)
-            b = tl.load(B, mask=rk[:, None] < k_remaining, other=_0)
+            a = tl.load(a_block_ptr, mask=rk[None, :] < k_remaining, other=_0)
+            b = tl.load(b_block_ptr, mask=rk[:, None] < k_remaining, other=_0)
         acc += tl.dot(a, b, out_dtype=acc_dtype)
-        A += BLOCK_K * SPLIT_K * stride_ak
-        B += BLOCK_K * SPLIT_K * stride_bk
+        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_K * SPLIT_K))
+        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_K * SPLIT_K, 0))
     acc = acc.to(C.dtype.element_ty)
-    # rematerialize rm and rn to save registers
-    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
-    mask = (rm < M)[:, None] & (rn < N)[None, :]
     # handles write-back with reduction-splitting
     if SPLIT_K == 1:
-        tl.store(C, acc, mask=mask)
+        c_block_ptr = tl.make_block_ptr(base=C, shape=(M, N), strides=(stride_cm, stride_cn),
+                                        offsets=(pid_m * BLOCK_M, pid_n * BLOCK_N),
+                                        block_shape=(BLOCK_M, BLOCK_N), order=(1, 0))
+        tl.store(c_block_ptr, acc, boundary_check=(0, 1))
     else:
+        # rematerialize rm and rn to save registers
+        rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
+        mask = (rm < M)[:, None] & (rn < N)[None, :]
         tl.atomic_add(C, acc, mask=mask)
 
 
