@@ -7,9 +7,8 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config(
-            {'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4, "threads_per_warp": 16},
-            num_stages=4, num_warps=32),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4, 'grf_mode': 'large'},
+                      num_stages=4, num_warps=32),
     ],
     key=['M', 'N', 'K'],
 )
