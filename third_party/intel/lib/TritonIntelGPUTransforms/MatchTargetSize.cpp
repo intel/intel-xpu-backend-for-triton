@@ -42,9 +42,13 @@
 #include "llvm/Support/Debug.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/Visitors.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -197,6 +201,17 @@ public:
     LLVM_DEBUG(llvm::dbgs() << "Module after canonicalization:\n"
                             << m << "\n\n");
 
+    llvm::DenseSet<Operation *> preDotChain;
+    m.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
+      if (auto extractOp = dyn_cast<ttgi::ExtractOp>(op)) {
+        transformPreDotOp(extractOp, preDotChain);
+      }
+
+      return WalkResult::advance();
+    });
+    // for (auto *preOp : preDotChain) {
+    //   preOp->erase();
+    // }
     // By default, tritongpu are lowered to simt mode (threads-per-warp=16)
     // instead of simd mode (threads-per-warp=1).
     // FIXME: force threads-per-warp=16 in simt(this should be done via an
@@ -235,6 +250,9 @@ private:
 
   /// Generic transformation.
   void transformGenericOp(Operation *op);
+
+  void transformPreDotOp(ttgi::ExtractOp op,
+                         llvm::DenseSet<Operation *> &chain);
 
   /// Record the native size supported by the target implementation.
   DenseMap<Attribute, SmallVector<int64_t>> sizePerAttrMap;
@@ -767,6 +785,64 @@ void MatchTargetSizePass::transformArithConstantOp(arith::ConstantOp op) {
   op->replaceAllUsesWith(
       b.create<ttgi::GlueOp>(loc, resultType, subOps)->getResults());
   op->erase();
+}
+
+// TODO: Refine the patterns chain between load -> dot
+Value backTraceDotOperand(Value val, DenseSet<Operation *> &backTraceChain,
+                          int &count) {
+  auto defOp = val.getDefiningOp();
+  if (auto loadOp = dyn_cast<tt::LoadOp>(defOp)) {
+    return val;
+  }
+  if (auto truncOp = dyn_cast<arith::TruncFOp>(defOp)) {
+    if (!backTraceChain.count(truncOp))
+      backTraceChain.insert(truncOp);
+    count += 1;
+    return backTraceDotOperand(truncOp.getOperand(), backTraceChain, count);
+  }
+  if (auto expOp = dyn_cast<math::ExpOp>(defOp)) {
+    if (!backTraceChain.count(expOp))
+      backTraceChain.insert(expOp);
+    count += 1;
+    return backTraceDotOperand(expOp.getOperand(), backTraceChain, count);
+  }
+  if (auto extOp = dyn_cast<arith::ExtFOp>(defOp)) {
+    if (!backTraceChain.count(extOp))
+      backTraceChain.insert(extOp);
+    count += 1;
+    return backTraceDotOperand(extOp.getOperand(), backTraceChain, count);
+  }
+  assert(false && "dot backtrace pattern not supported");
+}
+
+void MatchTargetSizePass::transformPreDotOp(
+    ttgi::ExtractOp op, DenseSet<Operation *> &preDotChain) {
+
+  auto extractSrc = op->getOperand(0);
+  int count = 0;
+  auto load = backTraceDotOperand(op.getOperand(), preDotChain, count);
+
+  if (!count)
+    return;
+
+  OpBuilder b(op);
+  Location loc = op.getLoc();
+  b.setInsertionPoint(op);
+
+  auto extractOp = b.create<ttgi::ExtractOp>(loc, op.getResult().getType(),
+                                             load, op.getIndex());
+
+  auto subType = cast<RankedTensorType>(op.getResult().getType());
+  auto subShape = subType.getShape();
+  auto f32Type = RankedTensorType::get(subShape, b.getF32Type());
+
+  auto extOp = b.create<arith::ExtFOp>(loc, f32Type, extractOp.getResult());
+  auto expOp = b.create<math::ExpOp>(loc, extOp);
+  auto truncOp = b.create<arith::TruncFOp>(loc, subType, expOp);
+
+  op.getResult().replaceAllUsesWith(truncOp.getResult());
+  op.erase();
+  return;
 }
 
 void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {

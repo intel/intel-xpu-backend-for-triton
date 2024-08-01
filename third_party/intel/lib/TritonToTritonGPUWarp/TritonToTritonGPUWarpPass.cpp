@@ -249,7 +249,8 @@ public:
 
         auto numResults = op->getResults().size();
         if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
-          transformArithConstantOp(cst, valueAttrMap[cst]);
+          // transformArithConstantOp(cst, valueAttrMap[cst]);
+          transformArithConstantOp(cst, defaultLayout);
         } else if (auto loop = dyn_cast<scf::ForOp>(op)) {
           transformScfForOp(loop);
         } else if (auto store = dyn_cast<tt::StoreOp>(op)) {

@@ -78,9 +78,9 @@ def matmul_kernel_with_block_pointers(
         a = tl.load(a_block_ptr, boundary_check=(0, 1))
         b = tl.load(b_block_ptr, boundary_check=(0, 1))
         # We accumulate along the K dimension.
-        # a = a.to(tl.float32)
-        # a = tl.math.exp(a)
-        # a = a.to(tl.float16)
+        a = a.to(tl.float32)
+        a = tl.math.exp(a)
+        a = a.to(tl.float16)
         accumulator += tl.dot(a, b)
         # Advance the block pointer to the next K block.
         # See above `Advance a Block Pointer` section for details.
@@ -94,8 +94,8 @@ def matmul_kernel_with_block_pointers(
     d = tl.load(d_block_ptr, boundary_check=(0, 1))
     c = accumulator + d
 
-    # c = 0.5 * c * (1 + tanh(kAlpha * (c + 0.044715 * c * c * c)))
-    c = tl.where(c >= 0, c, 0)
+    c = 0.5 * c * (1 + tanh(kAlpha * (c + 0.044715 * c * c * c)))
+    # c = tl.where(c >= 0, c, 0)
     # ----------------------------------------------------------------
     # Write back the block of the output matrix C with boundary checks.
     # See above `Load/Store a Block Pointer` section for details.
