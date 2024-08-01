@@ -89,6 +89,7 @@ jobs:
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
           IGC_DisableLoopUnroll=1 \
+          SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
           python gemm_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops-max --hbm_col "Triton-GB/s-max"
