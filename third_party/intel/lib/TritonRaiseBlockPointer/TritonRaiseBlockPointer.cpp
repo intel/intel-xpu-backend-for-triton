@@ -12,6 +12,8 @@
 #include "llvm/Support/Debug.h"
 #include <set>
 
+#include <iostream>
+
 #define DEBUG_TYPE "triton-raise-block-pointer"
 
 using namespace mlir;
@@ -69,14 +71,20 @@ std::optional<int64_t> getFoldedConstantValue(Operation *op) {
   return std::nullopt;
 }
 
-// return true if the `val` value is a constant containing a value equal to zero
-bool hasConstZero(const Value val) {
-  auto intVal = getFoldedConstantValue(val.getDefiningOp());
+// return true if the `val` value is a constant containing a value equal to ref
+bool hasConstEqualTo(const Value val, const int ref) {
+  auto defOp = val.getDefiningOp();
+  if (!defOp)
+    return false;
+  auto intVal = getFoldedConstantValue(defOp);
   if (intVal.has_value()) {
-    return (intVal.value() == 0);
+    return (intVal.value() == ref);
   }
   return false;
 }
+
+// return true if the `val` value is a constant containing a value equal to zero
+bool hasConstZero(const Value val) { return hasConstEqualTo(val, 0); }
 
 // Data structure used to decode pointer arithmetics. Offsets, sizes, and
 // strides are in unit of elements in a linearly laid-out memory, which is the
@@ -588,6 +596,7 @@ struct TritonRaiseBlockPointer
         return failure();
       }
     }
+
     // Update the loop body.
     if (failed(rewriteOp(newOp))) {
       newOp->erase();
@@ -595,6 +604,7 @@ struct TritonRaiseBlockPointer
                      "rewriting for op");
       return failure();
     }
+
     if (op.getNumRegionIterArgs()) {
       auto yieldOp = cast<scf::YieldOp>(newOp.getBody()->getTerminator());
       if (failed(rewriteYieldOp(yieldOp, initArgIndexMap))) {
@@ -680,7 +690,7 @@ struct TritonRaiseBlockPointer
           op->emitRemark(
               "TritonRaiseToBlockPointer: operand's shape/modulo state changed "
               "within loop body");
-          return failure();
+          // return failure();
         }
       }
     }
@@ -733,6 +743,133 @@ struct TritonRaiseBlockPointer
     return success();
   }
 
+  Value getFinalValue(Value value) {
+    auto defOp = value.getDefiningOp();
+    if (!defOp) {
+      // look init values outside the loop
+      BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+      Operation *parentOp = blockArg.getOwner()->getParentOp();
+      scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp);
+      return forOp ? getFinalValue(
+                         forOp.getInitArgs()[blockArg.getArgNumber() - 1])
+                   : value;
+    }
+
+    if (isa<triton::ExpandDimsOp>(defOp) || isa<triton::BroadcastOp>(defOp) ||
+        isa<triton::SplatOp>(defOp) || isa<arith::IndexCastOp>(defOp))
+      return getFinalValue(defOp->getOperand(0));
+    else if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
+      if (hasConstZero(addOp.getLhs()))
+        return getFinalValue(addOp.getRhs());
+      else if (hasConstZero(addOp.getRhs()))
+        return getFinalValue(addOp.getLhs());
+      else
+        return addOp.getResult();
+    } else if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
+      if (hasConstEqualTo(mulOp.getLhs(), 1))
+        return getFinalValue(mulOp.getRhs());
+      else if (hasConstEqualTo(mulOp.getRhs(), 1))
+        return getFinalValue(mulOp.getLhs());
+      else
+        return mulOp.getResult();
+    }
+    return value;
+  }
+
+  bool lookForMulitplyingValueInDefiningPath(Value &val, Value &ref) {
+    auto defOp = getFinalValue(val).getDefiningOp();
+    if (!defOp)
+      return false;
+
+    if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
+      if ((mulOp.getLhs() == ref) || (mulOp.getRhs() == ref))
+        return true;
+    }
+    return false;
+  }
+
+  bool areValuesEqual(Value val1, Value val2) {
+    if (val1 == val2)
+      return true;
+    auto op1 = val1.getDefiningOp();
+    auto op2 = val2.getDefiningOp();
+    if (op1 && op2) {
+      auto intVal1 = getFoldedConstantValue(op1);
+      auto intVal2 = getFoldedConstantValue(op2);
+      if (intVal1.has_value() && intVal2.has_value()) {
+        return intVal1.value() == intVal2.value();
+      }
+    }
+    return false;
+  }
+
+  int checkIfOffsetMultipliedByStride(Value operand,
+                                      SmallVector<Value> &strides) {
+    auto defOp = operand.getDefiningOp();
+
+    SmallVector<Value> finalStrides;
+    // check all strides different
+    // if not = skip
+    for (auto stride : strides) {
+      auto currentVal = getFinalValue(stride);
+      if (llvm::any_of(finalStrides, [&](Value val) {
+            return areValuesEqual(val, currentVal);
+          }))
+        return -1;
+      finalStrides.push_back(currentVal);
+    }
+
+    /*
+    int i = 0;
+    for(auto finalStride : finalStrides) {
+      std::cout << "Stride["<<i<<"] = " << std::endl;
+      auto def =  finalStride.getDefiningOp();
+      if (def)
+        finalStride.getDefiningOp()->print(llvm::outs());
+      else
+        std::cout << "Block arg " << std::endl;
+      std::cout << " <<<<<<<< " << std::endl;
+      i++;
+    }
+    */
+
+    int axis = 0;
+    for (auto finalStride : finalStrides) {
+      // search for a mul to finalStride in the predecessors
+      if (lookForMulitplyingValueInDefiningPath(operand, finalStride))
+        return axis;
+      else if (hasConstEqualTo(finalStride, 1))
+        return axis;
+      ++axis;
+    }
+    return -1;
+  }
+
+  bool hasExpandOpInDefiningPath(Value value) {
+    auto defOp = value.getDefiningOp();
+    if (!defOp) {
+      // look init values outside the loop
+      BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+      Operation *parentOp = blockArg.getOwner()->getParentOp();
+      scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp);
+      return forOp ? hasExpandOpInDefiningPath(
+                         forOp.getInitArgs()[blockArg.getArgNumber() - 1])
+                   : false;
+    }
+
+    if (isa<triton::ExpandDimsOp>(defOp))
+      return true;
+    else if (isa<triton::BroadcastOp>(defOp) || isa<triton::SplatOp>(defOp) ||
+             isa<arith::IndexCastOp>(defOp) || isa<arith::RemUIOp>(defOp) ||
+             isa<arith::RemSIOp>(defOp))
+      return hasExpandOpInDefiningPath(defOp->getOperand(0));
+    else if (isa<arith::AddIOp>(defOp) || isa<arith::MulIOp>(defOp))
+      return hasExpandOpInDefiningPath(defOp->getOperand(0)) ||
+             hasExpandOpInDefiningPath(defOp->getOperand(1));
+
+    return false;
+  }
+
   LogicalResult rewriteAddPtrOp(triton::AddPtrOp op) {
     OpBuilder builder(op);
     Location loc = op.getLoc();
@@ -740,6 +877,21 @@ struct TritonRaiseBlockPointer
     PtrState state;
     if (failed(visitOperandAddptr(op, state, loc, builder)))
       return failure();
+
+    // Fix offset axis
+    auto parentOp = op->getParentOp();
+    if (isa<scf::ForOp>(parentOp)) {
+      // ExpandOp should set offset to the expected axis.
+      // Check if an ExpandOp has been found in defining path.
+      if (!hasExpandOpInDefiningPath(op.getOffset())) {
+        auto axis =
+            checkIfOffsetMultipliedByStride(op.getOffset(), state.strides);
+        if (axis >= 1) {
+          // Swap axis
+          std::swap(state.offsets[0], state.offsets[axis]);
+        }
+      }
+    }
 
     knownPtrs[op.getResult()] = state;
 
