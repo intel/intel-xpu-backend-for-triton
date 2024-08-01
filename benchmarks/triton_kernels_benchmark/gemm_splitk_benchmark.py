@@ -136,8 +136,8 @@ matmul = _matmul.apply
 
 
 # Benchmark Performance
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
+@benchmark_suit.perf_report(
+    benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['M', 'K', 'N'],
         x_vals=[
