@@ -819,20 +819,6 @@ struct TritonRaiseBlockPointer
       finalStrides.push_back(currentVal);
     }
 
-    /*
-    int i = 0;
-    for(auto finalStride : finalStrides) {
-      std::cout << "Stride["<<i<<"] = " << std::endl;
-      auto def =  finalStride.getDefiningOp();
-      if (def)
-        finalStride.getDefiningOp()->print(llvm::outs());
-      else
-        std::cout << "Block arg " << std::endl;
-      std::cout << " <<<<<<<< " << std::endl;
-      i++;
-    }
-    */
-
     int axis = 0;
     for (auto finalStride : finalStrides) {
       // search for a mul to finalStride in the predecessors
@@ -877,21 +863,6 @@ struct TritonRaiseBlockPointer
     PtrState state;
     if (failed(visitOperandAddptr(op, state, loc, builder)))
       return failure();
-
-    // Fix offset axis
-    auto parentOp = op->getParentOp();
-    if (isa<scf::ForOp>(parentOp)) {
-      // ExpandOp should set offset to the expected axis.
-      // Check if an ExpandOp has been found in defining path.
-      if (!hasExpandOpInDefiningPath(op.getOffset())) {
-        auto axis =
-            checkIfOffsetMultipliedByStride(op.getOffset(), state.strides);
-        if (axis >= 1) {
-          // Swap axis
-          std::swap(state.offsets[0], state.offsets[axis]);
-        }
-      }
-    }
 
     knownPtrs[op.getResult()] = state;
 
@@ -966,6 +937,19 @@ struct TritonRaiseBlockPointer
     if (failed(visitOperand(addptrOp.getOffset(), offsetState,
                             addptrOp.getLoc(), builder))) {
       return failure();
+    }
+
+    // Fix offset axis
+    auto parentOp = addptrOp->getParentOp();
+    if (isa<scf::ForOp>(parentOp)) {
+      // ExpandOp should set offset to the expected axis.
+      // Check if an ExpandOp has been found in defining path.
+      if (!hasExpandOpInDefiningPath(addptrOp.getOffset())) {
+        auto axis = checkIfOffsetMultipliedByStride(addptrOp.getOffset(),
+                                                    ptrState.strides);
+        if (axis >= 1)
+          std::swap(offsetState.offsets[0], offsetState.offsets[1]);
+      }
     }
 
     assert(ptrState.source && "ptr field should provide source / base pointer");
