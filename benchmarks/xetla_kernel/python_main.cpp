@@ -1,6 +1,7 @@
 #include "flash_attention/fmha_forward_v5.h"
 #include "gemm/gemm.h"
 #include "softmax/softmax.h"
+#include "stream_k_gemm/stream_k_gemm.h"
 #include <CL/sycl.hpp>
 #include <cstdint>
 
@@ -82,6 +83,22 @@ at::Tensor bf16_gemm(const at::Tensor &a, const at::Tensor &b,
   auto queue = get_current_sycl_queue();
   auto evt = gemm_run<T>(a.data_ptr(), b.data_ptr(), c.data_ptr(),
                          acc.data_ptr(), cnt.data_ptr(), queue);
+  xpu::profiler_record("xetla kernel", evt);
+  return acc;
+}
+
+at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
+                              const at::Tensor &c, const at::Tensor &acc,
+                              const at::Tensor &cnt) {
+  CHECK_INPUT(a);
+  CHECK_INPUT(b);
+  CHECK_INPUT(c);
+  CHECK_INPUT(acc);
+  RECORD_FUNCTION("xetla stream_k_gemm", {a, b, c, acc});
+
+  auto queue = get_current_sycl_queue();
+  auto evt = stream_k_gemm_run(a.data_ptr(), b.data_ptr(), c.data_ptr(),
+                               acc.data_ptr(), cnt.data_ptr(), queue);
   xpu::profiler_record("xetla kernel", evt);
   return acc;
 }
@@ -203,6 +220,9 @@ PYBIND11_MODULE(xetla_kernel, m) {
         &bf16_gemm<Test_4096x8x128x16384_row_row>, "bf16_gemm (XeTLA)");
   m.def("gemm_shape_4096_8_16384_128",
         &bf16_gemm<Test_4096x8x16384x128_row_row>, "bf16_gemm (XeTLA)");
+  // stream_k_gemm
+  m.def("stream_k_gemm_shape_1_3072_4096_3072", &bf16_stream_k_gemm,
+        "bf16_stream_k_gemm (XeTLA)");
   // flash_attn_shape_$Z_$H_${N_CTX}_${D_HEAD}
   m.def(
       "flash_attn_shape_4_48_1024_64",
