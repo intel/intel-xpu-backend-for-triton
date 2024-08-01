@@ -503,8 +503,8 @@ DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout, unsigned opIdx) {
 
   auto tileLayout = LinearLayout::empty();
   int systolicDepth = dpas.getSystolicDepth();
-  int KDim = 1;
-  int nonKDim = 0;
+  unsigned KDim = 1;
+  unsigned nonKDim = 0;
   if (opIdx == 0) { // Operand A
     int repeatCount = dpas.getRepeatCount();
     auto regBasesA = DPASRegBasesA(opsPerChannel, repeatCount, threadsPerWarp,
@@ -557,10 +557,22 @@ DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout, unsigned opIdx) {
   tileLayout *= LinearLayout::identity1D(numReps[nonKDim], kRegister,
                                          outDimNames[nonKDim]);
 
-  // And each warp takes the same register and lane sub-layout. So mulitply with
-  // an identity layout for the warp.
-  LinearLayout warpLayout =
-      identityND(S("warp"), dpas.getWarpsPerCTA(), {0, 1}, outDimNames);
+  // For Operand C, warps split the tensor identically.
+  // For Operand A and B, warps in the K-dimension share the same data.
+  // In these cases, the warp hops for K-dimensions are zero.
+  LinearLayout warpLayout = LinearLayout::empty();
+  StringAttr kWarp = S("warp");
+  if (opIdx == 0) {
+    warpLayout =
+        LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
+    warpLayout *= LinearLayout::zeros1D(warpsPerCTA[1], kWarp, outDimNames[1]);
+  } else if (opIdx == 1) {
+    warpLayout = LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDimNames[0]);
+    warpLayout *=
+        LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDimNames[1]);
+  } else { /* opIdx == 2 */
+    warpLayout = identityND(kWarp, warpsPerCTA, {0, 1}, outDimNames);
+  }
   LinearLayout ctaLayout = tileLayout * warpLayout;
 
   return combineCtaCgaWithShape(ctaLayout, CTALayoutAttr::getDefault(ctx, rank),

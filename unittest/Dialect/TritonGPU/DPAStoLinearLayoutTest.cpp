@@ -148,6 +148,34 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_withWarp) {
                 {S("dim0"), S("dim1")}));
 }
 
+TEST_F(DPAStoLinearLayoutTest, DPAS_withWarpOperandA) {
+  EXPECT_EQ(
+      DPAStoLinearLayout({64, 64}, dpas({2, 2}, 8, 8, 16, 2, {4, 2}, 32), 0),
+      LinearLayout(
+          {
+              {S("register"),
+               {{0, 1}, {4, 0}, {8, 0}, {16, 0}, {0, 16}, {0, 32}}},
+              {S("lane"), {{0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
+              {S("warp"), {{32, 0}, {0, 0}}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(DPAStoLinearLayoutTest, DPAS_withWarpOperandB) {
+  EXPECT_EQ(
+      DPAStoLinearLayout({64, 64}, dpas({2, 2}, 8, 8, 16, 2, {4, 2}, 32), 1),
+      LinearLayout(
+          {
+              {S("register"),
+               {{1, 0}, {4, 0}, {8, 0}, {0, 16}, {16, 0}, {32, 0}}},
+              {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {2, 0}}},
+              {S("warp"), {{0, 0}, {0, 32}}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
+}
+
 TEST_F(DPAStoLinearLayoutTest, DPAS_withDPASRepetitions) {
   EXPECT_EQ(DPAStoLinearLayout({64, 64}, dpas({2, 1}, 8, 8, 16, 2, {4, 2}, 32)),
             LinearLayout(
