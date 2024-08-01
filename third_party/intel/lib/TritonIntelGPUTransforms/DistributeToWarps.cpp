@@ -288,9 +288,9 @@ void distributeConvertLayoutOp(ttg::ConvertLayoutOp op, Value warpId,
 
   // FIXME: allocOp may carry the size info.
   OpBuilder b(op);
-  auto baseType = tt::PointerType::get(
-      oldSrcType.getElementType(),
-      triton::TritonGEN::TritonGENMemorySpace::kCrossWorkgroup);
+  auto baseType =
+      tt::PointerType::get(oldSrcType.getElementType(),
+                           triton::TritonGEN::TritonGENMemorySpace::kWorkgroup);
   auto base = b.create<ttgi::AllocOp>(loc, baseType);
 
   SmallVector<Value> shape;
