@@ -32,13 +32,13 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     // CHECK:      scf.for {{.*}} iter_args([[ARG10:%.*]] = [[CST]], [[ARG11:%.*]] = [[TPTR1]], [[ARG12:%.*]] = [[TPTR2]])
     // CHECK-DAG:    [[LOAD1:%.*]] = tt.load [[ARG11]] : !tt.ptr<tensor<32x32xf16, [[WARP2]]>>
     // CHECK-DAG:    [[LOAD2:%.*]] = tt.load [[ARG12]] : !tt.ptr<tensor<32x32xf16, [[WARP2]]>>
-    // CHECK:        [[ALLOC1:%.*]] = triton_intel_gpu.alloc : <f16>
+    // CHECK:        [[ALLOC1:%.*]] = triton_intel_gpu.alloc : <f16, 3>
     // CHECK:        [[PTR1:%.*]] = tt.make_tensor_ptr [[ALLOC1]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x32xf16, [[WARP2]]>, 3>
     // CHECK:        tt.store [[PTR1]], [[LOAD1]] : !tt.ptr<tensor<32x32xf16, [[WARP2]]>, 3>
     // CHECK:        gpu.barrier
     // CHECK:        [[PTR2:%.*]] = tt.make_tensor_ptr [[ALLOC1]], {{.*}} {order = array<i32: 1, 0>} : <tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = [[WARP1]]}>>, 3>
     // CHECK:        [[LOAD3:%.*]] = tt.load [[PTR2]] : !tt.ptr<tensor<64x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = [[WARP1]]}>>, 3>
-    // CHECK:        [[ALLOC2:%.*]] = triton_intel_gpu.alloc : <f16>
+    // CHECK:        [[ALLOC2:%.*]] = triton_intel_gpu.alloc : <f16, 3>
     // CHECK:        [[PTR3:%.*]] = tt.make_tensor_ptr [[ALLOC2]], {{.*}} {order = array<i32: 1, 0>} : <tensor<32x32xf16, [[WARP2]]>, 3>
     // CHECK:        tt.store [[PTR3]], [[LOAD2]] : !tt.ptr<tensor<32x32xf16, [[WARP2]]>, 3>
     // CHECK:        gpu.barrier
