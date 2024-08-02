@@ -700,15 +700,22 @@ struct LoadOpConversion
       }
 
       // Create a predicated load operation.
-      Block &endBlock = LLVM::intel::createPredicatedBlock(
-          rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
-            Value addrElem =
-                bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-            uint32_t alignment = nWords * width / 8;
-            Value ret = load(retTy, addrElem, alignment);
-            return SmallVector<Value, 1>{ret};
-          });
-      Value ret = *endBlock.args_begin();
+      Value ret;
+      if (nWords == 1) {
+        Value addrElem = bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+        uint32_t alignment = nWords * width / 8;
+        ret = select(pred, other_, load(retTy, addrElem, alignment));
+      } else {
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
+              Value addrElem =
+                  bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+              uint32_t alignment = nWords * width / 8;
+              Value ret = load(retTy, addrElem, alignment);
+              return SmallVector<Value, 1>{ret};
+            });
+        ret = *endBlock.args_begin();
+      }
 
       // Extract and store return values
       SmallVector<Value> rets;
