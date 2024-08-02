@@ -1,4 +1,4 @@
-// RUN: env TRITON_INTEL_ENABLE_SLM=1 triton-opt %s -tritonintelgpu-match-target-size | FileCheck %s
+// RUN: env TRITON_INTEL_ENABLE_FIRST_LOAD_TO_SLM=1 triton-opt %s -tritonintelgpu-match-target-size | FileCheck %s
 
 #warp = #triton_intel_gpu.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 #dot0 = #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>
