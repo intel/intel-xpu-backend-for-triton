@@ -377,3 +377,21 @@ llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b
   // CHECK-NEXT: {{%.*}} = llvm.bitcast [[RES]] : vector<8xi16> to vector<8xbf16>
   llvm.return
 }
+
+// -----
+
+llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val : vector<64xi16>) {
+  // CHECK:     llvm.func spir_funccc @llvm.genx.GenISA.simdBlockWrite(!llvm.ptr<3>, vector<64xi16>)
+  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite
+  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr<3>, vector<64xi16>)
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
+  // CHECK:     llvm.func spir_funccc @llvm.genx.GenISA.simdBlockRead
+  // CHECK: [[RES:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.simdBlockRead
+  %ret = triton_gen.simdblockread %ptr : (!llvm.ptr<3>) -> vector<64xi16>
+  llvm.return
+}
