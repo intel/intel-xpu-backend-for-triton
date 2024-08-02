@@ -131,6 +131,61 @@ private:
   unsigned loadStoreSize = 0;
 };
 
+static tt::LoadOp findUsedLoad(Value val) {
+  tt::LoadOp loadOp;
+  auto defOp = val.getDefiningOp();
+  if (isa_and_nonnull<tt::LoadOp>(defOp))
+    return cast<tt::LoadOp>(defOp);
+  for (auto u : defOp->getOperands()) {
+    tt::LoadOp ld = findUsedLoad(u);
+    if (isa_and_nonnull<tt::LoadOp>(ld)) {
+      loadOp = ld;
+      break;
+    }
+  }
+  return loadOp;
+}
+
+static bool getTransposeFlagFromValue(Value val) {
+  bool isTransposed = false;
+  Value loadPtr = val;
+  // backward: from dot operands to tt.load
+  if (llvm::any_of(val.getUsers(),
+                   [](Operation *user) { return isa<tt::DotOp>(user); })) {
+    // is a dot operand
+    tt::LoadOp load = findUsedLoad(val);
+    if (load)
+      loadPtr = load.getPtr();
+  }
+
+  if (auto extractOp =
+          dyn_cast_or_null<ttgi::ExtractOp>(loadPtr.getDefiningOp())) {
+    loadPtr = extractOp.getBase();
+  }
+  // forward: from tt.load/tt.advance to dot
+  if (auto blockArg = dyn_cast<BlockArgument>(loadPtr)) {
+    unsigned argIdx = blockArg.getArgNumber();
+    if (auto loopLikeOp = dyn_cast<LoopLikeOpInterface>(
+            blockArg.getParentBlock()->getParentOp())) {
+      auto inits = llvm::to_vector(loopLikeOp.getInits());
+      if (auto glueOp =
+              dyn_cast<ttgi::GlueOp>(inits[argIdx - 1].getDefiningOp())) {
+        if (auto tempPtr = dyn_cast<tt::MakeTensorPtrOp>(
+                glueOp.getOperands()[0].getDefiningOp())) {
+          loadPtr = tempPtr.getResult();
+        }
+      }
+    }
+  }
+
+  if (auto tensorPtr = loadPtr.getDefiningOp<tt::MakeTensorPtrOp>()) {
+    ArrayRef<int32_t> order = tensorPtr.getOrder();
+    auto rank = order.size();
+    isTransposed = (order[rank - 2] != 1);
+  }
+  return isTransposed;
+}
+
 class MatchTargetSizePass
     : public triton::gpu::intel::impl::TritonIntelGPUMatchTargetSizeBase<
           MatchTargetSizePass> {
@@ -590,10 +645,12 @@ void MatchTargetSizePass::recordRootSubSize(Operation *op) {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Attribute layout = tensorType.getEncoding();
     assert(layout && "Expecting a valid layout");
-    if (isTransposed && sizePerAttrMapTransposed.count(layout) == 0)
+    if (isTransposed && sizePerAttrMapTransposed.count(layout) == 0) {
       sizePerAttrMapTransposed[layout] = getSubOpSize(tensorType, isTransposed);
-    if (!isTransposed && sizePerAttrMap.count(layout) == 0)
+    }
+    if (!isTransposed && sizePerAttrMap.count(layout) == 0) {
       sizePerAttrMap[layout] = getSubOpSize(tensorType, isTransposed);
+    }
     return;
   }
 }
@@ -879,8 +936,16 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
 
   auto getSubDotVal = [&](Value val, int64_t mm, int64_t kk, int64_t mStep,
                           int64_t kStep, bool useSLM = false) {
+    bool isTransposed = false;
+    if (auto dotEnc = dyn_cast<DotOperandEncodingAttr>(
+            cast<RankedTensorType>(val.getType()).getEncoding())) {
+      // FIXME: Just transposed B supported now
+      if (dotEnc.getOpIdx() == 1) {
+        isTransposed = getTransposeFlagFromValue(val);
+      }
+    }
     auto [shape, subType, subSize] =
-        getSubTypeAndShape(val.getType(), /* isTransposed = */ false, useSLM);
+        getSubTypeAndShape(val.getType(), isTransposed, useSLM);
     unsigned subIdx =
         (kk / subSize[1]) * (shape[0] / subSize[0]) + mm / subSize[0];
     Value subVal = b.create<ttgi::ExtractOp>(loc, subType, val, subIdx);
@@ -980,26 +1045,8 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
           loadPtr = load.getPtr();
         else
           loadPtr = advOp.getPtr();
-        if (auto blockArg = dyn_cast<BlockArgument>(loadPtr)) {
-          unsigned argIdx = blockArg.getArgNumber();
-          if (auto loopLikeOp = dyn_cast<LoopLikeOpInterface>(
-                  blockArg.getParentBlock()->getParentOp())) {
-            auto inits = llvm::to_vector(loopLikeOp.getInits());
-            if (auto glueOp =
-                    dyn_cast<ttgi::GlueOp>(inits[argIdx - 1].getDefiningOp())) {
-              if (auto tempPtr = dyn_cast<tt::MakeTensorPtrOp>(
-                      glueOp.getOperands()[0].getDefiningOp())) {
-                loadPtr = tempPtr.getResult();
-              }
-            }
-          }
-        }
 
-        if (auto tensorPtr = loadPtr.getDefiningOp<tt::MakeTensorPtrOp>()) {
-          ArrayRef<int32_t> order = tensorPtr.getOrder();
-          auto rank = order.size();
-          isTransposed = (order[rank - 2] != 1);
-        }
+        isTransposed = getTransposeFlagFromValue(loadPtr);
         if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout))
           dotIdx = dotAttr.getOpIdx();
       }
