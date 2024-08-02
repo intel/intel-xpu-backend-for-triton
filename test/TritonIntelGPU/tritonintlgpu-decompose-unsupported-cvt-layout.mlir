@@ -11,6 +11,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // CHECK: triton_gpu.local_alloc
     // CHECK: triton_gpu.local_load
     %0 = triton_gpu.convert_layout %cst : tensor<64x32xf16, #dpas> -> tensor<64x32xf16, #dot_b>
+    // COM: There is a shortcut for converting the layout from DPAS -> DotOp A operands.
+    // COM: The convert_layout op is not replaced by local_alloc/local_load.
     // CHECK: triton_gpu.convert_layout
     %1 = triton_gpu.convert_layout %cst : tensor<64x32xf16, #dpas> -> tensor<64x32xf16, #dot_a>
     tt.return
