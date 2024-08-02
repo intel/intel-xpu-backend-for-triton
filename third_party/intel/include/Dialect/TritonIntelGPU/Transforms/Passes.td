@@ -262,7 +262,7 @@ def TritonIntelGPUScheduleLoad : Pass<"tritonintelgpu-schedule-load", "mlir::Mod
 
   let description = [{
     This pass works for FlashAttention.
-    This pass moves loads to be adjacent to their user(tt.dot) to help IGC do better RA.
+    This pass moves loads to be adjacent to their user(tt.dot) to help IGC do better RegisterAllocation.
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect",

@@ -6,7 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// This file implements a naive scheduler for loop with load/dot
+/// This file implements a naive scheduler for loop with load/dot to help IGC's
+/// Register Allocation.
+/// For now, we put loads adjacent to its user dot.
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/SmallVector.h"
@@ -49,19 +51,24 @@ public:
     ModuleOp mod = getOperation();
     mod.walk<WalkOrder::PreOrder>([&](scf::ForOp loop) {
       visited.clear();
-      unsigned group = -1;
+      int group = -1;
+      unsigned numGroups = 0;
       SmallVector<SmallVector<tt::DotOp>> dotsGroup;
       SmallVector<tt::DotOp> dots;
       for (auto dot : loop.getOps<tt::DotOp>()) {
         auto groupAttr = dot->getAttrOfType<IntegerAttr>("schedule-group");
-        unsigned currGroup = groupAttr.getInt();
+        int currGroup = groupAttr.getInt();
+        // a new set of schedule-groups start
         if (currGroup != group && !dots.empty()) {
           dotsGroup.push_back(dots);
           dots.clear();
         }
+        // mark first dot B as visited to not move
         if (currGroup == 0) {
           SmallVector<tt::DotOp> vec{dot};
           getNotVisitedUses(vec, 1);
+          if (group != -1)
+            numGroups = dotsGroup.size();
         }
         dots.push_back(dot);
         group = currGroup;
@@ -83,7 +90,7 @@ public:
             op->moveBefore(dots.begin()->getOperation());
         }
         i++;
-        if (i == 4)
+        if (i == numGroups)
           i = 0;
       }
     });
