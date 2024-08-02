@@ -186,6 +186,87 @@ static bool getTransposeFlagFromValue(Value val) {
   return isTransposed;
 }
 
+static void rewriteLoadWithSLM(ModuleOp &m, DenseSet<Value> &dotWithSLMOperands,
+                               MLIRContext *ctx) {
+  // FIXME: Use a cost model to decide when to do rewrite
+  dotWithSLMOperands.clear();
+  auto funcsVec = llvm::to_vector(m.getBody()->getOps<tt::FuncOp>());
+  if (funcsVec.size() == 0)
+    return;
+
+  auto loadsVec = llvm::to_vector(funcsVec[0].getBody().getOps<tt::LoadOp>());
+  if (loadsVec.size() == 0)
+    return;
+  tt::LoadOp load = loadsVec[0];
+
+  // load is not in a loop-like op
+  if (load->getParentOfType<LoopLikeOpInterface>())
+    return;
+
+  auto dot = cast<tt::DotOp>(*load->getUsers().begin());
+  // load is not used by tt.dot
+  if (llvm::none_of(load->getUsers(),
+                    [&](Operation *user) { return isa<tt::DotOp>(user); }))
+    return;
+
+  auto loopOp = dyn_cast_or_null<LoopLikeOpInterface>(dot->getParentOp());
+  // skip dot which is not in a loop
+  if (!loopOp)
+    return;
+
+  Location loc = load.getLoc();
+  OpBuilder b(load);
+  auto type = cast<RankedTensorType>(load.getType());
+  unsigned bytes = type.getNumElements() * type.getElementTypeBitWidth() / 8;
+  unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(m);
+  unsigned slmSize = numWarps * bytes;
+
+  // TODO: use LocalAllocOp for SLM allocation
+  static constexpr char sharedAttr[] = "triton_gpu.shared";
+  m->setAttr(sharedAttr,
+             mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32), slmSize));
+  auto func = load->getParentOfType<FunctionOpInterface>();
+
+  auto ptrToSharedMemTy = tt::PointerType::get(
+      type.getElementType(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
+  func.insertArgument(func.getNumArguments(), ptrToSharedMemTy, {},
+                      func.getLoc());
+  b.setInsertionPointAfter(load);
+  auto subgroupId =
+      b.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr);
+  auto warpId = b.create<arith::IndexCastOp>(loc, b.getI32Type(), subgroupId);
+  // hardcode: we use i16ptr here, so bytes / 2
+  auto warpSize = b.create<arith::ConstantIntOp>(loc, bytes / 2, 32);
+  auto offset = b.create<arith::MulIOp>(loc, warpId, warpSize);
+  auto block = load->getBlock();
+  auto arg = block->getArgument(block->getNumArguments() - 1);
+  auto base = b.create<tt::AddPtrOp>(loc, ptrToSharedMemTy, arg, offset);
+  SmallVector<Value> shape;
+  shape.push_back(b.create<arith::ConstantIntOp>(loc, type.getShape()[0], 64));
+  shape.push_back(b.create<arith::ConstantIntOp>(loc, type.getShape()[1], 64));
+  SmallVector<Value> strides;
+  strides.push_back(
+      b.create<arith::ConstantIntOp>(loc, type.getShape()[1], 64));
+  strides.push_back(b.create<arith::ConstantIntOp>(loc, 1, 64));
+  SmallVector<Value> offsets;
+  offsets.push_back(b.create<arith::ConstantIntOp>(loc, 0, 32));
+  offsets.push_back(b.create<arith::ConstantIntOp>(loc, 0, 32));
+  auto loadPtrTy = cast<tt::PointerType>(load.getPtr().getType());
+  auto ptrTy = tt::PointerType::get(loadPtrTy.getPointeeType(), 3);
+  auto ptr =
+      b.create<tt::MakeTensorPtrOp>(loc, ptrTy, base, shape, strides, offsets,
+                                    b.getDenseI32ArrayAttr({1, 0}));
+  auto store = b.create<tt::StoreOp>(loc, ptr, load, tt::CacheModifier::NONE,
+                                     tt::EvictionPolicy::NORMAL);
+
+  b.setInsertionPoint(dot);
+  auto newLoad =
+      b.create<tt::LoadOp>(dot.getLoc(), ptr, tt::CacheModifier::NONE,
+                           tt::EvictionPolicy::NORMAL, false);
+  Value res = load.getResult();
+  dotWithSLMOperands.insert(dot);
+  res.replaceAllUsesExcept(newLoad, store);
+}
 class MatchTargetSizePass
     : public triton::gpu::intel::impl::TritonIntelGPUMatchTargetSizeBase<
           MatchTargetSizePass> {
@@ -195,78 +276,9 @@ public:
 
     MLIRContext *ctx = &getContext();
     ModuleOp m = getOperation();
-    // this is ad-hoc for Q SLM
-    char *env = std::getenv("TRITON_INTEL_ENABLE_SLM");
-    const bool enableSLM = env ? (bool)std::atoi(env) : false;
-    if (enableSLM) {
-      dotWithSLMOperands.clear();
-      tt::LoadOp load;
-      m.walk([&](tt::LoadOp op) {
-        load = op;
-        return WalkResult::interrupt();
-      });
-      auto dot = cast<tt::DotOp>(*load->getUsers().begin());
-      auto forOp = dyn_cast_or_null<scf::ForOp>(dot->getParentOp());
-      // skip dot which is not in a loop
-      if (forOp) {
-        auto type = cast<RankedTensorType>(load.getType());
-        unsigned bytes =
-            type.getNumElements() * type.getElementTypeBitWidth() / 8;
-        unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(m);
-        unsigned slmSize = numWarps * bytes;
-
-        static constexpr char sharedAttr[] = "triton_gpu.shared";
-        m->setAttr(sharedAttr, mlir::IntegerAttr::get(
-                                   mlir::IntegerType::get(ctx, 32), slmSize));
-        auto func = load->getParentOfType<FunctionOpInterface>();
-
-        auto ptrToSharedMemTy = tt::PointerType::get(
-            type.getElementType(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
-        func.insertArgument(func.getNumArguments(), ptrToSharedMemTy, {},
-                            func.getLoc());
-        Location loc = load.getLoc();
-        OpBuilder b(load);
-        b.setInsertionPointAfter(load);
-        auto subgroupId =
-            b.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr);
-        auto warpId =
-            b.create<arith::IndexCastOp>(loc, b.getI32Type(), subgroupId);
-        // hardcode: we use i16ptr here, so bytes / 2
-        auto warpSize = b.create<arith::ConstantIntOp>(loc, bytes / 2, 32);
-        auto offset = b.create<arith::MulIOp>(loc, warpId, warpSize);
-        auto block = load->getBlock();
-        auto arg = block->getArgument(block->getNumArguments() - 1);
-        auto base = b.create<tt::AddPtrOp>(loc, ptrToSharedMemTy, arg, offset);
-        SmallVector<Value> shape;
-        shape.push_back(
-            b.create<arith::ConstantIntOp>(loc, type.getShape()[0], 64));
-        shape.push_back(
-            b.create<arith::ConstantIntOp>(loc, type.getShape()[1], 64));
-        SmallVector<Value> strides;
-        strides.push_back(
-            b.create<arith::ConstantIntOp>(loc, type.getShape()[1], 64));
-        strides.push_back(b.create<arith::ConstantIntOp>(loc, 1, 64));
-        SmallVector<Value> offsets;
-        offsets.push_back(b.create<arith::ConstantIntOp>(loc, 0, 32));
-        offsets.push_back(b.create<arith::ConstantIntOp>(loc, 0, 32));
-        auto loadPtrTy = cast<tt::PointerType>(load.getPtr().getType());
-        auto ptrTy = tt::PointerType::get(loadPtrTy.getPointeeType(), 3);
-        auto ptr = b.create<tt::MakeTensorPtrOp>(
-            loc, ptrTy, base, shape, strides, offsets,
-            b.getDenseI32ArrayAttr({1, 0}));
-        auto store =
-            b.create<tt::StoreOp>(loc, ptr, load, tt::CacheModifier::NONE,
-                                  tt::EvictionPolicy::NORMAL);
-
-        b.setInsertionPoint(dot);
-        auto newLoad =
-            b.create<tt::LoadOp>(dot.getLoc(), ptr, tt::CacheModifier::NONE,
-                                 tt::EvictionPolicy::NORMAL, false);
-        Value res = load.getResult();
-        dotWithSLMOperands.insert(dot);
-        res.replaceAllUsesExcept(newLoad, store);
-      }
-    }
+    // this is ad-hoc for flash attention load/store Q on SLM
+    if (tools::getBoolEnv("TRITON_INTEL_ENABLE_FIRST_LOAD_TO_SLM"))
+      rewriteLoadWithSLM(m, dotWithSLMOperands, ctx);
 
     // Collect the result layout of "interesting" `tt.dot` operations.
     // A candidate 'tt.dot' operation yields a tensor with a warp layout.
@@ -1058,14 +1070,14 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
   // for attention SLM
   bool useSLM = false;
   if (auto store = dyn_cast<tt::StoreOp>(op)) {
-    auto ptrTy = store.getPtr().getType();
-    useSLM = (cast<tt::PointerType>(ptrTy).getAddressSpace() ==
-              TritonGEN::TritonGENMemorySpace::kWorkgroup);
+    auto ptrAS =
+        cast<tt::PointerType>(store.getPtr().getType()).getAddressSpace();
+    useSLM = (ptrAS == TritonGEN::TritonGENMemorySpace::kWorkgroup);
   }
   if (auto load = dyn_cast<tt::LoadOp>(op)) {
-    auto ptrTy = load.getPtr().getType();
-    useSLM = (cast<tt::PointerType>(ptrTy).getAddressSpace() ==
-              TritonGEN::TritonGENMemorySpace::kWorkgroup);
+    auto ptrAS =
+        cast<tt::PointerType>(load.getPtr().getType()).getAddressSpace();
+    useSLM = (ptrAS == TritonGEN::TritonGENMemorySpace::kWorkgroup);
   }
   auto [shape, subType, subSize] =
       getSubTypeAndShape(type, isTransposed, useSLM);

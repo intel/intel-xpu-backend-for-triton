@@ -507,4 +507,37 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
   let hasVerifier = 1;
 }
 
+def TritonGEN_SIMDBlockReadOp: TritonGEN_Op<"simdblockread">,
+  Results<(outs FixedVectorOf<[TritonGEN_MatrixElemType]>:$res)>,
+  Arguments<(ins
+    Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr
+  )> {
+
+  let summary = "simd block read";
+
+  let description = [{
+    The `triton_gen.simdblockread` operation performs simd block read from
+      a start address without laneId offset. The parameters are:
+      $ptr - the base address to read data
+      result vector will be stored in $val
+  }];
+
+}
+
+def TritonGEN_SIMDBlockWriteOp : TritonGEN_Op<"simdblockwrite">,
+  Arguments<(ins
+    Arg<LLVM_AnyPointer, "", [MemWrite]>:$ptr,
+    FixedVectorOf<[TritonGEN_MatrixElemType]>:$val
+  )> {
+
+  let summary = "simd block write";
+
+  let description = [{
+    The `triton_gen.simdblockwrite` operation performs simd block write to
+      a start address without laneId offset. The parameters are:
+      $ptr - the base address to be written
+      $val - the value vector to write
+  }];
+
+}
 #endif // TRITONGEN_OPS

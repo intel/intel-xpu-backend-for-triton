@@ -1379,6 +1379,62 @@ struct TritonMatrix2DBlockPrefetchLowering
   }
 };
 
+struct TritonSIMDBlockWriteLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockWriteOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SIMDBlockWriteOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SIMDBlockWriteOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    LLVM::LLVMPointerType ptrToSharedMemTy =
+        ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kWorkgroup);
+    VectorType v64i16Ty = VectorType::get(64, i16_ty);
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    constexpr char funcName[] = "llvm.genx.GenISA.simdBlockWrite";
+
+    SmallVector<Type> argTypes{ptrToSharedMemTy, v64i16Ty};
+
+    SmallVector<Value> args{adaptor.getPtr(), adaptor.getVal()};
+    intel::AttributeList attrs;
+    LLVM::CallOp call = createDeviceFunctionCall(
+        rewriter, funcName, void_ty(ctx), argTypes, args, attrs);
+
+    rewriter.replaceOp(op, call);
+    return success();
+  }
+};
+
+struct TritonSIMDBlockReadLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockReadOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SIMDBlockReadOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SIMDBlockReadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    VectorType v64f16Ty = VectorType::get(64, f16_ty);
+    VectorType v64i16Ty = VectorType::get(64, i16_ty);
+    LLVM::LLVMPointerType ptrToSharedMemTy =
+        ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kWorkgroup);
+
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    constexpr char funcName[] = "llvm.genx.GenISA.simdBlockRead";
+    SmallVector<Type> argTypes{ptrToSharedMemTy};
+    SmallVector<Value> args{adaptor.getPtr()};
+
+    intel::AttributeList attrs;
+    LLVM::CallOp call = createDeviceFunctionCall(rewriter, funcName, v64i16Ty,
+                                                 argTypes, args, attrs);
+    Location loc = op.getLoc();
+    rewriter.replaceOp(op, bitcast(call.getResult(), v64f16Ty));
+
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1449,7 +1505,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonSubGroupReduceLowering, TritonSubGroupScanLowering,
       TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
       TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
-      TritonMatrix2DBlockPrefetchLowering>(converter);
+      TritonMatrix2DBlockPrefetchLowering, TritonSIMDBlockWriteLowering,
+      TritonSIMDBlockReadLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {

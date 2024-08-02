@@ -195,39 +195,24 @@ public:
       if constexpr (std::is_same_v<OpType, LoadOp>) {
         VectorType v64f16Ty = VectorType::get(64, f16_ty);
 
-        // FIXME: need to add an operation in the TritonGen dialect for this.
-        constexpr char funcName[] = "llvm.genx.GenISA.simdBlockRead";
-        SmallVector<Type> argTypes{ptrToSharedMemTy};
-        LLVM::LLVMFuncOp funcOp =
-            LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, v64i16Ty);
-        funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
         rewriter.restoreInsertionPoint(insertPoint);
 
-        SmallVector<Value> args{base};
-        LLVM::CallOp localLoad = call(funcOp, args);
-        rewriter.replaceOp(op, bitcast(localLoad.getResult(), v64f16Ty));
+        TritonGEN::SIMDBlockReadOp simdRead =
+            rewriter.create<TritonGEN::SIMDBlockReadOp>(loc, v64i16Ty, base);
+        rewriter.replaceOp(op, simdRead.getRes());
 
         return success();
       }
 
       if constexpr (std::is_same_v<OpType, StoreOp>) {
-        LLVM::LLVMVoidType voidTy = void_ty(ctx);
-
-        // FIXME: Should add an operation in the TritonGen dialect for this.
-        constexpr char funcName[] = "llvm.genx.GenISA.simdBlockWrite";
         rewriter.restoreInsertionPoint(insertPoint);
         Value val = adaptor.getValue();
-
-        SmallVector<Type> argTypes{ptrToSharedMemTy, v64i16Ty};
-        LLVM::LLVMFuncOp funcOp =
-            LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, voidTy);
-        funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
         Value res = cast<LLVM::ShuffleVectorOp>(val.getDefiningOp()).getRes();
         res = bitcast(res, v64i16Ty);
 
-        SmallVector<Value> args{base, res};
-        LLVM::CallOp localStore = call(funcOp, args);
+        TritonGEN::SIMDBlockWriteOp simdWrite =
+            rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, base, res);
 
         rewriter.eraseOp(op);
         return success();
