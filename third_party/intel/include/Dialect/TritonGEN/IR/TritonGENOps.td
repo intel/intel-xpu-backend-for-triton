@@ -522,6 +522,9 @@ def TritonGEN_SIMDBlockReadOp: TritonGEN_Op<"simdblockread">,
       result vector will be stored in $val
   }];
 
+  let assemblyFormat = [{
+    operands ` ` attr-dict `:` functional-type(operands, results)
+  }];
 }
 
 def TritonGEN_SIMDBlockWriteOp : TritonGEN_Op<"simdblockwrite">,
@@ -539,5 +542,8 @@ def TritonGEN_SIMDBlockWriteOp : TritonGEN_Op<"simdblockwrite">,
       $val - the value vector to write
   }];
 
+  let assemblyFormat = [{
+    operands ` ` attr-dict `:` `(` type(operands) `)`
+  }];
 }
 #endif // TRITONGEN_OPS
