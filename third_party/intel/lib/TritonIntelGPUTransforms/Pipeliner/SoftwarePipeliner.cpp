@@ -69,9 +69,6 @@ struct IntelGPUPipelinePass
     if (!m->hasAttr(ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
       return;
 
-    auto deviceArch = ttgi::getDeviceArch(m);
-    if (deviceArch != ttgi::DeviceArch::PVC)
-      return;
     if (numStages <= 1)
       return;
 
