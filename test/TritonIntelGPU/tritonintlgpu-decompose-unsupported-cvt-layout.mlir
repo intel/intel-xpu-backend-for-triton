@@ -22,7 +22,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
 #blocked = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 32], order = [0, 1]}>
 #dot_a = #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>
 #dot_b = #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, triton_gpu.target = "xpu:DEVICE_ARCH.PVC", "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK-LABEL: decompose_block_2_dot
   tt.func public @decompose_block_2_dot() {
     %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #blocked>
