@@ -207,11 +207,12 @@ class MfmaLayout:
 
 class WmmaLayout:
 
-    def __init__(self, warps_per_cta):
+    def __init__(self, version, warps_per_cta):
+        self.version = version
         self.warps_per_cta = warps_per_cta
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.amd_wmma<{{warpsPerCTA = {self.warps_per_cta}}}>"
+        return f"#{GPU_DIALECT}.amd_wmma<{{version = {self.version}, warpsPerCTA = {self.warps_per_cta}}}>"
 
 
 class MmaLayout:
