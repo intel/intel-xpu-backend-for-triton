@@ -18,8 +18,6 @@ class ConversionPatternRewriter;
 
 namespace mlir::triton::gpu::intel {
 
-enum class DeviceArch { UNKNOWN = 0, ATS, PVC };
-
 // Infers the encoding of the source of op given the result encoding.
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
 
@@ -50,8 +48,6 @@ LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
 LLVM::CallOp createSPIRVBuiltinCall(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     LLVM::LLVMFuncOp func, ValueRange args);
-
-DeviceArch getDeviceArch(Operation *module);
 
 } // namespace mlir::triton::gpu::intel
 
