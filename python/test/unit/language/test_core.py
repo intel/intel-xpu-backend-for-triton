@@ -1109,6 +1109,9 @@ def test_abs_fp8(in_dtype, device):
     if is_hip():
         pytest.skip('test_abs_fp8 not supported on HIP.')
 
+    if device == "xpu" and in_dtype is tl.float8e5:
+        pytest.xfail('https://github.com/intel/torch-xpu-ops/issues/570')
+
     @triton.jit
     def abs_kernel(X, Z, SIZE: tl.constexpr):
         off = tl.arange(0, SIZE)
