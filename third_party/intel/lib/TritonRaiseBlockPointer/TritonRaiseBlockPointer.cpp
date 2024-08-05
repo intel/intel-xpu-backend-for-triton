@@ -182,11 +182,6 @@ struct PtrState {
     // %5 = tt.addptr %4, %0
     // %5 may also occur in a loop to increment %4 every iteration.
 
-    // Note that this is not bullet-proof. E.g., broken IR can actually
-    // increment dim0 while dim0 already has modulo, since Triton offsets are
-    // element-wise and not in unit of lower dimensions. However, this is highly
-    // unlikely but the analysis will provide wrong result. Hence we provide a
-    // warning in this case.
     const PtrState *lhs = &lhsState;
     const PtrState *rhs = &rhsState;
 
