@@ -56,7 +56,7 @@ public:
       for (auto dot : loop.getOps<tt::DotOp>()) {
         auto groupAttr = dot->getAttrOfType<IntegerAttr>("schedule-group");
         int currGroup = groupAttr.getInt();
-        // a new set of schedule-groups start
+        // a new set of schedule-group start (e.g. 0000 - 1111)
         if (currGroup != group && !dots.empty()) {
           dotsGroup.push_back(dots);
           dots.clear();
@@ -65,7 +65,8 @@ public:
         if (currGroup == 0) {
           SmallVector<tt::DotOp> vec{dot};
           getNotVisitedUses(vec, 1);
-          if (group != -1)
+          // a new set of schedule-groups(e.g. 0000,1111,2222,3333 - 0000) start
+          if (group > 0)
             numGroups = dotsGroup.size();
         }
         dots.push_back(dot);

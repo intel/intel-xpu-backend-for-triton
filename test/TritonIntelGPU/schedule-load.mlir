@@ -138,6 +138,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
       %129 = tt.dot %103, %89, %128, inputPrecision = tf32 {"schedule-group" = 3 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       %130 = tt.dot %105, %90, %129, inputPrecision = tf32 {"schedule-group" = 3 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
 
+      %cst_3 = arith.constant dense<1.000000e+00> : tensor<16x16xf16>
+      %131 = tt.dot %91, %cst_3, %cst_2, inputPrecision = tf32 {"schedule-group" = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+
       %321 = tt.advance %arg21, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
       %322 = tt.advance %arg22, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
       %323 = tt.advance %arg23, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
