@@ -17,8 +17,6 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
-// #include "mlir/Support/LogicalResult.h"
-// #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
