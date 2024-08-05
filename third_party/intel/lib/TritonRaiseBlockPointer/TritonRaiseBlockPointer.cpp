@@ -894,13 +894,15 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
     return failure();
   }
 
-  if (state.getRank() == 1) {
+  switch (state.getRank()) {
+  case 1:
     // Apply the modulo before expanding shape, the common pattern is
     // offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     // a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] *
     // stride_ak)
     state.shape.back() = rhsState.scalar;
-  } else if (state.getRank() == 2) {
+    break;
+  case 2: {
     // torch inductor expands the tensor shape before applying the modulo.
     //
     // We only support either:
@@ -918,7 +920,9 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
                         "with no singleton dimension not supported");
       return failure();
     }
-  } else {
+    break;
+  }
+  default:
     remOp->emitRemark("TritonRaiseBlockPointer: unsupported modulo pattern");
     return failure();
   }
