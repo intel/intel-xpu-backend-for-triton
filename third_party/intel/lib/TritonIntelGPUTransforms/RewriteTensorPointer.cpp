@@ -53,19 +53,13 @@ bool isDivisible(Value value, unsigned divisor) {
 
 /// Check if the tensor pointer should be removed. The tensor pointer should be
 /// removed if:
-///   - the device architecture is not PVC
 ///   - the tensor pointer does not have DotEncoding with DpasEncoding parent
 ///   and does not have DpasEncoding
 ///   - the tensor pointer pitch is not divisible by Qword bitwidth
 ///   - the tensor pointer is not contiguous on memory
-bool shouldRemove(tt::MakeTensorPtrOp &op, ttgi::DeviceArch deviceArch,
-                  bool isUsedByStoreOp) {
+bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
   if (!op->getParentOfType<ModuleOp>()->hasAttr(
           ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
-    return true;
-
-  // Non-PVC device should always remove the tensor pointer
-  if (deviceArch != ttgi::DeviceArch::PVC)
     return true;
 
   auto ptrType = cast<tt::PointerType>(op.getType());
@@ -726,22 +720,20 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    ttgi::DeviceArch arch = ttgi::getDeviceArch(mod);
-
     auto usedByStoreOp = [](Value val) {
       return llvm::any_of(val.getUsers(), [](Operation *user) {
         return llvm::isa<tt::StoreOp>(user);
       });
     };
 
-    auto markTensorPointerForRemoval =
-        [this, arch](Value val, bool isUsedByStoreOp = false) {
-          if (tt::isTensorPointerType(val.getType())) {
-            tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
-            if (shouldRemove(makeTensorPtrOp, arch, isUsedByStoreOp))
-              valueToRemove.insert(val);
-          }
-        };
+    auto markTensorPointerForRemoval = [this](Value val,
+                                              bool isUsedByStoreOp = false) {
+      if (tt::isTensorPointerType(val.getType())) {
+        tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
+        if (shouldRemove(makeTensorPtrOp, isUsedByStoreOp))
+          valueToRemove.insert(val);
+      }
+    };
 
     mod.walk([&](Operation *op) {
       if (llvm::isa<tt::MakeTensorPtrOp>(op)) {

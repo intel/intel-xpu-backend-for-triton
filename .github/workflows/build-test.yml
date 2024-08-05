@@ -116,11 +116,7 @@ jobs:
           if [[ -n "${{ inputs.runner_label }}" ]]; then
             matrix='{"python": ["3.9"]}'
           else
-            if [[ "${{ github.ref_name }}" = "llvm-target" ]]; then
-              matrix='{"python": ["3.9", "3.10", "3.11"], "driver": ["rolling", "lts"]}'
-            else
-              matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
-            fi
+            matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
           fi
           echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
 

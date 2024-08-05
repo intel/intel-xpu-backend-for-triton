@@ -12,21 +12,23 @@ RUN set -ex; \
     apt-get install -y --no-install-recommends --fix-missing \
       intel-opencl-icd \
       clinfo \
-      intel-opencl-icd intel-level-zero-gpu level-zero \
-      intel-media-va-driver-non-free libmfx1 libmfxgen1 libvpl2 libigdgmm12 \
-      libigc-dev intel-igc-cm libigdfcl-dev libigfxcmrt-dev level-zero-dev \
+      intel-level-zero-gpu \
+      libze1 \
+      libze-dev libigc-dev intel-igc-cm libigdfcl-dev libigfxcmrt-dev \
       \
+      pkg-config \
       build-essential \
       zlib1g-dev \
       cmake \
+      clang \
       ninja-build \
       ncurses-term \
-      pkg-config \
-      wget \
       \
       libpng-dev libjpeg-dev libsndfile1-dev libxml2-dev libxslt1-dev \
+      libgl1-mesa-glx  \
       fontconfig libfontconfig1-dev \
       libpango-1.0-0 libpangoft2-1.0-0 \
+      libsdl2-dev libsdl2-2.0-0 \
       \
       gh \
     ; \
@@ -46,7 +48,7 @@ RUN \
    spirv-dis --version
 
 RUN \
-  curl -sSLO https://registrationcenter-download.intel.com/akdlm/IRC_NAS/6758ce21-bde6-47f8-b4bf-6df4301f187d/l_intel-for-pytorch-gpu-dev_p_0.5.1.40_offline.sh; \
+  curl -sSLO https://registrationcenter-download.intel.com/akdlm/IRC_NAS/a8532c15-864f-4eac-88f2-a5c7e7998bbd/l_intel-for-pytorch-gpu-dev_p_0.5.2.18_offline.sh; \
   sh l_intel-for-pytorch-gpu*.sh -a --silent --eula accept; \
   rm l_intel-for-pytorch-gpu*.sh
 

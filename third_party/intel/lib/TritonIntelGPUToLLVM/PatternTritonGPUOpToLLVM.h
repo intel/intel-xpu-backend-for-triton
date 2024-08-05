@@ -10,6 +10,11 @@ namespace mlir::triton::intel {
 
 constexpr int patternBenefitAddSPIRVEnv = 30;
 
+// Custom Arith Dialect patterns.
+void populateArithOpsToLLVMPatterns(
+    TritonIntelGPUToLLVMTypeConverter &typeConverter,
+    RewritePatternSet &patterns, PatternBenefit benefit);
+
 void populateTritonOpsToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);

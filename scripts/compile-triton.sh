@@ -69,9 +69,6 @@ if [ "$VENV" = true ]; then
   python3 -m venv .venv --prompt triton
   source .venv/bin/activate
   pip install ninja cmake wheel
-elif [ -v VIRTUAL_ENV ]; then
-  echo "**** Cleaning up Python virtualenv ****"
-  deactivate
 fi
 
 if [ ! -d "$PACKAGES_DIR" ]; then

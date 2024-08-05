@@ -175,10 +175,10 @@ public:
                hasSliceAttr(op->getResultTypes()[0]))
         return WalkResult::advance();
       else if (auto cstOp = dyn_cast<arith::ConstantOp>(op)) {
-        recordRootSubSize(cstOp.getResult().getType());
+        recordRootSubSize(op);
         transformArithConstantOp(cstOp);
       } else if (auto ptrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
-        recordRootSubSize(ptrOp.getResult().getType());
+        recordRootSubSize(op);
         transformMakeTensorPtrOp(ptrOp);
       } else if (auto dot = dyn_cast<tt::DotOp>(op))
         transformDotOp(dot);
@@ -218,10 +218,11 @@ private:
   /// Canonicalize operations (e.g. remove redundant tt.extract, tt.glue)
   void canonicalize();
 
-  void recordRootSubSize(Type type);
-  SmallVector<int64_t> getSubOpSize(RankedTensorType type) const;
+  void recordRootSubSize(Operation *op);
+  SmallVector<int64_t> getSubOpSize(RankedTensorType op,
+                                    bool isTransposed) const;
   std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
-  getSubTypeAndShape(Type type) const;
+  getSubTypeAndShape(Type type, bool isTransposed = false) const;
   Value getSubVal(Operation *op, Value val, ArrayRef<int64_t> srcOffset,
                   ArrayRef<int64_t> dstSize);
 
@@ -237,6 +238,10 @@ private:
 
   /// Record the native size supported by the target implementation.
   DenseMap<Attribute, SmallVector<int64_t>> sizePerAttrMap;
+
+  /// Record the native size supported by the target implementation for
+  /// transposed type.
+  DenseMap<Attribute, SmallVector<int64_t>> sizePerAttrMapTransposed;
 
   /// Collects the result layout of the `tt.dot` operations in the module.
   DenseSet<Attribute> dotAttrs;
@@ -373,11 +378,12 @@ public:
       }
 
       auto glue = cast<ttgi::GlueOp>(definingOp);
-      for (Operation *user : result.getUsers())
+      for (Operation *user : result.getUsers()) {
         if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
           userIndexMap[extract] = idx + extract.getIndex();
           deleteList.push_back(extract.getOperation());
         }
+      }
 
       idx += glue->getOperands().size();
     }
@@ -412,10 +418,16 @@ public:
 
       if (llvm::any_of(arg.getUsers(), [](Operation *user) {
             return !isa<ttgi::ExtractOp>(user);
-          })) {
+          }))
         return false;
-      }
     }
+
+    // Bail out if the loop result is not used by an 'extract' operation.
+    if (forOp->getNumResults() == 1 &&
+        llvm::any_of(forOp.getResult(0).getUsers(), [](Operation *user) {
+          return !isa<ttgi::ExtractOp>(user);
+        }))
+      return false;
 
     return true;
   }
@@ -475,22 +487,40 @@ void MatchTargetSizePass::canonicalize() {
     signalPassFailure();
 }
 
-void MatchTargetSizePass::recordRootSubSize(Type type) {
+void MatchTargetSizePass::recordRootSubSize(Operation *op) {
+  Type type;
+  bool isTransposed = false;
+  if (auto cstOp = dyn_cast<arith::ConstantOp>(op)) {
+    type = cstOp.getResult().getType();
+  } else if (auto tensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
+    type = tensorPtrOp.getResult().getType();
+    ArrayRef<int32_t> order = tensorPtrOp.getOrder();
+    auto rank = order.size();
+    isTransposed = (order[rank - 2] != 1);
+  }
+
+  auto ptrType = dyn_cast<tt::PointerType>(type);
+  // extract until a non-PointerType
+  while (isa_and_nonnull<tt::PointerType>(ptrType)) {
+    type = ptrType.getPointeeType();
+    ptrType = dyn_cast<tt::PointerType>(type);
+  }
+
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Attribute layout = tensorType.getEncoding();
     assert(layout && "Expecting a valid layout");
-    if (sizePerAttrMap.count(layout) == 0)
-      sizePerAttrMap[layout] = getSubOpSize(tensorType);
+    if (isTransposed && sizePerAttrMapTransposed.count(layout) == 0)
+      sizePerAttrMapTransposed[layout] = getSubOpSize(tensorType, isTransposed);
+    if (!isTransposed && sizePerAttrMap.count(layout) == 0)
+      sizePerAttrMap[layout] = getSubOpSize(tensorType, isTransposed);
     return;
   }
-
-  if (auto ptrType = dyn_cast<tt::PointerType>(type))
-    recordRootSubSize(ptrType.getPointeeType());
 }
 
 /// Return the native size supported by the target architecture.
 SmallVector<int64_t>
-MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
+MatchTargetSizePass::getSubOpSize(RankedTensorType type,
+                                  bool isTransposed) const {
   Attribute layout = type.getEncoding();
   assert(layout && "Expecting a valid layout");
 
@@ -500,7 +530,7 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
   if (dotAttrs.count(layout)) {
     return {dotShape.m, dotShape.n};
   } else if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    if (dotAttr.getIsTransposed() == 1 && dotAttr.getOpIdx() == 1)
+    if (isTransposed && dotAttr.getOpIdx() == 1)
       return {dotShape.k, dotShape.n};
   }
 
@@ -552,12 +582,14 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type) const {
 /// FIXME: add a map for look up
 /// return [shape, subType, subSize] for a tensor (or pointer to tensor)
 std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
-MatchTargetSizePass::getSubTypeAndShape(Type type) const {
+MatchTargetSizePass::getSubTypeAndShape(Type type, bool isTransposed) const {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Attribute layout = tensorType.getEncoding();
     assert(layout && "Expecting a valid layout");
     SmallVector<int64_t> shape = to_vector(tensorType.getShape());
-    SmallVector<int64_t> subSize = sizePerAttrMap.at(layout);
+    SmallVector<int64_t> subSize = isTransposed
+                                       ? sizePerAttrMapTransposed.at(layout)
+                                       : sizePerAttrMap.at(layout);
     auto subType = RankedTensorType::get(
         subSize, tensorType.getElementType() /*no encoding*/);
     return {shape, subType, subSize};
@@ -565,7 +597,8 @@ MatchTargetSizePass::getSubTypeAndShape(Type type) const {
 
   if (auto ptrType = dyn_cast<tt::PointerType>(type)) {
     Type pointeeType = ptrType.getPointeeType();
-    auto [shape, subType, subSize] = getSubTypeAndShape(pointeeType);
+    auto [shape, subType, subSize] =
+        getSubTypeAndShape(pointeeType, isTransposed);
     auto newType = tt::PointerType::get(subType, ptrType.getAddressSpace());
     return {shape, newType, subSize};
   }
@@ -660,7 +693,10 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
 
 void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
   Type resultType = op.getResult().getType();
-  auto [shape, subType, subSize] = getSubTypeAndShape(resultType);
+  ArrayRef<int32_t> order = op.getOrder();
+  auto rank = order.size();
+  bool isTransposed = (order[rank - 2] != 1);
+  auto [shape, subType, subSize] = getSubTypeAndShape(resultType, isTransposed);
   unsigned dim = shape.size();
   OpBuilder b(op);
   Location loc = op.getLoc();
@@ -822,6 +858,7 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
   unsigned dotIdx = 2;
   Type type;
 
+  bool isTransposed = false;
   switch (numResults) {
   case 0:
     // prefetch/store
@@ -830,11 +867,45 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
   case 1: {
     // arith/math/advanceOp/loadOp
     type = op->getResultTypes()[0];
-    // mark tt.load for dot A/B
-    if (auto tensorType = dyn_cast<RankedTensorType>(type))
-      if (isa<tt::LoadOp>(op)) {
+    // mark tt.load/tt.advance for dot A/B
+    if (isa<RankedTensorType, tt::PointerType>(type))
+      if (isa<tt::LoadOp, tt::AdvanceOp>(op)) {
+        RankedTensorType tensorType;
+        if (isa<RankedTensorType>(type))
+          tensorType = dyn_cast<RankedTensorType>(type);
+        else
+          tensorType = dyn_cast<RankedTensorType>(
+              dyn_cast<tt::PointerType>(type).getPointeeType());
         Attribute layout = tensorType.getEncoding();
         assert(layout && "Expecting a valid layout");
+
+        tt::LoadOp load = dyn_cast<tt::LoadOp>(op);
+        tt::AdvanceOp advOp = dyn_cast<tt::AdvanceOp>(op);
+        Value loadPtr;
+        if (load)
+          loadPtr = load.getPtr();
+        else
+          loadPtr = advOp.getPtr();
+        if (auto blockArg = dyn_cast<BlockArgument>(loadPtr)) {
+          unsigned argIdx = blockArg.getArgNumber();
+          if (auto loopLikeOp = dyn_cast<LoopLikeOpInterface>(
+                  blockArg.getParentBlock()->getParentOp())) {
+            auto inits = llvm::to_vector(loopLikeOp.getInits());
+            if (auto glueOp =
+                    dyn_cast<ttgi::GlueOp>(inits[argIdx - 1].getDefiningOp())) {
+              if (auto tempPtr = dyn_cast<tt::MakeTensorPtrOp>(
+                      glueOp.getOperands()[0].getDefiningOp())) {
+                loadPtr = tempPtr.getResult();
+              }
+            }
+          }
+        }
+
+        if (auto tensorPtr = loadPtr.getDefiningOp<tt::MakeTensorPtrOp>()) {
+          ArrayRef<int32_t> order = tensorPtr.getOrder();
+          auto rank = order.size();
+          isTransposed = (order[rank - 2] != 1);
+        }
         if (auto dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(layout))
           dotIdx = dotAttr.getOpIdx();
       }
@@ -843,7 +914,8 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
     llvm_unreachable("Unexpected operation");
   }
 
-  auto [shape, subType, subSize] = getSubTypeAndShape(type);
+  auto [shape, subType, subSize] = getSubTypeAndShape(type, isTransposed);
+
   unsigned dim = shape.size();
   OpBuilder b(op);
   Location loc = op->getLoc();
@@ -859,8 +931,8 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
                         [&](Value operand) {
                           Type type = operand.getType();
                           if (isa<tt::PointerType, RankedTensorType>(type)) {
-                            Type subOpndType =
-                                std::get<1>(getSubTypeAndShape(type));
+                            Type subOpndType = std::get<1>(
+                                getSubTypeAndShape(type, isTransposed));
                             Value newOp = b.create<ttgi::ExtractOp>(
                                 loc, subOpndType, operand, idx);
                             return newOp;

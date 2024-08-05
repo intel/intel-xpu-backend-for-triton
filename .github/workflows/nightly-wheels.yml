@@ -16,13 +16,15 @@ jobs:
     runs-on:
       - glados
       - spr
-      - runner-0.0.16
+      - runner-0.0.18
     strategy:
       matrix:
         python:
           - "3.9"
           - "3.10"
           - "3.11"
+          - "3.12"
+      fail-fast: false
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -130,6 +132,8 @@ jobs:
       - name: Install torchtext
         run: |
           pip install text/dist/*.whl
+          # FIXME: old PyTorch does not work with torchdata=0.8.0
+          pip install 'torchdata<0.8.0'
           python -c "import torchtext; print(torchtext.__version__)"
 
       - name: Save torchtext to a cache

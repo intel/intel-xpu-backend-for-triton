@@ -929,7 +929,7 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
   SmallVector<Value> warpsPerCTA;
   for (unsigned i = 0; i < rank; ++i)
     warpsPerCTA.push_back(i32_val(_warpsPerCTA[i]));
-  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
 
   Value threadId = getThreadId(rewriter, loc);
   Value warpSize = i32_val(triton::gpu::getWarpSize(wmmaLayout));
@@ -983,7 +983,7 @@ emitOffsetForWmmaLayout(const AMDWmmaEncodingAttr &wmmaLayout,
   assert(rank == 2 || rank == 3);
 
   SmallVector<unsigned> numWarpsPerDim(rank, 1);
-  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerWMMAInstr();
+  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
   SmallVector<unsigned> shapePerWarp(rank, 1);
   shapePerWarp[rank - 2] = mnkDim[0];
   shapePerWarp[rank - 1] = mnkDim[1];
@@ -1109,6 +1109,8 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
     result = emitBaseIndexForMfmaLayout(loc, rewriter, mfmaLayout, type);
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(layout)) {
+    // TODO: support 2nd gen of WMMA
+    assert(wmmaLayout.getVersion() == 1);
     result = emitBaseIndexForWmmaLayout(loc, rewriter, wmmaLayout, type);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     auto parentLayout = sliceLayout.getParent();
@@ -1239,7 +1241,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   // Tensor indices held by the current thread, as LLVM values
   auto srcIndices = emitIndices(loc, rewriter, target, srcEncoding, srcTy,
                                 /*withCTAOffset=*/false);
-  // Swizzling with leading offsets (e.g. Hopper GMMA)
+  // Swizzling with leading offsets (e.g. Hopper WGMMA)
   unsigned swizzlingByteWidth = 0;
   if (resSharedLayout.getHasLeadingOffset()) {
     if (perPhase == 4 && maxPhase == 2)
@@ -1423,7 +1425,7 @@ inline Value packLLElements(Location loc,
     if (v.value().getType() != elementTypes[v.index()]) {
       LDBG("type " << type << " structType " << structType);
       LDBG("value " << v.value());
-      emitError(loc) << "invalid element type in packLLEElements. Expected "
+      emitError(loc) << "invalid element type in packLLElements. Expected "
                      << elementTypes[v.index()] << " but got "
                      << v.value().getType();
     }

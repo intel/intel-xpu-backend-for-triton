@@ -7,6 +7,10 @@ on:
         description: Install Intel PyTorch Extension
         type: boolean
         default: true
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
       suite:
         description: Test suite
         type: string
@@ -46,7 +50,6 @@ env:
   TRITON_DISABLE_LINE_INFO: 1
   PYTHON_VERSION: "3.10"
   BENCHMARK_REPO: weishi-deng/benchmark.git
-  TORCH_XPU_OPS_COMMIT: 39522db63ce045f52c9d61a286018c266cd00479
 
 jobs:
   run_tests:
@@ -60,7 +63,9 @@ jobs:
     steps:
       - name: Print inputs
         run: |
-          echo "${{ toJSON(inputs) }}"
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -85,13 +90,16 @@ jobs:
       - name: Setup PyTorch with IPEX
         if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
+        with:
+          repository: Stonepia/pytorch
+          ref: ${{ inputs.pytorch_ref }}
 
       - name: Setup PyTorch without IPEX
         if: ${{ !inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
-          torch_xpu_ops_commit: ${{ env.TORCH_XPU_OPS_COMMIT }}
+          ref: ${{ inputs.pytorch_ref }}
 
       - name: Set benchmark repository (IPEX)
         if: ${{ inputs.install_ipex }}
@@ -125,16 +133,6 @@ jobs:
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> "${GITHUB_ENV}"
           echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" >> "${GITHUB_ENV}"
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" >> "${GITHUB_ENV}"
-
-      # TIMM depends on torch and torchvision, so, in general, it needs to be installed before
-      # installing custom torch and torchvision, but instead we install its dependencies except
-      # torch and torchvision.
-      - name: Install TIMM Models
-        run: |
-          # install timm without dependencies
-          pip install --no-deps git+https://github.com/huggingface/pytorch-image-models@$TIMM_COMMIT_ID
-          # install timm dependencies without torch and torchvision
-          pip install $(curl -sSL https://raw.githubusercontent.com/huggingface/pytorch-image-models/$TIMM_COMMIT_ID/requirements.txt | grep -vE torch)
 
       - name: Setup IPEX
         if: ${{ inputs.install_ipex }}
@@ -197,6 +195,12 @@ jobs:
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
+      # FIXME: old PyTorch does not work with torchdata=0.8.0
+      - name: Install torchdata package
+        if: ${{ inputs.suite == 'torchbench' && inputs.install_ipex }}
+        run: |
+          pip install 'torchdata<0.8.0'
+
       - name: Install torchtext package
         if: ${{ inputs.suite == 'torchbench' }}
         uses: ./.github/actions/install-dependency
@@ -213,6 +217,15 @@ jobs:
           package: torchaudio
           repository: pytorch/audio
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+
+      - name: Install timm package
+        if: ${{ inputs.suite == 'timm_models' || inputs.suite == 'torchbench' }}
+        uses: ./.github/actions/install-dependency
+        with:
+          package: timm
+          repository: huggingface/pytorch-image-models
+          ref: ${{ env.TIMM_COMMIT_ID }}
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
       - name: Clone pytorch benchmark

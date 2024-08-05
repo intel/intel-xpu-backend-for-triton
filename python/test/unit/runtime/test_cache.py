@@ -1,6 +1,5 @@
 import importlib.util
 import itertools
-import os
 import shutil
 import tempfile
 
@@ -11,8 +10,6 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.language as tl
 from triton.runtime.jit import JITFunction
-
-tmpdir = ".tmp"
 
 
 @triton.jit
@@ -51,6 +48,13 @@ def kernel(X, i, BLOCK: tl.constexpr):
 
 @triton.jit(do_not_specialize=["i"])
 def kernel_nospec(X, i, BLOCK: tl.constexpr):
+    i = i + 1
+    i = function_1(i)
+    tl.store(X, i)
+
+
+@triton.jit(do_not_specialize_on_alignment=["i"])
+def kernel_nospec_on_alignment(X, i, BLOCK: tl.constexpr):
     i = i + 1
     i = function_1(i)
     tl.store(X, i)
@@ -151,14 +155,7 @@ def test_changed_line_numbers_invalidate_cache():
     assert orig_cache_key != updated_cache_key
 
 
-def reset_tmp_dir():
-    os.environ["TRITON_CACHE_DIR"] = tmpdir
-    if os.path.exists(tmpdir):
-        # https://stackoverflow.com/questions/303200/how-do-i-remove-delete-a-folder-that-is-not-empty
-        shutil.rmtree(tmpdir, ignore_errors=True)
-
-
-def test_reuse():
+def test_reuse(device, fresh_triton_cache):
     counter = 0
 
     def inc_counter(*args, **kwargs):
@@ -166,15 +163,14 @@ def test_reuse():
         counter += 1
 
     JITFunction.cache_hook = inc_counter
-    reset_tmp_dir()
-    x = torch.empty(1, dtype=torch.int32, device='xpu')
+    x = torch.empty(1, dtype=torch.int32, device=device)
     for i in range(10):
         kernel[(1, )](x, 1, BLOCK=1024)
     assert counter == 1
 
 
-@pytest.mark.parametrize('mode', ['enable', 'disable'])
-def test_specialize(mode):
+@pytest.mark.parametrize('mode', ['enable', 'disable', 'disable_on_alignment'])
+def test_specialize(mode, device, fresh_triton_cache):
     counter = 0
 
     def inc_counter(*args, **kwargs):
@@ -182,22 +178,21 @@ def test_specialize(mode):
         counter += 1
 
     JITFunction.cache_hook = inc_counter
-    reset_tmp_dir()
-    x = torch.empty(1, dtype=torch.int32, device='xpu')
-    function = {'enable': kernel, 'disable': kernel_nospec}[mode]
-    target = {'enable': 3, 'disable': 1}[mode]
+    x = torch.empty(1, dtype=torch.int32, device=device)
+    function = {'enable': kernel, 'disable': kernel_nospec, 'disable_on_alignment': kernel_nospec_on_alignment}[mode]
+    target = {'enable': 3, 'disable': 1, 'disable_on_alignment': 2}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target
 
 
-def test_annotation():
+def test_annotation(device):
 
     @triton.jit
     def kernel(X, i: tl.int32):
         tl.store(X, i)
 
-    x = torch.empty(1, dtype=torch.int32, device='xpu')
+    x = torch.empty(1, dtype=torch.int32, device=device)
 
     device = torch.xpu.current_device()
     kernel[(1, )](x, 1)
@@ -386,13 +381,13 @@ def test_no_cache_callable():
     assert not kernel.used_global_vals
 
 
-def test_constexpr_not_callable() -> None:
+def test_constexpr_not_callable(device) -> None:
 
     @triton.jit
     def kernel(X, c: tl.constexpr):
         tl.store(X, 2)
 
-    x = torch.empty(1, dtype=torch.int32, device='xpu')
+    x = torch.empty(1, dtype=torch.int32, device=device)
     error = False
     try:
         kernel[(1, )](x, c="str")
@@ -407,7 +402,7 @@ def test_constexpr_not_callable() -> None:
     assert error is True
 
 
-def test_jit_warmup_cache() -> None:
+def test_jit_warmup_cache(device) -> None:
 
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr):
@@ -415,9 +410,9 @@ def test_jit_warmup_cache() -> None:
         tl.store(o + idx, tl.load(a + idx) + tl.load(b + idx))
 
     args = [
-        torch.randn(32, dtype=torch.float32, device="xpu"),
-        torch.randn(32, dtype=torch.float32, device="xpu"),
-        torch.randn(32, dtype=torch.float32, device="xpu"),
+        torch.randn(32, dtype=torch.float32, device=device),
+        torch.randn(32, dtype=torch.float32, device=device),
+        torch.randn(32, dtype=torch.float32, device=device),
         32,
     ]
     device = torch.xpu.current_device()
@@ -494,7 +489,7 @@ def test_memory_leak() -> None:
         tl.store(out_ptr0 + (x0 + tl.zeros([XBLOCK], tl.int32)), tmp0, xmask)
 
 
-def test_preload() -> None:
+def test_preload(fresh_triton_cache) -> None:
 
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr, type: tl.constexpr):
@@ -523,7 +518,7 @@ def test_preload() -> None:
     assert specialization_data is not None
 
     # clear the cache
-    reset_tmp_dir()
+    shutil.rmtree(fresh_triton_cache)
     kernel_add.cache[device].clear()
 
     # preload the kernel

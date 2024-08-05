@@ -24,6 +24,19 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
 
+static bool isSingleValue(Value value) {
+  // Don't consider load as expensive if it is loading a scalar.
+  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
+    return tensorTy.getNumElements() == 1;
+  // TODO: Handle other cases.
+  // For example, when ptr is a tensor of single value.
+  // It means that ptr is a resultant of broadcast or generated through
+  // a chain of broadcast and other operations.
+  // Rematerialize it without considering contiguous memory access pattern is
+  // fine.
+  return true;
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (auto makeTensorPtrOp = dyn_cast<triton::MakeTensorPtrOp>(op))
     return encoding;
@@ -192,18 +205,6 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
   auto call = rewriter.create<LLVM::CallOp>(loc, func, args);
   call.setCConv(func.getCConv());
   return call;
-}
-
-DeviceArch getDeviceArch(Operation *module) {
-  assert(module->hasAttr(triton::AttrTargetName) &&
-         "Expected a target attribute on the module operation");
-  StringAttr archAttr =
-      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
-
-  return llvm::StringSwitch<DeviceArch>(archAttr)
-      .Case("xpu:DEVICE_ARCH.PVC", DeviceArch::PVC)
-      .Case("xpu:DEVICE_ARCH.ATS", DeviceArch::ATS)
-      .Default(DeviceArch::UNKNOWN);
 }
 
 } // namespace mlir::triton::gpu::intel
