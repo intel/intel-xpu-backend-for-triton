@@ -222,38 +222,33 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
   unsigned executionSize = dpasLayout.getExecutionSize();
   unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
 
-  unsigned numRowsPerValue = 0u, numColsPerValue = 0u, packedOpsPerLane = 0u;
+  unsigned numRowsPerPackedValue = 0u, numColsPerPackedValue = 0u;
+  unsigned numColsPerLaneForPackedValue = 0u, numOpsPerPackedValue = 0u;
   switch (opIdx) {
   case 0: {
     assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
            "invalid opsPerChannel number.");
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
     // Unlike the operand B, to pack the value to i16 for scalar bit width <=16.
-    packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
-    unsigned packedColNum = shapeA[1] / packedOpsPerLane;
-    if (warpSize < packedColNum)
-      llvm::report_fatal_error(
-          "DpasEncodingAttr sub-group size could not "
-          "be smaller than the threads required per row for A operand.");
-
-    numRowsPerValue = warpSize / packedColNum;
-    numColsPerValue = packedOpsPerLane;
+    numOpsPerPackedValue = opsPerChannel == 4 ? 2 : 1;
+    unsigned packedColNum = shapeA[1] / numOpsPerPackedValue;
+    // Each value name represent multiple rows if warpSize > packedColNum
+    numRowsPerPackedValue = mlir::ceil(warpSize, packedColNum);
+    numColsPerPackedValue = std::min(warpSize, packedColNum);
+    numColsPerLaneForPackedValue = mlir::ceil(packedColNum, warpSize);
+    ;
   } break;
   case 1: {
-    if (warpSize < executionSize)
-      llvm::report_fatal_error(
-          "DpasEncodingAttr sub-group size could not "
-          "be smaller than the execution size for B operand.");
-
-    packedOpsPerLane = opsPerChannel;
-    numRowsPerValue = warpSize / executionSize;
-    numRowsPerValue = numRowsPerValue * opsPerChannel;
-    numColsPerValue = 1;
+    numOpsPerPackedValue = opsPerChannel;
+    // Each value name represent multiple rows if warpSize > executionSize
+    numRowsPerPackedValue = mlir::ceil(warpSize, executionSize) * opsPerChannel;
+    numColsPerPackedValue = std::min(warpSize, executionSize);
+    numColsPerLaneForPackedValue = mlir::ceil(executionSize, warpSize);
   } break;
   default:
     llvm_unreachable("unexpected operand index");
   }
-  assert(packedOpsPerLane != 0 &&
+  assert(numOpsPerPackedValue != 0 &&
          "numElemPerInstPerRowPerThread should not be zero");
 
   SmallVector<unsigned> shapePerCTATile = getShapePerCTATile(dotLayout);
@@ -267,21 +262,27 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
     for (unsigned k = 0; k < numRepK; ++k)
       for (unsigned rep = 0; rep < repClusterSize; ++rep) {
         for (unsigned elemId = 0; elemId < numElemPerInstPerThread; ++elemId) {
-          unsigned opsRowIndex = (opIdx == 0) ? 0 : elemId % packedOpsPerLane;
-          unsigned opsColIndex = (opIdx == 0) ? elemId % packedOpsPerLane : 0;
-          unsigned packedElemId = elemId / packedOpsPerLane;
+          unsigned opsRowIndex =
+              (opIdx == 0) ? 0 : elemId % numOpsPerPackedValue;
+          unsigned opsColIndex =
+              (opIdx == 0) ? elemId % numOpsPerPackedValue : 0;
+          unsigned packedElemId = elemId / numOpsPerPackedValue;
           unsigned repRowIndex =
               shapePerCTATile[0] * (opIdx == 0 ? dimOuter : k);
           unsigned repColIndex =
               shapePerCTATile[1] * (opIdx == 0 ? k : dimOuter);
           unsigned repClusterRowIndex = opIdx == 0 ? rep * instShape[0] : 0;
           unsigned repClusterColIndex = opIdx == 0 ? 0 : rep * instShape[1];
-          unsigned elemRowIndex =
-              (packedElemId / numColsPerValue) * numRowsPerValue;
-          unsigned elemColIndex = packedElemId % numColsPerValue;
-          offsets.push_back(
-              {repRowIndex + repClusterRowIndex + elemRowIndex + opsRowIndex,
-               repColIndex + repClusterColIndex + elemColIndex + opsColIndex});
+          unsigned packedElemRowIndex =
+              (packedElemId / numColsPerLaneForPackedValue) *
+              numRowsPerPackedValue;
+          unsigned packedElemColIndex =
+              (packedElemId % numColsPerLaneForPackedValue) *
+              numColsPerPackedValue;
+          offsets.push_back({repRowIndex + repClusterRowIndex +
+                                 packedElemRowIndex + opsRowIndex,
+                             repColIndex + repClusterColIndex +
+                                 packedElemColIndex + opsColIndex});
         }
       }
 
@@ -455,6 +456,35 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
   // fewer than getTotalElementsPerThread() elements.  In that case repeat the
   // sequence.
   int elemsPerThread = triton::gpu::getTotalElemsPerThread(type);
+
+  //  llvm::outs() << "johnlu slice layout emit offset type:" << type << "\n";
+  //  llvm::outs() << "johnlu slice layout emit offset elemsPerThread:" <<
+  //  elemsPerThread << "\n";
+  //
+  //  llvm::outs() << "johnlu slice layout emit offset parentOffsets.size():" <<
+  //  parentOffsets.size() << "\n"; llvm::outs() << "johnlu slice layout emit
+  //  offset parentOffsets:" << "\n"; for (auto offsets: parentOffsets) {
+  //    llvm::outs() << "[";
+  //    for (auto off: offsets) {
+  //      llvm::outs() << off << ", ";
+  //    }
+  //    llvm::outs() << "]\n";
+  //  }
+  //  llvm::outs().flush();
+  //
+  //  llvm::outs() << "johnlu slice layout emit offset resultOffsets.size():" <<
+  //  resultOffsets.size() << "\n"; llvm::outs() << "johnlu slice layout emit
+  //  offset resultOffsets:" << "\n"; for (auto offsets: resultOffsets) {
+  //    llvm::outs() << "[";
+  //    for (auto off: offsets) {
+  //      llvm::outs() << off << ", ";
+  //    }
+  //    llvm::outs() << "]\n";
+  //  }
+  //  llvm::outs().flush();
+  //  auto newOffset = ::intel::emitOffsetForLayout(parentEncoding, parentTy);
+  //  llvm::outs() << newOffset.size() << "\n";
+  //  llvm::outs().flush();
   assert(resultOffsets.size() > 0);
   assert(elemsPerThread % resultOffsets.size() == 0);
   int numRepeats = elemsPerThread / resultOffsets.size();
