@@ -42,6 +42,7 @@ jobs:
       matrix:
         python: ["3.9"]
         driver: ["rolling", "lts"]
+      fail-fast: false
     uses: ./.github/workflows/build-test-reusable.yml
     with:
       driver_version: ${{ matrix.driver }}

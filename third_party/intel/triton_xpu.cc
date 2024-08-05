@@ -57,12 +57,6 @@ void init_triton_intel_passes_ttir(py::module &&m) {
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  py::enum_<gpu::intel::DeviceArch>(m, "DEVICE_ARCH", py::module_local())
-      .value("UNKNOWN", gpu::intel::DeviceArch::UNKNOWN)
-      .value("ATS", gpu::intel::DeviceArch::ATS)
-      .value("PVC", gpu::intel::DeviceArch::PVC)
-      .export_values();
-
   ADD_PASS_WRAPPER_0("add_to_llvmir",
                      gpu::intel::createConvertTritonIntelGPUToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
