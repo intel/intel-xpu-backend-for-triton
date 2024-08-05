@@ -99,19 +99,17 @@ struct DecomposeUnsupportedConversions
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (srcDpas && dstDotOp &&
           !triton::gpu::intel::isDpasToDotShortcut(srcType, dstType)) {
-        auto sharedMemorySpace =
-            triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
-        auto tmpType = triton::MemDescType::get(
+        auto tmpType = RankedTensorType::get(
             dstType.getShape(), dstType.getElementType(),
-            triton::gpu::SharedEncodingAttr::get(
-                mod.getContext(), dstDotOp, srcType.getShape(),
-                triton::gpu::getOrder(srcDpas),
-                triton::gpu::getCTALayout(srcDpas), srcType.getElementType()),
-            sharedMemorySpace);
-        auto tmp = builder.create<triton::gpu::LocalAllocOp>(
+            triton::gpu::BlockedEncodingAttr::get(
+                mod.getContext(), srcType.getShape(), getSizePerThread(srcDpas),
+                getOrder(srcDpas), numWarps, threadsPerWarp, numCTAs));
+        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-        auto newConvert = builder.create<triton::gpu::LocalLoadOp>(
+        addAttrs(tmp, cvtOp->getAttrs());
+        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), dstType, tmp);
+        addAttrs(newConvert, cvtOp->getAttrs());
         cvtOp.replaceAllUsesWith(newConvert.getResult());
         cvtOp.erase();
       }
