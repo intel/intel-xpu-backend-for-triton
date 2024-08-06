@@ -194,8 +194,6 @@ PYBIND11_MODULE(xetla_kernel, m) {
         &bf16_gemm<Test_1x1024x16384x8192_row_row>, "bf16_gemm (XeTLA)");
   m.def("gemm_shape_1_1024_28672_8192",
         &bf16_gemm<Test_1x1024x28672x8192_row_row>, "bf16_gemm (XeTLA)");
-  m.def("gemm_shape_1_3072_4096_3072",
-        &bf16_gemm<Test_1x3072x4096x3072_row_row>, "bf16_gemm (XeTLA)");
   m.def("gemm_shape_1_4096_16384_8192",
         &bf16_gemm<Test_1x4096x16384x8192_row_row>, "bf16_gemm (XeTLA)");
   m.def("gemm_shape_1_8192_16384_1024",
