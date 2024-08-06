@@ -15,7 +15,7 @@ def tanh(x):
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=4,
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'}, num_stages=4,
                       num_warps=32),
     ],
     key=['M', 'N', 'K'],
@@ -52,6 +52,15 @@ def matmul_kernel_with_block_pointers(
     pid_m = first_pid_m + (pid % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
+    block_start = pid * BLOCK_SIZE_M * BLOCK_SIZE_K
+    offsets = block_start + tl.arange(0, BLOCK_SIZE_M * BLOCK_SIZE_K)
+    mask = offsets < (M * K)
+    a2 = tl.load(a_ptr + offsets, mask=mask)
+    a2 = a2.to(tl.float32)
+    a2 = tl.math.exp(a2)
+    a2 = a2.to(tl.float16)
+    tl.store(a_ptr + offsets, a2, mask=mask)
+
     # ----------------------------------------------------------
     # Create block pointers for the first blocks of A and B.
     # We will advance this pointer as we move in the K direction and accumulate.
@@ -78,9 +87,6 @@ def matmul_kernel_with_block_pointers(
         a = tl.load(a_block_ptr, boundary_check=(0, 1))
         b = tl.load(b_block_ptr, boundary_check=(0, 1))
         # We accumulate along the K dimension.
-        a = a.to(tl.float32)
-        a = tl.math.exp(a)
-        a = a.to(tl.float16)
         accumulator += tl.dot(a, b)
         # Advance the block pointer to the next K block.
         # See above `Advance a Block Pointer` section for details.
