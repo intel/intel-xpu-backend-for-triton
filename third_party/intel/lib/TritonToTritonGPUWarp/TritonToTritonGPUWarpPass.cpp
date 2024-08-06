@@ -236,8 +236,9 @@ public:
           LDBG("\n");
           return;
         case Workload::ElementWise:
-        case Workload::Reduction:
+        case Workload::Reduction: {
           break;
+        }
         case Workload::Attention: {
           llvm::outs() << "match workload attention \n";
           auto &info0 = loopDotInfo.dotInfo0;
@@ -272,8 +273,10 @@ public:
           dot1A.replaceAllUsesExcept(cvt, cvt);
           auto qkLayout0 = ttg::BlockedEncodingAttr::get(
               ctx, sizePerWarpQK, {1, 1}, warpsPerCTA, {1, 0}, ctaLayout);
-          auto qLayout = ttg::DotOperandEncodingAttr::get(ctx, 0, qkLayout0, 1);
-          auto kLayout = ttg::DotOperandEncodingAttr::get(ctx, 1, qkLayout0, 1);
+          auto qLayout = ttg::DotOperandEncodingAttr::get(
+              ctx, 0, qkLayout0, aType.getElementType());
+          auto kLayout = ttg::DotOperandEncodingAttr::get(
+              ctx, 1, qkLayout0, aType.getElementType());
 
           // record value's attr
           // fixme: the 2nd loop may overwrite, not check it for now
