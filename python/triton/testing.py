@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 
-if "intel_extension_for_pytorch" in sys.modules:
+if True or "intel_extension_for_pytorch" in sys.modules:
     import torch
 
     def Event(**kwargs):
