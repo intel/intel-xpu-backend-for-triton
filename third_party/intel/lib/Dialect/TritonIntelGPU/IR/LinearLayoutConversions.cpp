@@ -360,11 +360,11 @@ std::vector<std::vector<int32_t>> DPASRegBasesA(int opsPerChannel,
   int warpRepeats = repeatCount / rowPerWarp;
   std::vector<std::vector<int32_t>> regBases;
 
-  for (int opc = 1; opc < opsPerChannel; opc = opc * 2) {
+  for (int opc = 1; opc < opsPerChannel; opc *= 2) {
     regBases.push_back({0, opc});
   }
 
-  for (int warp = 1; warp < warpRepeats; warp = warp * 2) {
+  for (int warp = 1; warp < warpRepeats; warp *= 2) {
     regBases.push_back({warp * rowPerWarp, 0});
   }
 
@@ -373,13 +373,12 @@ std::vector<std::vector<int32_t>> DPASRegBasesA(int opsPerChannel,
 
 std::vector<std::vector<int32_t>>
 DPASLaneBasesA(int opsPerChannel, int threadsPerWarp, int systolicDepth) {
-
   std::vector<std::vector<int32_t>> laneBases;
 
-  for (int tid = 1; tid < systolicDepth; tid = tid * 2) {
+  for (int tid = 1; tid < systolicDepth; tid *= 2) {
     laneBases.push_back({0, opsPerChannel * tid});
   }
-  for (int tid = systolicDepth; tid < threadsPerWarp; tid = tid * 2) {
+  for (int tid = systolicDepth; tid < threadsPerWarp; tid *= 2) {
     laneBases.push_back({tid / systolicDepth, 0});
   }
 
@@ -412,10 +411,10 @@ std::vector<std::vector<int32_t>> DPASRegBasesB(int opsPerChannel,
   int warpRepeats = systolicDepth / rowsPerWarp;
   std::vector<std::vector<int32_t>> regBases;
 
-  for (int opc = 1; opc < opsPerChannel; opc = opc * 2) {
+  for (int opc = 1; opc < opsPerChannel; opc *= 2) {
     regBases.push_back({opc, 0});
   }
-  for (int rid = rowsPerWarp; rid < systolicDepth; rid = rid * 2) {
+  for (int rid = rowsPerWarp; rid < systolicDepth; rid *= 2) {
     regBases.push_back({rid * opsPerChannel, 0});
   }
 
@@ -424,14 +423,13 @@ std::vector<std::vector<int32_t>> DPASRegBasesB(int opsPerChannel,
 
 std::vector<std::vector<int32_t>>
 DPASLaneBasesB(int opsPerChannel, int threadsPerWarp, int executionSize) {
-
   std::vector<std::vector<int32_t>> laneBases;
 
-  for (int tid = 1; tid < executionSize; tid = tid * 2) {
+  for (int tid = 1; tid < executionSize; tid *= 2) {
     laneBases.push_back({0, tid});
   }
   int rowsPerWarp = threadsPerWarp / executionSize;
-  for (int row = 1; row < rowsPerWarp; row = row * 2) {
+  for (int row = 1; row < rowsPerWarp; row *= 2) {
     laneBases.push_back({row * opsPerChannel, 0});
   }
 
@@ -456,7 +454,7 @@ DPASRegBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
 
   std::vector<std::vector<int32_t>> regBases;
 
-  for (int rid = rowsPerWarp; rid < repeatCount; rid = rid * 2) {
+  for (int rid = rowsPerWarp; rid < repeatCount; rid *= 2) {
     regBases.push_back({rid, 0});
   }
 
@@ -465,14 +463,13 @@ DPASRegBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
 
 std::vector<std::vector<int32_t>>
 DPASLaneBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
-
   std::vector<std::vector<int32_t>> laneBases;
 
-  for (int tid = 1; tid < executionSize; tid = tid * 2) {
+  for (int tid = 1; tid < executionSize; tid *= 2) {
     laneBases.push_back({0, tid});
   }
   int rowsPerWarp = threadsPerWarp / executionSize;
-  for (int row = 1; row < rowsPerWarp; row = row * 2) {
+  for (int row = 1; row < rowsPerWarp; row *= 2) {
     laneBases.push_back({row, 0});
   }
 
@@ -481,7 +478,7 @@ DPASLaneBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
 
 std::optional<LinearLayout>
 DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout, unsigned opIdx) {
-
+  assert(opIdx < 3 && opIdx >= 0);
   auto dpas = dyn_cast<DpasEncodingAttr>(layout);
   assert(dpas && "Must be DPAS layout");
 
@@ -503,10 +500,11 @@ DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout, unsigned opIdx) {
 
   auto tileLayout = LinearLayout::empty();
   int systolicDepth = dpas.getSystolicDepth();
-  unsigned KDim = 1;
+  int repeatCount = dpas.getRepeatCount();
+  int executionSize = dpas.getExecutionSize();
+  unsigned KDim = 0;
   unsigned nonKDim = 0;
   if (opIdx == 0) { // Operand A
-    int repeatCount = dpas.getRepeatCount();
     auto regBasesA = DPASRegBasesA(opsPerChannel, repeatCount, threadsPerWarp,
                                    systolicDepth);
     auto laneBasesA =
@@ -519,7 +517,6 @@ DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout, unsigned opIdx) {
     nonKDim = 0;
     KDim = 1;
   } else if (opIdx == 1) { // Operand B
-    int executionSize = dpas.getExecutionSize();
     auto regBasesB = DPASRegBasesB(opsPerChannel, executionSize, threadsPerWarp,
                                    systolicDepth);
     auto laneBasesB =
@@ -532,8 +529,6 @@ DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout, unsigned opIdx) {
     nonKDim = 1;
     KDim = 0;
   } else { // opIdx=2 -> Operand C
-    int repeatCount = dpas.getRepeatCount();
-    int executionSize = dpas.getExecutionSize();
     auto regBasesC = DPASRegBasesC(repeatCount, executionSize, threadsPerWarp);
     auto laneBasesC =
         DPASLaneBasesC(repeatCount, executionSize, threadsPerWarp);
