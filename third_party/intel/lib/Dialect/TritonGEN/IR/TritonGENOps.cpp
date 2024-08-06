@@ -9,6 +9,7 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include <cstdint>
 
@@ -268,15 +269,18 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
   if (verifyMatrixInput(*this).failed())
     return failure();
 
+  const bool enableFastPrefetch =
+      tools::getBoolEnv("TRITON_INTEL_ENABLE_FAST_PREFETCH");
   uint32_t tileWidth = getTileWidth();
   switch (getElemSizeInBits()) {
   case 8:
-    if (tileWidth != 16 && tileWidth != 32)
+    if (tileWidth != 16 && tileWidth != 32 &&
+        !(enableFastPrefetch && tileWidth == 64))
       return emitOpError("tile_width for 8 bit elements should be equal to "
                          "16 or 32");
     break;
   case 16:
-    if (tileWidth != 16)
+    if (tileWidth != 16 && !(enableFastPrefetch && tileWidth == 32))
       return emitOpError("tile_width for 16 bit elements should be equal "
                          "to 16");
     break;
