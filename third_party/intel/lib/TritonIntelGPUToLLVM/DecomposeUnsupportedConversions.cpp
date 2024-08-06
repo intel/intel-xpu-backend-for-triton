@@ -86,7 +86,7 @@ struct DecomposeUnsupportedConversions
       }
     });
     /* -------------------------------- */
-    // Replace `dpas -> dot_op` with `dpas -> shared -> dot_op`
+    // Replace `dpas -> dot_op` with `dpas -> blocked -> dot_op`
     // unless certain conditions are met
     /* -------------------------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
