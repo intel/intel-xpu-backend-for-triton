@@ -11,6 +11,10 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.language as tl
 
+import triton_kernels_benchmark
+
+benchmark_suit = triton_kernels_benchmark  # triton.testing
+
 
 @triton.jit
 def swizzle_tile(tile_id,
@@ -47,7 +51,8 @@ def mac_loop(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
-        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
+        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
+        stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
         stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Stream-K parameters
@@ -96,7 +101,7 @@ def mac_loop(
 @triton.autotune(
     configs=[
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, "threads_per_warp": 16},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
@@ -131,7 +136,7 @@ def first_wave(
 @triton.autotune(
     configs=[
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, "threads_per_warp": 16},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
@@ -239,48 +244,22 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
     return c
 
 
-# %%
-# Unit Test
-# ---------
-#
-# Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., OneDNN).
-
-torch.manual_seed(0)
-for dtype in [
-        torch.float16,
-]:
-    a = torch.randn((512, 512), device='xpu', dtype=dtype)
-    b = torch.randn((512, 512), device='xpu', dtype=dtype)
-    triton_output = matmul(a, b)
-    torch_output = torch.matmul(a, b).to(torch.float32)
-    print(f"triton_output={triton_output}")
-    print(f"torch_output={torch_output}")
-
-    # Note: the torch.matmul and Triton implementations uses different
-    # algorithms so we need to adjust tolerance.
-    rtol = 1e-3
-    if torch.allclose(triton_output, torch_output, atol=1e-3, rtol=rtol):
-        print("✅ Triton and Torch match")
-    else:
-        exit("❌ Triton and Torch differ")
-
-
 # Benchmark Performance
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
+@benchmark_suit.perf_report(
+    benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['M', 'K', 'N'],
         x_vals=[[3072, 4096, 3072]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['onednn', 'triton'],
+        line_vals=['triton'],
         # label name for the lines
-        line_names=["onednn", "Triton"],
+        line_names=['Triton'],
         # line styles
-        # styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel="TFLOPS",  # label name for the y-axis
-        plot_name="matmul-performance",
+        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
+        plot_name='matmul-streamk-performance',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
@@ -288,21 +267,24 @@ def benchmark(M, N, K, provider):
     torch.manual_seed(0)
     a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
     b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
-    quantiles = [0.5, 0.2, 0.8]
 
-    # calculate tflops for oneDNN kernel
-    def calculate_tflops(ms):
-        return 2 * M * N * K * 1e-12 / (ms * 1e-3)
+    quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), rep=100, quantiles=quantiles,
-                                                     fast_flush=False)
-        print(f"oneDNN Peak TFlops {calculate_tflops(min_ms)}")
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=100, rep=100,
+                                                               quantiles=quantiles, fast_flush=False)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), rep=100, quantiles=quantiles,
-                                                     fast_flush=False)
+        triton_fn = lambda: matmul(a, b)
+        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=1e-2, err_msg="triton to torch")
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=100, rep=100, quantiles=quantiles,
+                                                               fast_flush=False)
 
-    return calculate_tflops(ms), calculate_tflops(min_ms), calculate_tflops(max_ms)
+    tflops = lambda mean: 2 * M * N * K * (1e-12) / (mean * 1e-3)
+    gbps = lambda mean: 2 * (M * K + K * N) + 4.0 * (M * N) * (1e-9) / (mean * 1e-3)
+
+    return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
-benchmark.run(show_plots=True, print_data=True)
+if __name__ == '__main__':
+    benchmark.run(show_plots=False, print_data=True)

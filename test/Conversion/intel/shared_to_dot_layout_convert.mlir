@@ -6,7 +6,7 @@
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
 
-module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.target = "xpu:DEVICE_ARCH.PVC", "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @convert_dot(
   // CHECK-SAME:    %[[VAL_0:.*]]: !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>,
   // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], {{.*}}} {
@@ -88,7 +88,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.target = "xpu:D
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
 
-module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.target = "xpu:DEVICE_ARCH.PVC", "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @convert_dot(
   // CHECK-SAME:    %[[VAL_0:.*]]: !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>,
   // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], {{.*}}} {
@@ -171,7 +171,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.target = "xpu:D
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
 #dot_operand_b = #triton_gpu.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
 
-module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.target = "xpu:DEVICE_ARCH.PVC", "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @convert_dot(
   // CHECK-SAME:    %[[VAL_1:.*]]: !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>,
   // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], {{.*}}} {

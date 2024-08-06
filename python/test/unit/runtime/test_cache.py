@@ -53,6 +53,13 @@ def kernel_nospec(X, i, BLOCK: tl.constexpr):
     tl.store(X, i)
 
 
+@triton.jit(do_not_specialize_on_alignment=["i"])
+def kernel_nospec_on_alignment(X, i, BLOCK: tl.constexpr):
+    i = i + 1
+    i = function_1(i)
+    tl.store(X, i)
+
+
 @triton.jit
 def kernel_with_combine_fn(X, BLOCK: tl.constexpr):
     i = tl.arange(0, BLOCK)
@@ -162,7 +169,7 @@ def test_reuse(device, fresh_triton_cache):
     assert counter == 1
 
 
-@pytest.mark.parametrize('mode', ['enable', 'disable'])
+@pytest.mark.parametrize('mode', ['enable', 'disable', 'disable_on_alignment'])
 def test_specialize(mode, device, fresh_triton_cache):
     counter = 0
 
@@ -172,8 +179,8 @@ def test_specialize(mode, device, fresh_triton_cache):
 
     JITFunction.cache_hook = inc_counter
     x = torch.empty(1, dtype=torch.int32, device=device)
-    function = {'enable': kernel, 'disable': kernel_nospec}[mode]
-    target = {'enable': 3, 'disable': 1}[mode]
+    function = {'enable': kernel, 'disable': kernel_nospec, 'disable_on_alignment': kernel_nospec_on_alignment}[mode]
+    target = {'enable': 3, 'disable': 1, 'disable_on_alignment': 2}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target

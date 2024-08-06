@@ -13,7 +13,7 @@
 // CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX(!llvm.ptr {llvm.nonnull}, i32) attributes {passthrough = ["nounwind", ["memory", "2"]]}
 // CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_createBlock2DAddressPayload(i64, i32, i32, i32, i32, i32, i32, i32, i32) -> !llvm.ptr attributes {passthrough = ["nounwind", ["memory", "1"]]}
 
-module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 33792 : i32, triton_gpu.target = "xpu:DEVICE_ARCH.PVC", "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 33792 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_kernel_with_addr_payload_opt(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i64, %arg4: i64, %arg5: i64, %arg6: i64, %arg7: i64) {
     // CHECK-LABEL: @matmul_kernel_with_addr_payload_opt
     // CHECK: [[CMP:%.*]] = llvm.icmp "slt" {{.*}}, %arg4 : i64

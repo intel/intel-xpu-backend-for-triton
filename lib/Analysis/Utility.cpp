@@ -2,6 +2,7 @@
 
 #include <deque>
 
+#include "intel/include/Analysis/Utility.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -407,20 +408,6 @@ unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
   return product<unsigned>(shape);
 }
 
-bool maybeSharedAllocationOp(Operation *op) {
-  // TODO(Keren): This function can be replaced by adding
-  // MemoryEffectOpInterface. We can then use the MemoryEffectOpInterface to
-  // query the memory effects of the op.
-  auto *dialect = op->getDialect();
-  return dialect &&
-         (dialect->getTypeID() == TypeID::get<TritonGPUDialect>() ||
-          dialect->getTypeID() ==
-              TypeID::get<triton::nvidia_gpu::TritonNvidiaGPUDialect>() ||
-          dialect->getTypeID() == TypeID::get<triton::TritonDialect>() ||
-          dialect->getTypeID() == TypeID::get<arith::ArithDialect>() ||
-          dialect->getTypeID() == TypeID::get<tensor::TensorDialect>());
-}
-
 static bool supportMFMAGranularity(int m, int n, int k) {
   // these limitations are dtype dependent, in future we may relax them
   const static std::pair<int, int> mfmaTypes[2] = {{32, 8}, {16, 16}};
@@ -619,7 +606,8 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
 
   // TODO(jlebar): Remove these special cases once they're fully subsumed by the
   // linear-layout check above.
-  return !isMmaToMmaShortcut(srcTy, dstTy) &&
+  return !triton::gpu::intel::isDpasToDotShortcut(srcTy, dstTy) &&
+         !isMmaToMmaShortcut(srcTy, dstTy) &&
          !isMmaToDotShortcut(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
 }
