@@ -948,7 +948,7 @@ struct TritonRaiseBlockPointer
         auto axis = checkIfOffsetMultipliedByStride(addptrOp.getOffset(),
                                                     ptrState.strides);
         if (axis >= 1)
-          std::swap(offsetState.offsets[0], offsetState.offsets[1]);
+          std::swap(offsetState.offsets[0], offsetState.offsets[axis]);
       }
     }
 
