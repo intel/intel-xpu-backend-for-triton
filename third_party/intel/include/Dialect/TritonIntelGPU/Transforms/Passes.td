@@ -257,4 +257,17 @@ def TritonIntelGPUReduceDataDuplication: Pass<"tritonintelgpu-reduce-data-duplic
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonIntelGPUScheduleLoad : Pass<"tritonintelgpu-schedule-load", "mlir::ModuleOp"> {
+  let summary = "naive ra-aware instr scheduler";
+
+  let description = [{
+    This pass works for FlashAttention.
+    This pass moves loads to be adjacent to their user(tt.dot) to help IGC do better RegisterAllocation.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES

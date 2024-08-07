@@ -207,16 +207,4 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
   return call;
 }
 
-DeviceArch getDeviceArch(Operation *module) {
-  assert(module->hasAttr(triton::AttrTargetName) &&
-         "Expected a target attribute on the module operation");
-  StringAttr archAttr =
-      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
-
-  return llvm::StringSwitch<DeviceArch>(archAttr)
-      .Case("xpu:DEVICE_ARCH.PVC", DeviceArch::PVC)
-      .Case("xpu:DEVICE_ARCH.ATS", DeviceArch::ATS)
-      .Default(DeviceArch::UNKNOWN);
-}
-
 } // namespace mlir::triton::gpu::intel

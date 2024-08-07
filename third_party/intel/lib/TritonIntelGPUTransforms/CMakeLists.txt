@@ -8,6 +8,7 @@ add_triton_library(TritonIntelGPUTransforms
   ReduceDataDuplication.cpp
   RemoveLayoutConversions.cpp
   RewriteTensorPointer.cpp
+  ScheduleLoad.cpp
   Utility.cpp
 
   DEPENDS

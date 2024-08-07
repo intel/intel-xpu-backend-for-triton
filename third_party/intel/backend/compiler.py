@@ -1,6 +1,5 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src
 
 from dataclasses import dataclass
 import functools
@@ -101,9 +100,12 @@ class XPUBackend(BaseBackend):
             inject_split_barriers = False
             intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
             intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
+            intel.passes.ttgpuir.add_schedule_load(pm)
             passes.common.add_symbol_dce(pm)
             pm.run(mod)
             return mod
@@ -115,9 +117,6 @@ class XPUBackend(BaseBackend):
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
         assert isinstance(target.arch, dict)
-        dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
-        self.parse_device_arch = mod.parse_device_arch
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
 
@@ -133,7 +132,6 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        dev_prop['device_arch'] = self.parse_device_arch(tgt_prop.get('device_arch', 0))
         dev_prop['support_cl_sg_matmul_acc'] = tgt_prop.get('support_cl_sg_matmul_acc', False)
         dev_prop['support_cl_sg_matmul_acc_tf32'] = tgt_prop.get('support_cl_sg_matmul_acc_tf32', False)
         dev_prop['support_cl_sg_2d_block_io'] = tgt_prop.get('support_cl_sg_2d_block_io', False)
@@ -198,8 +196,7 @@ class XPUBackend(BaseBackend):
                 and os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1"):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
-        device_arch = properties["device_arch"]
-        passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
+        passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)

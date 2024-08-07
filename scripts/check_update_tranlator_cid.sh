@@ -23,6 +23,7 @@ COMMIT_IDS=$(git -C $TRITON_PROJ/external/SPIRV-LLVM-Translator log --format="%H
 
 # check every commit ids
 cd $TRITON_PROJ
+FOUND=false
 for cid in $COMMIT_IDS; do
     echo "$cid" > ./lib/Target/SPIRV/spirv-llvm-translator.conf
     if ! ./scripts/compile-triton.sh --clean; then
@@ -34,8 +35,13 @@ for cid in $COMMIT_IDS; do
     if ./scripts/test-triton.sh --skip-deps; then
         echo "Tests passed for translator commit $cid"
         echo "A newer commit found: $cid"
+        FOUND=true
         break
     else
         echo "Tests failed for translator commit $cid"
     fi
 done
+
+if [ "$FOUND" = false ]; then
+    git restore ./lib/Target/SPIRV/spirv-llvm-translator.conf
+fi
