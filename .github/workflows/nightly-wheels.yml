@@ -14,8 +14,8 @@ jobs:
   build:
     name: Build
     runs-on:
-      - glados
-      - spr
+      - max1100
+      - rolling
       - runner-0.0.18
     strategy:
       matrix:
