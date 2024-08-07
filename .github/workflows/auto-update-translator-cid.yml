@@ -11,8 +11,8 @@ env:
 jobs:
   update-config:
     runs-on:
-      - glados
-      - spr
+      - max1100
+      - rolling
       - runner-0.0.18
     defaults:
       run:
