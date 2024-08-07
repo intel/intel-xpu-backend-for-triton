@@ -11,9 +11,7 @@ jobs:
   coverity:
     name: Coverity
 
-    runs-on:
-      - glados
-      - cpu
+    runs-on: Linux
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail {0}
