@@ -11,9 +11,7 @@ jobs:
   coverity:
     name: Coverity
 
-    runs-on:
-      - glados
-      - cpu
+    runs-on: Linux
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail {0}
@@ -44,7 +42,7 @@ jobs:
           COVERITY_TOKEN: ${{ secrets.COVERITY_TOKEN }}
         run: |
           cd $HOME
-          wget https://scan.coverity.com/download/linux64 --no-verbose --post-data "token=$COVERITY_TOKEN&project=intel%2Fintel-xpu-backend-for-triton" -O coverity.tgz
+          curl -sSL --data-binary "token=$COVERITY_TOKEN&project=intel%2Fintel-xpu-backend-for-triton" -o coverity.tgz https://scan.coverity.com/download/linux64
           tar zxf coverity.tgz
           mv -T cov-analysis-linux64-* coverity
 
