@@ -261,7 +261,9 @@ run_benchmark_gemm() {
   if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
     echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
   fi
+  cd $TRITON_PROJ/benchmarks; python setup.py install
   TRITON_INTEL_ADVANCED_PATH=0 \
+  TRITON_INTEL_ENABLE_FAST_PREFETCH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
   IGC_DisableLoopUnroll=1 \
