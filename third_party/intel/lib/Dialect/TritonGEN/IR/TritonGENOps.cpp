@@ -168,13 +168,16 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (verifyMatrixInput(*this).failed())
     return failure();
 
+  bool useGenISA = triton::tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
+
   VectorType resTy = getRes().getType();
   unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
   if (getElemSizeInBits() == 32 || getVnniTransform()) {
     if (resElemTySize != 32)
       return emitOpError() << "expecting result element type to be 32 bits";
   } else if (resElemTySize != 16) {
-    return emitOpError() << "expecting result element type to be 16 bits";
+    if (!useGenISA)
+      return emitOpError() << "expecting result element type to be 16 bits";
   }
 
   unsigned resSize = resTy.getNumElements() * resElemTySize;
@@ -206,24 +209,29 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   }
 
   assert(!getVnniTransform() && "Expecting vnni_transform should be false");
-  switch (getElemSizeInBits()) {
-  case 8:
-    if (tileWidth != 32)
-      return emitOpError("tile_width for 8 bit elements when vnni_transform is "
-                         "false should be equal to 32");
-    break;
-  case 16:
-    if (tileWidth != 16)
-      return emitOpError("tile_width for 16 bit elements when vnni_transform "
-                         "is false should be equal to 16");
-    break;
-  case 32:
-    if (tileWidth != 8 && tileWidth != 16)
-      return emitOpError("tile_width for 32 bit elements when vnni_transform "
-                         "is false should be equal to 8 or 16");
-    break;
-  default:
-    llvm_unreachable("unexpected element size");
+
+  if (!useGenISA) {
+    // OCL interface only supports a subset of the 2D load instruction.
+    switch (getElemSizeInBits()) {
+    case 8:
+      if (tileWidth != 32)
+        return emitOpError(
+            "tile_width for 8 bit elements when vnni_transform is "
+            "false should be equal to 32");
+      break;
+    case 16:
+      if (tileWidth != 16)
+        return emitOpError("tile_width for 16 bit elements when vnni_transform "
+                           "is false should be equal to 16");
+      break;
+    case 32:
+      if (tileWidth != 8 && tileWidth != 16)
+        return emitOpError("tile_width for 32 bit elements when vnni_transform "
+                           "is false should be equal to 8 or 16");
+      break;
+    default:
+      llvm_unreachable("unexpected element size");
+    }
   }
 
   return success();
