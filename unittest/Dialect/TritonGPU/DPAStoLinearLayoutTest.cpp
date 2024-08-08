@@ -39,6 +39,7 @@ protected:
 };
 
 TEST_F(DPAStoLinearLayoutTest, DPAS_perInst) {
+  // Default: Operand C
   EXPECT_EQ(DPAStoLinearLayout({8, 16}, dpas({1, 1}, 8, 8, 16, 2, {1, 1}, 32)),
             LinearLayout(
                 {
@@ -57,6 +58,28 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_perInst) {
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
+  // Test Operand A (opIdx=0)
+  EXPECT_EQ(
+      DPAStoLinearLayout({8, 16}, dpas({1, 1}, 8, 8, 16, 2, {1, 1}, 32), 0),
+      LinearLayout(
+          {
+              {S("register"), {{0, 1}, {4, 0}}},
+              {S("lane"), {{0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
+              {S("warp"), {}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
+  // Test Operand B (opIdx=1)
+  EXPECT_EQ(
+      DPAStoLinearLayout({16, 16}, dpas({1, 1}, 8, 8, 16, 2, {1, 1}, 32), 1),
+      LinearLayout(
+          {
+              {S("register"), {{1, 0}, {4, 0}, {8, 0}}},
+              {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {2, 0}}},
+              {S("warp"), {}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
 }
 
 TEST_F(DPAStoLinearLayoutTest, DPAS_withRepCluster) {
@@ -70,6 +93,28 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_withRepCluster) {
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
+  // Test Operand A (opIdx=0)
+  EXPECT_EQ(
+      DPAStoLinearLayout({32, 16}, dpas({1, 1}, 8, 8, 16, 2, {4, 2}, 32), 0),
+      LinearLayout(
+          {
+              {S("register"), {{0, 1}, {4, 0}, {8, 0}, {16, 0}}},
+              {S("lane"), {{0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
+              {S("warp"), {}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
+  // Test Operand B (opIdx=1)
+  EXPECT_EQ(
+      DPAStoLinearLayout({16, 32}, dpas({1, 1}, 8, 8, 16, 2, {4, 2}, 32), 1),
+      LinearLayout(
+          {
+              {S("register"), {{1, 0}, {4, 0}, {8, 0}, {0, 16}}},
+              {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {2, 0}}},
+              {S("warp"), {}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
   EXPECT_EQ(DPAStoLinearLayout({32, 32}, dpas({1, 1}, 8, 8, 16, 1, {4, 2}, 16)),
             LinearLayout(
                 {
@@ -101,6 +146,34 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_withWarp) {
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
+}
+
+TEST_F(DPAStoLinearLayoutTest, DPAS_withWarpOperandA) {
+  EXPECT_EQ(
+      DPAStoLinearLayout({64, 64}, dpas({2, 2}, 8, 8, 16, 2, {4, 2}, 32), 0),
+      LinearLayout(
+          {
+              {S("register"),
+               {{0, 1}, {4, 0}, {8, 0}, {16, 0}, {0, 16}, {0, 32}}},
+              {S("lane"), {{0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
+              {S("warp"), {{32, 0}, {0, 0}}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(DPAStoLinearLayoutTest, DPAS_withWarpOperandB) {
+  EXPECT_EQ(
+      DPAStoLinearLayout({64, 64}, dpas({2, 2}, 8, 8, 16, 2, {4, 2}, 32), 1),
+      LinearLayout(
+          {
+              {S("register"),
+               {{1, 0}, {4, 0}, {8, 0}, {0, 16}, {16, 0}, {32, 0}}},
+              {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {2, 0}}},
+              {S("warp"), {{0, 0}, {0, 32}}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
 }
 
 TEST_F(DPAStoLinearLayoutTest, DPAS_withDPASRepetitions) {

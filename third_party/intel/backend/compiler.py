@@ -103,9 +103,12 @@ class XPUBackend(BaseBackend):
             inject_split_barriers = False
             intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
             intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
+            intel.passes.ttgpuir.add_schedule_load(pm)
             passes.common.add_symbol_dce(pm)
             pm.run(mod)
             return mod
@@ -132,9 +135,11 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        dev_prop['support_cl_sg_matmul_acc'] = tgt_prop.get('support_cl_sg_matmul_acc', False)
-        dev_prop['support_cl_sg_matmul_acc_tf32'] = tgt_prop.get('support_cl_sg_matmul_acc_tf32', False)
-        dev_prop['support_cl_sg_2d_block_io'] = tgt_prop.get('support_cl_sg_2d_block_io', False)
+        dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
+                                                                           False)
+        dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
+            'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
+        dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -181,8 +186,9 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
-                                                        properties["support_cl_sg_2d_block_io"],
-                                                        properties["support_cl_sg_matmul_acc"], opt.threads_per_warp)
+                                                        properties["has_subgroup_2d_block_io"],
+                                                        properties["has_subgroup_matrix_multiply_accumulate"],
+                                                        opt.threads_per_warp)
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
@@ -192,7 +198,7 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        if (properties["support_cl_sg_2d_block_io"] and properties["support_cl_sg_matmul_acc"]
+        if (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]
                 and os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1"):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
