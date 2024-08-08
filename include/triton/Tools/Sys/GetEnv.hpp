@@ -32,13 +32,15 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "NVPTX_ENABLE_DUMP",
     "TRITON_INTEL_ADVANCED_PATH",
     "TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT",
+    "TRITON_INTEL_ENABLE_INSTR_SCHED",
+    "TRITON_INTEL_ENABLE_FAST_PREFETCH"
     // clang-format on
 };
 
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
     // clang-format off
     "TRITON_REPRODUCER_PATH",
-    "TRITON_DISABLE_PYTHON_STACKTRACE"
+    "TRITON_ENABLE_PYTHON_STACKTRACE"
     // clang-format on
 };
 

@@ -5,8 +5,10 @@ add_triton_library(TritonIntelGPUTransforms
   Pipeliner/MatmulLoopPipeline.cpp
   Pipeliner/SoftwarePipeliner.cpp
   PrefetchBlock.cpp
+  ReduceDataDuplication.cpp
   RemoveLayoutConversions.cpp
   RewriteTensorPointer.cpp
+  ScheduleLoad.cpp
   Utility.cpp
 
   DEPENDS

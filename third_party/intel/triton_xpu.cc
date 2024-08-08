@@ -57,12 +57,6 @@ void init_triton_intel_passes_ttir(py::module &&m) {
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  py::enum_<gpu::intel::DeviceArch>(m, "DEVICE_ARCH", py::module_local())
-      .value("UNKNOWN", gpu::intel::DeviceArch::UNKNOWN)
-      .value("ATS", gpu::intel::DeviceArch::ATS)
-      .value("PVC", gpu::intel::DeviceArch::PVC)
-      .export_values();
-
   ADD_PASS_WRAPPER_0("add_to_llvmir",
                      gpu::intel::createConvertTritonIntelGPUToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
@@ -84,9 +78,13 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUDistributeToWarps);
   ADD_PASS_WRAPPER_0("add_match_target_size",
                      gpu::intel::createTritonIntelGPUMatchTargetSize);
+  ADD_PASS_WRAPPER_0("add_schedule_load",
+                     gpu::intel::createTritonIntelGPUScheduleLoad);
   ADD_PASS_WRAPPER_OPT_4("add_triton_annotate_module",
                          gpu::intel::createTritonAnnotateModule, unsigned, bool,
                          bool, unsigned);
+  ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
+                     gpu::intel::createTritonIntelGPUReduceDataDuplication);
 }
 
 void init_triton_intel(py::module &&m) {

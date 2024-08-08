@@ -8,6 +8,10 @@ on:
         description: Install Intel PyTorch Extension
         type: boolean
         default: true
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
       suite:
         description: Test suite
         type: choice
@@ -65,10 +69,7 @@ permissions: read-all
 jobs:
   setup:
     name: Setup
-    runs-on:
-      - glados
-      - spr
-      - cpu
+    runs-on: Linux
     outputs:
       suite: ${{ steps.set-matrix.outputs.suite }}
       mode: ${{ steps.set-matrix.outputs.mode }}
@@ -122,6 +123,7 @@ jobs:
     uses: ./.github/workflows/e2e-reusable.yml
     with:
       install_ipex: ${{ inputs.install_ipex }}
+      pytorch_ref: ${{ inputs.pytorch_ref }}
       suite: ${{ matrix.suite }}
       mode: ${{ matrix.mode }}
       test_mode: accuracy

@@ -42,10 +42,6 @@ on:
         type: boolean
         default: false
 
-  schedule:
-    # Every midnight PST (UTC-8)
-    - cron: "0 8 * * *"
-
 permissions: read-all
 
 jobs:
@@ -53,7 +49,7 @@ jobs:
     name: Integration tests matrix
     strategy:
       matrix:
-        python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
+        python: ["3.9"]
     uses: ./.github/workflows/build-test-reusable.yml
     with:
       device: a770

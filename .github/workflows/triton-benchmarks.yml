@@ -51,21 +51,7 @@ jobs:
       - name: Setup IPEX
         uses: ./.github/actions/setup-ipex
 
-      - name: Generate Triton cache key
-        id: triton-key
-        run: |
-          COMPOSITE_KEY=$(echo $PYTHON_VERSION $GITHUB_SHA | sha256sum - | cut -d\  -f1)
-          echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
-
-      - name: Load Triton wheels from a cache
-        id: triton-cache
-        uses: ./.github/actions/load
-        with:
-          path: python/dist
-          key: ${{ steps.triton-key.outputs.key }}
-
       - name: Build Triton wheels
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/setup-triton
         with:
           command: DEBUG=1 python setup.py bdist_wheel
@@ -73,13 +59,6 @@ jobs:
       - name: Install Triton
         run: |
           pip install python/dist/*.whl
-
-      - name: Save Triton wheels to a cache
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.triton-cache.outputs.path }}
-          dest: ${{ steps.triton-cache.outputs.dest }}
 
       - name: Install benchmark dependencies
         run: |
@@ -90,19 +69,32 @@ jobs:
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
-      - name: Install xetla benchmark
+      - name: Install benchmarks
         run: |
           cd benchmarks
           python setup.py install
 
-      - name: Run xetla benchmark
+      - name: Run Triton Softmax kernel benchmark
         run: |
-          cd benchmarks/xetla_benchmark
+          cd benchmarks/triton_kernels_benchmark
           python fused_softmax.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops-max --hbm_col "Triton-GB/s-max"
           python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops-max --hbm_col "XeTLA-GB/s-max"
 
+      - name: Run Triton GEMM kernel benchmark
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          # Advanced path:
+          TRITON_INTEL_ADVANCED_PATH=1 \
+          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+          IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+          IGC_DisableLoopUnroll=1 \
+          SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
+          python gemm_benchmark.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops-max --hbm_col "Triton-GB/s-max"
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops-max --hbm_col "XeTLA-GB/s-max"
 
       - name: Run micro benchmark
         run: |
@@ -171,21 +163,7 @@ jobs:
       - name: Setup IPEX
         uses: ./.github/actions/setup-ipex
 
-      - name: Generate Triton cache key
-        id: triton-key
-        run: |
-          COMPOSITE_KEY=$(echo $PYTHON_VERSION $GITHUB_SHA | sha256sum - | cut -d\  -f1)
-          echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
-
-      - name: Load Triton wheels from a cache
-        id: triton-cache
-        uses: ./.github/actions/load
-        with:
-          path: python/dist
-          key: ${{ steps.triton-key.outputs.key }}
-
       - name: Build Triton wheels
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
         uses: ./llvm-target/.github/actions/setup-triton
         with:
           command: DEBUG=1 python setup.py bdist_wheel
@@ -193,13 +171,6 @@ jobs:
       - name: Install Triton
         run: |
           pip install python/dist/*.whl
-
-      - name: Save Triton wheels to a cache
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.triton-cache.outputs.path }}
-          dest: ${{ steps.triton-cache.outputs.dest }}
 
       - name: Install benchmark dependencies
         run: |
@@ -235,120 +206,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-attention-reports
-          path: reports
-
-  benchmark-gemm:
-    name: GEMM benchmarks
-    runs-on:
-      - ${{ inputs.runner_label || 'max1550' }}
-    timeout-minutes: 720
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: 'triton_perf_poc'
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          path: llvm-target
-
-      - name: Load pip cache
-        id: pip-cache
-        uses: ./.github/actions/load
-        with:
-          path: $HOME/.cache/pip
-          # pip cache per commit id just to minimize network traffic
-          key: pip-$PYTHON_VERSION-$GITHUB_SHA
-
-      - name: Load artifacts cache
-        id: artifacts-cache
-        uses: ./.github/actions/load
-        with:
-          path: artifacts
-          key: artifacts
-
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Python build dependencies
-        run: |
-          pip install wheel
-
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
-
-      - name: Setup IPEX
-        uses: ./.github/actions/setup-ipex
-
-      - name: Generate Triton cache key
-        id: triton-key
-        run: |
-          COMPOSITE_KEY=$(echo $PYTHON_VERSION $GITHUB_SHA | sha256sum - | cut -d\  -f1)
-          echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
-
-      - name: Load Triton wheels from a cache
-        id: triton-cache
-        uses: ./.github/actions/load
-        with:
-          path: python/dist
-          key: ${{ steps.triton-key.outputs.key }}
-
-      - name: Build Triton wheels
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        uses: ./llvm-target/.github/actions/setup-triton
-        with:
-          command: DEBUG=1 python setup.py bdist_wheel
-
-      - name: Install Triton
-        run: |
-          pip install python/dist/*.whl
-
-      - name: Save Triton wheels to a cache
-        if: ${{ steps.triton-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.triton-cache.outputs.path }}
-          dest: ${{ steps.triton-cache.outputs.dest }}
-
-      - name: Install benchmark dependencies
-        run: |
-          pip install matplotlib pandas tabulate
-
-      - name: Install a custom libigc from artifacts
-        run: |
-          sudo dpkg -i artifacts/libigc1_1.0.24994.16243-igc+releaseinternal1_amd64.deb
-
-      - name: Create reports dir
-        run: |
-          mkdir reports
-          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
-
-      - name: Run GEMM benchmark
-        run: |
-          source scripts/capture-hw-details.sh
-          cd python/tutorials
-          bash run_all.sh
-          cp summary.csv $REPORTS/gemm-summary.csv
-          # This will fix csv file issues, fixing ", "->"," and " " -> "," that exist in raw output
-          sed -E 's/, /,/g;s/ /,/g' summary.csv > gemm-results.csv
-          # For debug
-          python ../../scripts/build_report.py gemm-results.csv $REPORTS/gemm-report.csv --benchmark gemm --compiler triton --param_cols "B,N,K,M" --tflops_col max_tflops --hbm_col max_gbs
-
-      - name: Save pip cache
-        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.pip-cache.outputs.path }}
-          dest: ${{ steps.pip-cache.outputs.dest }}
-
-      - name: Upload benchmark reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-gemm-reports
           path: reports

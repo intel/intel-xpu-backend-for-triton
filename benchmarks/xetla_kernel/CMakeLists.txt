@@ -13,5 +13,6 @@ target_include_directories(xetla_kernel PUBLIC "${TORCH_IPEX_INCLUDE_DIRS}")
 target_include_directories(xetla_kernel PUBLIC "${XeTLALibrary_INCLUDE_DIR}")
 
 add_subdirectory(softmax)
-add_subdirectory(bgemm)
+add_subdirectory(gemm)
+add_subdirectory(stream_k_gemm)
 add_subdirectory(flash_attention)

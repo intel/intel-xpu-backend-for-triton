@@ -22,7 +22,7 @@ else:
             self.record()
 
         def record(self):
-            self.timestamp = time.time_ns() // 1_000_000
+            self.timestamp = time.time_ns() / 1_000_000
 
         def elapsed_time(self, end):
             return end.timestamp - self.timestamp
@@ -47,7 +47,17 @@ def nvsmi(attrs):
     return ret
 
 
-def do_bench_cudagraph(fn, rep=20, grad_to_none=None, return_mode="mean"):
+def _summarize_statistics(times, quantiles, return_mode):
+    import torch
+    if quantiles is not None:
+        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+        if len(ret) == 1:
+            ret = ret[0]
+        return ret
+    return getattr(torch, return_mode)(times).item()
+
+
+def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
     Benchmark the runtime of the provided function.
 
@@ -108,8 +118,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, return_mode="mean"):
         end_event.record()
         torch.cuda.synchronize()
         ret += [start_event.elapsed_time(end_event) / n_repeat]
-    times = torch.tensor(ret)
-    return getattr(torch, return_mode)(times).item()
+    return _summarize_statistics(torch.tensor(ret), quantiles, return_mode)
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
@@ -190,12 +199,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     if not USE_WALL_TIME:
         synchronize()
     times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
-    if quantiles is not None:
-        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
-        if len(ret) == 1:
-            ret = ret[0]
-        return ret
-    return getattr(torch, return_mode)(times).item()
+    return _summarize_statistics(times, quantiles, return_mode)
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=''):

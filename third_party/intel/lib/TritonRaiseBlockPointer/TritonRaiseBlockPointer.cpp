@@ -25,6 +25,51 @@ namespace {
 constexpr unsigned offsetBitwidth = 32;
 constexpr unsigned shapeAndStridesBitwidth = 64;
 
+std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
+  if (ofr.is<Attribute>() && isa<IntegerAttr>(ofr.get<Attribute>()))
+    return cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
+  return std::nullopt;
+}
+
+// This function folds the `op` operation and returns the constant value if it
+// has successfully folded to a constant. Otherwise, it returns `std::nullopt`.
+std::optional<int64_t> getFoldedConstantValue(Operation *op) {
+  SmallVector<OpFoldResult> results;
+  if (failed(op->fold(results))) {
+    return std::nullopt;
+  }
+
+  // If fold succeeded but `results` is empty, we give a second try, after the
+  // operands have been switched during the first call to `fold()`.
+  if (results.empty()) {
+    if (failed(op->fold(results))) {
+      return std::nullopt;
+    }
+  }
+
+  if (results.size() != 1) {
+    return std::nullopt;
+  }
+
+  auto intAttr = getIntAttr(results[0]);
+  if (intAttr.has_value()) {
+    return intAttr.value();
+  }
+
+  auto val = cast<Value>(results[0]);
+  auto constOp = val.getDefiningOp<arith::ConstantOp>();
+  if (!constOp)
+    return std::nullopt;
+
+  return getIntAttr(constOp.getValue());
+}
+
+// return true if the `val` value is a constant containing a value equal to zero
+bool hasConstZero(Value val) {
+  auto intVal = getFoldedConstantValue(val.getDefiningOp());
+  return (intVal.has_value() && (intVal.value() == 0));
+}
+
 // Data structure used to decode pointer arithmetics. Offsets, sizes, and
 // strides are in unit of elements in a linearly laid-out memory, which is the
 // same as pointer arithmetic operations in Triton language. Scalar is a
@@ -70,10 +115,7 @@ struct PtrState {
     // When PtrState describes a non-block pointer, shape field indicates how
     // address wraps around. As a result, a constant 0 indicates no wrap around
     // (i.e. modulo) for the dimension.
-    if (auto intOp = shape[dim].getDefiningOp<arith::ConstantIntOp>()) {
-      return intOp.value() != 0;
-    }
-    return true;
+    return !hasConstZero(shape[dim]);
   }
 
   // @return true if addresses wrap around in any of the pointer dimension.
@@ -113,11 +155,50 @@ struct PtrState {
       sizes.push_back(lhsState.sizes[i]);
     }
 
+    // AddPtr where both lhs and rhs containing modulo operators not supported
+    if (lhsState.hasModulo() && rhsState.hasModulo()) {
+      op->emitRemark(
+          "TritonRaiseBlockPointer: do not support adding two pointer states "
+          "that both have modulo");
+      return failure();
+    }
+
+    assert(
+        !(lhsState.hasModulo() || rhsState.hasModulo()) ||
+        (lhsState.getRank() <= 2) &&
+            "cannot have rank > 2 if operand one of the operands has a modulo");
+
+    // dealing with modulo:
+    // - If lhs has no modulo, skip
+    // - If rhs has zero offset on dim i, we can just use lhs's modulo
+    // - Else, the analysis fails
+
+    // An example for the 3rd condition above can look like:
+    // %0 = tt.splat %scalar
+    // %1 = tt.splat %ptr
+    // %2 = tt.arange
+    // %3 = arith.remsi %2, %size
+    // %4 = tt.addptr %1, %3
+    // %5 = tt.addptr %4, %0
+    // %5 may also occur in a loop to increment %4 every iteration.
+
     const PtrState *lhs = &lhsState;
     const PtrState *rhs = &rhsState;
 
-    for (uint64_t i = 0; i < lhs->getRank(); ++i) {
-      shape.push_back(lhs->shape[i]);
+    if (rhs->hasModulo()) {
+      std::swap(lhs, rhs);
+    }
+
+    for (uint64_t i = 0; i < lhs->getRank(); i++) {
+      if (!lhs->dimHasModulo(i)) {
+        shape.push_back(lhs->shape[i]);
+      } else if (hasConstZero(rhs->offsets[i])) {
+        shape.push_back(lhs->shape[i]);
+      } else {
+        op->emitRemark("TritonRaiseBlockPointer: do not support adding to "
+                       "operand with modulo");
+        return failure();
+      }
     }
 
     return success();
@@ -155,9 +236,18 @@ struct PtrState {
     ArithBuilder abuilder(builder, loc);
     for (const auto &[offset, stride, dim, size] :
          llvm::zip(lhs->offsets, lhs->strides, lhs->shape, lhs->sizes)) {
-      Value newOffset = abuilder.mul(offset, i32Scalar);
-      Value newStride = abuilder.mul(stride, i64Scalar);
-      Value newDim = abuilder.mul(dim, i64Scalar);
+
+      Value newOffset =
+          abuilder.mul(getValueOrCreateCastToIndexLike(
+                           builder, loc, builder.getI32Type(), offset),
+                       i32Scalar);
+      Value newStride =
+          abuilder.mul(getValueOrCreateCastToIndexLike(
+                           builder, loc, builder.getI64Type(), stride),
+                       i64Scalar);
+      Value newDim = abuilder.mul(getValueOrCreateCastToIndexLike(
+                                      builder, loc, builder.getI64Type(), dim),
+                                  i64Scalar);
 
       offsets.push_back(newOffset);
       strides.push_back(newStride);
@@ -710,11 +800,12 @@ struct TritonRaiseBlockPointer
     }
 
     return TypeSwitch<Operation *, LogicalResult>(definingOp)
-        .Case<arith::AddIOp, arith::ConstantOp, arith::MulIOp,
-              triton::BroadcastOp, triton::MakeRangeOp, triton::SplatOp,
-              triton::ExpandDimsOp>([this, &state, loc, &builder](auto op) {
-          return visitAddPointerOperand(op, state, loc, builder);
-        })
+        .Case<arith::AddIOp, arith::ConstantOp, arith::MulIOp, arith::RemUIOp,
+              arith::RemSIOp, triton::BroadcastOp, triton::MakeRangeOp,
+              triton::SplatOp, triton::ExpandDimsOp>(
+            [this, &state, loc, &builder](auto op) {
+              return visitAddPointerOperand(op, state, loc, builder);
+            })
         .Default([](Operation *op) {
           llvm::dbgs() << "TritonRaiseBlockPointer: encountered addptr operand "
                           "produced by an unsupported operation\n"
@@ -726,6 +817,11 @@ struct TritonRaiseBlockPointer
   template <typename OpTy>
   LogicalResult visitAddPointerOperand(OpTy op, PtrState &state, Location loc,
                                        OpBuilder &builder);
+
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, arith::RemSIOp, arith::RemUIOp>::value>>
+  LogicalResult visitAddPointerRemOperand(OpTy remOp, PtrState &state,
+                                          Location loc, OpBuilder &builder);
 
   template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
                                OpTy, triton::LoadOp, triton::StoreOp>::value>>
@@ -776,6 +872,85 @@ struct TritonRaiseBlockPointer
   IndexMapSet levelToBlockArgIndex;
   int level = 0;
 };
+
+template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                             OpTy, arith::RemSIOp, arith::RemUIOp>::value>>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
+    OpTy remOp, PtrState &state, Location loc, OpBuilder &builder) {
+  assert(state.isEmpty() && "state is a return argument");
+
+  PtrState rhsState;
+  if (failed(visitOperand(remOp.getRhs(), rhsState, loc, builder))) {
+    return failure();
+  }
+
+  if (!rhsState.scalar) {
+    remOp->emitRemark(
+        "TritonRaiseBlockPointer: only support cases when rhs of remainder "
+        "contains scalar");
+    return failure();
+  }
+
+  if (failed(visitOperand(remOp.getLhs(), state, loc, builder))) {
+    return failure();
+  }
+
+  // If there are multiple modulo ops on an expression (e.g.: (a % b) % c), we
+  // would have already populated the modulo states after visiting the lhs.
+  // Assert that all the modulo states are empty.
+  if (state.hasModulo()) {
+    remOp->emitRemark("TritonRaiseBlockPointer: do not support multiple modulo "
+                      "within an expression");
+    return failure();
+  }
+
+  switch (state.getRank()) {
+  case 1:
+    // Apply the modulo before expanding shape, the common pattern is
+    // offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+    // a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] *
+    // stride_ak)
+    state.shape.back() = rhsState.scalar;
+    break;
+  case 2: {
+    // torch inductor expands the tensor shape before applying the modulo.
+    //
+    // We only support either:
+    // - (tl.arange(0, end)[:, None] % mod), or
+    // - (tl.arange(0, end)[None, :] % mod)
+    //
+    // In both cases, we apply the modulo to the non-singleton dimension.
+    auto shape = cast<TensorType>(remOp.getResult().getType()).getShape();
+    if (shape[0] == 1) {
+      state.shape[1] = rhsState.scalar;
+    } else if (shape[1] == 1) {
+      state.shape[0] = rhsState.scalar;
+    } else {
+      remOp->emitRemark("TritonRaiseBlockPointer: taking modulo on a 2D tensor "
+                        "with no singleton dimension not supported");
+      return failure();
+    }
+    break;
+  }
+  default:
+    remOp->emitRemark("TritonRaiseBlockPointer: unsupported modulo pattern");
+    return failure();
+  }
+
+  return success();
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::RemSIOp remOp, PtrState &state, Location loc, OpBuilder &builder) {
+  return visitAddPointerRemOperand(remOp, state, loc, builder);
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::RemUIOp remOp, PtrState &state, Location loc, OpBuilder &builder) {
+  return visitAddPointerRemOperand(remOp, state, loc, builder);
+}
 
 template <>
 LogicalResult

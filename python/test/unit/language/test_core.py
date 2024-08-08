@@ -24,28 +24,36 @@ def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
 
 
+def get_current_target():
+    if is_interpreter():
+        return None
+    return triton.runtime.driver.active.get_current_target()
+
+
 def is_cuda():
-    return not is_interpreter() and \
-        triton.runtime.driver.active.get_current_target().backend == "cuda"
+    target = get_current_target()
+    return False if target is None else target.backend == "cuda"
 
 
 def is_hip():
-    return not is_interpreter() and \
-        triton.runtime.driver.active.get_current_target().backend == "hip"
+    target = get_current_target()
+    return False if target is None else target.backend == "hip"
 
 
-def is_hip_mi300():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == 'hip' and target.arch == 'gfx942'
+def get_arch():
+    target = get_current_target()
+    return "" if target is None else str(target.arch)
 
 
 def is_xpu():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "xpu"
+    target = get_current_target()
+    return False if target is None else target.backend == "xpu"
 
 
 def xpu_has_fp64():
     assert is_xpu()
-    return triton.runtime.driver.active.get_current_target().arch['has_fp64']
+    target = get_current_target()
+    return target.arch['has_fp64']
 
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -199,11 +207,12 @@ class MfmaLayout:
 
 class WmmaLayout:
 
-    def __init__(self, warps_per_cta):
+    def __init__(self, version, warps_per_cta):
+        self.version = version
         self.warps_per_cta = warps_per_cta
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.amd_wmma<{{warpsPerCTA = {self.warps_per_cta}}}>"
+        return f"#{GPU_DIALECT}.amd_wmma<{{version = {self.version}, warpsPerCTA = {self.warps_per_cta}}}>"
 
 
 class MmaLayout:
@@ -3124,6 +3133,8 @@ def convert_fp8_to_fp32(x, device, dtype_str):
                                                 for col_a in [True, False]
                                                 for col_b in [True, False]] +
     [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1)] +
+    ([(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1),
+      (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1)] if "gfx9" in get_arch() else []) +
     [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
      for float8_type in ["float8e5", "float8e4nv"]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -3350,12 +3361,17 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("B", [1, 2, 4, 8])
-@pytest.mark.parametrize("num_warps", [1, 2, 4, 8, 16])
-@pytest.mark.parametrize("M, N, K", [(64, 64, 64), (32, 32, 32)])
-@pytest.mark.parametrize("in_dtype_str, out_dtype_str", [('int8', 'int8'), ('float16', 'float16'),
-                                                         ('float16', 'float32'), ('float32', 'float32')])
-def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
+@pytest.mark.parametrize("B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str",
+                         [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
+                          for B in [1, 2, 4, 8]
+                          for num_warps in [1, 2, 4, 8, 16]
+                          for BLOCK_M, BLOCK_N in [(32, 32)]
+                          for M, N, K in [(64, 64, 64), (32, 32, 32)]
+                          for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'),
+                                                              ('float16', 'float32'), ('float32', 'float32')]] +
+                         # Large block sizes
+                         [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')])
+def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
         input_precision = "ieee"
@@ -3432,7 +3448,6 @@ def test_dot3d(B, num_warps, M, N, K, in_dtype_str, out_dtype_str, device):
     out_tri = to_triton(out, device=device)
 
     BLOCK_B = B
-    BLOCK_M, BLOCK_N = 32, 32
     BLOCK_K = K
 
     grid = (
@@ -3633,6 +3648,13 @@ def test_const(device, choose_const, constexpr, mode):
     if expect_fail:
         with pytest.raises(triton.CompilationError) as exc_info:
             patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
+        if constexpr:
+            assert "Cannot store to a constant pointer" in str(exc_info.value.__cause__), "Wrong error message!"
+        elif not constexpr and mode == "call":
+            assert "Inconsistent return types" in str(exc_info.value.__cause__), "Wrong error message!"
+        else:
+            # TODO: Add error messages for the other cases
+            pass
     else:
         patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
         assert torch.all(input == output)
@@ -3811,7 +3833,16 @@ def test_load_cache_modifier(cache, device):
         tl.store(dst + offsets, x)
 
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
+
     if not is_cuda():
+        if is_hip():
+            amdgcn = pgm.asm['amdgcn']
+            cache_modifier_str = 'nt' if 'gfx94' in get_arch() else 'glc'
+            global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
+            if cache == '':
+                assert cache_modifier_str not in global_load_line[0]
+            if cache == '.cg':
+                assert cache_modifier_str in global_load_line[0]
         return
 
     ptx = pgm.asm['ptx']
@@ -3878,6 +3909,27 @@ def test_vectorization_hints(has_hints, device):
         assert "ld.global.v4.b32" in ptx
     else:
         assert "ld.global.v4.b32" not in ptx
+
+
+@pytest.mark.interpreter
+def test_assume(device):
+
+    @triton.jit
+    def _kernel(out_ptr, N: tl.constexpr, BLOCK_N: tl.constexpr):
+        current_size = N - tl.program_id(0) * BLOCK_N
+        tl.assume(current_size >= BLOCK_N)
+        if current_size >= 128:
+            tl.store(out_ptr + tl.program_id(0), current_size)
+        else:
+            tl.store(out_ptr + tl.program_id(0), current_size + 101024)
+
+    output = torch.zeros(1024 // 128, device=device)
+    pgm = _kernel[(1024 // 128, )](output, N=1024, BLOCK_N=128)
+
+    if is_interpreter():
+        return
+
+    assert 'llvm.assume' in pgm.asm['llir']
 
 
 # ---------------
@@ -5224,7 +5276,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
             pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
         ## TODO: Figure out why block size (128, 256, 128) fails on MI300
-        if is_hip_mi300() and BLOCK_M == 128:
+        if ("gfx94" in get_arch()) and BLOCK_M == 128:
             pytest.skip('BLOCK size (128, 256, 128) fails on MI300')
 
     check_type_supported(in_type_str, device)
@@ -5235,8 +5287,9 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     a = to_triton(A, device=device, dst_type=in_type_str)
     b = to_triton(B, device=device, dst_type=in_type_str)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    max_num_impressive_acc = low_precision_acc if low_precision_acc <= BLOCK_K else None
     h = matmul_kernel[grid](a, b, C, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), C.stride(0),
-                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, low_precision_acc, num_warps=num_warps)
+                            C.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, max_num_impressive_acc, num_warps=num_warps)
     torch_a = torch.from_numpy(A).to(device=device)
     th_a = f8_to_f16(torch_a, in_type_str)
     torch_b = torch.from_numpy(B).to(device=device)

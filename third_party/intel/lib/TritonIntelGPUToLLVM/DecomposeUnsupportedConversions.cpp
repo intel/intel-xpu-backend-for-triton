@@ -1,3 +1,5 @@
+#include "intel/include/Analysis/Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -84,23 +86,24 @@ struct DecomposeUnsupportedConversions
       }
     });
     /* -------------------------------- */
-    // Replace `mma -> dot_op` with `mma -> blocked -> dot_op`
+    // Replace `dpas -> dot_op` with `dpas -> blocked -> dot_op`
     // unless certain conditions are met
     /* -------------------------------- */
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
       auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
       auto dstType = cast<RankedTensorType>(cvtOp.getType());
-      auto srcMma =
-          dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(srcType.getEncoding());
+      auto srcDpas =
+          dyn_cast<triton::gpu::intel::DpasEncodingAttr>(srcType.getEncoding());
       auto dstDotOp =
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
-      if (srcMma && dstDotOp && !isMmaToDotShortcut(srcType, dstType)) {
+      if (srcDpas && dstDotOp &&
+          !triton::gpu::intel::isDpasToDotShortcut(srcType, dstType)) {
         auto tmpType = RankedTensorType::get(
             dstType.getShape(), dstType.getElementType(),
             triton::gpu::BlockedEncodingAttr::get(
-                mod.getContext(), srcType.getShape(), getSizePerThread(srcMma),
-                getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
+                mod.getContext(), srcType.getShape(), getSizePerThread(srcDpas),
+                getOrder(srcDpas), numWarps, threadsPerWarp, numCTAs));
         auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getSrc());
         addAttrs(tmp, cvtOp->getAttrs());
@@ -133,12 +136,10 @@ struct DecomposeUnsupportedConversions
                 srcBlocked.getOrder(), srcBlocked.getCTALayout(),
                 srcType.getElementType()),
             sharedMemorySpace);
-        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
+        auto tmp = builder.create<triton::gpu::LocalAllocOp>(
             cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-        addAttrs(tmp, cvtOp->getAttrs());
-        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
+        auto newConvert = builder.create<triton::gpu::LocalLoadOp>(
             cvtOp.getLoc(), dstType, tmp);
-        addAttrs(newConvert, cvtOp->getAttrs());
         cvtOp.replaceAllUsesWith(newConvert.getResult());
         cvtOp.erase();
       }

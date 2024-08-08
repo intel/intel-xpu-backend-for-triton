@@ -1,6 +1,5 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src
 
 from dataclasses import dataclass
 import functools
@@ -46,6 +45,7 @@ class XPUOptions:
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
+    grf_mode: tuple = ('small', 'large', 'auto', 'default')
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -66,6 +66,26 @@ class XPUOptions:
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
+def min_dot_size(device_props: dict):
+    # (M, N, K)
+    # M: repeatCount. 1,2,4,8
+    # N: executionSize. 16 for PVC, 8 for ATS
+    # K: systolicDepth x opsPerChan. systolicDepth must be 8
+
+    # default 8 because 1,2,4 is not supported by our backend now.
+    repeat_count = 8
+    sdepth = 8
+    exec_size = min(device_props["sub_group_sizes"])
+
+    def get_ops_per_channel(lhs_type, rhs_type):
+        l_bitwidth = lhs_type.scalar.primitive_bitwidth
+        r_bitwidth = rhs_type.scalar.primitive_bitwidth
+        max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
+        return min(8, max_ops_per_chan)
+
+    return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
+
+
 class XPUBackend(BaseBackend):
 
     # AdvancedPath pass pipeline for kernels using block pointers.
@@ -80,9 +100,12 @@ class XPUBackend(BaseBackend):
             inject_split_barriers = False
             intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
             intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
+            intel.passes.ttgpuir.add_schedule_load(pm)
             passes.common.add_symbol_dce(pm)
             pm.run(mod)
             return mod
@@ -94,9 +117,6 @@ class XPUBackend(BaseBackend):
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
         assert isinstance(target.arch, dict)
-        dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
-        self.parse_device_arch = mod.parse_device_arch
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
 
@@ -112,10 +132,11 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        dev_prop['device_arch'] = self.parse_device_arch(tgt_prop.get('device_arch', 0))
-        dev_prop['support_cl_sg_matmul_acc'] = tgt_prop.get('support_cl_sg_matmul_acc', False)
-        dev_prop['support_cl_sg_matmul_acc_tf32'] = tgt_prop.get('support_cl_sg_matmul_acc_tf32', False)
-        dev_prop['support_cl_sg_2d_block_io'] = tgt_prop.get('support_cl_sg_2d_block_io', False)
+        dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
+                                                                           False)
+        dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
+            'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
+        dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -130,6 +151,7 @@ class XPUBackend(BaseBackend):
         from triton.language.extra.intel import convert_custom_float8
         codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8
+        codegen_fns["min_dot_size"] = min_dot_size(self.properties)
         return codegen_fns
 
     def load_dialects(self, ctx):
@@ -161,8 +183,9 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
-                                                        properties["support_cl_sg_2d_block_io"],
-                                                        properties["support_cl_sg_matmul_acc"], opt.threads_per_warp)
+                                                        properties["has_subgroup_2d_block_io"],
+                                                        properties["has_subgroup_matrix_multiply_accumulate"],
+                                                        opt.threads_per_warp)
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
@@ -172,12 +195,11 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        if (properties["support_cl_sg_2d_block_io"] and properties["support_cl_sg_matmul_acc"]
+        if (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]
                 and os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1"):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
-        device_arch = properties["device_arch"]
-        passes.ttir.add_convert_to_ttgpuir(pm, f"xpu:{device_arch}", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
+        passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
@@ -243,16 +265,27 @@ class XPUBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def make_spv(src, metadata):
+    def make_spv(src, metadata, options):
         ret, name = intel.translate_to_spirv(src)
         metadata["name"] = name
+        if options.grf_mode == 'small':
+            metadata["build_flags"] = "-cl-intel-128-GRF-per-thread"
+        elif options.grf_mode == 'large':
+            if options.num_warps > 32:
+                raise RuntimeError(f"grf_mode = large cannot be used with num_warps > 32")
+            metadata["build_flags"] = "-cl-intel-256-GRF-per-thread"
+        elif options.grf_mode == 'auto':
+            metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
+        else:
+            metadata["build_flags"] = ""
+
         return ret
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
-        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata)
+        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
 
     @functools.lru_cache()
     def hash(self):

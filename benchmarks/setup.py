@@ -24,7 +24,7 @@ class CMakeBuild():
     def __init__(self):
         self.current_dir = os.path.abspath(os.path.dirname(__file__))
         self.build_temp = self.current_dir + '/build/temp'
-        self.extdir = self.current_dir + '/xetla_benchmark'
+        self.extdir = self.current_dir + '/triton_kernels_benchmark'
 
     def run(self):
         try:
@@ -78,8 +78,8 @@ class CMakeBuild():
 cmake = CMakeBuild()
 cmake.run()
 
-setup(name='xetla-benchmark', packages=[
-    "xetla_benchmark",
+setup(name='triton-kernels-benchmark', packages=[
+    "triton_kernels_benchmark",
 ], package_dir={
-    "xetla_benchmark": "xetla_benchmark",
-}, package_data={"xetla_benchmark": ["xetla_kernel.so"]})
+    "triton_kernels_benchmark": "triton_kernels_benchmark",
+}, package_data={"triton_kernels_benchmark": ["xetla_kernel.so"]})

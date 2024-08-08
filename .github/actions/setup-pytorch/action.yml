@@ -16,9 +16,6 @@ inputs:
   ref:
     description: Branch, tag, commit id
     default: ""
-  torch_xpu_ops_commit:
-    description: Commit id of third_party/xpu_ops repository
-    default: ""
 runs:
   using: "composite"
   steps:
@@ -76,7 +73,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: 7
+        CACHE_NUMBER: 10
       with:
         path: pytorch
         key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID-$CACHE_NUMBER
@@ -90,19 +87,14 @@ runs:
         submodules: recursive
         path: pytorch
 
-    - name: Update third_party/xpu_ops
-      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.repository == 'pytorch/pytorch' }}
-      shell: bash
-      run: |
-        cd pytorch/third_party
-        echo ${{ inputs.torch_xpu_ops_commit }} > xpu.txt
-
     - name: Apply additional PR patches
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.repository == 'pytorch/pytorch' }}
       shell: bash
       run: |
         cd pytorch
-        curl -Ls https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
+        curl -sSL https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
+        curl -sSL https://github.com/pytorch/pytorch/pull/126456.diff | git apply -
+        curl -sSL https://github.com/pytorch/pytorch/pull/131738.diff | git apply -
 
     # FIXME: Old PyTorch does not work with numpy==2.0.0
     - name: Install numpy < 2.0.0

@@ -5,11 +5,13 @@ set -euo pipefail
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Select which tests to run.
-TEST_MICRO_BENCHMARKS=false
+TEST_UNIT=false
 TEST_CORE=false
 TEST_INTERPRETER=false
 TEST_TUTORIAL=false
-TEST_UNIT=false
+TEST_MICRO_BENCHMARKS=false
+TEST_BENCHMARK_SOFTMAX=false
+TEST_BENCHMARK_GEMM=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
@@ -23,8 +25,8 @@ for arg in "$@"; do
       TEST_UNSKIP=true
       shift
       ;;
-    --microbench)
-      TEST_MICRO_BENCHMARKS=true
+    --unit)
+      TEST_UNIT=true
       shift
       ;;
     --core)
@@ -39,8 +41,16 @@ for arg in "$@"; do
       TEST_TUTORIAL=true
       shift
       ;;
-    --unit)
-      TEST_UNIT=true
+    --microbench)
+      TEST_MICRO_BENCHMARKS=true
+      shift
+      ;;
+    --softmax)
+      TEST_BENCHMARK_SOFTMAX=true
+      shift
+      ;;
+    --gemm)
+      TEST_BENCHMARK_GEMM=true
       shift
       ;;
     --venv)
@@ -75,11 +85,11 @@ for arg in "$@"; do
 done
 
 # Only run interpreter test when $TEST_INTERPRETER is ture
-if [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_UNIT" = false ]; then
-  TEST_MICRO_BENCHMARKS=true
+if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ]; then
+  TEST_UNIT=true
   TEST_CORE=true
   TEST_TUTORIAL=true
-  TEST_UNIT=true
+  TEST_MICRO_BENCHMARKS=true
 fi
 
 if [ ! -v BASE ]; then
@@ -114,17 +124,6 @@ then
   echo "****** ERROR: Build Triton first ******"
   exit 1
 fi
-
-run_benchmark_tests() {
-  echo "****************************************************"
-  echo "*****   Running Triton Micro Benchmark tests   *****"
-  echo "****************************************************"
-  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/micro_benchmarks
-  if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
-    echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
-  fi
-  python ${BENCHMARK_TEST_DIR}/run_benchmarks.py
-}
 
 run_unit_tests() {
   echo "***************************************************"
@@ -232,6 +231,53 @@ run_tutorial_tests() {
   run_tutorial_test "10i-experimental-block-pointer"
 }
 
+run_microbench_tests() {
+  echo "****************************************************"
+  echo "*****   Running Triton Micro Benchmark tests   *****"
+  echo "****************************************************"
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/micro_benchmarks
+  if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
+    echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
+  fi
+  python ${BENCHMARK_TEST_DIR}/run_benchmarks.py
+}
+
+run_benchmark_softmax() {
+  echo "****************************************************"
+  echo "*****             Running Softmax              *****"
+  echo "****************************************************"
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
+  if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
+    echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
+  fi
+  python ${BENCHMARK_TEST_DIR}/fused_softmax.py
+}
+
+run_benchmark_gemm() {
+  echo "****************************************************"
+  echo "*****              Running GEMM                *****"
+  echo "****************************************************"
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
+  if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
+    echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
+  fi
+  cd $TRITON_PROJ/benchmarks; python setup.py install
+  TRITON_INTEL_ADVANCED_PATH=0 \
+  TRITON_INTEL_ENABLE_FAST_PREFETCH=1 \
+  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+  IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+  IGC_DisableLoopUnroll=1 \
+  SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
+  python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
+
+  TRITON_INTEL_ADVANCED_PATH=1 \
+  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+  IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+  IGC_DisableLoopUnroll=1 \
+  SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
+  python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
+}
+
 test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
@@ -247,7 +293,13 @@ test_triton() {
     run_tutorial_tests
   fi
   if [ "$TEST_MICRO_BENCHMARKS" = true ]; then
-    run_benchmark_tests
+    run_microbench_tests
+  fi
+  if [ "$TEST_BENCHMARK_SOFTMAX" = true ]; then
+    run_benchmark_softmax
+  fi
+  if [ "$TEST_BENCHMARK_GEMM" = true ]; then
+    run_benchmark_gemm
   fi
 }
 
