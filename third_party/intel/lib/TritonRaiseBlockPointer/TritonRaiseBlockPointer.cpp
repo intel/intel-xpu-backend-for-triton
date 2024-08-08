@@ -818,13 +818,17 @@ struct TritonRaiseBlockPointer
   LogicalResult visitAddPointerOperand(OpTy op, PtrState &state, Location loc,
                                        OpBuilder &builder);
 
-  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
-                               OpTy, arith::RemSIOp, arith::RemUIOp>::value>>
+  template <typename OpTy,
+            std::enable_if_t<
+                llvm::is_one_of<OpTy, arith::RemSIOp, arith::RemUIOp>::value,
+                bool> = true>
   LogicalResult visitAddPointerRemOperand(OpTy remOp, PtrState &state,
                                           Location loc, OpBuilder &builder);
 
-  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
-                               OpTy, triton::LoadOp, triton::StoreOp>::value>>
+  template <typename OpTy,
+            std::enable_if_t<
+                llvm::is_one_of<OpTy, triton::LoadOp, triton::StoreOp>::value,
+                bool> = true>
   LogicalResult rewriteLoadStoreOp(OpTy op) {
     constexpr bool isLoad = std::is_same_v<OpTy, triton::LoadOp>;
     constexpr StringLiteral opName =
@@ -881,8 +885,10 @@ struct TritonRaiseBlockPointer
   int level = 0;
 };
 
-template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
-                             OpTy, arith::RemSIOp, arith::RemUIOp>::value>>
+template <typename OpTy,
+          std::enable_if_t<
+              llvm::is_one_of<OpTy, arith::RemSIOp, arith::RemUIOp>::value,
+              bool> = true>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
     OpTy remOp, PtrState &state, Location loc, OpBuilder &builder) {
   assert(state.isEmpty() && "state is a return argument");
