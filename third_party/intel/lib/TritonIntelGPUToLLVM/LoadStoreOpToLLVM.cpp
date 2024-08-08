@@ -399,14 +399,36 @@ struct LoadOpConversion
     Type unpackedDPASOperandType = LLVM::getFixedVectorType(
         typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
 
-    // pack scalars for operand A and B.
-    Type elemType = (isOperandA && eltTy != f32_ty) ? i16_ty : i32_ty;
+    // If the element type matches the DPAS type, use the opaque packed type for
+    // the 2D load result. Then there is a shortcut to use the load result
+    // directly as the input operands to DPAS.
+    Type loadResultElemType;
+    bool usePackedType;
+    unsigned packedElemsPerLanePerDPASInst;
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
-    unsigned packedElemsPerLanePerDPASInst =
-        isOperandA ? elemsPerLanePerDPASInst / (opsPerChannel == 4 ? 2 : 1)
-                   : elemsPerLanePerDPASInst / opsPerChannel;
-    Type packedDPASOperandType =
-        LLVM::getFixedVectorType(elemType, packedElemsPerLanePerDPASInst);
+    unsigned elemBits = eltTy.getIntOrFloatBitWidth();
+    // TODO: add support for int4 and int2 later.
+    if ((opsPerChannel == 4 && elemBits == 8) ||
+        (opsPerChannel == 2 && elemBits == 16) ||
+        (opsPerChannel == 1 && elemBits == 32)) {
+      loadResultElemType = (isOperandA && elemBits != 32) ? i16_ty : i32_ty;
+      packedElemsPerLanePerDPASInst =
+          isOperandA ? elemsPerLanePerDPASInst / (opsPerChannel == 4 ? 2 : 1)
+                     : elemsPerLanePerDPASInst / opsPerChannel;
+      usePackedType = true;
+
+    } else {
+      bool useGenISA = triton::tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
+      if (!useGenISA)
+        llvm_unreachable("not support general 2D load with OCL interface");
+      // no packing.
+      loadResultElemType = typeConverter->convertType(eltTy);
+      packedElemsPerLanePerDPASInst = elemsPerLanePerDPASInst;
+      usePackedType = false;
+    }
+
+    Type packedDPASOperandType = LLVM::getFixedVectorType(
+        loadResultElemType, packedElemsPerLanePerDPASInst);
 
     // Outer dim: Dim M or N. Inner dim: Dim K.
     // Round the warp id fit into the tensor shape.
@@ -440,14 +462,10 @@ struct LoadOpConversion
       assert(tileHeight <= 32 && "invalid tile height.");
       numOperandsOuterDimPerLoad = repCluster[0];
 
-      // The number of bytes per row for the operand A are always 32. (PVC)
-      if (numRepK >= 2) {
-        // Use block array length 2 to load multiple operands A in K dim.
-        vBlocks = 2;
-      } else {
-        // Load one operands A in K dim.
-        vBlocks = 1;
-      }
+      // PVC 2D load supports 64 bytes per row at most.
+      unsigned totalBytesPerRowPerDPASOp =
+          elemsPerDPASInst[1] * eltTy.getIntOrFloatBitWidth() / 8;
+      vBlocks = std::min(numRepK, 64 / totalBytesPerRowPerDPASOp);
       numOperandsKDimPerLoad = vBlocks;
     } else {
       // PVC 2D load supports 32 rows at most. Load multiple operands B in K
@@ -470,7 +488,8 @@ struct LoadOpConversion
     unsigned numValuesPerLoad = packedElemsPerLanePerDPASInst *
                                 numOperandsOuterDimPerLoad *
                                 numOperandsKDimPerLoad;
-    Type load2DGenXType = LLVM::getFixedVectorType(elemType, numValuesPerLoad);
+    Type load2DGenXType =
+        LLVM::getFixedVectorType(loadResultElemType, numValuesPerLoad);
 
     // The stride for the replicates.
     unsigned repOuterStride = warpShape[opIdx] * outerDimWarpNum;
@@ -518,7 +537,8 @@ struct LoadOpConversion
               /*v_blocks*/ vBlocks,
               /*transpose*/ false,
               /*vnni_transform*/
-              (!isOperandA && eltTy.getIntOrFloatBitWidth() != 32));
+              (usePackedType && !isOperandA &&
+               eltTy.getIntOrFloatBitWidth() != 32));
           if (failed(load2dOp.verify())) {
             // Explicitly invoke verifier because `triton_gen` ops are
             // immediately lowered further to a builtin call.
