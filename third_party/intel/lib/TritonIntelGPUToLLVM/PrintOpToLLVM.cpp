@@ -188,7 +188,7 @@ struct PrintOpConversion
                               bool isSigned = false) const {
     Type type = value.getType();
     // If the `value` is a pointer, just return %p.
-    if (isa<LLVM::PointerType>(type)) {
+    if (isa<LLVM::LLVMPointerType>(type)) {
       return "%p";
     }
     // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
@@ -209,9 +209,7 @@ struct PrintOpConversion
       prefix += std::to_string(*width);
     }
 
-    if (isa<LLVM::LLVMPointerType>(type)) {
-      return prefix + "p";
-    } else if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
+    if (type.isBF16() || type.isF16() || type.isF32() || type.isF64()) {
       return prefix + "f";
     } else if (type.isInteger()) {
       if (type.getIntOrFloatBitWidth() == 64)
