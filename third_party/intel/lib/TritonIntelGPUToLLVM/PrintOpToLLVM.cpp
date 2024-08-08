@@ -28,11 +28,7 @@ struct PrintOpConversion
   LogicalResult
   matchAndRewrite(triton::PrintOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto typeConverter = getTypeConverter();
     auto loc = op->getLoc();
-    Value prefixStr = LLVM::intel::addStringToModule(
-        loc, rewriter, "printfPrefix_", op.getPrefix(),
-        TritonGEN::TritonGENMemorySpace::kUniformConstant);
 
     auto getPid = [&](int axis) {
       return targetInfo.programId(rewriter, loc,
@@ -45,9 +41,9 @@ struct PrintOpConversion
       std::string formatStr;
       llvm::raw_string_ostream os(formatStr);
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
-         << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")%s";
-      LLVM::intel::llPrintf(rewriter, formatStr,
-                            {pid[0], pid[1], pid[2], prefixStr});
+         << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")"
+         << op.getPrefix();
+      llPrintf(formatStr, {pid[0], pid[1], pid[2]}, rewriter);
       rewriter.eraseOp(op);
       return success();
     }
@@ -86,7 +82,7 @@ struct PrintOpConversion
       }
 
       if (!elems.empty()) {
-        printTensor(prefixStr, /*operand=*/i,
+        printTensor(op.getPrefix(), /*operand=*/i,
                     /*numOperands=*/op.getNumOperands(), elems, pid, indices,
                     dimWidths, op.getHex(), rewriter, isSigned);
       }
@@ -95,7 +91,7 @@ struct PrintOpConversion
     return success();
   }
 
-  void printTensor(Value prefixStr, size_t operand, size_t numOperands,
+  void printTensor(StringRef prefixStr, size_t operand, size_t numOperands,
                    ArrayRef<Value> elems, std::array<Value, 3> pid,
                    ArrayRef<SmallVector<Value>> indices,
                    ArrayRef<int> dimWidths, bool hex,
@@ -156,10 +152,7 @@ struct PrintOpConversion
                               /*width=*/dimWidths[dim]);
         printfOperands.push_back(index[dim]);
       }
-      os << ")";
-
-      os << "%s";
-      printfOperands.push_back(prefixStr);
+      os << ")" << prefixStr;
 
       if (numOperands > 1) {
         os << "(operand " << operand << ") ";
@@ -176,7 +169,7 @@ struct PrintOpConversion
       // strings, so we cache the Value.
       if (i == 0) {
         formatStrValue =
-            LLVM::intel::llPrintf(rewriter, formatStr, printfOperands);
+            llPrintf(formatStr, printfOperands, rewriter, &formatStrByteCount);
       } else {
         targetInfo.printf(rewriter, formatStrValue, formatStrByteCount,
                           printfOperands);
@@ -223,6 +216,24 @@ struct PrintOpConversion
     }
     assert(false && "not supported type");
     return "";
+  }
+
+  // Returns a Value for the format string, which you can reuse. Writes the byte
+  // count for the string to |formatStrByteCount| if not null.
+  Value llPrintf(StringRef msg, ValueRange args,
+                 ConversionPatternRewriter &rewriter,
+                 int *formatStrByteCount = nullptr) const {
+    assert(!msg.empty() && "printf with empty string not supported");
+    llvm::SmallString<64> msgNewline(msg);
+    msgNewline.push_back('\n');
+    msgNewline.push_back('\0');
+    Value msgValue = LLVM::intel::addStringToModule(
+        UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
+        msgNewline, TritonGEN::TritonGENMemorySpace::kUniformConstant);
+    targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+    if (formatStrByteCount)
+      *formatStrByteCount = msgNewline.size_in_bytes();
+    return msgValue;
   }
 
 protected:
