@@ -24,7 +24,12 @@ void postProcessLLVMIR(llvm::Module &mod) {
       break;
     }
   };
-
+  for (auto &f : mod) {
+    if (f.getName().str() == "__devicelib_assert_fail") {
+      assert(f.isDeclaration() &&
+             "__devicelib_assert_fail must be a declaration!");
+    }
+  }
   print("PostProcessing: Before SLPVectorizer", mod);
   SLPVectorizer(mod, trace);
   print("PostProcessing: After SLPVectorizer", mod);
