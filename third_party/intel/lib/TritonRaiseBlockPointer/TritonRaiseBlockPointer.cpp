@@ -885,10 +885,10 @@ struct TritonRaiseBlockPointer
   int level = 0;
 };
 
-template <typename OpTy,
-          std::enable_if_t<
-              llvm::is_one_of<OpTy, arith::RemSIOp, arith::RemUIOp>::value,
-              bool> = true>
+template <
+    typename OpTy,
+    std::enable_if_t<
+        llvm::is_one_of<OpTy, arith::RemSIOp, arith::RemUIOp>::value, bool>>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
     OpTy remOp, PtrState &state, Location loc, OpBuilder &builder) {
   assert(state.isEmpty() && "state is a return argument");
