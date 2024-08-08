@@ -53,17 +53,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # Estimate the runtime of the function
     start_event = torch.xpu.Event(enable_timing=True)
     end_event = torch.xpu.Event(enable_timing=True)
-    start_event.record()
-    for _ in range(5):
-        cache.zero_()
-        fn()
-    end_event.record()
-    synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
-
-    # compute number of warmup and repeat
-    n_warmup = max(warmup, int(warmup / estimate_ms))
-    n_repeat = max(rep, int(rep / estimate_ms))
+    n_warmup = warmup
+    n_repeat = rep
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -102,11 +93,13 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+        # calculate average time exclude max and min times
+        avg = (torch.sum(times) - torch.max(times) - torch.min(times)) / (times.numel() - 2)
         # add coefficient of the variance.
         std = torch.std(times)
         mean = torch.mean(times)
         cv = std / mean
-        ret.extend([mean.tolist(), cv.tolist()])
+        ret.extend([avg.tolist(), cv.tolist()])
         if len(ret) == 1:
             ret = ret[0]
         return ret
