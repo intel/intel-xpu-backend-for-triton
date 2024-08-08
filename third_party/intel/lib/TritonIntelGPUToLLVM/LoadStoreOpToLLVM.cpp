@@ -704,7 +704,10 @@ struct LoadOpConversion
       if (nWords == 1) {
         Value addrElem = bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
         uint32_t alignment = nWords * width / 8;
-        ret = rewriter.create<LLVM::SelectOp>(loc, pred, rewriter.create<LLVM::LoadOp>(loc, retTy, addrElem, alignment), other_);
+        ret = rewriter.create<LLVM::SelectOp>(
+            loc, pred,
+            rewriter.create<LLVM::LoadOp>(loc, retTy, addrElem, alignment),
+            other_);
       } else {
         Block &endBlock = LLVM::intel::createPredicatedBlock(
             rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
