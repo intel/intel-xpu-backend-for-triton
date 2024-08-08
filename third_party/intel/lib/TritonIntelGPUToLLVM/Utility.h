@@ -236,7 +236,6 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
     numRowsPerPackedValue = mlir::ceil(warpSize, packedColNum);
     numColsPerPackedValue = std::min(warpSize, packedColNum);
     numColsPerLaneForPackedValue = mlir::ceil(packedColNum, warpSize);
-    ;
   } break;
   case 1: {
     numOpsPerPackedValue = opsPerChannel;
@@ -456,35 +455,6 @@ emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
   // fewer than getTotalElementsPerThread() elements.  In that case repeat the
   // sequence.
   int elemsPerThread = triton::gpu::getTotalElemsPerThread(type);
-
-  //  llvm::outs() << "johnlu slice layout emit offset type:" << type << "\n";
-  //  llvm::outs() << "johnlu slice layout emit offset elemsPerThread:" <<
-  //  elemsPerThread << "\n";
-  //
-  //  llvm::outs() << "johnlu slice layout emit offset parentOffsets.size():" <<
-  //  parentOffsets.size() << "\n"; llvm::outs() << "johnlu slice layout emit
-  //  offset parentOffsets:" << "\n"; for (auto offsets: parentOffsets) {
-  //    llvm::outs() << "[";
-  //    for (auto off: offsets) {
-  //      llvm::outs() << off << ", ";
-  //    }
-  //    llvm::outs() << "]\n";
-  //  }
-  //  llvm::outs().flush();
-  //
-  //  llvm::outs() << "johnlu slice layout emit offset resultOffsets.size():" <<
-  //  resultOffsets.size() << "\n"; llvm::outs() << "johnlu slice layout emit
-  //  offset resultOffsets:" << "\n"; for (auto offsets: resultOffsets) {
-  //    llvm::outs() << "[";
-  //    for (auto off: offsets) {
-  //      llvm::outs() << off << ", ";
-  //    }
-  //    llvm::outs() << "]\n";
-  //  }
-  //  llvm::outs().flush();
-  //  auto newOffset = ::intel::emitOffsetForLayout(parentEncoding, parentTy);
-  //  llvm::outs() << newOffset.size() << "\n";
-  //  llvm::outs().flush();
   assert(resultOffsets.size() > 0);
   assert(elemsPerThread % resultOffsets.size() == 0);
   int numRepeats = elemsPerThread / resultOffsets.size();

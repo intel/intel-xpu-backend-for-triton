@@ -292,8 +292,8 @@ SmallVector<unsigned> DpasEncodingAttr::getElemsPerThreadForOperands(
   SmallVector<unsigned> sizePerThread = getSizePerThreadForOperands(opIdx);
   SmallVector<int64_t> repetitions = getDPASRepetitions(shape, opIdx);
 
-  return SmallVector<unsigned>{(unsigned)(sizePerThread[0] * repetitions[0]),
-                               (unsigned)(sizePerThread[1] * repetitions[1])};
+  return {static_cast<unsigned>(sizePerThread[0] * repetitions[0]),
+          static_cast<unsigned>(sizePerThread[1] * repetitions[1])};
 };
 
 SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() {
