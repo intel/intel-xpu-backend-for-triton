@@ -846,6 +846,14 @@ struct TritonRaiseBlockPointer
       return failure();
     }
 
+    // As masks are incompatible with block pointer load/store ops
+    // Masks must be handled before the operation can be rewritten.
+    // This will be done in a future PR (Issue #1784).
+    // In the meantime, operations with a mask are not rewrtitten.
+    if (op.getMask()) {
+      return success();
+    }
+
     OpBuilder builder(op);
     if constexpr (isLoad) {
       auto loadOp = builder.create<triton::LoadOp>(
