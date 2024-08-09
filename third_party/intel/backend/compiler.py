@@ -7,6 +7,8 @@ from typing import Any, Dict, Tuple
 from types import ModuleType
 import hashlib
 import re
+import tempfile
+import signal
 import os
 import shutil
 import subprocess
@@ -51,6 +53,7 @@ class XPUOptions:
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
+    cache_native_code: bool = True
     backend_name: str = 'intel'
 
     def __post_init__(self):
@@ -62,6 +65,7 @@ class XPUOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
             raise AssertionError("num_warps must be a power of 2")
+        self.cache_native_code = os.getenv("TRITON_XPU_CACHE_NATIVE_CODE", True)
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -121,7 +125,7 @@ class XPUBackend(BaseBackend):
         if not isinstance(target.arch, dict):
             raise TypeError("target.arch is not a dict")
         self.properties = self.parse_target(target.arch)
-        self.binary_ext = "spv"
+        self.binary_ext = "zebin"
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
@@ -282,7 +286,8 @@ class XPUBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def make_spv(src, metadata, options):
+    def make_zebin(src, metadata, options):
+        # generate SPIRV
         ret, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         if options.grf_mode == 'small':
@@ -296,13 +301,63 @@ class XPUBackend(BaseBackend):
         else:
             metadata["build_flags"] = ""
 
+        if options.cache_native_code is True:
+            #return intel.compile_native_binary(metadata["name"], metadata["build_flags"], metadata["shared"], 0, ret)
+            with tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.spv') as fsrc, \
+                tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
+                fsrc.write(ret)
+                fsrc.flush()
+                fbin = fsrc.name + '.o'
+
+                #line_info = [] if os.environ.get('TRITON_DISABLE_LINE_INFO') else ['-lineinfo']
+                #fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
+                #suffix = 'a' if capability == 90 else ''
+                #opt_level = ['--opt-level', '0'] if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1" else []
+                ocloc_cmd = [
+                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', 'pvc', '-options', f'{metadata["build_flags"]}'
+                ]
+
+                try:
+                    subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog, stderr=subprocess.STDOUT)
+                    if os.path.exists(fsrc.name):
+                        os.remove(fsrc.name)
+                    if os.path.exists(flog.name):
+                        with open(flog.name) as log_file:
+                            log = log_file.read().strip()
+                            if 'spilled' in log:
+                                # TODO: handle register spills - can we set the build flag for module load, or do we need to recompile? 
+                                print(log)
+                        os.remove(flog.name)
+                except subprocess.CalledProcessError as e:
+                    with open(flog.name) as log_file:
+                        log = log_file.read()
+                    if os.path.exists(flog.name):
+                        os.remove(flog.name)
+
+                    if e.returncode == 255:
+                        error = 'Internal Triton ZEBIN codegen error'
+                    elif e.returncode == 128 + signal.SIGSEGV:
+                        error = '`ocloc` raised SIGSEGV'
+                    else:
+                        error = f'`ocloc` failed with error code {e.returncode}'
+
+                    raise RuntimeError(f'{error}\n'
+                                    f'`ocloc` stderr:\n{log}\n'
+                                    f'Repro command: {ocloc_cmd}\n')
+
+                with open(fbin, 'rb') as f:
+                    zebin = f.read()
+                if os.path.exists(fbin):
+                    os.remove(fbin)
+            return zebin
+
         return ret
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
-        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
+        stages["zebin"] = lambda src, metadata: self.make_zebin(src, metadata, options)
 
     @functools.lru_cache()
     def hash(self):

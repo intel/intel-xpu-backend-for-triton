@@ -14,6 +14,7 @@
 #include <variant>
 #include <vector>
 
+#include "measure.h"
 #include "sycl_functions.h"
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -113,7 +114,7 @@ void freeKernelBundle(PyObject *p) {
       PyCapsule_GetPointer(p, "kernel_bundle"));
 }
 
-static PyObject *loadBinary(PyObject *self, PyObject *args) {
+static PyObject *loadBinaryImpl(PyObject *self, PyObject *args) {
   const char *name, *build_flags;
   int shared;
   PyObject *py_bytes;
@@ -134,25 +135,45 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const sycl::device sycl_device = sycl_l0_device_pair.first;
 
   std::string kernel_name = name;
-  size_t binary_size = PyBytes_Size(py_bytes);
-  binary_size = binary_size / sizeof(uint32_t);
+  const size_t binary_size = PyBytes_Size(py_bytes);
 
   uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
   const auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
   const auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
-  const auto l0_context =
-      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-  auto l0_module = checkSyclErrors(create_module(
-      l0_context, l0_device, binary_ptr, binary_size, build_flags));
+
+  auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
+
+  const auto cache_native_code_env_opt =
+      isEnvValueBool(getStrEnv("TRITON_XPU_CACHE_NATIVE_CODE"));
+  const bool is_spv =
+      cache_native_code_env_opt
+          ? !(*cache_native_code_env_opt)
+          : false; // default value is false, maybe we should rework this
+
+  ze_module_handle_t l0_module;
+  auto create_module_ms = measure<>::execution([&]() {
+    l0_module = checkSyclErrors(create_module(
+        l0_context, l0_device, binary_ptr, binary_size, build_flags, is_spv));
+  });
+  if (create_module_ms > 0) {
+    std::cout << "Module creation time: " << create_module_ms << " ms"
+              << std::endl;
+  }
 
   auto checkL0Errors = [&](auto l0_module) -> ze_kernel_handle_t {
     if (PyErr_Occurred()) {
       // check for errors from module creation
       return NULL;
     }
-    ze_kernel_handle_t l0_kernel =
-        checkSyclErrors(create_function(l0_module, kernel_name));
+    ze_kernel_handle_t l0_kernel;
+    auto create_function_ms = measure<>::execution([&]() {
+      l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
+    });
+    if (create_function_ms > 0) {
+      std::cout << "Function creation time: " << create_function_ms << " ms"
+                << std::endl;
+    }
     if (PyErr_Occurred()) {
       // check for errors from kernel creation
       return NULL;
@@ -173,31 +194,42 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   std::string build_flags_str(build_flags);
   bool is_GRF_mode_specified = false;
 
-  // Check whether the GRF mode is specified by the build flags.
-  if (build_flags_str.find("-cl-intel-256-GRF-per-thread") !=
-          std::string::npos ||
-      build_flags_str.find("-cl-intel-128-GRF-per-thread") !=
-          std::string::npos ||
-      build_flags_str.find("-cl-intel-enable-auto-large-GRF-mode") !=
-          std::string::npos) {
-    is_GRF_mode_specified = true;
-  }
+  if (is_spv) {
+    constexpr int32_t max_reg_spill = 1000;
+    std::string build_flags_str(build_flags);
+    bool is_GRF_mode_specified = false;
 
-  // If the register mode isn't set, and the number of spills is greater
-  // than the threshold, recompile the kernel using large GRF mode.
-  if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
-    std::cout << "(I): Detected " << n_spills
-              << " spills, recompiling the kernel using large GRF mode"
-              << std::endl;
-    const std::string new_build_flags =
-        build_flags_str.append(" -cl-intel-256-GRF-per-thread");
-    l0_module =
-        checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                      binary_size, new_build_flags.c_str()));
-    l0_kernel = checkL0Errors(l0_module);
-    gpuAssert(zeKernelGetProperties(l0_kernel, &props));
-    n_spills = props.spillMemSize;
-    std::cout << "(I): Kernel has now " << n_spills << " spills" << std::endl;
+    // Check whether the GRF mode is specified by the build flags.
+    if (build_flags_str.find("-cl-intel-256-GRF-per-thread") !=
+            std::string::npos ||
+        build_flags_str.find("-cl-intel-128-GRF-per-thread") !=
+            std::string::npos ||
+        build_flags_str.find("-cl-intel-enable-auto-large-GRF-mode") !=
+            std::string::npos) {
+      is_GRF_mode_specified = true;
+    }
+
+    // If the register mode isn't set, and the number of spills is greater
+    // than the threshold, recompile the kernel using large GRF mode.
+    if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
+      std::cout << "(I): Detected " << n_spills
+                << " spills, recompiling the kernel using large GRF mode"
+                << std::endl;
+      const std::string new_build_flags =
+          build_flags_str.append(" -cl-intel-256-GRF-per-thread");
+      auto create_module_ms = measure<>::execution([&]() {
+        l0_module = checkSyclErrors(
+            create_module(l0_context, l0_device, binary_ptr, binary_size,
+                          new_build_flags.c_str(), is_spv));
+      });
+      std::cout << "Module creation time: " << create_module_ms << " ms"
+                << std::endl;
+
+      l0_kernel = checkL0Errors(l0_module);
+      gpuAssert(zeKernelGetProperties(l0_kernel, &props));
+      n_spills = props.spillMemSize;
+      std::cout << "(I): Kernel has now " << n_spills << " spills" << std::endl;
+    }
   }
 
   auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
@@ -215,6 +247,13 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
                                         "kernel_bundle", freeKernelBundle);
 
   return Py_BuildValue("(OOii)", kernel_bundle_py, kernel_py, n_regs, n_spills);
+}
+
+static PyObject *loadBinary(PyObject *self, PyObject *args) {
+  PyObject *ret;
+  auto load_binary_time_ns = measure<std::chrono::nanoseconds>::execution(
+      [&]() { ret = loadBinaryImpl(self, args); });
+  return ret;
 }
 
 static PyObject *initContext(PyObject *self, PyObject *args) {
@@ -268,6 +307,22 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
+static PyObject *getSyclDeviceHandle(PyObject *self, PyObject *args) {
+  int devId;
+  if (!PyArg_ParseTuple(args, "i", &devId))
+    return NULL;
+
+  if (devId > sycl_l0_device_list.size()) {
+    std::cerr << "Device is not found " << std::endl;
+    return NULL;
+  }
+
+  auto &sycl_l0_device_pair = sycl_l0_device_list[devId];
+  sycl::device *sycl_device = &sycl_l0_device_pair.first;
+
+  return Py_BuildValue("K", (uint64_t)(sycl_device));
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
@@ -277,6 +332,8 @@ static PyMethodDef ModuleMethods[] = {
      "Initialize the ZE GPU context"},
     {"init_devices", initDevices, METH_VARARGS,
      "Initialize the ZE GPU devices and return device count"},
+    {"get_sycl_device_handle", getSyclDeviceHandle, METH_VARARGS,
+     "Get the sycl device handle for a given device"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 

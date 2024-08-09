@@ -141,6 +141,7 @@ class XPUUtils(object):
         self.context = mod.init_context(self.get_sycl_queue())
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.current_device = 0 if self.device_count[0] > 0 else -1
+        self.get_sycl_device_handle = mod.get_sycl_device_handle
 
     def get_current_device(self):
         return self.current_device
