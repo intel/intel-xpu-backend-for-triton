@@ -359,12 +359,6 @@ public:
 
   Operation *rewriteOp(OpBuilder &builder, tt::MakeTensorPtrOp op,
                        std::stack<Operation *> &eraser) {
-    llvm::errs() << "at line " << __LINE__ << "\n";
-    llvm::errs() << "op: " << op << "\n";
-    llvm::errs() << "builder.getInsertionPoint(): ";
-    builder.getInsertionPoint()->dump();
-    llvm::errs() << "\n";
-
     if (!valueToRemove.count(op.getResult()))
       return nullptr;
 
@@ -689,18 +683,18 @@ public:
       return rewriteOp(builder, loadOp, eraser);
     if (auto storeOp = dyn_cast<tt::StoreOp>(op))
       return rewriteOp(builder, storeOp, eraser);
-    if (auto ifOp = dyn_cast<scf::IfOp>(op))
-      return rewriteOp(builder, ifOp, eraser);
-    if (auto forOp = dyn_cast<scf::ForOp>(op))
-      return rewriteOp(builder, forOp, eraser);
-    if (auto yieldOp = dyn_cast<scf::YieldOp>(op))
-      return rewriteOp(builder, yieldOp, eraser);
 
     StringRef opNamespace = op->getDialect()->getNamespace();
     if (opNamespace == scf::SCFDialect::getDialectNamespace() ||
         opNamespace == cf::ControlFlowDialect::getDialectNamespace()) {
+      if (auto ifOp = dyn_cast<scf::IfOp>(op))
+        return rewriteOp(builder, ifOp, eraser);
       if (!needRewrite(op, valueToRemove))
         return op;
+      if (auto forOp = dyn_cast<scf::ForOp>(op))
+        return rewriteOp(builder, forOp, eraser);
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(op))
+        return rewriteOp(builder, yieldOp, eraser);
 
       llvm_unreachable("Currently we only support tensor pointer usages "
                        "inside a `scf::ForOp` or `scf::IfOp`, others such as "
