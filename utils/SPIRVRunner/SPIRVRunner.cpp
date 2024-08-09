@@ -342,9 +342,8 @@ int main() {
   auto spirv = read_spirv("_kernel.spv");
   std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
 
-  auto [kernel_bundle, kernel, n_regs, n_spills] =
-      loadBinary("_kernel", reinterpret_cast<uint8_t *>(spirv.data()),
-                 spirv.size(), 0);
+  auto [kernel_bundle, kernel, n_regs, n_spills] = loadBinary(
+      "_kernel", reinterpret_cast<uint8_t *>(spirv.data()), spirv.size(), 0);
 
   // TODO: this seems wrong from upstream code?
   std::cout << "Loaded kernel with " << n_regs << " registers and " << n_spills

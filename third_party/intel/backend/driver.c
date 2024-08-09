@@ -14,8 +14,8 @@
 #include <variant>
 #include <vector>
 
-#include "sycl_functions.h"
 #include "measure.h"
+#include "sycl_functions.h"
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
@@ -140,7 +140,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   ze_module_handle_t l0_module;
   auto create_module_ms = measure<>::execution([&]() {
     l0_module = checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                              binary_size, build_flags, /*is_spv=*/false));
+                                              binary_size, build_flags,
+                                              /*is_spv=*/false));
   });
   std::cout << "Module creation time: " << create_module_ms << " ms"
             << std::endl;
@@ -286,19 +287,18 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
-static PyObject* getSyclDeviceHandle(PyObject *self, PyObject *args) {
+static PyObject *getSyclDeviceHandle(PyObject *self, PyObject *args) {
   int devId;
   if (!PyArg_ParseTuple(args, "i", &devId))
     return NULL;
 
-  
- if (devId > sycl_l0_device_list.size()) {
+  if (devId > sycl_l0_device_list.size()) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
 
-  auto& sycl_l0_device_pair = sycl_l0_device_list[devId];
-  sycl::device* sycl_device = &sycl_l0_device_pair.first;
+  auto &sycl_l0_device_pair = sycl_l0_device_list[devId];
+  sycl::device *sycl_device = &sycl_l0_device_pair.first;
 
   return Py_BuildValue("K", (uint64_t)(sycl_device));
 }
@@ -312,7 +312,8 @@ static PyMethodDef ModuleMethods[] = {
      "Initialize the ZE GPU context"},
     {"init_devices", initDevices, METH_VARARGS,
      "Initialize the ZE GPU devices and return device count"},
-    {"get_sycl_device_handle", getSyclDeviceHandle, METH_VARARGS, "Get the sycl device handle for a given device"},
+    {"get_sycl_device_handle", getSyclDeviceHandle, METH_VARARGS,
+     "Get the sycl device handle for a given device"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 
