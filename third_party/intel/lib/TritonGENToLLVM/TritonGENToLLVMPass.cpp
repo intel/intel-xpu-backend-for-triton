@@ -1383,6 +1383,28 @@ struct TritonMatrix2DBlockPrefetchLowering
   }
 };
 
+struct TritonSIMDBlockReadLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockReadOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SIMDBlockReadOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SIMDBlockReadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
+    VectorType vecTy = op.getRes().getType();
+
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    const StringLiteral funcName = "llvm.genx.GenISA.simdBlockRead";
+    intel::AttributeList attrs;
+    LLVM::CallOp call = createDeviceFunctionCall(rewriter, funcName, vecTy,
+                                                 {ptrTy}, {op.getPtr()}, attrs);
+
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 struct TritonSIMDBlockWriteLowering
     : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockWriteOp> {
   using ConvertOpToLLVMPattern<
@@ -1392,49 +1414,17 @@ struct TritonSIMDBlockWriteLowering
   matchAndRewrite(TritonGEN::SIMDBlockWriteOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = rewriter.getContext();
-    Type ptrTy = adaptor.getPtr().getType();
-    assert(isa<LLVM::LLVMPointerType>(ptrTy) && "Expecting a LLVMPointerType!");
-    Type vecTy = adaptor.getVal().getType();
-    assert(isa<VectorType>(vecTy) && "Expecting a VectorType!");
+    LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
+    VectorType vecTy = op.getVal().getType();
+
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    constexpr char funcName[] = "llvm.genx.GenISA.simdBlockWrite";
-
-    SmallVector<Type> argTypes{ptrTy, vecTy};
-
-    SmallVector<Value> args{adaptor.getPtr(), adaptor.getVal()};
+    const StringLiteral funcName = "llvm.genx.GenISA.simdBlockWrite";
     intel::AttributeList attrs;
     LLVM::CallOp call = createDeviceFunctionCall(
-        rewriter, funcName, void_ty(ctx), argTypes, args, attrs);
+        rewriter, funcName, void_ty(ctx), {ptrTy, vecTy},
+        {op.getPtr(), op.getVal()}, attrs);
 
     rewriter.replaceOp(op, call);
-    return success();
-  }
-};
-
-struct TritonSIMDBlockReadLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockReadOp> {
-  using ConvertOpToLLVMPattern<
-      TritonGEN::SIMDBlockReadOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(TritonGEN::SIMDBlockReadOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    MLIRContext *ctx = rewriter.getContext();
-    Type ptrTy = adaptor.getPtr().getType();
-    assert(isa<LLVM::LLVMPointerType>(ptrTy) && "Expecting a LLVMPointerType!");
-    Type vecTy = op.getRes().getType();
-    assert(isa<VectorType>(vecTy) && "Expecting a VectorType!");
-    // TODO: Remove GenISA lowering after PoC productization is completed.
-    constexpr char funcName[] = "llvm.genx.GenISA.simdBlockRead";
-    SmallVector<Type> argTypes{ptrTy};
-    SmallVector<Value> args{adaptor.getPtr()};
-
-    intel::AttributeList attrs;
-    LLVM::CallOp call = createDeviceFunctionCall(rewriter, funcName, vecTy,
-                                                 argTypes, args, attrs);
-    Location loc = op.getLoc();
-    rewriter.replaceOp(op, call.getResult());
-
     return success();
   }
 };
@@ -1509,8 +1499,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonSubGroupReduceLowering, TritonSubGroupScanLowering,
       TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
       TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
-      TritonMatrix2DBlockPrefetchLowering, TritonSIMDBlockWriteLowering,
-      TritonSIMDBlockReadLowering>(converter);
+      TritonMatrix2DBlockPrefetchLowering, TritonSIMDBlockReadLowering,
+      TritonSIMDBlockWriteLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
