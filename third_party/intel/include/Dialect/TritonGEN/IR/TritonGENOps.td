@@ -519,7 +519,6 @@ def TritonGEN_SIMDBlockReadOp: TritonGEN_Op<"simdblockread">,
     The `triton_gen.simdblockread` operation performs simd block read from
       a start address without laneId offset. The parameters are:
       $ptr - the base address to read data
-      result vector will be stored in $val
   }];
 
   let assemblyFormat = [{

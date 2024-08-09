@@ -35,6 +35,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_INTEL_ENABLE_FIRST_LOAD_TO_SLM",
     "TRITON_INTEL_ENABLE_INSTR_SCHED",
     "TRITON_INTEL_ENABLE_FAST_PREFETCH"
+    // clang-format on
 };
 
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {

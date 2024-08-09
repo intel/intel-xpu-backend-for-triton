@@ -381,8 +381,9 @@ llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b
 // -----
 
 llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val : vector<64xi16>) {
-  // CHECK:     llvm.func spir_funccc @llvm.genx.GenISA.simdBlockWrite(!llvm.ptr<3>, vector<64xi16>)
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite
+  // CHECK:      llvm.func spir_funccc @llvm.genx.GenISA.simdBlockWrite(!llvm.ptr<3>, vector<64xi16>)
+  // CHECK:      llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite(%arg0, %arg1)
+  // CHECK-SAME: : (!llvm.ptr<3>, vector<64xi16>) -> ()
   triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr<3>, vector<64xi16>)
   llvm.return
 }
@@ -390,8 +391,9 @@ llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val : vector<64xi16>) 
 // -----
 
 llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
-  // CHECK:     llvm.func spir_funccc @llvm.genx.GenISA.simdBlockRead
-  // CHECK: [[RES:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.simdBlockRead
+  // CHECK:      llvm.func spir_funccc @llvm.genx.GenISA.simdBlockRead(!llvm.ptr<3>) -> vector<64xi16>
+  // CHECK:      [[RES:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.simdBlockRead(%arg0)
+  // CHECK-SAME: : (!llvm.ptr<3>) -> vector<64xi16>
   %ret = triton_gen.simdblockread %ptr : (!llvm.ptr<3>) -> vector<64xi16>
   llvm.return
 }

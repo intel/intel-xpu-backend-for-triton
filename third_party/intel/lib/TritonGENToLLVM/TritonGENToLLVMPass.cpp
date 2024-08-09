@@ -1392,13 +1392,14 @@ struct TritonSIMDBlockWriteLowering
   matchAndRewrite(TritonGEN::SIMDBlockWriteOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = rewriter.getContext();
-    LLVM::LLVMPointerType ptrToSharedMemTy =
-        ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kWorkgroup);
-    VectorType v64i16Ty = VectorType::get(64, i16_ty);
+    Type ptrTy = adaptor.getPtr().getType();
+    assert(isa<LLVM::LLVMPointerType>(ptrTy) && "Expecting a LLVMPointerType!");
+    Type vecTy = adaptor.getVal().getType();
+    assert(isa<VectorType>(vecTy) && "Expecting a VectorType!");
     // TODO: Remove GenISA lowering after PoC productization is completed.
     constexpr char funcName[] = "llvm.genx.GenISA.simdBlockWrite";
 
-    SmallVector<Type> argTypes{ptrToSharedMemTy, v64i16Ty};
+    SmallVector<Type> argTypes{ptrTy, vecTy};
 
     SmallVector<Value> args{adaptor.getPtr(), adaptor.getVal()};
     intel::AttributeList attrs;
@@ -1419,21 +1420,20 @@ struct TritonSIMDBlockReadLowering
   matchAndRewrite(TritonGEN::SIMDBlockReadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = rewriter.getContext();
-    VectorType v64f16Ty = VectorType::get(64, f16_ty);
-    VectorType v64i16Ty = VectorType::get(64, i16_ty);
-    LLVM::LLVMPointerType ptrToSharedMemTy =
-        ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kWorkgroup);
-
+    Type ptrTy = adaptor.getPtr().getType();
+    assert(isa<LLVM::LLVMPointerType>(ptrTy) && "Expecting a LLVMPointerType!");
+    Type vecTy = op.getRes().getType();
+    assert(isa<VectorType>(vecTy) && "Expecting a VectorType!");
     // TODO: Remove GenISA lowering after PoC productization is completed.
     constexpr char funcName[] = "llvm.genx.GenISA.simdBlockRead";
-    SmallVector<Type> argTypes{ptrToSharedMemTy};
+    SmallVector<Type> argTypes{ptrTy};
     SmallVector<Value> args{adaptor.getPtr()};
 
     intel::AttributeList attrs;
-    LLVM::CallOp call = createDeviceFunctionCall(rewriter, funcName, v64i16Ty,
+    LLVM::CallOp call = createDeviceFunctionCall(rewriter, funcName, vecTy,
                                                  argTypes, args, attrs);
     Location loc = op.getLoc();
-    rewriter.replaceOp(op, bitcast(call.getResult(), v64f16Ty));
+    rewriter.replaceOp(op, call.getResult());
 
     return success();
   }
