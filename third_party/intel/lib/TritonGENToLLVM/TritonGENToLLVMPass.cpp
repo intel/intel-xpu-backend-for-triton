@@ -362,6 +362,8 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
            "Expecting a pointer type");
 
     std::string fnName = "__builtin_IB_subgroup_block_read_ap_";
+    if (op.getTranspose())
+      fnName += "transpose_";
     if (op.getVnniTransform())
       fnName += "transform_";
     fnName += "u" + std::to_string(op.getElemSizeInBits()) + "_m" +
