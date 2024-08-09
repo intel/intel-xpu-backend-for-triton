@@ -26,7 +26,7 @@ def _path_to_binary(binary: str):
         if os.path.exists(bin) and os.path.isfile(bin):
             try:
                 result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
-            except BaseException:
+            except subprocess.CalledProcessError:
                 pass
             if result is not None:
                 version = re.search(r".*SPIRV-Tools v(\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
