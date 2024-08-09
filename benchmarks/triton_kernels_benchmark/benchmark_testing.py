@@ -68,7 +68,6 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     for _ in range(n_warmup):
         fn()
     # Benchmark
-
     with torch.autograd.profiler_legacy.profile(True, use_xpu=True) as prof:
         for i in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
@@ -102,6 +101,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+        if (times.numel() > 2):
+            # exclude max and min times
+            times = torch.sort(times).values[1:-1]
         # add coefficient of the variance.
         std = torch.std(times)
         mean = torch.mean(times)
