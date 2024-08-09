@@ -261,7 +261,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   ArrayRef<unsigned> order = sharedLayout.getOrder();
 
   // (a, b) is the coordinate.
-  auto load = [=, &rewriter, &vals](int a, int b) {
+  auto load = [&](int a, int b) {
     DpasMatmulLoader<opIdx> loader(dpasLayout, descTy, warpsPerTile,
                                    smemObj.strides, instrShape, rewriter,
                                    typeConverter, loc);
@@ -331,8 +331,8 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   // Get the function to use to load the operand.
   ValueTable vals;
   std::function<void(int, int)> loadFn = getLoadMatrixFn<opIdx>(
-      descTy, smemObj, dpasLayout, warpsPerTile, shape, warpId, outerWarpDim,
-      laneId, vals, typeConverter, rewriter, loc);
+      descTy, smemObj, dpasLayout, warpsPerTile, std::move(shape), warpId,
+      outerWarpDim, laneId, vals, typeConverter, rewriter, loc);
 
   // Load the operand.
   int64_t numRepOuter = numReps[opIdx];

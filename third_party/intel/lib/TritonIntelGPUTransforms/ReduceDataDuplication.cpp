@@ -88,7 +88,7 @@ public:
             sharedOrder.emplace_back(srcOrder[i]);
         sharedOrder.emplace_back(0);
       } else {
-        sharedOrder = srcOrder;
+        sharedOrder = std::move(srcOrder);
       }
       auto sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
