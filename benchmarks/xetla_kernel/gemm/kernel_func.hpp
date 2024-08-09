@@ -23,9 +23,56 @@ using namespace gpu::xetla::group;
 using namespace gpu::xetla::kernel;
 using namespace gpu::xetla::subgroup;
 
+namespace gpu::xetla::kernel {
+template <int wg_num_m_, gpu_arch arch_tag_> struct group_swizzle_m_first {
+public:
+  static constexpr gpu_arch arch_tag = arch_tag_;
+  inline group_swizzle_m_first() = default;
+
+  // get dim0 group id
+  template <int idx>
+  static __XETLA_API typename std::enable_if_t<idx == 0, int>
+  get_tile_idx(sycl::nd_item<3> &item) {
+    return item.get_group(idx);
+  }
+  // get transformed dim1 group id
+  template <int idx>
+  static __XETLA_API typename std::enable_if_t<idx == 2, int>
+  get_tile_idx(sycl::nd_item<3> &item) {
+    uint32_t wg_inner_id = get_2d_group_linear_id(item);
+    uint32_t wg_coord_n = wg_inner_id / wg_num_m;
+    int start_n_id = wg_coord_n;
+    return wg_coord_n;
+  }
+  // get transformed dim2 group id
+  template <int idx>
+  static __XETLA_API typename std::enable_if_t<idx == 1, int>
+  get_tile_idx(sycl::nd_item<3> &item) {
+    uint32_t wg_inner_id = get_2d_group_linear_id(item);
+    uint32_t wg_coord_m = wg_inner_id % wg_num_m;
+    int start_m_id = wg_coord_m;
+    return wg_coord_m;
+  }
+  // correct group range, workgroup will be padded to fit the given wg_num_n
+  // under this swizzle policy
+  static __XETLA_API void update_group_range(uint32_t &group_range_m,
+                                             uint32_t &group_range_n) {
+    group_range_m = (group_range_m + wg_num_m - 1) / wg_num_m * wg_num_m;
+    group_range_n = (group_range_n + wg_num_n - 1) / wg_num_n * wg_num_n;
+  }
+
+private:
+  static constexpr uint32_t max_wg_num = arch_attr_t<arch_tag>::max_wg_num;
+  static constexpr uint32_t wg_num_n = max_wg_num / wg_num_m_;
+  // static_assert(!(max_wg_num % wg_num_n),
+  //         "max_wg_num cannot be divisible by given wg_num_n!");
+  static constexpr uint32_t wg_num_m = wg_num_m_;
+};
+} // namespace gpu::xetla::kernel
+
 template <typename dtype_a, typename dtype_b, typename dtype_c,
-          typename dtype_acc, uint32_t wg_m, uint32_t wg_n, uint32_t sg_m,
-          uint32_t sg_n, uint32_t sg_k, mem_layout layout_a,
+          typename dtype_acc, typename swizzle, uint32_t wg_m, uint32_t wg_n,
+          uint32_t sg_m, uint32_t sg_n, uint32_t sg_k, mem_layout layout_a,
           mem_layout layout_b, uint32_t global_kslicing,
           uint32_t local_kslicing>
 struct bf16_gemm_test_func {
@@ -41,7 +88,7 @@ struct bf16_gemm_test_func {
       epilogue_t<epilogue_policy_default<gpu_arch::Xe>, tile_shape,
                  mem_desc_t<dtype_c, mem_layout::row_major, mem_space::global>>;
 
-  using group_swizzle = gpu::xetla::kernel::group_swizzle_default<gpu_arch::Xe>;
+  using group_swizzle = swizzle;
 
   using dispatch_policy =
       dispatch_policy_kslicing<group_swizzle, global_kslicing, local_kslicing>;

@@ -69,10 +69,7 @@ permissions: read-all
 jobs:
   setup:
     name: Setup
-    runs-on:
-      - glados
-      - spr
-      - cpu
+    runs-on: Linux
     outputs:
       suite: ${{ steps.set-matrix.outputs.suite }}
       mode: ${{ steps.set-matrix.outputs.mode }}

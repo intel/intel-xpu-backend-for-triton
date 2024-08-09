@@ -73,7 +73,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: 9
+        CACHE_NUMBER: 10
       with:
         path: pytorch
         key: pytorch-$PYTHON_VERSION-$PYTORCH_COMMIT_ID-$CACHE_NUMBER
@@ -92,8 +92,7 @@ runs:
       shell: bash
       run: |
         cd pytorch
-        curl -sSL https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
-        curl -sSL https://github.com/pytorch/pytorch/compare/main...ZzEeKkAa:pytorch:triton-zeka.diff | git apply -
+        ../scripts/patch-pytorch.sh
 
     # FIXME: Old PyTorch does not work with numpy==2.0.0
     - name: Install numpy < 2.0.0
