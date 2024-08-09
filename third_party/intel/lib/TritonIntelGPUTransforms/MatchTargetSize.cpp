@@ -138,8 +138,7 @@ static tt::LoadOp findUsedLoad(Value val) {
   if (isa_and_nonnull<tt::LoadOp>(defOp))
     return cast<tt::LoadOp>(defOp);
   for (auto u : defOp->getOperands()) {
-    tt::LoadOp ld = findUsedLoad(u);
-    if (isa_and_nonnull<tt::LoadOp>(ld)) {
+    if (tt::LoadOp ld = findUsedLoad(u)) {
       loadOp = ld;
       break;
     }
