@@ -41,8 +41,9 @@ sycl::event gemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
   using data_type_acc = float;
   using gemm_functor =
       bf16_gemm_test_func<data_type_a, data_type_b, data_type_c, data_type_acc,
-                          wg_tile_m, wg_tile_n, sg_tile_m, sg_tile_n, sg_tile_k,
-                          Test::layout_a, Test::layout_b, Test::global_kslicing,
+                          typename Test::swizzle, wg_tile_m, wg_tile_n,
+                          sg_tile_m, sg_tile_n, sg_tile_k, Test::layout_a,
+                          Test::layout_b, Test::global_kslicing,
                           Test::local_kslicing>;
   using gemm_op_t = typename gemm_functor::gemm_op_t;
 

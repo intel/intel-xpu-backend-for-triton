@@ -260,8 +260,23 @@ struct PtrState {
 
   triton::MakeTensorPtrOp createTTMakeTensorPtrOp(OpBuilder &builder,
                                                   Location loc) {
+
+    SmallVector<Value> newOffsets;
+    SmallVector<Value> newStrides;
+    SmallVector<Value> newShape;
+    for (const auto &[offset, stride, dim] :
+         llvm::zip(offsets, strides, shape)) {
+
+      newOffsets.push_back(getValueOrCreateCastToIndexLike(
+          builder, loc, builder.getI32Type(), offset));
+      newStrides.push_back(getValueOrCreateCastToIndexLike(
+          builder, loc, builder.getI64Type(), stride));
+      newShape.push_back(getValueOrCreateCastToIndexLike(
+          builder, loc, builder.getI64Type(), dim));
+    }
+
     auto op = builder.create<triton::MakeTensorPtrOp>(
-        loc, source, shape, strides, offsets, sizes, order);
+        loc, source, newShape, newStrides, newOffsets, sizes, order);
     LLVM_DEBUG(llvm::dbgs() << "creating tt.make_tensor_ptr:\n" << op << "\n";);
     return op;
   }
@@ -803,13 +818,17 @@ struct TritonRaiseBlockPointer
   LogicalResult visitAddPointerOperand(OpTy op, PtrState &state, Location loc,
                                        OpBuilder &builder);
 
-  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
-                               OpTy, arith::RemSIOp, arith::RemUIOp>::value>>
+  template <typename OpTy,
+            std::enable_if_t<
+                llvm::is_one_of<OpTy, arith::RemSIOp, arith::RemUIOp>::value,
+                bool> = true>
   LogicalResult visitAddPointerRemOperand(OpTy remOp, PtrState &state,
                                           Location loc, OpBuilder &builder);
 
-  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
-                               OpTy, triton::LoadOp, triton::StoreOp>::value>>
+  template <typename OpTy,
+            std::enable_if_t<
+                llvm::is_one_of<OpTy, triton::LoadOp, triton::StoreOp>::value,
+                bool> = true>
   LogicalResult rewriteLoadStoreOp(OpTy op) {
     constexpr bool isLoad = std::is_same_v<OpTy, triton::LoadOp>;
     constexpr StringLiteral opName =
@@ -831,19 +850,27 @@ struct TritonRaiseBlockPointer
       return failure();
     }
 
+    // As masks are incompatible with block pointer load/store ops
+    // Masks must be handled before the operation can be rewritten.
+    // This will be done in a future PR (Issue #1784).
+    // In the meantime, operations with a mask are not rewrtitten.
+    if (op.getMask()) {
+      return success();
+    }
+
     OpBuilder builder(op);
     if constexpr (isLoad) {
       auto loadOp = builder.create<triton::LoadOp>(
-          op.getLoc(), ptr, op.getMask(), op.getOther(), op.getBoundaryCheck(),
-          op.getPadding(), op.getCache(), op.getEvict(), op.getIsVolatile());
+          op.getLoc(), ptr, op.getBoundaryCheck(), op.getPadding(),
+          op.getCache(), op.getEvict(), op.getIsVolatile());
 
       LLVM_DEBUG(llvm::dbgs() << "creating tt.load: " << loadOp << "\n";);
 
       op.replaceAllUsesWith(loadOp.getResult());
     } else {
       [[maybe_unused]] auto storeOp = builder.create<triton::StoreOp>(
-          op.getLoc(), ptr, op.getValue(), op.getMask(), op.getBoundaryCheck(),
-          op.getCache(), op.getEvict());
+          op.getLoc(), ptr, op.getValue(), op.getBoundaryCheck(), op.getCache(),
+          op.getEvict());
 
       LLVM_DEBUG(llvm::dbgs() << "creating tt.store: " << storeOp << "\n";);
     }
@@ -858,8 +885,10 @@ struct TritonRaiseBlockPointer
   int level = 0;
 };
 
-template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
-                             OpTy, arith::RemSIOp, arith::RemUIOp>::value>>
+template <
+    typename OpTy,
+    std::enable_if_t<
+        llvm::is_one_of<OpTy, arith::RemSIOp, arith::RemUIOp>::value, bool>>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
     OpTy remOp, PtrState &state, Location loc, OpBuilder &builder) {
   assert(state.isEmpty() && "state is a return argument");
