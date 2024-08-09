@@ -64,12 +64,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # compute number of warmup and repeat
     n_warmup = max(warmup, int(warmup / estimate_ms))
     n_repeat = max(rep, int(rep / estimate_ms))
-
     # Warm-up
     for _ in range(n_warmup):
         fn()
     # Benchmark
-
     with torch.autograd.profiler_legacy.profile(True, use_xpu=True) as prof:
         for i in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
@@ -106,14 +104,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         if (times.numel() > 2):
             # exclude max and min times
             times = torch.sort(times).values[1:-1]
-            std = torch.std(times)
-            mean = torch.mean(times)
-            cv = std / mean
-        else:
-            # add coefficient of the variance.
-            std = torch.std(times)
-            mean = torch.mean(times)
-            cv = std / mean
+        # add coefficient of the variance.
+        std = torch.std(times)
+        mean = torch.mean(times)
+        cv = std / mean
         ret.extend([mean.tolist(), cv.tolist()])
         if len(ret) == 1:
             ret = ret[0]
