@@ -331,8 +331,8 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   // Get the function to use to load the operand.
   ValueTable vals;
   std::function<void(int, int)> loadFn = getLoadMatrixFn<opIdx>(
-      descTy, smemObj, dpasLayout, warpsPerTile, shape, warpId, outerWarpDim,
-      laneId, vals, typeConverter, rewriter, loc);
+      descTy, smemObj, dpasLayout, warpsPerTile, std::move(shape), warpId,
+      outerWarpDim, laneId, vals, typeConverter, rewriter, loc);
 
   // Load the operand.
   int64_t numRepOuter = numReps[opIdx];
