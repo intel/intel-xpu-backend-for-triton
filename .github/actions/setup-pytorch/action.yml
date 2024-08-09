@@ -92,9 +92,7 @@ runs:
       shell: bash
       run: |
         cd pytorch
-        curl -sSL https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
-        curl -sSL https://github.com/pytorch/pytorch/pull/126456.diff | git apply -
-        curl -sSL https://github.com/pytorch/pytorch/pull/131738.diff | git apply -
+        ../scripts/patch-pytorch.sh
 
     # FIXME: Old PyTorch does not work with numpy==2.0.0
     - name: Install numpy < 2.0.0
