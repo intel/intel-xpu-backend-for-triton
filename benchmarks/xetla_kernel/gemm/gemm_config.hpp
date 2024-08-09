@@ -292,6 +292,28 @@ public:
   using data_type_acc = float;
 };
 
+class Test_1x3072x4096x3072_row_row : public TestBase {
+public:
+  static constexpr size_t mat_m = 3072;
+  static constexpr size_t mat_k = 4096;
+  static constexpr size_t mat_n = 3072;
+  static constexpr size_t wg_m = 256;
+  static constexpr size_t wg_n = 256;
+  static constexpr size_t sg_m = 32;
+  static constexpr size_t sg_n = 64;
+  static constexpr size_t sg_k = 32;
+  static constexpr uint32_t local_kslicing = 1;
+  static constexpr uint32_t global_kslicing = 1;
+  static constexpr gpu::xetla::mem_layout layout_a =
+      gpu::xetla::mem_layout::row_major;
+  static constexpr gpu::xetla::mem_layout layout_b =
+      gpu::xetla::mem_layout::row_major;
+  using data_type_a = sycl::ext::oneapi::bfloat16;
+  using data_type_b = sycl::ext::oneapi::bfloat16;
+  using data_type_c = float;
+  using data_type_acc = float;
+};
+
 class Test_1x4096x16384x8192_row_row : public TestBase {
 public:
   static constexpr size_t mat_m = 4096;

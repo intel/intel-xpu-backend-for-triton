@@ -351,6 +351,7 @@ def matmul(a, b):
          [1, 512, 32768, 8192],  #
          [1, 1024, 16384, 8192],  #
          [1, 1024, 28672, 8192],  #
+         [1, 3072, 4096, 3072],  # FIXME: Remove this case when gemm_streamk_benchmark works
          [1, 4096, 16384, 8192],  #
          [1, 8192, 16384, 1024],  #
          [1, 8192, 16384, 4096],  #
@@ -388,13 +389,14 @@ def benchmark(B, M, N, K, provider):
 
     if provider == 'onednn':
         ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
-                                                               quantiles=quantiles)
+                                                               quantiles=quantiles, fast_flush=False)
     if provider == 'triton':
         triton_fn = lambda: matmul(a, b)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg="triton to torch")
-        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles)
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                               fast_flush=False)
     if provider == 'xetla':
         if B == 1:
             c = torch.empty((M, N), device='xpu', dtype=torch.float32)
@@ -409,7 +411,8 @@ def benchmark(B, M, N, K, provider):
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg="xetla to torch")
-        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles)
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                               fast_flush=False)
 
     tflops = lambda mean: 2 * B * M * N * K * (1e-12) / (mean * 1e-3)
     gbps = lambda mean: B * (2 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (mean * 1e-3)
