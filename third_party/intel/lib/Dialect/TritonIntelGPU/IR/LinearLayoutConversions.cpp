@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/DenseMap.h"
@@ -573,5 +574,16 @@ DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout, unsigned opIdx) {
   return combineCtaCgaWithShape(ctaLayout, CTALayoutAttr::getDefault(ctx, rank),
                                 shape);
 }
+
+namespace intel {
+std::optional<LinearLayout>
+toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+               std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
+  if (auto dpas = dyn_cast<DpasEncodingAttr>(layout)) {
+    return mlir::triton::gpu::DPAStoLinearLayout(shape, dpas);
+  }
+  return mlir::triton::gpu::toLinearLayout(shape, layout, elemBitWidth);
+}
+} // namespace intel
 
 } // namespace mlir::triton::gpu

@@ -594,6 +594,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     std::optional<LinearLayout> srcLayout;
     auto srcTy = op.getSrc().getType();
 
+    llvm::outs() << "convert layout:" << op << "\n";
+    llvm::outs().flush();
     if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcTy.getEncoding())) {
       srcLayout = gpu::DPAStoLinearLayout(shape, dpasLayout);
     } else {
@@ -675,7 +677,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
 
-    assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+    assert(!triton::gpu::intel::cvtNeedsSharedMemory(op.getSrc().getType(),
+                                                     op.getType()));
     assert(ArrayRef(to_vector(conversion.getInDimNames())) ==
            ArrayRef{kRegister});
     assert(ArrayRef(to_vector(conversion.getOutDimNames())) ==

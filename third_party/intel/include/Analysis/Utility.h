@@ -6,6 +6,7 @@
 namespace mlir::triton::gpu::intel {
 
 bool isDpasToDotShortcut(RankedTensorType dpasTy, RankedTensorType dotTy);
+bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
 } // namespace mlir::triton::gpu::intel
 

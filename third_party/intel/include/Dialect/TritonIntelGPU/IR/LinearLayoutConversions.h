@@ -19,6 +19,12 @@ std::optional<LinearLayout> DPAStoLinearLayout(ArrayRef<int64_t> shape,
                                                Attribute layout,
                                                unsigned opIdx = 2);
 
+namespace intel {
+std::optional<LinearLayout>
+toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+               std::optional<int32_t> elemBitWidth = std::nullopt);
+}
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONINTELGPU_IR_LINEARLAYOUTCONVERSIONS_H
