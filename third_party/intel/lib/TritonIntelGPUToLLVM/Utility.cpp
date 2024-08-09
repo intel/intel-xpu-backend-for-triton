@@ -63,14 +63,12 @@ Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
   } while (moduleOp.lookupSymbol(stringConstName));
 
   llvm::SmallString<64> contentStr(content);
-  // SPIRV needs c-string
-  contentStr.push_back('\0');
   size_t contentSize = contentStr.size_in_bytes();
   auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
 
   LLVM::GlobalOp global;
   {
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
     global = rewriter.create<LLVM::GlobalOp>(
         UnknownLoc::get(ctx), globalType,
@@ -112,33 +110,6 @@ LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter) {
   printFunc->setAttr("nounwind", rewriter.getUnitAttr());
 
   return printFunc;
-}
-
-void llPrintf(ConversionPatternRewriter &rewriter, Value msg, ValueRange args) {
-  auto *ctx = rewriter.getContext();
-  Type ptr = ptr_ty(ctx);
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  auto funcOp = getSpirvPrintfDeclaration(rewriter);
-  auto loc = UnknownLoc::get(ctx);
-
-  SmallVector<Value> operands;
-  operands.push_back(msg);
-  for (auto arg : args) {
-    operands.push_back(arg);
-  }
-  call(funcOp, operands);
-}
-
-Value llPrintf(ConversionPatternRewriter &rewriter, StringRef msg,
-               ValueRange args) {
-  assert(!msg.empty() && "printf with empty string not supported");
-  llvm::SmallString<64> msgNewline(msg);
-  msgNewline.push_back('\n');
-  Value msgValue = addStringToModule(
-      UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
-      msgNewline, TritonGEN::TritonGENMemorySpace::kUniformConstant);
-  llPrintf(rewriter, msgValue, args);
-  return msgValue;
 }
 
 } // namespace mlir::LLVM::intel
