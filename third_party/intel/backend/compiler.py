@@ -118,7 +118,7 @@ class XPUBackend(BaseBackend):
         super().__init__(target)
         assert isinstance(target.arch, dict)
         self.properties = self.parse_target(target.arch)
-        self.binary_ext = "spv"
+        self.binary_ext = "zebin"
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
@@ -281,11 +281,27 @@ class XPUBackend(BaseBackend):
 
         return ret
 
+    @staticmethod
+    def make_zebin(src, metadata, options):
+        # hack the driver right now to just initialize things
+        from triton.backends.intel.driver import XPUDriver
+        driver = XPUDriver()
+        utils = driver.utils
+        crt_device = utils.get_current_device()
+        print(crt_device)
+        sycl_device = utils.get_sycl_device_handle(crt_device)
+        print(sycl_device)
+        kernel_name = metadata["name"]
+        #import pdb; pdb.set_trace()
+        return intel.compile_native_binary(kernel_name, "", metadata["shared"], sycl_device, src)
+
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
+        # TODO: we should probably merge these as "zebin" and control whether we have spirv or native code via feature flag
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
+        stages["zebin"] = lambda src, metadata: self.make_zebin(src, metadata, options)
 
     @functools.lru_cache()
     def hash(self):
