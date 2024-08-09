@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "sycl_functions.h"
+#include "measure.h"
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
@@ -128,24 +129,33 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   sycl::device sycl_device = sycl_l0_device_pair.first;
 
   std::string kernel_name = name;
-  size_t binary_size = PyBytes_Size(py_bytes);
-  binary_size = binary_size / sizeof(uint32_t);
+  const size_t binary_size = PyBytes_Size(py_bytes);
 
   uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
   auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
   auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-  auto l0_module = checkSyclErrors(create_module(
-      l0_context, l0_device, binary_ptr, binary_size, build_flags));
+
+  ze_module_handle_t l0_module;
+  auto create_module_ms = measure<>::execution([&]() {
+    l0_module = checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
+                                              binary_size, build_flags, /*is_spv=*/false));
+  });
+  std::cout << "Module creation time: " << create_module_ms << " ms"
+            << std::endl;
 
   auto checkL0Errors = [&](auto l0_module) -> ze_kernel_handle_t {
     if (PyErr_Occurred()) {
       // check for errors from module creation
       return NULL;
     }
-    ze_kernel_handle_t l0_kernel =
-        checkSyclErrors(create_function(l0_module, kernel_name));
+    ze_kernel_handle_t l0_kernel;
+    auto create_function_ms = measure<>::execution([&]() {
+      l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
+    });
+    std::cout << "Function creation time: " << create_function_ms << " ms"
+              << std::endl;
     if (PyErr_Occurred()) {
       // check for errors from kernel creation
       return NULL;
@@ -184,9 +194,14 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
               << std::endl;
     const std::string new_build_flags =
         build_flags_str.append(" -cl-intel-256-GRF-per-thread");
-    l0_module =
-        checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                      binary_size, new_build_flags.c_str()));
+    auto create_module_ms = measure<>::execution([&]() {
+      l0_module =
+          checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
+                                        binary_size, new_build_flags.c_str()));
+    });
+    std::cout << "Module creation time: " << create_module_ms << " ms"
+              << std::endl;
+
     l0_kernel = checkL0Errors(l0_module);
     gpuAssert(zeKernelGetProperties(l0_kernel, &props));
     n_spills = props.spillMemSize;
@@ -271,6 +286,23 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
+static PyObject* getSyclDeviceHandle(PyObject *self, PyObject *args) {
+  int devId;
+  if (!PyArg_ParseTuple(args, "i", &devId))
+    return NULL;
+
+  
+ if (devId > sycl_l0_device_list.size()) {
+    std::cerr << "Device is not found " << std::endl;
+    return NULL;
+  }
+
+  auto& sycl_l0_device_pair = sycl_l0_device_list[devId];
+  sycl::device* sycl_device = &sycl_l0_device_pair.first;
+
+  return Py_BuildValue("K", (uint64_t)(sycl_device));
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
@@ -280,6 +312,7 @@ static PyMethodDef ModuleMethods[] = {
      "Initialize the ZE GPU context"},
     {"init_devices", initDevices, METH_VARARGS,
      "Initialize the ZE GPU devices and return device count"},
+    {"get_sycl_device_handle", getSyclDeviceHandle, METH_VARARGS, "Get the sycl device handle for a given device"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 

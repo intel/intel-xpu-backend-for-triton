@@ -344,7 +344,7 @@ int main() {
 
   auto [kernel_bundle, kernel, n_regs, n_spills] =
       loadBinary("_kernel", reinterpret_cast<uint8_t *>(spirv.data()),
-                 spirv.size() / sizeof(uint32_t), 0);
+                 spirv.size(), 0);
 
   // TODO: this seems wrong from upstream code?
   std::cout << "Loaded kernel with " << n_regs << " registers and " << n_spills
