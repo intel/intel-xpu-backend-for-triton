@@ -47,7 +47,7 @@ SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
 LinearLayout identityND(StringAttr inDimName, ArrayRef<unsigned> shape,
                         ArrayRef<unsigned> order,
                         ArrayRef<StringAttr> outDimNames) {
-  assert(shape.size() == order.size());
+  assert(shape.size() == order.size() && "shape and order must have same size");
 
   MLIRContext *ctx = inDimName.getContext();
   LinearLayout ret = LinearLayout::empty();
@@ -79,7 +79,7 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
     int dim = layout.getCTAOrder()[i];
     int split = layout.getCTASplitNum()[dim];
     int ctas = layout.getCTAsPerCGA()[dim];
-    assert(ctas % split == 0);
+    assert(ctas % split == 0 && "split must divide ctas");
     ret *= LinearLayout::identity1D(split, kBlock, outDimNames[dim]) *
            LinearLayout::zeros1D(ctas / split, kBlock, outDimNames[dim]);
   }
@@ -127,7 +127,8 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
 // what to do when they're not.
 LinearLayout shrinkCodomain(const LinearLayout &layout, StringAttr inDimName,
                             StringAttr outDimName, int desiredSize) {
-  assert(llvm::isPowerOf2_32(desiredSize));
+  assert(llvm::isPowerOf2_32(desiredSize) &&
+         "desiredSize must be a power of 2");
   int outDimIdx = layout.getOutDimIndex(outDimName);
   int desiredZeros =
       llvm::Log2_32(layout.getOutDimSize(outDimName) / desiredSize);
@@ -154,7 +155,8 @@ LinearLayout shrinkCodomain(const LinearLayout &layout, StringAttr inDimName,
   // The algorithm below only works because the bases are powers of two.  I'm
   // not sure what to do otherwise.
   assert(llvm::all_of(basesToZero,
-                      [&](int basis) { return llvm::isPowerOf2_32(basis); }));
+                      [&](int basis) { return llvm::isPowerOf2_32(basis); }) &&
+         "bad bases");
 
   // We want to zero out the bases in `basesToZero`, and also "shift out" the
   // corresponding bits from all other bases.  For example if we remove the
@@ -210,7 +212,7 @@ LinearLayout shrinkCodomain(const LinearLayout &layout, StringAttr inDimName,
 LinearLayout ensureLayoutNotLargerThan(
     const LinearLayout &layout,
     const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
-  assert(shape.size() == layout.getNumOutDims());
+  assert(shape.size() == layout.getNumOutDims() && "shape must match layout");
   if (shape.empty()) {
     return layout;
   }
@@ -246,13 +248,13 @@ LinearLayout ensureLayoutNotLargerThan(
     if (actualSize <= desiredSize) {
       continue;
     }
-    assert(actualSize % desiredSize == 0);
+    assert(desiredSize != 0 && actualSize % desiredSize == 0 && "bad shape");
     for (StringAttr inDimName : llvm::reverse(inDimNames)) {
       if (ret.hasInDim(inDimName)) {
         ret = shrinkCodomain(ret, inDimName, outDimName, desiredSize);
       }
     }
-    assert(ret.getOutDimSize(outDimName) == desiredSize);
+    assert(ret.getOutDimSize(outDimName) == desiredSize && "bad shrink");
   }
   return ret;
 }
@@ -267,22 +269,23 @@ LinearLayout ensureLayoutNotLargerThan(
 LinearLayout ensureLayoutNotSmallerThan(
     const LinearLayout &layout,
     const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
-  assert(shape.size() == layout.getNumOutDims());
+  assert(shape.size() == layout.getNumOutDims() && "shape must match layout");
   if (shape.empty()) {
     return layout;
   }
 
   MLIRContext *ctx = shape.begin()->first.getContext();
   StringAttr kDim = *layout.getInDimNames().begin();
-  assert(kDim == "register" || kDim == "offset");
+  assert(kDim == "register" || kDim == "offset" && "unexpected kDim");
 
   LinearLayout ret = layout;
   for (StringAttr outDimName : layout.getOutDimNames()) {
     int32_t actualSize = layout.getOutDimSize(outDimName);
     int32_t desiredSize = shape.lookup(outDimName);
-    assert(actualSize > desiredSize || desiredSize % actualSize == 0);
+    assert(actualSize > desiredSize ||
+           desiredSize % actualSize == 0 && "bad shape");
     ret *= LinearLayout::identity1D(desiredSize / actualSize, kDim, outDimName);
-    assert(ret.getOutDimSize(outDimName) >= desiredSize);
+    assert(ret.getOutDimSize(outDimName) >= desiredSize && "bad grow");
   }
   return ret;
 }
@@ -297,8 +300,10 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
                                     CTALayoutAttr cgaLayoutAttr,
                                     ArrayRef<int64_t> shape) {
   int rank = shape.size();
-  assert(ctaLayout.getNumOutDims() == rank);
-  assert(cgaLayoutAttr.getCTAOrder().size() == rank);
+  assert(ctaLayout.getNumOutDims() == rank &&
+         "ctaLayout must have the same rank as shape");
+  assert(cgaLayoutAttr.getCTAOrder().size() == rank &&
+         "cgaLayoutAttr must have the same rank as shape");
   MLIRContext *ctx = cgaLayoutAttr.getContext();
 
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
@@ -316,7 +321,8 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   // cgaLayout's size.
   llvm::SmallDenseMap<StringAttr, int64_t> ctaShape;
   assert(llvm::to_vector(ctaLayout.getOutDimNames()) ==
-         llvm::to_vector(cgaLayout.getOutDimNames()));
+             llvm::to_vector(cgaLayout.getOutDimNames()) &&
+         "bad layout");
   for (auto dim : ctaLayout.getOutDimNames()) {
     ctaShape[dim] =
         std::max(int64_t{1}, labeledShape[dim] / cgaLayout.getOutDimSize(dim));
@@ -325,9 +331,10 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   ctaLayout = ensureLayoutNotSmallerThan(ctaLayout, ctaShape);
   ctaLayout = ensureLayoutNotLargerThan(ctaLayout, ctaShape);
 
-  LinearLayout ret = (ctaLayout * cgaLayout).transposeOuts(outDimNames);
+  LinearLayout ret =
+      (ctaLayout * std::move(cgaLayout)).transposeOuts(outDimNames);
   for (auto dim : ret.getOutDimNames()) {
-    assert(ret.getOutDimSize(dim) == labeledShape[dim]);
+    assert(ret.getOutDimSize(dim) == labeledShape[dim] && "bad shape");
   }
   return ret;
 }
@@ -478,13 +485,12 @@ DPASLaneBasesC(int repeatCount, int executionSize, int threadsPerWarp) {
 
 std::optional<LinearLayout>
 DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout, unsigned opIdx) {
-  assert(opIdx < 3 && opIdx >= 0);
+  assert(opIdx < 3 && "opIdx must be 0, 1, or 2");
   auto dpas = dyn_cast<DpasEncodingAttr>(layout);
   assert(dpas && "Must be DPAS layout");
 
   int rank = shape.size();
-  assert(rank == dpas.getWarpsPerCTA().size());
-  assert(rank == 2);
+  assert(rank == dpas.getWarpsPerCTA().size() && rank == 2 && "Invalid rank");
 
   MLIRContext *ctx = dpas.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
@@ -570,8 +576,8 @@ DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout, unsigned opIdx) {
   }
   LinearLayout ctaLayout = tileLayout * warpLayout;
 
-  return combineCtaCgaWithShape(ctaLayout, CTALayoutAttr::getDefault(ctx, rank),
-                                shape);
+  return combineCtaCgaWithShape(std::move(ctaLayout),
+                                CTALayoutAttr::getDefault(ctx, rank), shape);
 }
 
 } // namespace mlir::triton::gpu

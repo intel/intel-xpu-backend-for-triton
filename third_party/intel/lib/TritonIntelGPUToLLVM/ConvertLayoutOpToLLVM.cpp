@@ -410,7 +410,7 @@ private:
     auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
     unsigned inVec = scratchConfig.inVec;
     unsigned outVec = scratchConfig.outVec;
-    auto paddedRepShape = scratchConfig.paddedRepShape;
+    auto &paddedRepShape = scratchConfig.paddedRepShape;
     auto origRepShape = scratchConfig.repShape;
     if (isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>(
             getElementTypeOrSelf(op.getType()))) {

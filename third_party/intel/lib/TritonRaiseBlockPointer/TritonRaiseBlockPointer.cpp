@@ -676,7 +676,7 @@ struct TritonRaiseBlockPointer
       return failure();
     }
 
-    knownPtrs[op.getResult()] = state;
+    knownPtrs[op.getResult()] = std::move(state);
     return success();
   }
 

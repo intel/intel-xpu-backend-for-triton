@@ -177,16 +177,6 @@ public:
         loopMap[loop] = loopDotInfo;
         // DAG pattern match
         Workload workLoadKind = matchLoopWorkload(loop, loopDotInfo);
-        if (workLoadKind == Workload::None) {
-          LDBG("\n");
-          LDBG("***********************************************\n");
-          LDBG("this has tt.dot, but workload do not match any \n");
-          LDBG("***********************************************\n");
-          LDBG("\n");
-          return;
-        }
-        loop->setAttr(AttrWorkloadName,
-                      IntegerAttr::get(i32Ty, int64_t(workLoadKind)));
 
         /// get tensor layout attr according to workload pattern
         switch (workLoadKind) {
@@ -219,11 +209,20 @@ public:
           break;
         }
         case Workload::None:
+          LDBG("\n");
+          LDBG("***********************************************\n");
+          LDBG("this has tt.dot, but workload do not match any \n");
+          LDBG("***********************************************\n");
+          LDBG("\n");
+          return;
         case Workload::ElementWise:
         case Workload::Reduction:
         case Workload::Attention:
           break;
         }
+
+        loop->setAttr(AttrWorkloadName,
+                      IntegerAttr::get(i32Ty, int64_t(workLoadKind)));
       }
 
       /// adding tensor layout attr to related ops

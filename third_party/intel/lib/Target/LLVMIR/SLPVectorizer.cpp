@@ -2603,7 +2603,7 @@ private:
 
   struct TreeEntry {
     using VecTreeTy = SmallVector<std::unique_ptr<TreeEntry>, 8>;
-    TreeEntry(VecTreeTy &Container) : Container(Container) {}
+    TreeEntry(VecTreeTy &Container) : Container(Container), State() {}
 
     /// \returns Common mask for reorder indices and reused scalars.
     SmallVector<int> getCommonMask() const {
@@ -8713,6 +8713,7 @@ public:
     unsigned SliceSize = getPartNumElems(Mask.size(), NumParts);
     const auto *It =
         find_if(Mask, [](int Idx) { return Idx != PoisonMaskElem; });
+    assert(SliceSize != 0 && "Expected non-zero slice size.");
     unsigned Part = std::distance(Mask.begin(), It) / SliceSize;
     estimateNodesPermuteCost(E1, &E2, Mask, Part, SliceSize);
   }
@@ -8730,6 +8731,7 @@ public:
     unsigned SliceSize = getPartNumElems(Mask.size(), NumParts);
     const auto *It =
         find_if(Mask, [](int Idx) { return Idx != PoisonMaskElem; });
+    assert(SliceSize != 0 && "Expected non-zero slice size.");
     unsigned Part = std::distance(Mask.begin(), It) / SliceSize;
     estimateNodesPermuteCost(E1, nullptr, Mask, Part, SliceSize);
     if (!SameNodesEstimated && InVectors.size() == 1)
@@ -11672,8 +11674,9 @@ public:
               ArrayRef<SmallVector<const TreeEntry *>> Deps) const {
     // No need to delay emission if all deps are ready.
     if (all_of(Deps, [](ArrayRef<const TreeEntry *> TEs) {
-          return all_of(
-              TEs, [](const TreeEntry *TE) { return TE->VectorizedValue; });
+          return all_of(TEs, [](const TreeEntry *TE) -> const auto & {
+            return TE->VectorizedValue;
+          });
         }))
       return std::nullopt;
     // Postpone gather emission, will be emitted after the end of the
@@ -15029,7 +15032,7 @@ bool BoUpSLP::collectValuesToDemote(
         ID != Intrinsic::smax && ID != Intrinsic::umin && ID != Intrinsic::umax)
       break;
     SmallVector<const TreeEntry *, 2> Operands(1, getOperandEntry(&E, 0));
-    function_ref<bool(unsigned, unsigned)> CallChecker;
+    function_ref<bool(unsigned, unsigned)> CallChecker = {};
     auto CompChecker = [&](unsigned BitWidth, unsigned OrigBitWidth) {
       assert(BitWidth <= OrigBitWidth && "Unexpected bitwidths!");
       return all_of(E.Scalars, [&](Value *V) {
