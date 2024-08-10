@@ -957,9 +957,7 @@ struct TritonSubGroupReduceLowering
     SmallVector<Value> args{val};
     bool useCluster = (getSubgroupSize(op) != op.getSize());
 
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    const bool useGenISA = env ? (bool)std::atoi(env) : false;
-    if (useGenISA && !useCluster) {
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA") && !useCluster) {
       Value result = createGenISASubGroupReduce(op, val, rewriter).getResult();
       result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
       rewriter.replaceOp(op, result);
@@ -1194,9 +1192,7 @@ struct TritonMatrix2DBlockLoadLowering
     }
 
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    const bool useGenISA = env ? (bool)std::atoi(env) : false;
-    if (useGenISA) {
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
     }
@@ -1263,9 +1259,7 @@ struct TritonMatrix2DBlockStoreLowering
   matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    const bool useGenISA = env ? (bool)std::atoi(env) : false;
-    if (useGenISA) {
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
       rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
       return success();
     }
@@ -1334,8 +1328,7 @@ struct TritonMatrix2DBlockPrefetchLowering
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    bool useGenISA = env ? (bool)std::atoi(env) : false;
+    bool useGenISA = tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
     if (tools::getBoolEnv("TRITON_INTEL_ENABLE_FAST_PREFETCH") &&
         ((op.getElemSizeInBits() == 8 && op.getTileWidth() == 64) ||
          (op.getElemSizeInBits() == 16 && op.getTileWidth() == 32)))

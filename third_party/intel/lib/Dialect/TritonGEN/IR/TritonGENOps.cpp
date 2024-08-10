@@ -164,7 +164,160 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
 // gen.2Dblockload
 //===----------------------------------------------------------------------===//
 
+static LogicalResult
+verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
+  VectorType resTy = op.getRes().getType();
+  unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
+  unsigned resSize = resTy.getNumElements() * resElemTySize;
+  constexpr unsigned subgroupSize = 16;
+  unsigned expectedSize = op.getElemSizeInBits() * op.getTileHeight() *
+                          op.getTileWidth() * op.getVBlocks() / subgroupSize;
+  if (resSize != expectedSize)
+    return op.emitOpError() << "result size of " << resSize
+                            << " bits does not match the expected size of "
+                            << expectedSize << " bits";
+
+  if (!op.getTranspose() && !op.getVnniTransform()) {
+    uint32_t tileHeight = op.getTileHeight();
+    if (tileHeight < 1 || tileHeight > 32)
+      return op.emitOpError("expecting tile_height to be between 1 and 32");
+
+    uint32_t tileWidth = op.getTileWidth();
+    uint32_t vBlocks = op.getVBlocks();
+    switch (op.getElemSizeInBits()) {
+    case 8:
+      if (tileWidth < 4 || tileWidth > 64)
+        return op.emitOpError("expecting tile_width to be between 4 and 64");
+      if (vBlocks != 1 && vBlocks != 2 && vBlocks != 4)
+        return op.emitOpError("expecting v_blocks to be 1, 2, or 4");
+      if (tileWidth * vBlocks > 64)
+        return op.emitOpError(
+            "tile_width * v_blocks should be less than or equal "
+            "to 64 for 8 bit elements");
+      break;
+    case 16:
+      if (tileWidth < 2 || tileWidth > 32)
+        return op.emitOpError("expecting tile_width to be between 2 and 32");
+      if (vBlocks != 1 && vBlocks != 2 && vBlocks != 4)
+        return op.emitOpError("expecting v_blocks to be 1, 2, or 4");
+      if (tileWidth * vBlocks > 32)
+        return op.emitOpError(
+            "tile_width * v_blocks should be less than or equal "
+            "to 32 for 16 bit elements");
+      break;
+    case 32:
+      if (tileWidth < 1 || tileWidth > 16)
+        return op.emitOpError("expecting tile_width to be between 1 and 16");
+      if (vBlocks != 1 && vBlocks != 2)
+        return op.emitOpError("expecting v_blocks to be 1 or 2");
+      if (tileWidth * vBlocks > 16)
+        return op.emitOpError(
+            "tile_width * v_blocks should be less than or equal "
+            "to 16 for 32 bit elements");
+      break;
+    case 64:
+      if (tileWidth < 1 || tileWidth > 8)
+        return op.emitOpError("expecting tile_width to be between 1 and 8");
+      if (vBlocks != 1)
+        return op.emitOpError("expecting v_blocks to be 1");
+      if (tileWidth * vBlocks > 8)
+        return op.emitOpError(
+            "tile_width * v_blocks should be less than or equal "
+            "to 8 for 64 bit elements");
+      break;
+    default:
+      return op.emitOpError(
+          "expecting elem_size_in_bits to be 8, 16, 32, or 64");
+    }
+
+    return success();
+  }
+
+  if (op.getTranspose()) {
+    if (op.getVnniTransform())
+      return op.emitOpError(
+          "transpose and vnni_transform are mutually exclusive");
+
+    uint32_t vBlocks = op.getVBlocks();
+    if (vBlocks != 1)
+      return op.emitOpError("expecting v_blocks to be 1");
+
+    uint32_t tileHeight = op.getTileHeight();
+    uint32_t tileWidth = op.getTileWidth();
+    switch (op.getElemSizeInBits()) {
+    case 32:
+      if (tileHeight < 1 || tileHeight > 32)
+        return op.emitOpError("expecting tile_height to be between 1 and 32");
+      if (tileWidth < 1 || tileWidth > 8)
+        return op.emitOpError("expecting tile_width to be between 1 and 8");
+      if (tileWidth * vBlocks > 8)
+        return op.emitOpError(
+            "tile_width * v_blocks should be less than or equal "
+            "to 8 for 32 bit elements");
+      break;
+    case 64:
+      if (tileHeight != 8)
+        return op.emitOpError(
+            "expecting tile_height to be 8 for 64 bit elements");
+      if (tileWidth != 1 && tileWidth != 2 && tileWidth != 4)
+        return op.emitOpError("expecting tile_width to be 1, 2, or 4");
+      if (tileWidth * vBlocks > 4)
+        return op.emitOpError(
+            "tile_width * v_blocks should be less than or equal "
+            "to 4 for 64 bit elements");
+      break;
+    default:
+      return op.emitOpError("transpose is only supported for 32 and 64 bit "
+                            "elements");
+    }
+
+    return success();
+  }
+
+  assert(op.getVnniTransform() && "Expecting vnni_transform should be true");
+
+  uint32_t vBlocks = op.getVBlocks();
+  if (vBlocks != 1 && vBlocks != 2 && vBlocks != 4)
+    return op.emitOpError("expecting v_blocks to be 1, 2, or 4");
+
+  uint32_t tileHeight = op.getTileHeight();
+  uint32_t tileWidth = op.getTileWidth();
+  switch (op.getElemSizeInBits()) {
+  case 8:
+    if (tileHeight < 4 || tileHeight > 32)
+      return op.emitOpError("expecting tile_height to be between 4 and 32");
+    if (tileWidth < 4 || tileWidth > 16)
+      return op.emitOpError("expecting tile_width to be between 4 and 16");
+    if (tileWidth * vBlocks > 64)
+      return op.emitOpError(
+          "tile_width * v_blocks should be less than or equal "
+          "to 64 for 8 bit elements");
+    break;
+  case 16:
+    if (tileHeight < 2 || tileHeight > 32)
+      return op.emitOpError("expecting tile_height to be between 2 and 32");
+    if (tileWidth < 2 || tileWidth > 16)
+      return op.emitOpError("expecting tile_width to be between 2 and 16");
+    if (tileWidth * vBlocks > 32)
+      return op.emitOpError(
+          "tile_width * v_blocks should be less than or equal "
+          "to 32 for 16 bit elements");
+    break;
+  default:
+    return op.emitOpError("vnni_transform is only supported for 8 and 16 bit "
+                          "elements");
+  }
+
+  return success();
+}
+
 LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
+  if (verify2DBlockLoadHWRestriction(*this).failed())
+    return failure();
+
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verifyMatrixInput(*this).failed())
     return failure();
 
@@ -176,25 +329,6 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   } else if (resElemTySize != 16) {
     return emitOpError() << "expecting result element type to be 16 bits";
   }
-
-  unsigned resSize = resTy.getNumElements() * resElemTySize;
-  constexpr unsigned subgroupSize = 16;
-  unsigned expectedSize = getElemSizeInBits() * getTileHeight() *
-                          getTileWidth() * getVBlocks() / subgroupSize;
-  if (resSize != expectedSize)
-    return emitOpError() << "result size of " << resSize
-                         << " bits does not match the expected size of "
-                         << expectedSize << " bits";
-
-  if (getTranspose() && getVnniTransform())
-    return emitOpError("transpose and vnni_transform are mutually exclusive");
-
-  if (getTranspose() && getElemSizeInBits() != 32)
-    return emitOpError("transpose is only supported for 32 bit elements");
-
-  if (getVnniTransform() && getElemSizeInBits() == 32)
-    return emitOpError("vnni_transform is only supported for 8 and 16 bit "
-                       "elements");
 
   uint32_t tileWidth = getTileWidth();
   if (getVnniTransform()) {
@@ -233,7 +367,47 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 // gen.2Dblockstore
 //===----------------------------------------------------------------------===//
 
+static LogicalResult
+verify2DBlockStoreHWRestriction(TritonGEN::Matrix2DBlockStoreOp op) {
+  uint32_t tileHeight = op.getTileHeight();
+  if (tileHeight < 1 || tileHeight > 8)
+    return op.emitOpError("expecting tile_height to be between 1 and 8");
+
+  uint32_t tileWidth = op.getTileWidth();
+  switch (op.getElemSizeInBits()) {
+  case 8:
+    if (tileWidth < 4 || tileWidth > 64)
+      return op.emitOpError("expecting tile_width to be between 4 and 64");
+    break;
+  case 16:
+    if (tileWidth < 2 || tileWidth > 32)
+      return op.emitOpError("expecting tile_width to be between 2 and 32");
+    break;
+  case 32:
+    if (tileWidth < 1 || tileWidth > 16)
+      return op.emitOpError("expecting tile_width to be between 1 and 16");
+    break;
+  case 64:
+    if (tileWidth < 1 || tileWidth > 8)
+      return op.emitOpError("expecting tile_width to be between 1 and 8");
+    break;
+  default:
+    return op.emitOpError("expecting elem_size_in_bits to be 8, 16, 32, or 64");
+  }
+
+  uint32_t vBlocks = op.getVBlocks();
+  if (vBlocks != 1)
+    return op.emitOpError("expecting v_blocks to be 1");
+  return success();
+}
+
 LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
+  if (verify2DBlockStoreHWRestriction(*this).failed())
+    return failure();
+
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verifyMatrixInput(*this).failed())
     return failure();
 
