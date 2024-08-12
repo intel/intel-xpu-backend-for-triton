@@ -1076,6 +1076,10 @@ struct AtomicCASOpConversion
               vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
         }
       } else {
+        if (!atomicNeedsSharedMemory(op.getResult())) {
+          rewriter.eraseOp(op);
+          return success();
+        }
         createBarrier(rewriter, loc, numCTAs);
         Value atomPtr =
             LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
@@ -1249,6 +1253,10 @@ struct AtomicRMWOpConversion
               vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
         }
       } else {
+        if (!atomicNeedsSharedMemory(op.getResult())) {
+          rewriter.eraseOp(op);
+          return success();
+        }
         Value atomPtr =
             LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));

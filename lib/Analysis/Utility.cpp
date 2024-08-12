@@ -11,6 +11,7 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -610,6 +611,23 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
          !isMmaToMmaShortcut(srcTy, dstTy) &&
          !isMmaToDotShortcut(srcTy, dstTy) &&
          !isMfmaToDotShortcut(srcTy, dstTy);
+}
+
+bool atomicNeedsSharedMemory(Value value) {
+  // FIXME: Remove temporary workaround to avoid 05-layer-norm failure.
+  auto mod = value.getParentBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  if (mod->hasAttr(triton::AttrTargetName)) {
+    StringAttr targetAttr =
+        cast<StringAttr>(mod->getAttr(triton::AttrTargetName));
+    StringRef ref = targetAttr.strref();
+    if (ref.starts_with("xpu"))
+      return true;
+  }
+
+  auto type = value.getType();
+  if (isa<RankedTensorType>(type) || value.use_empty())
+    return false;
+  return true;
 }
 
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {

@@ -791,6 +791,11 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                     "SmallVector<unsigned>",
                     "getSizePerThreadForOperands",
                     (ins "unsigned":$opIdx)>,
+
+    InterfaceMethod<"Return element sizes per thread for dot operands.", "SmallVector<unsigned>",
+      "getElemsPerThreadForOperands", (ins "ArrayRef<int64_t>":$tensorShape,
+                                           "Type":$eltTy,
+                                           "unsigned":$opIdx)>,
   ];
 }
 
@@ -924,6 +929,10 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
       return contigPerThread;
     };
 
+    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
+      llvm_unreachable("getElemsPerThreadForOperands is not supported.");
+    };
+
   }];
 
   let genVerifyDecl = 1;
@@ -1031,6 +1040,10 @@ Row |       warp 0                warp 2
         contigPerThread[rank - 2] = 8;
       }
       return contigPerThread;
+    };
+
+    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
+      llvm_unreachable("getElemsPerThreadForOperands is not supported.");
     };
   }];
 }
@@ -1235,6 +1248,10 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       SmallVector<unsigned> contigPerThread(rank, 1);
       contigPerThread[rank - 1] = 2;
       return contigPerThread;
+    };
+
+    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
+      llvm_unreachable("getElemsPerThreadForOperands is not supported.");
     };
 
   }];

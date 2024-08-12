@@ -166,28 +166,44 @@ jobs:
         run: |
           echo "TRITON_TEST_SKIPLIST_DIR=$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}" | tee -a $GITHUB_ENV
 
+      - name: Enable XPU fallback for upstream PyTorch
+        run: |
+          echo "PYTORCH_ENABLE_XPU_FALLBACK=${{ inputs.install_ipex && '0' || '1' }}" | tee -a $GITHUB_ENV
+
       - name: Run core tests
         run: |
           source ./scripts/pytest-utils.sh
           ensure_spirv_dis
 
-          SHARED_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/_C"
-          if [ ! -d "${SHARED_LIB_DIR}" ]; then
-            echo "Coult not find '${SHARED_LIB_DIR}'" ; exit -1
-          fi
-
           cd python/test/unit
+
           TRITON_TEST_SUITE=language \
             pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+
           TRITON_TEST_SUITE=subprocess \
             pytest -vvv -n 8 --device xpu language/test_subprocess.py
+
           # Run runtime tests serially to avoid race condition with cache handling
           TRITON_TEST_SUITE=runtime \
             pytest -vvv --device xpu runtime/
+
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
+          TRITON_TEST_SUITE=line_info \
+          TRITON_DISABLE_LINE_INFO=0 \
             pytest -vvv --device xpu language/test_line_info.py
 
+      - name: Run instrumentation tests
+        run: |
+          source ./scripts/pytest-utils.sh
+
+          SHARED_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/_C"
+          if [ ! -d "${SHARED_LIB_DIR}" ]; then
+            echo "Could not find '${SHARED_LIB_DIR}'" ; exit -1
+          fi
+
+          cd python/test/unit
+
+          TRITON_TEST_SUITE=instrumentation \
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
             pytest -vvv --device xpu instrumentation/test_gpuhello.py
 
