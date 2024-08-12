@@ -74,7 +74,7 @@ struct ArithConstantSplatOpConversion
     auto values = mlir::dyn_cast<SplatElementsAttr>(op.getValue());
     auto elemType = values.getElementType();
     Attribute val;
-    if (elemType.isBF16() || type::isFloat(elemType)) {
+    if (type::isFloat(elemType)) {
       val = values.getValues<FloatAttr>()[0];
     } else if (type::isInt(elemType)) {
       val = values.getValues<IntegerAttr>()[0];
@@ -83,6 +83,10 @@ struct ArithConstantSplatOpConversion
                    << value.getType() << "\n";
       return failure();
     }
+    // Lower FP8 constant to int8 constant since FP8 types are not supported on
+    // LLVM IR.
+    if (type::isFloat8(elemType))
+      elemType = rewriter.getIntegerType(8);
     auto constOp = rewriter.create<LLVM::ConstantOp>(loc, elemType, val);
     auto typeConverter = getTypeConverter();
     auto llStruct = SplatOpConversion::convertSplatLikeOp(
