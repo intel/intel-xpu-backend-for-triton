@@ -74,10 +74,6 @@ class XPUUtils(object):
         import torch
         return torch.xpu.current_stream().sycl_queue
 
-    def get_sycl_device(self, device_id):
-        import torch
-        return torch.xpu.device(device_id).sycl_device
-
 
 # ------------------------
 # Launcher
