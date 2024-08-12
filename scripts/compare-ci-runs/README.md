@@ -5,8 +5,8 @@ This script can be used to compare the results of two runs of the
 
 ## Prerequisites
 
-To evaluate the data from CI runs, the Python packages `pandas` and `numpy` and
-their corresponding dependencies are required.
+To evaluate the data from CI runs, the Python packages `pandas` and its
+corresponding dependencies are required.
 
 If you also plan to plot the performance comparison, the packages `matplotlib`
 and `seaborn` and their dependencies are also required.
@@ -14,7 +14,7 @@ and `seaborn` and their dependencies are also required.
 All those packages can simply be installed through `pip`
 
 ```sh
-pip install pandas numpy seaborn matplotlib
+pip install pandas seaborn matplotlib
 ```
 
 The installation and use inside a virtual environment is recommended, but not
