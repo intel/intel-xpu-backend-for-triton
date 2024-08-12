@@ -5,8 +5,27 @@ import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
+import torch.xpu
+import logging
 
-if "intel_extension_for_pytorch" in sys.modules:
+
+@functools.cache
+def _support_elapsed_time():
+    e1 = torch.xpu.Event(enable_timing=True)
+    e1.record()
+    e1.synchronize()
+
+    e2 = torch.xpu.Event(enable_timing=True)
+    e2.record()
+    e2.synchronize()
+
+    try:
+        return e1.elapsed_time(e2) > 0
+    except Exception:
+        return False
+
+
+if _support_elapsed_time():
     import torch
 
     def Event(**kwargs):
@@ -14,6 +33,8 @@ if "intel_extension_for_pytorch" in sys.modules:
 
     USE_WALL_TIME = False
 else:
+    logging.warn("Wall time is used instead of elapsed_time (not supported). "
+                 "The timing measurements could be innacurate.")
     import time
 
     class Event():
