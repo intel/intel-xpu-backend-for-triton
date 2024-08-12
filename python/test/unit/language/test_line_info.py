@@ -186,9 +186,6 @@ def test_line_info(func: str):
     except BaseException:
         pytest.skip("disassembler is not available")
 
-    if func == "dot_combine":
-        pytest.skip("FIXME: dot_combine doesn't work with 16 threads-per-warp")
-
     shape = (128, )
     kernel_info = {}
     if func == "single":

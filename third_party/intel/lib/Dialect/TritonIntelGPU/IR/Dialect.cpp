@@ -287,6 +287,15 @@ DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   }
 }
 
+SmallVector<unsigned> DpasEncodingAttr::getElemsPerThreadForOperands(
+    ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
+  SmallVector<unsigned> sizePerThread = getSizePerThreadForOperands(opIdx);
+  SmallVector<int64_t> repetitions = getDPASRepetitions(shape, opIdx);
+
+  return {static_cast<unsigned>(sizePerThread[0] * repetitions[0]),
+          static_cast<unsigned>(sizePerThread[1] * repetitions[1])};
+};
+
 SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() {
   unsigned threadsPerWarp = getSubGroupSize();
   auto shapeC = getDPASInstShapeC();
