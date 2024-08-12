@@ -177,6 +177,10 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
                             << " bits does not match the expected size of "
                             << expectedSize << " bits";
 
+  if (op.getTranspose() && op.getVnniTransform())
+    return op.emitOpError(
+        "transpose and vnni_transform are mutually exclusive");
+
   if (!op.getTranspose() && !op.getVnniTransform()) {
     uint32_t tileHeight = op.getTileHeight();
     if (tileHeight < 1 || tileHeight > 32)
@@ -234,9 +238,8 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
   }
 
   if (op.getTranspose()) {
-    if (op.getVnniTransform())
-      return op.emitOpError(
-          "transpose and vnni_transform are mutually exclusive");
+    assert(!op.getVnniTransform() &&
+           "Expecting vnni_transform should be false");
 
     uint32_t vBlocks = op.getVBlocks();
     if (vBlocks != 1)
@@ -274,7 +277,9 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
     return success();
   }
 
-  assert(op.getVnniTransform() && "Expecting vnni_transform should be true");
+  assert(op.getVnniTransform() && !op.getTranspose() &&
+         "Expecting vnni_transform should be true and transpose should be "
+         "false");
 
   uint32_t vBlocks = op.getVBlocks();
   if (vBlocks != 1 && vBlocks != 2 && vBlocks != 4)
