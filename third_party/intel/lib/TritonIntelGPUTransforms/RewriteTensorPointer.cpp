@@ -8,10 +8,9 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
-
 #include <stack>
-#include <type_traits>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -422,8 +421,7 @@ public:
 
     // Get info from previous results
     auto ptr = op->getOperand(0);
-    assert(rewritedInfo.count(ptr) &&
-           "Expecting LoadOp/StoreOp ptr in rewritedInfo");
+    assert(rewritedInfo.count(ptr) && "Expecting LoadOp ptr in rewritedInfo");
     auto info = rewritedInfo[ptr];
 
     assert(!op.getMask() && !op.getOther() &&
@@ -455,8 +453,7 @@ public:
 
     // Get info from previous results
     auto ptr = op->getOperand(0);
-    assert(rewritedInfo.count(ptr) &&
-           "Expecting LoadOp/StoreOp ptr in rewritedInfo");
+    assert(rewritedInfo.count(ptr) && "Expecting StoreOp ptr in rewritedInfo");
     auto info = rewritedInfo[ptr];
 
     assert(!op.getMask() && "StoreOp with tensor pointer should not have mask");
@@ -675,34 +672,27 @@ public:
     // Rewrite `make_tensor_ptr`, `advance`, etc...
     // Rewriting functions return the next operation to visit, or `nullptr` if
     // there isn't one.
-    if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
-      return rewriteOp(builder, makeTensorPtrOp, eraser);
-    if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op))
-      return rewriteOp(builder, advanceOp, eraser);
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
-      return rewriteOp(builder, loadOp, eraser);
-    if (auto storeOp = dyn_cast<tt::StoreOp>(op))
-      return rewriteOp(builder, storeOp, eraser);
+    return TypeSwitch<Operation *, Operation *>(op)
+        .Case<tt::MakeTensorPtrOp, tt::AdvanceOp, tt::LoadOp, tt::StoreOp,
+              scf::IfOp>(
+            [&](auto op) { return rewriteOp(builder, op, eraser); })
+        .Case<scf::ForOp, scf::YieldOp>([&](auto op) {
+          return needRewrite(op, valueToRemove) ? rewriteOp(builder, op, eraser)
+                                                : op;
+        })
+        .Default([&](Operation *op) {
+          StringRef opNamespace = op->getDialect()->getNamespace();
+          if ((opNamespace == scf::SCFDialect::getDialectNamespace() ||
+               opNamespace == cf::ControlFlowDialect::getDialectNamespace()) &&
+              needRewrite(op, valueToRemove))
+            llvm_unreachable(
+                "Currently we only support tensor pointer usages "
+                "inside a `scf::ForOp` or `scf::IfOp`, others such as "
+                "`scf::WhileOp`, `cf::BranchOp` or `cf::CondBranchOp` "
+                "are not supported yet");
 
-    StringRef opNamespace = op->getDialect()->getNamespace();
-    if (opNamespace == scf::SCFDialect::getDialectNamespace() ||
-        opNamespace == cf::ControlFlowDialect::getDialectNamespace()) {
-      if (auto ifOp = dyn_cast<scf::IfOp>(op))
-        return rewriteOp(builder, ifOp, eraser);
-      if (!needRewrite(op, valueToRemove))
-        return op;
-      if (auto forOp = dyn_cast<scf::ForOp>(op))
-        return rewriteOp(builder, forOp, eraser);
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(op))
-        return rewriteOp(builder, yieldOp, eraser);
-
-      llvm_unreachable("Currently we only support tensor pointer usages "
-                       "inside a `scf::ForOp` or `scf::IfOp`, others such as "
-                       "`scf::WhileOp`, `cf::BranchOp` or `cf::CondBranchOp` "
-                       "are not supported yet");
-    }
-
-    return op;
+          return op;
+        });
   }
 
   void visitOperation(Operation *op, std::stack<Operation *> &eraser) {
@@ -768,16 +758,16 @@ public:
     });
 
     // NOTES(Chenggang): we don't use `ConversionPatternRewriter`, because
-    // MLIR does not support one-multiple value mapping. For example, if we use
-    // `ConversionPatternRewriter`, we can not make a type converter, which
-    // converts `ptr<tensor>` into multiple types `ptr<>, int64, int64, ...`
-    // (containing the base/offsets/strides...). What we can do is to convert
-    // `ptr<tensor>` into a single type `Tuple<ptr<>, int64, int64, ...>`. But
-    // in this way, we also have to define `PackTuple` and `UnpackTuple`
-    // operations and make a canonicalization pass to optimize, which is much
-    // So here we recursively build the IR, to be specific, we have to rewrite
-    // `tt.make_tensor_ptr`, `tt.advance`, `tt.load`, `tt.store`,
-    // `scf.for` (tensor pointer usages may be in a loop fashion)
+    // MLIR does not support one-multiple value mapping. For example, if we
+    // use `ConversionPatternRewriter`, we can not make a type converter,
+    // which converts `ptr<tensor>` into multiple types `ptr<>, int64, int64,
+    // ...` (containing the base/offsets/strides...). What we can do is to
+    // convert `ptr<tensor>` into a single type `Tuple<ptr<>, int64, int64,
+    // ...>`. But in this way, we also have to define `PackTuple` and
+    // `UnpackTuple` operations and make a canonicalization pass to optimize,
+    // which is much So here we recursively build the IR, to be specific, we
+    // have to rewrite `tt.make_tensor_ptr`, `tt.advance`, `tt.load`,
+    // `tt.store`, `scf.for` (tensor pointer usages may be in a loop fashion)
     std::stack<Operation *> eraser;
     visitOperation(getOperation(), eraser);
 
