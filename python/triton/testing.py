@@ -173,8 +173,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         cache = torch.empty(int(cache_size), dtype=torch.int8, device=device_type)
 
     # Estimate the runtime of the function
-    start_event = di.Event(enable_timing=True)
-    end_event = di.Event(enable_timing=True)
+    start_event = Event(enable_timing=True)
+    end_event = Event(enable_timing=True)
     start_event.record()
     for _ in range(5):
         cache.zero_()
@@ -189,8 +189,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # compute number of warmup and repeat
     n_warmup = max(1, int(warmup / estimate_ms))
     n_repeat = max(1, int(rep / estimate_ms))
-    start_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
-    end_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
+    start_event = [Event(enable_timing=True) for i in range(n_repeat)]
+    end_event = [Event(enable_timing=True) for i in range(n_repeat)]
     # Warm-up
     for _ in range(n_warmup):
         fn()
