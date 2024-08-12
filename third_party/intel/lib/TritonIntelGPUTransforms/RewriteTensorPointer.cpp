@@ -85,8 +85,9 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
   // HW 2D block read instruction has restriction on pitch divisibility
   if (strides.size() == 2) {
     auto pitch = strides[0];
-    // PVC requires pitch to be a multiple of QWord(64 bits).
-    if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
+    // Across Intel platforms, the strictest pitch restriction is to be a
+    // multiple of OWord(128 bits).
+    if (!isDivisible(pitch, 128 / tensorType.getElementTypeBitWidth()))
       return true;
   }
 
