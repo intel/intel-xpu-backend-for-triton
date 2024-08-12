@@ -70,13 +70,15 @@ being one entry on the x-axis of the plot.
 While some options are used to control the execution mode of the script as
 described below, some options are common to all modes of execution:
 
-* `-p`/`--path`: Per default, the script would store all intermediate data and
-output in the current directory. With this option, users can select a different
-location to store data and output. For the remainder of this README, the path
-where data is stored will be referred to as `DIR`.
-* `--no-plot`: Per default, the script will also visualize the output in a plot.
-With this option, you can deactive plotting, which also means the corresponding
-prerequisite Python packages (see above) do not need to be installed.
+* `-p`/`--path`: The output path, `DIR`. Per default, the script would store
+all intermediate data and output in the current directory. With this option,
+users can select a different location to store data and output. For the
+remainder of this README, the path where data is stored will be referred to
+as `DIR`.
+* `--no-plot`: Disable plotting. Per default, the script will also visualize
+the output in a plot. With this option, you can deactive plotting, which also
+means the corresponding prerequisite Python packages (see above) do not need to
+be installed.
 
 ### Full Mode
 
@@ -135,7 +137,7 @@ might trigger rate limiting.
 
 ### Evaluation Mode
 
-The local mode can be used by adding the `-e`/`--eval-only` option.
+The evaluation mode can be used by adding the `-e`/`--eval-only` option.
 
 In this mode, the script skips the first two steps from above and assumes that
 the pre-processed data is stored in
