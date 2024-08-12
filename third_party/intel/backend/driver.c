@@ -198,7 +198,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     auto create_module_ms = measure<>::execution([&]() {
       l0_module =
           checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                        binary_size, new_build_flags.c_str()));
+                                        binary_size, new_build_flags.c_str(), /*is_spv=*/false));
     });
     std::cout << "Module creation time: " << create_module_ms << " ms"
               << std::endl;

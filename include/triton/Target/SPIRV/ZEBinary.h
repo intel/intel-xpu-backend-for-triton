@@ -20,7 +20,6 @@ std::string compile_ze_native_code(const std::string &kernel_name,
                                    const std::string &build_flags_in,
                                    int shared, uint64_t sycl_device_addr,
                                    const std::string &spirv_kernel) {
-  printf("Compiling ze native code\n");
   auto binary_ptr = const_cast<uint8_t *>(
       reinterpret_cast<const uint8_t *>(spirv_kernel.data()));
 
@@ -34,17 +33,11 @@ std::string compile_ze_native_code(const std::string &kernel_name,
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
 
-  // compile the spirv module
-  printf("Creating module of size %ld...\n", spirv_kernel.size());
-  printf("kernel ptr: %p\n", binary_ptr);
-  printf("kernel str ptr: %p\n", spirv_kernel.data());
-
-  // TODO: bring GRF switch over
-  std::string build_flags = build_flags_in + "  -cl-intel-256-GRF-per-thread";
   auto l0_module =
       checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                    spirv_kernel.size(), build_flags.c_str()));
-  printf("Created module\n");
+                                    spirv_kernel.size(), build_flags_in.c_str()));
+
+
 
   // TODO: do we care about the kernel?
   auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));

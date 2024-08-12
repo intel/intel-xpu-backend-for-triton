@@ -49,6 +49,7 @@ class XPUOptions:
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
+    cache_native_code: bool = True
     backend_name: str = 'intel'
 
     def __post_init__(self):
@@ -60,6 +61,7 @@ class XPUOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
             "num_warps must be a power of 2"
+        self.cache_native_code = os.getenv("TRITON_XPU_CACHE_NATIVE_CODE", True)
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -265,7 +267,8 @@ class XPUBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def make_spv(src, metadata, options):
+    def make_zebin(src, metadata, options):
+        # generate SPIRV
         ret, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         if options.grf_mode == 'small':
@@ -279,28 +282,20 @@ class XPUBackend(BaseBackend):
         else:
             metadata["build_flags"] = ""
 
+        if options.cache_native_code:
+            # hack the driver right now to just initialize things
+            from triton.backends.intel.driver import XPUDriver
+            driver = XPUDriver()
+            utils = driver.utils
+            sycl_device = utils.get_sycl_device_handle( utils.get_current_device())
+            return intel.compile_native_binary(metadata["name"], metadata["build_flags"], metadata["shared"], sycl_device, ret)
+            
         return ret
-
-    @staticmethod
-    def make_zebin(src, metadata, options):
-        # hack the driver right now to just initialize things
-        from triton.backends.intel.driver import XPUDriver
-        driver = XPUDriver()
-        utils = driver.utils
-        crt_device = utils.get_current_device()
-        print(crt_device)
-        sycl_device = utils.get_sycl_device_handle(crt_device)
-        print(sycl_device)
-        kernel_name = metadata["name"]
-        #import pdb; pdb.set_trace()
-        return intel.compile_native_binary(kernel_name, "", metadata["shared"], sycl_device, src)
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
-        # TODO: we should probably merge these as "zebin" and control whether we have spirv or native code via feature flag
-        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
         stages["zebin"] = lambda src, metadata: self.make_zebin(src, metadata, options)
 
     @functools.lru_cache()
