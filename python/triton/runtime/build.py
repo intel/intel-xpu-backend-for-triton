@@ -53,8 +53,9 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         cxx = os.environ.get("CXX")
         if cxx is None:
             clangpp = shutil.which("clang++")
+            gxx = shutil.which("g++")
             icpx = shutil.which("icpx")
-            cxx = icpx if icpx is not None else clangpp
+            cxx = icpx or clangpp or gxx
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         import numpy as np
@@ -63,6 +64,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         cc_cmd = [cxx]
         if icpx is not None:
             cc_cmd += ["-fsycl"]
+        else:
+            cc_cmd += ["--std=c++17"]
     else:
         cc_cmd = [cc]
 
