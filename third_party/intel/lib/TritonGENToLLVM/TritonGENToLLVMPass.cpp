@@ -387,12 +387,10 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
                                     attrs);
   };
 
-  auto createBlock2DReadGenIsa = [&](Value ptr,
+  auto createBlock2DReadGenISA = [&](Value ptr,
                                      TritonGEN::Matrix2DBlockLoadOp op) {
     assert(isa<LLVM::LLVMPointerType>(ptr.getType()) &&
            "Expecting a pointer type");
-
-    std::string fnName = "llvm.genx.GenISA.LSC2DBlockReadAddrPayload";
 
     llvm::LLVMContext llvmContext;
     LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
@@ -400,57 +398,21 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     auto vecType = cast<VectorType>(resType);
     assert(vecType.getShape().size() == 1 && "Expecting a 1D vector");
 
-    switch (vecType.getDimSize(0)) {
-    case 8:
-      fnName += ".v8";
-      break;
-    case 16:
-      fnName += ".v16";
-      break;
-    case 32:
-      fnName += ".v32";
-      break;
-    case 64:
-      fnName += ".v64";
-      break;
-    default:
-      llvm::errs() << "vecType.getDimSize(0): " << vecType.getDimSize(0)
-                   << "\n";
-      llvm_unreachable("unhandled vector size for LSC2DBlockReadAddrPayload");
-    };
-
-    switch (vecType.getElementType().getIntOrFloatBitWidth()) {
-    case 16:
-      fnName += "i16.p0i8";
-      break;
-    case 32:
-      fnName += "i32.p0i8";
-      break;
-    default:
-      llvm::errs() << "vecType.getElementType().getIntOrFloatBitWidth(): "
-                   << vecType.getElementType().getIntOrFloatBitWidth() << "\n";
-      llvm_unreachable("unhandled element size for LSC2DBlockReadAddrPayload");
-    }
+    std::string fnName = "llvm.genx.GenISA.LSC2DBlockReadAddrPayload." +
+                         getGenISATypeMangling(vecType) + ".p0i8";
 
     Value zero = i32_val(0);
     SmallVector<Type> argTypes{ptr.getType(), i32_ty, i32_ty, i32_ty, i32_ty,
                                i32_ty,        i32_ty, i1_ty,  i1_ty,  i32_ty};
 
-    Value x = zero;
-    Value y = zero;
-    auto elemSize =
-        rewriter.create<LLVM::ConstantOp>(loc, i32_ty, op.getElemSizeInBits());
-    auto tileWidth =
-        rewriter.create<LLVM::ConstantOp>(loc, i32_ty, op.getTileWidth());
-    auto tileHeight =
-        rewriter.create<LLVM::ConstantOp>(loc, i32_ty, op.getTileHeight());
-    auto vBlocks =
-        rewriter.create<LLVM::ConstantOp>(loc, i32_ty, op.getVBlocks());
-    auto useTranspose =
-        rewriter.create<LLVM::ConstantOp>(loc, i1_ty, op.getTranspose());
-    auto vnniTransform =
-        rewriter.create<LLVM::ConstantOp>(loc, i1_ty, op.getVnniTransform());
-    auto cache = rewriter.create<LLVM::ConstantOp>(loc, i32_ty, 4);
+    Value x = zero, y = zero;
+    Value elemSize = i32_val(op.getElemSizeInBits());
+    Value tileWidth = i32_val(op.getTileWidth());
+    Value tileHeight = i32_val(op.getTileHeight());
+    Value vBlocks = i32_val(op.getVBlocks());
+    Value useTranspose = i1_val(op.getTranspose());
+    Value vnniTransform = i1_val(op.getVnniTransform());
+    Value cache = i32_val(4);
 
     SmallVector<Value> args{ptr,           x,          y,       elemSize,
                             tileWidth,     tileHeight, vBlocks, useTranspose,
@@ -476,7 +438,7 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
   // TODO: Remove GenISA lowering after PoC productization is completed.
   char *env = std::getenv("TRITONGEN_FORCE_GENISA");
   const bool useGenISA = env ? (bool)std::atoi(env) : false;
-  return (useGenISA) ? createBlock2DReadGenIsa(ptr, op)
+  return (useGenISA) ? createBlock2DReadGenISA(ptr, op)
                      : createBlock2DRead(ptr, op);
 }
 
