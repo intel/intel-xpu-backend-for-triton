@@ -27,11 +27,9 @@ def download(ident):
 
     name, run = ident.split(":", 1)
 
-    ret = subprocess.run([
-        "gh", "run", "download", "-R", "intel/intel-xpu-backend-for-triton",
-        "-D", f"{name}", f"{run}"
-    ],
-                         capture_output=True)
+    ret = subprocess.run(
+        ["gh", "run", "download", "-R", "intel/intel-xpu-backend-for-triton", "-D", f"{name}", f"{run}"],
+        capture_output=True)
 
     if ret.returncode != 0:
         print("Downloading run artifacts with 'gh' CLI failed")
@@ -56,14 +54,11 @@ def get_raw_data(args):
             return (None, None)
 
         if not os.path.isdir(numDir):
-            print(
-                f"Directory {numDir} must exist if no download is happening.")
+            print(f"Directory {numDir} must exist if no download is happening.")
             return (None, None)
 
         if not os.path.isdir(denomDir):
-            print(
-                f"Directory {denomDir} must exist if no download is happening."
-            )
+            print(f"Directory {denomDir} must exist if no download is happening.")
             return (None, None)
     else:
         if not download(args.numerator):
@@ -87,9 +82,7 @@ def parse_data(config, df, file):
     elif "training" in path.parts[-1]:
         mode = "training"
 
-    raw_data = pd.read_csv(file,
-                           header=0,
-                           usecols=["dev", "name", "batch_size", "speedup"])
+    raw_data = pd.read_csv(file, header=0, usecols=["dev", "name", "batch_size", "speedup"])
 
     raw_data["suite"] = suite
     raw_data["datatype"] = datatype
@@ -100,10 +93,7 @@ def parse_data(config, df, file):
 
 
 def parse_directory(config, previous, directory):
-    df = pd.DataFrame(columns=[
-        "dev", "name", "batch_size", f"speedup {config}", "suite", "datatype",
-        "mode"
-    ])
+    df = pd.DataFrame(columns=["dev", "name", "batch_size", f"speedup {config}", "suite", "datatype", "mode"])
     regex = re.compile(r".*performance\.csv")
     for root, _, files in os.walk(directory):
         for file in files:
@@ -112,9 +102,7 @@ def parse_directory(config, previous, directory):
                 df = parse_data(config, df, file)
 
     if previous is not None:
-        df = df.merge(previous,
-                      how="left",
-                      on=["suite", "datatype", "mode", "name", "dev"])
+        df = df.merge(previous, how="left", on=["suite", "datatype", "mode", "name", "dev"])
     return df
 
 
@@ -135,8 +123,7 @@ def eval_data(df, numerator, denominator, plot):
     print("\n" * 2)
 
     denomFailed = df.loc[(df[numCol] != 0.0) & (df[denomCol] == 0.0)]
-    print(
-        f"Only {denominator} failed ({denomFailed.shape[0]} configurations):")
+    print(f"Only {denominator} failed ({denomFailed.shape[0]} configurations):")
     print(denomFailed.to_string())
     print("\n" * 2)
 
@@ -155,25 +142,15 @@ def eval_data(df, numerator, denominator, plot):
     print(f"Mean speedup for denominator: {df[denomCol].mean()}")
     print("\n" * 2)
 
-    df.sort_values(by=["relative difference"],
-                   inplace=True,
-                   ignore_index=True,
-                   ascending=True)
+    df.sort_values(by=["relative difference"], inplace=True, ignore_index=True, ascending=True)
     printCfgs = 10
-    print(
-        f"{printCfgs} fastest configurations ({denominator} faster than "
-        "{numerator}, showing relative difference in speedup)"
-    )
+    print(f"{printCfgs} fastest configurations ({denominator} faster than "
+          "{numerator}, showing relative difference in speedup)")
     print(df.head(printCfgs))
     print("\n" * 2)
-    df.sort_values(by=["relative difference"],
-                   inplace=True,
-                   ignore_index=True,
-                   ascending=False)
-    print(
-        f"{printCfgs} slowest configurations ({denominator} slower than "
-        "{numerator}, showing relative difference in speedup)"
-    )
+    df.sort_values(by=["relative difference"], inplace=True, ignore_index=True, ascending=False)
+    print(f"{printCfgs} slowest configurations ({denominator} slower than "
+          "{numerator}, showing relative difference in speedup)")
     print(df.head(printCfgs))
     print("\n" * 2)
 
@@ -192,19 +169,14 @@ def eval_data(df, numerator, denominator, plot):
             fig = plt.figure()
             plt.xticks(rotation=85)
 
-            title = (
-                "Relative difference 0.0 means both perform identically,\n"
-                f"relative difference > 0.0 means {numerator} performs better,\n"
-                f"relative difference < 0.0 means {denominator} performs better"
-            )
+            title = ("Relative difference 0.0 means both perform identically,\n"
+                     f"relative difference > 0.0 means {numerator} performs better,\n"
+                     f"relative difference < 0.0 means {denominator} performs better")
             plt.title(f"Comparison {numerator} vs {denominator}.")
 
             plt.figtext(1, 0.5, title)
 
-            ax = sns.boxplot(df,
-                             x="xlabel",
-                             y="relative difference",
-                             order=order)
+            ax = sns.boxplot(df, x="xlabel", y="relative difference", order=order)
 
             ax.set(xlabel=None, ylabel="Relative difference in speedup")
 
@@ -213,35 +185,16 @@ def eval_data(df, numerator, denominator, plot):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        prog="compare-runs", description="Compare performance of two CI runs")
-    parser.add_argument(
-        "-n",
-        "--numerator",
-        help="Numerator in the comparison. Format 'name[:Github CI Run ID]'.",
-        required=True)
-    parser.add_argument(
-        "-d",
-        "--denominator",
-        help="Denominator in the comparison. Format 'name[:Github CI Run ID]'.",
-        required=True)
-    parser.add_argument("-p",
-                        "--path",
-                        help="Directory to store raw data and output.",
-                        default=None)
-    parser.add_argument(
-        "-l",
-        "--local",
-        help="Use existing raw data instead of downloading from Github.",
-        action="store_true")
-    parser.add_argument("-e",
-                        "--eval-only",
-                        help="Use existing preprocessed data",
+    parser = argparse.ArgumentParser(prog="compare-runs", description="Compare performance of two CI runs")
+    parser.add_argument("-n", "--numerator", help="Numerator in the comparison. Format 'name[:Github CI Run ID]'.",
+                        required=True)
+    parser.add_argument("-d", "--denominator", help="Denominator in the comparison. Format 'name[:Github CI Run ID]'.",
+                        required=True)
+    parser.add_argument("-p", "--path", help="Directory to store raw data and output.", default=None)
+    parser.add_argument("-l", "--local", help="Use existing raw data instead of downloading from Github.",
                         action="store_true")
-    parser.add_argument(
-        "--no-plot",
-        help="Do not plot, no requirement on seaborn and matplotlib",
-        action="store_true")
+    parser.add_argument("-e", "--eval-only", help="Use existing preprocessed data", action="store_true")
+    parser.add_argument("--no-plot", help="Do not plot, no requirement on seaborn and matplotlib", action="store_true")
 
     args = parser.parse_args()
 
@@ -271,8 +224,8 @@ if __name__ == "__main__":
         df = parse_directory(denomCfg, df, denomDir)
 
         cols = [
-            "dev", "suite", "name", "mode", "datatype", "batch_size_x",
-            "batch_size_y", f"speedup {numCfg}", f"speedup {denomCfg}"
+            "dev", "suite", "name", "mode", "datatype", "batch_size_x", "batch_size_y", f"speedup {numCfg}",
+            f"speedup {denomCfg}"
         ]
         df = df[cols]
 

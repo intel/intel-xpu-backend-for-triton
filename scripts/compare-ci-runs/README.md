@@ -6,7 +6,7 @@ This script can be used to compare the results of two runs of the
 ## Prerequisites
 
 To evaluate the data from CI runs, the Python packages `pandas` and `numpy` and
-their corresponding dependencies are required. 
+their corresponding dependencies are required.
 
 If you also plan to plot the performance comparison, the packages `matplotlib`
 and `seaborn` and their dependencies are also required.
@@ -22,10 +22,10 @@ strictly required.
 
 ### Github CLI
 
-To download artifacts from CI runs, the script uses the Github CLI `gh`. 
+To download artifacts from CI runs, the script uses the Github CLI `gh`.
 
 The script assumes that the `gh` executable can be found on the `$PATH` and
-that authentication has happened. 
+that authentication has happened.
 
 Authentication for the Github CLI is only required once, see the
 [manual](https://cli.github.com/manual/gh_auth_login).
@@ -33,22 +33,22 @@ Authentication for the Github CLI is only required once, see the
 ## Usage
 
 The script supports three modes of execution, explained below. Some aspects of
-the script are indenpendent from the mode of execution and will be explained 
+the script are indenpendent from the mode of execution and will be explained
 first.
 
 ### Output
 
 In general, the script compares the performance results of two different
-configurations from two different CI runs. 
+configurations from two different CI runs.
 
 One configuration is referred to as the "numerator", while the other is called
-the "denominator". 
+the "denominator".
 
 The raw performance of the numerator and denominator in the CI runs is captured
 as "speedup" over Pytorch native (i.e., not Triton-compiled) execution.
 
-The metric used to compare the those two configurations is the 
-"relative difference" between the speedups. 
+The metric used to compare the those two configurations is the
+"relative difference" between the speedups.
 
 It is calculated as:
 ```
@@ -56,7 +56,7 @@ It is calculated as:
 ```
 
 As also explained in the script's output, a relative difference of (close to) 0
-means that numerator and denominator configuration perform identically. 
+means that numerator and denominator configuration perform identically.
 A relative difference < 0 means that the denominator outperformed the numerator,
 while a relative difference of > 0 means that the numerator was faster than the
 denominator.
@@ -83,7 +83,7 @@ prerequisite Python packages (see above) do not need to be installed.
 In this mode, the full set of capabilities of the script is used. This means,
 the script will perform the following three steps:
 
-1. Download the artifacts from both *Performance E2E* CI runs containing the 
+1. Download the artifacts from both *Performance E2E* CI runs containing the
 performance data using the Github CLI. The raw data is stored in subdirectories
 of `DIR`, with the given names for numerator and denominator used as names for
 the subdirectories.
@@ -101,7 +101,7 @@ run. This ID can be extracted from the URL of a CI run, e.g.:
 
 In this case, the ID is `10180538030`.
 
-To specify a name and the ID for numerator and denominator, name and ID are 
+To specify a name and the ID for numerator and denominator, name and ID are
 separated by a `:`, for example:
 
 ```sh
@@ -138,7 +138,7 @@ might trigger rate limiting.
 The local mode can be used by adding the `-e`/`--eval-only` option.
 
 In this mode, the script skips the first two steps from above and assumes that
-the pre-processed data is stored in 
+the pre-processed data is stored in
 `DIR/preprocessed-data-[numerator]-[denominator].csv`.
 
 As no download is required in evaluation mode, only the name has to be specified
