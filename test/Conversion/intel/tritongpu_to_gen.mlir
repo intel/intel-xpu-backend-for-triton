@@ -1072,7 +1072,6 @@ module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32,
     // CHECK-NEXT:   llvm.br ^bb2([[CMPXCHG_RES]] : i32)
     // CHECK-NEXT: ^bb2([[RES:%.*]]: i32):
     // CHECK-NEXT:   [[RES_CAST:%.*]] = llvm.bitcast [[RES]] : i32 to f32
-    // CHECK:        llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
     // CHECK-NEXT:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT:   [[GEP:%.*]] = llvm.getelementptr %arg3[[[ZERO]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>
     // CHECK-NEXT:   [[BCAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
@@ -1083,7 +1082,6 @@ module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32,
     // CHECK-NEXT: ^bb4:
     // CHECK:        llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
     // CHECK-NEXT:   {{.*}} = llvm.load [[BCAST]] : !llvm.ptr<3> -> f32
-    // CHECK:        llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
     %0 = "tt.atomic_cas" (%ptr, %cmp, %val) {sem = 1 : i32, scope = 1 : i32} : (!tt.ptr<f32>, f32, f32) -> f32
     tt.return
   }
