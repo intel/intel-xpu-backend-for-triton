@@ -213,7 +213,8 @@ jobs:
         run: |
           cd python/tutorials
           # We need latest build report
-          wget https://raw.githubusercontent.com/intel/intel-xpu-backend-for-triton/llvm-target/scripts/build_report.py
+          # wget https://raw.githubusercontent.com/intel/intel-xpu-backend-for-triton/llvm-target/scripts/build_report.py
+          wget https://raw.githubusercontent.com/intel/intel-xpu-backend-for-triton/benchmark_tags/scripts/build_report.py
           bash run_all.sh
           # This will fix csv file issues, fixing ", "->"," and " " -> "," that exist in raw output
           cp summary.csv $REPORTS/attention-summary.csv
