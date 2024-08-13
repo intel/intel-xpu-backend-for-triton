@@ -214,14 +214,8 @@ public:
             valueAttrMap[op] = dotALayout;
           for (auto op : info0.chainOpsB)
             valueAttrMap[op] = dotBLayout;
-          // for (auto op : info0.chainOpsC)
-          //   valueAttrMap[op] = dotCLayout;
-          DenseSet<Value> chainedVals{info0.chainOpsC.begin(),
-                                      info0.chainOpsC.end()};
-          expandUseChain(info0.dot, chainedVals);
-          for (auto val : chainedVals)
-            valueAttrMap[val] = dotCLayout;
-
+          for (auto op : info0.chainOpsC)
+            valueAttrMap[op] = dotCLayout;
           if (info0.advanceA)
             valueAttrMap[info0.advanceA] = dotALayout;
           if (info0.advanceB)
@@ -240,7 +234,6 @@ public:
           break;
         }
         case Workload::Attention: {
-          llvm::outs() << "match workload attention \n";
           auto &info0 = loopDotInfo.dotInfo0;
           auto &info1 = loopDotInfo.dotInfo1;
           auto dot0 = info0.dot;
@@ -261,9 +254,9 @@ public:
           auto oLayout = ttg::BlockedEncodingAttr::get(
               ctx, sizePerWarpO, {1, 1}, warpsPerCTA, {1, 0}, ctaLayout);
           auto vLayout = ttg::DotOperandEncodingAttr::get(
-              ctx, 1, oLayout, aType.getElementType()); // vType
+              ctx, 1, oLayout, aType.getElementType());
           auto qkLayout1 = ttg::DotOperandEncodingAttr::get(
-              ctx, 0, oLayout, aType.getElementType()); // qkType
+              ctx, 0, oLayout, aType.getElementType());
           OpBuilder b(info1.dot);
           auto dot1A = info1.dot.getA();
           auto cvtType = addAttrToType(dot1A.getType(), qkLayout1);
@@ -279,7 +272,6 @@ public:
               ctx, 1, qkLayout0, aType.getElementType());
 
           // record value's attr
-          // fixme: the 2nd loop may overwrite, not check it for now
           for (auto val : info0.chainOpsA)
             valueAttrMap[val] = qLayout;
           for (auto val : info0.chainOpsB)
@@ -301,6 +293,7 @@ public:
               continue;
             } else {
               auto op = val.getDefiningOp();
+              // clone value if it has more than 1 layout used
               if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
                 OpBuilder b(cst);
                 auto newOp = b.clone(*op);
@@ -329,37 +322,26 @@ public:
                       IntegerAttr::get(i32Ty, int64_t(workLoadKind)));
       }
 
-      // helper function
-      auto hasTensorType = [](Type type) {
-        if (isa<RankedTensorType>(type))
-          return true;
-        else if (auto ptrType = dyn_cast<tt::PointerType>(type))
-          if (isa<RankedTensorType>(ptrType.getPointeeType()))
-            return true;
-        return false;
-      };
       auto opHasTensorType = [&](Operation *op) {
         auto oprndHasTensorType =
-            llvm::any_of(op->getOperandTypes(), hasTensorType);
+            llvm::any_of(op->getOperandTypes(), isTensorOrTensorPointerType);
         auto resultHasTensorType =
-            llvm::any_of(op->getResultTypes(), hasTensorType);
+            llvm::any_of(op->getResultTypes(), isTensorOrTensorPointerType);
         return oprndHasTensorType || resultHasTensorType;
       };
-      /// get other op's layout attr by def/use chain
+
+      /// get other value's layout attr by def/use chain
       func.walk<WalkOrder::PreOrder>([&](Operation *op) {
         if (auto loop = dyn_cast<scf::ForOp>(op))
           ;
         else if (!opHasTensorType(op))
           ;
-        // else if (op->getResults().size() != 0 &&
-        //          valueAttrMap.count(op->getResults()[0]) == 1)
-        //   ;
         else if (auto reduce = dyn_cast<tt::ReduceOp>(op)) {
           assert(reduce.getSrcs().size() == 1);
           auto axis = reduce.getAxis();
           auto src = reduce.getSrcs()[0];
           assert(valueAttrMap.count(src) != 0 &&
-                 "reduce source attr should alread figured out");
+                 "reduce source attr should be already figured out");
           auto sliceAttr =
               ttg::SliceEncodingAttr::get(ctx, axis, valueAttrMap[src]);
           auto result = reduce.getResults()[0];
@@ -371,7 +353,7 @@ public:
           }
         } else if (op->getDialect() == arithDialect ||
                    op->getDialect() == mathDialect) {
-          // fixme: this is realy ad-hoc to amend
+          // FIXME: this is really ad-hoc to amend
           if (auto mul = dyn_cast<arith::MulFOp>(op)) {
             auto rhs = mul.getRhs();
             valueAttrMap[rhs] = valueAttrMap[op->getResults()[0]];
@@ -658,14 +640,8 @@ public:
       }
     }
   }
-  // if (valueAttrMap.count(result) == 0) {
-  //   valueAttrMap[result] = valueAttrMap[val];
-  // }
-  // fixme: try to merge with above dot related expand
+
   void expandUseChain(Value val, DenseSet<Value> &chainedVals) {
-    // if (chainedVals.count(val))
-    //   return;
-    // chainedVals.insert(val);
     for (auto user : val.getUsers()) {
       if (user->getDialect() == arithDialect ||
           user->getDialect() == mathDialect) {
