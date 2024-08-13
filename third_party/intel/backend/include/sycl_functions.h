@@ -5,6 +5,7 @@
 #include <cassert>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -50,12 +51,31 @@ inline std::string parseZeResultCode(const ze_result_t code) {
     }                                                                          \
   }
 
+// TODO: share Triton GetEnv.hpp impl
+inline std::string getStrEnv(const std::string &env) {
+  const char *cstr = std::getenv(env.c_str());
+  if (!cstr)
+    return "";
+  std::string result(cstr);
+  return result;
+}
+
 bool getBoolEnv(const std::string &env) {
   const char *s = std::getenv(env.c_str());
   std::string str(s ? s : "");
   std::transform(str.begin(), str.end(), str.begin(),
                  [](unsigned char c) { return std::tolower(c); });
   return (str == "on" || str == "true" || str == "1");
+}
+
+inline std::optional<bool> isEnvValueBool(std::string str) {
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  if (str == "on" || str == "true" || str == "1")
+    return true;
+  if (str == "off" || str == "false" || str == "0")
+    return false;
+  return std::nullopt;
 }
 
 std::tuple<ze_module_handle_t, ze_result_t>

@@ -282,7 +282,7 @@ class XPUBackend(BaseBackend):
         else:
             metadata["build_flags"] = ""
 
-        if options.cache_native_code:
+        if options.cache_native_code is True:
             # hack the driver right now to just initialize things
             #from triton.backends.intel.driver import XPUDriver
             #driver = XPUDriver()

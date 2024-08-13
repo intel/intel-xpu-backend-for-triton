@@ -108,7 +108,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
 std::vector<std::unique_ptr<sycl::kernel>> compiled_kernels;
 
-static PyObject *loadBinary(PyObject *self, PyObject *args) {
+static PyObject *loadBinaryImpl(PyObject *self, PyObject *args) {
   const char *name, *build_flags;
   int shared;
   PyObject *py_bytes;
@@ -137,11 +137,17 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
 
+  const auto cache_native_code_env_opt =
+      isEnvValueBool(getStrEnv("TRITON_XPU_CACHE_NATIVE_CODE"));
+  const bool is_spv =
+      cache_native_code_env_opt
+          ? !(*cache_native_code_env_opt)
+          : false; // default value is false, maybe we should rework this
+
   ze_module_handle_t l0_module;
   auto create_module_ms = measure<>::execution([&]() {
-    l0_module = checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                              binary_size, build_flags,
-                                              /*is_spv=*/false));
+    l0_module = checkSyclErrors(create_module(
+        l0_context, l0_device, binary_ptr, binary_size, build_flags, is_spv));
   });
   if (create_module_ms > 0) {
     std::cout << "Module creation time: " << create_module_ms << " ms"
@@ -178,7 +184,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   int32_t n_spills = props.spillMemSize;
   int32_t n_regs = 0;
 
-  bool is_spv = false; // TODO: parameter-ize
   if (is_spv) {
     constexpr int32_t max_reg_spill = 1000;
     std::string build_flags_str(build_flags);
@@ -241,6 +246,13 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       new sycl::kernel_bundle<sycl::bundle_state::executable>(mod);
 
   return Py_BuildValue("(KKii)", (uint64_t)kb, (uint64_t)k, n_regs, n_spills);
+}
+
+static PyObject *loadBinary(PyObject *self, PyObject *args) {
+  PyObject *ret;
+  auto load_binary_time_ns = measure<std::chrono::nanoseconds>::execution(
+      [&]() { ret = loadBinaryImpl(self, args); });
+  return ret;
 }
 
 static PyObject *initContext(PyObject *self, PyObject *args) {
