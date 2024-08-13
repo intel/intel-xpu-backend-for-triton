@@ -212,14 +212,15 @@ jobs:
       - name: Run flash attention benchmarks
         run: |
           cd python/tutorials
-          git checkout llvm-target ../../scripts/build_report.py
+          # We need latest build report
+          wget https://raw.githubusercontent.com/intel/intel-xpu-backend-for-triton/llvm-target/scripts/build_report.py
           bash run_all.sh
           # This will fix csv file issues, fixing ", "->"," and " " -> "," that exist in raw output
           cp summary.csv $REPORTS/attention-summary.csv
           sed -E 's/, /,/g;s/ /,/g' summary.csv > attention-results.csv
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}
-          python ../../scripts/build_report.py attention-results.csv $REPORTS/attention-triton-report.csv --benchmark flash_attention --compiler triton --tflops_col max_tflops --param_cols "Z,H,N_CTX,D_HEAD" --tag $TAG
+          python ./build_report.py attention-results.csv $REPORTS/attention-triton-report.csv --benchmark flash_attention --compiler triton --tflops_col max_tflops --param_cols "Z,H,N_CTX,D_HEAD" --tag $TAG
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
