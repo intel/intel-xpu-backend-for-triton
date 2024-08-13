@@ -1081,7 +1081,6 @@ struct AtomicCASOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        //        createBarrier(rewriter, loc, numCTAs);
         Value atomPtr =
             LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
