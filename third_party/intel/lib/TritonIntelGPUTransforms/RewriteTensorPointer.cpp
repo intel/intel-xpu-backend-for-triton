@@ -3,7 +3,6 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -71,21 +70,6 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
   if (!ttgi::hasDotDpasEncoding(tensorType) &&
       !(isUsedByStoreOp && ttgi::hasDpasEncoding(tensorType)))
     return true;
-
-  ttg::DotOperandEncodingAttr dotLayout =
-      dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
-  if (dotLayout) {
-    unsigned kWidth = dotLayout.getKWidth();
-    Type eltType = tensorType.getElementType();
-    unsigned elemBits = eltType.getIntOrFloatBitWidth();
-    if (!((kWidth == 4 && elemBits == 8) || (kWidth == 2 && elemBits == 16) ||
-          (kWidth == 1 && elemBits == 32))) {
-      // OCL interface only supports a small subset of 2D load variance.
-      bool useGenISA = triton::tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
-      if (!useGenISA)
-        return true;
-    }
-  }
 
   TypedValue<triton::PointerType> base = op.getBase();
   Operation::operand_range shape = op.getShape();

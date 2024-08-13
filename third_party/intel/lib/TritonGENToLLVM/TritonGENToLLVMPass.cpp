@@ -200,6 +200,44 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
+static LogicalResult isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+  VectorType resTy = op.getRes().getType();
+  unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
+  if (op.getElemSizeInBits() == 32 || op.getVnniTransform()) {
+    if (resElemTySize != 32)
+      return failure();
+  } else if (resElemTySize != 16) {
+    return failure();
+  }
+
+  uint32_t tileWidth = op.getTileWidth();
+  if (op.getVnniTransform()) {
+    if (tileWidth != 16)
+      return failure();
+    return success();
+  }
+
+  assert(!op.getVnniTransform() && "Expecting vnni_transform should be false");
+  switch (op.getElemSizeInBits()) {
+  case 8:
+    if (tileWidth != 32)
+      return failure();
+    break;
+  case 16:
+    if (tileWidth != 16)
+      return failure();
+    break;
+  case 32:
+    if (tileWidth != 8 && tileWidth != 16)
+      return failure();
+    break;
+  default:
+    llvm_unreachable("unexpected element size");
+  }
+
+  return success();
+}
+
 static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                                      ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
@@ -1169,7 +1207,8 @@ struct TritonMatrix2DBlockLoadLowering
     }
 
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA") ||
+        isOCLBuiltinAvailable(op).failed()) {
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
     }
