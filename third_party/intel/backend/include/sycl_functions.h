@@ -36,7 +36,6 @@ auto exception_handler = [](sycl::exception_list e_list) {
   }
 };
 
-
 inline std::string parseZeResultCode(const ze_result_t code) {
   const std::string prefix = "Triton Error [ZE]: ";
   std::stringstream ss;

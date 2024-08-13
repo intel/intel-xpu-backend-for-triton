@@ -289,7 +289,7 @@ class XPUBackend(BaseBackend):
             #utils = driver.utils
             #sycl_device = utils.get_sycl_device_handle( utils.get_current_device())
             return intel.compile_native_binary(metadata["name"], metadata["build_flags"], metadata["shared"], 0, ret)
-            
+
         return ret
 
     def add_stages(self, stages, options):
