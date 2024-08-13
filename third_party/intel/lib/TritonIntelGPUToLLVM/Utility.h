@@ -748,36 +748,34 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
 inline SmallVector<Value>
-loadSharedToDistributed(Value dst, Value src, SharedMemoryObject &shrMemObj,
-                        Type elemTy, Location loc, RewriterBase &rewriter,
+loadSharedToDistributed(RankedTensorType dstTy, MemDescType srcTy,
+                        Type elemLlvmTy, SharedMemoryObject &memObj,
+                        Location loc, RewriterBase &rewriter,
                         const TargetInfoBase &target) {
-  auto dstTy = cast<RankedTensorType>(dst.getType());
-  auto srcTy = cast<MemDescType>(src.getType());
-
   SmallVector<Value> ret;
   if (isa<DpasEncodingAttr>(dstTy.getEncoding())) {
     if (emitTransferBetweenDPASAndShared(
-            dstTy, srcTy, elemTy, /*maxVecElems=*/std::nullopt,
-            shrMemObj.getBase(), shrMemObj.getStrides(), loc, rewriter, target,
+            dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt,
+            memObj.getBase(), memObj.getStrides(), loc, rewriter, target,
             [&](VectorType vecTy, Value vecAddr) {
               auto vecVal = load(vecTy, vecAddr);
               vecVal.setAlignment(vecTy.getNumElements() *
-                                  elemTy.getIntOrFloatBitWidth() / 8);
+                                  elemLlvmTy.getIntOrFloatBitWidth() / 8);
               for (int v = 0; v < vecTy.getNumElements(); v++) {
-                ret.push_back(extract_element(elemTy, vecVal, i32_val(v)));
+                ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
               }
             }))
       return ret;
   }
   bool success = emitTransferBetweenRegistersAndShared(
-      dstTy, srcTy, elemTy, /*maxVecElems=*/std::nullopt, shrMemObj.getBase(),
-      shrMemObj.getStrides(), loc, rewriter, target,
+      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, memObj.getBase(),
+      memObj.getStrides(), loc, rewriter, target,
       [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = load(vecTy, vecAddr);
         vecVal.setAlignment(vecTy.getNumElements() *
-                            elemTy.getIntOrFloatBitWidth() / 8);
+                            elemLlvmTy.getIntOrFloatBitWidth() / 8);
         for (int v = 0; v < vecTy.getNumElements(); v++) {
-          ret.push_back(extract_element(elemTy, vecVal, i32_val(v)));
+          ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
         }
       });
   if (!success)
