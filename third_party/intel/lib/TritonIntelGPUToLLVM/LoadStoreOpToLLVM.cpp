@@ -1200,6 +1200,8 @@ struct AtomicRMWOpConversion
             emulateFp16AtomicRmw(rewriter, loc, atomicRmwAttr, valueElemTy,
                                  rmwPtr, rmwVal, rmwMask, {zero});
       } else {
+        if (!atomicNeedsSharedMemory(op.getResult()))
+          createBarrier(rewriter, loc, numCTAs);
         endBlock = &LLVM::intel::createPredicatedBlock(
             rewriter, loc, rmwMask, {zero}, [&] {
               mlir::LLVM::AtomicBinOp rmwKind;
