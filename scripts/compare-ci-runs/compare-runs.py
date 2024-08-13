@@ -5,18 +5,19 @@ import shutil
 import subprocess
 import os
 import pandas as pd
-import re
 from pathlib import Path
 
 
-def get_config(ident):
+def get_config(ident: str) -> str:
+    """Retrieve configuration name"""
     if ":" in ident:
         return ident.split(":")[0]
 
     return ident
 
 
-def download(ident):
+def download(ident: str) -> bool:
+    """Download artifacts for given configuration and CI run ID from Github"""
     if not shutil.which("gh"):
         print("Could not find 'gh' executable on the '$PATH'")
         return False
@@ -27,37 +28,37 @@ def download(ident):
 
     name, run = ident.split(":", 1)
 
-    ret = subprocess.run(
-        ["gh", "run", "download", "-R", "intel/intel-xpu-backend-for-triton", "-D", f"{name}", f"{run}"],
-        capture_output=True)
+    ret = subprocess.run(["gh", "run", "download", "-R", "intel/intel-xpu-backend-for-triton", "-D", name, run],
+                         capture_output=True)
 
     if ret.returncode != 0:
         print("Downloading run artifacts with 'gh' CLI failed")
         if ret.stdout:
             print("Command stdout:")
-            print(ret.stdout)
+            print(ret.stdout.decode("UTF-8"))
         if ret.stderr:
             print("Command stderr:")
-            print(ret.stderr)
+            print(ret.stderr.decode("UTF-8"))
         return False
 
     return True
 
 
-def get_raw_data(args):
-    numDir = os.path.join(os.getcwd(), get_config(args.numerator))
-    denomDir = os.path.join(os.getcwd(), get_config(args.denominator))
+def get_raw_data(args: argparse.Namespace) -> tuple[Path, Path]:
+    """Discover or download the raw data for both configurations."""
+    numDir = Path(os.getcwd()).joinpath(get_config(args.numerator))
+    denomDir = Path(os.getcwd()).joinpath(get_config(args.denominator))
 
     if args.local:
         if ":" in args.numerator or ":" in args.denominator:
             print("Invalid format, expecting only 'name' for local run")
             return (None, None)
 
-        if not os.path.isdir(numDir):
+        if not numDir.is_dir():
             print(f"Directory {numDir} must exist if no download is happening.")
             return (None, None)
 
-        if not os.path.isdir(denomDir):
+        if not denomDir.is_dir():
             print(f"Directory {denomDir} must exist if no download is happening.")
             return (None, None)
     else:
@@ -69,9 +70,9 @@ def get_raw_data(args):
     return (numDir, denomDir)
 
 
-def parse_data(config, df, file):
-    file = os.path.abspath(file)
-    path = Path(file)
+def parse_data(config: str, df: pd.DataFrame, file: Path) -> pd.DataFrame:
+    """Parse data from a single CSV file into the dataframe."""
+    path = Path(file).absolute()
 
     datatype = path.parts[-2]
     suite = path.parts[-3]
@@ -92,21 +93,20 @@ def parse_data(config, df, file):
     return pd.concat([df, raw_data], ignore_index=True)
 
 
-def parse_directory(config, previous, directory):
+def parse_directory(config: str, previous: pd.DataFrame, directory: str) -> pd.DataFrame:
+    """Parse all CSV files for a configuration in a directory, merging with
+        the previous dataframe if present."""
     df = pd.DataFrame(columns=["dev", "name", "batch_size", f"speedup {config}", "suite", "datatype", "mode"])
-    regex = re.compile(r".*performance\.csv")
-    for root, _, files in os.walk(directory):
-        for file in files:
-            if regex.match(file):
-                file = os.path.join(root, file)
-                df = parse_data(config, df, file)
+    for file in Path(directory).rglob("*performance.csv"):
+        df = parse_data(config, df, file)
 
     if previous is not None:
-        df = df.merge(previous, how="left", on=["suite", "datatype", "mode", "name", "dev"])
+        df = df.merge(previous, how="outer", on=["suite", "datatype", "mode", "name", "dev"])
     return df
 
 
-def eval_data(df, numerator, denominator, plot):
+def eval_data(df: pd.DataFrame, numerator: str, denominator: str, plot: bool):
+    """Evaluate the data, print a summary and plot if enabled."""
     numCol = f"speedup {numerator}"
     denomCol = f"speedup {denominator}"
 
@@ -127,6 +127,11 @@ def eval_data(df, numerator, denominator, plot):
     print(denomFailed.to_string())
     print("\n" * 2)
 
+    nanEntries = df[df[[numCol, denomCol]].isnull().any(axis=1)]
+    print("NaN entries present:")
+    print(nanEntries.to_string())
+    print("\n" * 2)
+
     # Filter out NaN and zero values
     df = df[df[[numCol, denomCol]].notnull().all(1)]
     df = df.loc[(df[numCol] != 0.0) & (df[denomCol] != 0.0)]
@@ -135,8 +140,8 @@ def eval_data(df, numerator, denominator, plot):
 
     print("Overview of relative difference in speedup.\n"
           "Relative difference 0.0 means both perform identically,"
-          f"relative difference > 0.0 means {numerator} performs better,"
-          f"relative difference < 0.0 means {denominator} performs better")
+          f" relative difference > 0.0 means {numerator} performs better,"
+          f" relative difference < 0.0 means {denominator} performs better")
 
     print(df["relative difference"].describe())
     print(f"Mean speedup for denominator: {df[denomCol].mean()}")
@@ -185,6 +190,7 @@ def eval_data(df, numerator, denominator, plot):
 
 
 if __name__ == "__main__":
+    """Main entry point."""
     parser = argparse.ArgumentParser(prog="compare-runs", description="Compare performance of two CI runs")
     parser.add_argument("-n", "--numerator", help="Numerator in the comparison. Format 'name[:Github CI Run ID]'.",
                         required=True)
@@ -200,8 +206,8 @@ if __name__ == "__main__":
 
     cwd = os.getcwd()
     if args.path:
-        path = os.path.abspath(args.path)
-        Path(path).mkdir(parents=True, exist_ok=True)
+        path = Path(args.path).absolute()
+        path.mkdir(parents=True, exist_ok=True)
         os.chdir(path)
 
     numCfg = get_config(args.numerator)
@@ -209,7 +215,7 @@ if __name__ == "__main__":
     csvFile = f"preprocessed-data-{numCfg}-{denomCfg}.csv"
 
     if args.eval_only:
-        if not os.path.isfile(csvFile):
+        if not Path(csvFile).is_file():
             print(f"Could not find preprocessed data file {csvFile}")
             exit(-1)
         df = pd.read_csv(csvFile, header=0)
