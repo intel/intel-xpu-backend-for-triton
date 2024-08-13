@@ -67,7 +67,7 @@ static intel::AttributeList createFunctionAttributes(
   return attrs;
 }
 
-NamedAttrList
+static NamedAttrList
 createParameterAttributes(ArrayRef<llvm::Attribute::AttrKind> attributes,
                           MLIRContext *ctx) {
   intel::AttrBuilder paramAttrBuilder(*ctx);
@@ -161,6 +161,7 @@ loadCacheControlToDecoration(Builder &builder, uint32_t operandNum,
             builder.getAttr<TritonGEN::LoadCacheControlDecorationAttr>(
                 1, l3, operandNum)};
   };
+
   switch (orig) {
   case TritonGEN::LoadCacheControl::DEFAULT:
     return {};
@@ -221,6 +222,7 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
 
   // The IGC intrinsic requires the first argument be int64
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
+  Value one = i32_val(1);
 
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
@@ -236,35 +238,19 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                              int1Ty,
                              int32Ty};
 
-  auto elemSize =
-      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getElemSizeInBits());
-  auto tileWidth =
-      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileWidth());
-  auto tileHeight =
-      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getTileHeight());
-  auto vBlocks =
-      rewriter.create<LLVM::ConstantOp>(loc, int32Ty, op.getVBlocks());
-  auto useTranspose =
-      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getTranspose());
-  auto vnniTransform =
-      rewriter.create<LLVM::ConstantOp>(loc, int1Ty, op.getVnniTransform());
-  auto cache = rewriter.create<LLVM::ConstantOp>(
-      loc, int32Ty, static_cast<int>(op.getCacheControl()));
-
-  Value one = i32_val(1);
   SmallVector<Value> args{ptr,
                           sub(baseWidth, one),
                           sub(baseHeight, one),
                           sub(basePitch, one),
                           x,
                           y,
-                          elemSize,
-                          tileWidth,
-                          tileHeight,
-                          vBlocks,
-                          useTranspose,
-                          vnniTransform,
-                          cache};
+                          i32_val(op.getElemSizeInBits()),
+                          i32_val(op.getTileWidth()),
+                          i32_val(op.getTileHeight()),
+                          i32_val(op.getVBlocks()),
+                          i1_val(op.getTranspose()),
+                          i1_val(op.getVnniTransform()),
+                          i32_val(static_cast<int>(op.getCacheControl()))};
 
   intel::AttributeList attrs =
       createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
@@ -426,6 +412,7 @@ storeCacheControlToDecoration(Builder &builder, uint32_t operandNum,
             builder.getAttr<TritonGEN::StoreCacheControlDecorationAttr>(
                 1, l3, operandNum)};
   };
+
   switch (orig) {
   case TritonGEN::StoreCacheControl::DEFAULT:
     return {};
@@ -484,6 +471,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   VectorType storeValType = op.getStoredVal().getType();
   std::string funcName =
       "llvm.genx.GenISA.LSC2DBlockWrite." + getGenISATypeMangling(storeValType);
+  Value one = i32_val(1);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -491,29 +479,19 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
       int_ty(32),          int_ty(32),          int_ty(32),
       int_ty(32),          int_ty(1),           int_ty(1),
       int_ty(32),          storeVal.getType()};
-
-  auto elemSize = i32_val(op.getElemSizeInBits());
-  auto tileWidth = i32_val(op.getTileWidth());
-  auto tileHeight = i32_val(op.getTileHeight());
-  auto vBlocks = i32_val(op.getVBlocks());
-  auto useTranspose = i1_val(false);
-  auto vnniTransform = i1_val(false);
-  auto cache = i32_val(static_cast<int>(op.getCacheControl()));
-
-  Value one = i32_val(1);
   SmallVector<Value> args{ptr,
                           sub(baseWidth, one),
                           sub(baseHeight, one),
                           sub(basePitch, one),
                           x,
                           y,
-                          elemSize,
-                          tileWidth,
-                          tileHeight,
-                          vBlocks,
-                          useTranspose,
-                          vnniTransform,
-                          cache,
+                          i32_val(op.getElemSizeInBits()),
+                          i32_val(op.getTileWidth()),
+                          i32_val(op.getTileHeight()),
+                          i32_val(op.getVBlocks()),
+                          i1_val(false), // transpose
+                          i1_val(false), // vnniTransform
+                          i32_val(static_cast<int>(op.getCacheControl())),
                           storeVal};
 
   intel::AttributeList attrs =
@@ -539,6 +517,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   Value basePitch = op.getBasePitch();
   Value x = op.getX();
   Value y = op.getY();
+  Value one = i32_val(1);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -546,29 +525,19 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
       int_ty(32),          int_ty(32),          int_ty(32),
       int_ty(32),          int_ty(1),           int_ty(1),
       int_ty(32)};
-
-  auto elemSize = i32_val(op.getElemSizeInBits());
-  auto tileWidth = i32_val(op.getTileWidth());
-  auto tileHeight = i32_val(op.getTileHeight());
-  auto vBlocks = i32_val(op.getVBlocks());
-  auto useTranspose = i1_val(false);
-  auto vnniTransform = i1_val(false);
-  auto cache = i32_val(static_cast<int>(op.getCacheControl()));
-
-  Value one = i32_val(1);
   SmallVector<Value> args{ptr,
                           sub(baseWidth, one),
                           sub(baseHeight, one),
                           sub(basePitch, one),
                           x,
                           y,
-                          elemSize,
-                          tileWidth,
-                          tileHeight,
-                          vBlocks,
-                          useTranspose,
-                          vnniTransform,
-                          cache};
+                          i32_val(op.getElemSizeInBits()),
+                          i32_val(op.getTileWidth()),
+                          i32_val(op.getTileHeight()),
+                          i32_val(op.getVBlocks()),
+                          i1_val(false), // transpose
+                          i1_val(false), // vnniTransform
+                          i32_val(static_cast<int>(op.getCacheControl()))};
 
   intel::AttributeList attrs =
       createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
@@ -587,9 +556,10 @@ protected:
   static Value rewrite(Operation *op, StringRef funcName, unsigned dim,
                        ConversionPatternRewriter &rewriter) {
     MLIRContext *ctx = rewriter.getContext();
-    auto retType = rewriter.getIntegerType(64);
-    auto argType = rewriter.getIntegerType(32);
-    auto arg = LLVM::createConstantI32(op->getLoc(), rewriter, dim);
+    Location loc = op->getLoc();
+    IntegerType retType = int_ty(64);
+    IntegerType argType = int_ty(32);
+    Value arg = i32_val(dim);
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
@@ -785,9 +755,10 @@ struct TritonGENBarrierLowering
   matchAndRewrite(TritonGEN::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = rewriter.getContext();
-    auto retType = LLVM::LLVMVoidType::get(ctx);
-    auto argType = rewriter.getIntegerType(32);
-    auto arg = LLVM::createConstantI32(op->getLoc(), rewriter, MemFence::Local);
+    Location loc = op->getLoc();
+    Type retType = void_ty(ctx);
+    IntegerType argType = int_ty(32);
+    Value arg = i32_val(MemFence::Local);
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::Convergent, std::nullopt}}, ctx);
@@ -809,12 +780,10 @@ protected:
         "Unexpected OpType");
 
     MLIRContext *ctx = rewriter.getContext();
-    auto retType = LLVM::LLVMVoidType::get(ctx);
     Location loc = op->getLoc();
-    auto memFence = LLVM::createConstantI32(loc, rewriter,
-                                            static_cast<int>(op.getMemFence()));
-    auto memScope = LLVM::createConstantI32(loc, rewriter,
-                                            static_cast<int>(op.getMemScope()));
+    Type retType = void_ty(ctx);
+    Value memFence = i32_val(static_cast<int>(op.getMemFence()));
+    Value memScope = i32_val(static_cast<int>(op.getMemScope()));
     SmallVector<Value> args{memFence, memScope};
     SmallVector<Type> argTypes;
     for (auto arg : args)
@@ -1117,9 +1086,9 @@ struct TritonMatrixDPASLowering
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
 
-    FloatType fp32Ty = rewriter.getF32Type();
-    IntegerType int16Ty = rewriter.getIntegerType(16);
-    IntegerType int32Ty = rewriter.getIntegerType(32);
+    FloatType fp32Ty = f32_ty;
+    IntegerType int16Ty = int_ty(16);
+    IntegerType int32Ty = int_ty(32);
 
     TritonGEN::PrecisionType precisionA = op.getPa();
     Type packedAType = (precisionA == TritonGEN::PrecisionType::TF32)
