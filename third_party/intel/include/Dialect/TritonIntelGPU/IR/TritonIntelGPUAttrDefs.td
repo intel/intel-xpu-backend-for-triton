@@ -10,7 +10,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 //===----------------------------------------------------------------------===//
 
 def DpasEncodingAttr : DistributedEncoding<"DpasEncoding", "intel_dpas_encoding",
-                                          [MmaEncodingTrait], TritonIntelGPU_Dialect> {
+                                          [MmaEncodingTrait, LinearLayoutTrait], TritonIntelGPU_Dialect> {
   let mnemonic = "dpas";
 
   let description = [{
@@ -86,6 +86,7 @@ along the row (resp. col) dimension.
     SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const;
     SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape, std::optional<int32_t> elemBitWidth) const;
 
     bool supportReduction() const {
       return true;
