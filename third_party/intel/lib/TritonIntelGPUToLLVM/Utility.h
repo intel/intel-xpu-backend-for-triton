@@ -746,20 +746,6 @@ loadSharedToDistributed(RankedTensorType dstTy, MemDescType srcTy,
                         Location loc, RewriterBase &rewriter,
                         const TargetInfoBase &target) {
   SmallVector<Value> ret;
-  if (isa<DpasEncodingAttr>(dstTy.getEncoding())) {
-    if (emitTransferBetweenDPASAndShared(
-            dstTy, srcTy, elemTy, /*maxVecElems=*/std::nullopt,
-            shrMemObj.getBase(), shrMemObj.getStrides(), loc, rewriter, target,
-            [&](VectorType vecTy, Value vecAddr) {
-              auto vecVal = load(vecTy, vecAddr);
-              vecVal.setAlignment(vecTy.getNumElements() *
-                                  elemTy.getIntOrFloatBitWidth() / 8);
-              for (int v = 0; v < vecTy.getNumElements(); v++) {
-                ret.push_back(extract_element(elemTy, vecVal, i32_val(v)));
-              }
-            }))
-      return ret;
-  }
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, memObj.getBase(),
       memObj.getStrides(), loc, rewriter, target,
