@@ -284,11 +284,11 @@ class XPUBackend(BaseBackend):
 
         if options.cache_native_code:
             # hack the driver right now to just initialize things
-            from triton.backends.intel.driver import XPUDriver
-            driver = XPUDriver()
-            utils = driver.utils
-            sycl_device = utils.get_sycl_device_handle( utils.get_current_device())
-            return intel.compile_native_binary(metadata["name"], metadata["build_flags"], metadata["shared"], sycl_device, ret)
+            #from triton.backends.intel.driver import XPUDriver
+            #driver = XPUDriver()
+            #utils = driver.utils
+            #sycl_device = utils.get_sycl_device_handle( utils.get_current_device())
+            return intel.compile_native_binary(metadata["name"], metadata["build_flags"], metadata["shared"], 0, ret)
             
         return ret
 

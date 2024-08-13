@@ -22,6 +22,21 @@ typedef struct l0_resc_handles {
 
 using SyclQueueMap = std::unordered_map<sycl::queue, l0_resc_handles>;
 
+// Create an exception handler for asynchronous SYCL exceptions
+auto exception_handler = [](sycl::exception_list e_list) {
+  for (std::exception_ptr const &e : e_list) {
+    try {
+      std::rethrow_exception(e);
+    } catch (std::exception const &e) {
+#if _DEBUG
+      std::cout << "Failure" << std::endl;
+#endif
+      std::terminate();
+    }
+  }
+};
+
+
 inline std::string parseZeResultCode(const ze_result_t code) {
   const std::string prefix = "Triton Error [ZE]: ";
   std::stringstream ss;
