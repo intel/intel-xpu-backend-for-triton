@@ -212,6 +212,7 @@ jobs:
       - name: Run flash attention benchmarks
         run: |
           cd python/tutorials
+          git checkout llvm-target ../../scripts/build_report.py
           bash run_all.sh
           # This will fix csv file issues, fixing ", "->"," and " " -> "," that exist in raw output
           cp summary.csv $REPORTS/attention-summary.csv
