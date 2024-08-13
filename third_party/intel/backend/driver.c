@@ -143,8 +143,10 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
                                               binary_size, build_flags,
                                               /*is_spv=*/false));
   });
-  std::cout << "Module creation time: " << create_module_ms << " ms"
-            << std::endl;
+  if (create_module_ms > 0) {
+    std::cout << "Module creation time: " << create_module_ms << " ms"
+              << std::endl;
+  }
 
   auto checkL0Errors = [&](auto l0_module) -> ze_kernel_handle_t {
     if (PyErr_Occurred()) {
@@ -155,8 +157,10 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     auto create_function_ms = measure<>::execution([&]() {
       l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
     });
-    std::cout << "Function creation time: " << create_function_ms << " ms"
-              << std::endl;
+    if (create_function_ms > 0) {
+      std::cout << "Function creation time: " << create_function_ms << " ms"
+                << std::endl;
+    }
     if (PyErr_Occurred()) {
       // check for errors from kernel creation
       return NULL;
