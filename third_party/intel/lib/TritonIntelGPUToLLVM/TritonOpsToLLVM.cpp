@@ -150,7 +150,11 @@ public:
       vBlks = ceil(blockWidth, blockWidthUnit);
       blockWidth = blockWidthUnit;
     }
-    assert((vBlks == 1 || vBlks == 2) && "only support 1 or 2 blocks");
+    bool isLocalSpace = (ptrType.getAddressSpace() ==
+                         TritonGEN::TritonGENMemorySpace::kWorkgroup);
+
+    assert(isLocalSpace ||
+           (vBlks == 1 || vBlks == 2) && "only support 1 or 2 blocks");
 
     Value ptr = op.getPtr();
     if (auto cast =
@@ -167,8 +171,7 @@ public:
 
     OpBuilder::InsertPoint insertPoint = rewriter.saveInsertionPoint();
     rewriter.setInsertionPointAfter(ptrOp);
-    if (ptrType.getAddressSpace() ==
-        TritonGEN::TritonGENMemorySpace::kWorkgroup)
+    if (isLocalSpace)
       return rewriteLocalSpace(op, base, insertPoint, adaptor, rewriter);
 
     Location loc = op.getLoc();
@@ -259,6 +262,10 @@ private:
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op.getLoc();
     Value llPtr = adaptor.getPtr();
+    if (auto cast =
+            dyn_cast<mlir::UnrealizedConversionCastOp>(llPtr.getDefiningOp()))
+      llPtr = cast.getInputs()[0];
+
     // sg_size(16) x i64 = 64 x i16
     VectorType v64i16Ty = VectorType::get(64, i16_ty);
     LLVM::LLVMPointerType ptrToSharedMemTy =
@@ -286,12 +293,17 @@ private:
     if constexpr (std::is_same_v<OpType, StoreOp>) {
       rewriter.restoreInsertionPoint(insertPoint);
       Value val = adaptor.getValue();
-
-      Value res = cast<LLVM::ShuffleVectorOp>(val.getDefiningOp()).getRes();
-      res = bitcast(res, v64i16Ty);
+      if (auto shuffleOp =
+              dyn_cast_or_null<LLVM::ShuffleVectorOp>(val.getDefiningOp()))
+        val = shuffleOp.getRes();
+      if (isa<LLVM::LLVMStructType>(val.getType())) {
+        SmallVector<Value> unpackedVal = unpackLLElements(loc, val, rewriter);
+        val = packLLVector(loc, unpackedVal, rewriter);
+      }
+      val = bitcast(val, v64i16Ty);
 
       TritonGEN::SIMDBlockWriteOp simdWrite =
-          rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, base, res);
+          rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, base, val);
 
       rewriter.eraseOp(op);
       return success();
