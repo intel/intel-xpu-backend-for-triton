@@ -200,29 +200,6 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  // OCL builtins with 32-bit element size and tile width of 8 are lowered
-  // incorrectly. For example, intel_sub_group_2d_block_read_32b_8r8x1c is
-  // expected to be lowered to llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is
-  // incorrectly lowered to llvm.genx.GenISA.LSC2DBlockRead.v8i32.
-  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 8)
-    return false;
-
-  // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
-  // intel_sub_group_2d_block_read_32b_16r16x1c.
-  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 16 &&
-      op.getVBlocks() == 1)
-    return false;
-
-  // Missing intel_sub_group_2d_block_read_8b_16r32x1c and
-  // intel_sub_group_2d_block_read_8b_32r32x1c.
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() > 8 &&
-      op.getTileWidth() == 32 && op.getVBlocks() == 1)
-    return false;
-
-  return true;
-}
-
 static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                                      ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
