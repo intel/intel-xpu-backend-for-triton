@@ -1,3 +1,5 @@
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -6,8 +8,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
-
 #include <stack>
 
 using namespace mlir;
@@ -74,6 +76,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
   Type eltType = tensorType.getElementType();
   if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FNUZ())
     return true;
+
   TypedValue<triton::PointerType> base = op.getBase();
   Operation::operand_range shape = op.getShape();
   Operation::operand_range strides = op.getStrides();
@@ -85,8 +88,9 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
   // HW 2D block read instruction has restriction on pitch divisibility
   if (strides.size() == 2) {
     auto pitch = strides[0];
-    // PVC requires pitch to be a multiple of QWord(64 bits).
-    if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
+    // Across Intel platforms, the strictest pitch restriction is to be a
+    // multiple of OWord(128 bits).
+    if (!isDivisible(pitch, 128 / tensorType.getElementTypeBitWidth()))
       return true;
   }
 
@@ -333,11 +337,10 @@ public:
       TritonIntelGPURewriteTensorPointerBase;
 
   static bool needRewrite(Operation *op, const DenseSet<Value> &valueToRemove) {
-    return std::any_of(op->getOperands().begin(), op->getOperands().end(),
-                       [&valueToRemove](Value operand) {
-                         return tt::isTensorPointerType(operand.getType()) &&
-                                valueToRemove.count(operand);
-                       });
+    return llvm::any_of(op->getOperands(), [&valueToRemove](Value operand) {
+      return tt::isTensorPointerType(operand.getType()) &&
+             valueToRemove.count(operand);
+    });
   }
 
   static SmallVector<Value>
@@ -354,8 +357,8 @@ public:
     return newOperands;
   }
 
-  Operation *rewriteMakeTensorPtrOp(OpBuilder &builder, tt::MakeTensorPtrOp op,
-                                    std::stack<Operation *> &eraser) {
+  Operation *rewriteOp(OpBuilder &builder, tt::MakeTensorPtrOp op,
+                       std::stack<Operation *> &eraser) {
     if (!valueToRemove.count(op.getResult()))
       return nullptr;
 
@@ -381,8 +384,8 @@ public:
     return nullptr;
   }
 
-  Operation *rewriteAdvanceOp(OpBuilder &builder, tt::AdvanceOp op,
-                              std::stack<Operation *> &eraser) {
+  Operation *rewriteOp(OpBuilder &builder, tt::AdvanceOp op,
+                       std::stack<Operation *> &eraser) {
     if (!valueToRemove.count(op.getResult()))
       return nullptr;
 
@@ -412,67 +415,68 @@ public:
     return nullptr;
   }
 
-  Operation *rewriteLoadStoreOp(OpBuilder &builder, Operation *op,
-                                std::stack<Operation *> &eraser) {
-    assert(isa<tt::LoadOp>(op) ||
-           isa<tt::StoreOp>(op) && "Expecting LoadOp or StoreOp");
+  Operation *rewriteOp(OpBuilder &builder, tt::LoadOp op,
+                       std::stack<Operation *> &eraser) {
     if (!valueToRemove.count(op->getOperand(0)))
       return nullptr;
 
     // Get info from previous results
     auto ptr = op->getOperand(0);
-    assert(rewritedInfo.count(ptr) &&
-           "Expecting LoadOp/StoreOp ptr in rewritedInfo");
+    assert(rewritedInfo.count(ptr) && "Expecting LoadOp ptr in rewritedInfo");
     auto info = rewritedInfo[ptr];
 
-    // Load/store with tensor pointers implicitly will check the bound while
-    // accessing memory, so we should set `mask` and `other` (according to the
-    // padding). Also note that load with tensor pointers do not have `mask` and
-    // `other` while building IR from Python AST
-    std::optional<ArrayRef<int>> boundaryCheck;
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      assert(!loadOp.getMask() && !loadOp.getOther() &&
-             "LoadOp with tensor pointer should not have mask and other");
-      boundaryCheck = loadOp.getBoundaryCheck();
-      if (auto valueType =
-              dyn_cast<RankedTensorType>(loadOp.getResult().getType()))
-        info.setEncoding(valueType.getEncoding());
-    } else {
-      auto storeOp = cast<tt::StoreOp>(op);
-      assert(!storeOp.getMask() &&
-             "StoreOp with tensor pointer should not have mask");
-      boundaryCheck = storeOp.getBoundaryCheck();
-      if (auto valueType =
-              dyn_cast<RankedTensorType>(storeOp.getValue().getType()))
-        info.setEncoding(valueType.getEncoding());
-    }
+    assert(!op.getMask() && !op.getOther() &&
+           "LoadOp with tensor pointer should not have mask and other");
+    std::optional<ArrayRef<int>> boundaryCheck = op.getBoundaryCheck();
+    if (auto valueType = dyn_cast<RankedTensorType>(op.getResult().getType()))
+      info.setEncoding(valueType.getEncoding());
 
     // Generate new `ptr`, `mask` and `other`
     auto newPtr = info.generatePtr(builder, op->getLoc());
     auto newMask = info.generateMask(builder, op->getLoc(), boundaryCheck);
-    Value newOther;
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
-      newOther = info.generateOther(builder, op->getLoc(), loadOp.getPadding());
+    Value newOther = info.generateOther(builder, op->getLoc(), op.getPadding());
 
     // Create a new operation
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      auto newResult = builder.create<tt::LoadOp>(
-          loadOp.getLoc(), newPtr, newMask, newOther, loadOp.getCache(),
-          loadOp.getEvict(), loadOp.getIsVolatile());
-      op->getResult(0).replaceAllUsesWith(newResult);
-    } else if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
-      builder.create<tt::StoreOp>(storeOp.getLoc(), newPtr, storeOp.getValue(),
-                                  newMask, storeOp.getCache(),
-                                  storeOp.getEvict());
-    }
+    auto newResult = builder.create<tt::LoadOp>(
+        op.getLoc(), newPtr, newMask, newOther, op.getCache(), op.getEvict(),
+        op.getIsVolatile());
+    op->getResult(0).replaceAllUsesWith(newResult);
 
     // Erase the original operation
     eraser.push(op);
     return nullptr;
   }
 
-  Operation *rewriteIfOp(OpBuilder &builder, scf::IfOp op,
-                         std::stack<Operation *> &eraser) {
+  Operation *rewriteOp(OpBuilder &builder, tt::StoreOp op,
+                       std::stack<Operation *> &eraser) {
+    if (!valueToRemove.count(op->getOperand(0)))
+      return nullptr;
+
+    // Get info from previous results
+    auto ptr = op->getOperand(0);
+    assert(rewritedInfo.count(ptr) && "Expecting StoreOp ptr in rewritedInfo");
+    auto info = rewritedInfo[ptr];
+
+    assert(!op.getMask() && "StoreOp with tensor pointer should not have mask");
+    std::optional<ArrayRef<int>> boundaryCheck = op.getBoundaryCheck();
+    if (auto valueType = dyn_cast<RankedTensorType>(op.getValue().getType()))
+      info.setEncoding(valueType.getEncoding());
+
+    // Generate new `ptr`, `mask` and `other`
+    auto newPtr = info.generatePtr(builder, op->getLoc());
+    auto newMask = info.generateMask(builder, op->getLoc(), boundaryCheck);
+
+    // Create a new operation
+    builder.create<tt::StoreOp>(op.getLoc(), newPtr, op.getValue(), newMask,
+                                op.getCache(), op.getEvict());
+
+    // Erase the original operation
+    eraser.push(op);
+    return nullptr;
+  }
+
+  Operation *rewriteOp(OpBuilder &builder, scf::IfOp op,
+                       std::stack<Operation *> &eraser) {
     auto thenYieldOp = op.thenYield();
     assert(op.getNumResults() == thenYieldOp.getNumOperands() &&
            "Expecting IfOp results and its thenYieldOp operands have the same "
@@ -548,8 +552,8 @@ public:
     return newOp;
   }
 
-  Operation *rewriteForOp(OpBuilder &builder, scf::ForOp op,
-                          std::stack<Operation *> &eraser) {
+  Operation *rewriteOp(OpBuilder &builder, scf::ForOp op,
+                       std::stack<Operation *> &eraser) {
     // Generate new iteration operands and set rewrited information
     SmallVector<Value> oldIterOperands = llvm::to_vector(op.getInitArgs());
     SmallVector<Value> newIterOperands = llvm::to_vector(op.getInitArgs());
@@ -640,8 +644,8 @@ public:
     return newForOp;
   }
 
-  Operation *rewriteYieldOp(OpBuilder &builder, scf::YieldOp op,
-                            std::stack<Operation *> &eraser) {
+  Operation *rewriteOp(OpBuilder &builder, scf::YieldOp op,
+                       std::stack<Operation *> &eraser) {
     // Replace tensor pointers with offsets
     SmallVector<Value> newOperands = op->getOperands();
     for (unsigned i = 0, size = op.getNumOperands(); i < size; ++i) {
@@ -666,37 +670,30 @@ public:
   Operation *rewriteOp(Operation *op, std::stack<Operation *> &eraser) {
     OpBuilder builder(op);
 
-    // Rewrite `make_tensor_ptr` and `advance` and make a tensor of pointers
-    // Rewriting functions return the next operation to visit, if there is no
-    // next one, simply return `nullptr`
-    if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
-      return rewriteMakeTensorPtrOp(builder, makeTensorPtrOp, eraser);
-    } else if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op)) {
-      return rewriteAdvanceOp(builder, advanceOp, eraser);
-    } else if (isa<tt::LoadOp>(op) || isa<tt::StoreOp>(op)) {
-      return rewriteLoadStoreOp(builder, op, eraser);
-    } else if (op->getDialect()->getNamespace() == "scf" ||
-               op->getDialect()->getNamespace() == "cf") {
-      if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-        return rewriteIfOp(builder, ifOp, eraser);
-      }
-      if (!needRewrite(op, valueToRemove))
-        return op;
+    // Rewrite `make_tensor_ptr`, `advance`, etc...
+    // Rewriting functions return the next operation to visit, or `nullptr` if
+    // there isn't one.
+    return TypeSwitch<Operation *, Operation *>(op)
+        .Case<tt::MakeTensorPtrOp, tt::AdvanceOp, tt::LoadOp, tt::StoreOp,
+              scf::IfOp>(
+            [&](auto op) { return rewriteOp(builder, op, eraser); })
+        .Case<scf::ForOp, scf::YieldOp>([&](auto op) {
+          return needRewrite(op, valueToRemove) ? rewriteOp(builder, op, eraser)
+                                                : op;
+        })
+        .Default([&](Operation *op) {
+          StringRef opNamespace = op->getDialect()->getNamespace();
+          if ((opNamespace == scf::SCFDialect::getDialectNamespace() ||
+               opNamespace == cf::ControlFlowDialect::getDialectNamespace()) &&
+              needRewrite(op, valueToRemove))
+            llvm_unreachable(
+                "Currently we only support tensor pointer usages "
+                "inside a `scf::ForOp` or `scf::IfOp`, others such as "
+                "`scf::WhileOp`, `cf::BranchOp` or `cf::CondBranchOp` "
+                "are not supported yet");
 
-      if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        return rewriteForOp(builder, forOp, eraser);
-      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
-        return rewriteYieldOp(builder, yieldOp, eraser);
-      } else {
-        llvm_unreachable("Currently we only support tensor pointer usages "
-                         "inside a `scf::ForOp` or `scf::IfOp`, others such as "
-                         "`scf::WhileOp`, `cf::BranchOp` or `cf::CondBranchOp` "
-                         "are not supported yet");
-      }
-    }
-
-    // Otherwise return the original one
-    return op;
+          return op;
+        });
   }
 
   void visitOperation(Operation *op, std::stack<Operation *> &eraser) {
@@ -762,16 +759,16 @@ public:
     });
 
     // NOTES(Chenggang): we don't use `ConversionPatternRewriter`, because
-    // MLIR does not support one-multiple value mapping. For example, if we use
-    // `ConversionPatternRewriter`, we can not make a type converter, which
-    // converts `ptr<tensor>` into multiple types `ptr<>, int64, int64, ...`
-    // (containing the base/offsets/strides...). What we can do is to convert
-    // `ptr<tensor>` into a single type `Tuple<ptr<>, int64, int64, ...>`. But
-    // in this way, we also have to define `PackTuple` and `UnpackTuple`
-    // operations and make a canonicalization pass to optimize, which is much
-    // So here we recursively build the IR, to be specific, we have to rewrite
-    // `tt.make_tensor_ptr`, `tt.advance`, `tt.load`, `tt.store`,
-    // `scf.for` (tensor pointer usages may be in a loop fashion)
+    // MLIR does not support one-multiple value mapping. For example, if we
+    // use `ConversionPatternRewriter`, we can not make a type converter,
+    // which converts `ptr<tensor>` into multiple types `ptr<>, int64, int64,
+    // ...` (containing the base/offsets/strides...). What we can do is to
+    // convert `ptr<tensor>` into a single type `Tuple<ptr<>, int64, int64,
+    // ...>`. But in this way, we also have to define `PackTuple` and
+    // `UnpackTuple` operations and make a canonicalization pass to optimize,
+    // which is much So here we recursively build the IR, to be specific, we
+    // have to rewrite `tt.make_tensor_ptr`, `tt.advance`, `tt.load`,
+    // `tt.store`, `scf.for` (tensor pointer usages may be in a loop fashion)
     std::stack<Operation *> eraser;
     visitOperation(getOperation(), eraser);
 

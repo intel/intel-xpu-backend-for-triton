@@ -200,29 +200,6 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  // OCL builtins with 32-bit element size and tile width of 8 are lowered
-  // incorrectly. For example, intel_sub_group_2d_block_read_32b_8r8x1c is
-  // expected to be lowered to llvm.genx.GenISA.LSC2DBlockRead.v4i32, but it is
-  // incorrectly lowered to llvm.genx.GenISA.LSC2DBlockRead.v8i32.
-  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 8)
-    return false;
-
-  // Missing intel_sub_group_2d_block_read_32b_8r16x1c and
-  // intel_sub_group_2d_block_read_32b_16r16x1c.
-  if (op.getElemSizeInBits() == 32 && op.getTileWidth() == 16 &&
-      op.getVBlocks() == 1)
-    return false;
-
-  // Missing intel_sub_group_2d_block_read_8b_16r32x1c and
-  // intel_sub_group_2d_block_read_8b_32r32x1c.
-  if (op.getElemSizeInBits() == 8 && op.getTileHeight() > 8 &&
-      op.getTileWidth() == 32 && op.getVBlocks() == 1)
-    return false;
-
-  return true;
-}
-
 static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                                      ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
@@ -957,9 +934,7 @@ struct TritonSubGroupReduceLowering
     SmallVector<Value> args{val};
     bool useCluster = (getSubgroupSize(op) != op.getSize());
 
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    const bool useGenISA = env ? (bool)std::atoi(env) : false;
-    if (useGenISA && !useCluster) {
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA") && !useCluster) {
       Value result = createGenISASubGroupReduce(op, val, rewriter).getResult();
       result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
       rewriter.replaceOp(op, result);
@@ -1194,9 +1169,7 @@ struct TritonMatrix2DBlockLoadLowering
     }
 
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    const bool useGenISA = env ? (bool)std::atoi(env) : false;
-    if (useGenISA) {
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
     }
@@ -1263,9 +1236,7 @@ struct TritonMatrix2DBlockStoreLowering
   matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    const bool useGenISA = env ? (bool)std::atoi(env) : false;
-    if (useGenISA) {
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
       rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
       return success();
     }
@@ -1334,8 +1305,7 @@ struct TritonMatrix2DBlockPrefetchLowering
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    char *env = std::getenv("TRITONGEN_FORCE_GENISA");
-    bool useGenISA = env ? (bool)std::atoi(env) : false;
+    bool useGenISA = tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
     if (tools::getBoolEnv("TRITON_INTEL_ENABLE_FAST_PREFETCH") &&
         ((op.getElemSizeInBits() == 8 && op.getTileWidth() == 64) ||
          (op.getElemSizeInBits() == 16 && op.getTileWidth() == 32)))
