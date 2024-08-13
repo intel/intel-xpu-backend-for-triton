@@ -392,11 +392,9 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     assert(isa<LLVM::LLVMPointerType>(ptr.getType()) &&
            "Expecting a pointer type");
 
-    llvm::LLVMContext llvmContext;
-    LLVM::TypeToLLVMIRTranslator typeTranslator(llvmContext);
-    assert(isa<VectorType>(resType) && "Expecting a vector type");
-    auto vecType = cast<VectorType>(resType);
-    assert(vecType.getShape().size() == 1 && "Expecting a 1D vector");
+    auto vecType = dyn_cast<VectorType>(resType);
+    assert(vecType && vecType.getShape().size() == 1 &&
+           "Expecting a 1D vector");
 
     std::string fnName = "llvm.genx.GenISA.LSC2DBlockReadAddrPayload." +
                          getGenISATypeMangling(vecType) + ".p0i8";
@@ -404,19 +402,16 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     Value zero = i32_val(0);
     SmallVector<Type> argTypes{ptr.getType(), i32_ty, i32_ty, i32_ty, i32_ty,
                                i32_ty,        i32_ty, i1_ty,  i1_ty,  i32_ty};
-
-    Value x = zero, y = zero;
-    Value elemSize = i32_val(op.getElemSizeInBits());
-    Value tileWidth = i32_val(op.getTileWidth());
-    Value tileHeight = i32_val(op.getTileHeight());
-    Value vBlocks = i32_val(op.getVBlocks());
-    Value useTranspose = i1_val(op.getTranspose());
-    Value vnniTransform = i1_val(op.getVnniTransform());
-    Value cache = i32_val(4);
-
-    SmallVector<Value> args{ptr,           x,          y,       elemSize,
-                            tileWidth,     tileHeight, vBlocks, useTranspose,
-                            vnniTransform, cache};
+    SmallVector<Value> args{ptr,
+                            zero, // x
+                            zero, // y
+                            i32_val(op.getElemSizeInBits()),
+                            i32_val(op.getTileWidth()),
+                            i32_val(op.getTileHeight()),
+                            i32_val(op.getVBlocks()),
+                            i1_val(op.getTranspose()),
+                            i1_val(op.getVnniTransform()),
+                            i32_val(4) /*cache*/};
 
     // Function and parameters attributes.
     intel::AttributeList attrs = createFunctionAttributes(
