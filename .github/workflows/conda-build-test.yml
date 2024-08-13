@@ -17,9 +17,9 @@ jobs:
   integration-tests:
     name: Integration tests
     runs-on:
-      - glados
-      - spr
-      - runner-0.0.18
+      - max1100
+      - rolling
+      - runner-0.0.19
     strategy:
       matrix:
         python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
