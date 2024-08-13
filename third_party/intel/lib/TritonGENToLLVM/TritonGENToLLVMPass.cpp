@@ -364,9 +364,54 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
                                     attrs);
   };
 
+  auto createBlock2DReadGenISA = [&](Value ptr,
+                                     TritonGEN::Matrix2DBlockLoadOp op) {
+    assert(isa<LLVM::LLVMPointerType>(ptr.getType()) &&
+           "Expecting a pointer type");
+
+    auto vecType = dyn_cast<VectorType>(resType);
+    assert(vecType && vecType.getShape().size() == 1 &&
+           "Expecting a 1D vector");
+
+    std::string fnName = "llvm.genx.GenISA.LSC2DBlockReadAddrPayload." +
+                         getGenISATypeMangling(vecType) + ".p0i8";
+
+    Value zero = i32_val(0);
+    SmallVector<Type> argTypes{ptr.getType(), i32_ty, i32_ty, i32_ty, i32_ty,
+                               i32_ty,        i32_ty, i1_ty,  i1_ty,  i32_ty};
+    SmallVector<Value> args{ptr,
+                            zero, // x
+                            zero, // y
+                            i32_val(op.getElemSizeInBits()),
+                            i32_val(op.getTileWidth()),
+                            i32_val(op.getTileHeight()),
+                            i32_val(op.getVBlocks()),
+                            i1_val(op.getTranspose()),
+                            i1_val(op.getVnniTransform()),
+                            i32_val(4) /*cache*/};
+
+    // Function and parameters attributes.
+    intel::AttributeList attrs = createFunctionAttributes(
+        {{llvm::Attribute::NoUnwind, std::nullopt},
+         {llvm::Attribute::Memory,
+          llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
+        ctx);
+    SmallVector<NamedAttrList> paramAttrs(argTypes.size());
+    paramAttrs[0] = createParameterAttributes({llvm::Attribute::NonNull}, ctx);
+    attrs.addParamAttributes(paramAttrs);
+
+    return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
+                                    attrs);
+  };
+
   Value ptr = createBlock2DAddressPayload(op);
   setBlock2DAddressPayload(ptr, op);
-  return createBlock2DRead(ptr, op);
+
+  // TODO: Remove GenISA lowering after PoC productization is completed.
+  char *env = std::getenv("TRITONGEN_FORCE_GENISA");
+  const bool useGenISA = env ? (bool)std::atoi(env) : false;
+  return (useGenISA) ? createBlock2DReadGenISA(ptr, op)
+                     : createBlock2DRead(ptr, op);
 }
 
 static SmallVector<Attribute>
