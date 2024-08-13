@@ -338,7 +338,7 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
     if (tileWidth != 16)
       return emitOpError(
           "tile_width when vnni_transform is true should be equal "
-          "to DPAS execution size (16 elements)");
+          "to subgroup size (16 elements)");
     return success();
   }
 
