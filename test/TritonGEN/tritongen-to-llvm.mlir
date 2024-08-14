@@ -61,9 +61,12 @@ llvm.func @gen_special_regs() -> i32 {
 
 llvm.func @triton_gen.barrier() {
   // CHECK-LABEL: triton_gen.barrier
-  // CHECK: [[CST:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z7barrierj([[CST]]) {{.*}} : (i32) -> ()
-  triton_gen.barrier
+  // CHECK: [[LOCAL:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z7barrierj([[LOCAL]]) {{.*}} : (i32) -> ()
+  // CHECK: [[GLOBAL:%.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z7barrierj([[GLOBAL]]) {{.*}} : (i32) -> ()
+  triton_gen.barrier {mem_fence=Local}
+  triton_gen.barrier {mem_fence=Global}
   llvm.return
 }
 

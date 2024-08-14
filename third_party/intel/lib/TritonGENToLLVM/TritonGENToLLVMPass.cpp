@@ -776,18 +776,14 @@ struct TritonGENBarrierLowering
     : public ConvertOpToLLVMPattern<TritonGEN::BarrierOp> {
   using ConvertOpToLLVMPattern<TritonGEN::BarrierOp>::ConvertOpToLLVMPattern;
 
-  enum MemFence {
-    Local = 0x01,
-    Global = 0x02,
-  };
-
   LogicalResult
   matchAndRewrite(TritonGEN::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = rewriter.getContext();
-    auto retType = LLVM::LLVMVoidType::get(ctx);
-    auto argType = rewriter.getIntegerType(32);
-    auto arg = LLVM::createConstantI32(op->getLoc(), rewriter, MemFence::Local);
+    Location loc = op->getLoc();
+    Type retType = void_ty(ctx);
+    IntegerType argType = int_ty(32);
+    Value arg = i32_val(static_cast<int>(op.getMemFence()));
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::Convergent, std::nullopt}}, ctx);

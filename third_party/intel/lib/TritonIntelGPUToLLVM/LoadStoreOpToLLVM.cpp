@@ -1201,7 +1201,8 @@ struct AtomicRMWOpConversion
                                  rmwPtr, rmwVal, rmwMask, {zero});
       } else {
         if (!atomicNeedsSharedMemory(op.getResult()))
-          createBarrier(rewriter, loc, numCTAs);
+          rewriter.create<TritonGEN::BarrierOp>(loc,
+                                                TritonGEN::MemFence::GLOBAL);
         endBlock = &LLVM::intel::createPredicatedBlock(
             rewriter, loc, rmwMask, {zero}, [&] {
               mlir::LLVM::AtomicBinOp rmwKind;

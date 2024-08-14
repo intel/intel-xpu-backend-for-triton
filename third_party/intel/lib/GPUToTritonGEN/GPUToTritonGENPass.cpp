@@ -58,6 +58,19 @@ namespace {
 /// Import the GPU Ops to TritonGEN Patterns.
 #include "GPUToTritonGEN.cpp.inc"
 
+struct GPUBarrierOpLowering
+    : public ConvertOpToLLVMPattern<mlir::gpu::BarrierOp> {
+  using ConvertOpToLLVMPattern<mlir::gpu::BarrierOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(mlir::gpu::BarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<TritonGEN::BarrierOp>(
+        op, TritonGEN::MemFence::LOCAL);
+    return success();
+  }
+};
+
 struct GPUSubgroupReduceOpLowering
     : public ConvertOpToLLVMPattern<mlir::gpu::SubgroupReduceOp> {
   using ConvertOpToLLVMPattern<
@@ -198,7 +211,7 @@ static void populateOpPatterns(LLVMTypeConverter &converter,
 void mlir::triton::populateGPUToTritonGENConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
   populateWithGenerated(patterns);
-  patterns.add<GPUSubgroupReduceOpLowering>(converter);
+  patterns.add<GPUBarrierOpLowering, GPUSubgroupReduceOpLowering>(converter);
   patterns.add<
       GPUIndexIntrinsicOpLowering<mlir::gpu::ThreadIdOp, TritonGEN::ThreadIdXOp,
                                   TritonGEN::ThreadIdYOp,
