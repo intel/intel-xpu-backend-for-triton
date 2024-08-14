@@ -1052,6 +1052,8 @@ struct AtomicCASOpConversion
              "Unexpected width");
 
       Value zero = (valueElemNBits == 32) ? i32_val(0) : i64_val(0);
+      if (!atomicNeedsSharedMemory(op.getResult()))
+        rewriter.create<TritonGEN::BarrierOp>(loc, TritonGEN::MemFence::GLOBAL);
       Block &endBlock =
           LLVM::intel::createPredicatedBlock(rewriter, loc, mask, {zero}, [&] {
             // casPtr = bitcast(casPtr, ptr_ty(ctx, 1));
