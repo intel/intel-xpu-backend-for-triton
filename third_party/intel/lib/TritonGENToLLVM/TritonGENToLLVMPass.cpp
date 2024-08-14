@@ -203,11 +203,12 @@ loadCacheControlToCacheControls(Builder &builder,
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   VectorType resTy = op.getRes().getType();
   unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
-  if (op.getElemSizeInBits() == 32 || op.getVnniTransform()) {
-    assert(resElemTySize == 32 && "Expecting 32-bit element type");
-  } else if (resElemTySize != 16) {
+  bool needsResElemSizeEqualTo32 =
+      op.getElemSizeInBits() == 32 || op.getVnniTransform();
+  assert((!needsResElemSizeEqualTo32 || resElemTySize == 32) &&
+         "Expecting 32-bit element type");
+  if (!needsResElemSizeEqualTo32 && resElemTySize != 16)
     return false;
-  }
 
   uint32_t tileWidth = op.getTileWidth();
   if (!op.getVnniTransform()) {
