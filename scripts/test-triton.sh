@@ -12,6 +12,7 @@ TEST_TUTORIAL=false
 TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARK_SOFTMAX=false
 TEST_BENCHMARK_GEMM=false
+TEST_BENCHMARK_ATTENTION=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
@@ -53,6 +54,10 @@ for arg in "$@"; do
       TEST_BENCHMARK_GEMM=true
       shift
       ;;
+    --attention)
+      TEST_BENCHMARK_ATTENTION=true
+      shift
+      ;;
     --venv)
       VENV=true
       shift
@@ -74,7 +79,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --venv | --reports | --warning-reports | --ignore-errors]"
+      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --reports | --warning-reports | --ignore-errors]"
       exit 1
       ;;
     *)
@@ -85,7 +90,7 @@ for arg in "$@"; do
 done
 
 # Only run interpreter test when $TEST_INTERPRETER is ture
-if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ]; then
+if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ]; then
   TEST_UNIT=true
   TEST_CORE=true
   TEST_TUTORIAL=true
@@ -267,15 +272,34 @@ run_benchmark_gemm() {
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
   IGC_DisableLoopUnroll=1 \
-  SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
   python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
 
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
   IGC_DisableLoopUnroll=1 \
-  SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
   python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
+}
+
+run_benchmark_attention() {
+  echo "****************************************************"
+  echo "*****            Running ATTENTION             *****"
+  echo "****************************************************"
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
+  if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
+    echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
+  fi
+  TRITON_INTEL_ADVANCED_PATH=1 \
+  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+  IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
+  IGC_DisableLoopUnroll=1 \
+  python ${BENCHMARK_TEST_DIR}/flash_attention_fwd_benchmark.py
+
+  TRITON_INTEL_ADVANCED_PATH=0 \
+  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+  IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
+  IGC_DisableLoopUnroll=1 \
+  python ${BENCHMARK_TEST_DIR}/flash_attention_fwd_benchmark.py
 }
 
 test_triton() {
@@ -300,6 +324,9 @@ test_triton() {
   fi
   if [ "$TEST_BENCHMARK_GEMM" = true ]; then
     run_benchmark_gemm
+  fi
+  if [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
+    run_benchmark_attention
   fi
 }
 

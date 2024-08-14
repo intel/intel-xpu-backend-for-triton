@@ -164,12 +164,6 @@ def forward(q, k, v, causal, sm_scale):
     causal = False
     stage = 3 if causal else 1
     grid = (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], BLOCK_M))
-    print("Q stride =", q.stride(0), q.stride(1), q.stride(2), q.stride(3))
-    print("K stride =", k.stride(0), k.stride(1), k.stride(2), k.stride(3))
-    print("V stride =", v.stride(0), v.stride(1), v.stride(2), v.stride(3))
-    print(q.shape[0], q.shape[1])
-    print("causal = ", causal)
-    print(stage)
     M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
     _attn_fwd[grid](
         q, k, v, sm_scale, M, o,  #
@@ -193,13 +187,14 @@ def forward(q, k, v, causal, sm_scale):
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD'],
-        x_vals=[[4, 48, 1024, 64]],
+        x_vals=[[4, 48, 1024, 64], [32, 32, 512, 64], [16, 32, 1024, 64], [8, 32, 2048, 64], [4, 32, 4096, 64],
+                [2, 32, 8192, 64], [1, 32, 16384, 64]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'xetla'],
+        line_vals=['xetla'],
         # label name for the lines
-        line_names=["Triton", "XeTLA"],
+        line_names=["XeTLA"],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=["GB/s", "TFlops"],  # label name for the y-axis
@@ -214,7 +209,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
     k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
     v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
     sm_scale = 0.125
-    quantiles = [0.5, 0.2, 0.8]
+    quantiles = [0.5, 0.0, 1.0]
     if provider == 'onednn':
         ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
             lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
@@ -222,11 +217,15 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
             quantiles=quantiles, fast_flush=False)
 
     if provider == 'triton':
-        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: forward(q, k, v, causal, sm_scale), warmup=10,
-                                                               rep=10, quantiles=quantiles, fast_flush=False)
+        triton_fn = lambda: forward(q, k, v, causal, sm_scale)
+        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=sm_scale).to(torch.float32)
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-3, rtol=1e-3, err_msg="triton to torch")
+        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                               fast_flush=False)
+
     if provider == 'xetla':
-        name = "flash_attn_shape_{}_{}_{}_{}".format(Z, H, N_CTX, D_HEAD)
-        func = getattr(xetla_kernel, name)
+        func = getattr(xetla_kernel, "flash_attn")
         xetla_fn = lambda: func(Z, H, D_HEAD, N_CTX, N_CTX)
         ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
                                                                fast_flush=False)
