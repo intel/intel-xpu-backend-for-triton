@@ -1369,6 +1369,52 @@ struct TritonMatrix2DBlockPrefetchLowering
   }
 };
 
+struct TritonSIMDBlockReadLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockReadOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SIMDBlockReadOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SIMDBlockReadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
+    VectorType vecTy = op.getRes().getType();
+
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    const StringLiteral funcName = "llvm.genx.GenISA.simdBlockRead";
+    intel::AttributeList attrs;
+    LLVM::CallOp call = createDeviceFunctionCall(rewriter, funcName, vecTy,
+                                                 {ptrTy}, {op.getPtr()}, attrs);
+
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
+struct TritonSIMDBlockWriteLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockWriteOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SIMDBlockWriteOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SIMDBlockWriteOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
+    VectorType vecTy = op.getVal().getType();
+
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    const StringLiteral funcName = "llvm.genx.GenISA.simdBlockWrite";
+    intel::AttributeList attrs;
+    LLVM::CallOp call = createDeviceFunctionCall(
+        rewriter, funcName, void_ty(ctx), {ptrTy, vecTy},
+        {op.getPtr(), op.getVal()}, attrs);
+
+    rewriter.replaceOp(op, call);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1439,7 +1485,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonSubGroupReduceLowering, TritonSubGroupScanLowering,
       TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
       TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
-      TritonMatrix2DBlockPrefetchLowering>(converter);
+      TritonMatrix2DBlockPrefetchLowering, TritonSIMDBlockReadLowering,
+      TritonSIMDBlockWriteLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
