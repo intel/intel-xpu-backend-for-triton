@@ -21,7 +21,6 @@
 #include <numpy/arrayobject.h>
 
 static SyclQueueMap g_sycl_queue_map;
-static ze_context_handle_t g_context = {nullptr};
 
 static std::vector<ze_device_handle_t> g_devices;
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
@@ -238,8 +237,8 @@ static PyObject *initContext(PyObject *self, PyObject *args) {
       }
     }
   }
-  g_context = g_sycl_queue_map[*sycl_queue].context;
-  return Py_BuildValue("(K)", (uint64_t)g_context);
+  auto context = g_sycl_queue_map[*sycl_queue].context;
+  return Py_BuildValue("(K)", (uint64_t)context);
 }
 
 static PyObject *initDevices(PyObject *self, PyObject *args) {
