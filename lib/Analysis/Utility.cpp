@@ -614,16 +614,6 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
 }
 
 bool atomicNeedsSharedMemory(Value value) {
-  // FIXME: Remove temporary workaround to avoid 05-layer-norm failure.
-  auto mod = value.getParentBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  if (mod->hasAttr(triton::AttrTargetName)) {
-    StringAttr targetAttr =
-        cast<StringAttr>(mod->getAttr(triton::AttrTargetName));
-    StringRef ref = targetAttr.strref();
-    if (ref.starts_with("xpu"))
-      return true;
-  }
-
   auto type = value.getType();
   if (isa<RankedTensorType>(type) || value.use_empty())
     return false;
