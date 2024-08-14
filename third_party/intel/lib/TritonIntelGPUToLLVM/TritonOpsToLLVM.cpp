@@ -24,7 +24,7 @@ namespace {
 
 VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
   // Determine a vector type of the given `elemType` that covers 1/16 of
-  // `tensorType`, i.e. the amout of data a single subgroup lane will work on.
+  // `tensorType`, i.e. the amount of data a single subgroup lane will work on.
   size_t tensorSize =
       tensorType.getNumElements() * tensorType.getElementTypeBitWidth();
   size_t num = (tensorSize / 16) / elemType.getIntOrFloatBitWidth();
@@ -150,7 +150,11 @@ public:
       vBlks = ceil(blockWidth, blockWidthUnit);
       blockWidth = blockWidthUnit;
     }
-    assert((vBlks == 1 || vBlks == 2) && "only support 1 or 2 blocks");
+    bool isLocalSpace = (ptrType.getAddressSpace() ==
+                         TritonGEN::TritonGENMemorySpace::kWorkgroup);
+
+    assert(isLocalSpace ||
+           (vBlks == 1 || vBlks == 2) && "only support 1 or 2 blocks");
 
     Value ptr = op.getPtr();
     if (auto cast =
@@ -167,6 +171,9 @@ public:
 
     OpBuilder::InsertPoint insertPoint = rewriter.saveInsertionPoint();
     rewriter.setInsertionPointAfter(ptrOp);
+    if (isLocalSpace)
+      return rewriteLocalSpace(op, base, insertPoint, adaptor, rewriter);
+
     Location loc = op.getLoc();
     bool transpose = ptrOp.getOrder()[0] == 0;
     Value bytes =
@@ -223,7 +230,7 @@ public:
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks, TritonGEN::LoadCacheControl::L1C_L3C);
-      VERIFY_OPERATION(newOp);
+      VERIFY_OPERATION(newOp)
 
       rewriter.eraseOp(op);
     } else {
@@ -234,12 +241,75 @@ public:
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks,
           bitcast(adaptor.getValue(), vectorType));
-      VERIFY_OPERATION(newOp);
+      VERIFY_OPERATION(newOp)
 
       rewriter.eraseOp(op);
     }
 
     return success();
+  }
+
+private:
+  LogicalResult rewriteLocalSpace(OpType op, Value base,
+                                  OpBuilder::InsertPoint insertPoint,
+                                  typename OpType::Adaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) const {
+    auto ptrType = cast<PointerType>(op.getPtr().getType());
+    assert(ptrType.getAddressSpace() ==
+               TritonGEN::TritonGENMemorySpace::kWorkgroup &&
+           "expecting local space");
+
+    MLIRContext *ctx = rewriter.getContext();
+    Location loc = op.getLoc();
+    Value llPtr = adaptor.getPtr();
+    if (auto cast =
+            dyn_cast<mlir::UnrealizedConversionCastOp>(llPtr.getDefiningOp()))
+      llPtr = cast.getInputs()[0];
+
+    // sg_size(16) x i64 = 64 x i16
+    VectorType v64i16Ty = VectorType::get(64, i16_ty);
+    LLVM::LLVMPointerType ptrToSharedMemTy =
+        ptr_ty(ctx, ptrType.getAddressSpace());
+    Value offsetX = extract_element(llPtr, i32_val(0));
+    Value offsetY = extract_element(llPtr, i32_val(1));
+
+    Value blkId = add(mul(udiv(offsetY, i32_val(8)), i32_val(4)),
+                      udiv(offsetX, i32_val(16)));
+    Value index = mul(blkId, i32_val(128));
+    base = gep(ptrToSharedMemTy, i16_ty, base, index);
+
+    if constexpr (std::is_same_v<OpType, LoadOp>) {
+      VectorType v64f16Ty = VectorType::get(64, f16_ty);
+
+      rewriter.restoreInsertionPoint(insertPoint);
+
+      TritonGEN::SIMDBlockReadOp simdRead =
+          rewriter.create<TritonGEN::SIMDBlockReadOp>(loc, v64i16Ty, base);
+      rewriter.replaceOp(op, simdRead.getRes());
+
+      return success();
+    }
+
+    if constexpr (std::is_same_v<OpType, StoreOp>) {
+      rewriter.restoreInsertionPoint(insertPoint);
+      Value val = adaptor.getValue();
+      if (auto shuffleOp =
+              dyn_cast_or_null<LLVM::ShuffleVectorOp>(val.getDefiningOp()))
+        val = shuffleOp.getRes();
+      if (isa<LLVM::LLVMStructType>(val.getType())) {
+        SmallVector<Value> unpackedVal = unpackLLElements(loc, val, rewriter);
+        val = packLLVector(loc, unpackedVal, rewriter);
+      }
+      val = bitcast(val, v64i16Ty);
+
+      TritonGEN::SIMDBlockWriteOp simdWrite =
+          rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, base, val);
+
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    return failure();
   }
 };
 

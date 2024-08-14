@@ -33,8 +33,8 @@ llvm.func @triton_gen_special_regs() -> i32 {
 
 llvm.func @triton_gen.barrier() {
   // CHECK-LABEL: triton_gen.barrier
-  // CHECK: triton_gen.barrier
-  triton_gen.barrier
+  // CHECK: triton_gen.barrier {mem_fence = Local}
+  triton_gen.barrier {mem_fence=Local}
   llvm.return
 }
 
@@ -206,5 +206,19 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base
   // CHECK:      llvm.func @triton_gen.2Dblockprefetch(%arg0: !llvm.ptr, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
   // CHECK-NEXT:    triton_gen.2Dblockprefetch %arg0, %arg1, %arg2, %arg3, %arg4, %arg5 {elem_size_in_bits = 32, tile_width = 8, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=8, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
+  llvm.return
+}
+
+llvm.func @triton_gen.simdblockread(%ptr : !llvm.ptr) {
+  // CHECK:      llvm.func @triton_gen.simdblockread(%arg0: !llvm.ptr) {
+  // CHECK-NEXT:   triton_gen.simdblockread %arg0 : (!llvm.ptr) -> vector<64xi16>
+  triton_gen.simdblockread %ptr : (!llvm.ptr) -> vector<64xi16>
+  llvm.return
+}
+
+llvm.func @triton_gen.simdblockwrite(%ptr : !llvm.ptr, %val : vector<64xi16>) {
+  // CHECK:      llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr, %arg1: vector<64xi16>) {
+  // CHECK-NEXT:    triton_gen.simdblockwrite %arg0, %arg1 : (!llvm.ptr, vector<64xi16>)
+  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr, vector<64xi16>)
   llvm.return
 }

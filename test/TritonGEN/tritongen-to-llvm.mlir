@@ -61,9 +61,12 @@ llvm.func @gen_special_regs() -> i32 {
 
 llvm.func @triton_gen.barrier() {
   // CHECK-LABEL: triton_gen.barrier
-  // CHECK: [[CST:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z7barrierj([[CST]]) {{.*}} : (i32) -> ()
-  triton_gen.barrier
+  // CHECK: [[LOCAL:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z7barrierj([[LOCAL]]) {{.*}} : (i32) -> ()
+  // CHECK: [[GLOBAL:%.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z7barrierj([[GLOBAL]]) {{.*}} : (i32) -> ()
+  triton_gen.barrier {mem_fence=Local}
+  triton_gen.barrier {mem_fence=Global}
   llvm.return
 }
 
@@ -375,5 +378,27 @@ llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b
   // CHECK-SAME:    : (vector<8xi16>, vector<8xi32>, vector<8xi16>) -> vector<8xi16>
   %0 = triton_gen.dpas %c, %a, %b {pa = bf16, pb = bf16, rc = 8} : (vector<8xbf16>, vector<8xi16>, vector<8xi32>) -> vector<8xbf16>
   // CHECK-NEXT: {{%.*}} = llvm.bitcast [[RES]] : vector<8xi16> to vector<8xbf16>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.simdBlockRead(!llvm.ptr<3>) -> vector<64xi16>
+
+llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
+  // CHECK:     llvm.func @triton_gen.simdblockread(%arg0: !llvm.ptr<3>) {
+  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.simdBlockRead(%arg0) {{.*}} : (!llvm.ptr<3>) -> vector<64xi16>
+  %ret = triton_gen.simdblockread %ptr : (!llvm.ptr<3>) -> vector<64xi16>
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.simdBlockWrite(!llvm.ptr<3>, vector<64xi16>)
+
+llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val : vector<64xi16>) {
+  // CHECK:     llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr<3>, %arg1: vector<64xi16>) {
+  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite(%arg0, %arg1) {{.*}} : (!llvm.ptr<3>, vector<64xi16>) -> ()
+  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr<3>, vector<64xi16>)
   llvm.return
 }
