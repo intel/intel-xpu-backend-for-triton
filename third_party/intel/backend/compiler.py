@@ -6,6 +6,8 @@ import functools
 from typing import Any, Tuple
 import hashlib
 import re
+import tempfile
+import signal
 import os
 import shutil
 import subprocess
@@ -283,12 +285,54 @@ class XPUBackend(BaseBackend):
             metadata["build_flags"] = ""
 
         if options.cache_native_code is True:
-            # hack the driver right now to just initialize things
-            #from triton.backends.intel.driver import XPUDriver
-            #driver = XPUDriver()
-            #utils = driver.utils
-            #sycl_device = utils.get_sycl_device_handle( utils.get_current_device())
-            return intel.compile_native_binary(metadata["name"], metadata["build_flags"], metadata["shared"], 0, ret)
+            #return intel.compile_native_binary(metadata["name"], metadata["build_flags"], metadata["shared"], 0, ret)
+            with tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.spv') as fsrc, \
+                tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
+                fsrc.write(ret)
+                fsrc.flush()
+                fbin = fsrc.name + '.o'
+
+                #line_info = [] if os.environ.get('TRITON_DISABLE_LINE_INFO') else ['-lineinfo']
+                #fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
+                #suffix = 'a' if capability == 90 else ''
+                #opt_level = ['--opt-level', '0'] if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1" else []
+                ocloc_cmd = [
+                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', 'pvc', '-options', f'{metadata["build_flags"]}'
+                ]
+
+                try:
+                    subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog, stderr=subprocess.STDOUT)
+                    if os.path.exists(fsrc.name):
+                        os.remove(fsrc.name)
+                    if os.path.exists(flog.name):
+                        with open(flog.name) as log_file:
+                            log = log_file.read().strip()
+                            if 'spilled' in log:
+                                # TODO: handle register spills - can we set the build flag for module load, or do we need to recompile? 
+                                print(log)
+                        os.remove(flog.name)
+                except subprocess.CalledProcessError as e:
+                    with open(flog.name) as log_file:
+                        log = log_file.read()
+                    if os.path.exists(flog.name):
+                        os.remove(flog.name)
+
+                    if e.returncode == 255:
+                        error = 'Internal Triton ZEBIN codegen error'
+                    elif e.returncode == 128 + signal.SIGSEGV:
+                        error = '`ocloc` raised SIGSEGV'
+                    else:
+                        error = f'`ocloc` failed with error code {e.returncode}'
+
+                    raise RuntimeError(f'{error}\n'
+                                    f'`ocloc` stderr:\n{log}\n'
+                                    f'Repro command: {ocloc_cmd}\n')
+
+                with open(fbin, 'rb') as f:
+                    zebin = f.read()
+                if os.path.exists(fbin):
+                    os.remove(fbin)
+            return zebin
 
         return ret
 
