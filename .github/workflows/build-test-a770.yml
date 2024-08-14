@@ -44,6 +44,10 @@ on:
 
 permissions: read-all
 
+env:
+  OverrideDefaultFP64Settings: 1
+  IGC_EnableDPEmulation: 1
+
 jobs:
   integration-tests:
     name: Integration tests matrix
