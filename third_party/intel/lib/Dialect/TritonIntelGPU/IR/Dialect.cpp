@@ -419,7 +419,7 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
 LinearLayout
 DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape,
                                  std::optional<int32_t> elemBitWidth) const {
-  return DPAStoLinearLayout(shape, *this, 2 /*opIdx*/);
+  return DPAStoLinearLayout(shape, *this);
 }
 
 //===----------------------------------------------------------------------===//

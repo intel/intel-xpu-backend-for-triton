@@ -808,9 +808,8 @@ def LinearLayoutTrait : AttrInterface<"LinearLayoutTrait"> {
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
                     "toLinearLayout",
-                    (ins
-                    "ArrayRef<int64_t>":$shape,
-                    "std::optional<int32_t>":$elemBitWidth)>
+                    (ins "ArrayRef<int64_t>":$shape,
+                         "std::optional<int32_t>":$elemBitWidth)>
   ];
 }
 

@@ -28,15 +28,15 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK:           %[[VAL_43:.*]] = llvm.select %[[VAL_42]], %[[CST_0]], %[[CST_8]] : i1, i32
     // CHECK:           %[[VAL_44:.*]] = llvm.xor %{{.*}}, %[[VAL_43]]  : i32
     // CHECK:           %[[OFFSET_X_0:.*]] = llvm.xor %[[VAL_44]], %[[CST_0]] : i32
-    // CHECK-DAG:           %[[OFFSET_Y_0:.*]] = llvm.xor %[[VAL_40]], %[[CST_0]] : i32
-    // CHECK-DAG:           %[[OFFSET_X_1:.*]] = llvm.xor %[[VAL_44]], %[[CST_2]] : i32
-    // CHECK-DAG:           %[[OFFSET_X_2:.*]] = llvm.xor %[[VAL_44]], %[[CST_4]] : i32
-    // CHECK-DAG:           %[[OFFSET_X_3:.*]] = llvm.xor %[[VAL_44]], %[[CST_6]] : i32
-    // CHECK-DAG:           %[[OFFSET_Y_1:.*]] = llvm.xor %[[VAL_40]], %[[CST_16]] : i32
-    // CHECK-DAG:           %[[OFFSET_X_4:.*]] = llvm.xor %[[VAL_44]], %[[CST_16]] : i32
-    // CHECK-DAG:           %[[OFFSET_X_5:.*]] = llvm.xor %[[VAL_44]], %[[CST_18]] : i32
-    // CHECK-DAG:           %[[OFFSET_X_6:.*]] = llvm.xor %[[VAL_44]], %[[CST_20]] : i32
-    // CHECK-DAG:           %[[OFFSET_X_7:.*]] = llvm.xor %[[VAL_44]], %[[CST_22]] : i32
+    // CHECK:           %[[OFFSET_Y_0:.*]] = llvm.xor %[[VAL_40]], %[[CST_0]] : i32
+    // CHECK:           %[[OFFSET_X_1:.*]] = llvm.xor %[[VAL_44]], %[[CST_2]] : i32
+    // CHECK:           %[[OFFSET_X_2:.*]] = llvm.xor %[[VAL_44]], %[[CST_4]] : i32
+    // CHECK:           %[[OFFSET_X_3:.*]] = llvm.xor %[[VAL_44]], %[[CST_6]] : i32
+    // CHECK:           %[[OFFSET_Y_1:.*]] = llvm.xor %[[VAL_40]], %[[CST_16]] : i32
+    // CHECK:           %[[OFFSET_X_4:.*]] = llvm.xor %[[VAL_44]], %[[CST_16]] : i32
+    // CHECK:           %[[OFFSET_X_5:.*]] = llvm.xor %[[VAL_44]], %[[CST_18]] : i32
+    // CHECK:           %[[OFFSET_X_6:.*]] = llvm.xor %[[VAL_44]], %[[CST_20]] : i32
+    // CHECK:           %[[OFFSET_X_7:.*]] = llvm.xor %[[VAL_44]], %[[CST_22]] : i32
     // CHECK:           llvm.call @_Z18__spirv_ocl_printf({{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[OFFSET_X_0]], %[[OFFSET_Y_0]], {{.*}}, {{.*}})
     // CHECK:           llvm.call @_Z18__spirv_ocl_printf({{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[OFFSET_X_1]], %[[OFFSET_Y_0]], {{.*}}, {{.*}})
     // CHECK:           llvm.call @_Z18__spirv_ocl_printf({{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[OFFSET_X_2]], %[[OFFSET_Y_0]], {{.*}}, {{.*}})
