@@ -979,6 +979,7 @@ struct StoreOpConversion
     return success();
   }
 };
+
 void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
                    int numCTAs) {
   assert(numCTAs == 1 && "Expecting numCTA to be 1");
@@ -1082,14 +1083,12 @@ struct AtomicCASOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        createBarrier(rewriter, loc, numCTAs);
         Value atomPtr =
             LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         targetInfo.storeShared(rewriter, loc, atomPtr, ret, mask);
         createBarrier(rewriter, loc, numCTAs);
         Value ret = load(valueElemTy, atomPtr);
-        createBarrier(rewriter, loc, numCTAs);
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -1269,7 +1268,6 @@ struct AtomicRMWOpConversion
         targetInfo.storeShared(rewriter, loc, atomPtr, ret, rmwMask);
         createBarrier(rewriter, loc, numCTAs);
         Value loadVal = load(valueElemTy, atomPtr);
-        createBarrier(rewriter, loc, numCTAs);
         rewriter.replaceOp(op, {loadVal});
       }
     }
