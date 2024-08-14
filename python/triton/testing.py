@@ -5,7 +5,7 @@ import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
-import torch.xpu
+import torch
 import logging
 
 
