@@ -130,7 +130,7 @@ void init_triton_intel(py::module &&m) {
 
   m.def(
       "translate_to_spirv",
-      [](const std::string llvmIR) -> std::tuple<py::object, std::string> {
+      [](const std::string &llvmIR) -> std::tuple<py::object, std::string> {
         std::string name;
         std::string spirvBitcode;
         {
@@ -149,7 +149,7 @@ void init_triton_intel(py::module &&m) {
           }
           // Get name of kernel in the module
           std::set<llvm::Function *> kernels;
-          uint32_t numKernels = findKernels(*module, kernels);
+          const uint32_t numKernels = findKernels(*module, kernels);
           assert(numKernels == 1 && "Expecting a single SPIR kernel");
           name = (*kernels.begin())->getName().str();
           spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
