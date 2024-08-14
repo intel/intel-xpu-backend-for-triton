@@ -6,10 +6,11 @@ import subprocess
 import os
 import pandas as pd
 from pathlib import Path
+from typing import Optional
 
 
 def get_config(ident: str) -> str:
-    """Retrieve configuration name"""
+    """Retrieve configuration name."""
     if ":" in ident:
         return ident.split(":")[0]
 
@@ -17,7 +18,7 @@ def get_config(ident: str) -> str:
 
 
 def download(ident: str) -> bool:
-    """Download artifacts for given configuration and CI run ID from Github"""
+    """Download artifacts for given configuration and CI run ID from Github."""
     if not shutil.which("gh"):
         print("Could not find 'gh' executable on the '$PATH'")
         return False
@@ -44,10 +45,10 @@ def download(ident: str) -> bool:
     return True
 
 
-def get_raw_data(args: argparse.Namespace) -> tuple[Path, Path]:
+def get_raw_data(args: argparse.Namespace) -> tuple[Optional[Path], Optional[Path]]:
     """Discover or download the raw data for both configurations."""
-    numDir = Path(os.getcwd()).joinpath(get_config(args.numerator))
-    denomDir = Path(os.getcwd()).joinpath(get_config(args.denominator))
+    numDir = Path(get_config(args.numerator))
+    denomDir = Path(get_config(args.denominator))
 
     if args.local:
         if ":" in args.numerator or ":" in args.denominator:
@@ -93,7 +94,7 @@ def parse_data(config: str, df: pd.DataFrame, file: Path) -> pd.DataFrame:
     return pd.concat([df, raw_data], ignore_index=True)
 
 
-def parse_directory(config: str, previous: pd.DataFrame, directory: str) -> pd.DataFrame:
+def parse_directory(config: str, previous: pd.DataFrame, directory: Path) -> pd.DataFrame:
     """Parse all CSV files for a configuration in a directory, merging with
         the previous dataframe if present."""
     df = pd.DataFrame(columns=["dev", "name", "batch_size", f"speedup {config}", "suite", "datatype", "mode"])
@@ -204,7 +205,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    cwd = os.getcwd()
     if args.path:
         path = Path(args.path).absolute()
         path.mkdir(parents=True, exist_ok=True)
