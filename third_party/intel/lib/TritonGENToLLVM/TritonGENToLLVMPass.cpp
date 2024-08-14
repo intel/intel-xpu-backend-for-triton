@@ -210,27 +210,23 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   if (!needsResElemSizeEqualTo32 && resElemTySize != 16)
     return false;
 
+  if (op.getVnniTransform())
+    return true;
+
   uint32_t tileWidth = op.getTileWidth();
-  if (!op.getVnniTransform()) {
-    switch (op.getElemSizeInBits()) {
-    case 8:
-      if (tileWidth != 32)
-        return false;
-      break;
-    case 16:
-      if (tileWidth != 16)
-        return false;
-      break;
-    case 32:
-      if (tileWidth != 8 && tileWidth != 16)
-        return false;
-      break;
-    default:
-      llvm_unreachable("unexpected element size");
-    }
+  switch (op.getElemSizeInBits()) {
+  case 8:
+    return (tileWidth == 32);
+  case 16:
+    return (tileWidth == 16);
+  case 32:
+    return (tileWidth == 8 || tileWidth == 16);
+  default:
+    llvm_unreachable("unexpected element size");
   }
 
-  return true;
+  return false;
+}
 }
 
 static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
