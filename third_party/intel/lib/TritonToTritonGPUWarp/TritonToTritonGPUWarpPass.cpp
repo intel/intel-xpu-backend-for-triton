@@ -287,9 +287,9 @@ public:
           for (auto val : info1.chainOpsB)
             valueAttrMap[val] = vLayout;
           for (auto val : info1.chainOpsC) {
-            if (valueAttrMap.count(val) == 0)
+            if (valueAttrMap.count(val) == 0) {
               valueAttrMap[val] = oLayout;
-            else if (valueAttrMap[val] == oLayout) {
+            } else if (valueAttrMap[val] == oLayout) {
               continue;
             } else {
               auto op = val.getDefiningOp();
@@ -316,6 +316,7 @@ public:
           if (info1.advanceB)
             valueAttrMap[info1.advanceB] = vLayout;
           break;
+        }
         }
 
         loop->setAttr(AttrWorkloadName,
@@ -366,7 +367,7 @@ public:
         if (!opHasTensorType(op))
           return WalkResult::advance();
 
-        auto numResults = op->getResults().size();
+        unsigned numResults = op->getResults().size();
         if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
           transformArithConstantOp(cst, valueAttrMap[cst]);
         } else if (auto loop = dyn_cast<scf::ForOp>(op)) {
@@ -642,32 +643,23 @@ public:
   }
 
   void expandUseChain(Value val, DenseSet<Value> &chainedVals) {
-    for (auto user : val.getUsers()) {
-      if (user->getDialect() == arithDialect ||
-          user->getDialect() == mathDialect) {
-        auto result = user->getResults()[0];
+    for (auto &use : val.getUses()) {
+      Operation *op = use.getOwner();
+      if (op->getDialect() == arithDialect || op->getDialect() == mathDialect) {
+        auto result = op->getResults()[0];
         if (chainedVals.count(result) == 0) {
           chainedVals.insert(result);
           expandUseChain(result, chainedVals);
         }
-        for (auto operand : user->getOperands()) {
+        for (auto operand : op->getOperands()) {
           expandDefChain(operand, chainedVals);
         }
-      } else if (auto yield = dyn_cast<scf::YieldOp>(user)) {
-        unsigned resNum = -1;
-        unsigned i = 0;
-        for (auto operand : user->getOperands()) {
-          if (operand == val) {
-            resNum = i;
-            break;
-          }
-          i++;
-        }
+      } else if (auto yield = dyn_cast<scf::YieldOp>(op)) {
         auto loop = dyn_cast<scf::ForOp>(yield->getParentOp());
-        auto res = loop.getResult(resNum);
+        auto res = loop.getResult(use.getOperandNumber());
         chainedVals.insert(res);
         expandUseChain(res, chainedVals);
-      } else if (isa<tt::ExpandDimsOp, tt::SplatOp, tt::StoreOp>(user)) {
+      } else if (isa<tt::ExpandDimsOp, tt::SplatOp, tt::StoreOp>(op)) {
         ;
       } else {
         assert(0 && "add more support");
