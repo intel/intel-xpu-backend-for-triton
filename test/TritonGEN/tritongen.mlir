@@ -33,8 +33,8 @@ llvm.func @triton_gen_special_regs() -> i32 {
 
 llvm.func @triton_gen.barrier() {
   // CHECK-LABEL: triton_gen.barrier
-  // CHECK: triton_gen.barrier
-  triton_gen.barrier
+  // CHECK: triton_gen.barrier {mem_fence = Local}
+  triton_gen.barrier {mem_fence=Local}
   llvm.return
 }
 

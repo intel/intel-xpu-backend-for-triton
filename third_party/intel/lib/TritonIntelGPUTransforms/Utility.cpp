@@ -97,12 +97,13 @@ getDotEncoding(RankedTensorType tensorType) {
   return dotLayout;
 }
 
-// Check if the convert will be a no-op in codegen.
+// Check if the convert will be performed by reordering registers.
 static bool isFreeConvert(Operation *op) {
-  if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op))
-    return isMmaToMmaShortcut(convertOp.getSrc().getType(),
+  auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
+  if (!convertOp)
+    return false;
+  return cvtReordersRegisters(convertOp.getSrc().getType(),
                               convertOp.getType());
-  return false;
 }
 
 LogicalResult
