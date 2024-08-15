@@ -33,7 +33,7 @@ Authentication for the Github CLI is only required once, see the
 ## Usage
 
 The script supports three modes of execution, explained below. Some aspects of
-the script are indenpendent from the mode of execution and will be explained
+the script are independent from the mode of execution and will be explained
 first.
 
 ### Output
