@@ -1482,7 +1482,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 // -----
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
 #dot = #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth=4}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_intel_gpu.support_bf16_conversion"} {
   // CHECK-LABEL: test_s8_to_bf16_vectorized_conversion
   tt.func @test_s8_to_bf16_vectorized_conversion(%in: tensor<16x16xi8, #dpas>) {
      // CHECK: %[[F32:.+]] = llvm.sitofp %{{.*}} : i8 to f32
@@ -1916,7 +1916,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // -----
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_intel_gpu.support_bf16_conversion"} {
   tt.func @int32_to_bf16(%arg0: tensor<256xi32, #blocked>) attributes {noinline = false} {
     // CHECK-LABEL: @int32_to_bf16
     // CHECK: llvm.sitofp %{{.*}} : i32 to f32
@@ -1930,7 +1930,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // -----
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_intel_gpu.support_bf16_conversion} {
   tt.func @bf16_to_int32(%arg0: tensor<256xbf16, #blocked>) attributes {noinline = false} {
     // CHECK-LABEL: @bf16_to_int32
     // CHECK: llvm.bitcast %{{.*}} : bf16 to i16
