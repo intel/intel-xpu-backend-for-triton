@@ -1,14 +1,15 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+//  #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
+// #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+// #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/Support/Debug.h"
-#include <numeric>
+// #include "triton/Tools/Sys/GetEnv.hpp"
+// #include "llvm/Support/Debug.h"
+//  #include <numeric>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -23,12 +24,14 @@ namespace mlir::triton::gpu::intel {
 namespace {
 
 bool isDivisible(Value v, unsigned divisor) {
-  if (auto op = v.getDefiningOp<mlir::arith::ConstantOp>()) {
-    auto attr = dyn_cast<IntegerAttr>(op.getValue());
-    return attr.getValue().getZExtValue() % divisor == 0;
-  } else if (auto op = v.getDefiningOp<mlir::arith::ExtSIOp>()) {
+  if (auto op = v.getDefiningOp<mlir::arith::ConstantOp>())
+    return (cast<IntegerAttr>(op.getValue()).getValue().getZExtValue() %
+            divisor) == 0;
+
+  if (auto op = v.getDefiningOp<mlir::arith::ExtSIOp>())
     return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
-  } else if (v.getParentBlock()->isEntryBlock() && isa<BlockArgument>(v)) {
+
+  if (v.getParentBlock()->isEntryBlock() && isa<BlockArgument>(v)) {
     BlockArgument blockArg = cast<BlockArgument>(v);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (auto func = dyn_cast<tt::FuncOp>(parentOp)) {
@@ -37,20 +40,24 @@ bool isDivisible(Value v, unsigned divisor) {
       return attr && attr.getValue().getZExtValue() % divisor == 0;
     }
     return false;
-  } else if (v.getParentBlock()->isEntryBlock() && (!isa<BlockArgument>(v))) {
-    // in entryblock but not BlockArgument
-    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
-  } else if (!v.getParentBlock()->isEntryBlock()) {
-    // in non-entryblock
-    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
-  } else {
-    llvm::report_fatal_error("Operand of `MakeTensorPtrOp` is not the "
-                             "function's argument or a constant value.");
-    return false;
   }
+
+  // in entryblock but not BlockArgument
+  if (v.getParentBlock()->isEntryBlock() && (!isa<BlockArgument>(v)))
+    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
+
+  // in non-entryblock
+  if (!v.getParentBlock()->isEntryBlock())
+    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
+
+  llvm::report_fatal_error("Operand of `MakeTensorPtrOp` is not the "
+                           "function's argument or a constant value.");
+  return false;
 }
 
 bool isConstantExp(Value v, unsigned expected) {
+  if (v.getDefiningOp() == nullptr)
+    return false;
 
   if (auto stride = dyn_cast<arith::ConstantOp>(v.getDefiningOp())) {
     if (auto strideInt = dyn_cast<IntegerAttr>(stride.getValue()))
@@ -73,59 +80,55 @@ public:
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
-    ModuleOp m = getOperation();
+    ModuleOp mod = getOperation();
 
-    if (!m->hasAttr(ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
+    if (!mod->hasAttr(
+            ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
       return;
 
-    ModuleOp mod = getOperation();
     mod.walk([context](tt::LoadOp loadOp) {
-      auto src = loadOp->getOperand(0);
-      if (tt::isTensorPointerType(src.getType())) {
-        // the 2D load only work for dot operands.
-        if (auto resultTy =
-                dyn_cast<RankedTensorType>(loadOp->getResult(0).getType()))
-          if (auto dotLayout = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
-                  resultTy.getEncoding()))
-            if (auto dpasLayout =
-                    dyn_cast<triton::gpu::intel::DpasEncodingAttr>(
-                        dotLayout.getParent())) {
-              auto makeTensorPtrOp = getMakeTensorPtrOp(src);
-              auto ptrType =
-                  cast<triton::PointerType>(makeTensorPtrOp.getType());
-              auto tensorType =
-                  cast<RankedTensorType>(ptrType.getPointeeType());
+      Value src = loadOp->getOperand(0);
+      if (!tt::isTensorPointerType(src.getType()))
+        return;
 
-              Operation::operand_range strides = makeTensorPtrOp.getStrides();
-              ArrayRef<int32_t> order = makeTensorPtrOp.getOrder();
+      // the 2D load only work for dot operands.
+      if (auto resultTy =
+              dyn_cast<RankedTensorType>(loadOp->getResult(0).getType()))
+        if (auto dotLayout =
+                dyn_cast<ttg::DotOperandEncodingAttr>(resultTy.getEncoding()))
+          if (auto dpasLayout =
+                  dyn_cast<ttgi::DpasEncodingAttr>(dotLayout.getParent())) {
+            tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(src);
+            auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
+            auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
 
-              unsigned rank = order.size();
-              if (rank == 1)
+            Operation::operand_range strides = makeTensorPtrOp.getStrides();
+            ArrayRef<int32_t> order = makeTensorPtrOp.getOrder();
+
+            unsigned rank = order.size();
+            if (rank == 1)
+              return;
+
+            unsigned fastChangeDim = order[0];
+            if (fastChangeDim >= (rank - 2)) {
+              // HW 2D block read instruction only supports contiguous
+              // accessing.
+              Value fastChangeStride = strides[fastChangeDim];
+              if (!isConstantExp(fastChangeStride, 1))
                 return;
 
-              unsigned fastChangeDim = order[0];
-              if (fastChangeDim >= (rank - 2)) {
-                // HW 2D block read instruction only supports contiguous
-                // accessing.
-                auto fastChangeStride = strides[fastChangeDim];
-                if (!isConstantExp(fastChangeStride, 1))
-                  return;
+              // PVC requires pitch to be a multiple of QWord(64 bits).
+              Value pitch =
+                  strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
+              if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
+                return;
 
-                // PVC requires pitch to be a multiple of QWord(64 bits).
-                Value pitch =
-                    strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
-                if (!isDivisible(pitch,
-                                 64 / tensorType.getElementTypeBitWidth()))
-                  return;
-
-                loadOp->setAttr(
-                    ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                    StringAttr::get(context, fastChangeDim == rank - 1
-                                                 ? "row_major"
-                                                 : "column_major"));
-              }
+              loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                              StringAttr::get(context, fastChangeDim == rank - 1
+                                                           ? "row_major"
+                                                           : "column_major"));
             }
-      }
+          }
     });
   }
 };
