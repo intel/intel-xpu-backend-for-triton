@@ -23,7 +23,7 @@ bool isDivisible(Value v, unsigned divisor) {
             divisor) == 0;
 
   if (auto op = v.getDefiningOp<mlir::arith::ExtSIOp>())
-    return isDivisible(v.getDefiningOp()->getOperand(0), divisor);
+    return isDivisible(op.getOperand(), divisor);
 
   if (v.getParentBlock()->isEntryBlock() && isa<BlockArgument>(v)) {
     BlockArgument blockArg = cast<BlockArgument>(v);
@@ -66,63 +66,60 @@ struct TritonIntelGPUMaterializeBlockPointerPass
     : public triton::gpu::intel::impl::
           TritonIntelGPUMaterializeBlockPointerBase<
               TritonIntelGPUMaterializeBlockPointerPass> {
-
 public:
   using triton::gpu::intel::impl::TritonIntelGPUMaterializeBlockPointerBase<
       TritonIntelGPUMaterializeBlockPointerPass>::
       TritonIntelGPUMaterializeBlockPointerBase;
 
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
-
     if (!mod->hasAttr(
             ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
       return;
 
+    MLIRContext *context = &getContext();
     mod.walk([context](tt::LoadOp loadOp) {
-      Value src = loadOp->getOperand(0);
-      if (!tt::isTensorPointerType(src.getType()))
+      Value ptr = loadOp.getPtr();
+      if (!tt::isTensorPointerType(ptr.getType()))
         return;
 
       // the 2D load only work for dot operands.
       if (auto resultTy =
-              dyn_cast<RankedTensorType>(loadOp->getResult(0).getType()))
+              dyn_cast<RankedTensorType>(loadOp.getResult().getType()))
         if (auto dotLayout =
-                dyn_cast<ttg::DotOperandEncodingAttr>(resultTy.getEncoding()))
-          if (auto dpasLayout =
-                  dyn_cast<ttgi::DpasEncodingAttr>(dotLayout.getParent())) {
-            tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(src);
-            auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-            auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+                dyn_cast<ttg::DotOperandEncodingAttr>(resultTy.getEncoding())) {
+          assert(isa<ttgi::DpasEncodingAttr>(dotLayout.getParent()) &&
+                 "Expecting DpasEncodingAttr");
 
+          tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
+          auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
+          auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+          ArrayRef<int32_t> order = makeTensorPtrOp.getOrder();
+          unsigned rank = order.size();
+          if (rank == 1)
+            return;
+
+          unsigned fastChangeDim = order[0];
+          if (fastChangeDim >= (rank - 2)) {
             Operation::operand_range strides = makeTensorPtrOp.getStrides();
-            ArrayRef<int32_t> order = makeTensorPtrOp.getOrder();
 
-            unsigned rank = order.size();
-            if (rank == 1)
+            // HW 2D block read instruction only supports contiguous access.
+            Value fastChangeStride = strides[fastChangeDim];
+            if (!isConstantExp(fastChangeStride, 1))
               return;
 
-            unsigned fastChangeDim = order[0];
-            if (fastChangeDim >= (rank - 2)) {
-              // HW 2D block read instruction only supports contiguous
-              // accessing.
-              Value fastChangeStride = strides[fastChangeDim];
-              if (!isConstantExp(fastChangeStride, 1))
-                return;
+            // PVC requires pitch to be a multiple of QWord(64 bits).
+            Value pitch =
+                strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
+            if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
+              return;
 
-              // PVC requires pitch to be a multiple of QWord(64 bits).
-              Value pitch =
-                  strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
-              if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
-                return;
-
-              loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                              StringAttr::get(context, fastChangeDim == rank - 1
-                                                           ? "row_major"
-                                                           : "column_major"));
-            }
+            loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                            StringAttr::get(context, fastChangeDim == rank - 1
+                                                         ? "row_major"
+                                                         : "column_major"));
           }
+        }
     });
   }
 };
