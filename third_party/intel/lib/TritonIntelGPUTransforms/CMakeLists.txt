@@ -4,6 +4,7 @@ add_triton_library(TritonIntelGPUTransforms
   MatchTargetSize.cpp
   Pipeliner/MatmulLoopPipeline.cpp
   Pipeliner/SoftwarePipeliner.cpp
+  MaterializeBlockPointer.cpp
   PrefetchBlock.cpp
   ReduceDataDuplication.cpp
   RemoveLayoutConversions.cpp

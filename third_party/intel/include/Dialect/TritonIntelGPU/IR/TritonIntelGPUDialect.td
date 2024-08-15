@@ -36,6 +36,10 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getSupportDPASAttrName() {
       return "triton_intel_gpu.support_dpas";
     }
+
+    static constexpr llvm::StringRef getBlockIOAttrName() {
+      return "triton_intel_gpu.block_io";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;
