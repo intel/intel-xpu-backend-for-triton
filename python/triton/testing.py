@@ -5,12 +5,14 @@ import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
-import torch
+import time
 import logging
 
 
 @functools.cache
 def _support_elapsed_time():
+    import torch
+
     e1 = torch.xpu.Event(enable_timing=True)
     e1.record()
     e1.synchronize()
@@ -20,35 +22,36 @@ def _support_elapsed_time():
     e2.synchronize()
 
     try:
-        return e1.elapsed_time(e2) > 0
+        support = e1.elapsed_time(e2) > 0
     except Exception:
-        return False
+        support = False
+
+    if not support:
+        logging.warn("Wall time is used instead of elapsed_time (not supported). "
+                     "The timing measurements could be innacurate.")
+
+    return support
 
 
-if _support_elapsed_time():
-    import torch
+class WallEvent():
 
-    def Event(**kwargs):
+    def __init__(self, **kwargs):
+        self.record()
+
+    def record(self):
+        self.timestamp = time.time_ns() / 1_000_000
+
+    def elapsed_time(self, end):
+        return end.timestamp - self.timestamp
+
+
+def Event(**kwargs):
+    if _support_elapsed_time():
+        import torch
+
         return torch.xpu.Event(**kwargs)
-
-    USE_WALL_TIME = False
-else:
-    logging.warn("Wall time is used instead of elapsed_time (not supported). "
-                 "The timing measurements could be innacurate.")
-    import time
-
-    class Event():
-
-        def __init__(self, **kwargs):
-            self.record()
-
-        def record(self):
-            self.timestamp = time.time_ns() / 1_000_000
-
-        def elapsed_time(self, end):
-            return end.timestamp - self.timestamp
-
-    USE_WALL_TIME = True
+    else:
+        return WallEvent(**kwargs)
 
 
 def nvsmi(attrs):
@@ -175,6 +178,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # Estimate the runtime of the function
     start_event = Event(enable_timing=True)
     end_event = Event(enable_timing=True)
+    USE_WALL_TIME = isinstance(start_event, WallEvent)
+
     start_event.record()
     for _ in range(5):
         cache.zero_()
