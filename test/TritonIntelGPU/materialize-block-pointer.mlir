@@ -9,7 +9,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, triton_gpu.target = "xpu", t
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
     %c1_i64 = arith.constant 1 : i64
-//    %pitch = arith.extsi %arg1 : i32 to i64
 
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 1>, padding = 1 : i32, triton_intel_gpu.block_io = "row_major"}
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 0>, padding = 1 : i32, triton_intel_gpu.block_io = "row_major"}
