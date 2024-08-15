@@ -1,15 +1,9 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
-//  #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-// #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
-// #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-// #include "triton/Tools/Sys/GetEnv.hpp"
-// #include "llvm/Support/Debug.h"
-//  #include <numeric>
 
 using namespace mlir;
 namespace tt = mlir::triton;
