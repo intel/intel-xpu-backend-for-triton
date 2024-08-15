@@ -31,6 +31,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "whether subgroup 2D block operations (e.g., 2D block read/write) are available">,
     Option<"supportDPAS", "support-dpas", "bool", /*default*/"false",
            "whether DPAS instruction is available">,
+    Option<"supportBF16Conversion", "support-bf16-conversion", "bool", /*default*/"false",
+           "whether BF16 conversion instruction is available">,
     Option<"threadsPerWarp", "threads-per-warp",
            "unsigned", /*default*/"32",
            "number of threads per warp (aka subgroup size)">,
