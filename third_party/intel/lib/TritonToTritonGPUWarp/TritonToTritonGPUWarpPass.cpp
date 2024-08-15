@@ -139,8 +139,8 @@ public:
 
 private:
   DenseMap<Value, Attribute> valueAttrMap;
-  Dialect *arithDialect;
-  Dialect *mathDialect;
+  Dialect *arithDialect = nullptr;
+  Dialect *mathDialect = nullptr;
 
 public:
   LogicalResult initialize(MLIRContext *context) override {
@@ -234,16 +234,17 @@ public:
           break;
         }
         case Workload::Attention: {
-          auto &info0 = loopDotInfo.dotInfo0;
-          auto &info1 = loopDotInfo.dotInfo1;
-          auto dot0 = info0.dot;
+          DotInfo &info0 = loopDotInfo.dotInfo0;
+          DotInfo &info1 = loopDotInfo.dotInfo1;
+          DotOp dot0 = info0.dot;
           auto aType = cast<RankedTensorType>(dot0.getA().getType());
           auto bType = cast<RankedTensorType>(dot0.getB().getType());
           unsigned Br = aType.getShape()[0];
           unsigned d = bType.getShape()[0];
           unsigned Bc = bType.getShape()[1];
-          assert(Br % numWarps == 0);
-          assert(Bc % numWarps == 0);
+          assert(Br % numWarps == 0 && "rows should be multiple of numWarps");
+          assert(Bc % numWarps == 0 &&
+                 "columns should be multiple of numWarps");
           SmallVector<unsigned> warpsPerCTA{numWarps, 1};
           SmallVector<unsigned> sizePerWarpQ{Br / numWarps, d};
           SmallVector<unsigned> sizePerWarpK{d, Bc};
@@ -334,9 +335,9 @@ public:
       /// get other value's layout attr by def/use chain
       func.walk<WalkOrder::PreOrder>([&](Operation *op) {
         if (auto loop = dyn_cast<scf::ForOp>(op))
-          ;
+          return;
         else if (!opHasTensorType(op))
-          ;
+          return;
         else if (auto reduce = dyn_cast<tt::ReduceOp>(op)) {
           assert(reduce.getSrcs().size() == 1);
           auto axis = reduce.getAxis();
@@ -645,8 +646,9 @@ public:
   void expandUseChain(Value val, DenseSet<Value> &chainedVals) {
     for (auto &use : val.getUses()) {
       Operation *op = use.getOwner();
+      // arith/math ops
       if (op->getDialect() == arithDialect || op->getDialect() == mathDialect) {
-        auto result = op->getResults()[0];
+        Value result = op->getResults()[0];
         if (chainedVals.count(result) == 0) {
           chainedVals.insert(result);
           expandUseChain(result, chainedVals);
@@ -654,13 +656,16 @@ public:
         for (auto operand : op->getOperands()) {
           expandDefChain(operand, chainedVals);
         }
+        // yield
       } else if (auto yield = dyn_cast<scf::YieldOp>(op)) {
-        auto loop = dyn_cast<scf::ForOp>(yield->getParentOp());
-        auto res = loop.getResult(use.getOperandNumber());
+        auto loop = cast<scf::ForOp>(yield->getParentOp());
+        Value res = loop.getResult(use.getOperandNumber());
         chainedVals.insert(res);
         expandUseChain(res, chainedVals);
+        // expanddims, splat, store
       } else if (isa<tt::ExpandDimsOp, tt::SplatOp, tt::StoreOp>(op)) {
-        ;
+        continue;
+        // other ops
       } else {
         assert(0 && "add more support");
       }
