@@ -83,43 +83,37 @@ public:
       if (!tt::isTensorPointerType(ptr.getType()))
         return;
 
-      // the 2D load only work for dot operands.
       if (auto resultTy =
-              dyn_cast<RankedTensorType>(loadOp.getResult().getType()))
-        if (auto dotLayout =
-                dyn_cast<ttg::DotOperandEncodingAttr>(resultTy.getEncoding())) {
-          assert(isa<ttgi::DpasEncodingAttr>(dotLayout.getParent()) &&
-                 "Expecting DpasEncodingAttr");
+              dyn_cast<RankedTensorType>(loadOp.getResult().getType())) {
+        tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
+        auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
+        auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+        ArrayRef<int32_t> order = makeTensorPtrOp.getOrder();
+        unsigned rank = order.size();
+        if (rank == 1)
+          return;
 
-          tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
-          auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-          auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-          ArrayRef<int32_t> order = makeTensorPtrOp.getOrder();
-          unsigned rank = order.size();
-          if (rank == 1)
+        unsigned fastChangeDim = order[0];
+        if (fastChangeDim >= (rank - 2)) {
+          Operation::operand_range strides = makeTensorPtrOp.getStrides();
+
+          // HW 2D block read instruction only supports contiguous access.
+          Value fastChangeStride = strides[fastChangeDim];
+          if (!isConstantExp(fastChangeStride, 1))
             return;
 
-          unsigned fastChangeDim = order[0];
-          if (fastChangeDim >= (rank - 2)) {
-            Operation::operand_range strides = makeTensorPtrOp.getStrides();
+          // PVC requires pitch to be a multiple of QWord(64 bits).
+          Value pitch =
+              strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
+          if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
+            return;
 
-            // HW 2D block read instruction only supports contiguous access.
-            Value fastChangeStride = strides[fastChangeDim];
-            if (!isConstantExp(fastChangeStride, 1))
-              return;
-
-            // PVC requires pitch to be a multiple of QWord(64 bits).
-            Value pitch =
-                strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
-            if (!isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
-              return;
-
-            loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                            StringAttr::get(context, fastChangeDim == rank - 1
-                                                         ? "row_major"
-                                                         : "column_major"));
-          }
+          loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                          StringAttr::get(context, fastChangeDim == rank - 1
+                                                       ? "row_major"
+                                                       : "column_major"));
         }
+      }
     });
   }
 };
