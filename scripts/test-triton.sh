@@ -255,6 +255,7 @@ run_benchmark_softmax() {
   if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
     echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
   fi
+  cd $TRITON_PROJ/benchmarks; python setup.py install
   python ${BENCHMARK_TEST_DIR}/fused_softmax.py
 }
 
@@ -289,13 +290,14 @@ run_benchmark_attention() {
   if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
     echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
   fi
-  TRITON_INTEL_ADVANCED_PATH=1 \
+  cd $TRITON_PROJ/benchmarks; python setup.py install
+  TRITON_INTEL_ADVANCED_PATH=0 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
   IGC_DisableLoopUnroll=1 \
   python ${BENCHMARK_TEST_DIR}/flash_attention_fwd_benchmark.py
 
-  TRITON_INTEL_ADVANCED_PATH=0 \
+  TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
   IGC_DisableLoopUnroll=1 \
