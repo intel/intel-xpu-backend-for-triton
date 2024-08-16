@@ -41,7 +41,7 @@ def libcuda_dirs():
     else:
         msg += 'Please make sure GPU is set up and then run "/sbin/ldconfig"'
         msg += ' (requires sudo) to refresh the linker cache.'
-    assert any(os.path.exists(os.path.join(path, 'libcuda.so.1')) for path in dirs), msg
+    # assert any(os.path.exists(os.path.join(path, 'libcuda.so.1')) for path in dirs), msg
     return dirs
 
 
@@ -338,11 +338,11 @@ class CudaDriver(GPUDriver):
         super().__init__()
 
     def get_current_target(self):
-        device = self.get_current_device()
-        capability = self.get_device_capability(device)
-        capability = capability[0] * 10 + capability[1]
-        warp_size = 32
-        return GPUTarget("cuda", capability, warp_size)
+        # device = self.get_current_device()
+        # capability = self.get_device_capability(device)
+        # capability = capability[0] * 10 + capability[1]
+        # warp_size = 32
+        return GPUTarget("cuda", 90, 32)
 
     def get_active_torch_device(self):
         import torch
