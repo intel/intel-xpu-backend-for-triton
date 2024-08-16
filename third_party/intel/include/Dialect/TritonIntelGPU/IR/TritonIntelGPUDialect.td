@@ -19,6 +19,10 @@ def TritonIntelGPU_Dialect : Dialect {
   ];
 
   let extraClassDeclaration = [{
+    /// Get the name of the attribute used to indicate whether the BF16 conversion instruction is available.
+    static constexpr llvm::StringRef getSupportBF16ConversionAttrName() {
+      return "triton_intel_gpu.support_bf16_conversion";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

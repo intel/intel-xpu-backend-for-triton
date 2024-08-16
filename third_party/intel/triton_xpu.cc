@@ -77,4 +77,13 @@ void init_triton_intel(py::module &&m) {
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
+
+  m.def("set_device_properties",
+        [](mlir::ModuleOp mod, bool supportBF16Conversion) {
+          mlir::Builder builder(mod);
+          if (supportBF16Conversion)
+            mod->setAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
+                             getSupportBF16ConversionAttrName(),
+                         builder.getUnitAttr());
+        });
 }

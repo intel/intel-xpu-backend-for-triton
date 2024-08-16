@@ -6,7 +6,7 @@
 
 // CHECK-LABEL:   llvm.func spir_kernelcc @float_to_bfloat_conversion(
 // CHECK-SAME:                                               %[[VAL_0:.*]]: !llvm.struct<(f32, f32, f32, f32)>) -> !llvm.struct<(i16, i16, i16, i16)>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_intel_gpu.support_bf16_conversion"} {
   tt.func @float_to_bfloat_conversion(%arg0 : tensor<512xf32, #blocked>) ->  tensor<512xbf16, #blocked>{
 // CHECK:                           builtin.unrealized_conversion_cast %[[VAL_0]] : !llvm.struct<(f32, f32, f32, f32)> to tensor<512xf32, #[[$ATTR_0]]>
 // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f32, f32, f32, f32)>

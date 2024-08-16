@@ -116,6 +116,7 @@ class XPUBackend(BaseBackend):
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
         dev_prop['device_arch'] = self.parse_device_arch(tgt_prop.get('device_arch', 0))
+        dev_prop['has_bf16_conversion'] = tgt_prop.get('has_bf16_conversion', True)
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -150,7 +151,9 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_ttgir(mod, metadata, opt, device_arch):
+    def make_ttgir(mod, metadata, opt, device_arch, properties):
+        intel.set_device_properties(mod, properties["has_bf16_conversion"])
+
         if XPUOptions.isBlockPtrEnabled:
             return XPUBackend.Experimental.make_ttgir(mod, metadata, opt, device_arch)
 
@@ -235,7 +238,8 @@ class XPUBackend(BaseBackend):
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.device_arch)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.device_arch, self.
+                                                                properties)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata)
 
