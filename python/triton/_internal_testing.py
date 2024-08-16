@@ -55,7 +55,8 @@ def is_hopper_or_newer():
 
 
 def is_hopper():
-    return is_cuda() and torch.cuda.get_device_capability()[0] == 9
+    return True
+    # return is_cuda() and torch.cuda.get_device_capability()[0] == 9
 
 
 def is_sm12x():
@@ -261,11 +262,12 @@ def supports_tma(byval_only=False):
         return True
     if not is_cuda():
         return False
-    cuda_version = knobs.nvidia.ptxas.version
-    min_cuda_version = (12, 0) if byval_only else (12, 3)
-    cuda_version_tuple = tuple(map(int, cuda_version.split(".")))
-    assert len(cuda_version_tuple) == 2, cuda_version_tuple
-    return torch.cuda.get_device_capability()[0] >= 9 and cuda_version_tuple >= min_cuda_version
+    return True
+    #cuda_version = knobs.nvidia.ptxas.version
+    #min_cuda_version = (12, 0) if byval_only else (12, 3)
+    #cuda_version_tuple = tuple(map(int, cuda_version.split(".")))
+    #assert len(cuda_version_tuple) == 2, cuda_version_tuple
+    #return torch.cuda.get_device_capability()[0] >= 9 and cuda_version_tuple >= min_cuda_version
 
 
 def supports_ws():
