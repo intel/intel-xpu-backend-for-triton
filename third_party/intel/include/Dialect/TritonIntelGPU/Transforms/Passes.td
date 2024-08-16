@@ -271,14 +271,11 @@ def TritonIntelGPUScheduleLoad : Pass<"tritonintelgpu-schedule-load", "mlir::Mod
 }
 
 def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-block-pointer", "mlir::ModuleOp"> {
-  let summary = "annotate the memory accessing operation with information required by Intel block io";
+  let summary = "annotate load operations with information required to exploit 2D block HW instructions";
 
   let description = [{
-    During the lowering phase, the block pointer type is converted to the struct type.
-    It is not easy to analysis the matrix's layout on memory without high level semantic.
-
-    This pass annotate the memory accessing ops with the information which is required
-    by the Intel block IO while it is much easier deduced at TTGIR optimization phase
+    This pass annotates load operations using a block pointer with information required to exploit 2D 
+    block HW instructions during lowering (e.g. whether the memory access pattern is row or column major).
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
