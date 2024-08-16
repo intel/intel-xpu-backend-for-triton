@@ -221,7 +221,7 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
-        passes.ttgpuir.add_reduce_data_duplication(pm)
+        intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
