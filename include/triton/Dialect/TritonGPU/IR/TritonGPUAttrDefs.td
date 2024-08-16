@@ -525,6 +525,10 @@ For the Threads Per Warp and Values Per Thread level, the linear id distribution
     InterfaceMethod<"Gets the number of contiguous elements per thread.",
                     "SmallVector<unsigned>",
                     "getContigPerThread">,
+    InterfaceMethod<"Convert to LinearLayout.",
+                    "std::optional<LinearLayout>",
+                    "toLinearLayout",
+                    (ins "ArrayRef<int64_t>":$shape)>
   ];
 }
 
@@ -576,6 +580,8 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 
     SmallVector<unsigned> getSizePerThread() const;
     SmallVector<unsigned> getShapePerCTATile(ArrayRef<int64_t> tensorShape = ArrayRef<int64_t>()) const;
+
+    std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
 }
 
@@ -796,20 +802,6 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
       "getElemsPerThreadForOperands", (ins "ArrayRef<int64_t>":$tensorShape,
                                            "Type":$eltTy,
                                            "unsigned":$opIdx)>,
-  ];
-}
-
-//===----------------------------------------------------------------------===//
-// LinearLayout Conversion Interface
-//===----------------------------------------------------------------------===//
-def LinearLayoutTrait : AttrInterface<"LinearLayoutTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-  let methods = [
-    InterfaceMethod<"Convert to LinearLayout.",
-                    "LinearLayout",
-                    "toLinearLayout",
-                    (ins "ArrayRef<int64_t>":$shape,
-                         "std::optional<int32_t>":$elemBitWidth)>
   ];
 }
 
