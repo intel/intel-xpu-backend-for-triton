@@ -175,8 +175,8 @@ jobs:
           source ./scripts/pytest-utils.sh
           ensure_spirv_dis
 
-          export OverrideDefaultFP64Settings=1
-          export IGC_EnableDPEmulation=1
+          # export OverrideDefaultFP64Settings=1
+          # export IGC_EnableDPEmulation=1
 
           cd python/test/unit
 
