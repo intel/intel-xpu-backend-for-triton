@@ -710,8 +710,11 @@ class JITFunction(JITCallable, KernelInterface[T]):
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
 
         # parse options
-        device = driver.active.get_current_device()
-        stream = driver.active.get_current_stream(device)
+        # device = driver.active.get_current_device()
+        # stream = driver.active.get_current_stream(device)
+        device = 0 # driver.active.get_current_device()
+        stream = 0 # driver.active.get_current_stream(device)
+
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
