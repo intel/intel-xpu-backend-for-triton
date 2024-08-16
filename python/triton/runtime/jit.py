@@ -565,8 +565,10 @@ class JITFunction(KernelInterface[T]):
 
         # parse options
         from ..compiler import make_backend
-        device = driver.active.get_current_device()
-        stream = driver.active.get_current_stream(device)
+        # device = driver.active.get_current_device()
+        # stream = driver.active.get_current_stream(device)
+        device = 0 # driver.active.get_current_device()
+        stream = 0 # driver.active.get_current_stream(device)
         target = driver.active.get_current_target()
         backend = make_backend(target)
 
