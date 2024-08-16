@@ -43,7 +43,7 @@ def TritonIntelGPU_Dialect : Dialect {
       return "triton_intel_gpu.support_bf16_conversion";
     }
 
-    /// Get the name of the attribute used to convay information required for lowering 
+    /// Get the name of the attribute used to convay information required for lowering
     /// memory operations (e.g. load, prefetches) to 2D block HW instructions.
     static constexpr llvm::StringRef getBlockIOAttrName() {
       return "triton_intel_gpu.block_io";

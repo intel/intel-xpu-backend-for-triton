@@ -274,7 +274,7 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
   let summary = "annotate load operations with information required to exploit 2D block HW instructions";
 
   let description = [{
-    This pass annotates load operations using a block pointer with information required to exploit 2D 
+    This pass annotates load operations using a block pointer with information required to exploit 2D
     block HW instructions during lowering (e.g. whether the memory access pattern is row or column major).
   }];
 
