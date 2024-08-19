@@ -280,8 +280,7 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
 
 int main() {
   // initialize sycl runtime
-  sycl::default_selector d_selector;
-  sycl::queue q = sycl::queue(d_selector, exception_handler);
+  sycl::queue q = sycl::queue(sycl::gpu_selector_v, exception_handler);
 
   std::cout << "Running on device: "
             << q.get_device().get_info<sycl::info::device::name>() << "\n";
