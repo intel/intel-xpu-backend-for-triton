@@ -60,6 +60,27 @@ for arg in "$@"; do
 done
 
 set +o xtrace
+
+if [ "$BUILD_PYTORCH" = true ] && [ "$UPSTREAM_PYTORCH" = true ]; then
+  echo "***** Use '--pytorch' or '--upstream-pytorch' *****"
+  exit 1
+fi
+
+if [ "$BUILD_IPEX" = true ] && [ "$NO_OP_IPEX" = true ]; then
+  echo "***** Use '--ipex' or '--no-op-ipex' *****"
+  exit 1
+fi
+
+if [ "$BUILD_PYTORCH" = true ] && [ "$NO_OP_IPEX" = true ]; then
+  echo "***** Use of '--no-op-ipex' isn't allowed with '--pytorch' *****"
+  exit 1
+fi
+
+if [ "$UPSTREAM_PYTORCH" = true ] && [ "$BUILD_IPEX" = true ]; then
+  echo "***** Use of '--ipex' isn't allowed with '--upstream-pytorch' *****"
+  exit 1
+fi
+
 if [ ! -v BASE ]; then
   echo "**** BASE is not given *****"
   BASE=$(cd $(dirname "$0")/../.. && pwd)
@@ -222,9 +243,9 @@ build_pytorch() {
 
 build_ipex() {
   if [ ! -d "$IPEX_PROJ" ]; then
-    echo "**** Cloning $IPEX_PROJ ****"
     cd $BASE
     if [ "$NO_OP_IPEX" = true ]; then
+      echo "**** Setup no-op $IPEX_PROJ ****"
       mkdir intel-extension-for-pytorch
       cd intel-extension-for-pytorch
       cat > setup.py <<EOF
@@ -244,6 +265,7 @@ EOF
       echo '__version__ = "2.4.0+dummy_no-op"' > intel_extension_for_pytorch/__init__.py
       touch requirements.txt
     else
+      echo "**** Cloning $IPEX_PROJ ****"
       git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/intel/intel-extension-for-pytorch.git
     fi
   fi
