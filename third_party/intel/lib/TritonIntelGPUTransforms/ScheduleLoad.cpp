@@ -50,47 +50,32 @@ public:
     mod.walk<WalkOrder::PreOrder>([&](scf::ForOp loop) {
       visited.clear();
       int group = -1;
-      unsigned numGroups = 0;
-      SmallVector<SmallVector<tt::DotOp>> dotsGroup;
+      SmallVector<std::pair<SmallVector<tt::DotOp>, int>> dotsGroup;
       SmallVector<tt::DotOp> dots;
       for (auto dot : loop.getOps<tt::DotOp>()) {
         auto groupAttr = dot->getAttrOfType<IntegerAttr>("schedule-group");
         int currGroup = groupAttr.getInt();
         // a new set of schedule-group start (e.g. 0000 - 1111)
         if (currGroup != group && !dots.empty()) {
-          dotsGroup.push_back(dots);
+          dotsGroup.push_back({dots, group});
           dots.clear();
-        }
-        // mark first dot B as visited to not move
-        if (currGroup == 0) {
-          SmallVector<tt::DotOp> vec{dot};
-          getNotVisitedUses(vec, 1);
-          // a new set of schedule-groups(e.g. 0000,1111,2222,3333 - 0000) start
-          if (group > 0)
-            numGroups = dotsGroup.size();
         }
         dots.push_back(dot);
         group = currGroup;
       }
       assert(!dots.empty() && "No dot found in the loop");
-      dotsGroup.push_back(dots);
+      dotsGroup.push_back({dots, group});
 
-      unsigned i = 0;
       Operation *start = &loop.getBody()->front();
-      for (SmallVector<tt::DotOp> &dots : dotsGroup) {
-        auto notVisited = getNotVisitedUses(dots, 1);
-        if (i == 0)
-          notVisited.append(getNotVisitedUses(dots, 0));
+      for (std::pair<SmallVector<tt::DotOp>, int> &dotsGroup : dotsGroup) {
+        SmallVector<tt::DotOp> dots = dotsGroup.first;
+        unsigned groupId = dotsGroup.second;
+        SmallVector<Value> notVisited = getNotVisitedUses(dots, 0);
+        notVisited.append(getNotVisitedUses(dots, 1));
         for (Value val : notVisited) {
-          auto op = val.getDefiningOp();
-          if (i == 0)
-            op->moveBefore(start);
-          else
-            op->moveBefore(dots.begin()->getOperation());
+          Operation *op = val.getDefiningOp();
+          op->moveBefore(dots.begin()->getOperation());
         }
-        i++;
-        if (i == numGroups)
-          i = 0;
       }
     });
 
@@ -111,6 +96,30 @@ public:
   }
 
 private:
+  bool isInnerLoopLoad(tt::LoadOp op) {
+    // Check if load operand is a BlockArgument
+    if (dyn_cast<BlockArgument>(op.getPtr()))
+      return true;
+    else
+      return false;
+  }
+
+  // Backtrace to collect unvisited dot operands
+  // Only handle dot operands which is from tt.load and ttgi.extract
+  void markUnvisited(Value val, SmallVector<Value> &notVisited) {
+    if (visited.contains(val))
+      return;
+    if (auto load = dyn_cast<tt::LoadOp>(val.getDefiningOp())) {
+      if (isInnerLoopLoad(load))
+        notVisited.push_back(val);
+    } else if (auto extract = dyn_cast<ttgi::ExtractOp>(val.getDefiningOp())) {
+      Value base = extract.getBase();
+      markUnvisited(base, notVisited);
+      notVisited.push_back(val);
+    }
+    visited.insert(val);
+  }
+
   // hack!!! only trace dot A/B, only back 1 level
   SmallVector<Value> getNotVisitedUses(SmallVector<tt::DotOp> &dots,
                                        unsigned opIdx) {
@@ -119,19 +128,7 @@ private:
     SmallVector<Value> notVisited;
     for (tt::DotOp &dot : dots) {
       Value val = (opIdx == 1) ? dot.getB() : dot.getA();
-      if (visited.contains(val))
-        continue;
-
-      Operation *def = val.getDefiningOp();
-      if (auto extract = dyn_cast<ttgi::ExtractOp>(def)) {
-        Value base = extract.getBase();
-        if (!visited.contains(base)) {
-          notVisited.push_back(base);
-          visited.insert(base);
-        }
-      }
-      notVisited.push_back(val);
-      visited.insert(val);
+      markUnvisited(val, notVisited);
     }
     return notVisited;
   }
