@@ -8,7 +8,7 @@ SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd 
 BUILD_PYTORCH=false
 UPSTREAM_PYTORCH=false
 BUILD_IPEX=false
-FAKE_IPEX=false
+NO_OP_IPEX=false
 BUILD_PINNED=false
 BUILD_FROM_SOURCE=false
 CLEAN=false
@@ -27,8 +27,8 @@ for arg in "$@"; do
       BUILD_IPEX=true
       shift
       ;;
-    --fake-ipex)
-      FAKE_IPEX=true
+    --no-op-ipex)
+      NO_OP_IPEX=true
       shift
       ;;
     --pinned)
@@ -49,7 +49,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./compile-pytorch-ipex.sh [--pytorch | --upstream-pytorch | --ipex | --fake-ipex | --pinned | --source | --clean | --venv]"
+      echo "Example usage: ./compile-pytorch-ipex.sh [--pytorch | --upstream-pytorch | --ipex | --no-op-ipex | --pinned | --source | --clean | --venv]"
       exit 1
       ;;
     *)
@@ -81,9 +81,18 @@ if [ "$CLEAN" = true ]; then
   fi
 fi
 
-if [ "$FAKE_IPEX" = true ]; then
+if [ "$UPSTREAM_PYTORCH" = true ]; then
   # This is a simplification that allows not to use two flags at the same time.
-  # It's convenient because `FAKE_IPEX` has no meaning without `BUILD_IPEX` flag.
+  # It's convenient because `UPSTREAM_PYTORCH` flag only specifies the repository
+  # and has no meaning without `BUILD_PYTORCH` flag.
+  BUILD_PYTORCH=true
+  # Only no-op IPEX works with PyTorch upstream.
+  NO_OP_IPEX=true
+fi
+
+if [ "$NO_OP_IPEX" = true ]; then
+  # This is a simplification that allows not to use two flags at the same time.
+  # It's convenient because `NO_OP_IPEX` has no meaning without `BUILD_IPEX` flag.
   BUILD_IPEX=true
 fi
 
@@ -133,13 +142,6 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
     echo "****** WARNING: gh or jq is missing ******"
     BUILD_FROM_SOURCE=true
   fi
-fi
-
-if [ "$UPSTREAM_PYTORCH" = true ]; then
-  # This is a simplification that allows not to use two flags at the same time.
-  # It's convenient because `UPSTREAM_PYTORCH` flag only specifies the repository
-  # and has no meaning without `BUILD_PYTORCH` flag.
-  BUILD_PYTORCH=true
 fi
 
 if [ "$BUILD_PINNED" = false ]; then
@@ -222,24 +224,24 @@ build_ipex() {
   if [ ! -d "$IPEX_PROJ" ]; then
     echo "**** Cloning $IPEX_PROJ ****"
     cd $BASE
-    if [ "$FAKE_IPEX" = true ]; then
+    if [ "$NO_OP_IPEX" = true ]; then
       mkdir intel-extension-for-pytorch
       cd intel-extension-for-pytorch
       cat > setup.py <<EOF
 from setuptools import setup
 
 name = "intel-extension-for-pytorch"
-version = "0.1+FAKE"
+version = "2.4.0+dummy_no-op"
 
 setup(
     name=name,
     version=version,
-    description="FAKE Intel Extension for PyTorch"
+    description="No-op Intel Extension for PyTorch"
 )
 EOF
 
       mkdir intel_extension_for_pytorch
-      echo '__version__ = "0.1+FAKE"' > intel_extension_for_pytorch/__init__.py
+      echo '__version__ = "2.4.0+dummy_no-op"' > intel_extension_for_pytorch/__init__.py
       touch requirements.txt
     else
       git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/intel/intel-extension-for-pytorch.git
