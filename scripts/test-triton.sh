@@ -250,6 +250,7 @@ run_benchmark_softmax() {
   if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
     echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
   fi
+  cd $TRITON_PROJ/benchmarks; python setup.py install
   python ${BENCHMARK_TEST_DIR}/fused_softmax.py
 }
 
@@ -262,6 +263,7 @@ run_benchmark_gemm() {
     echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
   fi
   cd $TRITON_PROJ/benchmarks; python setup.py install
+  echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
@@ -269,6 +271,7 @@ run_benchmark_gemm() {
   SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
   python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
 
+  echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
