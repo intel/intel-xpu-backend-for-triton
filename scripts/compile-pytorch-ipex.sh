@@ -83,36 +83,41 @@ fi
 
 if [ "$BUILD_PINNED" = true ]; then
   echo "**** Determine if the installed PyTorch version is the same as the pinned version. ****"
-  INSTALL_PYTORCH=true
-  if pip show torch &>/dev/null; then
+  if [ "$UPSTREAM_PYTORCH" = true ]; then
+    PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch-upstream.txt)"
+  else
     PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
+  fi
+
+  if pip show torch &>/dev/null; then
     PYTORCH_CURRENT_COMMIT=`python -c "import torch;print(torch.__version__)"`
     PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
     if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
       echo "**** PyTorch is already installed and its current commit is equal to the pinned commit: $PYTORCH_PINNED_COMMIT. ****"
-      INSTALL_PYTORCH=false
+      BUILD_PYTORCH=false
     else
       echo "**** Current PyTorch commit $PYTORCH_CURRENT_COMMIT ****"
       echo "**** Pinned PyTorch commit $PYTORCH_PINNED_COMMIT ****"
     fi
   fi
+
   echo "**** Determine if the installed IPEX version is the same as the pinned version. ****"
-  INSTALL_IPEX=true
+  IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
+
   if pip show intel-extension-for-pytorch &>/dev/null; then
-    IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
     IPEX_CURRENT_COMMIT=`python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"`
     IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
     if [[ "$IPEX_PINNED_COMMIT" = "$IPEX_CURRENT_COMMIT"* ]]; then
       echo "**** IPEX is already installed and its current commit is equal to the pinned commit: $IPEX_PINNED_COMMIT. ****"
-      INSTALL_IPEX=false
+      BUILD_IPEX=false
     else
       echo "**** Current IPEX commit $IPEX_CURRENT_COMMIT ****"
       echo "**** Pinned IPEX commit $IPEX_PINNED_COMMIT ****"
     fi
   fi
 
-  if [[ "$INSTALL_PYTORCH" = false && "$INSTALL_IPEX" = false ]]; then
-    echo "**** Nothing needs to be installed, just exit. ****"
+  if [[ "$BUILD_PYTORCH" = false && "$BUILD_IPEX" = false ]]; then
+    echo "**** There is no need to build anything, just exit. ****"
     exit 0
   fi
 fi
@@ -122,6 +127,13 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
     echo "****** WARNING: gh or jq is missing ******"
     BUILD_FROM_SOURCE=true
   fi
+fi
+
+if [ "$UPSTREAM_PYTORCH" = true ]; then
+  # This is a simplification that allows not to use two flags at the same time.
+  # It's convenient because `UPSTREAM_PYTORCH` flag only specifies the repository
+  # and has no meaning without `BUILD_PYTORCH` flag.
+  BUILD_PYTORCH=true
 fi
 
 if [ "$BUILD_PINNED" = false ]; then
@@ -184,8 +196,7 @@ build_pytorch() {
   if [ ! -d "$PYTORCH_PROJ/dist" ]; then
     if [ "$BUILD_PINNED" = true ]; then
       git fetch --all
-      PYTORCH_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
-      git checkout $PYTORCH_COMMIT_ID
+      git checkout $PYTORCH_PINNED_COMMIT
       git submodule update --recursive
     fi
     pip install cmake ninja
@@ -232,9 +243,8 @@ EOF
   cd $IPEX_PROJ
   if [ ! -d "$IPEX_PROJ/dist" ]; then
     if [ "$BUILD_PINNED" = true ]; then
-      IPEX_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
-      git fetch origin $IPEX_COMMIT_ID
-      git checkout $IPEX_COMMIT_ID
+      git fetch origin $IPEX_PINNED_COMMIT
+      git checkout $IPEX_PINNED_COMMIT
       git submodule sync
       git submodule update --init --recursive
     fi

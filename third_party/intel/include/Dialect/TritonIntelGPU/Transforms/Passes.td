@@ -270,4 +270,18 @@ def TritonIntelGPUScheduleLoad : Pass<"tritonintelgpu-schedule-load", "mlir::Mod
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-block-pointer", "mlir::ModuleOp"> {
+  let summary = "annotate load operations with information required to exploit 2D block HW instructions";
+
+  let description = [{
+    This pass annotates load operations using a block pointer with information required to exploit 2D
+    block HW instructions during lowering (e.g. whether the memory access pattern is row or column major).
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
