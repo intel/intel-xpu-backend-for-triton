@@ -252,7 +252,7 @@ build_ipex() {
 from setuptools import setup
 
 name = "intel-extension-for-pytorch"
-version = "2.4.0+dummy_no-op"
+version = "2.4.0+noop"
 
 setup(
     name=name,
@@ -262,7 +262,7 @@ setup(
 EOF
 
       mkdir intel_extension_for_pytorch
-      echo '__version__ = "2.4.0+dummy_no-op"' > intel_extension_for_pytorch/__init__.py
+      echo '__version__ = "2.4.0+noop"' > intel_extension_for_pytorch/__init__.py
       touch requirements.txt
     else
       echo "**** Cloning $IPEX_PROJ ****"
