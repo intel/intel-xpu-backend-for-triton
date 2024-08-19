@@ -81,6 +81,12 @@ if [ "$CLEAN" = true ]; then
   fi
 fi
 
+if [ "$FAKE_IPEX" = true ]; then
+  # This is a simplification that allows not to use two flags at the same time.
+  # It's convenient because `FAKE_IPEX` has no meaning without `BUILD_IPEX` flag.
+  BUILD_IPEX=true
+fi
+
 if [ "$BUILD_PINNED" = true ]; then
   echo "**** Determine if the installed PyTorch version is the same as the pinned version. ****"
   if [ "$UPSTREAM_PYTORCH" = true ]; then
