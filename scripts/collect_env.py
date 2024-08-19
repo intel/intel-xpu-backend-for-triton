@@ -41,7 +41,9 @@ SystemEnv = namedtuple(
         "python_platform",
         "is_xpu_available",
         "dpcpp_runtime_version",
+        "whether_dpcpp_from_ptdb",
         "mkl_version",
+        "whether_mkl_from_ptdb",
         "gpu_models",
         "intel_opencl_version",
         "level_zero_version",
@@ -204,6 +206,33 @@ def get_running_dpcpp_version(run_lambda):
         run_lambda, 'env | grep CMPLR_ROOT | rev | cut -d "/" -f 1 | rev'
     )
 
+def get_running_dpcpp_version_from_dash_dash_version(run_lambda):
+    return run_and_read_all(
+        run_lambda, 'dpcpp --version | head -1'
+    ).split()[-1][1:-1]
+
+def if_dpcpp_from_ptdb(dpcpp_version):
+    ver = [int(x) for x in dpcpp_version.split('.')]
+    if ver[0] > 2024:
+        return True
+    if ver[0] == 2024:
+        if ver[1] > 1:
+            return True
+        if ver[1] == 1:
+            return ver[2] >= 1
+    return False
+
+def if_mkl_from_ptdb(mkl_version):
+    ver = [int(x) for x in mkl_version.split('.')]
+    if ver[0] >= 2025:
+        return True
+    return False
+
+def get_if_mkl_from_ptdb(run_lambda):
+    return if_mkl_from_ptdb(get_mkl_version(run_lambda))
+
+def get_if_dpcpp_from_ptdb(run_lambda):
+    return if_dpcpp_from_ptdb(get_running_dpcpp_version_from_dash_dash_version(run_lambda))
 
 def get_mkl_version(run_lambda):
     return run_and_read_all(
@@ -385,8 +414,10 @@ def get_env_info():
         ),
         python_platform=get_python_platform(),
         is_xpu_available=xpu_available_str,
-        dpcpp_runtime_version=get_running_dpcpp_version(run_lambda),
+        dpcpp_runtime_version=get_running_dpcpp_version_from_dash_dash_version(run_lambda),
+        whether_dpcpp_from_ptdb=get_if_dpcpp_from_ptdb(run_lambda),
         mkl_version=get_mkl_version(run_lambda),
+        whether_mkl_from_ptdb=get_if_mkl_from_ptdb(run_lambda),
         gpu_models=f"\n{get_gpu_info(run_lambda)}",
         intel_opencl_version=get_pkg_version(run_lambda, "intel_opencl"),
         level_zero_version=get_pkg_version(run_lambda, "level_zero"),
@@ -420,8 +451,8 @@ Libc version: {libc_version}
 Python version: {python_version}
 Python platform: {python_platform}
 Is XPU available: {is_xpu_available}
-DPCPP runtime version: {dpcpp_runtime_version}
-MKL version: {mkl_version}
+DPCPP runtime version: {dpcpp_runtime_version} (from PTDB: {whether_dpcpp_from_ptdb})
+MKL version: {mkl_version} (from PTDB: {whether_mkl_from_ptdb})
 GPU models and configuration: {gpu_models}
 Intel OpenCL ICD version: {intel_opencl_version}
 Level Zero version: {level_zero_version}
