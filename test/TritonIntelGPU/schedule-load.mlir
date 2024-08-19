@@ -54,7 +54,6 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %46 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c48_i32, %c48_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
     // CHECK: scf.for
     // CHECK-COUNT-2: tt.load {{.*}} : !tt.ptr<tensor<16x32xf16>>
-    // CHECK: scf.for
     // CHECK-COUNT-4: tt.load {{.*}} : !tt.ptr<tensor<16x16xf16>>
     // CHECK-COUNT-8: tt.dot {{.*}} {"schedule-group" = 0 : i32}
     // CHECK-COUNT-4: tt.load {{.*}} : !tt.ptr<tensor<16x16xf16>>

@@ -96,22 +96,13 @@ public:
   }
 
 private:
-  bool isInnerLoopLoad(tt::LoadOp op) {
-    // Check if load operand is a BlockArgument
-    if (dyn_cast<BlockArgument>(op.getPtr()))
-      return true;
-    else
-      return false;
-  }
-
   // Backtrace to collect unvisited dot operands
   // Only handle dot operands which is from tt.load and ttgi.extract
   void markUnvisited(Value val, SmallVector<Value> &notVisited) {
     if (visited.contains(val))
       return;
     if (auto load = dyn_cast<tt::LoadOp>(val.getDefiningOp())) {
-      if (isInnerLoopLoad(load))
-        notVisited.push_back(val);
+      notVisited.push_back(val);
     } else if (auto extract = dyn_cast<ttgi::ExtractOp>(val.getDefiningOp())) {
       Value base = extract.getBase();
       markUnvisited(base, notVisited);
