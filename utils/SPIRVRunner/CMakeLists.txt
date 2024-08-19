@@ -8,7 +8,7 @@ list(APPEND CMAKE_PREFIX_PATH "/opt/intel/oneapi/tbb/latest/lib/cmake/tbb/")
 
 find_package(Torch REQUIRED)
 
-set(COMPILE_FLAGS "-fsycl -Wall")
+set(COMPILE_FLAGS "-fsycl -Wall -fpreview-breaking-changes")
 set(LINK_FLAGS "-fsycl -lze_loader")
 
 set(SYCL_FUNCTIONS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/intel/backend/include")
