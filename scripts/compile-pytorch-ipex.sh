@@ -129,6 +129,13 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
   fi
 fi
 
+if [ "$UPSTREAM_PYTORCH" = true ]; then
+  # This is a simplification that allows not to use two flags at the same time.
+  # It's convenient because `UPSTREAM_PYTORCH` flag only specifies the repository
+  # and has no meaning without `BUILD_PYTORCH` flag.
+  BUILD_PYTORCH=true
+fi
+
 if [ "$BUILD_PINNED" = false ]; then
   echo "**** Since '--pinned' option is not used, enable building from source. ****"
   BUILD_FROM_SOURCE=true
