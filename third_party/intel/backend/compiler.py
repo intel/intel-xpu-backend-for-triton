@@ -280,6 +280,7 @@ class XPUBackend(BaseBackend):
             metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
         else:
             metadata["build_flags"] = ""
+        metadata["build_flags"] += " -cl-fp64-gen-emu"
 
         return ret
 

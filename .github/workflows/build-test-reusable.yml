@@ -274,8 +274,8 @@ jobs:
         run: |
           # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
           export WORKSPACE=$GITHUB_WORKSPACE
-          export OverrideDefaultFP64Settings=1
-          export IGC_EnableDPEmulation=1
+          # export OverrideDefaultFP64Settings=1
+          # export IGC_EnableDPEmulation=1
           cd pytorch
           pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
           # TODO: Find the fastest Hugging Face model
