@@ -142,7 +142,7 @@ def make_launcher(constants, signature, ids):
         }[ty]
 
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
-    format = "iiiOKOOOO" + args_format
+    format = "iiiOOOOOO" + args_format
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
     # generate glue code
@@ -306,10 +306,10 @@ def make_launcher(constants, signature, ids):
       PyObject *kernel_metadata = NULL;
       PyObject *launch_metadata = NULL;
       PyObject *py_obj_stream;
-      void* pKrnl;
+      PyObject *py_kernel;
 
       {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &pKrnl,
+      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
         return NULL;
@@ -341,10 +341,12 @@ def make_launcher(constants, signature, ids):
 
       void * pStream = PyLong_AsVoidPtr(py_obj_stream);
       //error check
-      if(pStream == nullptr || pKrnl == nullptr) return NULL;
+      if(pStream == nullptr || py_kernel == nullptr) return NULL;
 
       sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
-      sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
+      sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
+      if(kernel_ptr == nullptr) return NULL;
+      sycl::kernel kernel = *kernel_ptr;
 
       {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
       sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
