@@ -85,8 +85,8 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
 }
 
 /** SYCL Functions **/
-std::tuple<std::unique_ptr<sycl::kernel_bundle<sycl::bundle_state::executable>>,
-           std::unique_ptr<sycl::kernel>, int32_t, int32_t>
+std::tuple<sycl::kernel_bundle<sycl::bundle_state::executable>, sycl::kernel,
+           int32_t, int32_t>
 loadBinary(const std::string &kernel_name, uint8_t *binary_ptr,
            const size_t binary_size, const size_t deviceId) {
   int32_t n_regs = 0;
@@ -97,12 +97,14 @@ loadBinary(const std::string &kernel_name, uint8_t *binary_ptr,
   }
 
   const auto &sycl_l0_device_pair = g_sycl_l0_device_list[deviceId];
-  const sycl::device sycl_device = sycl_l0_device_pair.first; // TODO: reference ok? 
+  const sycl::device sycl_device =
+      sycl_l0_device_pair.first; // TODO: reference ok?
 
   const auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
   const auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
-  const auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
+  const auto l0_context =
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
   const char *build_flags = "";
   auto l0_module = checkSyclErrors(create_module(
       l0_context, l0_device, binary_ptr, binary_size, build_flags));
@@ -113,14 +115,14 @@ loadBinary(const std::string &kernel_name, uint8_t *binary_ptr,
   props.pNext = nullptr;
   gpuAssert((zeKernelGetProperties(l0_kernel, &props)));
   n_spills = props.spillMemSize;
-  auto mod = std::make_unique<sycl::kernel_bundle<sycl::bundle_state::executable>>(sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
+  auto mod = sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
                                       sycl::bundle_state::executable>(
-      {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer}, ctx));
-  auto fun = std::make_unique<sycl::kernel>(sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
-      {*mod, l0_kernel, sycl::ext::oneapi::level_zero::ownership::transfer},
-      ctx));
+      {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer}, ctx);
+  auto fun = sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
+      {mod, l0_kernel, sycl::ext::oneapi::level_zero::ownership::transfer},
+      ctx);
 
-  return std::make_tuple(std::move(mod), std::move(fun), n_regs, n_spills);
+  return std::make_tuple(mod, fun, n_regs, n_spills);
 }
 
 ze_context_handle_t initContext(sycl::queue *sycl_queue) {
@@ -237,11 +239,11 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
   int threads_per_warp = 32;
 
   int _arg3 = 98432;
-  
-  torch::Tensor output =
-      torch::zeros({a.sizes()[0]}, c10::nullopt,
-                   at::TensorOptions{c10::ScalarType::Float}); 
-   std::cout << "Tensor output: " << output.sizes() << ", " << output.scalar_type() << " (" << output.nbytes() << " bytes)"
+
+  torch::Tensor output = torch::zeros(
+      {a.sizes()[0]}, c10::nullopt, at::TensorOptions{c10::ScalarType::Float});
+  std::cout << "Tensor output: " << output.sizes() << ", "
+            << output.scalar_type() << " (" << output.nbytes() << " bytes)"
             << std::endl;
 
   auto tensor_ptr = [](const torch::Tensor &t) -> void * {
@@ -264,9 +266,8 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
   stream.wait();
 
   sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
-                     shared_memory, stream, kernel, a_dev,
-                     b_dev, output_dev, _arg3);
-
+                     shared_memory, stream, kernel, a_dev, b_dev, output_dev,
+                     _arg3);
 
   // copy back
   stream.submit([&](sycl::handler &cgh) {
@@ -281,18 +282,18 @@ int main() {
   // initialize sycl runtime
   sycl::default_selector d_selector;
   sycl::queue q = sycl::queue(d_selector, exception_handler);
-  
+
   std::cout << "Running on device: "
             << q.get_device().get_info<sycl::info::device::name>() << "\n";
-  auto context = initContext(&q);
-  auto device_count = initDevices(&q);
+  initContext(&q);
+  initDevices(&q);
 
   auto a = load_tensor("x.pt");
   auto b = load_tensor("y.pt");
-  std::cout << "Tensor a: " << a.sizes() << ", " << a.scalar_type() << " (" << a.nbytes() << " bytes)"
-            << std::endl;
-  std::cout << "Tensor b: " << b.sizes() << ", " << b.scalar_type() << " (" << b.nbytes() << " bytes)"
-            << std::endl;
+  std::cout << "Tensor a: " << a.sizes() << ", " << a.scalar_type() << " ("
+            << a.nbytes() << " bytes)" << std::endl;
+  std::cout << "Tensor b: " << b.sizes() << ", " << b.scalar_type() << " ("
+            << b.nbytes() << " bytes)" << std::endl;
 
   // read spirv
   auto spirv = read_spirv("add_kernel.spv");
@@ -302,11 +303,11 @@ int main() {
       loadBinary("add_kernel", reinterpret_cast<uint8_t *>(spirv.data()),
                  spirv.size() / sizeof(uint32_t), 0);
 
-  // TODO: missing number of registers 
+  // TODO: missing number of registers
   std::cout << "Loaded kernel with " << n_regs << " registers and " << n_spills
             << " register spills." << std::endl;
 
-  auto output = launchKernel(q, *kernel, a, b);
+  auto output = launchKernel(q, kernel, a, b);
   std::cout << "Kernel return output: " << output[0] << std::endl;
   write_tensor("cpp_outs.pt", output);
 }
