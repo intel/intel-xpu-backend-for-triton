@@ -282,10 +282,6 @@ struct PrefetchOpConversion
           offsetBaseY] =
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
 
-    base = gep(base.getType(), eltTy, base, offsetBaseX);
-    Value rowOffset = mul(zext(i64_ty, offsetBaseY), rowStride);
-    base = gep(base.getType(), eltTy, base, rowOffset);
-
     baseWidth = mul(baseWidth, i64_val(eltTy.getIntOrFloatBitWidth() / 8));
     baseWidth = trunc(i32_ty, baseWidth);
 
@@ -305,6 +301,7 @@ struct PrefetchOpConversion
             i32_val(col * warpsPerCTA[1] * shapePerWarp[1]));
         // Round the offset into to the tensor shape
         offsetX = urem(offsetX, i32_val(tensorShape[1]));
+        offsetX = add(offsetX, offsetBaseX);
         offsetY = add(
             // the offset of this warp.
             mul(multiDimWarpId[0], i32_val(shapePerWarp[0])),
@@ -312,6 +309,7 @@ struct PrefetchOpConversion
             i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
         // Round the offset into to the tensor shape
         offsetY = urem(offsetY, i32_val(tensorShape[0]));
+        offsetY = add(offsetX, offsetBaseY);
 
         auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
             loc,

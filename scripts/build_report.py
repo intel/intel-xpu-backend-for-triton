@@ -19,6 +19,7 @@ def parse_args():
     parser.add_argument("--compiler", help="Name of the compiler, like `triton`.", required=True)
     parser.add_argument("--tflops_col", help="Column name with tflops.", required=True)
     parser.add_argument("--hbm_col", help="Column name with HBM results.", required=False, default=None)
+    parser.add_argument("--tag", help="How to tag results", required=False, default="")
     return parser.parse_args()
 
 
@@ -27,7 +28,7 @@ def check_cols(target_cols, all_cols):
     assert (len(diff) == 0), f"Couldn't find required columns: '{diff}' among available '{all_cols}'"
 
 
-def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler):
+def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag):
     check_cols(param_cols, df.columns)
     check_cols([tflops_col] + [] if hbm_col is None else [hbm_col], df.columns)
     # Build json with parameters
@@ -41,6 +42,7 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler):
     df_results["datetime"] = datetime.datetime.now()
     df_results["benchmark"] = benchmark
     df_results["compiler"] = compiler
+    df_results["tag"] = tag
 
     host_info = {
         n: os.getenv(n.upper(), default="")
@@ -58,7 +60,7 @@ def main():
     param_cols = args.param_cols.split(",")
     df = pd.read_csv(args.source)
     result_df = transform_df(df, param_cols=param_cols, tflops_col=args.tflops_col, hbm_col=args.hbm_col,
-                             benchmark=args.benchmark, compiler=args.compiler)
+                             benchmark=args.benchmark, compiler=args.compiler, tag=args.tag)
     result_df.to_csv(args.target, index=False)
 
 

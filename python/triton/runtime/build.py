@@ -63,6 +63,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         cc_cmd = [cxx]
         if icpx is not None:
             cc_cmd += ["-fsycl"]
+        cc_cmd += ["-O3"]
     else:
         cc_cmd = [cc, "-O3"]
 

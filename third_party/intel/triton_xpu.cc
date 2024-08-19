@@ -118,9 +118,7 @@ void init_triton_intel(py::module &&m) {
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {
-    // FIXME: Change triple back to spir64-unknown-unknown, when missing
-    // SPIR-V 1.4 features are backported.
-    std::string triple = "spirv64v1.3-unknown-unknown";
+    std::string triple = "spir64-unknown-unknown";
     std::string layout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:"
                          "256-v256:256-v512:512-v1024:1024-n8:16:32:64";
     mod->setTargetTriple(triple);
@@ -132,7 +130,7 @@ void init_triton_intel(py::module &&m) {
 
   m.def(
       "translate_to_spirv",
-      [](const std::string llvmIR) -> std::tuple<py::object, std::string> {
+      [](const std::string &llvmIR) -> std::tuple<py::object, std::string> {
         std::string name;
         std::string spirvBitcode;
         {
@@ -151,7 +149,7 @@ void init_triton_intel(py::module &&m) {
           }
           // Get name of kernel in the module
           std::set<llvm::Function *> kernels;
-          uint32_t numKernels = findKernels(*module, kernels);
+          const uint32_t numKernels = findKernels(*module, kernels);
           assert(numKernels == 1 && "Expecting a single SPIR kernel");
           name = (*kernels.begin())->getName().str();
           spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
