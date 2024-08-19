@@ -26,33 +26,6 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
-/// Check if given value is divisible by the divisor.
-bool isDivisible(Value value, unsigned divisor) {
-  // Case 1: Value is defined by a constant operation
-  if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
-    auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
-    return integerAttr && integerAttr.getValue().getZExtValue() % divisor == 0;
-  }
-
-  // Case 2: Value is a block argument of the entry block
-  if (value.getParentBlock()->isEntryBlock() && isa<BlockArgument>(value)) {
-    BlockArgument blockArg = cast<BlockArgument>(value);
-    Operation *parentOp = blockArg.getOwner()->getParentOp();
-    if (auto funcOp = dyn_cast<tt::FuncOp>(parentOp)) {
-      auto divisibilityAttr = funcOp.getArgAttrOfType<IntegerAttr>(
-          blockArg.getArgNumber(), "tt.divisibility");
-      return divisibilityAttr &&
-             divisibilityAttr.getValue().getZExtValue() % divisor == 0;
-    }
-  }
-
-  // Case 3: Value is defined by a sign extension operation
-  if (auto extSIOp = value.getDefiningOp<arith::ExtSIOp>())
-    return isDivisible(extSIOp->getOperand(0), divisor);
-
-  return false;
-}
-
 /// Check if the tensor pointer should be removed. The tensor pointer should be
 /// removed if:
 ///   - the tensor pointer does not have DotEncoding with DpasEncoding parent
@@ -71,12 +44,6 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
       !(isUsedByStoreOp && ttgi::hasDpasEncoding(tensorType)))
     return true;
 
-  // FIXME: Temporary workaround to avoid
-  // compile error on fp8 2d block read
-  Type eltType = tensorType.getElementType();
-  if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FNUZ())
-    return true;
-
   TypedValue<triton::PointerType> base = op.getBase();
   Operation::operand_range shape = op.getShape();
   Operation::operand_range strides = op.getStrides();
@@ -90,7 +57,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
     auto pitch = strides[0];
     // Across Intel platforms, the strictest pitch restriction is to be a
     // multiple of OWord(128 bits).
-    if (!isDivisible(pitch, 128 / tensorType.getElementTypeBitWidth()))
+    if (!ttgi::isDivisible(pitch, 128 / tensorType.getElementTypeBitWidth()))
       return true;
   }
 

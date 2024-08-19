@@ -263,7 +263,6 @@ run_benchmark_gemm() {
   fi
   cd $TRITON_PROJ/benchmarks; python setup.py install
   TRITON_INTEL_ADVANCED_PATH=0 \
-  TRITON_INTEL_ENABLE_FAST_PREFETCH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
   IGC_DisableLoopUnroll=1 \

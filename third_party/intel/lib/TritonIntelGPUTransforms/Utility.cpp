@@ -19,6 +19,7 @@
 #include <optional>
 
 using namespace mlir;
+namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
@@ -37,17 +38,43 @@ static bool isSingleValue(Value value) {
   return true;
 }
 
+bool isDivisible(Value value, unsigned divisor) {
+  // Case 1: Value is defined by a constant operation
+  if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
+    auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
+    return integerAttr && integerAttr.getValue().getZExtValue() % divisor == 0;
+  }
+
+  // Case 2: Value is a block argument of the entry block
+  if (value.getParentBlock()->isEntryBlock() && isa<BlockArgument>(value)) {
+    BlockArgument blockArg = cast<BlockArgument>(value);
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    if (auto funcOp = dyn_cast<tt::FuncOp>(parentOp)) {
+      auto divisibilityAttr = funcOp.getArgAttrOfType<IntegerAttr>(
+          blockArg.getArgNumber(), "tt.divisibility");
+      return divisibilityAttr &&
+             divisibilityAttr.getValue().getZExtValue() % divisor == 0;
+    }
+  }
+
+  // Case 3: Value is defined by a sign extension operation
+  if (auto extSIOp = value.getDefiningOp<arith::ExtSIOp>())
+    return isDivisible(extSIOp->getOperand(0), divisor);
+
+  return false;
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
-  if (auto makeTensorPtrOp = dyn_cast<triton::MakeTensorPtrOp>(op))
+  if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
     return encoding;
-  if (auto advanceOp = dyn_cast<triton::AdvanceOp>(op))
+  if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op))
     return encoding;
 
   return mlir::inferSrcEncoding(op, encoding);
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
-  assert((isa<triton::LoadOp>(op) || isa<triton::StoreOp>(op)) &&
+  assert((isa<tt::LoadOp>(op) || isa<tt::StoreOp>(op)) &&
          "Expecting Triton LoadOp or StoreOp");
   Value base = op->getOperand(0);
 
@@ -60,8 +87,8 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // we can presume a high hit-rate that makes it cheap to load
   if (auto ptrType = dyn_cast<RankedTensorType>(base.getType())) {
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     return ptrType.getNumElements() >= numWarps * threadsPerWarp;
   }
 
@@ -97,12 +124,13 @@ getDotEncoding(RankedTensorType tensorType) {
   return dotLayout;
 }
 
-// Check if the convert will be a no-op in codegen.
+// Check if the convert will be performed by reordering registers.
 static bool isFreeConvert(Operation *op) {
-  if (auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op))
-    return isMmaToMmaShortcut(convertOp.getSrc().getType(),
+  auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op);
+  if (!convertOp)
+    return false;
+  return cvtReordersRegisters(convertOp.getSrc().getType(),
                               convertOp.getType());
-  return false;
 }
 
 LogicalResult
@@ -156,7 +184,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
-      if (isa<triton::CatOp>(definingOp))
+      if (isa<tt::CatOp>(definingOp))
         return failure();
       for (Value operand : definingOp->getOperands()) {
         auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);

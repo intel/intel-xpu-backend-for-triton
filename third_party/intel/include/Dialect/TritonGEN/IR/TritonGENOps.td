@@ -153,9 +153,12 @@ def TritonGEN_BarrierOp : TritonGEN_Op<"barrier"> {
     The `triton_gen.barrier` operation performs a workgroup barrier and ensures
     all outstanding memory transaction using local or global memory are complete.
   }];
-  let arguments = (ins);
+  let arguments = (ins TritonGEN_MemFence:$mem_fence);
   let results = (outs);
   let assemblyFormat = "attr-dict";
+  let assemblyFormat = [{
+    ` ` `{` `mem_fence` `=` $mem_fence `}` attr-dict
+  }];
 }
 
 def TritonGEN_SplitBarrierSignalOp : TritonGEN_Op<"split_barrier_signal"> {

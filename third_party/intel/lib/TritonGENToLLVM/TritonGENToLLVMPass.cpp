@@ -201,6 +201,34 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
+static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+  VectorType resTy = op.getRes().getType();
+  unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
+  bool needsResElemSizeEqualTo32 =
+      op.getElemSizeInBits() == 32 || op.getVnniTransform();
+  assert((!needsResElemSizeEqualTo32 || resElemTySize == 32) &&
+         "Expecting 32-bit element type");
+  if (!needsResElemSizeEqualTo32 && resElemTySize != 16)
+    return false;
+
+  if (op.getVnniTransform())
+    return true;
+
+  uint32_t tileWidth = op.getTileWidth();
+  switch (op.getElemSizeInBits()) {
+  case 8:
+    return (tileWidth == 32);
+  case 16:
+    return (tileWidth == 16);
+  case 32:
+    return (tileWidth == 8 || tileWidth == 16);
+  default:
+    llvm_unreachable("unexpected element size");
+  }
+
+  return false;
+}
+
 static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                                      ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
@@ -746,11 +774,6 @@ struct TritonGENBarrierLowering
     : public ConvertOpToLLVMPattern<TritonGEN::BarrierOp> {
   using ConvertOpToLLVMPattern<TritonGEN::BarrierOp>::ConvertOpToLLVMPattern;
 
-  enum MemFence {
-    Local = 0x01,
-    Global = 0x02,
-  };
-
   LogicalResult
   matchAndRewrite(TritonGEN::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -758,7 +781,7 @@ struct TritonGENBarrierLowering
     Location loc = op->getLoc();
     Type retType = void_ty(ctx);
     IntegerType argType = int_ty(32);
-    Value arg = i32_val(MemFence::Local);
+    Value arg = i32_val(static_cast<int>(op.getMemFence()));
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::Convergent, std::nullopt}}, ctx);
@@ -1183,7 +1206,8 @@ struct TritonMatrix2DBlockLoadLowering
     }
 
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA") ||
+        !isOCLBuiltinAvailable(op)) {
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
     }

@@ -18,6 +18,9 @@ class ConversionPatternRewriter;
 
 namespace mlir::triton::gpu::intel {
 
+// Check if given value is divisible by the divisor.
+bool isDivisible(Value value, unsigned divisor);
+
 // Infers the encoding of the source of op given the result encoding.
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
 

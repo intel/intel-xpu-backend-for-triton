@@ -427,11 +427,6 @@ void init_triton_llvm(py::module &&m) {
       // linkage as a signifier of kernel functions.
       for (llvm::Function &fn : dstMod->functions()) {
         if (externalFns.count(fn.getName().str())) {
-          // FIXME: Temporary workaround to avoid __devicelib_assert_fail
-          // optimization with InternalLinkage, which causes
-          // test_subprocess.py::test_assert to fail.
-          if (fn.getName().str() == "__devicelib_assert_fail")
-            continue;
           fn.setLinkage(llvm::GlobalValue::InternalLinkage);
         }
       }
