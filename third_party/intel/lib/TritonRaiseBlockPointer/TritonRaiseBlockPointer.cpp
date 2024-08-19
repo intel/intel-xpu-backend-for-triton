@@ -27,7 +27,7 @@ constexpr unsigned shapeAndStridesBitwidth = 64;
 
 std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
   if (ofr.is<Attribute>() && isa<IntegerAttr>(ofr.get<Attribute>()))
-    return dyn_cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
+    return cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
   return std::nullopt;
 }
 
@@ -56,17 +56,12 @@ std::optional<int64_t> getFoldedConstantValue(Operation *op) {
     return intAttr.value();
   }
 
-  auto val = dyn_cast<Value>(results[0]);
-  assert(val && "op must have at least one result");
+  auto val = cast<Value>(results[0]);
   auto constOp = val.getDefiningOp<arith::ConstantOp>();
   if (!constOp)
     return std::nullopt;
 
-  intAttr = getIntAttr(constOp.getValue());
-  if (intAttr.has_value()) {
-    return intAttr.value();
-  }
-  return std::nullopt;
+  return getIntAttr(constOp.getValue());
 }
 
 // return true if the `val` value is a constant containing a value equal to ref
@@ -74,11 +69,7 @@ bool hasConstEqualTo(const Value val, const int ref) {
   auto defOp = val.getDefiningOp();
   if (!defOp)
     return false;
-  auto intVal = getFoldedConstantValue(defOp);
-  if (intVal.has_value()) {
-    return (intVal.value() == ref);
-  }
-  return false;
+  return (getFoldedConstantValue(defOp) == ref);
 }
 
 // return true if the `val` value is a constant containing a value equal to zero
@@ -158,11 +149,11 @@ struct PtrState {
 
     source = lhsState.source ? lhsState.source : rhsState.source;
 
-    if (lhsState.scalar && rhsState.scalar) {
+    if (lhsState.scalar && rhsState.scalar) { // both lhs and rhs are scalars
       auto addOp =
           builder.create<arith::AddIOp>(loc, lhsState.scalar, rhsState.scalar);
       scalar = addOp.getResult();
-    } else if (lhsState.getRank() == 0) { // both lhs and rhs are scalars
+    } else if (lhsState.getRank() == 0) {
       scalar = lhsState.scalar ? lhsState.scalar : rhsState.scalar;
     }
 
@@ -747,8 +738,9 @@ struct TritonRaiseBlockPointer
                                           bool addedByPass = false) {
     assert(state.isEmpty() && "state is a return argument");
 
-    if (knownPtrs.find(makeTPtrOp.getResult()) != knownPtrs.end()) {
-      state = knownPtrs.lookup(makeTPtrOp.getResult());
+    if (auto iter = knownPtrs.find(makeTPtrOp.getResult());
+        iter != knownPtrs.end()) {
+      state = iter->second;
       return success();
     }
 
@@ -909,8 +901,8 @@ struct TritonRaiseBlockPointer
     }
 
     SmallVector<int> boundary;
-    if (knownPtrs.find(ptr) != knownPtrs.end()) {
-      auto state = knownPtrs.lookup(ptr);
+    if (auto iter = knownPtrs.find(ptr); iter != knownPtrs.end()) {
+      auto state = iter->second;
       for (int axis = 0; axis < state.shape.size(); ++axis) {
         if (!hasConstZero(state.shape[axis]))
           boundary.push_back(axis);
@@ -1154,19 +1146,19 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   auto resultType = cast<ShapedType>(op.getResult().getType());
   Value offset = convertScalarToDtype(builder, loc, state.scalar, offsetType,
                                       /*isUnsignedCast=*/true);
-  size_t i = 0;
+  state.offsets.push_back(offset);
+  state.offsets.insert(
+      state.offsets.end(), resultType.getShape().size() - 1,
+      builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth));
+  state.strides.insert(
+      state.strides.end(), resultType.getShape().size(),
+      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
+  state.shape.insert(
+      state.shape.end(), resultType.getShape().size(),
+      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
+
   for (int32_t dim : resultType.getShape()) {
-    if (i == 0)
-      state.offsets.push_back(offset);
-    else
-      state.offsets.push_back(
-          builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth));
     state.sizes.push_back(dim);
-    state.strides.push_back(
-        builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
-    state.shape.push_back(
-        builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
-    i++;
   }
 
   return success();
