@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "5 2 * * *"
+  push:
+    paths:
+      - .github/workflows/conda-build-test.yml
+      - scripts/triton.yml
 
 permissions: read-all
 
@@ -16,10 +20,7 @@ jobs:
 
   integration-tests:
     name: Integration tests
-    runs-on:
-      - max1100
-      - rolling
-      - runner-0.0.19
+    runs-on: Linux
     strategy:
       matrix:
         python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
