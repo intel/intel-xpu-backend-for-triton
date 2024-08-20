@@ -130,6 +130,24 @@ struct PrintOpConversion
       }
       os << ") ";
 
+      auto loc = UnknownLoc::get(rewriter.getContext());
+      auto mod = rewriter.getInsertionBlock()
+                     ->getParent()
+                     ->getParentOfType<ModuleOp>();
+      unsigned iWarpSize =
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      auto builder = TritonLLVMOpBuilder(loc, rewriter);
+      Value threadId = getThreadId(rewriter, loc);
+      Value warpSize = builder.i32_val(iWarpSize);
+      Value warpId = builder.udiv(threadId, warpSize);
+      Value laneId = builder.urem(threadId, warpSize);
+      os << "warp: " << getFormatSubstr(warpId);
+      printfOperands.push_back(warpId);
+      os << " lane: " << getFormatSubstr(laneId);
+      printfOperands.push_back(laneId);
+
+      os << " ";
+
       // If `rank` is large enough, we could end up exceeding
       // kMaxPrintfOperands.  In that case, just truncate the index.
       // (Subtract 2 because we're going to add two operands after the index.)
