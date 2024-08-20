@@ -11,6 +11,12 @@ python/triton/_C/*.pyd
 python/triton/_C/*.so
 python/triton/_C/*.dylib
 
+python/*.whl
+benchmarks/*.egg-info/
+benchmarks/**/*.so
+dist/
+inductor_log/
+
 # Backends copied from submodules
 python/triton/backends/
 !python/triton/backends/__init__.py
