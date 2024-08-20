@@ -8,7 +8,9 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -388,43 +390,43 @@ public:
     SmallVector<Value> operands = adaptor.getOperands();
     auto dstType =
         cast<VectorType>(getTypeConverter()->convertType(op.getType()));
-    unsigned numElts = dstType.getNumElements();
-    SmallVector<int32_t> indices(numElts);
-    std::iota(indices.begin(), indices.end(), 0);
-    DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
-
-    switch (operands.size()) {
-    case 1:
-      rewriter.replaceOp(op, operands[0]);
-      break;
-    case 2:
-      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(
-          op, dstType, operands[0], operands[1], attr);
-      break;
-    case 4: {
-      auto subType = vec_ty(dstType.getElementType(), numElts / 2);
-      indices.pop_back_n(numElts / 2);
-      DenseI32ArrayAttr attr01 = rewriter.getDenseI32ArrayAttr(indices);
-      auto shfl01 = rewriter.create<LLVM::ShuffleVectorOp>(
-          loc, subType, operands[0], operands[1], attr01);
-      DenseI32ArrayAttr attr23 = rewriter.getDenseI32ArrayAttr(indices);
-      auto shfl23 = rewriter.create<LLVM::ShuffleVectorOp>(
-          loc, subType, operands[2], operands[3], attr23);
-      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(op, dstType, shfl01,
-                                                         shfl23, attr);
-    } break;
-    default: {
-      unsigned num = operands.size();
-      Value undef = undef(dstType);
-      for (unsigned i = 0; i < num; ++i)
-        undef =
-            insert_element(dstType, undef, operands[i],
-                           rewriter.create<LLVM::ConstantOp>(loc, i32_ty, i));
-
-      rewriter.replaceOp(op, undef);
-    }
-    }
-
+    Value poison = rewriter.create<LLVM::PoisonOp>(loc, dstType);
+    Value result =
+        TypeSwitch<Type, Value>(operands.front().getType())
+            .Case([&rewriter, loc, operands, poison](VectorType vecType) {
+              auto enumeratedOperands = llvm::enumerate(operands);
+              unsigned numElements = vecType.getNumElements();
+              return std::accumulate(
+                  std::begin(enumeratedOperands), std::end(enumeratedOperands),
+                  poison,
+                  [&rewriter, loc, numElements](Value acc, const auto &pair) {
+                    auto [index, operand] = pair;
+                    for (unsigned i = 0; i < numElements; ++i) {
+                      Value extractIdx = rewriter.create<LLVM::ConstantOp>(
+                          loc, rewriter.getI32Type(), index + i);
+                      Value insertIdx = rewriter.create<LLVM::ConstantOp>(
+                          loc, rewriter.getI32Type(), index * numElements + i);
+                      Value val = rewriter.create<LLVM::ExtractElementOp>(
+                          loc, operand, extractIdx);
+                      acc = rewriter.create<LLVM::InsertElementOp>(
+                          loc, acc, val, insertIdx);
+                    }
+                    return acc;
+                  });
+            })
+            .Default([&rewriter, loc, operands, poison](auto) {
+              auto enumeratedOperands = llvm::enumerate(operands);
+              return std::accumulate(
+                  std::begin(enumeratedOperands), std::end(enumeratedOperands),
+                  poison, [&rewriter, loc](Value acc, const auto &P) {
+                    auto [index, operand] = P;
+                    Value idx = rewriter.create<LLVM::ConstantOp>(
+                        loc, rewriter.getI32Type(), index);
+                    return rewriter.create<LLVM::InsertElementOp>(loc, acc,
+                                                                  operand, idx);
+                  });
+            });
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
