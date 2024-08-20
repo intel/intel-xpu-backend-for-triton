@@ -8,9 +8,14 @@ on:
         type: string
         default: ""
       suite:
-        description: Test suite, all if empty
+        description: Space separated lists of test suites, all if empty
         type: string
-        default: inductor/test_triton_kernels.py
+        default: >-
+          inductor/test_codegen_triton.py
+          inductor/test_triton_extension_backend.py
+          inductor/test_triton_heuristics.py
+          inductor/test_triton_wrapper.py
+          inductor/test_triton_kernels.py
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -19,8 +24,8 @@ on:
 permissions: read-all
 
 env:
-  PYTHON_VERSION: "3.10"
-  PYTORCH_REPO: "pytorch/pytorch"
+  PYTHON_VERSION: "3.9"
+  PYTORCH_REPO: pytorch/pytorch
 
 jobs:
   build:
@@ -78,10 +83,13 @@ jobs:
           if [[ -z "${{ github.event.inputs.suite }}" ]]; then
             for test in $(ls test/inductor | grep test);
             do
-              test_cmd="${test_cmd} inductor/$test";
+              test_cmd="${test_cmd} inductor/$test"
             done
           else
-            test_cmd="${test_cmd} '${{ github.event.inputs.suite }}'"
+            for test in ${{ github.event.inputs.suite }};
+            do
+              test_cmd="${test_cmd} $test"
+            done
           fi
           eval $test_cmd
 

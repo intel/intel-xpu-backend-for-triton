@@ -2,6 +2,7 @@
 
 #include <numeric>
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -413,6 +414,11 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
           << "B = [" << rB << "], "
           << "C = [" << rC << "]"
           << "}>";
+}
+
+std::optional<LinearLayout>
+DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  return DPAStoLinearLayout(shape, *this);
 }
 
 //===----------------------------------------------------------------------===//

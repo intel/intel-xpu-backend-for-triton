@@ -18,6 +18,9 @@ class ConversionPatternRewriter;
 
 namespace mlir::triton::gpu::intel {
 
+// Check if given value is divisible by the divisor.
+bool isDivisible(Value value, unsigned divisor);
+
 // Infers the encoding of the source of op given the result encoding.
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
 
@@ -48,6 +51,10 @@ LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
 LLVM::CallOp createSPIRVBuiltinCall(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     LLVM::LLVMFuncOp func, ValueRange args);
+
+// Return true if the `val` value is a constant containing a value equal to
+// expected.
+bool isConstant(Value val, const unsigned expected);
 
 } // namespace mlir::triton::gpu::intel
 

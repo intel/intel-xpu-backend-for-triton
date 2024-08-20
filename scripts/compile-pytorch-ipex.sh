@@ -8,7 +8,7 @@ SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd 
 BUILD_PYTORCH=false
 UPSTREAM_PYTORCH=false
 BUILD_IPEX=false
-FAKE_IPEX=false
+NO_OP_IPEX=false
 BUILD_PINNED=false
 BUILD_FROM_SOURCE=false
 CLEAN=false
@@ -27,8 +27,8 @@ for arg in "$@"; do
       BUILD_IPEX=true
       shift
       ;;
-    --fake-ipex)
-      FAKE_IPEX=true
+    --no-op-ipex)
+      NO_OP_IPEX=true
       shift
       ;;
     --pinned)
@@ -49,7 +49,7 @@ for arg in "$@"; do
       shift
       ;;
     --help)
-      echo "Example usage: ./compile-pytorch-ipex.sh [--pytorch | --upstream-pytorch | --ipex | --fake-ipex | --pinned | --source | --clean | --venv]"
+      echo "Example usage: ./compile-pytorch-ipex.sh [--pytorch | --upstream-pytorch | --ipex | --no-op-ipex | --pinned | --source | --clean | --venv]"
       exit 1
       ;;
     *)
@@ -60,6 +60,27 @@ for arg in "$@"; do
 done
 
 set +o xtrace
+
+if [ "$BUILD_PYTORCH" = true ] && [ "$UPSTREAM_PYTORCH" = true ]; then
+  echo "***** Use '--pytorch' or '--upstream-pytorch' *****"
+  exit 1
+fi
+
+if [ "$BUILD_IPEX" = true ] && [ "$NO_OP_IPEX" = true ]; then
+  echo "***** Use '--ipex' or '--no-op-ipex' *****"
+  exit 1
+fi
+
+if [ "$BUILD_PYTORCH" = true ] && [ "$NO_OP_IPEX" = true ]; then
+  echo "***** Use of '--no-op-ipex' isn't allowed with '--pytorch' *****"
+  exit 1
+fi
+
+if [ "$UPSTREAM_PYTORCH" = true ] && [ "$BUILD_IPEX" = true ]; then
+  echo "***** Use of '--ipex' isn't allowed with '--upstream-pytorch' *****"
+  exit 1
+fi
+
 if [ ! -v BASE ]; then
   echo "**** BASE is not given *****"
   BASE=$(cd $(dirname "$0")/../.. && pwd)
@@ -81,38 +102,58 @@ if [ "$CLEAN" = true ]; then
   fi
 fi
 
+if [ "$UPSTREAM_PYTORCH" = true ]; then
+  # This is a simplification that allows not to use two flags at the same time.
+  # It's convenient because `UPSTREAM_PYTORCH` flag only specifies the repository
+  # and has no meaning without `BUILD_PYTORCH` flag.
+  BUILD_PYTORCH=true
+  # Only no-op IPEX works with PyTorch upstream.
+  NO_OP_IPEX=true
+fi
+
+if [ "$NO_OP_IPEX" = true ]; then
+  # This is a simplification that allows not to use two flags at the same time.
+  # It's convenient because `NO_OP_IPEX` has no meaning without `BUILD_IPEX` flag.
+  BUILD_IPEX=true
+fi
+
 if [ "$BUILD_PINNED" = true ]; then
   echo "**** Determine if the installed PyTorch version is the same as the pinned version. ****"
-  INSTALL_PYTORCH=true
-  if pip show torch &>/dev/null; then
+  if [ "$UPSTREAM_PYTORCH" = true ]; then
+    PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch-upstream.txt)"
+  else
     PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
+  fi
+
+  if pip show torch &>/dev/null; then
     PYTORCH_CURRENT_COMMIT=`python -c "import torch;print(torch.__version__)"`
     PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
     if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
       echo "**** PyTorch is already installed and its current commit is equal to the pinned commit: $PYTORCH_PINNED_COMMIT. ****"
-      INSTALL_PYTORCH=false
+      BUILD_PYTORCH=false
     else
       echo "**** Current PyTorch commit $PYTORCH_CURRENT_COMMIT ****"
       echo "**** Pinned PyTorch commit $PYTORCH_PINNED_COMMIT ****"
     fi
   fi
+
   echo "**** Determine if the installed IPEX version is the same as the pinned version. ****"
-  INSTALL_IPEX=true
+  IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
+
   if pip show intel-extension-for-pytorch &>/dev/null; then
-    IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
     IPEX_CURRENT_COMMIT=`python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"`
     IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
     if [[ "$IPEX_PINNED_COMMIT" = "$IPEX_CURRENT_COMMIT"* ]]; then
       echo "**** IPEX is already installed and its current commit is equal to the pinned commit: $IPEX_PINNED_COMMIT. ****"
-      INSTALL_IPEX=false
+      BUILD_IPEX=false
     else
       echo "**** Current IPEX commit $IPEX_CURRENT_COMMIT ****"
       echo "**** Pinned IPEX commit $IPEX_PINNED_COMMIT ****"
     fi
   fi
 
-  if [[ "$INSTALL_PYTORCH" = false && "$INSTALL_IPEX" = false ]]; then
-    echo "**** Nothing needs to be installed, just exit. ****"
+  if [[ "$BUILD_PYTORCH" = false && "$BUILD_IPEX" = false ]]; then
+    echo "**** There is no need to build anything, just exit. ****"
     exit 0
   fi
 fi
@@ -184,8 +225,7 @@ build_pytorch() {
   if [ ! -d "$PYTORCH_PROJ/dist" ]; then
     if [ "$BUILD_PINNED" = true ]; then
       git fetch --all
-      PYTORCH_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
-      git checkout $PYTORCH_COMMIT_ID
+      git checkout $PYTORCH_PINNED_COMMIT
       git submodule update --recursive
     fi
     pip install cmake ninja
@@ -203,28 +243,29 @@ build_pytorch() {
 
 build_ipex() {
   if [ ! -d "$IPEX_PROJ" ]; then
-    echo "**** Cloning $IPEX_PROJ ****"
     cd $BASE
-    if [ "$FAKE_IPEX" = true ]; then
+    if [ "$NO_OP_IPEX" = true ]; then
+      echo "**** Setup no-op $IPEX_PROJ ****"
       mkdir intel-extension-for-pytorch
       cd intel-extension-for-pytorch
       cat > setup.py <<EOF
 from setuptools import setup
 
 name = "intel-extension-for-pytorch"
-version = "0.1+FAKE"
+version = "2.4.0+noop"
 
 setup(
     name=name,
     version=version,
-    description="FAKE Intel Extension for PyTorch"
+    description="No-op Intel Extension for PyTorch"
 )
 EOF
 
       mkdir intel_extension_for_pytorch
-      echo '__version__ = "0.1+FAKE"' > intel_extension_for_pytorch/__init__.py
+      echo '__version__ = "2.4.0+noop"' > intel_extension_for_pytorch/__init__.py
       touch requirements.txt
     else
+      echo "**** Cloning $IPEX_PROJ ****"
       git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/intel/intel-extension-for-pytorch.git
     fi
   fi
@@ -232,9 +273,8 @@ EOF
   cd $IPEX_PROJ
   if [ ! -d "$IPEX_PROJ/dist" ]; then
     if [ "$BUILD_PINNED" = true ]; then
-      IPEX_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
-      git fetch origin $IPEX_COMMIT_ID
-      git checkout $IPEX_COMMIT_ID
+      git fetch origin $IPEX_PINNED_COMMIT
+      git checkout $IPEX_PINNED_COMMIT
       git submodule sync
       git submodule update --init --recursive
     fi

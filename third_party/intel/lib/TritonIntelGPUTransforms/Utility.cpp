@@ -19,6 +19,7 @@
 #include <optional>
 
 using namespace mlir;
+namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
@@ -37,17 +38,43 @@ static bool isSingleValue(Value value) {
   return true;
 }
 
+bool isDivisible(Value value, unsigned divisor) {
+  // Case 1: Value is defined by a constant operation
+  if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
+    auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
+    return integerAttr && integerAttr.getValue().getZExtValue() % divisor == 0;
+  }
+
+  // Case 2: Value is a block argument of the entry block
+  if (value.getParentBlock()->isEntryBlock() && isa<BlockArgument>(value)) {
+    BlockArgument blockArg = cast<BlockArgument>(value);
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    if (auto funcOp = dyn_cast<tt::FuncOp>(parentOp)) {
+      auto divisibilityAttr = funcOp.getArgAttrOfType<IntegerAttr>(
+          blockArg.getArgNumber(), "tt.divisibility");
+      return divisibilityAttr &&
+             divisibilityAttr.getValue().getZExtValue() % divisor == 0;
+    }
+  }
+
+  // Case 3: Value is defined by a sign extension operation
+  if (auto extSIOp = value.getDefiningOp<arith::ExtSIOp>())
+    return isDivisible(extSIOp->getOperand(0), divisor);
+
+  return false;
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
-  if (auto makeTensorPtrOp = dyn_cast<triton::MakeTensorPtrOp>(op))
+  if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
     return encoding;
-  if (auto advanceOp = dyn_cast<triton::AdvanceOp>(op))
+  if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op))
     return encoding;
 
   return mlir::inferSrcEncoding(op, encoding);
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
-  assert((isa<triton::LoadOp>(op) || isa<triton::StoreOp>(op)) &&
+  assert((isa<tt::LoadOp>(op) || isa<tt::StoreOp>(op)) &&
          "Expecting Triton LoadOp or StoreOp");
   Value base = op->getOperand(0);
 
@@ -60,8 +87,8 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // we can presume a high hit-rate that makes it cheap to load
   if (auto ptrType = dyn_cast<RankedTensorType>(base.getType())) {
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     return ptrType.getNumElements() >= numWarps * threadsPerWarp;
   }
 
@@ -99,7 +126,7 @@ getDotEncoding(RankedTensorType tensorType) {
 
 // Check if the convert will be performed by reordering registers.
 static bool isFreeConvert(Operation *op) {
-  auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
+  auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op);
   if (!convertOp)
     return false;
   return cvtReordersRegisters(convertOp.getSrc().getType(),
@@ -157,7 +184,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
-      if (isa<triton::CatOp>(definingOp))
+      if (isa<tt::CatOp>(definingOp))
         return failure();
       for (Value operand : definingOp->getOperands()) {
         auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
@@ -206,6 +233,52 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
   auto call = rewriter.create<LLVM::CallOp>(loc, func, args);
   call.setCConv(func.getCConv());
   return call;
+}
+
+static std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
+  if (ofr.is<Attribute>() && isa<IntegerAttr>(ofr.get<Attribute>()))
+    return cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
+  return std::nullopt;
+}
+
+// This function folds the `op` operation and returns the constant value if it
+// has successfully folded to a constant. Otherwise, it returns `std::nullopt`.
+static std::optional<int64_t> getFoldedConstantValue(Operation *op) {
+  SmallVector<OpFoldResult> results;
+  if (failed(op->fold(results))) {
+    return std::nullopt;
+  }
+
+  // If fold succeeded but `results` is empty, we give a second try, after the
+  // operands have been switched during the first call to `fold()`.
+  if (results.empty()) {
+    if (failed(op->fold(results))) {
+      return std::nullopt;
+    }
+  }
+
+  if (results.size() != 1) {
+    return std::nullopt;
+  }
+
+  auto intAttr = getIntAttr(results[0]);
+  if (intAttr.has_value()) {
+    return intAttr.value();
+  }
+
+  auto val = cast<Value>(results[0]);
+  auto constOp = val.getDefiningOp<arith::ConstantOp>();
+  if (!constOp)
+    return std::nullopt;
+
+  return getIntAttr(constOp.getValue());
+}
+
+bool isConstant(Value val, const unsigned expected) {
+  auto defOp = val.getDefiningOp();
+  if (!defOp)
+    return false;
+  return (getFoldedConstantValue(defOp) == expected);
 }
 
 } // namespace mlir::triton::gpu::intel

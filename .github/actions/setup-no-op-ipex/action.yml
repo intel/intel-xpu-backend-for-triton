@@ -1,9 +1,9 @@
-name: setup-fake-ipex
-description: Create a fake package that imitates installed IPEX
+name: setup-no-op-ipex
+description: Create a no-op package that imitates installed IPEX
 runs:
   using: "composite"
   steps:
-    - name: Create and install fake IPEX
+    - name: Create and install no-op IPEX
       shell: bash
       run: |
         mkdir intel-extension-for-pytorch
@@ -12,14 +12,14 @@ runs:
         from setuptools import setup
 
         name = "intel-extension-for-pytorch"
-        version = "0.1+FAKE"
+        version = "2.4.0+noop"
 
         setup(
             name=name,
             version=version,
-            description="FAKE Intel Extension for PyTorch"
+            description="No-op Intel Extension for PyTorch"
         )
         EOF
         mkdir intel_extension_for_pytorch
-        echo '__version__ = "0.1+FAKE"' > intel_extension_for_pytorch/__init__.py
+        echo '__version__ = "2.4.0+noop"' > intel_extension_for_pytorch/__init__.py
         pip install -e .

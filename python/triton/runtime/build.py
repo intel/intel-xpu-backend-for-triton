@@ -64,9 +64,10 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         if icpx is not None:
             cc_cmd += ["-fsycl"]
     else:
-        cc_cmd = [cc, "-O3"]
+        cc_cmd = [cc]
 
-    cc_cmd += [src, "-shared", "-fPIC", "-o", so]
+    # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
+    cc_cmd += [src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
     cc_cmd += [f'-l{lib}' for lib in libraries]
     cc_cmd += [f"-L{dir}" for dir in library_dirs]
     cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]

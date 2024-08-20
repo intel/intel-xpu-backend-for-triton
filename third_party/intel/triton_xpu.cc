@@ -33,11 +33,11 @@ using ret = py::return_value_policy;
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
     pm.addPass(builder({val0, val1}));                                         \
   })
-#define ADD_PASS_WRAPPER_OPT_4(name, builder, ty0, ty1, ty2, ty3)              \
-  m.def(name,                                                                  \
-        [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2, ty3 val3) {    \
-          pm.addPass(builder({val0, val1, val2, val3}));                       \
-        })
+#define ADD_PASS_WRAPPER_OPT_5(name, builder, ty0, ty1, ty2, ty3, ty4)         \
+  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2,          \
+                 ty3 val3, ty4 val4) {                                         \
+    pm.addPass(builder({val0, val1, val2, val3, val4}));                       \
+  })
 
 static uint32_t findKernels(llvm::Module &M,
                             std::set<llvm::Function *> &functions) {
@@ -80,11 +80,13 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUMatchTargetSize);
   ADD_PASS_WRAPPER_0("add_schedule_load",
                      gpu::intel::createTritonIntelGPUScheduleLoad);
-  ADD_PASS_WRAPPER_OPT_4("add_triton_annotate_module",
+  ADD_PASS_WRAPPER_OPT_5("add_triton_annotate_module",
                          gpu::intel::createTritonAnnotateModule, unsigned, bool,
-                         bool, unsigned);
+                         bool, bool, unsigned);
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      gpu::intel::createTritonIntelGPUReduceDataDuplication);
+  ADD_PASS_WRAPPER_0("add_materialize_block_pointer",
+                     gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
 }
 
 void init_triton_intel(py::module &&m) {
@@ -116,9 +118,7 @@ void init_triton_intel(py::module &&m) {
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {
-    // FIXME: Change triple back to spir64-unknown-unknown, when missing
-    // SPIR-V 1.4 features are backported.
-    std::string triple = "spirv64v1.3-unknown-unknown";
+    std::string triple = "spir64-unknown-unknown";
     std::string layout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:"
                          "256-v256:256-v512:512-v1024:1024-n8:16:32:64";
     mod->setTargetTriple(triple);
@@ -130,7 +130,7 @@ void init_triton_intel(py::module &&m) {
 
   m.def(
       "translate_to_spirv",
-      [](const std::string llvmIR) -> std::tuple<py::object, std::string> {
+      [](const std::string &llvmIR) -> std::tuple<py::object, std::string> {
         std::string name;
         std::string spirvBitcode;
         {
@@ -149,7 +149,7 @@ void init_triton_intel(py::module &&m) {
           }
           // Get name of kernel in the module
           std::set<llvm::Function *> kernels;
-          uint32_t numKernels = findKernels(*module, kernels);
+          const uint32_t numKernels = findKernels(*module, kernels);
           assert(numKernels == 1 && "Expecting a single SPIR kernel");
           name = (*kernels.begin())->getName().str();
           spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
