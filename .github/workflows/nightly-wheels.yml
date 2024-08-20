@@ -28,6 +28,7 @@ jobs:
           - ipex
           - pytorch
       fail-fast: false
+      max-parallel: 2
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -134,11 +135,10 @@ jobs:
         run: |
           mkdir -p wheels
           cp -L pytorch/dist/*.whl wheels/
-          cp -L intel-extension-for-pytorch/dist/*.whl wheels/
           cp -L python/dist/*.whl wheels/
-          cp -L vision/dist/*.whl wheels/
-          cp -L text/dist/*.whl wheels/
-          cp -L audio/dist/*.whl wheels/
+          cp -L torchvision*/dist/*.whl wheels/
+          cp -L torchtext*/dist/*.whl wheels/
+          cp -L torchaudio*/dist/*.whl wheels/
 
       - name: Prepare IPEX wheels for upload
         if: ${{ matrix.mode == 'ipex' }}
