@@ -1,4 +1,4 @@
-//===- ScheduleLoad.cpp ----------------------------------------------*-===//
+//===- ScheduleLoad.cpp -------------------------------------------------*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -11,6 +11,7 @@
 /// For now, we put loads adjacent to its user dot.
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -47,6 +48,14 @@ public:
 
     MLIRContext *ctx = &getContext();
     ModuleOp mod = getOperation();
+
+    // Check whether a value can be legally moved to the given insertion point.
+    auto canMoveValueTo = [&](Value val, Operation *insertPoint) {
+      return llvm::all_of(val.getUsers(), [&](Operation *user) {
+        return insertPoint->isBeforeInBlock(user);
+      });
+    };
+
     mod.walk<WalkOrder::PreOrder>([&](scf::ForOp loop) {
       visited.clear();
       int group = -1;
@@ -75,22 +84,23 @@ public:
       assert(!dots.empty() && "No dot found in the loop");
       dotsGroup.push_back(dots);
 
-      unsigned i = 0;
+      unsigned groupNum = 0;
       Operation *start = &loop.getBody()->front();
       for (SmallVector<tt::DotOp> &dots : dotsGroup) {
         auto notVisited = getNotVisitedUses(dots, 1);
-        if (i == 0)
+        if (groupNum == 0)
           notVisited.append(getNotVisitedUses(dots, 0));
         for (Value val : notVisited) {
-          auto op = val.getDefiningOp();
-          if (i == 0)
-            op->moveBefore(start);
-          else
-            op->moveBefore(dots.begin()->getOperation());
+          Operation *insertPoint =
+              (groupNum == 0) ? start
+                              : dots.begin()->getOperation()->getPrevNode();
+
+          if (canMoveValueTo(val, insertPoint))
+            val.getDefiningOp()->moveAfter(insertPoint);
         }
-        i++;
-        if (i == numGroups)
-          i = 0;
+        ++groupNum;
+        if (groupNum == numGroups)
+          groupNum = 0;
       }
     });
 
@@ -116,6 +126,11 @@ private:
                                        unsigned opIdx) {
     assert((opIdx == 1 || opIdx == 0) && "opIdx should be 0 or 1");
 
+    auto belongsToRegion = [&](Value val, Region &rgn) {
+      Operation *def = val.getDefiningOp();
+      return (def && def->getParentRegion() == &rgn);
+    };
+
     SmallVector<Value> notVisited;
     for (tt::DotOp &dot : dots) {
       Value val = (opIdx == 1) ? dot.getB() : dot.getA();
@@ -126,6 +141,9 @@ private:
       if (auto extract = dyn_cast<ttgi::ExtractOp>(def)) {
         Value base = extract.getBase();
         if (!visited.contains(base)) {
+          if (!belongsToRegion(base, *extract->getParentRegion()))
+            continue;
+
           notVisited.push_back(base);
           visited.insert(base);
         }
