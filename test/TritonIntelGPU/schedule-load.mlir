@@ -1,7 +1,7 @@
 // RUN: TRITON_INTEL_ENABLE_INSTR_SCHED=1 triton-opt %s -tritonintelgpu-schedule-load | FileCheck %s
 module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: f32, %arg4: !tt.ptr<f32>, %arg5: !tt.ptr<f32>) {
-    // CHECK-LABEL: @_attn_fwd    
+    // CHECK-LABEL: @_attn_fwd
     %c48_i32 = arith.constant 48 : i32
     %c1_i32 = arith.constant 1 : i32
     %c3_i32 = arith.constant 3 : i32
@@ -52,7 +52,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %44 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c16_i32, %c48_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
     %45 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c32_i32, %c48_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
     %46 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c48_i32, %c48_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
-    // CHECK-COUNT-2: tt.load {{.*}} : !tt.ptr<tensor<16x32xf16>>    
+    // CHECK-COUNT-2: tt.load {{.*}} : !tt.ptr<tensor<16x32xf16>>
     // CHECK: scf.for
     // CHECK-COUNT-4: tt.load {{.*}} : !tt.ptr<tensor<16x16xf16>>
     // CHECK-COUNT-8: tt.dot {{.*}} {"schedule-group" = 0 : i32}
@@ -64,8 +64,8 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     // CHECK-COUNT-8: tt.dot {{.*}} {"schedule-group" = 3 : i32}
     %58 = tt.load %14 {DotIdx = 0 : i32} : !tt.ptr<tensor<16x32xf16>>
     %59 = tt.load %15 {DotIdx = 0 : i32} : !tt.ptr<tensor<16x32xf16>>
-    %62:24 = scf.for %arg6 = %c0_i32 to %c1024_i32 step %c64_i32 iter_args(%arg8 = %cst_2, %arg9 = %cst_2, %arg10 = %cst_2, %arg11 = %cst_2, %arg12 = %cst_2, %arg13 = %cst_2, %arg14 = %cst_2, %arg15 = %cst_2, %arg21 = %31, %arg22 = %32, %arg23 = %33, %arg24 = %34, %arg25 = %35, %arg26 = %36, %arg27 = %37, %arg28 = %38, %arg29 = %39, %arg30 = %40, %arg31 = %41, %arg32 = %42, %arg33 = %43, %arg34 = %44, %arg35 = %45, %arg36 = %46) 
-           -> (tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>) : i32 {    
+    %62:24 = scf.for %arg6 = %c0_i32 to %c1024_i32 step %c64_i32 iter_args(%arg8 = %cst_2, %arg9 = %cst_2, %arg10 = %cst_2, %arg11 = %cst_2, %arg12 = %cst_2, %arg13 = %cst_2, %arg14 = %cst_2, %arg15 = %cst_2, %arg21 = %31, %arg22 = %32, %arg23 = %33, %arg24 = %34, %arg25 = %35, %arg26 = %36, %arg27 = %37, %arg28 = %38, %arg29 = %39, %arg30 = %40, %arg31 = %41, %arg32 = %42, %arg33 = %43, %arg34 = %44, %arg35 = %45, %arg36 = %46)
+           -> (tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>) : i32 {
       %75 = tt.load %arg21 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
       %76 = tt.load %arg22 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
       %77 = tt.load %arg23 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
