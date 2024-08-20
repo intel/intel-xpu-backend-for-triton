@@ -53,7 +53,7 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
                                     LLVM::LLVMFuncOp func, ValueRange args);
 
 // Return true if the `val` value is a constant containing a value equal to
-// expected
+// expected.
 bool isConstant(Value val, const unsigned expected);
 
 } // namespace mlir::triton::gpu::intel
