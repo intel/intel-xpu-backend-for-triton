@@ -403,7 +403,7 @@ public:
                     auto [index, operand] = pair;
                     for (unsigned i = 0; i < numElements; ++i) {
                       Value extractIdx = rewriter.create<LLVM::ConstantOp>(
-                          loc, rewriter.getI32Type(), index + i);
+                          loc, rewriter.getI32Type(), i);
                       Value insertIdx = rewriter.create<LLVM::ConstantOp>(
                           loc, rewriter.getI32Type(), index * numElements + i);
                       Value val = rewriter.create<LLVM::ExtractElementOp>(
