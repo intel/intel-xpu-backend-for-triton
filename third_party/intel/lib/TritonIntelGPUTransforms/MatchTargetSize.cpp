@@ -326,11 +326,9 @@ public:
         newInits.push_back(glue->getOperand(i));
       }
       for (auto user : arg.getUsers()) {
-        auto extract = dyn_cast<ttgi::ExtractOp>(user);
-        if (extract) {
-          userIndexMap[extract] = idx + extract.getIndex();
-          deleteList.push_back(extract.getOperation());
-        }
+        auto extract = cast<ttgi::ExtractOp>(user);
+        userIndexMap[extract] = idx + extract.getIndex();
+        deleteList.push_back(extract.getOperation());
       }
       idx += numSplit;
     }
@@ -369,6 +367,22 @@ public:
 
     // replace results
     userIndexMap.clear();
+
+    // After the computational ops have been matched to their preferred target
+    // size by surrounding smaller-shaped ops with extract and glue operations,
+    // the idea of this pattern is to hoist extracting and glueing out of the
+    // loop. Effectively, we want separate the individual, target-sized "value
+    // streams" going through this loop. See also the comment on the original
+    // pattern below.
+    //
+    // However, this only works if all users of affected loop results are
+    // extract ops. If the user is another for-loop (as is the case with causal
+    // attention), then we cannot transform the second loop on the fly. Rather,
+    // we "re-glue" the separated results after the loop. After applying this
+    // pattern to the second loop and running the canonicalizer, we achieve the
+    // desired result.
+    llvm::SmallDenseMap<OpResult, Value> reglueMap;
+
     idx = 0;
     for (auto [result, init] : llvm::zip(op.getResults(), op.getInits())) {
       auto glue = dyn_cast<ttgi::GlueOp>(init.getDefiningOp());
@@ -377,17 +391,32 @@ public:
         idx++;
         continue;
       }
-      for (auto user : result.getUsers()) {
-        auto extract = dyn_cast<ttgi::ExtractOp>(user);
-        if (extract) {
+      if (llvm::all_of(result.getUsers(),
+                       [](auto *user) { return isa<ttgi::ExtractOp>(user); })) {
+        for (auto user : result.getUsers()) {
+          auto extract = cast<ttgi::ExtractOp>(user);
           userIndexMap[extract] = idx + extract.getIndex();
           deleteList.push_back(extract.getOperation());
         }
+      } else {
+        assert(llvm::none_of(
+                   result.getUsers(),
+                   [](auto *user) { return isa<ttgi::ExtractOp>(user); }) &&
+               "Mixing extract and non-extract users NYI");
+        // We have encountered a glued operand (and already split its uses
+        // within this loop), but the corresponding result's user(s) are not
+        // extracts. Hence, we have to re-glue the results.
+        auto reglue = rewriter.create<ttgi::GlueOp>(
+            op->getLoc(), result.getType(),
+            newOp->getResults().slice(idx, glue.getOperands().size()));
+        reglueMap[result] = reglue;
       }
       idx += glue->getOperands().size();
     }
     for (auto [user, idx] : userIndexMap)
       user.replaceAllUsesWith(newOp.getResults()[idx]);
+    for (auto [res, glue] : reglueMap)
+      res.replaceAllUsesWith(glue);
     for (auto op : deleteList)
       rewriter.eraseOp(op);
     rewriter.eraseOp(op);
@@ -676,6 +705,10 @@ MatchTargetSizePass::getSubTypeAndShape(Type type, bool hack) const {
     if (hack) {
       subSize[0] = 8;
       subSize[1] = 16;
+    } else {
+      // Never exceed the shape of the original type.
+      subSize[0] = std::min(subSize[0], shape[0]);
+      subSize[1] = std::min(subSize[1], shape[1]);
     }
 
     auto subType = RankedTensorType::get(
@@ -923,6 +956,10 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
   RankedTensorType srcType = op.getSrc().getType();
   unsigned srcDim0 = srcType.getShape()[0];
   unsigned dstDim0 = tType.getShape()[0];
+  unsigned resDim0 = resType.getShape()[0];
+  unsigned srcDim1 = srcType.getShape()[1];
+  unsigned dstDim1 = tType.getShape()[1];
+  unsigned resDim1 = resType.getShape()[1];
   if (srcDim0 == dstDim0) {
     Value newOp = b.create<tt::BroadcastOp>(loc, tType, op.getSrc());
     unsigned num = resType.getShape()[1] / tType.getShape()[1];
@@ -930,8 +967,7 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
     auto glue = b.create<ttgi::GlueOp>(loc, resType, ops);
     op->replaceAllUsesWith(glue->getResults());
     op->erase();
-  } else {
-    assert(srcDim0 == 2 * dstDim0);
+  } else if (srcDim0 == 2 * dstDim0) {
     auto newTy = RankedTensorType::get({srcDim0, tType.getShape()[1]},
                                        tType.getElementType());
     auto newOp = b.create<tt::BroadcastOp>(loc, newTy, op.getSrc());
@@ -942,6 +978,32 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
     auto glue = b.create<ttgi::GlueOp>(loc, resType, ops);
     op->replaceAllUsesWith(glue->getResults());
     op->erase();
+  } else if (srcDim0 == 1 && srcDim1 == resDim1) {
+    // Handle row-vector broadcasts, e.g. 1x64 --> 16x64.
+    auto subRowVecTy =
+        RankedTensorType::get({1, tType.getShape()[1]}, tType.getElementType());
+
+    // How many extracts do we need to cover the width of the input tensor?
+    unsigned nExtracts = srcDim1 / dstDim1;
+    SmallVector<Value> subBroadcasts;
+    for (int i = 0; i < nExtracts; ++i) {
+      auto ext = b.create<ttgi::ExtractOp>(loc, subRowVecTy, op.getSrc(), i);
+      auto sbc = b.create<tt::BroadcastOp>(loc, tType, ext);
+      subBroadcasts.push_back(sbc);
+    }
+
+    // How often do we need to repeat a sub broadcast to cover the height of the
+    // result tensor?
+    unsigned nRepeats = resDim0 / dstDim0;
+    SmallVector<Value> ops;
+    for (int i = 0; i < nRepeats * nExtracts; ++i)
+      ops.push_back(subBroadcasts[i / nRepeats]);
+
+    auto glue = b.create<ttgi::GlueOp>(loc, resType, ops);
+    op->replaceAllUsesWith(glue->getResults());
+    op.erase();
+  } else {
+    llvm_unreachable("Unhandled broadcast");
   }
   return;
 }

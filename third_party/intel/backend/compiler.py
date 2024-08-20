@@ -99,7 +99,8 @@ class XPUBackend(BaseBackend):
             intel.passes.ttgpuir.add_match_target_size(pm)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
-            intel.passes.ttgpuir.add_schedule_load(pm)
+            # FIXME: re-enable pass
+            # intel.passes.ttgpuir.add_schedule_load(pm)
             passes.common.add_symbol_dce(pm)
             pm.run(mod)
             return mod

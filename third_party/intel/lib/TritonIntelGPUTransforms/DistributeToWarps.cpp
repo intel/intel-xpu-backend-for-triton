@@ -204,6 +204,50 @@ void distributeGenericOp(Operation *op) {
   op->erase();
 }
 
+void distributeMakeRangeOp(tt::MakeRangeOp op, Value warpId) {
+  assert(op.getStart() == 0 && "Non-zero-based ranges NYI");
+
+  auto loc = op.getLoc();
+  OpBuilder b(op);
+
+  auto tensorTy = op.getType();
+  auto sliceLayout = dyn_cast<ttg::SliceEncodingAttr>(tensorTy.getEncoding());
+  assert(sliceLayout && "Expected slice layout");
+
+  auto parentWarpsPerCTA = ttg::getWarpsPerCTA(sliceLayout.getParent());
+  assert(parentWarpsPerCTA.size() == 2 && "Only slice of 2D layout supported");
+  assert(parentWarpsPerCTA.back() == 1 &&
+         "Warp distribution on second dimensions unsupported");
+
+  auto convTy = convertType(tensorTy);
+  unsigned numElems = convTy.getNumElements();
+  auto subRange = b.create<tt::MakeRangeOp>(loc, convTy, 0, numElems);
+
+  // If the number of elements stays the same, we don't need any offset
+  // computation. Use the newly constructed op because the type's encoding was
+  // changed by the conversion.
+  if (tensorTy.getNumElements() == numElems) {
+    op->replaceAllUsesWith(subRange);
+    op->erase();
+    return;
+  }
+
+  // Else: We need to take the warp ID into account. `tt.make_range` only
+  // supports constant boundaries, so we have to construct the offset
+  // calculation manually.
+  //
+  // FIXME: This assumes that warpsPerCTA[dim 1] is 1; I believe for the generic
+  // case, we would need to determine a dimension-specific offset similar to
+  // `tt.make_tensor_ptr`' distribution pattern.
+  auto elemTy = convTy.getElementType();
+  auto numElemsConst = b.create<arith::ConstantIntOp>(loc, numElems, elemTy);
+  auto rangeOffset = b.create<arith::MulIOp>(loc, warpId, numElemsConst);
+  auto splat = b.create<tt::SplatOp>(loc, convTy, rangeOffset);
+  auto newRange = b.create<arith::AddIOp>(loc, subRange, splat);
+  op->replaceAllUsesWith(newRange);
+  op->erase();
+}
+
 void distributeArithConstantOp(arith::ConstantOp op) {
   auto type = dyn_cast<RankedTensorType>(op.getType());
   if (!type)
@@ -396,6 +440,8 @@ public:
           distributeArithConstantOp(cstOp);
         else if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op))
           distributeConvertLayoutOp(convertOp, warpId, typeMap[convertOp]);
+        else if (auto makeRange = dyn_cast<tt::MakeRangeOp>(op))
+          distributeMakeRangeOp(makeRange, warpId);
         else if (isa<tt::LoadOp, tt::DotOp, tt::AdvanceOp, tt::ReduceOp,
                      tt::SplatOp, tt::BroadcastOp, tt::ExpandDimsOp>(op) ||
                  op->getDialect() == arithDialect ||

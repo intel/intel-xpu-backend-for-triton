@@ -572,6 +572,12 @@ public:
         loc, vecTy, undef, adaptor.getSrc(),
         rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), 0));
     auto convertedTy = typeConverter->convertType(resultType);
+    if (!isa<VectorType>(convertedTy)) {
+      // On the advance path, the type converter reduces 1-element vectors to
+      // their element type, making this splat a no-op.
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
+    }
     auto num = convertedTy.cast<VectorType>().getNumElements();
     SmallVector<int32_t> indices(num, 0);
     auto attr = rewriter.getDenseI32ArrayAttr(indices);
@@ -633,10 +639,31 @@ public:
   LogicalResult
   matchAndRewrite(BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // keep it simple for now
     auto src = adaptor.getSrc();
-    rewriter.replaceOp(op, src);
-    return success();
+    auto srcTy = src.getType();
+    auto convTy = getTypeConverter()->convertType(op.getType());
+    if (srcTy == convTy) {
+      // Specific to advance path.
+      // Example: 16x1 --> 16x16 broadcast. Each thread in the subgroup will get
+      // the same value, so we use the source operand directly.
+      rewriter.replaceOp(op, src);
+      return success();
+    }
+
+    if (srcTy.isIntOrFloat() && isa<VectorType>(convTy)) {
+      // Also specific to advance path (otherwise we wouldn't see scalar and
+      // vector types). Construct a splat.
+      auto loc = op.getLoc();
+      auto wrapTy = VectorType::get(1, srcTy);
+      auto undef = undef(wrapTy);
+      auto ins = insert_element(undef, src, i32_val(0));
+      SmallVector<int32_t> mask(cast<VectorType>(convTy).getNumElements(), 0);
+      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(op, ins, ins, mask);
+      return success();
+    }
+
+    llvm_unreachable("Unsupported broadcast");
+    return failure();
   }
 };
 
@@ -668,6 +695,31 @@ class ArithDivFOpLowering
   }
 };
 
+class MakeRangeOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<MakeRangeOp> {
+public:
+  using ConvertTritonGPUOpToLLVMPattern<
+      MakeRangeOp>::ConvertTritonGPUOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(MakeRangeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // FIXME: The real lowering has to take the layout into account. Here, we're
+    // just emitting a sequence of ints. Use
+    // `third_party/intel/lib/TritonIntelGPUToLLVM/MakeRangeOpToLLVM.cpp`
+    // instead!
+    auto loc = op->getLoc();
+    Value vec = rewriter.create<LLVM::UndefOp>(
+        loc, getTypeConverter()->convertType(op.getType()));
+    for (int i = op.getStart(); i < op.getEnd(); ++i) {
+      auto valI = LLVM::createConstantI32(loc, rewriter, i);
+      vec = rewriter.create<LLVM::InsertElementOp>(loc, vec, valI, valI);
+    }
+
+    rewriter.replaceOp(op, vec);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
@@ -689,4 +741,5 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<ReduceOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
+  patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
 }
