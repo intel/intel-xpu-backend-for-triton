@@ -7,7 +7,7 @@ on:
       install_ipex:
         description: Install Intel PyTorch Extension
         type: boolean
-        default: true
+        default: false
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
