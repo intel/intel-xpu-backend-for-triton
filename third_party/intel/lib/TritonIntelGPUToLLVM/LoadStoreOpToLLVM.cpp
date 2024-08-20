@@ -309,7 +309,7 @@ struct PrefetchOpConversion
             i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
         // Round the offset into to the tensor shape
         offsetY = urem(offsetY, i32_val(tensorShape[0]));
-        offsetY = add(offsetX, offsetBaseY);
+        offsetY = add(offsetY, offsetBaseY);
 
         auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
             loc,
