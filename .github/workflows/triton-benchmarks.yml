@@ -189,6 +189,7 @@ jobs:
       - name: Build Triton wheels
         uses: ./llvm-target/.github/actions/setup-triton
         with:
+          build_llvm: true
           command: DEBUG=1 python setup.py bdist_wheel
 
       - name: Install Triton
