@@ -97,8 +97,7 @@ loadBinary(const std::string &kernel_name, uint8_t *binary_ptr,
   }
 
   const auto &sycl_l0_device_pair = g_sycl_l0_device_list[deviceId];
-  const sycl::device sycl_device =
-      sycl_l0_device_pair.first; // TODO: reference ok?
+  const sycl::device sycl_device = sycl_l0_device_pair.first;
 
   const auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
   const auto l0_device =
