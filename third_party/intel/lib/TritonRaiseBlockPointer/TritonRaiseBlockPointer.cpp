@@ -7,6 +7,7 @@
 
 #include "intel/include/TritonRaiseBlockPointer/Passes.h"
 
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/IR/Matchers.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -24,56 +25,6 @@ namespace mlir::triton::intel {
 namespace {
 constexpr unsigned offsetBitwidth = 32;
 constexpr unsigned shapeAndStridesBitwidth = 64;
-
-std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
-  if (ofr.is<Attribute>() && isa<IntegerAttr>(ofr.get<Attribute>()))
-    return cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
-  return std::nullopt;
-}
-
-// This function folds the `op` operation and returns the constant value if it
-// has successfully folded to a constant. Otherwise, it returns `std::nullopt`.
-std::optional<int64_t> getFoldedConstantValue(Operation *op) {
-  SmallVector<OpFoldResult> results;
-  if (failed(op->fold(results))) {
-    return std::nullopt;
-  }
-
-  // If fold succeeded but `results` is empty, we give a second try, after the
-  // operands have been switched during the first call to `fold()`.
-  if (results.empty()) {
-    if (failed(op->fold(results))) {
-      return std::nullopt;
-    }
-  }
-
-  if (results.size() != 1) {
-    return std::nullopt;
-  }
-
-  auto intAttr = getIntAttr(results[0]);
-  if (intAttr.has_value()) {
-    return intAttr.value();
-  }
-
-  auto val = cast<Value>(results[0]);
-  auto constOp = val.getDefiningOp<arith::ConstantOp>();
-  if (!constOp)
-    return std::nullopt;
-
-  return getIntAttr(constOp.getValue());
-}
-
-// return true if the `val` value is a constant containing a value equal to ref
-bool hasConstEqualTo(const Value val, const int ref) {
-  auto defOp = val.getDefiningOp();
-  if (!defOp)
-    return false;
-  return (getFoldedConstantValue(defOp) == ref);
-}
-
-// return true if the `val` value is a constant containing a value equal to zero
-bool hasConstZero(const Value val) { return hasConstEqualTo(val, 0); }
 
 // Data structure used to decode pointer arithmetics. Offsets, sizes, and
 // strides are in unit of elements in a linearly laid-out memory, which is the
@@ -120,7 +71,7 @@ struct PtrState {
     // When PtrState describes a non-block pointer, shape field indicates how
     // address wraps around. As a result, a constant 0 indicates no wrap around
     // (i.e. modulo) for the dimension.
-    return !hasConstZero(shape[dim]);
+    return !mlir::triton::gpu::intel::isConstant(shape[dim], 0);
   }
 
   // @return true if addresses wrap around in any of the pointer dimension.
@@ -205,7 +156,7 @@ struct PtrState {
     for (uint64_t i = 0; i < lhs->getRank(); i++) {
       if (!lhs->dimHasModulo(i)) {
         shape.push_back(lhs->shape[i]);
-      } else if (hasConstZero(rhs->offsets[i])) {
+      } else if (mlir::triton::gpu::intel::isConstant(rhs->offsets[i], 0)) {
         shape.push_back(lhs->shape[i]);
       } else {
         op->emitRemark("TritonRaiseBlockPointer: do not support adding to "
@@ -281,7 +232,7 @@ struct PtrState {
     for (const auto &[offset, stride, dim] :
          llvm::zip(offsets, strides, shape)) {
 
-      if (hasConstZero(stride)) {
+      if (mlir::triton::gpu::intel::isConstant(stride, 0)) {
         newOffsets.push_back(getValueOrCreateCastToIndexLike(
             builder, loc, builder.getI32Type(), offset));
       } else {
@@ -548,9 +499,10 @@ struct TritonRaiseBlockPointer
       if (state.getRank() != 0) {
         OpBuilder::InsertionGuard guard(builder);
         builder.setInsertionPointToStart(&newOp.getRegion().front());
-        auto maketptrOp = state.createTTMakeTensorPtrOp(builder, op.getLoc());
-        ptrMap.map(key, maketptrOp.getResult());
-        knownPtrs[maketptrOp.getResult()] = std::move(state);
+        triton::MakeTensorPtrOp makePtrOp =
+            state.createTTMakeTensorPtrOp(builder, op.getLoc());
+        ptrMap.map(key, makePtrOp.getResult());
+        knownPtrs[makePtrOp.getResult()] = std::move(state);
       }
     }
 
@@ -718,9 +670,10 @@ struct TritonRaiseBlockPointer
     Value result = op.getResult();
     Value mapped = result;
     if (isa<RankedTensorType>(result.getType())) {
-      auto maketptrOp = state.createTTMakeTensorPtrOp(builder, loc);
-      knownPtrs[maketptrOp.getResult()] = std::move(state);
-      mapped = maketptrOp.getResult();
+      triton::MakeTensorPtrOp makePtrOp =
+          state.createTTMakeTensorPtrOp(builder, loc);
+      knownPtrs[makePtrOp.getResult()] = std::move(state);
+      mapped = makePtrOp.getResult();
     }
 
     ptrMap.map(result, mapped);
@@ -904,7 +857,7 @@ struct TritonRaiseBlockPointer
     if (auto iter = knownPtrs.find(ptr); iter != knownPtrs.end()) {
       auto state = iter->second;
       for (int axis = 0; axis < state.shape.size(); ++axis) {
-        if (!hasConstZero(state.shape[axis]))
+        if (!mlir::triton::gpu::intel::isConstant(state.shape[axis], 0))
           boundary.push_back(axis);
       }
     }
