@@ -7,7 +7,7 @@ import subprocess
 import sys
 import re
 import torch
-import intel_extension_for_pytorch
+# import intel_extension_for_pytorch
 
 
 class CMakeBuild():
@@ -42,7 +42,8 @@ class CMakeBuild():
             "Ninja",  # Ninja is much faster than make
             "-DCMAKE_MAKE_PROGRAM=" +
             ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
-            f"-DCMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path};{intel_extension_for_pytorch.cmake_prefix_path}",
+            # f"-DCMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path};{intel_extension_for_pytorch.cmake_prefix_path}",
+            f"-DCMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path}",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=" + self.extdir,
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + self.extdir,

@@ -11,7 +11,7 @@ endif()
 find_package(Python3 COMPONENTS Interpreter)
 find_package(Torch REQUIRED)
 find_library(TORCH_PYTHON_LIBRARY torch_python PATH "${TORCH_INSTALL_PREFIX}/lib")
-find_package(IPEX REQUIRED)
+# find_package(IPEX REQUIRED)
 
 
 # add the XeTLA kernel.

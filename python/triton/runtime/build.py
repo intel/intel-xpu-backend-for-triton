@@ -23,7 +23,7 @@ def quiet():
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
-def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
+def _build(name, src, srcdir, library_dirs, include_dirs, libraries, preview=False):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -64,6 +64,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         cc_cmd = [cxx]
         if icpx is not None:
             cc_cmd += ["-fsycl"]
+            if preview:
+                cc_cmd += ["-fpreview-breaking-changes"]
         else:
             cc_cmd += ["--std=c++17"]
     else:

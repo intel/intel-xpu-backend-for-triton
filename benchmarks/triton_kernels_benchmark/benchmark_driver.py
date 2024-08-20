@@ -8,7 +8,7 @@ from triton.backends.driver import DriverBase
 from triton.runtime.build import _build, quiet
 
 import torch
-import intel_extension_for_pytorch
+# import intel_extension_for_pytorch
 
 dirname = os.getenv("ZE_PATH", default="/usr/local")
 
@@ -16,7 +16,7 @@ include_dir = [
     os.path.join(dirname, "include"),
     os.path.join(torch.utils.cmake_prefix_path, "../../include"),
     os.path.join(torch.utils.cmake_prefix_path, "../../include/torch/csrc/api/include"),
-    os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../include")
+    # os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../include")
 ]
 
 oneapi_root = os.getenv("ONEAPI_ROOT")
@@ -29,22 +29,27 @@ if oneapi_root:
 library_dir = [
     os.path.join(dirname, "lib"),
     os.path.join(torch.utils.cmake_prefix_path, "../../lib"),
-    os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../lib")
+    # os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../lib")
 ]
-libraries = ['ze_loader', 'sycl', 'torch', 'intel-ext-pt-gpu']
+# libraries = ['ze_loader', 'sycl', 'torch', 'intel-ext-pt-gpu']
+# libraries = ['ze_loader', 'sycl', 'torch']
+libraries = ['ze_loader', 'torch']
+# libraries = ['ze_loader', 'sycl']
 
 
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     cache_path = cache.get_file(f"{name}.so")
+    print(f"!!!PATH: {cache_path}")
+    # t if True:
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.cpp")
             with open(src_path, "w") as f:
                 f.write(src)
             with quiet():
-                so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
+                so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries, preview=True)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
     import importlib.util
@@ -152,7 +157,6 @@ def make_launcher(constants, signature, ids):
     #include <level_zero/ze_api.h>
     #include <sycl/sycl.hpp>
     #include <torch/extension.h>
-    #include <ipex.h>
 
     #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
     #include <Python.h>
@@ -262,6 +266,7 @@ def make_launcher(constants, signature, ids):
   }}
   static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
+    printf("sycl queue: %d; \\n", &stream);
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
     RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
     void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
@@ -293,7 +298,6 @@ def make_launcher(constants, signature, ids):
       }}
       }};
     auto event = stream.submit(cgf);
-    xpu::profiler_record(kernel_name, event);
   }}
 // end sycl
     static PyObject* launch(PyObject* self, PyObject* args) {{

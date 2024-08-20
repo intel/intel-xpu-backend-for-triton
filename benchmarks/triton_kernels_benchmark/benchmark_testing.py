@@ -68,7 +68,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     for _ in range(n_warmup):
         fn()
     # Benchmark
-    with torch.autograd.profiler_legacy.profile(True, use_xpu=True) as prof:
+    with torch.profiler.profile() as prof:
         for i in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
             # if it contains a backward pass. So we clear the
@@ -86,7 +86,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         # Record clocks
         synchronize()
 
-    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.function_events)
+    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.events())
     functions = [func for func in profiling_func_filter]
 
     def extract_kernels(funcs):
