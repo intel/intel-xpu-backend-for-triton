@@ -459,25 +459,16 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     const auto &shape = op.getType().getShape();
     std::optional<LinearLayout> srcLayout;
     auto srcTy = op.getSrc().getType();
-
-    if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcTy.getEncoding())) {
-      srcLayout = gpu::DPAStoLinearLayout(shape, dpasLayout);
-    } else {
-      srcLayout = gpu::toLinearLayout(shape, srcTy.getEncoding());
-    }
+    srcLayout = gpu::toLinearLayout(shape, srcTy.getEncoding());
 
     std::optional<LinearLayout> dstLayout;
     auto dstTy = op.getType();
-    if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(dstTy.getEncoding())) {
-      dstLayout = gpu::DPAStoLinearLayout(shape, dpasLayout);
-    } else {
-      dstLayout = gpu::toLinearLayout(shape, dstTy.getEncoding());
-    }
+
+    dstLayout = gpu::toLinearLayout(shape, dstTy.getEncoding());
 
     if (!srcLayout.has_value() || !dstLayout.has_value()) {
       return failure();
     }
-
     // There are four cases to handle.
     //
     //  1. Transfer between values in the same thread, in which case we simply

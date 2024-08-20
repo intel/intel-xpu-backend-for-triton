@@ -138,9 +138,9 @@ jobs:
         if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-ipex
 
-      - name: Setup fake IPEX
+      - name: Setup no-op IPEX
         if: ${{ !inputs.install_ipex }}
-        uses: ./.github/actions/setup-fake-ipex
+        uses: ./.github/actions/setup-no-op-ipex
 
       - name: Generate Triton cache key
         id: triton-key
