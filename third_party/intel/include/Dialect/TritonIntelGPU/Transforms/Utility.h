@@ -52,6 +52,10 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     LLVM::LLVMFuncOp func, ValueRange args);
 
+// Return true if the `val` value is a constant containing a value equal to
+// expected.
+bool isConstant(Value val, const unsigned expected);
+
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITONINTELGPU_TRANSFORMS_UTILITY_H

@@ -7,6 +7,7 @@
 
 #include "intel/include/TritonRaiseBlockPointer/Passes.h"
 
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/IR/Matchers.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -24,51 +25,6 @@ namespace mlir::triton::intel {
 namespace {
 constexpr unsigned offsetBitwidth = 32;
 constexpr unsigned shapeAndStridesBitwidth = 64;
-
-std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
-  if (ofr.is<Attribute>() && isa<IntegerAttr>(ofr.get<Attribute>()))
-    return cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
-  return std::nullopt;
-}
-
-// This function folds the `op` operation and returns the constant value if it
-// has successfully folded to a constant. Otherwise, it returns `std::nullopt`.
-std::optional<int64_t> getFoldedConstantValue(Operation *op) {
-  SmallVector<OpFoldResult> results;
-  if (failed(op->fold(results))) {
-    return std::nullopt;
-  }
-
-  // If fold succeeded but `results` is empty, we give a second try, after the
-  // operands have been switched during the first call to `fold()`.
-  if (results.empty()) {
-    if (failed(op->fold(results))) {
-      return std::nullopt;
-    }
-  }
-
-  if (results.size() != 1) {
-    return std::nullopt;
-  }
-
-  auto intAttr = getIntAttr(results[0]);
-  if (intAttr.has_value()) {
-    return intAttr.value();
-  }
-
-  auto val = cast<Value>(results[0]);
-  auto constOp = val.getDefiningOp<arith::ConstantOp>();
-  if (!constOp)
-    return std::nullopt;
-
-  return getIntAttr(constOp.getValue());
-}
-
-// return true if the `val` value is a constant containing a value equal to zero
-bool hasConstZero(Value val) {
-  auto intVal = getFoldedConstantValue(val.getDefiningOp());
-  return (intVal.has_value() && (intVal.value() == 0));
-}
 
 // Data structure used to decode pointer arithmetics. Offsets, sizes, and
 // strides are in unit of elements in a linearly laid-out memory, which is the
@@ -115,7 +71,7 @@ struct PtrState {
     // When PtrState describes a non-block pointer, shape field indicates how
     // address wraps around. As a result, a constant 0 indicates no wrap around
     // (i.e. modulo) for the dimension.
-    return !hasConstZero(shape[dim]);
+    return !mlir::triton::gpu::intel::isConstant(shape[dim], 0);
   }
 
   // @return true if addresses wrap around in any of the pointer dimension.
@@ -143,6 +99,14 @@ struct PtrState {
     }
 
     source = lhsState.source ? lhsState.source : rhsState.source;
+
+    if (lhsState.scalar && rhsState.scalar) { // both lhs and rhs are scalars
+      auto addOp =
+          builder.create<arith::AddIOp>(loc, lhsState.scalar, rhsState.scalar);
+      scalar = addOp.getResult();
+    } else if (lhsState.getRank() == 0) {
+      scalar = lhsState.scalar ? lhsState.scalar : rhsState.scalar;
+    }
 
     ArithBuilder abuilder(builder, loc);
     for (uint64_t i = 0; i < lhsState.getRank(); ++i) {
@@ -192,7 +156,7 @@ struct PtrState {
     for (uint64_t i = 0; i < lhs->getRank(); i++) {
       if (!lhs->dimHasModulo(i)) {
         shape.push_back(lhs->shape[i]);
-      } else if (hasConstZero(rhs->offsets[i])) {
+      } else if (mlir::triton::gpu::intel::isConstant(rhs->offsets[i], 0)) {
         shape.push_back(lhs->shape[i]);
       } else {
         op->emitRemark("TritonRaiseBlockPointer: do not support adding to "
@@ -264,11 +228,22 @@ struct PtrState {
     SmallVector<Value> newOffsets;
     SmallVector<Value> newStrides;
     SmallVector<Value> newShape;
+    ArithBuilder abuilder(builder, loc);
     for (const auto &[offset, stride, dim] :
          llvm::zip(offsets, strides, shape)) {
 
-      newOffsets.push_back(getValueOrCreateCastToIndexLike(
-          builder, loc, builder.getI32Type(), offset));
+      if (mlir::triton::gpu::intel::isConstant(stride, 0)) {
+        newOffsets.push_back(getValueOrCreateCastToIndexLike(
+            builder, loc, builder.getI32Type(), offset));
+      } else {
+        auto divOffset = builder.create<arith::DivUIOp>(
+            loc, builder.getI32Type(),
+            getValueOrCreateCastToIndexLike(builder, loc, builder.getI32Type(),
+                                            offset),
+            getValueOrCreateCastToIndexLike(builder, loc, builder.getI32Type(),
+                                            stride));
+        newOffsets.push_back(divOffset);
+      }
       newStrides.push_back(getValueOrCreateCastToIndexLike(
           builder, loc, builder.getI64Type(), stride));
       newShape.push_back(getValueOrCreateCastToIndexLike(
@@ -524,8 +499,10 @@ struct TritonRaiseBlockPointer
       if (state.getRank() != 0) {
         OpBuilder::InsertionGuard guard(builder);
         builder.setInsertionPointToStart(&newOp.getRegion().front());
-        auto maketptrOp = state.createTTMakeTensorPtrOp(builder, op.getLoc());
-        ptrMap.map(key, maketptrOp.getResult());
+        triton::MakeTensorPtrOp makePtrOp =
+            state.createTTMakeTensorPtrOp(builder, op.getLoc());
+        ptrMap.map(key, makePtrOp.getResult());
+        knownPtrs[makePtrOp.getResult()] = std::move(state);
       }
     }
 
@@ -693,8 +670,10 @@ struct TritonRaiseBlockPointer
     Value result = op.getResult();
     Value mapped = result;
     if (isa<RankedTensorType>(result.getType())) {
-      Value maketptrOp = state.createTTMakeTensorPtrOp(builder, loc);
-      mapped = maketptrOp;
+      triton::MakeTensorPtrOp makePtrOp =
+          state.createTTMakeTensorPtrOp(builder, loc);
+      knownPtrs[makePtrOp.getResult()] = std::move(state);
+      mapped = makePtrOp.getResult();
     }
 
     ptrMap.map(result, mapped);
@@ -711,6 +690,13 @@ struct TritonRaiseBlockPointer
                                           OpBuilder &builder,
                                           bool addedByPass = false) {
     assert(state.isEmpty() && "state is a return argument");
+
+    if (auto iter = knownPtrs.find(makeTPtrOp.getResult());
+        iter != knownPtrs.end()) {
+      state = iter->second;
+      return success();
+    }
+
     state.source = makeTPtrOp.getBase();
 
     auto resType = cast<triton::PointerType>(makeTPtrOp.getResult().getType());
@@ -719,9 +705,18 @@ struct TritonRaiseBlockPointer
 
     for (int64_t i = 0; i < pointeeType.getRank(); i++) {
       state.sizes.push_back(shape[i]);
+
+      auto strideCst = builder.create<arith::IndexCastOp>(
+          loc, builder.getIndexType(), makeTPtrOp.getStrides()[i]);
+      auto offsetCst = builder.create<arith::IndexCastOp>(
+          loc, builder.getIndexType(), makeTPtrOp.getOffsets()[i]);
+      auto scaledOffset = builder.create<arith::MulIOp>(
+          loc, offsetCst.getResult(), strideCst.getResult());
+      state.offsets.push_back(getValueOrCreateCastToIndexLike(
+          builder, loc, builder.getIntegerType(offsetBitwidth),
+          scaledOffset.getResult()));
     }
     state.strides = makeTPtrOp.getStrides();
-    state.offsets = makeTPtrOp.getOffsets();
     state.shape = makeTPtrOp.getShape();
     state.order = SmallVector<int32_t>(makeTPtrOp.getOrder());
 
@@ -858,11 +853,21 @@ struct TritonRaiseBlockPointer
       return success();
     }
 
+    SmallVector<int> boundary;
+    if (auto iter = knownPtrs.find(ptr); iter != knownPtrs.end()) {
+      auto state = iter->second;
+      for (int axis = 0; axis < state.shape.size(); ++axis) {
+        if (!mlir::triton::gpu::intel::isConstant(state.shape[axis], 0))
+          boundary.push_back(axis);
+      }
+    }
+    ArrayRef<int> newBoundaryCheck(boundary);
+
     OpBuilder builder(op);
     if constexpr (isLoad) {
       auto loadOp = builder.create<triton::LoadOp>(
-          op.getLoc(), ptr, op.getBoundaryCheck(), op.getPadding(),
-          op.getCache(), op.getEvict(), op.getIsVolatile());
+          op.getLoc(), ptr, newBoundaryCheck, op.getPadding(), op.getCache(),
+          op.getEvict(), op.getIsVolatile());
 
       LLVM_DEBUG(llvm::dbgs() << "creating tt.load: " << loadOp << "\n";);
 
@@ -1094,13 +1099,19 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   auto resultType = cast<ShapedType>(op.getResult().getType());
   Value offset = convertScalarToDtype(builder, loc, state.scalar, offsetType,
                                       /*isUnsignedCast=*/true);
+  state.offsets.push_back(offset);
+  state.offsets.insert(
+      state.offsets.end(), resultType.getShape().size() - 1,
+      builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth));
+  state.strides.insert(
+      state.strides.end(), resultType.getShape().size(),
+      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
+  state.shape.insert(
+      state.shape.end(), resultType.getShape().size(),
+      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
+
   for (int32_t dim : resultType.getShape()) {
-    state.offsets.push_back(offset);
     state.sizes.push_back(dim);
-    state.strides.push_back(
-        builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
-    state.shape.push_back(
-        builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
   }
 
   return success();
