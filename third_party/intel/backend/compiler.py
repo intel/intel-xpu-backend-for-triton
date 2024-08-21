@@ -137,7 +137,7 @@ class XPUBackend(BaseBackend):
         dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
-        dev_prop['has_bf16_conversion'] = tgt_prop.get('has_bf16_conversion', True)
+        dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -186,7 +186,7 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
                                                         properties["has_subgroup_2d_block_io"],
                                                         properties["has_subgroup_matrix_multiply_accumulate"],
-                                                        properties["has_bf16_conversion"], opt.threads_per_warp)
+                                                        properties["has_bfloat16_conversions"], opt.threads_per_warp)
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
