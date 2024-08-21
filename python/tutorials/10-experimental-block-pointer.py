@@ -327,7 +327,6 @@ def matmul(a, b, accum_dtype, res_dtype):
 # Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-torch.xpu.set_fp32_math_mode(torch.xpu.utils.FP32MathMode.TF32)
 for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float16),
                                       (torch.float16, torch.float32, torch.float16),
                                       (torch.float16, torch.float32, torch.float32),
@@ -373,7 +372,9 @@ for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float
         # Note: the torch.matmul and Triton implementations uses different
         # algorithms so we need to adjust tolerance.
         rtol = 1e-2 if dtype == torch.bfloat16 or accum_dtype in [torch.float16, torch.bfloat16] else 1e-3
-        atol = 1e-2 if accum_dtype == torch.bfloat16 else 1e-3 if accum_dtype == torch.float16 else 1e-4
+        # FIXME: Remove 1e-1 tolerance for fp32, once fp32 math mode is implemented at pytorch:
+        # https://github.com/intel/intel-xpu-backend-for-triton/issues/1957
+        atol = 1e-1 if dtype == torch.float32 else 1e-2 if accum_dtype == torch.bfloat16 else 1e-3 if accum_dtype == torch.float16 else 1e-4
         if torch.allclose(triton_output, torch_output, atol=atol, rtol=rtol):
             print("✅ Triton and Torch match")
         else:
