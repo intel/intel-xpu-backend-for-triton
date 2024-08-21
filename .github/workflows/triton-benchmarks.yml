@@ -189,6 +189,7 @@ jobs:
       - name: Build Triton wheels
         uses: ./llvm-target/.github/actions/setup-triton
         with:
+          build_llvm: true
           command: DEBUG=1 python setup.py bdist_wheel
 
       - name: Install Triton
@@ -198,10 +199,6 @@ jobs:
       - name: Install benchmark dependencies
         run: |
           pip install matplotlib pandas tabulate
-
-      - name: Install a custom libigc from artifacts
-        run: |
-          sudo dpkg -i artifacts/libigc1_1.0.24994.16243-igc+releaseinternal1_amd64.deb
 
       - name: Create reports dir
         run: |
