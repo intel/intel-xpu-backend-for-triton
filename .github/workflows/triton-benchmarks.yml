@@ -87,6 +87,31 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
           python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
+      - name: Run Triton GEMM kernel benchmark
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python gemm_benchmark.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM kernel benchmark - default path
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          # Default path:
+          TRITON_INTEL_ADVANCED_PATH=0 \
+          TRITON_INTEL_ENABLE_FAST_PREFETCH=1 \
+          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+          IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+          IGC_DisableLoopUnroll=1 \
+          SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
+          python gemm_benchmark.py --reports $REPORTS
+
+          TAG=${{ inputs.tag || 'ci' }}-dflt
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-default-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
       - name: Run Triton GEMM kernel benchmark - advanced path
         run: |
           cd benchmarks/triton_kernels_benchmark
@@ -101,23 +126,6 @@ jobs:
           TAG=${{ inputs.tag || 'ci' }}-adv
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-advanced-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-
-      - name: Run Triton GEMM kernel benchmark - default path
-        run: |
-          cd benchmarks/triton_kernels_benchmark
-          # No advanced path:
-          TRITON_INTEL_ADVANCED_PATH=0 \
-          TRITON_INTEL_ENABLE_FAST_PREFETCH=1 \
-          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-          IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
-          IGC_DisableLoopUnroll=1 \
-          SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
-          python gemm_benchmark.py --reports $REPORTS
-
-          TAG=${{ inputs.tag || 'ci' }}
-          source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run micro benchmark
         run: |
