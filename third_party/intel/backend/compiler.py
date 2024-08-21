@@ -281,12 +281,6 @@ class XPUBackend(BaseBackend):
         else:
             metadata["build_flags"] = ""
 
-        # If `OverrideDefaultFP64Settings` environment variable is enabled, it will change
-        # `metadata["target"].arch["has_fp64"]` property from `false` to `true`, so we
-        # cannot rely on this property to enable emulation.
-        if False and os.environ.get("OverrideDefaultFP64Settings", "0") == "1":
-            metadata["build_flags"] += " -cl-fp64-gen-emu"
-
         return ret
 
     def add_stages(self, stages, options):
