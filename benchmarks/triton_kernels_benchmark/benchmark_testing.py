@@ -37,7 +37,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     """
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
-    from torch.autograd.profiler import record_function
+    from torch.profiler import record_function, profile, ProfilerActivity
 
     fn()
     synchronize()
@@ -68,7 +68,13 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     for _ in range(n_warmup):
         fn()
     # Benchmark
-    with torch.profiler.profile() as prof:
+    with profile(
+        activities=[
+            ProfilerActivity.CPU,
+            # Enforcing XPU events tracking
+            ProfilerActivity.XPU,
+        ]
+    ) as prof:
         for i in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
             # if it contains a backward pass. So we clear the
