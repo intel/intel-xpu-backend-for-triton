@@ -274,6 +274,8 @@ def benchmark(B, M, N, K, provider):
         median_ms, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10,
                                                                          quantiles=quantiles, fast_flush=False)
 
+    print(f"!!DEBUG: {mean_ms}, {max_ms}, {min_ms}, {provider}")
+
     tflops = lambda ms: 2 * B * M * N * K * (1e-12) / (ms * 1e-3)
     gbps = lambda ms: B * (2 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (ms * 1e-3)
 
