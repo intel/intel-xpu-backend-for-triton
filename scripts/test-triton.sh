@@ -266,7 +266,7 @@ run_benchmark_gemm() {
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
   IGC_DisableLoopUnroll=1 \
   SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
   python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
@@ -274,7 +274,7 @@ run_benchmark_gemm() {
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
   IGC_DisableLoopUnroll=1 \
   SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
   python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
