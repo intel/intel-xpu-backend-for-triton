@@ -104,7 +104,6 @@ jobs:
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
           IGC_DisableLoopUnroll=1 \
-          SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
           python gemm_benchmark.py --reports $REPORTS
 
           TAG=${{ inputs.tag || 'ci' }}-dflt
@@ -119,12 +118,34 @@ jobs:
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
           IGC_DisableLoopUnroll=1 \
-          SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
           python gemm_benchmark.py --reports $REPORTS
 
           TAG=${{ inputs.tag || 'ci' }}-adv
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-advanced-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton FA kernel benchmark
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python flash_attention_fwd_benchmark.py --reports $REPORTS
+
+          TAG=${{ inputs.tag || 'ci' }}
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
+
+      - name: Run Triton FA kernel benchmark - default path
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          TRITON_INTEL_ADVANCED_PATH=0 \
+          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+          IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+          IGC_DisableLoopUnroll=1 \
+          python flash_attention_fwd_benchmark.py --reports $REPORTS
+
+          TAG=${{ inputs.tag || 'ci' }}-dflt
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-default-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run micro benchmark
         run: |
@@ -222,8 +243,8 @@ jobs:
           cp summary.csv $REPORTS/attention-summary.csv
           sed -E 's/, /,/g;s/ /,/g' summary.csv > attention-results.csv
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}
-          python ./build_report.py attention-results.csv $REPORTS/attention-triton-report.csv --benchmark flash_attention --compiler triton --tflops_col max_tflops --param_cols "Z,H,N_CTX,D_HEAD" --tag $TAG
+          TAG=${{ inputs.tag || 'ci' }}-adv
+          python ./build_report.py attention-results.csv $REPORTS/attention-triton-advanced-report.csv --benchmark flash_attention --compiler triton --tflops_col max_tflops --param_cols "Z,H,N_CTX,D_HEAD" --tag $TAG
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
