@@ -278,6 +278,7 @@ jobs:
             # To enable FP64 type emulation.
             # For details see: https://github.com/intel/intel-xpu-backend-for-triton/pull/1879
             export OverrideDefaultFP64Settings=1
+            export IGC_EnableDPEmulation=1
           fi
           $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
           # The script above always returns 0, so we need an additional check to see if the accuracy test passed
