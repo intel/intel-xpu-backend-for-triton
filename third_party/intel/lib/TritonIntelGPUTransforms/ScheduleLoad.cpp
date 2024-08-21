@@ -68,8 +68,7 @@ public:
 
       Operation *start = &loop.getBody()->front();
       for (std::pair<SmallVector<tt::DotOp>, int> &dotsGroup : dotsGroup) {
-        SmallVector<tt::DotOp> dots = dotsGroup.first;
-        unsigned groupId = dotsGroup.second;
+        auto [dots, groupId] = dotsGroup;
         SmallVector<Value> notVisited = getNotVisitedUses(dots, 0);
         notVisited.append(getNotVisitedUses(dots, 1));
         for (Value val : notVisited) {
