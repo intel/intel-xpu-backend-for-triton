@@ -125,6 +125,7 @@ if [ "$BUILD_PINNED" = true ]; then
     PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
   fi
 
+  BUILD_PYTORCH=true
   if pip show torch &>/dev/null; then
     PYTORCH_CURRENT_COMMIT=`python -c "import torch;print(torch.__version__)"`
     PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
@@ -140,6 +141,7 @@ if [ "$BUILD_PINNED" = true ]; then
   echo "**** Determine if the installed IPEX version is the same as the pinned version. ****"
   IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
 
+  BUILD_IPEX=true
   if pip show intel-extension-for-pytorch &>/dev/null; then
     IPEX_CURRENT_COMMIT=`python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"`
     IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
