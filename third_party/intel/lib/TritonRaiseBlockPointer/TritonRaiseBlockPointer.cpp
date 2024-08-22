@@ -702,7 +702,7 @@ struct TritonRaiseBlockPointer
   }
 
   bool lookForMulitplyingValueInDefiningPath(Value &val, Value &ref) {
-    auto defOp = getFinalValue(val).getDefiningOp();
+    Operation *defOp = getFinalValue(val).getDefiningOp();
     if (!defOp)
       return false;
 
@@ -716,8 +716,8 @@ struct TritonRaiseBlockPointer
   bool areValuesEqual(Value val1, Value val2) {
     if (val1 == val2)
       return true;
-    auto op1 = val1.getDefiningOp();
-    auto op2 = val2.getDefiningOp();
+    Operation *op1 = val1.getDefiningOp();
+    Operation *op2 = val2.getDefiningOp();
     if (op1 && op2) {
       auto intVal1 = mlir::triton::gpu::intel::getFoldedConstantValue(op1);
       auto intVal2 = mlir::triton::gpu::intel::getFoldedConstantValue(op2);
@@ -730,13 +730,13 @@ struct TritonRaiseBlockPointer
 
   int checkIfOffsetMultipliedByStride(Value operand,
                                       SmallVector<Value> &strides) {
-    auto defOp = operand.getDefiningOp();
+    Operation *defOp = operand.getDefiningOp();
 
     SmallVector<Value> finalStrides;
     // check all strides different
     // if not => skip
     for (auto stride : strides) {
-      auto currentVal = getFinalValue(stride);
+      Value currentVal = getFinalValue(stride);
       if (llvm::any_of(finalStrides, [&](Value val) {
             return areValuesEqual(val, currentVal);
           }))
@@ -749,7 +749,7 @@ struct TritonRaiseBlockPointer
       // search for a mul to finalStride in the predecessors
       if (lookForMulitplyingValueInDefiningPath(operand, finalStride))
         return axis;
-      else if (mlir::triton::gpu::intel::isConstant(finalStride, 1))
+      if (mlir::triton::gpu::intel::isConstant(finalStride, 1))
         return axis;
       ++axis;
     }
@@ -758,7 +758,7 @@ struct TritonRaiseBlockPointer
 
   // Return true if a `triton::ExpandOp` has been found is the defining path.
   bool hasExpandOpInDefiningPath(Value value) {
-    auto defOp = value.getDefiningOp();
+    Operation *defOp = value.getDefiningOp();
     if (!defOp) {
       // look init values outside the loop
       BlockArgument blockArg = dyn_cast<BlockArgument>(value);
@@ -771,11 +771,11 @@ struct TritonRaiseBlockPointer
 
     if (isa<triton::ExpandDimsOp>(defOp))
       return true;
-    else if (isa<triton::BroadcastOp>(defOp) || isa<triton::SplatOp>(defOp) ||
-             isa<arith::IndexCastOp>(defOp) || isa<arith::RemUIOp>(defOp) ||
-             isa<arith::RemSIOp>(defOp))
+    if (isa<triton::BroadcastOp>(defOp) || isa<triton::SplatOp>(defOp) ||
+        isa<arith::IndexCastOp>(defOp) || isa<arith::RemUIOp>(defOp) ||
+        isa<arith::RemSIOp>(defOp))
       return hasExpandOpInDefiningPath(defOp->getOperand(0));
-    else if (isa<arith::AddIOp>(defOp) || isa<arith::MulIOp>(defOp))
+    if (isa<arith::AddIOp>(defOp) || isa<arith::MulIOp>(defOp))
       return hasExpandOpInDefiningPath(defOp->getOperand(0)) ||
              hasExpandOpInDefiningPath(defOp->getOperand(1));
 
