@@ -80,7 +80,7 @@ jobs:
           python setup.py install
 
       - name: Run Triton Softmax kernel benchmark
-        if: steps.install.outcome == 'success' && (success() || failure())
+        if: ${{ steps.install.outcome == 'success' && (success() || failure()) }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           exit 64
@@ -91,7 +91,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton GEMM kernel benchmark
-        if: steps.install.outcome == 'success' && (success() || failure())
+        if: ${{ steps.install.outcome == 'success' && (success() || failure()) }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python gemm_benchmark.py --reports $REPORTS
@@ -101,7 +101,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton GEMM kernel benchmark - default path
-        if: steps.install.outcome == 'success' && (success() || failure())
+        if: ${{ steps.install.outcome == 'success' && (success() || failure()) }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           # Default path:
@@ -116,7 +116,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-default-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM kernel benchmark - advanced path
-        if: steps.install.outcome == 'success' && (success() || failure())
+        if: ${{ steps.install.outcome == 'success' && (success() || failure()) }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           # Advanced path:
@@ -131,7 +131,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-advanced-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton FA kernel benchmark
-        if: steps.install.outcome == 'success' && (success() || failure())
+        if: ${{ steps.install.outcome == 'success' && (success() || failure()) }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python flash_attention_fwd_benchmark.py --reports $REPORTS
@@ -142,7 +142,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton FA kernel benchmark - default path
-        if: steps.install.outcome == 'success' && (success() || failure())
+        if: ${{ steps.install.outcome == 'success' && (success() || failure()) }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           TRITON_INTEL_ADVANCED_PATH=0 \
@@ -156,7 +156,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-default-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run micro benchmark
-        if: steps.install.outcome == 'success' && (success() || failure())
+        if: ${{ steps.install.outcome == 'success' && (success() || failure()) }}
         run: |
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
@@ -169,7 +169,7 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload benchmark reports
-        if: steps.install.outcome == 'success' && (success() || failure())
+        if: ${{ steps.install.outcome == 'success' && (success() || failure()) }}
         with:
           name: benchmark-reports
           path: reports
