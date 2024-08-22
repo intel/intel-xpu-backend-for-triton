@@ -8,7 +8,6 @@ from triton.backends.driver import DriverBase
 from triton.runtime.build import _build, quiet
 
 import torch
-# import intel_extension_for_pytorch
 
 dirname = os.getenv("ZE_PATH", default="/usr/local")
 
@@ -16,7 +15,6 @@ include_dir = [
     os.path.join(dirname, "include"),
     os.path.join(torch.utils.cmake_prefix_path, "../../include"),
     os.path.join(torch.utils.cmake_prefix_path, "../../include/torch/csrc/api/include"),
-    # os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../include")
 ]
 
 oneapi_root = os.getenv("ONEAPI_ROOT")
@@ -29,12 +27,8 @@ if oneapi_root:
 library_dir = [
     os.path.join(dirname, "lib"),
     os.path.join(torch.utils.cmake_prefix_path, "../../lib"),
-    # os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../lib")
 ]
-# libraries = ['ze_loader', 'sycl', 'torch', 'intel-ext-pt-gpu']
-# libraries = ['ze_loader', 'sycl', 'torch']
 libraries = ['ze_loader', 'torch']
-# libraries = ['ze_loader', 'sycl']
 
 
 def compile_module_from_src(src, name):

@@ -109,7 +109,7 @@ void flash_attn(const int64_t num_batches, const int64_t num_heads,
               << "\n";
   }
 
-  xpu::profiler_record("xetla kernel", evt);
+  //   xpu::profiler_record("xetla kernel", evt);
   return;
 }
 

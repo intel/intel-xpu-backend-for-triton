@@ -68,13 +68,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     for _ in range(n_warmup):
         fn()
     # Benchmark
-    with profile(
-        activities=[
+    with profile(activities=[
             ProfilerActivity.CPU,
             # Enforcing XPU events tracking
             ProfilerActivity.XPU,
-        ]
-    ) as prof:
+    ]) as prof:
         for i in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
             # if it contains a backward pass. So we clear the
