@@ -67,8 +67,7 @@ public:
       dotsGroup.push_back(dots);
 
       for (SmallVector<tt::DotOp> &dots : dotsGroup) {
-        SmallVector<Value> notVisited = getNotVisitedUses(dots, 0);
-        notVisited.append(getNotVisitedUses(dots, 1));
+        SmallVector<Value> notVisited = getNotVisitedUses(dots);
         for (Value val : notVisited) {
           Operation *op = val.getDefiningOp();
           op->moveBefore(dots.begin()->getOperation());
@@ -109,15 +108,13 @@ private:
   }
 
   // hack!!! only trace dot A/B, only back 1 level
-  SmallVector<Value> getNotVisitedUses(SmallVector<tt::DotOp> &dots,
-                                       unsigned opIdx) {
-    assert((opIdx == 1 || opIdx == 0) && "opIdx should be 0 or 1");
-
+  SmallVector<Value> getNotVisitedUses(SmallVector<tt::DotOp> &dots) {
     SmallVector<Value> notVisited;
-    for (tt::DotOp &dot : dots) {
-      Value val = (opIdx == 1) ? dot.getB() : dot.getA();
-      markUnvisited(val, notVisited);
-    }
+    for (unsigned opIdx = 0; opIdx < 2; ++opIdx)
+      for (tt::DotOp &dot : dots) {
+        Value val = (opIdx == 1) ? dot.getB() : dot.getA();
+        markUnvisited(val, notVisited);
+      }
     return notVisited;
   }
 
