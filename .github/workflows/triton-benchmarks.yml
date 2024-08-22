@@ -170,6 +170,7 @@ jobs:
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && (success() || failure()) }}
+        uses: actions/upload-artifact@v4
         with:
           name: benchmark-reports
           path: reports
