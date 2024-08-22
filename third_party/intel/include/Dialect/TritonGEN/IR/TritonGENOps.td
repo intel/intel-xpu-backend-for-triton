@@ -144,6 +144,19 @@ def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
   }];
 }
 
+def TritonGEN_LaneIdOp : TritonGEN_Op<"lane.id", [Pure]> {
+  let summary = "Lane Index";
+  string baseDescription = [{
+    The `gen.lane.id` operation returns the lane ID which is a number
+    from 0 to the subgroup size minus one.
+  }];
+  let arguments = (ins);
+  let results = (outs I32:$res);
+  let assemblyFormat = [{
+    attr-dict `:` type($res)
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Synchronization
 //===----------------------------------------------------------------------===//

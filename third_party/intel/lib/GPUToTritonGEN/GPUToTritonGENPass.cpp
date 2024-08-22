@@ -198,7 +198,9 @@ void mlir::triton::populateGPUToTritonGENConversionPatterns(
       GPUIndexIntrinsicOpLowering<mlir::gpu::GridDimOp, TritonGEN::GridDimXOp,
                                   TritonGEN::GridDimYOp, TritonGEN::GridDimZOp>,
       SingleDimLaunchConfigLowering<mlir::gpu::SubgroupIdOp,
-                                    TritonGEN::SubgroupIdOp>>(converter);
+                                    TritonGEN::SubgroupIdOp>,
+      SingleDimLaunchConfigLowering<mlir::gpu::LaneIdOp, TritonGEN::LaneIdOp>>(
+      converter);
   patterns.add<GPUFuncOpLowering>(
       converter,
       /*allocaAddrSpace=*/TritonGEN::TritonGENMemorySpace::kFunction,

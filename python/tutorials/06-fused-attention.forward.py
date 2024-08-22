@@ -155,7 +155,6 @@ def forward(q, k, v, causal, sm_scale):
     BLOCK_N = 64 if Lk <= 64 else 32
     num_stages = 4 if Lk <= 64 else 3
     num_warps = 8 if Lq == 64 else 16
-    causal = False
     stage = 3 if causal else 1
     grid = (q.shape[0],  q.shape[1],triton.cdiv(q.shape[2], BLOCK_M))
     print("Q stride =", q.stride(0), q.stride(1), q.stride(2), q.stride(3))
@@ -182,28 +181,28 @@ def forward(q, k, v, causal, sm_scale):
     )
     return o
 
-# torch.manual_seed(0)
-# Z = 1
-# H = 2
-# N_CTX = 1024
-# D_HEAD = 64
-# causal = False
-# dtype=torch.float16
-# q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
-# k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
-# v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
-# sm_scale = 0.125
-# dout = torch.randn_like(q)
-# #torch_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False)
-# #torch.save(torch_output, "./torch_output.pt")
+torch.manual_seed(0)
+Z = 1
+H = 2
+N_CTX = 1024
+D_HEAD = 64
+causal = True
+dtype=torch.float16
+q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
+k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
+v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
+sm_scale = 0.125
+dout = torch.randn_like(q)
+torch_output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=causal)
+# torch.save(torch_output, "./torch_output.pt")
 # torch_output = torch.load("./torch_output.pt")
-# triton_output = forward(q, k, v, causal, sm_scale)
+triton_output = forward(q, k, v, causal, sm_scale)
 
-# torch_outputf32 = torch_output.to(torch.float32)
-# if torch.allclose(triton_output, torch_outputf32, atol=1e-3, rtol=1e-3):
-#     print("✅ Triton and Torch match")
-# else:
-#     print("❌ Triton and Torch differ")
+torch_outputf32 = torch_output.to(torch.float32)
+if torch.allclose(triton_output, torch_outputf32, atol=1e-3, rtol=1e-3):
+    print("✅ Triton and Torch match")
+else:
+    print("❌ Triton and Torch differ")
 
 
 
@@ -228,7 +227,7 @@ def forward(q, k, v, causal, sm_scale):
         args={},
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, provider):
-    causal = False
+    causal = True
     dtype=torch.float16
     q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
     k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
@@ -236,7 +235,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
     sm_scale = 0.125
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'onednn':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale = sm_scale), rep=1000, quantiles=quantiles,
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=causal, scale = sm_scale), rep=1000, quantiles=quantiles,
                                                      fast_flush=False)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: forward(q, k, v, causal, sm_scale), rep=1000, quantiles=quantiles,

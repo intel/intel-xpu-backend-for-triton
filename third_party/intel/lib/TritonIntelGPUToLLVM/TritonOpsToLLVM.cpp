@@ -572,6 +572,12 @@ public:
         loc, vecTy, undef, adaptor.getSrc(),
         rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32Type(), 0));
     auto convertedTy = typeConverter->convertType(resultType);
+    if (!isa<VectorType>(convertedTy)) {
+      // On the advance path, the type converter reduces 1-element vectors to
+      // their element type, making this splat a no-op.
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
+    }
     auto num = convertedTy.cast<VectorType>().getNumElements();
     SmallVector<int32_t> indices(num, 0);
     auto attr = rewriter.getDenseI32ArrayAttr(indices);
@@ -633,10 +639,39 @@ public:
   LogicalResult
   matchAndRewrite(BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // keep it simple for now
-    auto src = adaptor.getSrc();
-    rewriter.replaceOp(op, src);
-    return success();
+    constexpr auto subgroupSize = 16;
+
+    auto srcShape = op.getSrc().getType().getShape();
+    auto dstShape = op.getType().getShape();
+    assert(srcShape.size() == 2 && dstShape.size() == 2 &&
+           "Expected 2D broadcast");
+    assert(dstShape[1] == subgroupSize && "Unexpected result shape");
+
+    if (srcShape[0] == dstShape[0]) {
+      // Example: 16x1 --> 16x16 broadcast. Each thread in the subgroup will get
+      // the same value, so we use the source operand directly.
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
+    }
+
+    if (srcShape[1] == dstShape[1]) {
+      // Example: 1x16 --> 8x16 broadcast. We have extract the element
+      // corresponding to the thread's lane ID and splat it to the desired
+      // result size.
+      auto loc = op.getLoc();
+      Value laneId = rewriter.create<mlir::gpu::LaneIdOp>(loc);
+      Value cast = rewriter.create<arith::IndexCastOp>(
+          loc, rewriter.getI32Type(), laneId);
+      Value extract =
+          rewriter.create<LLVM::ExtractElementOp>(loc, adaptor.getSrc(), cast);
+      Value splat =
+          rewriter.create<mlir::triton::SplatOp>(loc, op.getType(), extract);
+      rewriter.replaceOp(op, splat);
+      return success();
+    }
+
+    llvm_unreachable("Unsupported broadcast");
+    return failure();
   }
 };
 
@@ -668,6 +703,31 @@ class ArithDivFOpLowering
   }
 };
 
+class MakeRangeOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<MakeRangeOp> {
+public:
+  using ConvertTritonGPUOpToLLVMPattern<
+      MakeRangeOp>::ConvertTritonGPUOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(MakeRangeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // FIXME: The real lowering has to take the layout into account. Here, we're
+    // just emitting a sequence of ints. Use
+    // `third_party/intel/lib/TritonIntelGPUToLLVM/MakeRangeOpToLLVM.cpp`
+    // instead!
+    auto loc = op->getLoc();
+    Value vec = rewriter.create<LLVM::UndefOp>(
+        loc, getTypeConverter()->convertType(op.getType()));
+    for (int i = op.getStart(); i < op.getEnd(); ++i) {
+      auto valI = LLVM::createConstantI32(loc, rewriter, i);
+      vec = rewriter.create<LLVM::InsertElementOp>(loc, vec, valI, valI);
+    }
+
+    rewriter.replaceOp(op, vec);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
@@ -689,4 +749,5 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<ReduceOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
+  patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
 }
