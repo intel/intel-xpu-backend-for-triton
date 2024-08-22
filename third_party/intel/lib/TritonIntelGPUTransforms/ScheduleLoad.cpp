@@ -50,25 +50,23 @@ public:
     mod.walk<WalkOrder::PreOrder>([&](scf::ForOp loop) {
       visited.clear();
       int group = -1;
-      SmallVector<std::pair<SmallVector<tt::DotOp>, int>> dotsGroup;
+      SmallVector<SmallVector<tt::DotOp>> dotsGroup;
       SmallVector<tt::DotOp> dots;
       for (auto dot : loop.getOps<tt::DotOp>()) {
         auto groupAttr = dot->getAttrOfType<IntegerAttr>("schedule-group");
         int currGroup = groupAttr.getInt();
         // a new set of schedule-group start (e.g. 0000 - 1111)
         if (currGroup != group && !dots.empty()) {
-          dotsGroup.push_back({dots, group});
+          dotsGroup.push_back(dots);
           dots.clear();
         }
         dots.push_back(dot);
         group = currGroup;
       }
       assert(!dots.empty() && "No dot found in the loop");
-      dotsGroup.push_back({dots, group});
+      dotsGroup.push_back(dots);
 
-      Operation *start = &loop.getBody()->front();
-      for (std::pair<SmallVector<tt::DotOp>, int> &dotsGroup : dotsGroup) {
-        auto [dots, groupId] = dotsGroup;
+      for (SmallVector<tt::DotOp> &dots : dotsGroup) {
         SmallVector<Value> notVisited = getNotVisitedUses(dots, 0);
         notVisited.append(getNotVisitedUses(dots, 1));
         for (Value val : notVisited) {
