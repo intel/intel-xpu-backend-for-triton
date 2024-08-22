@@ -158,8 +158,7 @@ static bool getTransposeFlagFromValue(Value val) {
       loadPtr = load.getPtr();
   }
 
-  if (auto extractOp =
-          dyn_cast_or_null<ttgi::ExtractOp>(loadPtr.getDefiningOp())) {
+  if (auto extractOp = loadPtr.getDefiningOp<ttgi::ExtractOp>()) {
     loadPtr = extractOp.getBase();
   }
   // forward: from tt.load/tt.advance to dot
@@ -168,10 +167,9 @@ static bool getTransposeFlagFromValue(Value val) {
     if (auto loopLikeOp = dyn_cast<LoopLikeOpInterface>(
             blockArg.getParentBlock()->getParentOp())) {
       auto inits = llvm::to_vector(loopLikeOp.getInits());
-      if (auto glueOp =
-              dyn_cast<ttgi::GlueOp>(inits[argIdx - 1].getDefiningOp())) {
-        if (auto tempPtr = dyn_cast<tt::MakeTensorPtrOp>(
-                glueOp.getOperands()[0].getDefiningOp())) {
+      if (auto glueOp = inits[argIdx - 1].getDefiningOp<ttgi::GlueOp>()) {
+        if (auto tempPtr =
+                glueOp.getOperands()[0].getDefiningOp<tt::MakeTensorPtrOp>()) {
           loadPtr = tempPtr.getResult();
         }
       }
@@ -551,8 +549,7 @@ public:
     // If none of the loop init values is defined by a 'glue' operation there is
     // nothing to do.
     if (llvm::none_of(forOp.getInits(), [](Value init) {
-          return init.getDefiningOp() &&
-                 isa<ttgi::GlueOp>(init.getDefiningOp());
+          return init.getDefiningOp<ttgi::GlueOp>();
         })) {
       return false;
     }
@@ -561,7 +558,7 @@ public:
     // operation.
     for (auto [arg, init] :
          llvm::zip(forOp.getRegionIterArgs(), forOp.getInits())) {
-      if (!init.getDefiningOp() || !isa<ttgi::GlueOp>(init.getDefiningOp()))
+      if (!init.getDefiningOp<ttgi::GlueOp>())
         continue;
 
       if (llvm::any_of(arg.getUsers(), [](Operation *user) {
@@ -983,9 +980,10 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
                                       dot.getMaxNumImpreciseAccAttr());
         // hack for attention
         if (triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_INSTR_SCHED"))
-          subDotC.getDefiningOp()->setAttr(
-              "schedule-group",
-              b.getIntegerAttr(b.getI32Type(), nn / dotShape.n));
+          if (auto definingOp = subDotC.getDefiningOp())
+            definingOp->setAttr(
+                "schedule-group",
+                b.getIntegerAttr(b.getI32Type(), nn / dotShape.n));
       }
       subCs.push_back(subDotC);
     }
