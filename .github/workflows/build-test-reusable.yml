@@ -166,10 +166,6 @@ jobs:
         run: |
           echo "TRITON_TEST_SKIPLIST_DIR=$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}" | tee -a $GITHUB_ENV
 
-      - name: Enable XPU fallback for upstream PyTorch
-        run: |
-          echo "PYTORCH_ENABLE_XPU_FALLBACK=${{ inputs.install_ipex && '0' || '1' }}" | tee -a $GITHUB_ENV
-
       - name: Run core tests
         run: |
           source ./scripts/pytest-utils.sh
