@@ -142,7 +142,7 @@ if [ "$BUILD_PINNED" = true ]; then
   IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
 
   BUILD_IPEX=true
-  if pip show intel-extension-for-pytorch &>/dev/null; then
+  if pip show intel_extension_for_pytorch &>/dev/null; then
     IPEX_CURRENT_COMMIT=`python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"`
     IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
     if [[ "$IPEX_PINNED_COMMIT" = "$IPEX_CURRENT_COMMIT"* ]]; then
@@ -253,7 +253,7 @@ build_ipex() {
       cat > setup.py <<EOF
 from setuptools import setup
 
-name = "intel-extension-for-pytorch"
+name = "intel_extension_for_pytorch"
 version = "2.4.0+noop"
 
 setup(
@@ -285,7 +285,7 @@ EOF
   fi
   pip install dist/*.whl
   cd $BASE
-  python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
+  python -c "import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
 }
 
 build() {
