@@ -639,26 +639,34 @@ public:
   LogicalResult
   matchAndRewrite(BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto src = adaptor.getSrc();
-    auto srcTy = src.getType();
-    auto convTy = getTypeConverter()->convertType(op.getType());
-    if (srcTy == convTy) {
-      // Specific to advance path.
+    constexpr auto subgroupSize = 16;
+
+    auto srcShape = op.getSrc().getType().getShape();
+    auto dstShape = op.getType().getShape();
+    assert(srcShape.size() == 2 && dstShape.size() == 2 &&
+           "Expected 2D broadcast");
+    assert(dstShape[1] == subgroupSize && "Unexpected result shape");
+
+    if (srcShape[0] == dstShape[0]) {
       // Example: 16x1 --> 16x16 broadcast. Each thread in the subgroup will get
       // the same value, so we use the source operand directly.
-      rewriter.replaceOp(op, src);
+      rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
 
-    if (srcTy.isIntOrFloat() && isa<VectorType>(convTy)) {
-      // Also specific to advance path (otherwise we wouldn't see scalar and
-      // vector types). Construct a splat.
+    if (srcShape[1] == dstShape[1]) {
+      // Example: 1x16 --> 8x16 broadcast. We have extract the element
+      // corresponding to the thread's lane ID and splat it to the desired
+      // result size.
       auto loc = op.getLoc();
-      auto wrapTy = VectorType::get(1, srcTy);
-      auto undef = undef(wrapTy);
-      auto ins = insert_element(undef, src, i32_val(0));
-      SmallVector<int32_t> mask(cast<VectorType>(convTy).getNumElements(), 0);
-      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(op, ins, ins, mask);
+      Value laneId = rewriter.create<mlir::gpu::LaneIdOp>(loc);
+      Value cast = rewriter.create<arith::IndexCastOp>(
+          loc, rewriter.getI32Type(), laneId);
+      Value extract =
+          rewriter.create<LLVM::ExtractElementOp>(loc, adaptor.getSrc(), cast);
+      Value splat =
+          rewriter.create<mlir::triton::SplatOp>(loc, op.getType(), extract);
+      rewriter.replaceOp(op, splat);
       return success();
     }
 

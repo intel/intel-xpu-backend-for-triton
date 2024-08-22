@@ -33,9 +33,14 @@ TritonIntelGPUToLLVMTypeConverter::TritonIntelGPUToLLVMTypeConverter(
     addConversion([&](mlir::RankedTensorType type) -> mlir::Type {
       unsigned num = type.getNumElements();
       Type elmTy = type.getElementType();
-      if (!type.getEncoding() ||
-          isa<mlir::triton::gpu::DotOperandEncodingAttr>(type.getEncoding()))
+      if ((!type.getEncoding() ||
+           isa<mlir::triton::gpu::DotOperandEncodingAttr>(
+               type.getEncoding())) &&
+          // FIXME: Intended to exclude row vectors occuring in the attention
+          // mask computation; probably won't work in general.
+          !(type.getElementType().isInteger(32) && type.getShape()[0] == 1)) {
         num /= 16;
+      }
       if (num == 1)
         return elmTy;
       return mlir::VectorType::get(num, elmTy);

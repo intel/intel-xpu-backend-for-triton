@@ -192,7 +192,12 @@ public:
                                     op->getResultTypes().end());
       types.append(resultTypes);
 
-      if (llvm::none_of(types, [this](Type type) { return isCandidate(type); }))
+      if (auto mr = dyn_cast<tt::MakeRangeOp>(op)) {
+        // MakeRange's rank-1 tensors are not candidates in the original sense
+        // of the advance path, but we need to split them here anyways.
+        transformMakeRangeOp(mr);
+      } else if (llvm::none_of(types,
+                               [this](Type type) { return isCandidate(type); }))
         ;
       else if (isa<scf::ForOp, scf::YieldOp>(op))
         ;
@@ -263,6 +268,7 @@ private:
   void transformDotOp(tt::DotOp dot);
   void transformReduceOp(tt::ReduceOp op);
   void transformBroadcastOp(tt::BroadcastOp op);
+  void transformMakeRangeOp(tt::MakeRangeOp op);
 
   /// Generic transformation.
   void transformGenericOp(Operation *op);
@@ -1006,6 +1012,43 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
     llvm_unreachable("Unhandled broadcast");
   }
   return;
+}
+
+void MatchTargetSizePass::transformMakeRangeOp(tt::MakeRangeOp op) {
+  constexpr auto subgroupSize = 16;
+  auto start = op.getStart();
+  auto end = op.getEnd();
+  assert(start == 0 && end % subgroupSize == 0 && "Unsupported range");
+
+  if (end == subgroupSize)
+    // nothing to do
+    return;
+
+  // Transform the range like this: (SG = subgroup size = 16)
+  // makeRange(0, N) = glue(
+  //   splat(0 * SG) + makeRange(0, SG),
+  //   splat(1 * SG) + makeRange(0, SG),
+  //   ...
+  //   splat((N/SG-1) * SG) + makeRange(0, SG)
+  // )
+
+  OpBuilder b(op);
+  auto loc = op.getLoc();
+  auto origTy = op.getType();
+  auto elemTy = origTy.getElementType();
+  auto subRangeTy =
+      RankedTensorType::get({subgroupSize}, elemTy, origTy.getEncoding());
+  auto subRange = b.create<tt::MakeRangeOp>(loc, subRangeTy, 0, subgroupSize);
+  SmallVector<Value> subRanges;
+  for (int i = 0; i < end / subgroupSize; ++i) {
+    Value offset =
+        b.create<arith::ConstantIntOp>(loc, i * subgroupSize, elemTy);
+    Value offsetTensor = b.create<tt::SplatOp>(loc, subRangeTy, offset);
+    subRanges.push_back(b.create<arith::AddIOp>(loc, subRange, offsetTensor));
+  }
+  auto glue = b.create<ttgi::GlueOp>(loc, op.getType(), subRanges);
+  op.replaceAllUsesWith(glue->getResults()[0]);
+  op->erase();
 }
 
 void MatchTargetSizePass::transformGenericOp(Operation *op) {
