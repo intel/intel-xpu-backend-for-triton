@@ -3,7 +3,8 @@ from triton._C.libtriton import ir, passes, llvm, intel
 
 from dataclasses import dataclass
 import functools
-from typing import Any, Tuple
+from typing import Any, Dict, Tuple
+from types import ModuleType
 import hashlib
 import re
 import os
@@ -154,6 +155,10 @@ class XPUBackend(BaseBackend):
         codegen_fns["convert_custom_types"] = convert_custom_float8
         codegen_fns["min_dot_size"] = min_dot_size(self.properties)
         return codegen_fns
+
+    def get_module_map(self) -> Dict[str, ModuleType]:
+        from triton.language.extra.intel import libdevice
+        return {"triton.language.extra.libdevice": libdevice}
 
     def load_dialects(self, ctx):
         intel.load_dialects(ctx)
