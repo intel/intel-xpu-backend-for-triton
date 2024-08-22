@@ -83,7 +83,6 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && (success() || failure()) }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          exit 64
           python fused_softmax.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}
