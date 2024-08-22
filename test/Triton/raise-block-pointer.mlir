@@ -648,8 +648,8 @@ module {
 // CHECK:       tt.func @matmul_kernel
 // CHECK: tt.make_tensor_ptr %arg0
 // CHECK: tt.make_tensor_ptr %arg1
-// CHECK: tt.dot 
-// CHECK: %[[VAL_1:.*]] = arith.addi 
+// CHECK: tt.dot
+// CHECK: %[[VAL_1:.*]] = arith.addi
 // CHECK: %[[VAL_2:.*]] = arith.divui
 // CHECK: tt.make_tensor_ptr %arg0, {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}], {{\[}}%[[VAL_2]], %[[VAL_1]]]
 // CHECK: tt.make_tensor_ptr %arg1
