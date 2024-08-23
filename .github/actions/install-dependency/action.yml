@@ -63,7 +63,14 @@ runs:
       run: |
         source /home/runner/intel/oneapi/setvars.sh
         cd ${{ inputs.package }}-${{ steps.commit-id.outputs.commit_id }}
-        python setup.py bdist_wheel
+        if [[ -f setup.py ]]; then
+          python setup.py bdist_wheel
+        elif [[ -f pyproject.toml ]]; then
+          pyton -m build
+        else
+          echo "Error: setup.py and pyproject.toml not found"
+          exit 1
+        fi
 
     - name: Install package wheels
       shell: bash
