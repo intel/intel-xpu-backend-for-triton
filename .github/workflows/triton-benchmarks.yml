@@ -253,7 +253,7 @@ jobs:
           sed -E 's/, /,/g;s/ /,/g' summary.csv > attention-results.csv
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}-adv
-          python ./build_report.py attention-results.csv $REPORTS/attention-triton-advanced-report.csv --benchmark flash_attention --compiler triton --tflops_col max_tflops --param_cols "Z,H,N_CTX,D_HEAD" --tag $TAG
+          python ./build_report.py attention-results.csv $REPORTS/attention-triton-advanced-report.csv --benchmark attn --compiler triton --tflops_col max_tflops --param_cols "Z,H,N_CTX,D_HEAD" --tag $TAG
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
