@@ -66,6 +66,7 @@ runs:
         if [[ -f setup.py ]]; then
           python setup.py bdist_wheel
         elif [[ -f pyproject.toml ]]; then
+          pip install build
           python -m build
         else
           echo "Error: setup.py and pyproject.toml not found"
