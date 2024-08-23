@@ -1,0 +1,35 @@
+name: Bandit Check
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '5 23 * * *'
+
+jobs:
+  bandit-check:
+    runs-on:
+      - max1100
+      - rolling
+      - runner-0.0.19
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Files check
+        run: |
+          pip install bandit
+          bandit -c bandit.yaml -r ./benchmarks/ ./scripts/ ./third_party/intel/ --exit-zero -f html -o bandit_report.html
+
+      - name: Upload report to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bandit Report
+          path: bandit_report.html

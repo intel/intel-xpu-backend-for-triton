@@ -25,7 +25,8 @@ def parse_args():
 
 def check_cols(target_cols, all_cols):
     diff = set(target_cols).difference(all_cols)
-    assert (len(diff) == 0), f"Couldn't find required columns: '{diff}' among available '{all_cols}'"
+    if len(diff) != 0:
+        raise ValueError(f"Couldn't find required columns: '{diff}' among available '{all_cols}'")
 
 
 def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag):
@@ -48,7 +49,8 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag):
         n: os.getenv(n.upper(), default="")
         for n in ["libigc1_version", "level_zero_version", "gpu_device", "agama_version"]
     }
-    assert host_info['gpu_device'], "Could not find GPU device description, was capture_device.sh called?"
+    if not host_info["gpu_device"]:
+        raise RuntimeError(f"Could not find GPU device description, was capture_device.sh called?")
     for name, val in host_info.items():
         df_results[name] = val
 

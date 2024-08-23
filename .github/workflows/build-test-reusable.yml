@@ -124,7 +124,7 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout expecttest
+          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout expecttest defusedxml
           pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
 
       - name: Setup Triton
@@ -165,10 +165,6 @@ jobs:
         if: inputs.skip_list != ''
         run: |
           echo "TRITON_TEST_SKIPLIST_DIR=$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}" | tee -a $GITHUB_ENV
-
-      - name: Enable XPU fallback for upstream PyTorch
-        run: |
-          echo "PYTORCH_ENABLE_XPU_FALLBACK=${{ inputs.install_ipex && '0' || '1' }}" | tee -a $GITHUB_ENV
 
       - name: Run core tests
         run: |
