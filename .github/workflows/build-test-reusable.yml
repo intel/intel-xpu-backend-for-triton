@@ -192,6 +192,13 @@ jobs:
         run: |
           source ./scripts/pytest-utils.sh
 
+          # FIXME: the "instrumentation" test suite currently contains only one test, when all tests
+          # are skipped pytest reports an error. If the only test is the skip list, then we shouldn't
+          # run pytest at all. This must be changed when there is more than one instrumentation test.
+          if [[ $TEST_UNSKIP = false && -s $TRITON_TEST_SKIPLIST_DIR/instrumentation.txt ]]; then
+            exit 0
+          fi
+
           SHARED_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/_C"
           if [ ! -d "${SHARED_LIB_DIR}" ]; then
             echo "Could not find '${SHARED_LIB_DIR}'" ; exit -1
