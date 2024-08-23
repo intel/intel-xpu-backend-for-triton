@@ -272,7 +272,7 @@ jobs:
 
           # `runner_label` takes precedence over `device`, so this is how we check
           # that the workflow is definitely executed on A770 device.
-          if [[ ${{ inputs.device }} = a770 && ${{ inputs.runner_label }} = "" ]]; then
+          if [[ "${{ inputs.device }}" = "a770" && "${{ inputs.runner_label }}" = "" ]]; then
             # To enable FP64 type emulation.
             # For details see: https://github.com/intel/intel-xpu-backend-for-triton/pull/1879
             export OverrideDefaultFP64Settings=1
