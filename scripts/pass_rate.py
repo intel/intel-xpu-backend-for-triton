@@ -7,7 +7,7 @@ import json
 import os
 import pathlib
 import platform
-import xml.etree.ElementTree as ET
+from defusedxml.ElementTree import parse
 from typing import List
 
 
@@ -54,7 +54,7 @@ def get_deselected(report_path: pathlib.Path) -> int:
 def parse_report(report_path: pathlib.Path) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
-    root = ET.parse(report_path).getroot()
+    root = parse(report_path).getroot()
     for testsuite in root:
         testsuite_fixme_tests = set()
         stats.total += int(testsuite.get('tests'))
