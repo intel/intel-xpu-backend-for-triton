@@ -5,10 +5,10 @@ on:
   schedule:
     - cron: "5 2 * * *"
   push:
-    #    paths:
-      #      - .github/workflows/no-basekit-build-test.yml
-      #      - scripts/triton.yml
-      #      - scripts/skiplist/no-basekit/language.txt
+    paths:
+      - .github/workflows/no-basekit-build-test.yml
+      - scripts/triton.yml
+      - scripts/skiplist/no-basekit/*
 
 
 permissions: read-all
