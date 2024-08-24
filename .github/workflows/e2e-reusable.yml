@@ -6,7 +6,7 @@ on:
       install_ipex:
         description: Install Intel PyTorch Extension
         type: boolean
-        default: true
+        default: false
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
@@ -145,7 +145,7 @@ jobs:
       - name: Generate Triton cache key
         id: triton-key
         run: |
-          COMPOSITE_KEY=$(echo $PYTHON_VERSION $GITHUB_SHA | sha256sum - | cut -d\  -f1)
+          COMPOSITE_KEY=$(echo $PYTHON_VERSION $PYTORCH_VERSION $GITHUB_SHA | sha256sum - | cut -d\  -f1)
           echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
 
       - name: Load Triton wheels from a cache

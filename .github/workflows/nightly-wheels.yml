@@ -24,7 +24,11 @@ jobs:
           - "3.10"
           - "3.11"
           - "3.12"
+        mode:
+          - ipex
+          - pytorch
       fail-fast: false
+      max-parallel: 2
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -41,8 +45,17 @@ jobs:
         run: |
           pip install wheel
 
-      - name: Setup PyTorch
+      - name: Setup PyTorch with IPEX
+        if: ${{ matrix.mode == 'ipex' }}
         uses: ./.github/actions/setup-pytorch
+        with:
+          repository: Stonepia/pytorch
+
+      - name: Setup PyTorch without IPEX
+        if: ${{ matrix.mode == 'pytorch' }}
+        uses: ./.github/actions/setup-pytorch
+        with:
+          repository: pytorch/pytorch
 
       - name: Identify pinned versions
         run: |
@@ -52,6 +65,7 @@ jobs:
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> $GITHUB_ENV
 
       - name: Setup IPEX
+        if: ${{ matrix.mode == 'ipex' }}
         uses: ./.github/actions/setup-ipex
 
       - name: Identify Triton commit id
@@ -61,7 +75,7 @@ jobs:
       - name: Generate Triton cache key
         id: triton-key
         run: |
-          COMPOSITE_KEY=$(echo ${{ matrix.python }} $TRITON_COMMIT_ID | sha256sum - | cut -d\  -f1)
+          COMPOSITE_KEY=$(echo ${{ matrix.python }} $PYTORCH_VERSION $TRITON_COMMIT_ID | sha256sum - | cut -d\  -f1)
           echo "key=triton-$COMPOSITE_KEY" >> $GITHUB_OUTPUT
 
       - name: Load Triton wheels from a cache
@@ -87,98 +101,50 @@ jobs:
           path: ${{ steps.triton-cache.outputs.path }}
           dest: ${{ steps.triton-cache.outputs.dest }}
 
-      - name: Load torchvision from a cache
-        id: torchvision-cache
-        uses: ./.github/actions/load
+      - name: Install torchvision package
+        uses: ./.github/actions/install-dependency
         with:
-          path: vision
-          key: torchvision-$PYTHON_VERSION-$TORCHVISION_COMMIT_ID
+          package: torchvision
+          repository: pytorch/vision
+          ref: ${{ env.TORCHVISION_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
-      - name: Build torchvision wheels
-        if: ${{ steps.torchvision-cache.outputs.status == 'miss' }}
+      # FIXME: old PyTorch does not work with torchdata=0.8.0
+      - name: Install torchdata package
+        if: ${{ matrix.mode == 'ipex' }}
         run: |
-          git clone --single-branch -b main https://github.com/pytorch/vision.git
-          cd vision
-          git checkout $TORCHVISION_COMMIT_ID
-          python setup.py bdist_wheel
-
-      - name: Install torchvision
-        run: |
-          pip install vision/dist/*.whl
-          python -c "import torchvision; print(torchvision.__version__)"
-
-      - name: Save torchvision to a cache
-        if: ${{ steps.torchvision-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.torchvision-cache.outputs.path }}
-          dest: ${{ steps.torchvision-cache.outputs.dest }}
-
-      - name: Load torchtext from a cache
-        id: torchtext-cache
-        uses: ./.github/actions/load
-        with:
-          path: text
-          key: torchtext-$PYTHON_VERSION-$TORCHTEXT_COMMIT_ID
-
-      - name: Build torchtext wheels
-        if: ${{ steps.torchtext-cache.outputs.status == 'miss' }}
-        run: |
-          git clone --recurse-submodules --jobs 8 --single-branch -b main https://github.com/pytorch/text.git
-          cd text
-          git checkout $TORCHTEXT_COMMIT_ID
-          python setup.py bdist_wheel
-
-      - name: Install torchtext
-        run: |
-          pip install text/dist/*.whl
-          # FIXME: old PyTorch does not work with torchdata=0.8.0
           pip install 'torchdata<0.8.0'
-          python -c "import torchtext; print(torchtext.__version__)"
 
-      - name: Save torchtext to a cache
-        if: ${{ steps.torchtext-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
+      - name: Install torchtext package
+        uses: ./.github/actions/install-dependency
         with:
-          path: ${{ steps.torchtext-cache.outputs.path }}
-          dest: ${{ steps.torchtext-cache.outputs.dest }}
+          package: torchtext
+          repository: pytorch/text
+          ref: ${{ env.TORCHTEXT_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
-      - name: Load torchaudio from a cache
-        id: torchaudio-cache
-        uses: ./.github/actions/load
+      - name: Install torchaudio package
+        uses: ./.github/actions/install-dependency
         with:
-          path: audio
-          key: torchaudio-$PYTHON_VERSION-$TORCHAUDIO_COMMIT_ID
-
-      - name: Build torchaudio wheels
-        if: ${{ steps.torchaudio-cache.outputs.status == 'miss' }}
-        run: |
-          git clone --single-branch -b main https://github.com/pytorch/audio.git
-          cd audio
-          git checkout $TORCHAUDIO_COMMIT_ID
-          python setup.py bdist_wheel
-
-      - name: Install torchaudio
-        run: |
-          pip install audio/dist/*.whl
-          python -c "import torchaudio; print(torchaudio.__version__)"
-
-      - name: Save torchaudio to a cache
-        if: ${{ steps.torchaudio-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.torchaudio-cache.outputs.path }}
-          dest: ${{ steps.torchaudio-cache.outputs.dest }}
+          package: torchaudio
+          repository: pytorch/audio
+          ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
       - name: Prepare wheels for upload
         run: |
           mkdir -p wheels
           cp -L pytorch/dist/*.whl wheels/
-          cp -L intel-extension-for-pytorch/dist/*.whl wheels/
           cp -L python/dist/*.whl wheels/
-          cp -L vision/dist/*.whl wheels/
-          cp -L text/dist/*.whl wheels/
-          cp -L audio/dist/*.whl wheels/
+          cp -L torchvision*/dist/*.whl wheels/
+          cp -L torchtext*/dist/*.whl wheels/
+          cp -L torchaudio*/dist/*.whl wheels/
+
+      - name: Prepare IPEX wheels for upload
+        if: ${{ matrix.mode == 'ipex' }}
+        run: |
+          mkdir -p wheels
+          cp -L intel-extension-for-pytorch/dist/*.whl wheels/
 
       - name: Report environment details
         run: |
@@ -204,8 +170,16 @@ jobs:
           TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
           EOF
 
-      - name: Upload wheels to artifacts
+      - name: Upload IPEX wheels to artifacts
+        if: ${{ matrix.mode == 'ipex' }}
         uses: actions/upload-artifact@v4
         with:
           name: wheels-py${{ matrix.python }}-${{ env.TIMESTAMP }}
+          path: wheels
+
+      - name: Upload PyTorch wheels to artifacts
+        if: ${{ matrix.mode == 'pytorch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-pytorch-py${{ matrix.python }}-${{ env.TIMESTAMP }}
           path: wheels
