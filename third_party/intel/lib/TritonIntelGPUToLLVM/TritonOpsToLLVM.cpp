@@ -527,7 +527,6 @@ public:
     Location loc = op.getLoc();
     Type resultType = op.getType(0);
     TritonIntelGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
-    Type convertedTy = typeConverter->convertType(resultType);
     Region &combineOp = op.getCombineOp();
     if (!combineOp.hasOneBlock() ||
         combineOp.front().getOperations().size() != 2)
@@ -546,7 +545,7 @@ public:
       llvm_unreachable("Unhandled reduction kind");
 
     Value result = rewriter.create<mlir::gpu::SubgroupReduceOp>(
-        loc, convertedTy, adaptor.getSrcs()[0], redKind, true);
+        loc, adaptor.getSrcs()[0], redKind, true);
     rewriter.replaceOp(op, result);
     return success();
   }
