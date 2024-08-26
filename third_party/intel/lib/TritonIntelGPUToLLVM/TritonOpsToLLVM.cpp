@@ -376,9 +376,6 @@ public:
   }
 };
 
-/// %glue = ttgi.glue %a, %b : tensor<4xf16>, tensor<4xf16> : tensor<8xf16>
-/// is converted to:
-/// %glue = llvm.shufflevector %a, %b : [0, 1, 2, 3, 4, 5, 6, 7] : vector<8xf16>
 class GlueOpConversion : public ConvertTritonGPUOpToLLVMPattern<GlueOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
@@ -386,62 +383,75 @@ public:
   LogicalResult
   matchAndRewrite(GlueOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
     ValueRange operands = adaptor.getOperands();
-    auto dstType =
-        cast<VectorType>(getTypeConverter()->convertType(op.getType()));
-    Value poison = rewriter.create<LLVM::PoisonOp>(loc, dstType);
     Value result =
         TypeSwitch<Type, Value>(operands.front().getType())
-            .Case([&rewriter, loc, dstType, operands,
-                   poison](VectorType vecType) {
-              // Broadcast each operand vector to a vector of `dstType` type.
-              unsigned dstNumElements = dstType.getNumElements();
-              unsigned numElements = vecType.getNumElements();
-              Value broadcastPoison =
-                  rewriter.create<LLVM::PoisonOp>(loc, vecType);
-              SmallVector<int32_t> mask(dstNumElements, numElements);
-              std::iota(std::begin(mask), std::begin(mask) + numElements, 0);
-              SmallVector<Value> broadcastedOperands;
-              llvm::transform(operands, std::back_inserter(broadcastedOperands),
-                              [&rewriter, loc, broadcastPoison,
-                               &mask](Value operand) -> Value {
-                                return rewriter.create<LLVM::ShuffleVectorOp>(
-                                    loc, operand, broadcastPoison, mask);
-                              });
-
-              // Merge broadcasted vectors in a single vector.
-              auto enumeratedOperands = llvm::enumerate(broadcastedOperands);
-              std::iota(std::begin(mask), std::end(mask), 0);
-              return std::accumulate(
-                  std::begin(enumeratedOperands), std::end(enumeratedOperands),
-                  poison,
-                  [&rewriter, loc, &mask,
-                   numElements](Value acc, const auto &pair) -> Value {
-                    auto [index, operand] = pair;
-                    SmallVector<int32_t> newShuffleMask(mask);
-                    std::iota(std::begin(newShuffleMask) + index * numElements,
-                              std::begin(newShuffleMask) +
-                                  (index + 1) * numElements,
-                              newShuffleMask.size());
-                    return rewriter.create<LLVM::ShuffleVectorOp>(
-                        loc, acc, operand, newShuffleMask);
-                  });
+            .Case([this, &rewriter, op, operands](VectorType vecType) {
+              return vectorGlueOp(op, operands, rewriter, vecType);
             })
-            .Default([&rewriter, loc, operands, poison](auto) {
-              auto enumeratedOperands = llvm::enumerate(operands);
-              return std::accumulate(
-                  std::begin(enumeratedOperands), std::end(enumeratedOperands),
-                  poison, [&rewriter, loc](Value acc, const auto &P) {
-                    auto [index, operand] = P;
-                    Value idx = rewriter.create<LLVM::ConstantOp>(
-                        loc, rewriter.getI32Type(), index);
-                    return rewriter.create<LLVM::InsertElementOp>(loc, acc,
-                                                                  operand, idx);
-                  });
+            .Default([this, &rewriter, op, operands](auto) {
+              return scalarGlueOp(op, operands, rewriter);
             });
     rewriter.replaceOp(op, result);
     return success();
+  }
+
+private:
+  Value vectorGlueOp(GlueOp op, ValueRange operands,
+                     ConversionPatternRewriter &rewriter,
+                     VectorType vecType) const {
+    Location loc = op.getLoc();
+    auto dstType =
+        cast<VectorType>(getTypeConverter()->convertType(op.getType()));
+    Value poison = rewriter.create<LLVM::PoisonOp>(loc, dstType);
+
+    // Broadcast each operand vector to a vector of `dstType` type.
+    unsigned dstNumElements = dstType.getNumElements();
+    unsigned numElements = vecType.getNumElements();
+    Value broadcastPoison = rewriter.create<LLVM::PoisonOp>(loc, vecType);
+    SmallVector<int32_t> mask(dstNumElements, numElements);
+    std::iota(std::begin(mask), std::begin(mask) + numElements, 0);
+    SmallVector<Value> broadcastedOperands;
+    llvm::transform(
+        operands, std::back_inserter(broadcastedOperands),
+        [&rewriter, loc, broadcastPoison, &mask](Value operand) -> Value {
+          return rewriter.create<LLVM::ShuffleVectorOp>(loc, operand,
+                                                        broadcastPoison, mask);
+        });
+
+    // Merge broadcasted vectors in a single vector.
+    auto enumeratedOperands = llvm::enumerate(broadcastedOperands);
+    std::iota(std::begin(mask), std::end(mask), 0);
+    return std::accumulate(
+        std::begin(enumeratedOperands), std::end(enumeratedOperands), poison,
+        [&rewriter, loc, &mask, numElements](Value acc,
+                                             const auto &pair) -> Value {
+          auto [index, operand] = pair;
+          SmallVector<int32_t> newShuffleMask(mask);
+          std::iota(std::begin(newShuffleMask) + index * numElements,
+                    std::begin(newShuffleMask) + (index + 1) * numElements,
+                    newShuffleMask.size());
+          return rewriter.create<LLVM::ShuffleVectorOp>(loc, acc, operand,
+                                                        newShuffleMask);
+        });
+  }
+
+  Value scalarGlueOp(GlueOp op, ValueRange operands,
+                     ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    auto dstType =
+        cast<VectorType>(getTypeConverter()->convertType(op.getType()));
+    Value poison = rewriter.create<LLVM::PoisonOp>(loc, dstType);
+
+    auto enumeratedOperands = llvm::enumerate(operands);
+    return std::accumulate(
+        std::begin(enumeratedOperands), std::end(enumeratedOperands), poison,
+        [&rewriter, loc](Value acc, const auto &P) {
+          auto [index, operand] = P;
+          Value idx = rewriter.create<LLVM::ConstantOp>(
+              loc, rewriter.getI32Type(), index);
+          return rewriter.create<LLVM::InsertElementOp>(loc, acc, operand, idx);
+        });
   }
 };
 
