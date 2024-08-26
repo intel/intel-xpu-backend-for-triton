@@ -54,6 +54,7 @@ def _kernel(A, B, C,  #
             b = tl.load(b_block_ptr)
         else:
             # FIXME: Undefined name `rk`
+            # https://github.com/intel/intel-xpu-backend-for-triton/issues/2012
             raise NotImplementedError()
             # k_remaining = K - k * (BLOCK_K * SPLIT_K)
             # _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
