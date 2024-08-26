@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+# intel-xpu-backend-for-triton project root
+ROOT=$(cd $(dirname "$0")/.. && pwd)
 SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
 # Select what to build.
@@ -83,7 +85,10 @@ fi
 
 if [ ! -v BASE ]; then
   echo "**** BASE is not given *****"
-  BASE=$(cd $(dirname "$0")/../.. && pwd)
+  BASE=$ROOT/.scripts_cache
+  if [ ! -d "$BASE" ]; then
+    mkdir $BASE
+  fi
   echo "**** Default BASE is set to $BASE ****"
 fi
 
@@ -93,6 +98,11 @@ if [ "$VENV" = true ]; then
 fi
 
 export PYTORCH_PROJ=$BASE/pytorch
+export PYTORCH_PROXY_REPO=pytorch-stonepia
+if [ "$UPSTREAM_PYTORCH" = false ]; then
+  export PYTORCH_PROJ=$BASE/$PYTORCH_PROXY_REPO
+fi
+
 export IPEX_PROJ=$BASE/intel-extension-for-pytorch
 
 if [ "$CLEAN" = true ]; then
@@ -120,9 +130,9 @@ fi
 if [ "$BUILD_PINNED" = true ]; then
   echo "**** Determine if the installed PyTorch version is the same as the pinned version. ****"
   if [ "$UPSTREAM_PYTORCH" = true ]; then
-    PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch-upstream.txt)"
+    PYTORCH_PINNED_COMMIT="$(<$ROOT/.github/pins/pytorch-upstream.txt)"
   else
-    PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
+    PYTORCH_PINNED_COMMIT="$(<$ROOT/.github/pins/pytorch.txt)"
   fi
 
   BUILD_PYTORCH=true
@@ -139,11 +149,17 @@ if [ "$BUILD_PINNED" = true ]; then
   fi
 
   echo "**** Determine if the installed IPEX version is the same as the pinned version. ****"
-  IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
+
+  if [ "$NO_OP_IPEX" = true ]; then
+    # should be in sync with `create-noop-ipex.sh`
+    IPEX_PINNED_COMMIT="2.4.0+noop"
+  else
+    IPEX_PINNED_COMMIT="$(<$ROOT/.github/pins/ipex.txt)"
+  fi
 
   BUILD_IPEX=true
   if pip show intel_extension_for_pytorch &>/dev/null; then
-    IPEX_CURRENT_COMMIT=`python -c "import torch;import intel_extension_for_pytorch as ipex;print(ipex.__version__)"`
+    IPEX_CURRENT_COMMIT=`python -c "import intel_extension_for_pytorch as ipex;print(ipex.__version__)"`
     IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
     if [[ "$IPEX_PINNED_COMMIT" = "$IPEX_CURRENT_COMMIT"* ]]; then
       echo "**** IPEX is already installed and its current commit is equal to the pinned commit: $IPEX_PINNED_COMMIT. ****"
@@ -219,7 +235,7 @@ build_pytorch() {
       $SCRIPTS_DIR/patch-pytorch.sh
       popd
     else
-      git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git
+      git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git $PYTORCH_PROXY_REPO
     fi
   fi
   echo "****** Building $PYTORCH_PROJ ******"
