@@ -56,7 +56,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %44 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c16_i32, %c48_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
     %45 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c32_i32, %c48_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
     %46 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c48_i32, %c48_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
-    // CHECK-COUNT-2: tt.load {{.*}} : !tt.ptr<tensor<16x32xf16>>    
+    // CHECK-COUNT-2: tt.load {{.*}} : !tt.ptr<tensor<16x32xf16>>
     // CHECK: scf.for
     // CHECK-COUNT-4: tt.load {{.*}} : !tt.ptr<tensor<16x16xf16>>
     // CHECK-COUNT-8: tt.dot {{.*}} {"schedule-group" = 0 : i32}
@@ -223,7 +223,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     %36 = arith.addi %34, %c32_i32 : i32
     %37 = tt.make_tensor_ptr %arg1, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%c0_i32, %36] {order = array<i32: 1, 0>} : <tensor<32x32xbf16>>
     // CHECK: scf.for
-    // CHECK-COUNT-2: triton_intel_gpu.prefetch {{.*}} : !tt.ptr<tensor<8x32xbf16>> 
+    // CHECK-COUNT-2: triton_intel_gpu.prefetch {{.*}} : !tt.ptr<tensor<8x32xbf16>>
     // CHECK: tt.load {{.*}} : !tt.ptr<tensor<32x32xbf16>>
     // CHECK-COUNT-8: triton_intel_gpu.extract {{.*}} : tensor<32x32xbf16> -> tensor<8x16xbf16>
     // CHECK: tt.load {{.*}} : !tt.ptr<tensor<32x32xbf16>>
