@@ -15,13 +15,12 @@ ze_root = os.getenv("ZE_PATH", default="/usr/local")
 include_dir = [os.path.join(ze_root, "include")]
 
 
-def find_sycl(include_dir: list[str], library_dir: list[str]) -> tuple[list[str], list[str]]:
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
     """
     Looks for the sycl library in known places.
 
     Arguments:
       include_dir: list of include directories to pass to compiler.
-      library_dir: list of library directories to pass to compiler.
 
     Returns:
       enriched include_dir and library_dir.
@@ -29,6 +28,8 @@ def find_sycl(include_dir: list[str], library_dir: list[str]) -> tuple[list[str]
     Raises:
       AssertionError: if library was not found.
     """
+    library_dir = []
+    include_dir = include_dir.copy()
     assertion_error = lambda: AssertionError(
         "sycl headers not found, please install icpx compiler, provide ONEAPI_ROOT environment "
         "or install intel-sycl-rt>=2025.0.0 wheel")
@@ -63,7 +64,7 @@ def find_sycl(include_dir: list[str], library_dir: list[str]) -> tuple[list[str]
     return include_dir, library_dir
 
 
-include_dir, library_dir = find_sycl(include_dir, [])
+include_dir, library_dir = find_sycl(include_dir)
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir += [os.path.join(dirname, "include")]
