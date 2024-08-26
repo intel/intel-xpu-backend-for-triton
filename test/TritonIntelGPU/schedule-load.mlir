@@ -1,4 +1,5 @@
-// RUN: TRITON_INTEL_ENABLE_INSTR_SCHED=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s
+// RUN: TRITON_INTEL_ENABLE_INSTR_SCHED=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s --check-prefixes=CHECK,SINK-ACROSS-REGIONS
+// RUN: TRITON_INTEL_ENABLE_INSTR_SCHED=1 TRITON_INTEL_DO_NOT_SINK_INSTR_ACROSS_RGN=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s --check-prefixes=CHECK,DO-NOT-SINK-ACROSS-REGIONS
 
 // -----
 // COM: Inst Schedule for Flash Attention case
@@ -56,8 +57,9 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %44 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c16_i32, %c48_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
     %45 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c32_i32, %c48_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
     %46 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c48_i32, %c48_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
-    // CHECK-COUNT-2: tt.load {{.*}} : !tt.ptr<tensor<16x32xf16>>
+    // DO-NOT-SINK-ACROSS-REGIONS-COUNT-2: tt.load {{.*}} : !tt.ptr<tensor<16x32xf16>>
     // CHECK: scf.for
+    // SINK-ACROSS-REGIONS-COUNT-2: tt.load {{.*}} : !tt.ptr<tensor<16x32xf16>>
     // CHECK-COUNT-4: tt.load {{.*}} : !tt.ptr<tensor<16x16xf16>>
     // CHECK-COUNT-8: tt.dot {{.*}} {"schedule-group" = 0 : i32}
     // CHECK-COUNT-4: tt.load {{.*}} : !tt.ptr<tensor<16x16xf16>>
@@ -66,6 +68,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     // CHECK-COUNT-8: tt.dot {{.*}} {"schedule-group" = 2 : i32}
     // CHECK-COUNT-4: tt.load {{.*}} : !tt.ptr<tensor<16x16xf16>>
     // CHECK-COUNT-8: tt.dot {{.*}} {"schedule-group" = 3 : i32}
+    // CHECK-COUNT-16: tt.advance {{.*}} : <tensor<16x16xf16>>
     %58 = tt.load %14 {DotIdx = 0 : i32} : !tt.ptr<tensor<16x32xf16>>
     %59 = tt.load %15 {DotIdx = 0 : i32} : !tt.ptr<tensor<16x32xf16>>
     %62:24 = scf.for %arg6 = %c0_i32 to %c1024_i32 step %c64_i32 iter_args(%arg8 = %cst_2, %arg9 = %cst_2, %arg10 = %cst_2, %arg11 = %cst_2, %arg12 = %cst_2, %arg13 = %cst_2, %arg14 = %cst_2, %arg15 = %cst_2, %arg21 = %31, %arg22 = %32, %arg23 = %33, %arg24 = %34, %arg25 = %35, %arg26 = %36, %arg27 = %37, %arg28 = %38, %arg29 = %39, %arg30 = %40, %arg31 = %41, %arg32 = %42, %arg33 = %43, %arg34 = %44, %arg35 = %45, %arg36 = %46)

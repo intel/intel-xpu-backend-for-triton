@@ -101,6 +101,9 @@ private:
     if (visited.contains(val))
       return;
 
+    bool sinkAcrossRegions =
+        !triton::tools::getBoolEnv("TRITON_INTEL_DO_NOT_SINK_INSTR_ACROSS_RGN");
+
     auto belongsToRegion = [&](Value val, Region &rgn) {
       Operation *def = val.getDefiningOp();
       return (def && def->getParentRegion() == &rgn);
@@ -110,7 +113,8 @@ private:
       notVisited.push_back(val);
     } else if (auto extract = val.getDefiningOp<ttgi::ExtractOp>()) {
       Value base = extract.getBase();
-      if (belongsToRegion(base, *extract->getParentRegion())) {
+      if (sinkAcrossRegions ||
+          belongsToRegion(base, *extract->getParentRegion())) {
         markUnvisited(base, notVisited);
         notVisited.push_back(val);
       }
