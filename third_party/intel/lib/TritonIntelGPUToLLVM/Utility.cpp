@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+
 #include "Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -15,10 +17,57 @@ using namespace mlir::triton;
 
 namespace mlir::LLVM::intel {
 
+static Type findShuffleType(RewriterBase &rewriter, Type valType) {
+  if (rewriter.getI8Type() == valType || rewriter.getI16Type() == valType ||
+      rewriter.getI32Type() == valType || rewriter.getI64Type() == valType ||
+      rewriter.getF16Type() == valType || rewriter.getF32Type() == valType ||
+      rewriter.getF64Type() == valType) {
+    return valType;
+  }
+  if (rewriter.getBF16Type() == valType) {
+    return rewriter.getI16Type();
+  }
+
+  unsigned bitWidth = valType.getIntOrFloatBitWidth();
+  if (bitWidth < 8) {
+    return rewriter.getI8Type();
+  }
+  return {};
+}
+
 static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
-                           Value i, TritonGEN::ShflKind mode) {
-  Type type = val.getType();
-  return rewriter.create<TritonGEN::SubGroupShuffleOp>(loc, type, val, i, mode);
+                           Value i, mlir::gpu::ShuffleMode mode) {
+  Type valType = val.getType();
+  Type shuffleType = findShuffleType(rewriter, valType);
+
+  unsigned bitWidth = valType.getIntOrFloatBitWidth();
+  if (shuffleType != valType) {
+    assert(shuffleType.isInteger());
+    if (!valType.isInteger()) {
+      val = bitcast(val, int_ty(bitWidth));
+    }
+    if (bitWidth < shuffleType.getIntOrFloatBitWidth()) {
+      val = zext(shuffleType, val);
+    }
+  }
+
+  int width = TritonGEN::getSubgroupSize(i.getDefiningOp());
+  Value widthConstant =
+      rewriter.create<arith::ConstantIntOp>(loc, width, 32).getResult();
+  Value result =
+      rewriter.create<mlir::gpu::ShuffleOp>(loc, val, i, widthConstant, mode)
+          .getResult(0);
+
+  if (shuffleType != valType) {
+    if (bitWidth < shuffleType.getIntOrFloatBitWidth()) {
+      result = trunc(int_ty(bitWidth), result);
+    }
+    if (!valType.isInteger()) {
+      result = bitcast(result, valType);
+    }
+  }
+
+  return result;
 }
 
 Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
@@ -36,11 +85,12 @@ Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleCommon(loc, rewriter, val, i32_val(i),
-                       TritonGEN::ShflKind::XOR);
+                       mlir::gpu::ShuffleMode::XOR);
 }
 
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i), TritonGEN::ShflKind::UP);
+  return shuffleCommon(loc, rewriter, val, i32_val(i),
+                       mlir::gpu::ShuffleMode::UP);
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
@@ -48,7 +98,7 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
-  return shuffleCommon(loc, rewriter, val, i, TritonGEN::ShflKind::IDX);
+  return shuffleCommon(loc, rewriter, val, i, mlir::gpu::ShuffleMode::IDX);
 }
 
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
