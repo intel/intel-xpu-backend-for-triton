@@ -83,7 +83,11 @@ fi
 
 if [ ! -v BASE ]; then
   echo "**** BASE is not given *****"
-  BASE=$(cd $(dirname "$0")/../.. && pwd)
+  BASE=$(dirname "$0")/../.scripts_cache
+  if [ ! -d "$BASE" ]; then
+    mkdir $BASE
+  fi
+  BASE=$(cd $BASE && pwd)
   echo "**** Default BASE is set to $BASE ****"
 fi
 
