@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+# intel-xpu-backend-for-triton project root
+ROOT=$(cd $(dirname "$0")/.. && pwd)
 SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
 # Select what to build.
@@ -83,11 +85,10 @@ fi
 
 if [ ! -v BASE ]; then
   echo "**** BASE is not given *****"
-  BASE=$(dirname "$0")/../.scripts_cache
+  BASE=$ROOT/.scripts_cache
   if [ ! -d "$BASE" ]; then
     mkdir $BASE
   fi
-  BASE=$(cd $BASE && pwd)
   echo "**** Default BASE is set to $BASE ****"
 fi
 
@@ -124,9 +125,9 @@ fi
 if [ "$BUILD_PINNED" = true ]; then
   echo "**** Determine if the installed PyTorch version is the same as the pinned version. ****"
   if [ "$UPSTREAM_PYTORCH" = true ]; then
-    PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch-upstream.txt)"
+    PYTORCH_PINNED_COMMIT="$(<$ROOT/.github/pins/pytorch-upstream.txt)"
   else
-    PYTORCH_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/pytorch.txt)"
+    PYTORCH_PINNED_COMMIT="$(<$ROOT/.github/pins/pytorch.txt)"
   fi
 
   BUILD_PYTORCH=true
@@ -143,7 +144,7 @@ if [ "$BUILD_PINNED" = true ]; then
   fi
 
   echo "**** Determine if the installed IPEX version is the same as the pinned version. ****"
-  IPEX_PINNED_COMMIT="$(<$BASE/intel-xpu-backend-for-triton/.github/pins/ipex.txt)"
+  IPEX_PINNED_COMMIT="$(<$ROOT/.github/pins/ipex.txt)"
 
   BUILD_IPEX=true
   if pip show intel_extension_for_pytorch &>/dev/null; then
