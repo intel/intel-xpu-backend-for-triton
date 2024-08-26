@@ -30,11 +30,12 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
     """
     library_dir = []
     include_dir = include_dir.copy()
-    assertion_error = lambda: AssertionError(
-        "sycl headers not found, please install icpx compiler, provide ONEAPI_ROOT environment "
-        "or install intel-sycl-rt>=2025.0.0 wheel")
+    assertion_message = ("sycl headers not found, please install `icpx` compiler, "
+                         "or provide `ONEAPI_ROOT` environment "
+                         "or install `intel-sycl-rt>=2025.0.0` wheel")
 
     if shutil.which("icpx"):
+        # only `icpx` compiler knows where sycl runtime binaries and header files are
         return include_dir, library_dir
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
@@ -48,10 +49,10 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
     except importlib.metadata.PackageNotFoundError:
-        raise assertion_error()
+        raise AssertionError(assertion_message)
 
     if Version(sycl_rt.get("version", "0.0.0")) in SpecifierSet("<2025.0.0a1"):
-        raise assertion_error()
+        raise AssertionError(assertion_message)
 
     for f in importlib.metadata.files("intel-sycl-rt"):
         # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
