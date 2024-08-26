@@ -1,2 +1,1 @@
-target_compile_definitions(xetla_kernel PUBLIC XETPP_NEW_XMAIN)
 target_include_directories(xetla_kernel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

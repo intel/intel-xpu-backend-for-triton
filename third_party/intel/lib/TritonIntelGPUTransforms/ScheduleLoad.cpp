@@ -49,17 +49,9 @@ public:
     MLIRContext *ctx = &getContext();
     ModuleOp mod = getOperation();
 
-    // Check whether a value can be legally moved to the given insertion point.
-    auto canMoveValueTo = [&](Value val, Operation *insertPoint) {
-      return llvm::all_of(val.getUsers(), [&](Operation *user) {
-        return insertPoint->isBeforeInBlock(user);
-      });
-    };
-
     mod.walk<WalkOrder::PreOrder>([&](scf::ForOp loop) {
       visited.clear();
       int group = -1;
-      unsigned numGroups = 0;
       SmallVector<SmallVector<tt::DotOp>> dotsGroup;
       SmallVector<tt::DotOp> dots;
       for (auto dot : loop.getOps<tt::DotOp>()) {
@@ -70,44 +62,26 @@ public:
           dotsGroup.push_back(dots);
           dots.clear();
         }
-        // mark first dot B as visited to not move
-        if (currGroup == 0) {
-          SmallVector<tt::DotOp> vec{dot};
-          getNotVisitedUses(vec, 1);
-          // a new set of schedule-groups(e.g. 0000,1111,2222,3333 - 0000) start
-          if (group > 0)
-            numGroups = dotsGroup.size();
-        }
         dots.push_back(dot);
         group = currGroup;
       }
       assert(!dots.empty() && "No dot found in the loop");
       dotsGroup.push_back(dots);
 
-      unsigned groupNum = 0;
-      Operation *start = &loop.getBody()->front();
       for (SmallVector<tt::DotOp> &dots : dotsGroup) {
-        auto notVisited = getNotVisitedUses(dots, 1);
-        if (groupNum == 0)
-          notVisited.append(getNotVisitedUses(dots, 0));
+        SmallVector<Value> notVisited = getNotVisitedUses(dots);
         for (Value val : notVisited) {
-          Operation *insertPoint =
-              (groupNum == 0) ? start
-                              : dots.begin()->getOperation()->getPrevNode();
-
-          if (canMoveValueTo(val, insertPoint))
-            val.getDefiningOp()->moveAfter(insertPoint);
+          if (Operation *op = val.getDefiningOp())
+            op->moveBefore(dots.begin()->getOperation());
         }
-        ++groupNum;
-        if (groupNum == numGroups)
-          groupNum = 0;
       }
     });
 
     // HoHo, move trunc forward
     mod.walk([&](arith::TruncFOp op) {
-      auto def = op.getIn().getDefiningOp();
-      op->moveAfter(def);
+      if (auto def = op.getIn().getDefiningOp()) {
+        op->moveAfter(def);
+      }
     });
 
     // HoHo, add fastmath for all
@@ -121,36 +95,37 @@ public:
   }
 
 private:
-  // hack!!! only trace dot A/B, only back 1 level
-  SmallVector<Value> getNotVisitedUses(SmallVector<tt::DotOp> &dots,
-                                       unsigned opIdx) {
-    assert((opIdx == 1 || opIdx == 0) && "opIdx should be 0 or 1");
+  // Backtrace to collect unvisited dot operands
+  // Only handle dot operands which is from tt.load and ttgi.extract
+  void markUnvisited(Value val, SmallVector<Value> &notVisited) {
+    if (visited.contains(val))
+      return;
 
     auto belongsToRegion = [&](Value val, Region &rgn) {
       Operation *def = val.getDefiningOp();
       return (def && def->getParentRegion() == &rgn);
     };
 
-    SmallVector<Value> notVisited;
-    for (tt::DotOp &dot : dots) {
-      Value val = (opIdx == 1) ? dot.getB() : dot.getA();
-      if (visited.contains(val))
-        continue;
-
-      Operation *def = val.getDefiningOp();
-      if (auto extract = dyn_cast<ttgi::ExtractOp>(def)) {
-        Value base = extract.getBase();
-        if (!visited.contains(base)) {
-          if (!belongsToRegion(base, *extract->getParentRegion()))
-            continue;
-
-          notVisited.push_back(base);
-          visited.insert(base);
-        }
-      }
+    if (auto load = val.getDefiningOp<tt::LoadOp>()) {
       notVisited.push_back(val);
-      visited.insert(val);
+    } else if (auto extract = val.getDefiningOp<ttgi::ExtractOp>()) {
+      Value base = extract.getBase();
+      if (belongsToRegion(base, *extract->getParentRegion())) {
+        markUnvisited(base, notVisited);
+        notVisited.push_back(val);
+      }
     }
+    visited.insert(val);
+  }
+
+  // hack!!! only trace dot A/B, only back 1 level
+  SmallVector<Value> getNotVisitedUses(SmallVector<tt::DotOp> &dots) {
+    SmallVector<Value> notVisited;
+    for (unsigned opIdx = 0; opIdx < 2; ++opIdx)
+      for (tt::DotOp &dot : dots) {
+        Value val = (opIdx == 1) ? dot.getB() : dot.getA();
+        markUnvisited(val, notVisited);
+      }
     return notVisited;
   }
 

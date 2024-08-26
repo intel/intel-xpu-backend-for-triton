@@ -23,10 +23,42 @@
 // Set to 1 to get raw output, not permuted
 #define _RAW_OUTPUT 0
 #define _USE_BFNH 1
+using T = sycl::ext::oneapi::bfloat16;
 
 namespace gpu::xetla {
 
 namespace fmha {
+
+struct Shape {
+  Shape(int B, int N, int F, int T, int H)
+      : num_batches(B), num_heads(N), num_queries(F), num_keys(T),
+        head_size(H) {}
+  const int num_batches;
+  const int num_heads;
+  const int num_queries;
+  const int num_keys;
+  const int head_size;
+
+  inline uint32_t get_query_size() const {
+    return num_batches * num_heads * num_queries * head_size;
+  }
+  inline uint32_t get_key_size() const {
+    return num_batches * num_heads * num_keys * head_size;
+  }
+  inline uint32_t get_score_size() const {
+    return num_batches * num_heads * num_queries * num_keys;
+  }
+  inline uint32_t get_ml_size() const {
+    return num_batches * num_heads * num_queries;
+  }
+  inline uint32_t get_attn_mask_size() const {
+#if _BIAS_AS_INPUT
+    return num_batches * num_heads * num_queries * num_keys;
+#else
+    return num_batches * num_queries * num_keys;
+#endif
+  }
+};
 
 template <typename fmha_policy, typename scalar_t, bool kUseBias,
           bool kIsCausal, bool kIsTraining>
@@ -586,14 +618,39 @@ template <typename fmha_policy, typename T, bool kUseBias, bool kIsCausal,
 class FmhaForwardKernel;
 
 // The launcher of fmha forward kernel
-template <typename fmha_policy, typename T, bool kUseBias, bool kIsCausal,
-          bool kIsTraining>
-sycl::event fmha_forward_impl(sycl::queue &q, T *query, T *key, T *value,
-                              T *bias, float dropout_prob, T *out, float *l,
-                              uint32_t num_batches, uint32_t num_heads,
-                              uint32_t head_size, uint32_t num_queries,
-                              uint32_t num_keys, float head_scale,
-                              uint64_t seed, uint64_t offset) {
+template <typename fmha_policy, typename T, bool kUseBias = false,
+          bool kIsCausal = false, bool kIsTraining = false>
+sycl::event fmha_forward_impl(sycl::queue &q, uint32_t num_batches,
+                              uint32_t num_heads, uint32_t head_size,
+                              uint32_t num_queries, uint32_t num_keys,
+                              uint64_t seed = 0, uint64_t offset = 123) {
+
+  Shape shape(num_batches, num_heads, num_queries, num_keys, head_size);
+
+  constexpr bool use_mask = false;
+  constexpr bool use_dropout = false;
+  float dropout_prob = 0.0f;
+  if constexpr (use_dropout)
+    dropout_prob = 0.5f;
+  const float scale = 1 / (1 - dropout_prob);
+  const float head_scale = sycl::rsqrt(float(head_size));
+
+  uint32_t size_query = shape.get_query_size();
+  uint32_t size_key = shape.get_key_size();
+  uint32_t size_score = shape.get_score_size();
+  uint32_t size_attn_mask = shape.get_attn_mask_size();
+  uint32_t size_ml = shape.get_ml_size();
+
+  // forward
+  T *query = sycl::malloc_shared<T>(size_query, q);
+  T *key = sycl::malloc_shared<T>(size_key, q);
+  T *value = sycl::malloc_shared<T>(size_key, q);
+  T *bias = sycl::malloc_shared<T>(size_attn_mask, q);
+  uint8_t *dropout_mask = sycl::malloc_shared<uint8_t>(size_score, q);
+  T *out = sycl::malloc_shared<T>(size_query, q);
+  float *m = sycl::malloc_shared<float>(size_ml, q);
+  float *l = sycl::malloc_shared<float>(size_ml, q);
+
   // fmha forward kernel
   using fmha_forward_op_t =
       fmha_forward_t<fmha_policy, T, kUseBias, kIsCausal, kIsTraining>;
@@ -601,28 +658,7 @@ sycl::event fmha_forward_impl(sycl::queue &q, T *query, T *key, T *value,
   sycl::nd_range<3> NdRange =
       fmha_forward_op_t::get_nd_range(num_batches * num_heads, num_queries);
 
-  auto context = q.get_info<sycl::info::queue::context>();
-  std::vector<sycl::kernel_id> kernelId = {
-      sycl::get_kernel_id<class FmhaForwardKernel<fmha_policy, T, kUseBias,
-                                                  kIsCausal, kIsTraining>>()};
-
-  static std::once_flag jit_once;
-  std::call_once(jit_once, [&]() {
-    auto inputBundle =
-        sycl::get_kernel_bundle<sycl::bundle_state::input>(context, kernelId);
-    setenv("SYCL_PROGRAM_COMPILE_OPTIONS",
-           " -vc-codegen -doubleGRF -vc-disable-indvars-opt "
-           " -Xfinalizer '-printregusage -enableBCR -DPASTokenReduction '",
-           1);
-    sycl::kernel_bundle<sycl::bundle_state::executable> exeBundle =
-        build(inputBundle);
-    unsetenv("SYCL_PROGRAM_COMPILE_OPTIONS");
-  });
-  auto exeBundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(
-      context, kernelId);
-
   auto event = q.submit([&](sycl::handler &cgh) {
-    cgh.use_kernel_bundle(exeBundle);
     cgh.parallel_for<class FmhaForwardKernel<fmha_policy, T, kUseBias,
                                              kIsCausal, kIsTraining>>(
         NdRange, [=](sycl::nd_item<3> item) SYCL_ESIMD_KERNEL {
@@ -640,61 +676,16 @@ sycl::event fmha_forward_impl(sycl::queue &q, T *query, T *key, T *value,
           fmha_fwd_op(ei, args);
         });
   });
-  // event.wait();
-  // double time = (event.template get_profiling_info<
-  //                    sycl::info::event_profiling::command_end>() -
-  //                event.template get_profiling_info<
-  //                    sycl::info::event_profiling::command_start>());
-  // uint64_t ops = num_batches * num_heads *
-  //                uint64_t(head_size * num_queries * num_keys) * 2L * 2L;
-  // uint64_t bytes = num_batches * num_heads *
-  //                  (num_queries * head_size + num_keys * head_size) * 2 *
-  //                  sizeof(T);
-  // double tflops = (ops / 1024.0f / 1024.0f / 1024.0f / 1024.0f) / (time /
-  // 1e9); double bandwidth = double(bytes) / double(time); std::string
-  // qkv_layout = _USE_BFNH ? "BFNH" : "BNFH"; printf("B, N, F, T, H: %d, %d,
-  // %d, %d, %d, QKV_layout %s, UseBias: %d, "
-  //        "IsCausal: %d, "
-  //        "IsTraining: %d, RawOutput: %d\ntime: %.3f us, tflops: %.3f TFlops,
-  //        " "bandwidth: %.3f GB/s\n", num_batches, num_heads, num_queries,
-  //        num_keys, head_size, qkv_layout.c_str(), kUseBias, kIsCausal,
-  //        kIsTraining, _RAW_OUTPUT, time / 1e3, tflops, bandwidth);
+  sycl::free(query, q);
+  sycl::free(key, q);
+  sycl::free(value, q);
+  sycl::free(bias, q);
+  sycl::free(dropout_mask, q);
+  sycl::free(out, q);
   return event;
 }
 
 } // namespace fmha
-
-#define CALL_IMPL_FUNC(P)                                                      \
-  fmha::fmha_forward_impl<P, T, kUseBias, kIsCausal, kIsTraining>(             \
-      q, query, key, value, bias, dropout_prob, out, l, num_batches,           \
-      num_heads, head_size, num_queries, num_keys, head_scale, seed, offset)
-
-/// @brief Main execution function for flash mha forward.
-template <typename T, bool kUseBias = false, bool kIsCausal = false,
-          bool kIsTraining = false>
-void fmha_forward(sycl::queue &q, T *query, T *key, T *value, T *bias,
-                  uint8_t *dropout, float dropout_prob, T *out, float *m,
-                  float *l, uint32_t num_batches, uint32_t num_heads,
-                  uint32_t head_size, uint32_t num_queries, uint32_t num_keys,
-                  float head_scale, uint64_t seed = 0, uint64_t offset = 123) {
-  if (head_size <= 64) {
-    CALL_IMPL_FUNC(fmha_policy_64x128x64);
-  } else if (head_size <= 128) {
-    CALL_IMPL_FUNC(fmha_policy_64x128x128);
-  } else if (head_size <= 256) {
-    if (num_keys <= 256) {
-      CALL_IMPL_FUNC(fmha_policy_32x256x256);
-    } else {
-      CALL_IMPL_FUNC(fmha_policy_64x512x256);
-    }
-  } else {
-    std::cout << "No policy available for current head_size " << head_size
-              << "\n";
-    return;
-  }
-}
-
-#undef CALL_IMPL_FUNC
 
 } // namespace gpu::xetla
 

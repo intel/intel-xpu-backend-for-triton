@@ -148,9 +148,9 @@ shell_injection:
   subprocess:
   - subprocess.Popen
   - subprocess.call
-  # - subprocess.check_call
-  # - subprocess.check_output
-  # - subprocess.run
+  - subprocess.check_call
+  - subprocess.check_output
+  - subprocess.run
 ssl_with_bad_defaults:
   bad_protocol_versions:
   - PROTOCOL_SSLv2
