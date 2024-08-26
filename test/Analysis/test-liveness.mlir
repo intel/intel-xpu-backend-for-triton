@@ -1,7 +1,7 @@
 // RUN: triton-opt %s --mlir-disable-threading --test-liveness 2>&1 | FileCheck %s
 module attributes {"triton_gpu.num-warps" = 8 : i32} {
   tt.func public @test1(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>) {
-    // CHECK-LABEL: test1    
+    // CHECK-LABEL: test1
     %c48_i32 = arith.constant 48 : i32
     %c1024_i32 = arith.constant 1024 : i32
     %c64_i32 = arith.constant 64 : i32
