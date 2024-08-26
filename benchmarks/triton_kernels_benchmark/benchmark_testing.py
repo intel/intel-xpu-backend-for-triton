@@ -1,11 +1,11 @@
 import argparse
 import functools
+import itertools
 import os
 import subprocess
 import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
-import itertools
 
 
 def synchronize():
@@ -347,17 +347,6 @@ class Mark:
         return None
 
 
-def perf_report(benchmarks):
-    """
-    Mark a function for benchmarking. The benchmark can then be executed by using the :code:`.run` method on the return value.
-
-    :param benchmarks: Benchmarking configurations.
-    :type benchmarks: List of :class:`Benchmark`
-    """
-    wrapper = lambda fn: Mark(fn, benchmarks)
-    return wrapper
-
-
 def save_path_from_args(save_path: str):
     """Returns a save path that is specified as an argument or via --reports comman line option."""
     if save_path:
@@ -431,3 +420,12 @@ def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
         subprocess.check_output(["nvidia-smi", "-i", "0", "-pm", "0"])
         subprocess.check_output(["nvidia-smi", "-i", "0", "-rgc"])
         subprocess.check_output(["nvidia-smi", "-i", "0", "-rmc"])
+
+
+def nvsmi(attrs):
+    attrs = ','.join(attrs)
+    cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
+    out = subprocess.check_output(cmd)
+    ret = out.decode(sys.stdout.encoding).split(',')
+    ret = [int(x) for x in ret]
+    return ret
