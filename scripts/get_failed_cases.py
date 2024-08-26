@@ -1,4 +1,4 @@
-import xml.etree.ElementTree as ET
+from defusedxml.ElementTree import parse
 import argparse
 
 
@@ -12,7 +12,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
 
 def extract_failed_from_xml(in_file: str, out_file: str):
     """Process XML log file and output failed cases."""
-    root = ET.parse(in_file).getroot()
+    root = parse(in_file).getroot()
     failed = []
 
     for testcase in root.findall('.//testcase'):

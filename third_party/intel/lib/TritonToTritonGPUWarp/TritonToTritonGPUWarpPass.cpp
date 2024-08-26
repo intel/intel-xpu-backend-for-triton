@@ -293,11 +293,10 @@ public:
             } else if (valueAttrMap[val] == oLayout) {
               continue;
             } else {
-              auto op = val.getDefiningOp();
               // clone value if it has more than 1 layout used
-              if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
+              if (auto cst = val.getDefiningOp<arith::ConstantOp>()) {
                 OpBuilder b(cst);
-                auto newOp = b.clone(*op);
+                auto newOp = b.clone(*cst);
                 auto result = newOp->getResults()[0];
                 valueAttrMap[result] = oLayout;
                 val.replaceUsesWithIf(result, [&](OpOperand &use) {
@@ -426,10 +425,11 @@ public:
   // tt.store %ptr, %value
   void transformStoreOp(tt::StoreOp op) {
     auto attr = cast<RankedTensorType>(op.getValue().getType()).getEncoding();
-    auto makePtrOp = cast<tt::MakeTensorPtrOp>(op.getPtr().getDefiningOp());
-    auto result = makePtrOp.getResult();
-    auto newType = addAttrToType(result.getType(), attr);
-    result.setType(cast<tt::PointerType>(newType));
+    if (auto makePtrOp = op.getPtr().getDefiningOp<tt::MakeTensorPtrOp>()) {
+      auto result = makePtrOp.getResult();
+      auto newType = addAttrToType(result.getType(), attr);
+      result.setType(cast<tt::PointerType>(newType));
+    }
   }
   void transformScfForOp(scf::ForOp op) {
     auto body = op.getBody();
@@ -534,16 +534,20 @@ public:
         return Workload::None;
       auto &info0 = loopDotInfo.dotInfo0;
       auto &info1 = loopDotInfo.dotInfo1;
-      if (!info0.chainOpsA.empty() && // Q is loop invariant
-          info0.chainOpsA[0].getDefiningOp()->isBeforeInBlock(loop) &&
-          info0.advanceB && info1.advanceB) {
-        SmallVector<OpFoldResult> rawOffsetsK = info0.advanceB.getOffsets();
-        SmallVector<OpFoldResult> rawOffsetsV = info1.advanceB.getOffsets();
-        auto offsetsK = *getConstantIntValues(rawOffsetsK);
-        auto offsetsV = *getConstantIntValues(rawOffsetsV);
-        if (offsetsK.size() == 2 && offsetsV.size() == 2 && offsetsK[0] == 0 &&
-            offsetsV[1] == 0 && offsetsK[1] == offsetsV[0])
-          return Workload::Attention;
+      if (!info0.chainOpsA.empty()) {
+        // Q is loop invariant
+        if (Operation *op = info0.chainOpsA[0].getDefiningOp()) {
+          if (op->isBeforeInBlock(loop) && info0.advanceB && info1.advanceB) {
+            SmallVector<OpFoldResult> rawOffsetsK = info0.advanceB.getOffsets();
+            SmallVector<OpFoldResult> rawOffsetsV = info1.advanceB.getOffsets();
+            auto offsetsK = *getConstantIntValues(rawOffsetsK);
+            auto offsetsV = *getConstantIntValues(rawOffsetsV);
+            if (offsetsK.size() == 2 && offsetsV.size() == 2 &&
+                offsetsK[0] == 0 && offsetsV[1] == 0 &&
+                offsetsK[1] == offsetsV[0])
+              return Workload::Attention;
+          }
+        }
       }
     }
     return Workload::None;
