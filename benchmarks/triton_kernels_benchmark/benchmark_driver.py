@@ -1,8 +1,6 @@
 import os
 import hashlib
 import tempfile
-import sysconfig
-import setuptools
 from pathlib import Path
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget

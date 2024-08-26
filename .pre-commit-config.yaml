@@ -71,6 +71,14 @@ repos:
       args: ["-c", "bandit.yaml", "-s", "B404,B603,B607"]
       stages: [commit, push, manual]
 
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.3
+    hooks:
+      - id: ruff
+        files: '^benchmarks/.*'
+        args: ["--fix", "--line-length", "120"]
+        stages: [commit, push, manual]
+
 exclude: |
   (?x)(
     ^include/triton/external/|
