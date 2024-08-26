@@ -582,172 +582,6 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
 
 namespace {
 
-struct FuncCallLowering {
-protected:
-  static Value rewrite(Operation *op, StringRef funcName, unsigned dim,
-                       ConversionPatternRewriter &rewriter) {
-    MLIRContext *ctx = rewriter.getContext();
-    Location loc = op->getLoc();
-    IntegerType retType = int_ty(64);
-    IntegerType argType = int_ty(32);
-    Value arg = i32_val(dim);
-
-    intel::AttributeList attrs = createFunctionAttributes(
-        {{llvm::Attribute::NoUnwind, std::nullopt},
-         {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::Memory, llvm::MemoryEffects::none().toIntValue()}},
-        ctx);
-    LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, funcName, retType,
-                                                   {argType}, {arg}, attrs);
-    Type resType = op->getResult(0).getType();
-    if (resType == callOp.getResult().getType())
-      return callOp.getResult();
-
-    return rewriter.create<LLVM::TruncOp>(op->getLoc(), resType,
-                                          callOp.getResult());
-  }
-};
-
-//===----------------------------------------------------------------------===//
-// ThreadId Ops Lowerings
-//===----------------------------------------------------------------------===//
-
-template <typename SourceOp>
-struct TritonGENThreadIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
-                                   public FuncCallLowering {
-  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
-  using OpAdaptor = typename SourceOp::Adaptor;
-
-  LogicalResult
-  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Value res;
-    if (isa<TritonGEN::ThreadIdXOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z12get_local_idj", 0, rewriter);
-    else if (isa<TritonGEN::ThreadIdYOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z12get_local_idj", 1, rewriter);
-    else if (isa<TritonGEN::ThreadIdZOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z12get_local_idj", 2, rewriter);
-    else
-      llvm_unreachable("Unexpected operation");
-
-    rewriter.replaceOp(op, res);
-    return success();
-  }
-};
-
-using TritonGENThreadIdXLowering =
-    TritonGENThreadIdLowering<TritonGEN::ThreadIdXOp>;
-using TritonGENThreadIdYLowering =
-    TritonGENThreadIdLowering<TritonGEN::ThreadIdYOp>;
-using TritonGENThreadIdZLowering =
-    TritonGENThreadIdLowering<TritonGEN::ThreadIdZOp>;
-
-//===----------------------------------------------------------------------===//
-// BlockId Ops Lowerings
-//===----------------------------------------------------------------------===//
-
-template <typename SourceOp>
-struct TritonGENBlockIdLowering : public ConvertOpToLLVMPattern<SourceOp>,
-                                  public FuncCallLowering {
-  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
-  using OpAdaptor = typename SourceOp::Adaptor;
-
-  LogicalResult
-  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Value res;
-    if (isa<TritonGEN::BlockIdXOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z12get_group_idj", 0, rewriter);
-    else if (isa<TritonGEN::BlockIdYOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z12get_group_idj", 1, rewriter);
-    else if (isa<TritonGEN::BlockIdZOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z12get_group_idj", 2, rewriter);
-    else
-      llvm_unreachable("Unexpected operation");
-
-    rewriter.replaceOp(op, res);
-    return success();
-  }
-};
-
-using TritonGENBlockIdXLowering =
-    TritonGENBlockIdLowering<TritonGEN::BlockIdXOp>;
-using TritonGENBlockIdYLowering =
-    TritonGENBlockIdLowering<TritonGEN::BlockIdYOp>;
-using TritonGENBlockIdZLowering =
-    TritonGENBlockIdLowering<TritonGEN::BlockIdZOp>;
-
-//===----------------------------------------------------------------------===//
-// BlockDim Ops Lowerings
-//===----------------------------------------------------------------------===//
-
-template <typename SourceOp>
-struct TritonGENBlockDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
-                                   public FuncCallLowering {
-  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
-  using OpAdaptor = typename SourceOp::Adaptor;
-
-  LogicalResult
-  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Value res;
-    if (isa<TritonGEN::BlockDimXOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z14get_local_sizej", 0, rewriter);
-    else if (isa<TritonGEN::BlockDimYOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z14get_local_sizej", 1, rewriter);
-    else if (isa<TritonGEN::BlockDimZOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z14get_local_sizej", 2, rewriter);
-    else
-      llvm_unreachable("Unexpected operation");
-
-    rewriter.replaceOp(op, res);
-    return success();
-  }
-};
-
-using TritonGENBlockDimXLowering =
-    TritonGENBlockDimLowering<TritonGEN::BlockDimXOp>;
-using TritonGENBlockDimYLowering =
-    TritonGENBlockDimLowering<TritonGEN::BlockDimYOp>;
-using TritonGENBlockDimZLowering =
-    TritonGENBlockDimLowering<TritonGEN::BlockDimZOp>;
-
-//===----------------------------------------------------------------------===//
-// GridDim Ops Lowerings
-//===----------------------------------------------------------------------===//
-
-template <typename SourceOp>
-struct TritonGENGridDimLowering : public ConvertOpToLLVMPattern<SourceOp>,
-                                  public FuncCallLowering {
-  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
-  using OpAdaptor = typename SourceOp::Adaptor;
-
-  LogicalResult
-  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Value res;
-    if (isa<TritonGEN::GridDimXOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z14get_num_groupsj", 0, rewriter);
-    else if (isa<TritonGEN::GridDimYOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z14get_num_groupsj", 1, rewriter);
-    else if (isa<TritonGEN::GridDimZOp>(op))
-      res = FuncCallLowering::rewrite(op, "_Z14get_num_groupsj", 2, rewriter);
-    else
-      llvm_unreachable("Unexpected operation");
-
-    rewriter.replaceOp(op, res);
-    return success();
-  }
-};
-
-using TritonGENGridDimXLowering =
-    TritonGENGridDimLowering<TritonGEN::GridDimXOp>;
-using TritonGENGridDimYLowering =
-    TritonGENGridDimLowering<TritonGEN::GridDimYOp>;
-using TritonGENGridDimZLowering =
-    TritonGENGridDimLowering<TritonGEN::GridDimZOp>;
-
 //===----------------------------------------------------------------------===//
 // SubgroupID Op Lowering
 //===----------------------------------------------------------------------===//
@@ -1521,13 +1355,10 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
+  // This will ensure that the gpu-to-triton-gen lowering is prefered to the
+  // gpu-to-llvm-spv lowering while overlaps exist between the two.
+  constexpr int patternBenefitPreferTritonGENLowering = 20;
   patterns.add<
-      TritonGENThreadIdXLowering, TritonGENThreadIdYLowering,
-      TritonGENThreadIdZLowering, TritonGENBlockIdXLowering,
-      TritonGENBlockIdYLowering, TritonGENBlockIdZLowering,
-      TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
-      TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
-      TritonGENGridDimYLowering, TritonGENGridDimZLowering,
       TritonGENSubgroupIdLowering, TritonGENSubgroupLocalIdLowering,
       TritonGENBarrierLowering, TritonGENSplitBarrierSignalLowering,
       TritonGENSplitBarrierWaitLowering, TritonGENNamedBarrierSignalLowering,
@@ -1535,7 +1366,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonSubGroupScanLowering, TritonSubGroupShuffleLowering,
       TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
       TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering,
-      TritonSIMDBlockReadLowering, TritonSIMDBlockWriteLowering>(converter);
+      TritonSIMDBlockReadLowering, TritonSIMDBlockWriteLowering>(
+      converter, patternBenefitPreferTritonGENLowering);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {

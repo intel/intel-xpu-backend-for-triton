@@ -14,6 +14,7 @@ add_triton_plugin(TritonXPU
   TritonIntelGPUToLLVM
   TritonIntelGPUTransforms
   TritonToTritonGPUWarp
+  MLIRGPUToLLVMSPV
 )
 
 if(TRITON_BUILD_UT)
