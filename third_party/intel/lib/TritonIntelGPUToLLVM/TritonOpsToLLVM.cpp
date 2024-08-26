@@ -400,29 +400,26 @@ public:
               unsigned numElements = vecType.getNumElements();
               Value broadcastPoison =
                   rewriter.create<LLVM::PoisonOp>(loc, vecType);
-              SmallVector<int32_t> broadcastMask(dstNumElements, numElements);
-              std::iota(std::begin(broadcastMask),
-                        std::begin(broadcastMask) + numElements, 0);
+              SmallVector<int32_t> mask(dstNumElements, numElements);
+              std::iota(std::begin(mask), std::begin(mask) + numElements, 0);
               SmallVector<Value> broadcastedOperands;
               llvm::transform(operands, std::back_inserter(broadcastedOperands),
                               [&rewriter, loc, broadcastPoison,
-                               &broadcastMask](Value operand) -> Value {
+                               &mask](Value operand) -> Value {
                                 return rewriter.create<LLVM::ShuffleVectorOp>(
-                                    loc, operand, broadcastPoison,
-                                    broadcastMask);
+                                    loc, operand, broadcastPoison, mask);
                               });
 
               // Merge broadcasted vectors in a single vector.
               auto enumeratedOperands = llvm::enumerate(broadcastedOperands);
-              SmallVector<int32_t> shuffleMask(dstNumElements);
-              std::iota(std::begin(shuffleMask), std::end(shuffleMask), 0);
+              std::iota(std::begin(mask), std::end(mask), 0);
               return std::accumulate(
                   std::begin(enumeratedOperands), std::end(enumeratedOperands),
                   poison,
-                  [&rewriter, loc, &shuffleMask,
+                  [&rewriter, loc, &mask,
                    numElements](Value acc, const auto &pair) -> Value {
                     auto [index, operand] = pair;
-                    SmallVector<int32_t> newShuffleMask(shuffleMask);
+                    SmallVector<int32_t> newShuffleMask(mask);
                     std::iota(std::begin(newShuffleMask) + index * numElements,
                               std::begin(newShuffleMask) +
                                   (index + 1) * numElements,
