@@ -320,9 +320,8 @@ PrefetchBlockPass::findDefiningMakeTensorPtrOp(scf::ForOp loop,
     return findDefiningMakeTensorPtrOp(loop, loopArg);
   }
 
-  if (auto op = ptr.getDefiningOp()) {
-    if (auto makePtrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
-      return makePtrOp;
+  if (auto makePtrOp = ptr.getDefiningOp<tt::MakeTensorPtrOp>()) {
+    return makePtrOp;
   }
 
   return std::nullopt;

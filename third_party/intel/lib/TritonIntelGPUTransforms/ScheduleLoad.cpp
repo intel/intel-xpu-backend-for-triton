@@ -69,16 +69,18 @@ public:
       for (SmallVector<tt::DotOp> &dots : dotsGroup) {
         SmallVector<Value> notVisited = getNotVisitedUses(dots);
         for (Value val : notVisited) {
-          Operation *op = val.getDefiningOp();
-          op->moveBefore(dots.begin()->getOperation());
+          if (Operation *op = val.getDefiningOp()) {
+            op->moveBefore(dots.begin()->getOperation());
+          }
         }
       }
     });
 
     // HoHo, move trunc forward
     mod.walk([&](arith::TruncFOp op) {
-      auto def = op.getIn().getDefiningOp();
-      op->moveAfter(def);
+      if (auto def = op.getIn().getDefiningOp()) {
+        op->moveAfter(def);
+      }
     });
 
     // HoHo, add fastmath for all
@@ -97,9 +99,9 @@ private:
   void markUnvisited(Value val, SmallVector<Value> &notVisited) {
     if (visited.contains(val))
       return;
-    if (auto load = dyn_cast<tt::LoadOp>(val.getDefiningOp())) {
+    if (auto load = val.getDefiningOp<tt::LoadOp>()) {
       notVisited.push_back(val);
-    } else if (auto extract = dyn_cast<ttgi::ExtractOp>(val.getDefiningOp())) {
+    } else if (auto extract = val.getDefiningOp<ttgi::ExtractOp>()) {
       Value base = extract.getBase();
       markUnvisited(base, notVisited);
       notVisited.push_back(val);

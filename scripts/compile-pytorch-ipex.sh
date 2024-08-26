@@ -244,46 +244,29 @@ build_pytorch() {
 # Configure and build the ipex project.
 
 build_ipex() {
-  if [ ! -d "$IPEX_PROJ" ]; then
-    cd $BASE
-    if [ "$NO_OP_IPEX" = true ]; then
-      echo "**** Setup no-op $IPEX_PROJ ****"
-      mkdir intel-extension-for-pytorch
-      cd intel-extension-for-pytorch
-      cat > setup.py <<EOF
-from setuptools import setup
-
-name = "intel_extension_for_pytorch"
-version = "2.4.0+noop"
-
-setup(
-    name=name,
-    version=version,
-    description="No-op Intel Extension for PyTorch"
-)
-EOF
-
-      mkdir intel_extension_for_pytorch
-      echo '__version__ = "2.4.0+noop"' > intel_extension_for_pytorch/__init__.py
-      touch requirements.txt
-    else
+  if [ "$NO_OP_IPEX" = true ]; then
+    echo "**** Setup no-op IPEX ****"
+    python $SCRIPTS_DIR/create-noop-ipex.py
+  else
+    if [ ! -d "$IPEX_PROJ" ]; then
+      cd $BASE
       echo "**** Cloning $IPEX_PROJ ****"
       git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/intel/intel-extension-for-pytorch.git
     fi
-  fi
-  echo "****** Building $IPEX_PROJ ******"
-  cd $IPEX_PROJ
-  if [ ! -d "$IPEX_PROJ/dist" ]; then
-    if [ "$BUILD_PINNED" = true ]; then
-      git fetch origin $IPEX_PINNED_COMMIT
-      git checkout $IPEX_PINNED_COMMIT
-      git submodule sync
-      git submodule update --init --recursive
+    echo "****** Building $IPEX_PROJ ******"
+    cd $IPEX_PROJ
+    if [ ! -d "$IPEX_PROJ/dist" ]; then
+      if [ "$BUILD_PINNED" = true ]; then
+        git fetch origin $IPEX_PINNED_COMMIT
+        git checkout $IPEX_PINNED_COMMIT
+        git submodule sync
+        git submodule update --init --recursive
+      fi
+      pip install -r requirements.txt
+      python setup.py bdist_wheel
     fi
-    pip install -r requirements.txt
-    python setup.py bdist_wheel
+    pip install dist/*.whl
   fi
-  pip install dist/*.whl
   cd $BASE
   python -c "import intel_extension_for_pytorch as ipex;print(ipex.__version__)"
 }
