@@ -122,7 +122,7 @@ if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
 fi
 
-$SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
+$SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --upstream-pytorch --pinned $([ $VENV = true ] && echo "--venv")
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then
