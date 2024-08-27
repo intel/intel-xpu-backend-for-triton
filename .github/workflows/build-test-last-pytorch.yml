@@ -1,0 +1,99 @@
+name: Build and test PyTorch
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      install_ipex:
+        # This boolean parameter defines what PyTorch will be used in the workflow:
+        #   true: Stonepia/pytorch (fork) with IPEX
+        #   false: pytorch/pytorch (upstream) without IPX
+        # In both cases, pytorch_ref below allows specifying a branch, tag, or commit id in the
+        # corresponding repository. If not specified, a default (pinned) version will be used.
+        description: Install Intel PyTorch Extension
+        type: boolean
+        default: false
+      pytorch_ref:
+        description: PyTorch ref
+        type: string
+        default: "main"
+      upload_test_reports:
+        description: Upload test reports
+        type: boolean
+        default: false
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
+      run_name:
+        description: Custom run name prefix
+        type: string
+        default: "Build and test Pytorch"
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
+
+permissions: read-all
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: Linux
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      pytorch-commit-id: ${{ steps.pytorch-commit-id.outputs.pytorch_upstream_ref }}
+
+    steps:
+      - name: Inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+        
+      - name: Get latest upstream Pytorch ref
+        id: pytorch-commit-id
+        run: |
+          echo "pytorch_upstream_ref=$(git ls-remote https://github.com/pytorch/pytorch refs/heads/${{ inputs.pytorch_ref }} | awk '{print $1}')" | tee -a $GITHUB_OUTPUT
+
+
+      - name: Matrix
+        id: matrix
+        run: |
+          if [[ -n "${{ inputs.runner_label }}" ]]; then
+            matrix='{"python": ["3.9", "3.10", "3.11", "3.12"]}'
+          else
+            matrix='{"python": ["3.9", "3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
+          fi
+          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
+
+  integration-tests:
+    name: Integration tests matrix
+    needs: prepare
+
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
+
+    uses: ./.github/workflows/build-test-reusable.yml
+    with:
+      driver_version: ${{ matrix.driver }}
+      runner_label: ${{ inputs.runner_label }}
+      install_ipex: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
+      pytorch_ref: ${{ inputs.pytorch_ref }}
+      python_version: ${{ matrix.python }}
+      upload_test_reports: ${{ inputs.upload_test_reports || false }}
+      ignore_errors: ${{ inputs.ignore_errors || false }}
+      skip_list: ${{ inputs.skip_list }}
+      run_name: "${{ inputs.run_name }}: ${{ matrix.driver }} ${{ matrix.python }} ${{ needs.prepare.outputs.pytorch-commit-id }}"
+      enable_unskip: ${{ inputs.enable_unskip || false }}
+  
