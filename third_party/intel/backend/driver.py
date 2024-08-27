@@ -86,7 +86,7 @@ def compile_module_from_src(src, name):
             with open(src_path, "w", encoding="utf-8") as f:
                 f.write(src)
             so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
-            with open(so, "rb", encoding="utf-8") as f:
+            with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
