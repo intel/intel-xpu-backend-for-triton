@@ -182,6 +182,7 @@ public:
         return;
       valueAttrMap.clear();
       DenseMap<scf::ForOp, LoopDotInfo> loopMap;
+      SmallVector<Workload, 2> workloads;
       for (auto loop : loops) {
         auto dots = llvm::to_vector(loop.getOps<tt::DotOp>());
         assert(dots.size() <= 2 && "only support 1 or 2 dot in a loop");
@@ -191,6 +192,7 @@ public:
         loopMap[loop] = loopDotInfo;
         // DAG pattern match
         Workload workLoadKind = matchLoopWorkload(loop, loopDotInfo);
+        workloads.push_back(workLoadKind);
 
         /// get tensor layout attr according to workload pattern
         switch (workLoadKind) {
@@ -383,6 +385,51 @@ public:
         }
         return WalkResult::advance();
       });
+
+      if (loops.size() == 2 && workloads.front() == Workload::Attention &&
+          workloads.back() == Workload::Attention) {
+        // match attention with causal masking
+        Attribute blockLayout = loopMap[loops.front()]
+                                    .dotInfo0.dot.getResult()
+                                    .getType()
+                                    .getEncoding();
+
+        func.walk<WalkOrder::PreOrder>([&](Operation *op) {
+          SmallVector<RankedTensorType> typesWithoutEncoding;
+          for (Type ty : op->getResultTypes()) {
+            if (auto tty = dyn_cast<RankedTensorType>(ty))
+              if (!tty.getEncoding())
+                typesWithoutEncoding.push_back(tty);
+          }
+
+          if (typesWithoutEncoding.empty())
+            return;
+
+          if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
+            transformArithConstantOp(cst, blockLayout);
+            return;
+          }
+
+          // Assign:
+          // - rank-2 operations: block layout
+          // - rank-1 operations: slice layout
+          assert(op->getNumResults() == 1);
+          OpResult res = op->getOpResult(0);
+          auto tty = cast<RankedTensorType>(res.getType());
+          if (tty.getRank() == 2)
+            res.setType(addAttrToType(tty, blockLayout));
+          // Rank==1 tensors get a slice layout with the axis depending on the
+          // use.
+          if (auto expand = dyn_cast<tt::ExpandDimsOp>(op)) {
+            Attribute sliceLayout = triton::gpu::SliceEncodingAttr::get(
+                blockLayout.getContext(), expand.getAxis(), blockLayout);
+            DenseSet<Value> chainedVals;
+            expandDefChain(expand.getSrc(), chainedVals);
+            for (auto cv : chainedVals)
+              cv.setType(addAttrToType(cv.getType(), sliceLayout));
+          }
+        });
+      }
     }
 
     /// adding module attributes
@@ -414,9 +461,12 @@ public:
       result.setType(newType);
     } else if (auto expand = dyn_cast<tt::ExpandDimsOp>(op)) {
       auto src = expand.getSrc();
-      auto attr = cast<ttg::SliceEncodingAttr>(src.getType().getEncoding());
-      Type newType = addAttrToType(result.getType(), attr.getParent());
-      result.setType(newType);
+      if (auto attr = dyn_cast_if_present<ttg::SliceEncodingAttr>(
+              src.getType().getEncoding())) {
+        Type newType = addAttrToType(result.getType(), attr.getParent());
+        result.setType(newType);
+      }
+      // else: will patch up later
     }
   }
 
@@ -666,6 +716,11 @@ public:
         Value res = loop.getResult(use.getOperandNumber());
         chainedVals.insert(res);
         expandUseChain(res, chainedVals);
+      } else if (auto forLoop = dyn_cast<scf::ForOp>(op)) {
+        auto arg = forLoop.getRegionIterArg(use.getOperandNumber() -
+                                            forLoop.getNumControlOperands());
+        chainedVals.insert(arg);
+        expandUseChain(arg, chainedVals);
         // expanddims, splat, store
       } else if (isa<tt::ExpandDimsOp, tt::SplatOp, tt::StoreOp>(op)) {
         continue;
@@ -685,15 +740,21 @@ public:
       assert(loop);
       auto loopArg = loop.getInitArgs()[arg.getArgNumber() - 1];
       expandDefChain(loopArg, chainedVals);
-    } else if (auto def = val.getDefiningOp()) {
+    } else if (auto opRes = dyn_cast<OpResult>(val)) {
+      Operation *def = opRes.getOwner();
       if (def->getDialect() == arithDialect ||
           def->getDialect() == mathDialect) {
         for (auto operand : def->getOperands()) {
           expandDefChain(operand, chainedVals);
           expandUseChain(operand, chainedVals);
         }
-      } else if (isa<tt::SplatOp, tt::BroadcastOp, tt::ReduceOp>(def)) {
-        ;
+      } else if (auto forLoop = dyn_cast<scf::ForOp>(def)) {
+        Value yieldArg = forLoop.getYieldedValues()[opRes.getResultNumber()];
+        chainedVals.insert(yieldArg);
+        expandDefChain(yieldArg, chainedVals);
+      } else if (isa<tt::SplatOp, tt::BroadcastOp, tt::ReduceOp,
+                     tt::MakeRangeOp>(def)) {
+        chainedVals.insert(def->getResult(0));
       } else {
         assert(0 && "add more support");
       }
