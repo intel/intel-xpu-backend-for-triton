@@ -107,7 +107,7 @@ To specify a name and the ID for numerator and denominator, name and ID are
 separated by a `:`, for example:
 
 ```sh
-compare-runs.py -n "32:10197715410" -d "16:10197720144" -p data/run5
+compare_runs.py -n "32:10197715410" -d "16:10197720144" -p data/run5
 ```
 
 In this case "32" is used as the name for the numerator and "16" is used as the
@@ -129,7 +129,7 @@ As no download is required in local mode, only the name has to be specified
 for the numerator and denominator options, e.g.:
 
 ```sh
-compare-runs.py -n "32" -d "16" -p data/run5 -l
+compare_runs.py -n "32" -d "16" -p data/run5 -l
 ```
 
 The local mode can also be useful to avoid repeated downloads from Github that
@@ -147,7 +147,7 @@ As no download is required in evaluation mode, only the name has to be specified
 for the numerator and denominator options, e.g.:
 
 ```sh
-compare-runs.py -n "32" -d "16" -p data/run5 -e
+compare_runs.py -n "32" -d "16" -p data/run5 -e
 ```
 
 The evaluation mode can be useful to avoid repeated pre-processing of data.
