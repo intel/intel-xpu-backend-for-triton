@@ -154,12 +154,12 @@ def eval_data(df: pd.DataFrame, numerator: str, denominator: str, plot: bool):
     df.sort_values(by=["relative difference"], inplace=True, ignore_index=True, ascending=True)
     print_cfgs = 10
     print(f"{print_cfgs} fastest configurations ({denominator} faster than "
-          "{numerator}, showing relative difference in speedup)")
+          f"{numerator}, showing relative difference in speedup)")
     print(df.head(print_cfgs))
     print("\n" * 2)
     df.sort_values(by=["relative difference"], inplace=True, ignore_index=True, ascending=False)
     print(f"{print_cfgs} slowest configurations ({denominator} slower than "
-          "{numerator}, showing relative difference in speedup)")
+          f"{numerator}, showing relative difference in speedup)")
     print(df.head(print_cfgs))
     print("\n" * 2)
 
