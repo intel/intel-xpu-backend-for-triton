@@ -239,6 +239,12 @@ build_pytorch() {
     fi
   fi
   echo "****** Building $PYTORCH_PROJ ******"
+
+  if [ ! -v USE_XPU ]; then
+    echo "**** USE_XPU is not given *****"
+    export USE_XPU=1
+    echo "**** Default USE_XPU is set to $USE_XPU ****"
+  fi
   cd $PYTORCH_PROJ
   if [ ! -d "$PYTORCH_PROJ/dist" ]; then
     if [ "$BUILD_PINNED" = true ]; then
