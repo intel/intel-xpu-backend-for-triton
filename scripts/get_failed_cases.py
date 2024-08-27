@@ -1,5 +1,6 @@
-from defusedxml.ElementTree import parse
 import argparse
+
+from defusedxml.ElementTree import parse
 
 
 def create_argument_parser() -> argparse.ArgumentParser:
@@ -15,9 +16,10 @@ def extract_failed_from_xml(in_file: str, out_file: str):
     root = parse(in_file).getroot()
     failed = []
 
+    failed_tags = {'error', 'failure'}
     for testcase in root.findall('.//testcase'):
         for child in testcase:
-            if child.tag == 'error' or child.tag == 'failure':
+            if child.tag in failed_tags:
                 classname = testcase.get('classname').replace('.', '/') + '.py'
                 case = testcase.get('name')
                 result = f'{classname}::{case}'
@@ -26,7 +28,7 @@ def extract_failed_from_xml(in_file: str, out_file: str):
     if len(failed) == 0:
         return
 
-    with open(out_file, 'w') as f:
+    with open(out_file, 'w', encoding='utf-8') as f:
         for result in failed:
             f.write(result + '\n')
 

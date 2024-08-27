@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget
+from triton.backends.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, intel
 
 from dataclasses import dataclass
@@ -11,7 +11,6 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from packaging.version import Version
 
 
 @functools.lru_cache()
@@ -60,7 +59,7 @@ class XPUOptions:
                                                  str(default_libdir / 'libsycl-spir64-unknown-unknown.bc'))
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
-            raise AssertionError(f"num_warps must be a power of 2")
+            raise AssertionError("num_warps must be a power of 2")
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -118,7 +117,7 @@ class XPUBackend(BaseBackend):
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
         if not isinstance(target.arch, dict):
-            raise TypeError(f"target.arch is not a dict")
+            raise TypeError("target.arch is not a dict")
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
 
@@ -221,7 +220,7 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
-        passes.ttgpuir.add_reduce_data_duplication(pm)
+        intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
@@ -280,7 +279,7 @@ class XPUBackend(BaseBackend):
             metadata["build_flags"] = "-cl-intel-128-GRF-per-thread"
         elif options.grf_mode == 'large':
             if options.num_warps > 32:
-                raise RuntimeError(f"grf_mode = large cannot be used with num_warps > 32")
+                raise RuntimeError("grf_mode = large cannot be used with num_warps > 32")
             metadata["build_flags"] = "-cl-intel-256-GRF-per-thread"
         elif options.grf_mode == 'auto':
             metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
