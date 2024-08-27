@@ -68,16 +68,6 @@ if [ "$BUILD_PYTORCH" = true ] && [ "$UPSTREAM_PYTORCH" = true ]; then
   exit 1
 fi
 
-if [ "$BUILD_PYTORCH" = false ] && [ "$UPSTREAM_PYTORCH" = false ]; then
-  echo "***** Use upstream pytorch by the default *****"
-  UPSTREAM_PYTORCH=true
-fi
-
-if [ "$BUILD_PINNED" = false ] && [ "$BUILD_FROM_SOURCE" = false ]; then
-  echo "***** Use pinned pytorch by the default *****"
-  BUILD_PINNED=true
-fi
-
 if [ "$BUILD_IPEX" = true ] && [ "$NO_OP_IPEX" = true ]; then
   echo "***** Use '--ipex' or '--no-op-ipex' *****"
   exit 1
@@ -91,6 +81,16 @@ fi
 if [ "$UPSTREAM_PYTORCH" = true ] && [ "$BUILD_IPEX" = true ]; then
   echo "***** Use of '--ipex' isn't allowed with '--upstream-pytorch' *****"
   exit 1
+fi
+
+if [ "$BUILD_PYTORCH" = false ] && [ "$UPSTREAM_PYTORCH" = false ]; then
+  echo "***** Use upstream pytorch by the default *****"
+  UPSTREAM_PYTORCH=true
+fi
+
+if [ "$BUILD_PINNED" = false ] && [ "$BUILD_FROM_SOURCE" = false ]; then
+  echo "***** Use pinned pytorch by the default *****"
+  BUILD_PINNED=true
 fi
 
 if [ ! -v BASE ]; then
