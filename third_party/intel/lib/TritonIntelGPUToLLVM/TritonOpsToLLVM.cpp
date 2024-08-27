@@ -446,8 +446,8 @@ private:
     auto enumeratedOperands = llvm::enumerate(operands);
     return std::accumulate(
         std::begin(enumeratedOperands), std::end(enumeratedOperands), poison,
-        [&rewriter, loc](Value acc, const auto &P) {
-          auto [index, operand] = P;
+        [&rewriter, loc](Value acc, const auto &pair) {
+          auto [index, operand] = pair;
           Value idx = rewriter.create<LLVM::ConstantOp>(
               loc, rewriter.getI32Type(), index);
           return rewriter.create<LLVM::InsertElementOp>(loc, acc, operand, idx);
