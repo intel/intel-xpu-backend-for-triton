@@ -68,6 +68,16 @@ if [ "$BUILD_PYTORCH" = true ] && [ "$UPSTREAM_PYTORCH" = true ]; then
   exit 1
 fi
 
+if [ "$BUILD_PYTORCH" = false ] && [ "$UPSTREAM_PYTORCH" = false ]; then
+  echo "***** Use upstream pytorch by the default *****"
+  UPSTREAM_PYTORCH=true
+fi
+
+if [ "$BUILD_PINNED" = false ] && [ "$BUILD_FROM_SOURCE" = false ]; then
+  echo "***** Use pinned pytorch by the default *****"
+  BUILD_PINNED=true
+fi
+
 if [ "$BUILD_IPEX" = true ] && [ "$NO_OP_IPEX" = true ]; then
   echo "***** Use '--ipex' or '--no-op-ipex' *****"
   exit 1
@@ -187,11 +197,6 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
     echo "****** WARNING: gh or jq is missing ******"
     BUILD_FROM_SOURCE=true
   fi
-fi
-
-if [ "$BUILD_PINNED" = false ]; then
-  echo "**** Since '--pinned' option is not used, enable building from source. ****"
-  BUILD_FROM_SOURCE=true
 fi
 
 if [ "$BUILD_FROM_SOURCE" = false ]; then
