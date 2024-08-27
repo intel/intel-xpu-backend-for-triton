@@ -1,55 +1,52 @@
-import importlib.metadata
-import os
 import hashlib
+import importlib.metadata
+import importlib.util
+import os
 import shutil
 import tempfile
+
 from pathlib import Path
+from packaging.version import Version
+from packaging.specifiers import SpecifierSet
+
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
-from packaging.version import Version
-from packaging.specifiers import SpecifierSet
-
-ze_root = os.getenv("ZE_PATH", default="/usr/local")
-include_dir = [os.path.join(ze_root, "include")]
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
+def _find_sycl() -> tuple[list[str], list[str]]:
     """
     Looks for the sycl library in known places.
 
-    Arguments:
-      include_dir: list of include directories to pass to compiler.
-
     Returns:
-      enriched include_dir and library_dir.
+      include_dir and library_dir.
 
     Raises:
       AssertionError: if library was not found.
     """
-    library_dir = []
-    include_dir = include_dir.copy()
+    lib_dir = []
+    inc_dir = []
     assertion_message = ("sycl headers not found, please install `icpx` compiler, "
                          "or provide `ONEAPI_ROOT` environment "
                          "or install `intel-sycl-rt>=2025.0.0` wheel")
 
     if shutil.which("icpx"):
         # only `icpx` compiler knows where sycl runtime binaries and header files are
-        return include_dir, library_dir
+        return inc_dir, lib_dir
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
     if oneapi_root:
-        include_dir += [
+        inc_dir += [
             os.path.join(oneapi_root, "compiler/latest/include"),
             os.path.join(oneapi_root, "compiler/latest/include/sycl")
         ]
-        return include_dir, library_dir
+        return inc_dir, lib_dir
 
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
-    except importlib.metadata.PackageNotFoundError:
-        raise AssertionError(assertion_message)
+    except importlib.metadata.PackageNotFoundError as error:
+        raise AssertionError(assertion_message) from error
 
     if Version(sycl_rt.get("version", "0.0.0")) in SpecifierSet("<2025.0.0a1"):
         raise AssertionError(assertion_message)
@@ -58,19 +55,24 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
         # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
         # being add: include and include/sycl.
         if f.name == "sycl.hpp":
-            include_dir += [f.locate().parent.parent.resolve().as_posix()]
+            inc_dir += [f.locate().parent.parent.resolve().as_posix()]
         if f.name == "libsycl.so":
-            library_dir += [f.locate().parent.resolve().as_posix()]
+            lib_dir += [f.locate().parent.resolve().as_posix()]
 
-    return include_dir, library_dir
+    return inc_dir, lib_dir
 
 
-include_dir, library_dir = find_sycl(include_dir)
+def _get_dirs() -> tuple[list[str], list[str]]:
+    """Returns include_dir and library_dir."""
+    ze_root = Path(os.getenv("ZE_PATH", default="/usr/local"))
+    sycl_include_dirs, sycl_library_dirs = _find_sycl()
+    dirname = os.path.dirname(os.path.realpath(__file__))
+    inc_dirs = [os.path.join(ze_root, "include")] + sycl_include_dirs + [os.path.join(dirname, "include")]
+    lib_dirs = sycl_library_dirs + [os.path.join(dirname, "lib")]
+    return inc_dirs, lib_dirs
 
-dirname = os.path.dirname(os.path.realpath(__file__))
-include_dir += [os.path.join(dirname, "include")]
 
-library_dir += [os.path.join(dirname, "lib")]
+include_dir, library_dir = _get_dirs()
 libraries = ['ze_loader', 'sycl']
 
 
@@ -81,12 +83,11 @@ def compile_module_from_src(src, name):
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.cpp")
-            with open(src_path, "w") as f:
+            with open(src_path, "w", encoding="utf-8") as f:
                 f.write(src)
             so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
-            with open(so, "rb") as f:
+            with open(so, "rb", encoding="utf-8") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
-    import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -98,7 +99,7 @@ def compile_module_from_src(src, name):
 # ------------------------
 
 
-class XPUUtils(object):
+class XPUUtils:
 
     def __new__(cls):
         if not hasattr(cls, "instance"):
@@ -106,8 +107,8 @@ class XPUUtils(object):
         return cls.instance
 
     def __init__(self):
-        dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
+        file_path = Path(__file__).parent.resolve() / "driver.c"
+        mod = compile_module_from_src(file_path.read_text(encoding="utf-8"), "spirv_utils")
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
         self.context = mod.init_context(self.get_sycl_queue())
@@ -117,11 +118,8 @@ class XPUUtils(object):
     def get_current_device(self):
         return self.current_device
 
-    def get_event_pool(self):
-        return self.event_pool
-
     def get_sycl_queue(self):
-        import torch
+        import torch  # pylint: disable=import-outside-toplevel
         return torch.xpu.current_stream().sycl_queue
 
 
@@ -152,7 +150,7 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def make_launcher(constants, signature, ids):
+def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors.
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
@@ -179,7 +177,7 @@ def make_launcher(constants, signature, ids):
         }[ty]
 
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
-    format = "iiiOOOOOO" + args_format
+    fmt = "iiiOOOOOO" + args_format
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
     # generate glue code
@@ -342,7 +340,7 @@ def make_launcher(constants, signature, ids):
       PyObject* py_kernel;
 
       {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
+      if(!PyArg_ParseTuple(args, \"{fmt}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
         return NULL;
@@ -425,12 +423,15 @@ def make_launcher(constants, signature, ids):
     return src
 
 
-class XPULauncher(object):
+class XPULauncher:  # pylint: disable=too-few-public-methods
 
-    def __init__(self, src, metadata):
+    def __init__(self, src, metadata):  # pylint: disable=unused-argument
         ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
-        constants = src.constants if hasattr(src, "constants") else dict()
-        cst_key = lambda i: src.fn.arg_names.index(i) if isinstance(i, str) else i
+        constants = src.constants if hasattr(src, "constants") else {}
+
+        def cst_key(i):
+            return src.fn.arg_names.index(i) if isinstance(i, str) else i
+
         constants = {cst_key(key): value for key, value in constants.items()}
         signature = {cst_key(key): value for key, value in src.signature.items()}
         src = make_launcher(constants, signature, ids)
@@ -450,20 +451,19 @@ class XPUDriver(DriverBase):
         # Lazily initialize utils to avoid unnecessary XPU runtime invocations.
         # See https://github.com/intel/intel-xpu-backend-for-triton/issues/624
         if name == "utils":
-            self.utils = XPUUtils()
+            self.utils = XPUUtils()  # pylint: disable=attribute-defined-outside-init
             return self.utils
-        else:
-            raise AttributeError
+        raise AttributeError
 
     def get_current_device(self):
         return self.utils.get_current_device()
 
-    def get_current_stream(self, device):
-        import torch
+    def get_current_stream(self, device):  # pylint: disable=unused-argument
+        import torch  # pylint: disable=import-outside-toplevel
         return torch.xpu.current_stream().sycl_queue
 
     def get_current_target(self):
-        import torch
+        import torch  # pylint: disable=import-outside-toplevel
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
         warp_size = 32
@@ -471,5 +471,5 @@ class XPUDriver(DriverBase):
 
     @staticmethod
     def is_active():
-        import torch
+        import torch  # pylint: disable=import-outside-toplevel
         return torch.xpu.is_available()

@@ -1,16 +1,17 @@
-from triton.backends.compiler import BaseBackend
-from triton._C.libtriton import ir, passes, llvm, intel
-
-from dataclasses import dataclass
 import functools
-from typing import Any, Dict, Tuple
-from types import ModuleType
 import hashlib
 import re
 import os
 import shutil
 import subprocess
+
+from dataclasses import dataclass, fields
+from types import ModuleType
+from typing import Any, Dict, Tuple
 from pathlib import Path
+
+from triton.backends.compiler import BaseBackend
+from triton._C.libtriton import ir, passes, llvm, intel
 
 
 @functools.lru_cache()
@@ -22,9 +23,9 @@ def _path_to_binary(binary: str):
     ]
 
     for p in paths:
-        bin = p.split(" ")[0]
-        if os.path.exists(bin) and os.path.isfile(bin):
-            result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
+        executable = p.split(" ")[0]
+        if os.path.exists(executable) and os.path.isfile(executable):
+            result = subprocess.check_output([executable, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
                 version = re.search(r".*SPIRV-Tools v(\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
                 if version is not None:
@@ -33,7 +34,7 @@ def _path_to_binary(binary: str):
 
 
 @dataclass
-class XPUOptions:
+class XPUOptions:  # pylint: disable=too-many-instance-attributes
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 2
@@ -89,10 +90,10 @@ def min_dot_size(device_props: dict):
 class XPUBackend(BaseBackend):
 
     # AdvancedPath pass pipeline for kernels using block pointers.
-    class AdvancedPath:
+    class AdvancedPath:  # pylint: disable=too-few-public-methods
 
         @staticmethod
-        def make_ttgir(mod, metadata, opt):
+        def make_ttgir(mod, metadata, opt):  # pylint: disable=unused-argument
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
 
@@ -142,21 +143,25 @@ class XPUBackend(BaseBackend):
         return dev_prop
 
     def parse_options(self, opts) -> Any:
-        args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
-        args["allow_fp8e4nv"] = True
+        args = {"allow_fp8e4nv": True}
+        for field in fields(XPUOptions):
+            if field.name in opts:
+                args[field.name] = opts[field.name]
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
         return metadata
 
     def get_codegen_implementation(self):
+        # pylint: disable=import-outside-toplevel
         from triton.language.extra.intel import convert_custom_float8
-        codegen_fns = {}
-        codegen_fns["convert_custom_types"] = convert_custom_float8
-        codegen_fns["min_dot_size"] = min_dot_size(self.properties)
-        return codegen_fns
+        return {
+            "convert_custom_types": convert_custom_float8,
+            "min_dot_size": min_dot_size(self.properties),
+        }  # yapf: disable
 
     def get_module_map(self) -> Dict[str, ModuleType]:
+        # pylint: disable=import-outside-toplevel
         from triton.language.extra.intel import libdevice
         return {"triton.language.extra.libdevice": libdevice}
 
@@ -164,7 +169,7 @@ class XPUBackend(BaseBackend):
         intel.load_dialects(ctx)
 
     @staticmethod
-    def make_ttir(mod, metadata, opt):
+    def make_ttir(mod, metadata, opt):  # pylint: disable=unused-argument
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
