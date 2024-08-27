@@ -89,7 +89,7 @@ jobs:
       driver_version: ${{ matrix.driver }}
       runner_label: ${{ inputs.runner_label }}
       install_ipex: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
-      pytorch_ref: ${{ inputs.pytorch_ref }}
+      pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports || false }}
       ignore_errors: ${{ inputs.ignore_errors || false }}
