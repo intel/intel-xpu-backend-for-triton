@@ -368,23 +368,21 @@ struct LoadOpConversion
 
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
-    if (!blockIOAttr) {
+    if (!blockIOAttr)
       return failure();
-    }
 
-    // Only support rand 2 dot layout. Either row major or column major
-    auto memoryLayoutInfor = cast<StringAttr>(blockIOAttr);
-    bool memoryRowMajor = true;
-    if (memoryLayoutInfor.getValue() == "column_major") {
-      memoryRowMajor = false;
-    }
+    // Only support rank 2 dot layout, either row major or column major.
+    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
+    assert((memoryLayoutInfo == "row_major" ||
+            memoryLayoutInfo == "column_major") &&
+           "Only row_major or column_major is supported");
+    bool memoryRowMajor = (memoryLayoutInfo == "row_major");
 
     DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
     auto dotOrder = dotLayout.getThreadOrder();
-    bool valueRowMajor = true;
-    if (dotOrder[0] == 0 && dotOrder[1] == 1) {
-      valueRowMajor = false;
-    }
+    bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+    assert((valueRowMajor || (dotOrder[0] == 0 && dotOrder[1] == 1)) &&
+           "Only row_major or column_major is allowed");
     bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
 
     auto dpasLayout = cast<DpasEncodingAttr>(dotLayout.getParent());
@@ -477,26 +475,25 @@ struct LoadOpConversion
       numOperandsPer2DLoadM = isOperandA ? repCluster[opIdx] : numReps[!opIdx];
       numOperandsPer2DloadN = isOperandA ? numReps[!opIdx] : repCluster[opIdx];
     } else {
-      if (isOperandA) {
+      if (isOperandA)
         return op.emitOpError("Transposing load doesn't support dot A layout.");
-      } else {
-        if (!usePackedType)
-          return op.emitOpError(
-              "Transposing load doesn't support un-pack-able dot B layout.");
 
-        std::swap(tileHeight, tileWidth);
+      if (!usePackedType)
+        return op.emitOpError(
+            "Transposing load doesn't support un-pack-able dot B layout.");
 
-        // we can decompose the matrix returned by transposed large 2d load
-        // when threads per warp < column size. Otherwise we have to load one
-        // operand per inst.
-        // Note: the tileHeight and numOperandsPer2DLoadM are the column size
-        // now.
-        numOperandsPer2DLoadM =
-            (threadsPerWarp <= tileHeight) ? repCluster[1] : 1;
-        // The transpose 2d load only support 1 operand per inst on column.
-        // (vBlocks = 1)
-        numOperandsPer2DloadN = 1;
-      }
+      std::swap(tileHeight, tileWidth);
+
+      // We can decompose the matrix returned by transposed large 2d load
+      // when threads per warp < column size. Otherwise we have to load one
+      // operand per inst.
+      // Note: the tileHeight and numOperandsPer2DLoadM are the column size
+      // now.
+      numOperandsPer2DLoadM =
+          (threadsPerWarp <= tileHeight) ? repCluster[1] : 1;
+      // The transpose 2d load only support 1 operand per inst on column.
+      // (vBlocks = 1)
+      numOperandsPer2DloadN = 1;
     }
 
     // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
