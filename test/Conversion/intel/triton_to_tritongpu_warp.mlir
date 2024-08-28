@@ -8,7 +8,7 @@
 // CHECK: #triton_gpu.blocked<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], warpsPerCTA = [8, 4], order = [1, 0]}>
 // CHECK: "triton_gpu.num-warps" = 32
 module {
-  tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1>, %arg1: !tt.ptr<f16, 1>, %arg2: !tt.ptr<f32, 1>, %arg3: i32, %arg4: i32, %arg5: i32) {
     // CHECK: tt.load
     // CHECK-SAME: tensor<256x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}
     // CHECK: tt.load
@@ -57,7 +57,7 @@ module {
 // CHECK1: #triton_gpu.blocked<{sizePerThread = [8, 32], threadsPerWarp = [1, 1], warpsPerCTA = [1, 8], order = [1, 0]}>
 // CHECK1: "triton_gpu.num-warps" = 8
 module {
-  tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16, 1> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32, 1> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1>, %arg1: !tt.ptr<f16, 1>, %arg2: !tt.ptr<f32, 1>, %arg3: i32, %arg4: i32, %arg5: i32) {
     // CHECK1: tt.load
     // CHECK1-SAME: tensor<8x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}
     // CHECK1: tt.load
@@ -198,7 +198,7 @@ module {
 // CHECK1: #triton_gpu.blocked<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
 // CHECK1: "triton_gpu.num-warps" = 8
 module {
-  tt.func public @_attn_fwd(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @_attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: f32, %arg4: !tt.ptr<f32>, %arg5: !tt.ptr<f32>) {
     %cst = arith.constant dense<1.000000e+00> : tensor<128xf32>
     %cst_0 = arith.constant dense<0xFF800000> : tensor<128xf32>
     %c1_i32 = arith.constant 1 : i32
@@ -274,9 +274,9 @@ module {
       %61 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16>>
       scf.yield %53, %59, %43, %60, %61 : tensor<128xf32>, tensor<128x64xf32>, tensor<128xf32>, !tt.ptr<tensor<64x64xf16>>, !tt.ptr<tensor<64x64xf16>>
       // CHECK1: workload = 4
-    } {tt.divisibility_arg1 = dense<64> : tensor<1xi32>}
+    }
     gpu.barrier
-    %26 = arith.muli %0, %c128_i32 {tt.divisibility = dense<128> : tensor<1xi32>} : i32
+    %26 = arith.muli %0, %c128_i32 : i32
     %27 = arith.addi %0, %c1_i32 : i32
     %28 = arith.muli %27, %c128_i32 : i32
     %29 = tt.advance %14, [%c0_i32, %26] : <tensor<64x64xf16>>
@@ -330,7 +330,7 @@ module {
       %66 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16>>
       scf.yield %58, %64, %49, %65, %66 : tensor<128xf32>, tensor<128x64xf32>, tensor<128xf32>, !tt.ptr<tensor<64x64xf16>>, !tt.ptr<tensor<64x64xf16>>
       // CHECK1: workload = 4
-    } {tt.divisibility_arg1 = dense<64> : tensor<1xi32>}
+    }
     %36 = tt.expand_dims %35#0 {axis = 1 : i32} : tensor<128xf32> -> tensor<128x1xf32>
     %37 = tt.broadcast %36 : tensor<128x1xf32> -> tensor<128x64xf32>
     %38 = arith.divf %35#1, %37 : tensor<128x64xf32>

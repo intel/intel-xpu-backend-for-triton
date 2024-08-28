@@ -389,6 +389,9 @@ public:
       if (loops.size() == 2 && workloads.front() == Workload::Attention &&
           workloads.back() == Workload::Attention) {
         // match attention with causal masking
+        // FIXME: This is a workaround to attach layouts to tensor ops that have
+        //        not been handled before. This should instead be covered by a
+        //        more generic layout propagation approach.
         Attribute blockLayout = loopMap[loops.front()]
                                     .dotInfo0.dot.getResult()
                                     .getType()
@@ -413,7 +416,8 @@ public:
           // Assign:
           // - rank-2 operations: block layout
           // - rank-1 operations: slice layout
-          assert(op->getNumResults() == 1);
+          assert(op->getNumResults() == 1 &&
+                 "Unexpected tensor operation with multiple results");
           OpResult res = op->getOpResult(0);
           auto tty = cast<RankedTensorType>(res.getType());
           if (tty.getRank() == 2)
@@ -466,7 +470,9 @@ public:
         Type newType = addAttrToType(result.getType(), attr.getParent());
         result.setType(newType);
       }
-      // else: will patch up later
+      // else: will patch the encoding later in the causal-attention-specific
+      // layout propagation.
+      // FIXME: Remove this workaround.
     }
   }
 
