@@ -214,6 +214,9 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   if (op.getVnniTransform())
     return true;
 
+  if (op.getTranspose() && op.getTileHeight() != 16)
+    return false;
+
   uint32_t tileWidth = op.getTileWidth();
   switch (op.getElemSizeInBits()) {
   case 8:
