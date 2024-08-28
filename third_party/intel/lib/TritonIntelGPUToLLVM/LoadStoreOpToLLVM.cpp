@@ -376,14 +376,14 @@ struct LoadOpConversion
     assert((memoryLayoutInfo == "row_major" ||
             memoryLayoutInfo == "column_major") &&
            "Only row_major or column_major is supported");
-    bool memoryRowMajor = (memoryLayoutInfo == "row_major");
+    const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
 
     DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
     auto dotOrder = dotLayout.getThreadOrder();
-    bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+    const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
     assert((valueRowMajor || (dotOrder[0] == 0 && dotOrder[1] == 1)) &&
            "Only row_major or column_major is allowed");
-    bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
+    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
 
     auto dpasLayout = cast<DpasEncodingAttr>(dotLayout.getParent());
 
