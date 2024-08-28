@@ -1,20 +1,11 @@
 from setuptools import setup
-from setuptools.command.build_clib import build_clib
-from setuptools.command.egg_info import egg_info
-from setuptools import setup, distutils
-from pathlib import Path
 
 import sysconfig
-import distutils.ccompiler
-import distutils.command.clean
 import os
-import glob
-import platform
 import shutil
 import subprocess
 import sys
 import re
-import errno
 import torch
 import intel_extension_for_pytorch
 
