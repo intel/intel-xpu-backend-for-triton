@@ -23,11 +23,6 @@ if [[ -n "$MODEL_ONLY" ]]; then
     Model_only_extra="--only ${MODEL_ONLY}"
 fi
 
-if [[ -n "$" ]]; then
-    echo "Testing model ${MODEL_ONLY}"
-    Model_only_extra="--only ${MODEL_ONLY}"
-fi
-
 if [[ $MODE == "inference" ]]; then
     Mode_extra="--inference --freezing "
 fi
