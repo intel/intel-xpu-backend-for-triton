@@ -20,18 +20,25 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
     tt.return %0 : tensor<4x16xf32>
   }
 
-// CHECK-LABEL:   llvm.func spir_kernelcc @test_vec(
-// CHECK-SAME:                                      %[[VAL_0:.*]]: vector<4xf32>, %[[VAL_1:.*]]: vector<4xf32>) -> vector<8xf32>
-// CHECK:           %[[VAL_4:.*]] = llvm.mlir.poison : vector<8xf32>
-// CHECK:           %[[VAL_5:.*]] = llvm.mlir.poison : vector<4xf32>
-// CHECK:           %[[VAL_6:.*]] = llvm.shufflevector %[[VAL_0]], %[[VAL_5]] [0, 1, 2, 3, 4, 4, 4, 4] : vector<4xf32>
-// CHECK:           %[[VAL_7:.*]] = llvm.shufflevector %[[VAL_1]], %[[VAL_5]] [0, 1, 2, 3, 4, 4, 4, 4] : vector<4xf32>
-// CHECK:           %[[VAL_8:.*]] = llvm.shufflevector %[[VAL_4]], %[[VAL_6]] [8, 9, 10, 11, 4, 5, 6, 7] : vector<8xf32>
-// CHECK:           %[[VAL_9:.*]] = llvm.shufflevector %[[VAL_8]], %[[VAL_7]] [0, 1, 2, 3, 8, 9, 10, 11] : vector<8xf32>
-// CHECK:           llvm.return %[[VAL_9]] : vector<8xf32>
+// CHECK-LABEL:   llvm.func spir_kernelcc @test_vec_2(
+// CHECK-SAME:                                        %[[VAL_0:.*]]: vector<4xf32>, %[[VAL_1:.*]]: vector<4xf32>) -> vector<8xf32>
+// CHECK:           %[[VAL_4:.*]] = llvm.shufflevector %[[VAL_0]], %[[VAL_1]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<4xf32>
+// CHECK:           llvm.return %[[VAL_4]] : vector<8xf32>
 // CHECK:         }
-  tt.func @test_vec(%arg0: tensor<4x16xf32>, %arg1: tensor<4x16xf32>) -> tensor<8x16xf32> {
+  tt.func @test_vec_2(%arg0: tensor<4x16xf32>, %arg1: tensor<4x16xf32>) -> tensor<8x16xf32> {
     %0 = triton_intel_gpu.glue %arg0, %arg1 : (tensor<4x16xf32>, tensor<4x16xf32>) -> tensor<8x16xf32>
     tt.return %0 : tensor<8x16xf32>
+  }
+
+// CHECK-LABEL:   llvm.func spir_kernelcc @test_vec_4(
+// CHECK-SAME:                                        %[[VAL_0:.*]]: vector<4xf32>, %[[VAL_1:.*]]: vector<4xf32>, %[[VAL_2:.*]]: vector<4xf32>, %[[VAL_3:.*]]: vector<4xf32>) -> vector<16xf32>
+// CHECK:           %[[VAL_8:.*]] = llvm.shufflevector %[[VAL_0]], %[[VAL_1]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<4xf32>
+// CHECK:           %[[VAL_9:.*]] = llvm.shufflevector %[[VAL_2]], %[[VAL_3]] [0, 1, 2, 3, 4, 5, 6, 7] : vector<4xf32>
+// CHECK:           %[[VAL_10:.*]] = llvm.shufflevector %[[VAL_8]], %[[VAL_9]] [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] : vector<8xf32>
+// CHECK:           llvm.return %[[VAL_10]] : vector<16xf32>
+// CHECK:         }
+  tt.func @test_vec_4(%arg0: tensor<4x16xf32>, %arg1: tensor<4x16xf32>, %arg2: tensor<4x16xf32>, %arg3: tensor<4x16xf32>) -> tensor<16x16xf32> {
+    %0 = triton_intel_gpu.glue %arg0, %arg1, %arg2, %arg3 : (tensor<4x16xf32>, tensor<4x16xf32>, tensor<4x16xf32>, tensor<4x16xf32>) -> tensor<16x16xf32>
+    tt.return %0 : tensor<16x16xf32>
   }
 }

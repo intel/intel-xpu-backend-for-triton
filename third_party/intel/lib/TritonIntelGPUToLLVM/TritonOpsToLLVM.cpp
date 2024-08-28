@@ -384,56 +384,57 @@ public:
   matchAndRewrite(GlueOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ValueRange operands = adaptor.getOperands();
-    Value result =
-        TypeSwitch<Type, Value>(operands.front().getType())
-            .Case([this, &rewriter, op, operands](VectorType vecType) {
-              return vectorGlueOp(op, operands, rewriter, vecType);
-            })
-            .Default([this, &rewriter, op, operands](auto) {
-              return scalarGlueOp(op, operands, rewriter);
-            });
+    Value result = TypeSwitch<Type, Value>(operands.front().getType())
+                       .Case([this, &rewriter, op, operands](VectorType) {
+                         return vectorGlueOp(op, operands, rewriter);
+                       })
+                       .Default([this, &rewriter, op, operands](auto) {
+                         return scalarGlueOp(op, operands, rewriter);
+                       });
+    if (!result) {
+      // Non-power of 2 number of vector operands case. See comment below.
+      return failure();
+    }
     rewriter.replaceOp(op, result);
     return success();
   }
 
 private:
   Value vectorGlueOp(GlueOp op, ValueRange operands,
-                     ConversionPatternRewriter &rewriter,
-                     VectorType vecType) const {
+                     ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
-    auto dstType =
-        cast<VectorType>(getTypeConverter()->convertType(op.getType()));
-    Value poison = rewriter.create<LLVM::PoisonOp>(loc, dstType);
+    if (!llvm::isPowerOf2_64(operands.size())) {
+      // Legal vector widths: 2, 3, 4, 8, 16. We cannot obtain any of these from
+      // a non-power of 2 number of vector operands (2 and 3 can only be created
+      // from scalar values). Bail out to keep algorithm simple and avoid
+      // illegal codegen.
+      return {};
+    }
+    return treeVectorGlueOp(op.getLoc(), operands, rewriter);
+  }
 
-    // Broadcast each operand vector to a vector of `dstType` type.
-    unsigned dstNumElements = dstType.getNumElements();
-    unsigned numElements = vecType.getNumElements();
-    Value broadcastPoison = rewriter.create<LLVM::PoisonOp>(loc, vecType);
-    SmallVector<int32_t> mask(dstNumElements, numElements);
-    std::iota(std::begin(mask), std::begin(mask) + numElements, 0);
-    SmallVector<Value> broadcastedOperands;
-    llvm::transform(
-        operands, std::back_inserter(broadcastedOperands),
-        [&rewriter, loc, broadcastPoison, &mask](Value operand) -> Value {
-          return rewriter.create<LLVM::ShuffleVectorOp>(loc, operand,
-                                                        broadcastPoison, mask);
-        });
-
-    // Merge broadcasted vectors in a single vector.
-    auto enumeratedOperands = llvm::enumerate(broadcastedOperands);
-    std::iota(std::begin(mask), std::end(mask), 0);
-    return std::accumulate(
-        std::begin(enumeratedOperands), std::end(enumeratedOperands), poison,
-        [&rewriter, loc, &mask, numElements](Value acc,
-                                             const auto &pair) -> Value {
-          auto [index, operand] = pair;
-          SmallVector<int32_t> newShuffleMask(mask);
-          std::iota(std::begin(newShuffleMask) + index * numElements,
-                    std::begin(newShuffleMask) + (index + 1) * numElements,
-                    newShuffleMask.size());
-          return rewriter.create<LLVM::ShuffleVectorOp>(loc, acc, operand,
-                                                        newShuffleMask);
-        });
+  Value treeVectorGlueOp(Location loc, ValueRange operands,
+                         ConversionPatternRewriter &rewriter) const {
+    if (operands.size() == 1)
+      return operands.front();
+    assert(llvm::isPowerOf2_64(operands.size()) &&
+           "Expecting power of 2 number of operands");
+    SmallVector<Value> lhs;
+    SmallVector<Value> rhs;
+    for (auto [index, value] : llvm::enumerate(operands))
+      (index % 2 == 0 ? lhs : rhs).push_back(value);
+    SmallVector<Value> res;
+    int32_t numElements =
+        cast<VectorType>(operands.front().getType()).getNumElements();
+    SmallVector<int32_t> concatMask(numElements * 2);
+    std::iota(std::begin(concatMask), std::end(concatMask), 0);
+    llvm::transform(llvm::zip_equal(lhs, rhs), std::back_inserter(res),
+                    [loc, &rewriter, &concatMask](const auto &pair) -> Value {
+                      auto [lhs, rhs] = pair;
+                      return rewriter.create<LLVM::ShuffleVectorOp>(
+                          loc, lhs, rhs, concatMask);
+                    });
+    return treeVectorGlueOp(loc, res, rewriter);
   }
 
   Value scalarGlueOp(GlueOp op, ValueRange operands,
