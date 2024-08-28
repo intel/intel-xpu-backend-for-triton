@@ -683,20 +683,18 @@ struct TritonRaiseBlockPointer
     if (isa<triton::ExpandDimsOp>(defOp) || isa<triton::BroadcastOp>(defOp) ||
         isa<triton::SplatOp>(defOp) || isa<arith::IndexCastOp>(defOp))
       return getFinalValue(defOp->getOperand(0));
-    else if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
+    if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
       if (mlir::triton::gpu::intel::isConstant(addOp.getLhs(), 0))
         return getFinalValue(addOp.getRhs());
-      else if (mlir::triton::gpu::intel::isConstant(addOp.getRhs(), 0))
+      if (mlir::triton::gpu::intel::isConstant(addOp.getRhs(), 0))
         return getFinalValue(addOp.getLhs());
-      else
-        return addOp.getResult();
+      return addOp.getResult();
     } else if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
       if (mlir::triton::gpu::intel::isConstant(mulOp.getLhs(), 1))
         return getFinalValue(mulOp.getRhs());
-      else if (mlir::triton::gpu::intel::isConstant(mulOp.getRhs(), 1))
+      if (mlir::triton::gpu::intel::isConstant(mulOp.getRhs(), 1))
         return getFinalValue(mulOp.getLhs());
-      else
-        return mulOp.getResult();
+      return mulOp.getResult();
     }
     return value;
   }
