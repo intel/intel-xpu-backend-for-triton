@@ -144,6 +144,22 @@ def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Subgroup local index
+//===----------------------------------------------------------------------===//
+
+def TritonGEN_SubgroupLocalIdOp : TritonGEN_Op<"subgroup.local.id", [Pure]> {
+  let summary = "Subgroup Local Invocation Index";
+  string baseDescription = [{
+    The `gen.subgroup.local.id` operation returns the local invocation ID of the
+    work-item within the subgroup, which is a number in the range `[0,
+    subgroup_size)`.
+  }];
+  let arguments = (ins);
+  let results = (outs I32 : $res);
+  let assemblyFormat = "attr-dict `:` type($res)";
+}
+
+//===----------------------------------------------------------------------===//
 // Synchronization
 //===----------------------------------------------------------------------===//
 
