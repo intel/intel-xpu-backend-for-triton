@@ -1,8 +1,6 @@
 import os
 import hashlib
 import tempfile
-import sysconfig
-import setuptools
 from pathlib import Path
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
@@ -37,7 +35,7 @@ libraries = ['ze_loader', 'sycl', 'torch', 'intel-ext-pt-gpu']
 
 
 def compile_module_from_src(src, name):
-    key = hashlib.md5(src.encode("utf-8")).hexdigest()
+    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     cache_path = cache.get_file(f"{name}.so")
     if cache_path is None:

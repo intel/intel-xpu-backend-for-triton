@@ -75,18 +75,20 @@ struct TruncBF16 : ConvertOpToLLVMPattern<arith::TruncFOp> {
 namespace mlir::triton::intel {
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v) {
-  auto moduleOp = v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
-  if (moduleOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                            getSupportBF16ConversionAttrName())) {
-    constexpr StringLiteral baseName = "__spirv_ConvertBF16ToFINTEL";
-    Type inTy = getTypeWithSameShape(v.getType(), i16_ty);
-    Type outTy = getTypeWithSameShape(inTy, f32_ty);
-    std::string name = mlir::triton::gpu::intel::mangle(baseName, inTy);
-    auto ext_func =
-        triton::gpu::intel::lookupOrCreateSPIRVFn(moduleOp, name, inTy, outTy);
-    auto call = triton::gpu::intel::createSPIRVBuiltinCall(
-        loc, rewriter, ext_func, bitcast(v, inTy).getResult());
-    return call.getResult();
+  if (auto definingOp = v.getDefiningOp()) {
+    auto moduleOp = definingOp->getParentWithTrait<OpTrait::SymbolTable>();
+    if (moduleOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                              getSupportBF16ConversionAttrName())) {
+      constexpr StringLiteral baseName = "__spirv_ConvertBF16ToFINTEL";
+      Type inTy = getTypeWithSameShape(v.getType(), i16_ty);
+      Type outTy = getTypeWithSameShape(inTy, f32_ty);
+      std::string name = mlir::triton::gpu::intel::mangle(baseName, inTy);
+      auto ext_func = triton::gpu::intel::lookupOrCreateSPIRVFn(moduleOp, name,
+                                                                inTy, outTy);
+      auto call = triton::gpu::intel::createSPIRVBuiltinCall(
+          loc, rewriter, ext_func, bitcast(v, inTy).getResult());
+      return call.getResult();
+    }
   }
 
   auto as_int16 = bitcast(v, i16_ty);
@@ -97,21 +99,23 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
 
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                         Value v, RoundingMode rounding) {
-  auto moduleOp = v.getDefiningOp()->getParentWithTrait<OpTrait::SymbolTable>();
-  if (moduleOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                            getSupportBF16ConversionAttrName()) &&
-      rounding == RoundingMode::RTNE) {
-    // Intel SPIR-V extension only supports round-to-nearest-even
-    constexpr StringLiteral baseName = "__spirv_ConvertFToBF16INTEL";
-    Type inTy = v.getType();
-    Type funcOutTy = getTypeWithSameShape(inTy, i16_ty);
-    Type outTy = getTypeWithSameShape(inTy, bf16_ty);
-    std::string name = mlir::triton::gpu::intel::mangle(baseName, inTy);
-    auto trunc_func = triton::gpu::intel::lookupOrCreateSPIRVFn(
-        moduleOp, name, inTy, funcOutTy);
-    auto call = triton::gpu::intel::createSPIRVBuiltinCall(loc, rewriter,
-                                                           trunc_func, v);
-    return bitcast(call.getResult(), outTy);
+  if (auto definingOp = v.getDefiningOp()) {
+    auto moduleOp = definingOp->getParentWithTrait<OpTrait::SymbolTable>();
+    if (moduleOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                              getSupportBF16ConversionAttrName()) &&
+        rounding == RoundingMode::RTNE) {
+      // Intel SPIR-V extension only supports round-to-nearest-even
+      constexpr StringLiteral baseName = "__spirv_ConvertFToBF16INTEL";
+      Type inTy = v.getType();
+      Type funcOutTy = getTypeWithSameShape(inTy, i16_ty);
+      Type outTy = getTypeWithSameShape(inTy, bf16_ty);
+      std::string name = mlir::triton::gpu::intel::mangle(baseName, inTy);
+      auto trunc_func = triton::gpu::intel::lookupOrCreateSPIRVFn(
+          moduleOp, name, inTy, funcOutTy);
+      auto call = triton::gpu::intel::createSPIRVBuiltinCall(loc, rewriter,
+                                                             trunc_func, v);
+      return bitcast(call.getResult(), outTy);
+    }
   }
 
   assert(!isa<VectorType>(v.getType()) && "Not yet supported");

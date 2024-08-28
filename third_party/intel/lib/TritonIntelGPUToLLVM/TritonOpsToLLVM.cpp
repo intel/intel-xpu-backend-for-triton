@@ -70,7 +70,7 @@ public:
 
     for (size_t i = 0; i < offsets.size(); ++i) {
       Value offset = offsets[i];
-      if (auto cst = dyn_cast<LLVM::ConstantOp>(offset.getDefiningOp()))
+      if (auto cst = offset.getDefiningOp<LLVM::ConstantOp>())
         if (auto attr = dyn_cast<mlir::IntegerAttr>(cst.getValue());
             attr && attr.getInt() == 0)
           continue;
@@ -159,14 +159,12 @@ public:
            (vBlks == 1 || vBlks == 2) && "only support 1 or 2 blocks");
 
     Value ptr = op.getPtr();
-    if (auto cast =
-            dyn_cast<mlir::UnrealizedConversionCastOp>(ptr.getDefiningOp()))
+    if (auto cast = ptr.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       ptr = cast.getInputs()[0];
 
     MakeTensorPtrOp ptrOp = getMakeTensorPtrOp(ptr);
     Value base = ptrOp.getBase();
-    if (auto cast =
-            dyn_cast<mlir::UnrealizedConversionCastOp>(base.getDefiningOp()))
+    if (auto cast = base.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       base = cast.getInputs()[0];
     else
       base = rewriter.getRemappedValue(base);
@@ -264,8 +262,7 @@ private:
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op.getLoc();
     Value llPtr = adaptor.getPtr();
-    if (auto cast =
-            dyn_cast<mlir::UnrealizedConversionCastOp>(llPtr.getDefiningOp()))
+    if (auto cast = llPtr.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       llPtr = cast.getInputs()[0];
 
     // sg_size(16) x i64 = 64 x i16
@@ -295,8 +292,7 @@ private:
     if constexpr (std::is_same_v<OpType, StoreOp>) {
       rewriter.restoreInsertionPoint(insertPoint);
       Value val = adaptor.getValue();
-      if (auto shuffleOp =
-              dyn_cast_or_null<LLVM::ShuffleVectorOp>(val.getDefiningOp()))
+      if (auto shuffleOp = val.getDefiningOp<LLVM::ShuffleVectorOp>())
         val = shuffleOp.getRes();
       if (isa<LLVM::LLVMStructType>(val.getType())) {
         SmallVector<Value> unpackedVal = unpackLLElements(loc, val, rewriter);

@@ -1,31 +1,81 @@
+import importlib.metadata
 import os
 import hashlib
+import shutil
 import tempfile
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
+from packaging.version import Version
+from packaging.specifiers import SpecifierSet
 
 ze_root = os.getenv("ZE_PATH", default="/usr/local")
 include_dir = [os.path.join(ze_root, "include")]
 
-oneapi_root = os.getenv("ONEAPI_ROOT")
-if oneapi_root:
-    include_dir += [
-        os.path.join(oneapi_root, "compiler/latest/include"),
-        os.path.join(oneapi_root, "compiler/latest/include/sycl")
-    ]
+
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Looks for the sycl library in known places.
+
+    Arguments:
+      include_dir: list of include directories to pass to compiler.
+
+    Returns:
+      enriched include_dir and library_dir.
+
+    Raises:
+      AssertionError: if library was not found.
+    """
+    library_dir = []
+    include_dir = include_dir.copy()
+    assertion_message = ("sycl headers not found, please install `icpx` compiler, "
+                         "or provide `ONEAPI_ROOT` environment "
+                         "or install `intel-sycl-rt>=2025.0.0` wheel")
+
+    if shutil.which("icpx"):
+        # only `icpx` compiler knows where sycl runtime binaries and header files are
+        return include_dir, library_dir
+
+    oneapi_root = os.getenv("ONEAPI_ROOT")
+    if oneapi_root:
+        include_dir += [
+            os.path.join(oneapi_root, "compiler/latest/include"),
+            os.path.join(oneapi_root, "compiler/latest/include/sycl")
+        ]
+        return include_dir, library_dir
+
+    try:
+        sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
+    except importlib.metadata.PackageNotFoundError:
+        raise AssertionError(assertion_message)
+
+    if Version(sycl_rt.get("version", "0.0.0")) in SpecifierSet("<2025.0.0a1"):
+        raise AssertionError(assertion_message)
+
+    for f in importlib.metadata.files("intel-sycl-rt"):
+        # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
+        # being add: include and include/sycl.
+        if f.name == "sycl.hpp":
+            include_dir += [f.locate().parent.parent.resolve().as_posix()]
+        if f.name == "libsycl.so":
+            library_dir += [f.locate().parent.resolve().as_posix()]
+
+    return include_dir, library_dir
+
+
+include_dir, library_dir = find_sycl(include_dir)
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir += [os.path.join(dirname, "include")]
 
-library_dir = [os.path.join(dirname, "lib")]
+library_dir += [os.path.join(dirname, "lib")]
 libraries = ['ze_loader', 'sycl']
 
 
 def compile_module_from_src(src, name):
-    key = hashlib.md5(src.encode("utf-8")).hexdigest()
+    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     cache_path = cache.get_file(f"{name}.so")
     if cache_path is None:

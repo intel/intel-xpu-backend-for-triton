@@ -53,10 +53,13 @@ def _kernel(A, B, C,  #
             a = tl.load(a_block_ptr)
             b = tl.load(b_block_ptr)
         else:
-            k_remaining = K - k * (BLOCK_K * SPLIT_K)
-            _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
-            a = tl.load(a_block_ptr, mask=rk[None, :] < k_remaining, other=_0)
-            b = tl.load(b_block_ptr, mask=rk[:, None] < k_remaining, other=_0)
+            # FIXME: Undefined name `rk`
+            # https://github.com/intel/intel-xpu-backend-for-triton/issues/2012
+            raise NotImplementedError()
+            # k_remaining = K - k * (BLOCK_K * SPLIT_K)
+            # _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
+            # a = tl.load(a_block_ptr, mask=rk[None, :] < k_remaining, other=_0)
+            # b = tl.load(b_block_ptr, mask=rk[:, None] < k_remaining, other=_0)
         acc += tl.dot(a, b, out_dtype=acc_dtype)
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_K * SPLIT_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_K * SPLIT_K, 0))

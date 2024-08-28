@@ -7,8 +7,9 @@ import json
 import os
 import pathlib
 import platform
-import xml.etree.ElementTree as ET
 from typing import List
+
+from defusedxml.ElementTree import parse
 
 
 @dataclasses.dataclass
@@ -54,7 +55,7 @@ def get_deselected(report_path: pathlib.Path) -> int:
 def parse_report(report_path: pathlib.Path) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
-    root = ET.parse(report_path).getroot()
+    root = parse(report_path).getroot()
     for testsuite in root:
         testsuite_fixme_tests = set()
         stats.total += int(testsuite.get('tests'))
@@ -68,10 +69,11 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
         for _ in testsuite.iter('error'):
             stats.failed += 1
         try:
-            with open(f"{report_path.parent}/{report_path.stem}-warnings.json") as testsuite_warnings_file:
+            warnings_file_name = f'{report_path.parent}/{report_path.stem}-warnings.json'
+            with open(warnings_file_name, encoding='utf-8') as testsuite_warnings_file:
                 testsuite_warnings = json.load(testsuite_warnings_file)
                 for w in testsuite_warnings:
-                    if "FIXME" in list(w.values())[0]:
+                    if 'FIXME' in list(w.values())[0]:
                         testsuite_fixme_tests.add(list(w.keys())[0])
         except FileNotFoundError:
             pass

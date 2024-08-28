@@ -25,10 +25,17 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     // FAST: [[C2:%.*]] = llvm.mlir.constant(2 : i32) : i32
     // FAST: [[C1:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // FAST: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, [[C16]], [[C32]], [[C2]], [[C1]], {{.*}}, {{.*}}, {{.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.insertvalue [[ZERO]], {{.*}}[0]
     // CHECK: [[ARG0_STRUCT:%.*]] = llvm.insertvalue %arg0, {{.*}}[6]
     // CHECK: [[ARG1_STRUCT:%.*]] = llvm.insertvalue %arg1, {{.*}}[6]
+    // CHECK: [[OFFSETBASEY:%.*]] = llvm.extractvalue [[ARG0_STRUCT]][0]
     // CHECK: [[ARG0:%.*]] = llvm.extractvalue [[ARG0_STRUCT]][6]
-    // CHECK: llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x2cPU3AS1viiiDv2_i([[ARG0]], {{.*}}) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> ()
+    // CHECK: [[OFFSETY_:%.*]] = llvm.add {{.*}}, [[OFFSETBASEY]] : i32
+    // CHECK: [[OFFSETY:%.*]] = llvm.trunc [[OFFSETY_]] : i32 to i32
+    // CHECK: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK: [[COORD:%.*]] = llvm.insertelement [[OFFSETY]], {{.*}}[[[ONE]] : i32]
+    // CHECK: llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x2cPU3AS1viiiDv2_i([[ARG0]], {{.*}}, [[COORD]]) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> ()
     // CHECK: [[ARG1:%.*]] = llvm.extractvalue [[ARG1_STRUCT]][6]
     // CHECK: llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_2r16x2cPU3AS1viiiDv2_i([[ARG1]], {{.*}}) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> ()
     // CHECK: llvm.call spir_funccc @_Z41intel_sub_group_2d_block_read_16b_8r16x1cPU3AS1viiiDv2_iPt({{.*}}) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>, !llvm.ptr) -> ()

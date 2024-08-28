@@ -87,7 +87,6 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   kernel_description.flags = flag;
   kernel_description.pKernelName = func_name.data();
   assert(module);
-  auto module_initial = module;
   if (getBoolEnv("MLIR_ENABLE_DUMP")) {
     std::cout << "create kernel:" << func_name << std::endl;
   }

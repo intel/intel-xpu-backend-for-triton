@@ -235,4 +235,50 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
   return call;
 }
 
+static std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
+  if (ofr.is<Attribute>() && isa<IntegerAttr>(ofr.get<Attribute>()))
+    return cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
+  return std::nullopt;
+}
+
+// This function folds the `op` operation and returns the constant value if it
+// has successfully folded to a constant. Otherwise, it returns `std::nullopt`.
+static std::optional<int64_t> getFoldedConstantValue(Operation *op) {
+  SmallVector<OpFoldResult> results;
+  if (failed(op->fold(results))) {
+    return std::nullopt;
+  }
+
+  // If fold succeeded but `results` is empty, we give a second try, after the
+  // operands have been switched during the first call to `fold()`.
+  if (results.empty()) {
+    if (failed(op->fold(results))) {
+      return std::nullopt;
+    }
+  }
+
+  if (results.size() != 1) {
+    return std::nullopt;
+  }
+
+  auto intAttr = getIntAttr(results[0]);
+  if (intAttr.has_value()) {
+    return intAttr.value();
+  }
+
+  auto val = cast<Value>(results[0]);
+  auto constOp = val.getDefiningOp<arith::ConstantOp>();
+  if (!constOp)
+    return std::nullopt;
+
+  return getIntAttr(constOp.getValue());
+}
+
+bool isConstant(Value val, const unsigned expected) {
+  auto defOp = val.getDefiningOp();
+  if (!defOp)
+    return false;
+  return (getFoldedConstantValue(defOp) == expected);
+}
+
 } // namespace mlir::triton::gpu::intel
