@@ -767,6 +767,28 @@ struct TritonGENSubgroupIdLowering
 };
 
 //===----------------------------------------------------------------------===//
+// SubgroupLocalID Op Lowering
+//===----------------------------------------------------------------------===//
+
+struct TritonGENSubgroupLocalIdLowering
+    : ConvertOpToLLVMPattern<TritonGEN::SubgroupLocalIdOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubgroupLocalIdOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubgroupLocalIdOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto retType = rewriter.getIntegerType(32);
+
+    intel::AttributeList attrs;
+    LLVM::CallOp callOp = createDeviceFunctionCall(
+        rewriter, "_Z22get_sub_group_local_idv", retType, {}, {}, attrs);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Synchronization Ops Lowerings
 //===----------------------------------------------------------------------===//
 
@@ -1503,14 +1525,14 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
       TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
       TritonGENGridDimYLowering, TritonGENGridDimZLowering,
-      TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
-      TritonGENSplitBarrierSignalLowering, TritonGENSplitBarrierWaitLowering,
-      TritonGENNamedBarrierSignalLowering, TritonGENNamedBarrierWaitLowering,
-      TritonSubGroupReduceLowering, TritonSubGroupScanLowering,
-      TritonSubGroupShuffleLowering, TritonMatrixDPASLowering,
-      TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
-      TritonMatrix2DBlockPrefetchLowering, TritonSIMDBlockReadLowering,
-      TritonSIMDBlockWriteLowering>(converter);
+      TritonGENSubgroupIdLowering, TritonGENSubgroupLocalIdLowering,
+      TritonGENBarrierLowering, TritonGENSplitBarrierSignalLowering,
+      TritonGENSplitBarrierWaitLowering, TritonGENNamedBarrierSignalLowering,
+      TritonGENNamedBarrierWaitLowering, TritonSubGroupReduceLowering,
+      TritonSubGroupScanLowering, TritonSubGroupShuffleLowering,
+      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering,
+      TritonSIMDBlockReadLowering, TritonSIMDBlockWriteLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
