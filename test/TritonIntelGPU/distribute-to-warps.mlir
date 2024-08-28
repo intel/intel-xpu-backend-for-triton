@@ -215,7 +215,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     %25 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     // CHECK: %[[OFFSET2:.*]] = tt.splat %[[PROD_ID_SCALED]] : i32 -> tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
     %26 = tt.splat %9 : i32 -> tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
-    // CHECK: %[[RANGE1_OFFSET2:.*]] = arith.addi %[[OFFSET2]], %[[RANGE1_OFFSET]] : tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #warp}>>    
+    // CHECK: %[[RANGE1_OFFSET2:.*]] = arith.addi %[[OFFSET2]], %[[RANGE1_OFFSET]] : tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
     %27 = arith.addi %26, %25 : tensor<128xi32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
     // CHECK: %[[RANGE2:.*]] = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
     %28 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #blocked}>>
