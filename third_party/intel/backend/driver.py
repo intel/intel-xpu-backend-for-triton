@@ -65,8 +65,8 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
 
 
 class CompilationHelper:
-    library_dir: list[str]
-    include_dir: list[str]
+    _library_dir: list[str]
+    _include_dir: list[str]
 
     def __init__(self):
         self._library_dir = None
