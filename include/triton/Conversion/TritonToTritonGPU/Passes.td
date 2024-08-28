@@ -40,5 +40,4 @@ def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleO
    ];
 }
 
-
 #endif
