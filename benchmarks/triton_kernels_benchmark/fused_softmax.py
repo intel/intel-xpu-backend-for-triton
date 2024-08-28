@@ -13,10 +13,8 @@ import triton
 import triton.language as tl
 from triton.runtime import driver
 
-import triton_kernels_benchmark
+import triton_kernels_benchmark as benchmark_suit
 import triton_kernels_benchmark.xetla_kernel as xetla_kernel
-
-benchmark_suit = triton_kernels_benchmark  # triton.testing
 
 
 @torch.jit.script

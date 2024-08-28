@@ -4,10 +4,8 @@
 #include "stream_k_gemm/stream_k_gemm.h"
 #include <CL/sycl.hpp>
 #include <c10/core/ScalarType.h>
-#include <cstdint>
-
-// #include <ipex.h>
 #include <c10/xpu/XPUStream.h>
+#include <cstdint>
 #include <torch/extension.h>
 
 sycl::queue get_current_sycl_queue() {

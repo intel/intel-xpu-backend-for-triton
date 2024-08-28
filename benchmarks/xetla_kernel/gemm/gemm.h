@@ -53,7 +53,6 @@ sycl::event gemm_run(void *_A, void *_B, void *_C, void *_Acc, void *_Cnt,
   size_t size_acc = gemm_op_t::get_acc_buf_size(matrix_m, matrix_n);
   size_t size_cnt = gemm_op_t::get_cnt_buf_size(matrix_m, matrix_n);
 
-  printf("!!!! gemm queue addres: %d \n", &queue);
   auto context = queue.get_info<sycl::info::queue::context>();
   auto device = queue.get_info<sycl::info::queue::device>();
   data_type_a *A = static_cast<data_type_a *>(_A);

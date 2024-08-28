@@ -3,10 +3,8 @@ import torch
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark
+import triton_kernels_benchmark as benchmark_suit
 import triton_kernels_benchmark.xetla_kernel as xetla_kernel
-
-benchmark_suit = triton_kernels_benchmark  # triton.testing
 
 
 @triton.jit
