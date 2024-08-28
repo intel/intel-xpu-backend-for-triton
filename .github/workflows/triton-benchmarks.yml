@@ -11,6 +11,10 @@ on:
         description: Tag for benchmark results
         type: string
         default: "test"
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
   schedule:
     - cron: "5 23 * * *"
 
@@ -51,6 +55,8 @@ jobs:
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
+        with:
+          ref: ${{ inputs.pytorch_ref }}
 
       - name: Setup IPEX
         uses: ./.github/actions/setup-ipex
@@ -219,6 +225,8 @@ jobs:
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
+        with:
+          ref: ${{ inputs.pytorch_ref }}
 
       - name: Setup IPEX
         uses: ./.github/actions/setup-ipex
