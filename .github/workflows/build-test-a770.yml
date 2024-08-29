@@ -16,7 +16,7 @@ on:
         # corresponding repository. If not specified, a default (pinned) version will be used.
         description: Install Intel PyTorch Extension
         type: boolean
-        default: true
+        default: false
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
@@ -54,11 +54,11 @@ jobs:
     with:
       device: a770
       runner_label: ${{ inputs.runner_label }}
-      install_ipex: ${{ inputs.install_ipex || github.event_name == 'schedule' }}
+      install_ipex: ${{ inputs.install_ipex }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
-      upload_test_reports: ${{ inputs.upload_test_reports || false }}
-      ignore_errors: ${{ inputs.ignore_errors || false }}
+      upload_test_reports: ${{ inputs.upload_test_reports }}
+      ignore_errors: ${{ inputs.ignore_errors }}
       skip_list: ${{ inputs.skip_list || 'a770' }}
       run_name: ${{ inputs.run_name }}
-      enable_unskip: ${{ inputs.enable_unskip || false }}
+      enable_unskip: ${{ inputs.enable_unskip }}
