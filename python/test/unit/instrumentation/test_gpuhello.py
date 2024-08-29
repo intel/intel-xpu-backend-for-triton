@@ -1,5 +1,4 @@
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import pytest
 import os
