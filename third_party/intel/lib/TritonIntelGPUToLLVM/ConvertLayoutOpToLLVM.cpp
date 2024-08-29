@@ -480,15 +480,16 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     //  4. Transfer between values in different CTAs, in which case we move
     //     values through distributed shared memory.
     //
-    // We can tell which case we're in by examining `conversion`.  If e.g. the
-    // block -> block mapping is {1, 2, 4, ...} then there's no movement between
-    // data in different CTAs and we know we're not in case 4.
-    if (cvtReordersRegisters(srcTy, dstTy)) { // Case 1
+    // We can tell which case we're in by examining `conversion`.
+    // For example, if the block -> block mapping is an identity layout: {1, 2,
+    // 4, ...}, then there's no movement between data in different CTAs, and we
+    // know we're not in case 4.
+    if (cvtReordersRegisters(srcTy, dstTy)) { // Case 1.
       return transferWithinThread(op, *srcLayout, *dstLayout, adaptor,
                                   rewriter);
     }
 
-    if (cvtNeedsWarpShuffle(srcTy, dstTy)) {
+    if (cvtNeedsWarpShuffle(srcTy, dstTy)) { // Case 2.
       return transferWithinLane(op, *srcLayout, *dstLayout, adaptor, rewriter);
     }
 
