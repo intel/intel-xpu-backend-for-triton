@@ -8,7 +8,9 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -370,9 +372,6 @@ public:
   }
 };
 
-/// %glue = ttgi.glue %a, %b : tensor<4xf16>, tensor<4xf16> : tensor<8xf16>
-/// is converted to:
-/// %glue = llvm.shufflevector %a, %b : [0, 1, 2, 3, 4, 5, 6, 7] : vector<8xf16>
 class GlueOpConversion : public ConvertTritonGPUOpToLLVMPattern<GlueOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
@@ -380,48 +379,75 @@ public:
   LogicalResult
   matchAndRewrite(GlueOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    ValueRange operands = adaptor.getOperands();
+    Value result = TypeSwitch<Type, Value>(operands.front().getType())
+                       .Case([this, &rewriter, op, operands](VectorType) {
+                         return vectorGlueOp(op, operands, rewriter);
+                       })
+                       .Default([this, &rewriter, op, operands](auto) {
+                         return scalarGlueOp(op, operands, rewriter);
+                       });
+    if (!result) {
+      // Non-power of 2 number of vector operands case. See comment below.
+      return failure();
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+private:
+  Value vectorGlueOp(GlueOp op, ValueRange operands,
+                     ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
-    SmallVector<Value> operands = adaptor.getOperands();
+    if (!llvm::isPowerOf2_64(operands.size())) {
+      // Legal vector widths: 2, 3, 4, 8, 16. We cannot obtain any of these from
+      // a non-power of 2 number of vector operands (2 and 3 can only be created
+      // from scalar values). Bail out to keep algorithm simple and avoid
+      // illegal codegen.
+      return {};
+    }
+    return treeVectorGlueOp(op.getLoc(), operands, rewriter);
+  }
+
+  Value treeVectorGlueOp(Location loc, ValueRange operands,
+                         ConversionPatternRewriter &rewriter) const {
+    if (operands.size() == 1)
+      return operands.front();
+    assert(llvm::isPowerOf2_64(operands.size()) &&
+           "Expecting power of 2 number of operands");
+    SmallVector<Value> lhs;
+    SmallVector<Value> rhs;
+    for (auto [index, value] : llvm::enumerate(operands))
+      (index % 2 == 0 ? lhs : rhs).push_back(value);
+    SmallVector<Value> res;
+    int32_t numElements =
+        cast<VectorType>(operands.front().getType()).getNumElements();
+    SmallVector<int32_t> concatMask(numElements * 2);
+    std::iota(std::begin(concatMask), std::end(concatMask), 0);
+    llvm::transform(llvm::zip_equal(lhs, rhs), std::back_inserter(res),
+                    [loc, &rewriter, &concatMask](const auto &pair) -> Value {
+                      auto [lhs, rhs] = pair;
+                      return rewriter.create<LLVM::ShuffleVectorOp>(
+                          loc, lhs, rhs, concatMask);
+                    });
+    return treeVectorGlueOp(loc, res, rewriter);
+  }
+
+  Value scalarGlueOp(GlueOp op, ValueRange operands,
+                     ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
     auto dstType =
         cast<VectorType>(getTypeConverter()->convertType(op.getType()));
-    unsigned numElts = dstType.getNumElements();
-    SmallVector<int32_t> indices(numElts);
-    std::iota(indices.begin(), indices.end(), 0);
-    DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
+    Value poison = rewriter.create<LLVM::PoisonOp>(loc, dstType);
 
-    switch (operands.size()) {
-    case 1:
-      rewriter.replaceOp(op, operands[0]);
-      break;
-    case 2:
-      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(
-          op, dstType, operands[0], operands[1], attr);
-      break;
-    case 4: {
-      auto subType = vec_ty(dstType.getElementType(), numElts / 2);
-      indices.pop_back_n(numElts / 2);
-      DenseI32ArrayAttr attr01 = rewriter.getDenseI32ArrayAttr(indices);
-      auto shfl01 = rewriter.create<LLVM::ShuffleVectorOp>(
-          loc, subType, operands[0], operands[1], attr01);
-      DenseI32ArrayAttr attr23 = rewriter.getDenseI32ArrayAttr(indices);
-      auto shfl23 = rewriter.create<LLVM::ShuffleVectorOp>(
-          loc, subType, operands[2], operands[3], attr23);
-      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(op, dstType, shfl01,
-                                                         shfl23, attr);
-    } break;
-    default: {
-      unsigned num = operands.size();
-      Value undef = undef(dstType);
-      for (unsigned i = 0; i < num; ++i)
-        undef =
-            insert_element(dstType, undef, operands[i],
-                           rewriter.create<LLVM::ConstantOp>(loc, i32_ty, i));
-
-      rewriter.replaceOp(op, undef);
-    }
-    }
-
-    return success();
+    auto enumeratedOperands = llvm::enumerate(operands);
+    return std::accumulate(std::begin(enumeratedOperands),
+                           std::end(enumeratedOperands), poison,
+                           [&rewriter, loc](Value acc, const auto &pair) {
+                             auto [index, operand] = pair;
+                             Value idx = i32_val(index);
+                             return insert_element(acc, operand, idx);
+                           });
   }
 };
 
