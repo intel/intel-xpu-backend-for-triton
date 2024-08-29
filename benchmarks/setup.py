@@ -15,8 +15,8 @@ class CMakeBuild():
 
     def __init__(self):
         self.current_dir = os.path.abspath(os.path.dirname(__file__))
-        self.build_temp = self.current_dir + '/build/temp'
-        self.extdir = self.current_dir + '/triton_kernels_benchmark'
+        self.build_temp = self.current_dir + "/build/temp"
+        self.extdir = self.current_dir + "/triton_kernels_benchmark"
 
     def run(self):
         try:
@@ -32,7 +32,7 @@ class CMakeBuild():
         self.build_extension()
 
     def build_extension(self):
-        ninja_dir = shutil.which('ninja')
+        ninja_dir = shutil.which("ninja")
         # create build directories
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
@@ -55,11 +55,11 @@ class CMakeBuild():
         ]
 
         # configuration
-        build_type = 'Debug'
+        build_type = "Debug"
         build_args = ["--config", build_type]
         cmake_args += ["-DCMAKE_BUILD_TYPE=" + build_type]
         max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
-        build_args += ['-j' + max_jobs]
+        build_args += ["-j" + max_jobs]
 
         env = os.environ.copy()
         cmake_dir = self.build_temp
@@ -70,7 +70,7 @@ class CMakeBuild():
 cmake = CMakeBuild()
 cmake.run()
 
-setup(name='triton-kernels-benchmark', packages=[
+setup(name="triton-kernels-benchmark", packages=[
     "triton_kernels_benchmark",
 ], package_dir={
     "triton_kernels_benchmark": "triton_kernels_benchmark",

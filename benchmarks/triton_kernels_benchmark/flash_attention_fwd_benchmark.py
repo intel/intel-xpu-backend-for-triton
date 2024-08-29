@@ -117,7 +117,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
     # initialize pointer to m and l
-    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
+    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=tl.float32)
     # load scales
@@ -202,11 +202,11 @@ def forward(q, k, v, causal, sm_scale):
         # possible values for `line_arg``
         line_vals=['triton', 'xetla'],
         # label name for the lines
-        line_names=["Triton", "XeTLA"],
+        line_names=['Triton', 'XeTLA'],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel=["GB/s", "TFlops"],  # label name for the y-axis
-        plot_name="attn-performance",
+        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
+        plot_name='attn-performance',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
@@ -229,18 +229,18 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
         torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(
             q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=sm_scale).to(torch.float32)
         atol = 1e-1 if N_CTX == 16384 else 1e-2
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg="triton to torch")
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
                                                               fast_flush=False)
 
     elif provider == 'xetla':
-        func = getattr(xetla_kernel, "flash_attn")
+        func = getattr(xetla_kernel, 'flash_attn')
         xetla_fn = lambda: func(Z, H, D_HEAD, N_CTX, N_CTX)
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
                                                               fast_flush=False)
 
     else:
-        raise NotImplementedError(f"Unsupported provider {provider}")
+        raise NotImplementedError(f'Unsupported provider {provider}')
 
     tflops = lambda mean: 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12) / (mean * 1e-3)
     gbps = lambda mean: Z * H * (N_CTX * D_HEAD + N_CTX * D_HEAD) * 2 * 2 * (1e-9) / (mean * 1e-3)
@@ -248,5 +248,5 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     benchmark.run(show_plots=False, print_data=True)
