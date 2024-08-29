@@ -876,7 +876,7 @@ struct TritonRaiseBlockPointer
     // `stride_ak`. The corrected offsets then become: [0, off] Limitations:
     //     - this approach based on pattern matching + user code assumptions is
     //     (very) fragile.
-    //       if user code does not directlu mulitply the offset by the stride
+    //       if user code does not directly multiply the offset by the stride
     //       value identified by the pass, the analysis will fail.
     //     - in theory, this correction support should fail if the analyse
     //     cannot reach a certain level of certainty.
