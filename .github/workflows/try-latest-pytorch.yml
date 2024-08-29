@@ -50,7 +50,7 @@ jobs:
           cat <<EOF
           ${{ toJSON(inputs) }}
           EOF
-        
+
       - name: Get latest upstream Pytorch ref
         id: pytorch-commit-id
         run: |
