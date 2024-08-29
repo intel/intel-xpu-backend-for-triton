@@ -195,6 +195,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
 
   // CHECK: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
+  // CHECK: llvm.func spir_funccc @_Z22get_sub_group_local_idv() -> i32
 
   // CHECK-LABEL: llvm.func spir_kernelcc @broadcast(
   // CHECK-SAME:                                     [[VAL_0:%.*]]: f32) -> vector<16xf32>
@@ -207,6 +208,22 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>> -> tensor<16x1xf32, #warp>
     %2 = tt.broadcast %1 : tensor<16x1xf32, #warp> -> tensor<16x16xf32>
     tt.return %2 : tensor<16x16xf32>
+  }
+
+  // CHECK-LABEL: llvm.func spir_kernelcc @broadcast_range() -> vector<16xi32>
+  tt.func public @broadcast_range() -> tensor<16x16xi32> {
+    // CHECK: [[LAST_CONST:%.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK: [[RANGE:%.*]] = llvm.insertelement [[LAST_CONST]], {{%.*}}[[[LAST_CONST]] : i32] : vector<16xi32>
+    // CHECK: [[LANE_ID:%.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_idv()
+    // CHECK: [[EXTRACT:%.*]] = llvm.extractelement [[RANGE]][[[LANE_ID]] : i32] : vector<16xi32>
+    // CHECK: [[EMPTY:%.*]] = llvm.mlir.poison : vector<1xi32>
+    // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[VEC:%.*]] = llvm.insertelement [[EXTRACT]], [[EMPTY]][[[ZERO]] : i32] : vector<1xi32>
+    // CHECK: llvm.shufflevector [[VEC]], [[EMPTY]] [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] : vector<1xi32>
+    %0 = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>> -> tensor<1x16xi32, #warp>
+    %2 = tt.broadcast %1 : tensor<1x16xi32, #warp> -> tensor<16x16xi32>
+    tt.return %2 : tensor<16x16xi32>
   }
 
   // CHECK-LABEL: llvm.func spir_kernelcc @addptr(

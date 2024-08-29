@@ -17,7 +17,8 @@ void populateArithOpsToLLVMPatterns(
 
 void populateTritonOpsToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit);
+    RewritePatternSet &patterns, PatternBenefit benefit,
+    bool isAdvancedPathEnabled);
 
 void populateBarrierOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
