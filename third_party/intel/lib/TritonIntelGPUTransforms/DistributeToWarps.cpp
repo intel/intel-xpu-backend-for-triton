@@ -198,7 +198,7 @@ void distributeGenericOp(Operation *op) {
 }
 
 void distributeMakeRangeOp(tt::MakeRangeOp op, Value warpId) {
-  assert(op.getStart() == 0 && "Non-zero-based ranges NYI");
+  assert(op.getStart() == 0 && "Expected zero-based range");
 
   auto loc = op.getLoc();
   OpBuilder b(op);
