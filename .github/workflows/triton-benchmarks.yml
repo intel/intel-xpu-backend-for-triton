@@ -3,6 +3,14 @@ name: Triton benchmarks
 on:
   workflow_dispatch:
     inputs:
+      install_ipex:
+        description: Install Intel PyTorch Extension
+        type: boolean
+        default: false
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -49,11 +57,27 @@ jobs:
         run: |
           pip install wheel
 
-      - name: Setup PyTorch
+      - name: Setup PyTorch with IPEX
+        if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
+        with:
+          repository: Stonepia/pytorch
+          ref: ${{ inputs.pytorch_ref }}
+
+      - name: Setup PyTorch without IPEX
+        if: ${{ !inputs.install_ipex }}
+        uses: ./.github/actions/setup-pytorch
+        with:
+          repository: pytorch/pytorch
+          ref: ${{ inputs.pytorch_ref }}
 
       - name: Setup IPEX
+        if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-ipex
+
+      - name: Setup no-op IPEX
+        if: ${{ !inputs.install_ipex }}
+        uses: ./.github/actions/setup-no-op-ipex
 
       - name: Build Triton wheels
         uses: ./.github/actions/setup-triton
