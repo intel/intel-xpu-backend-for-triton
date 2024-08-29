@@ -299,6 +299,13 @@ public:
                                     op->getResultTypes().end());
       types.append(resultTypes);
 
+      if (auto mr = dyn_cast<tt::MakeRangeOp>(op)) {
+        // FIXME: MakeRange's rank-1 tensors are not candidates in the original
+        // sense of the advance path, but we need to split them here anyways.
+        transformMakeRangeOp(mr);
+        return WalkResult::advance();
+      }
+
       if (llvm::none_of(types, [this](Type type) { return isCandidate(type); }))
         return WalkResult::advance();
       if (isa<scf::ForOp, scf::YieldOp>(op))
@@ -375,6 +382,7 @@ private:
   void transformDotOp(tt::DotOp dot);
   void transformReduceOp(tt::ReduceOp op);
   void transformBroadcastOp(tt::BroadcastOp op);
+  void transformMakeRangeOp(tt::MakeRangeOp op);
 
   /// Generic transformation.
   void transformGenericOp(Operation *op);
@@ -742,6 +750,10 @@ MatchTargetSizePass::getSubTypeAndShape(Type type, bool isTransposed,
     if (useSLM) {
       subSize[0] = 16;
       subSize[1] = 64;
+    } else {
+      // Never exceed the shape of the original type.
+      subSize[0] = std::min(subSize[0], shape[0]);
+      subSize[1] = std::min(subSize[1], shape[1]);
     }
 
     auto subType = RankedTensorType::get(
@@ -1003,14 +1015,17 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
   RankedTensorType srcType = op.getSrc().getType();
   unsigned srcDim0 = srcType.getShape()[0];
   unsigned dstDim0 = tType.getShape()[0];
+  unsigned resDim0 = resType.getShape()[0];
+  unsigned srcDim1 = srcType.getShape()[1];
+  unsigned dstDim1 = tType.getShape()[1];
+  unsigned resDim1 = resType.getShape()[1];
   Operation *glue;
   if (srcDim0 == dstDim0) {
     Value newOp = b.create<ttgi::BroadcastOp>(loc, tType, op.getSrc());
     unsigned num = resType.getShape()[1] / tType.getShape()[1];
     SmallVector<Value> ops(num, newOp);
     glue = b.create<ttgi::GlueOp>(loc, resType, ops);
-  } else {
-    assert(srcDim0 == 2 * dstDim0 && "add more support");
+  } else if (srcDim0 == 2 * dstDim0) {
     auto newTy = RankedTensorType::get({srcDim0, tType.getShape()[1]},
                                        tType.getElementType());
     auto newOp = b.create<ttgi::BroadcastOp>(loc, newTy, op.getSrc());
@@ -1019,12 +1034,73 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
     SmallVector<Value> ops{extract0, extract1, extract0, extract1,
                            extract0, extract1, extract0, extract1};
     glue = b.create<ttgi::GlueOp>(loc, resType, ops);
+  } else if (srcDim0 == 1 && srcDim1 == resDim1) {
+    // Handle row-vector broadcasts, e.g. 1x64 --> 16x64.
+    auto subRowVecTy =
+        RankedTensorType::get({1, tType.getShape()[1]}, tType.getElementType());
+
+    // How many extracts do we need to cover the width of the input tensor?
+    unsigned nExtracts = srcDim1 / dstDim1;
+    SmallVector<Value> subBroadcasts;
+    for (int i = 0; i < nExtracts; ++i) {
+      auto ext = b.create<ttgi::ExtractOp>(loc, subRowVecTy, op.getSrc(), i);
+      auto sbc = b.create<tt::BroadcastOp>(loc, tType, ext);
+      subBroadcasts.push_back(sbc);
+    }
+
+    // How often do we need to repeat a sub broadcast to cover the height of the
+    // result tensor?
+    unsigned nRepeats = resDim0 / dstDim0;
+    SmallVector<Value> ops;
+    for (int i = 0; i < nRepeats * nExtracts; ++i)
+      ops.push_back(subBroadcasts[i / nRepeats]);
+
+    glue = b.create<ttgi::GlueOp>(loc, resType, ops);
+  } else {
+    llvm::report_fatal_error("Unhandled broadcast");
   }
 
   op->replaceAllUsesWith(glue->getResults());
   op->erase();
 
   return;
+}
+
+void MatchTargetSizePass::transformMakeRangeOp(tt::MakeRangeOp op) {
+  constexpr unsigned subgroupSize = 16;
+  unsigned start = op.getStart();
+  unsigned end = op.getEnd();
+  assert(start == 0 && end % subgroupSize == 0 && "Unsupported range");
+
+  if (end == subgroupSize)
+    // nothing to do
+    return;
+
+  // Transform the range like this: (SG = subgroup size = 16)
+  // makeRange(0, N) = glue(
+  //   splat(0 * SG) + makeRange(0, SG),
+  //   splat(1 * SG) + makeRange(0, SG),
+  //   ...
+  //   splat((N/SG-1) * SG) + makeRange(0, SG)
+  // )
+
+  OpBuilder b(op);
+  auto loc = op.getLoc();
+  auto origTy = op.getType();
+  auto elemTy = origTy.getElementType();
+  auto subRangeTy =
+      RankedTensorType::get({subgroupSize}, elemTy, origTy.getEncoding());
+  auto subRange = b.create<tt::MakeRangeOp>(loc, subRangeTy, 0, subgroupSize);
+  SmallVector<Value> subRanges;
+  for (int i = 0; i < end / subgroupSize; ++i) {
+    Value offset =
+        b.create<arith::ConstantIntOp>(loc, i * subgroupSize, elemTy);
+    Value offsetTensor = b.create<tt::SplatOp>(loc, subRangeTy, offset);
+    subRanges.push_back(b.create<arith::AddIOp>(loc, subRange, offsetTensor));
+  }
+  auto glue = b.create<ttgi::GlueOp>(loc, op.getType(), subRanges);
+  op.replaceAllUsesWith(glue->getResults()[0]);
+  op->erase();
 }
 
 void MatchTargetSizePass::transformGenericOp(Operation *op) {
