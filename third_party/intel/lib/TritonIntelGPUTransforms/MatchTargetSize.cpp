@@ -1085,9 +1085,9 @@ void MatchTargetSizePass::transformMakeRangeOp(tt::MakeRangeOp op) {
   // )
 
   OpBuilder b(op);
-  auto loc = op.getLoc();
-  auto origTy = op.getType();
-  auto elemTy = origTy.getElementType();
+  Location loc = op.getLoc();
+  RankedTensorType origTy = op.getType();
+  Type elemTy = origTy.getElementType();
   auto subRangeTy =
       RankedTensorType::get({subgroupSize}, elemTy, origTy.getEncoding());
   auto subRange = b.create<tt::MakeRangeOp>(loc, subRangeTy, 0, subgroupSize);
