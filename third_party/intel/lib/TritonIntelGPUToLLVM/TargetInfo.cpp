@@ -183,9 +183,9 @@ void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');
   msgNewline.push_back('\0');
-  Value msgValue =
-      LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
-                              "printfFormat_", msgNewline);
+  Value msgValue = LLVM::intel::addStringToModule(
+      UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
+      msgNewline, /*AddressSpace*/ TritonGEN::kUniformConstant);
   printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
 }
 
