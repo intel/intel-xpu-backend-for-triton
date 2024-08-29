@@ -441,14 +441,13 @@ private:
     Value poison = rewriter.create<LLVM::PoisonOp>(loc, dstType);
 
     auto enumeratedOperands = llvm::enumerate(operands);
-    return std::accumulate(
-        std::begin(enumeratedOperands), std::end(enumeratedOperands), poison,
-        [&rewriter, loc](Value acc, const auto &pair) {
-          auto [index, operand] = pair;
-          Value idx = rewriter.create<LLVM::ConstantOp>(
-              loc, rewriter.getI32Type(), index);
-          return rewriter.create<LLVM::InsertElementOp>(loc, acc, operand, idx);
-        });
+    return std::accumulate(std::begin(enumeratedOperands),
+                           std::end(enumeratedOperands), poison,
+                           [&rewriter, loc](Value acc, const auto &pair) {
+                             auto [index, operand] = pair;
+                             Value idx = i32_val(index);
+                             return insert_element(acc, operand, idx);
+                           });
   }
 };
 
