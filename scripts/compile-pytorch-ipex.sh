@@ -83,6 +83,16 @@ if [ "$UPSTREAM_PYTORCH" = true ] && [ "$BUILD_IPEX" = true ]; then
   exit 1
 fi
 
+if [ "$BUILD_PYTORCH" = false ] && [ "$UPSTREAM_PYTORCH" = false ]; then
+  echo "***** Use upstream pytorch by the default *****"
+  UPSTREAM_PYTORCH=true
+fi
+
+if [ "$BUILD_PINNED" = false ] && [ "$BUILD_FROM_SOURCE" = false ]; then
+  echo "***** Use pinned pytorch by the default *****"
+  BUILD_PINNED=true
+fi
+
 if [ ! -v BASE ]; then
   echo "**** BASE is not given *****"
   BASE=$ROOT/.scripts_cache
@@ -165,8 +175,14 @@ if [ "$BUILD_PINNED" = true ]; then
       echo "**** IPEX is already installed and its current commit is equal to the pinned commit: $IPEX_PINNED_COMMIT. ****"
       BUILD_IPEX=false
     else
-      echo "**** Current IPEX commit $IPEX_CURRENT_COMMIT ****"
-      echo "**** Pinned IPEX commit $IPEX_PINNED_COMMIT ****"
+      IPEX_CURRENT_COMMIT=${IPEX_CURRENT_COMMIT#*"git"}
+      if [[ $IPEX_PINNED_COMMIT = $IPEX_CURRENT_COMMIT* ]]; then
+        echo "**** IPEX is already installed and its current commit is equal to the pinned commit: $IPEX_PINNED_COMMIT. ****"
+        BUILD_IPEX=false
+      else
+        echo "**** Current IPEX commit $IPEX_CURRENT_COMMIT ****"
+        echo "**** Pinned IPEX commit $IPEX_PINNED_COMMIT ****"
+      fi
     fi
   fi
 
@@ -183,22 +199,29 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
   fi
 fi
 
-if [ "$BUILD_PINNED" = false ]; then
-  echo "**** Since '--pinned' option is not used, enable building from source. ****"
-  BUILD_FROM_SOURCE=true
-fi
-
 if [ "$BUILD_FROM_SOURCE" = false ]; then
-  echo "**** Install PyTorch and IPEX from nightly builds. ****"
+  echo "**** Download nightly builds. ****"
   PYTHON_VERSION=$( python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" )
   RUN_ID=$(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
   TEMP_DIR=$(mktemp -d)
+  WHEEL_PATTERN="wheels-py${PYTHON_VERSION}*"
+  if [ "$UPSTREAM_PYTORCH" = true ]; then
+    WHEEL_PATTERN="wheels-pytorch-py${PYTHON_VERSION}*"
+  fi
   gh run download $RUN_ID \
     --repo intel/intel-xpu-backend-for-triton \
-    --pattern "wheels-py${PYTHON_VERSION}*" \
+    --pattern "$WHEEL_PATTERN" \
     --dir $TEMP_DIR
-  cd $TEMP_DIR/wheels-py${PYTHON_VERSION}*
-  pip install torch-* intel_extension_for_pytorch-*
+  cd $TEMP_DIR/$WHEEL_PATTERN
+  echo "**** Install PyTorch from nightly builds. ****"
+  pip install torch-*
+  if [ "$NO_OP_IPEX" = true ]; then
+    echo "**** Setup no-op IPEX ****"
+    python $SCRIPTS_DIR/create-noop-ipex.py
+  else
+    echo "**** Install IPEX from nightly builds. ****"
+    pip install intel_extension_for_pytorch-*
+  fi
   rm -r $TEMP_DIR
   exit 0
 fi

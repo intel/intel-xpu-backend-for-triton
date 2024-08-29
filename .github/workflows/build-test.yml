@@ -16,7 +16,7 @@ on:
         # corresponding repository. If not specified, a default (pinned) version will be used.
         description: Install Intel PyTorch Extension
         type: boolean
-        default: true
+        default: false
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
@@ -128,7 +128,7 @@ jobs:
     with:
       driver_version: ${{ matrix.driver }}
       runner_label: ${{ inputs.runner_label }}
-      install_ipex: ${{ inputs.install_ipex || github.event_name == 'pull_request' || github.event_name == 'push' }}
+      install_ipex: ${{ inputs.install_ipex || false }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports || false }}
