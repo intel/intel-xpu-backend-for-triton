@@ -251,7 +251,7 @@ run_benchmark_softmax() {
   echo "****************************************************"
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
-  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/key_benchmarks
   if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
     echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
   fi
@@ -263,7 +263,7 @@ run_benchmark_gemm() {
   echo "****************************************************"
   echo "*****              Running GEMM                *****"
   echo "****************************************************"
-  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/key_benchmarks
   if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
     echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
   fi
@@ -287,7 +287,7 @@ run_benchmark_attention() {
   echo "****************************************************"
   echo "*****            Running ATTENTION             *****"
   echo "****************************************************"
-  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/key_benchmarks
   if [ ! -d "${BENCHMARK_TEST_DIR}" ]; then
     echo "Not found '${BENCHMARK_TEST_DIR}'." ; exit 5
   fi

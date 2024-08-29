@@ -106,7 +106,7 @@ jobs:
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          cd benchmarks/triton_kernels_benchmark
+          cd benchmarks/key_benchmarks
           python fused_softmax.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}
@@ -116,7 +116,7 @@ jobs:
       - name: Run Triton GEMM kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          cd benchmarks/triton_kernels_benchmark
+          cd benchmarks/key_benchmarks
           python gemm_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}
@@ -126,7 +126,7 @@ jobs:
       - name: Run Triton GEMM kernel benchmark - default path
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          cd benchmarks/triton_kernels_benchmark
+          cd benchmarks/key_benchmarks
           # Default path:
           TRITON_INTEL_ADVANCED_PATH=0 \
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
@@ -141,7 +141,7 @@ jobs:
       - name: Run Triton GEMM kernel benchmark - advanced path
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          cd benchmarks/triton_kernels_benchmark
+          cd benchmarks/key_benchmarks
           # Advanced path:
           TRITON_INTEL_ADVANCED_PATH=1 \
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
@@ -156,7 +156,7 @@ jobs:
       - name: Run Triton FA kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          cd benchmarks/triton_kernels_benchmark
+          cd benchmarks/key_benchmarks
           python flash_attention_fwd_benchmark.py --reports $REPORTS
 
           TAG=${{ inputs.tag || 'ci' }}
@@ -167,7 +167,7 @@ jobs:
       - name: Run Triton FA kernel benchmark - default path
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          cd benchmarks/triton_kernels_benchmark
+          cd benchmarks/key_benchmarks
           TRITON_INTEL_ADVANCED_PATH=0 \
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
