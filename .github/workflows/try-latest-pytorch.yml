@@ -54,7 +54,13 @@ jobs:
       - name: Get latest upstream Pytorch ref
         id: pytorch-commit-id
         run: |
-          echo "pytorch_upstream_ref=$(git ls-remote https://github.com/pytorch/pytorch refs/heads/${{ inputs.pytorch_ref }} | awk '{print $1}')" | tee -a $GITHUB_OUTPUT
+          echo "PyTorch ref: ${{ inputs.pytorch_ref }}"
+          if [[ "${{ inputs.pytorch_ref }}" == "" ]]; then
+            PYTORCH_REF="main"
+          else
+            PYTORCH_REF="${{ inputs.pytorch_ref }}"
+          fi          
+          echo "pytorch_upstream_ref=$(git ls-remote https://github.com/pytorch/pytorch refs/heads/"${PYTORCH_REF}" | awk '{print $1}')" | tee -a $GITHUB_OUTPUT
 
 
       - name: Matrix
