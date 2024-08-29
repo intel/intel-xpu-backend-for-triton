@@ -40,40 +40,10 @@ class ArithConstantOpLowering
     return success();
   }
 };
-
-// FIXME: This optimization should be done in IGC.
-class ArithDivFOpLowering
-    : public ConvertTritonGPUOpToLLVMPattern<mlir::arith::DivFOp> {
-  using ConvertTritonGPUOpToLLVMPattern<
-      mlir::arith::DivFOp>::ConvertTritonGPUOpToLLVMPattern;
-  LogicalResult
-  matchAndRewrite(mlir::arith::DivFOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto srcType = dyn_cast<ShapedType>(op.getType());
-    if (!srcType)
-      return failure();
-
-    Type dstType = getTypeConverter()->convertType(srcType);
-    if (!dyn_cast_or_null<VectorType>(dstType))
-      return failure();
-
-    Location loc = op->getLoc();
-    auto vecType = cast<VectorType>(dstType);
-    auto attr = rewriter.getFloatAttr(vecType.getElementType(), 1.0);
-    auto dstAttr = DenseElementsAttr::get(vecType, attr.getValue());
-    auto one = rewriter.create<LLVM::ConstantOp>(loc, dstType, dstAttr);
-    auto rcp =
-        rewriter.create<LLVM::FDivOp>(loc, dstType, one, adaptor.getRhs());
-    rewriter.replaceOpWithNewOp<LLVM::FMulOp>(op, dstType, adaptor.getLhs(),
-                                              rcp);
-    return success();
-  }
-};
 } // namespace
 
 void mlir::triton::intel::populateArithOpsToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<ArithConstantOpLowering>(typeConverter, benefit);
-  patterns.add<ArithDivFOpLowering>(typeConverter, benefit);
 }
