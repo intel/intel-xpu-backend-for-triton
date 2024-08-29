@@ -52,6 +52,9 @@ llvm.func @gen_special_regs() -> i32 {
   // CHECK: llvm.call spir_funccc @_Z16get_sub_group_idv() {{.*}} : () -> i32
   %13 = triton_gen.subgroup.id : i32
 
+  // CHECK: llvm.call spir_funccc @_Z22get_sub_group_local_idv() {{.*}} : () -> i32
+  %14 = triton_gen.subgroup.local.id : i32
+
   llvm.return %1 : i32
 }
 
