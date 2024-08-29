@@ -374,19 +374,19 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 
     // CHECK: %[[MR1:.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
     %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
-    
+
     // CHECK: %[[MR2:.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
     // CHECK: %[[MR2_PLUS_16:.*]] = arith.addi %[[MR2]], %[[CST_16]] : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
     // CHECK: %[[MR2_PLUS_32:.*]] = arith.addi %[[MR2]], %[[CST_32]] : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
     // CHECK: %[[MR2_PLUS_48:.*]] = arith.addi %[[MR2]], %[[CST_48]] : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
     // CHECK: %[[GLUE:.*]] = triton_intel_gpu.glue %[[MR2]], %[[MR2_PLUS_16]], %[[MR2_PLUS_32]], %[[MR2_PLUS_48]] : (tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>, tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>, tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>, tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>) -> tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
     %1 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
-    
+
     // CHECK: %[[ED1:.*]] = tt.expand_dims %[[MR1]] {axis = 1 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #warp}>> -> tensor<16x1xi32, #warp>
     // CHECK: %[[ED2:.*]] = tt.expand_dims %[[GLUE]] {axis = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>> -> tensor<1x64xi32, #warp>
     %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #warp}>> -> tensor<16x1xi32, #warp>
     %3 = tt.expand_dims %1 {axis = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>> -> tensor<1x64xi32, #warp>
-    
+
     // CHECK: %[[BC1:.*]] = triton_intel_gpu.broadcast %[[ED1]] : tensor<16x1xi32, #warp> -> tensor<16x16xi32>
     %4 = tt.broadcast %2 : tensor<16x1xi32, #warp> -> tensor<16x64xi32, #warp>
 
