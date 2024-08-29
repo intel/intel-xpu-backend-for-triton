@@ -878,7 +878,7 @@ struct TritonRaiseBlockPointer
     //     (very) fragile.
     //       if user code does not directly multiply the offset by the stride
     //       value identified by the pass, the analysis will fail.
-    //     - in theory, this correction support should fail if the analyse
+    //     - in theory, this correction support should fail if the analysis
     //     cannot reach a certain level of certainty.
     //       Typically, if stride values are the same (e.g. [512, 512]), the
     //       support is unable to determine the right axis and will not correct
