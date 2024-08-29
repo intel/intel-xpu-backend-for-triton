@@ -1,4 +1,4 @@
-name: Try against upstream PyTorch
+name: Try latest PyTorch
 run-name: ${{ inputs.run_name }}
 
 on:
