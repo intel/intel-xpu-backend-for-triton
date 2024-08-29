@@ -59,7 +59,7 @@ jobs:
             PYTORCH_REF="main"
           else
             PYTORCH_REF="${{ inputs.pytorch_ref }}"
-          fi          
+          fi
           echo "pytorch_upstream_ref=$(git ls-remote https://github.com/pytorch/pytorch refs/heads/"${PYTORCH_REF}" | awk '{print $1}')" | tee -a $GITHUB_OUTPUT
 
 
