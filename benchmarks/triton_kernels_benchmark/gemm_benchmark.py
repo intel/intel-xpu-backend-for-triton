@@ -14,7 +14,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
-import triton_kernels_benchmark.xetla_kernel as xetla_kernel
+from triton_kernels_benchmark import xetla_kernel  # pylint: disable=no-name-in-module
 
 
 @triton.autotune(
@@ -67,7 +67,7 @@ def matmul_kernel_with_block_pointers(
                                     order=(1, 0))
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in range(0, K, BLOCK_SIZE_K):
+    for _ in range(0, K, BLOCK_SIZE_K):
         a = tl.load(a_block_ptr, boundary_check=(0, 1))
         b = tl.load(b_block_ptr, boundary_check=(0, 1))
         accumulator += tl.dot(a, b)
@@ -81,6 +81,7 @@ def matmul_kernel_with_block_pointers(
     tl.store(c_block_ptr, c, boundary_check=(0, 1))
 
 
+# pylint: disable=unused-argument
 @triton.autotune(
     configs=[
         triton.Config(
@@ -138,7 +139,7 @@ def matmul_kernel_with_block_pointers_batched(
                                     order=(1, 0))
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in range(0, K, BLOCK_SIZE_K):
+    for _ in range(0, K, BLOCK_SIZE_K):
         a = tl.load(a_block_ptr, boundary_check=(0, 1))
         b = tl.load(b_block_ptr, boundary_check=(0, 1))
         accumulator += tl.dot(a, b)
@@ -248,16 +249,16 @@ def benchmark(B, M, N, K, provider):
     quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        median_ms, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
-                                                                         quantiles=quantiles, fast_flush=False)
-    if provider == 'triton':
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
+                                                                 quantiles=quantiles, fast_flush=False)
+    elif provider == 'triton':
         triton_fn = lambda: matmul(a, b)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg="triton to torch")
-        median_ms, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10,
-                                                                         quantiles=quantiles, fast_flush=False)
-    if provider == 'xetla':
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                                 fast_flush=False)
+    elif provider == 'xetla':
         if B == 1:
             c = torch.empty((M, N), device='xpu', dtype=torch.float32)
             acc = torch.empty((M, N), device='xpu', dtype=torch.float32)
@@ -266,13 +267,15 @@ def benchmark(B, M, N, K, provider):
             c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
             acc = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
             cnt = torch.empty((B, M, N), device='xpu', dtype=torch.int32)
-        name = "gemm_shape_{}_{}_{}_{}".format(B, M, K, N)
+        name = f"gemm_shape_{B}_{M}_{K}_{N}"
         func = getattr(xetla_kernel, name)
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg="xetla to torch")
-        median_ms, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10,
-                                                                         quantiles=quantiles, fast_flush=False)
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                                 fast_flush=False)
+    else:
+        raise NotImplementedError(f"Unsupported provider {provider}")
 
     tflops = lambda ms: 2 * B * M * N * K * (1e-12) / (ms * 1e-3)
     gbps = lambda ms: B * (2 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (ms * 1e-3)
