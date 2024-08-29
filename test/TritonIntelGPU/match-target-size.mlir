@@ -367,7 +367,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
   tt.func public @_attn_fwd(%arg0: i32, %arg1: !tt.ptr<i32>) {
     // COM: This op primes the map of known layouts
     %cst = arith.constant dense<1> : tensor<16x64xi32, #warp>
-    
+
     // CHECK: %[[CST_48:.*]] = arith.constant dense<48> : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
     // CHECK: %[[CST_32:.*]] = arith.constant dense<32> : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
     // CHECK: %[[CST_16:.*]] = arith.constant dense<16> : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
