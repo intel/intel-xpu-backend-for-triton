@@ -514,6 +514,13 @@ public:
 
     // Replace uses of the original loop results with the new loop results.
     userIndexMap.clear();
+
+    // If a results is used by another scf.for loop, we re-glue the individual
+    // results together to allow canonicalization of the dependent loop, too.
+    llvm::SmallDenseMap<OpResult, Value> reglueMap;
+
+    rewriter.setInsertionPointAfter(newForOp);
+
     idx = 0;
     for (auto [result, init] :
          llvm::zip(forOp.getResults(), forOp.getInits())) {
@@ -524,11 +531,25 @@ public:
       }
 
       auto glue = cast<ttgi::GlueOp>(definingOp);
-      for (Operation *user : result.getUsers()) {
-        if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
+      if (llvm::all_of(result.getUsers(),
+                       [](auto *user) { return isa<ttgi::ExtractOp>(user); })) {
+        for (Operation *user : result.getUsers()) {
+          auto extract = cast<ttgi::ExtractOp>(user);
           userIndexMap[extract] = idx + extract.getIndex();
           deleteList.push_back(extract.getOperation());
         }
+      } else if (llvm::all_of(result.getUsers(), [](auto *user) {
+                   return isa<scf::ForOp>(user);
+                 })) {
+        // We have encountered a glued operand (and already split its uses
+        // within this loop), but the corresponding result's user(s) are
+        // dependent loops, not extracts. Hence, we have to re-glue the results.
+        auto reglue = rewriter.create<ttgi::GlueOp>(
+            forOp->getLoc(), result.getType(),
+            newForOp->getResults().slice(idx, glue.getOperands().size()));
+        reglueMap[result] = reglue;
+      } else {
+        llvm::report_fatal_error("Unexpected users of loop result");
       }
 
       idx += glue->getOperands().size();
@@ -536,6 +557,9 @@ public:
 
     for (auto [user, idx] : userIndexMap)
       user.replaceAllUsesWith(newForOp.getResults()[idx]);
+
+    for (auto [res, glue] : reglueMap)
+      res.replaceAllUsesWith(glue);
 
     for (Operation *deleteOp : deleteList)
       rewriter.eraseOp(deleteOp);
@@ -567,10 +591,11 @@ public:
         return false;
     }
 
-    // Bail out if the loop result is not used by an 'extract' operation.
+    // Bail out if the loop result is not used by an 'extract' operation, or
+    // another loop.
     if (forOp->getNumResults() == 1 &&
         llvm::any_of(forOp.getResult(0).getUsers(), [](Operation *user) {
-          return !isa<ttgi::ExtractOp>(user);
+          return !isa<ttgi::ExtractOp, scf::ForOp>(user);
         }))
       return false;
 
