@@ -47,8 +47,8 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 33792 
     %27 = arith.cmpi slt, %23, %arg5 : i64
     cf.cond_br %27, ^bb2, ^bb3
   ^bb2:
-    %28 = tt.load %25 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x16xf16, #dot0>>
-    %29 = tt.load %26 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x8xf16, #dot1>>
+    %28 = tt.load %25 {boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<8x16xf16, #dot0>>
+    %29 = tt.load %26 {boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<16x8xf16, #dot1>>
     %30 = tt.dot %28, %29, %24, inputPrecision = tf32 : tensor<8x16xf16, #dot0> * tensor<16x8xf16, #dot1> -> tensor<8x8xf32, #mma>
     %31 = tt.advance %25, [%c0_i32, %c32_i32] : <tensor<8x16xf16, #dot0>>
     %32 = tt.advance %26, [%c32_i32, %c0_i32] : <tensor<16x8xf16, #dot1>>

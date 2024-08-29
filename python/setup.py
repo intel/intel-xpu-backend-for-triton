@@ -659,7 +659,6 @@ setup(
     extras_require={
         "build": [
             "cmake>=3.20",
-            "importlib_metadata",
             "lit",
         ],
         "tests": [
