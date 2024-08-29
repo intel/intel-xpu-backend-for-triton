@@ -200,7 +200,7 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
 fi
 
 if [ "$BUILD_FROM_SOURCE" = false ]; then
-  if [ "$UPSTREAM_PYTORCH" = false ]; then
+  if [ "$UPSTREAM_PYTORCH" = false ] || [ "$NO_OP_IPEX" = false ]; then
       echo "Nightly wheels with IPEX are deprecated, use upstream PyTorch instead."
       exit 1
   fi
@@ -216,13 +216,8 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
   cd $TEMP_DIR/$WHEEL_PATTERN
   echo "**** Install PyTorch from nightly builds. ****"
   pip install torch-*
-  if [ "$NO_OP_IPEX" = true ]; then
-    echo "**** Setup no-op IPEX ****"
-    python $SCRIPTS_DIR/create-noop-ipex.py
-  else
-      echo "Nightly wheels with IPEX are deprecated, use upstream PyTorch instead."
-      exit 1
-  fi
+  echo "**** Setup no-op IPEX ****"
+  python $SCRIPTS_DIR/create-noop-ipex.py
   rm -r $TEMP_DIR
   exit 0
 fi
