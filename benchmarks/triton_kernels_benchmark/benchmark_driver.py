@@ -1,21 +1,21 @@
 import os
 import hashlib
+import importlib.util
 import tempfile
-import sysconfig
-import setuptools
 from pathlib import Path
-from triton.runtime.cache import get_cache_manager
+
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
+from triton.runtime.cache import get_cache_manager
 from triton.runtime.build import _build, quiet
 
 import torch
 import intel_extension_for_pytorch
 
-dirname = os.getenv("ZE_PATH", default="/usr/local")
+_dirname = os.getenv("ZE_PATH", default="/usr/local")
 
 include_dir = [
-    os.path.join(dirname, "include"),
+    os.path.join(_dirname, "include"),
     os.path.join(torch.utils.cmake_prefix_path, "../../include"),
     os.path.join(torch.utils.cmake_prefix_path, "../../include/torch/csrc/api/include"),
     os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../include")
@@ -29,7 +29,7 @@ if oneapi_root:
     ]
 
 library_dir = [
-    os.path.join(dirname, "lib"),
+    os.path.join(_dirname, "lib"),
     os.path.join(torch.utils.cmake_prefix_path, "../../lib"),
     os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../lib")
 ]
@@ -43,13 +43,12 @@ def compile_module_from_src(src, name):
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.cpp")
-            with open(src_path, "w") as f:
+            with open(src_path, "w", encoding="utf-8") as f:
                 f.write(src)
             with quiet():
                 so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
-    import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -61,7 +60,7 @@ def compile_module_from_src(src, name):
 # ------------------------
 
 
-class XPUUtils(object):
+class XPUUtils:
 
     def __new__(cls):
         if not hasattr(cls, "instance"):
@@ -70,7 +69,8 @@ class XPUUtils(object):
 
     def __init__(self):
         dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
+        mod = compile_module_from_src(
+            Path(os.path.join(dirname, "driver.c")).read_text(encoding="utf-8"), "spirv_utils")
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
         self.context = mod.init_context(self.get_sycl_queue())
@@ -80,11 +80,7 @@ class XPUUtils(object):
     def get_current_device(self):
         return self.current_device
 
-    def get_event_pool(self):
-        return self.event_pool
-
     def get_sycl_queue(self):
-        import torch
         return torch.xpu.current_stream().sycl_queue
 
 
@@ -115,7 +111,7 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def make_launcher(constants, signature, ids):
+def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors.
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
@@ -142,7 +138,7 @@ def make_launcher(constants, signature, ids):
         }[ty]
 
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
-    format = "iiiOOOOOO" + args_format
+    fmt = "iiiOOOOOO" + args_format
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
     # generate glue code
@@ -309,7 +305,7 @@ def make_launcher(constants, signature, ids):
       PyObject *py_kernel;
 
       {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
+      if(!PyArg_ParseTuple(args, \"{fmt}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
         return NULL;
@@ -392,11 +388,11 @@ def make_launcher(constants, signature, ids):
     return src
 
 
-class XPULauncher(object):
+class XPULauncher:
 
-    def __init__(self, src, metadata):
+    def __init__(self, src, metadata):  # pylint: disable=unused-argument
         ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
-        constants = src.constants if hasattr(src, "constants") else dict()
+        constants = src.constants if hasattr(src, "constants") else {}
         cst_key = lambda i: src.fn.arg_names.index(i) if isinstance(i, str) else i
         constants = {cst_key(key): value for key, value in constants.items()}
         signature = {cst_key(key): value for key, value in src.signature.items()}
@@ -417,20 +413,17 @@ class XPUDriver(DriverBase):
         # Lazily initialize utils to avoid unnecessary XPU runtime invocations.
         # See https://github.com/intel/intel-xpu-backend-for-triton/issues/624
         if name == "utils":
-            self.utils = XPUUtils()
+            self.utils = XPUUtils()  # pylint: disable=attribute-defined-outside-init
             return self.utils
-        else:
-            raise AttributeError
+        raise AttributeError
 
     def get_current_device(self):
         return self.utils.get_current_device()
 
-    def get_current_stream(self, device):
-        import torch
+    def get_current_stream(self, device):  # pylint: disable=unused-argument
         return torch.xpu.current_stream().sycl_queue
 
     def get_current_target(self):
-        import torch
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
         warp_size = 32
@@ -438,5 +431,4 @@ class XPUDriver(DriverBase):
 
     @staticmethod
     def is_active():
-        import torch
         return torch.xpu.is_available()

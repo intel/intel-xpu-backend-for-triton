@@ -379,3 +379,47 @@ for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float
             print("✅ Triton and Torch match")
         else:
             exit("❌ Triton and Torch differ")
+
+# %%
+# Benchmark
+# ---------
+#
+# Square Matrix Performance
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+# Compare the performance of our kernel against that of the library
+
+ref_lib = 'oneDNN'
+configs = []
+configs.append(
+    triton.testing.Benchmark(
+        x_names=["M", "N", "K"],  # Argument names to use as an x-axis for the plot
+        x_vals=[128 * i for i in range(2, 33)],  # Different possible values for `x_name`
+        line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
+        # Possible values for `line_arg`
+        # Don't compare to cublas for fp8 cases as torch.matmul doesn't support fp8 at the moment.
+        line_vals=[ref_lib.lower(), "triton"],  # Label name for the lines
+        line_names=[ref_lib, "Triton"],  # Line styles
+        styles=[("green", "-"), ("blue", "-")],
+        ylabel="TFLOPS",  # Label name for the y-axis
+        plot_name="matmul-performance-fp16",  # Name for the plot, used also as a file name for saving the plot.
+        args={},
+    ))
+
+
+@triton.testing.perf_report(configs)
+def benchmark(M, N, K, provider):
+    a = torch.randn((M, K), device='xpu', dtype=torch.float16)
+    b = torch.randn((K, N), device='xpu', dtype=torch.float16)
+
+    quantiles = [0.5, 0.2, 0.8]
+    if provider == ref_lib.lower():
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
+    if provider == 'triton':
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b, torch.float32, torch.float16),
+                                                     quantiles=quantiles)
+    perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
+    return perf(ms), perf(max_ms), perf(min_ms)
+
+
+benchmark.run(show_plots=True, print_data=True)

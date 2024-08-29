@@ -1,20 +1,12 @@
-from setuptools import setup
-from setuptools.command.build_clib import build_clib
-from setuptools.command.egg_info import egg_info
-from setuptools import setup, distutils
-from pathlib import Path
-
-import sysconfig
-import distutils.ccompiler
-import distutils.command.clean
 import os
-import glob
-import platform
+import re
 import shutil
 import subprocess
+import sysconfig
 import sys
-import re
-import errno
+
+from setuptools import setup
+
 import torch
 import intel_extension_for_pytorch
 
@@ -29,8 +21,8 @@ class CMakeBuild():
     def run(self):
         try:
             out = subprocess.check_output(["cmake", "--version"])
-        except OSError:
-            raise RuntimeError("CMake must be installed to build the following extensions: ")
+        except OSError as error:
+            raise RuntimeError("CMake must be installed") from error
 
         match = re.search(r"version\s*(?P<major>\d+)\.(?P<minor>\d+)([\d.]+)?", out.decode())
         cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))

@@ -1,5 +1,5 @@
 import torch
-import intel_extension_for_pytorch
+import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
@@ -57,6 +57,8 @@ def benchmark(N, target_type):
         fwd = lambda: launch_conversion(inputs, tl.bfloat16)
     elif target_type == "float16":
         fwd = lambda: launch_conversion(inputs, tl.float16)
+    else:
+        raise NotImplementedError(f'Type {target_type} is not supported')
 
     ms, min_ms, max_ms = triton.testing.do_bench(fwd, quantiles=quantiles)
     gbps = lambda ms: (inputs.numel() * inputs.element_size() * 1e-9) / (ms * 1e-3)

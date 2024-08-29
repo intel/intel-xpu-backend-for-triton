@@ -71,6 +71,72 @@ repos:
       args: ["-c", "bandit.yaml", "-s", "B404,B603,B607"]
       stages: [commit, push, manual]
 
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.3
+    hooks:
+      - id: ruff
+        files: '^(benchmarks|third_party/intel|scripts)/.*'
+        args: ["--fix", "--line-length", "120"]
+        stages: [commit, push, manual]
+
+  - repo: https://github.com/pycqa/pylint
+    rev: v3.2.6
+    hooks:
+      - id: pylint
+        name: pylint for scripts
+        files: '^scripts/.*\.py$'
+        # FIXME: will be deleted soon
+        exclude: '^scripts/create-noop-ipex\.py$'
+        args:
+          # Max line length 120 is consistent with ruff's one in upstream
+          - --max-line-length=120
+          # Disable line-too-long: rely on ruff's check for line length
+          - --disable=line-too-long
+          # Disable import-error: not everything can be imported when pre-commit runs
+          - --disable=import-error
+          # Disable unused-import: ruff has a corresponding check and supports "noqa: F401"
+          - --disable=unused-import
+          # FIXME: revisit these checks later
+          - --disable=missing-module-docstring
+          - --disable=missing-function-docstring
+          - --disable=missing-class-docstring
+          - --disable=duplicate-code
+          - --disable=too-many-locals
+          - --disable=too-many-statements
+          - --disable=too-many-arguments
+        stages: [commit, push, manual]
+
+      - id: pylint
+        name: pylint for benchmarks
+        files: '^benchmarks/.*\.py$'
+        args:
+          # Max line length 120 is consistent with ruff's one in upstream
+          - --max-line-length=120
+          # Disable line-too-long: rely on ruff's check for line length
+          - --disable=line-too-long
+          # Disable import-error: not everything can be imported when pre-commit runs
+          - --disable=import-error
+          # Disable unused-import: ruff has a corresponding check and supports "noqa: F401"
+          - --disable=unused-import
+          # Disable invalid_name: benchmarks use a lot of UPPER_SNAKE arguments
+          - --disable=invalid-name
+          # Disable unnecessary-lambda-assignment: benchmark use a lot of lambda assignments
+          - --disable=unnecessary-lambda-assignment
+          # FIXME: revisit these checks later
+          - --disable=import-outside-toplevel
+          - --disable=too-few-public-methods
+          - --disable=consider-using-generator
+          - --disable=missing-module-docstring
+          - --disable=missing-function-docstring
+          - --disable=missing-class-docstring
+          - --disable=duplicate-code
+          - --disable=too-many-locals
+          - --disable=too-many-statements
+          - --disable=too-many-arguments
+          - --disable=fixme
+        stages: [commit, push, manual]
+
+
 exclude: |
   (?x)(
     ^include/triton/external/|

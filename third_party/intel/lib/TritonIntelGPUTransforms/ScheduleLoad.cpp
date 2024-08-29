@@ -1,4 +1,4 @@
-//===- ScheduleLoad.cpp ----------------------------------------------*-===//
+//===- ScheduleLoad.cpp -------------------------------------------------*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -11,6 +11,7 @@
 /// For now, we put loads adjacent to its user dot.
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -47,6 +48,7 @@ public:
 
     MLIRContext *ctx = &getContext();
     ModuleOp mod = getOperation();
+
     mod.walk<WalkOrder::PreOrder>([&](scf::ForOp loop) {
       visited.clear();
       int group = -1;
@@ -69,9 +71,8 @@ public:
       for (SmallVector<tt::DotOp> &dots : dotsGroup) {
         SmallVector<Value> notVisited = getNotVisitedUses(dots);
         for (Value val : notVisited) {
-          if (Operation *op = val.getDefiningOp()) {
+          if (Operation *op = val.getDefiningOp())
             op->moveBefore(dots.begin()->getOperation());
-          }
         }
       }
     });
@@ -99,12 +100,24 @@ private:
   void markUnvisited(Value val, SmallVector<Value> &notVisited) {
     if (visited.contains(val))
       return;
+
+    bool sinkAcrossRegions =
+        !triton::tools::getBoolEnv("TRITON_INTEL_DO_NOT_SINK_INSTR_ACROSS_RGN");
+
+    auto belongsToRegion = [&](Value val, Region &rgn) {
+      Operation *def = val.getDefiningOp();
+      return (def && def->getParentRegion() == &rgn);
+    };
+
     if (auto load = val.getDefiningOp<tt::LoadOp>()) {
       notVisited.push_back(val);
     } else if (auto extract = val.getDefiningOp<ttgi::ExtractOp>()) {
       Value base = extract.getBase();
-      markUnvisited(base, notVisited);
-      notVisited.push_back(val);
+      if (sinkAcrossRegions ||
+          belongsToRegion(base, *extract->getParentRegion())) {
+        markUnvisited(base, notVisited);
+        notVisited.push_back(val);
+      }
     }
     visited.insert(val);
   }
