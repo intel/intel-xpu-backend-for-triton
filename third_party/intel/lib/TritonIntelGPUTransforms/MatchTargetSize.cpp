@@ -531,14 +531,15 @@ public:
       }
 
       auto glue = cast<ttgi::GlueOp>(definingOp);
-      if (llvm::all_of(result.getUsers(),
-                       [](auto *user) { return isa<ttgi::ExtractOp>(user); })) {
+      if (llvm::all_of(result.getUsers(), [](Operation *user) {
+            return isa<ttgi::ExtractOp>(user);
+          })) {
         for (Operation *user : result.getUsers()) {
           auto extract = cast<ttgi::ExtractOp>(user);
           userIndexMap[extract] = idx + extract.getIndex();
           deleteList.push_back(extract.getOperation());
         }
-      } else if (llvm::all_of(result.getUsers(), [](auto *user) {
+      } else if (llvm::all_of(result.getUsers(), [](Operation *user) {
                    return isa<scf::ForOp>(user);
                  })) {
         // We have encountered a glued operand (and already split its uses
