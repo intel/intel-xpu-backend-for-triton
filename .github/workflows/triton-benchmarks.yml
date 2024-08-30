@@ -75,10 +75,6 @@ jobs:
         if: ${{ inputs.install_ipex }}
         uses: ./.github/actions/setup-ipex
 
-      - name: Setup no-op IPEX
-        if: ${{ !inputs.install_ipex }}
-        uses: ./.github/actions/setup-no-op-ipex
-
       - name: Build Triton wheels
         uses: ./.github/actions/setup-triton
         with:
