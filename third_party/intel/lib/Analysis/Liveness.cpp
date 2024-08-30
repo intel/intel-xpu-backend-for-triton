@@ -14,12 +14,9 @@ raw_ostream &operator<<(raw_ostream &OS, const LiveInterval &LI) {
     case 0:
       OS << op->getName();
       break;
-    case 1:
-      op->getResult(0).printAsOperand(OS, flags);
-      break;
     default:
-      op->print(OS, flags);
-      break;
+      llvm::interleaveComma(op->getResults(), OS,
+                            [&](Value res) { res.printAsOperand(OS, flags); });
     }
   };
 
@@ -43,9 +40,10 @@ void LivenessAnalysis::printLiveIntervals(raw_ostream &OS) const {
 }
 
 LivenessAnalysis::LivenessAnalysis(Operation *op) : mlir::Liveness(op) {
-  assert(getOperation() && !op->getRegions().empty() &&
+  assert(getOperation() && !getOperation()->getRegions().empty() &&
          "root operation should not be null and should contain a region");
-  for (Region &rgn : op->getRegions())
+
+  for (Region &rgn : getOperation()->getRegions())
     for (Block &block : rgn)
       computeLiveIntervals(block);
 }

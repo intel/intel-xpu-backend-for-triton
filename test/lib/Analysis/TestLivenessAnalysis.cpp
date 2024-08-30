@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/Liveness.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Region.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -27,9 +28,12 @@ struct TestLivenessPass
       auto opName = SymbolTable::getSymbolName(func).getValue().str();
       os << opName << "\n";
 
-      func.walk<WalkOrder::PreOrder>([&](scf::ForOp loop) {
-        os << loop->getName() << "\n";
-        auto liveness = triton::gpu::intel::LivenessAnalysis(loop);
+      func.walk<WalkOrder::PreOrder>([&](Operation *op) {
+        if (op->getRegions().empty())
+          return;
+
+        os << op->getName() << "\n";
+        auto liveness = triton::gpu::intel::LivenessAnalysis(op);
         liveness.printLiveIntervals(os);
       });
     });

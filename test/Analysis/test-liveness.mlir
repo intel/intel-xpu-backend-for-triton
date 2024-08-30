@@ -1,8 +1,30 @@
-// RUN: triton-opt %s --mlir-disable-threading --test-liveness 2>&1 | FileCheck %s
+// RUN: triton-opt %s --mlir-disable-threading --test-liveness --split-input-file 2>&1 | FileCheck %s
+
 module attributes {"triton_gpu.num-warps" = 8 : i32} {
-  tt.func public @test1(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>) {
-    // CHECK-LABEL: test1
-    %c48_i32 = arith.constant 48 : i32
+  tt.func public @test(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %cond: i1) {
+    // CHECK-LABEL: test
+    // CHECK: scf.for            
+    // CHECK-NEXT: LiveIntervals for block: ^bb0
+    // CHECK-NEXT:  [[[LOAD_A:%.*]], [[ADVANCE2:%.*]]] for value: %c0_i32
+    // CHECK-NEXT:  [[[LOAD_A]], [[DOT2:%.*]]] for value: %cst
+    // CHECK-NEXT:  [[[LOAD_A]], [[EXTRACT:%.*]]] for value: %16
+    // CHECK-NEXT:  [[[LOAD_A]], %29] for value: %c64_i32
+    // CHECK-NEXT:  [[[LOAD_A]], [[DOT1:%.*]]] for value: %23
+    // CHECK-NEXT:  [[[LOAD_B:%.*]], [[DOT2]]] for value: [[LOAD_B]]
+    // CHECK-NEXT:  [[[EXTRACT]], [[DOT2]]] for value: [[EXTRACT]]
+    // CHECK-NEXT:  [[[DOT1]], scf.yield] for value: [[DOT1]]
+    // CHECK-NEXT:  [[[DOT2]], scf.yield] for value: [[DOT2]]
+    // CHECK-NEXT:  [[[ADVANCE1:%.*]], scf.yield] for value: [[ADVANCE1]]
+    // CHECK-NEXT:  [[[ADVANCE2]], scf.yield] for value: [[ADVANCE2]]
+
+    // CHECK: scf.if
+    // CHECK-NEXT: LiveIntervals for block: ^bb0
+    // CHECK-NEXT:  [[[LOAD1:%.*]], [[LOAD1]]] for value: %arg0
+    // CHECK-NEXT:  [[[LOAD1]], scf.yield] for value: [[LOAD1]]
+    // CHECK-NEXT: LiveIntervals for block: ^bb0
+    // CHECK-NEXT:  [[[LOAD2:%.*]], [[LOAD2]]] for value: %arg1
+    // CHECK-NEXT:  [[[LOAD2]], scf.yield] for value: [[LOAD2]]
+
     %c1024_i32 = arith.constant 1024 : i32
     %c64_i32 = arith.constant 64 : i32
     %c32_i32 = arith.constant 32 : i32
@@ -39,27 +61,14 @@ module attributes {"triton_gpu.num-warps" = 8 : i32} {
     %35 = tt.make_tensor_ptr %28, [%c64_i64, %c1024_i64], [%c1_i64, %c64_i64], [%c0_i32, %c16_i32] {order = array<i32: 0, 1>} : <tensor<16x16xf16>>
     %62:4 = scf.for %arg6 = %c0_i32 to %c1024_i32 step %c64_i32 iter_args(%arg8 = %cst_2, %arg10 = %cst_2, %arg21 = %31, %arg25 = %35)
            -> (tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>) : i32 {
-      // CHECK: LiveIntervals for block: ^bb0
-      // CHECK-NEXT: [%22, %28] for value: %c0_i32
-      // CHECK-NEXT: [%22, %26] for value: %cst
-      // CHECK-NEXT: [%22, %24] for value: %16
-      // CHECK-NEXT: [%22, %28] for value: %c64_i32
-      // CHECK-NEXT: [%22, %25] for value: %22
-      // CHECK-NEXT: [%23, %26] for value: %23
-      // CHECK-NEXT: [%24, %26] for value: %24
-      // CHECK-NEXT: [%25, scf.yield] for value: %25
-      // CHECK-NEXT: [%26, scf.yield] for value: %26
-      // CHECK-NEXT: [%27, scf.yield] for value: %27
-      // CHECK-NEXT: [%28, scf.yield] for value: %28
-
-      // CHECK:      %22 = tt.load %arg5 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
-      // CHECK-NEXT: %23 = tt.load %arg6 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
-      // CHECK-NEXT: %24 = triton_intel_gpu.extract %16[0] : tensor<16x32xf16> -> tensor<8x16xf16>
-      // CHECK-NEXT: %25 = tt.dot %24, %22, %cst, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
-      // CHECK-NEXT: %26 = tt.dot %24, %23, %cst, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
-      // CHECK-NEXT: %27 = tt.advance %arg5, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      // CHECK-NEXT: %28 = tt.advance %arg6, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      // CHECK-NEXT: scf.yield %25, %26, %27, %28 : tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>
+      // CHECK:      [[LOAD_A]] = tt.load %arg6 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
+      // CHECK-NEXT: [[LOAD_B]] = tt.load %arg7 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>      
+      // CHECK-NEXT: [[EXTRACT]] = triton_intel_gpu.extract %16[0] : tensor<16x32xf16> -> tensor<8x16xf16>
+      // CHECK-NEXT: [[DOT1]] = tt.dot [[EXTRACT]], [[LOAD_A]], %cst, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+      // CHECK-NEXT: [[DOT2]] = tt.dot [[EXTRACT]], [[LOAD_B]], %cst, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+      // CHECK-NEXT: [[ADVANCE1]] = tt.advance %arg6, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
+      // CHECK-NEXT: [[ADVANCE2]] = tt.advance %arg7, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
+      // CHECK-NEXT: scf.yield [[DOT1]], [[DOT2]], [[ADVANCE1]], [[ADVANCE2]] : tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>
 
       %75 = tt.load %arg21 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
       %79 = tt.load %arg25 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
@@ -70,6 +79,24 @@ module attributes {"triton_gpu.num-warps" = 8 : i32} {
       %325 = tt.advance %arg25, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
       scf.yield %92, %107, %321, %325 : tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>
     }
+
+    // CHECK: [[IF:%.*]] = scf.if %arg2 -> (f16) {
+    // CHECK-NEXT:   [[LOAD1]] = tt.load %arg0 : !tt.ptr<f16>
+    // CHECK-NEXT:   scf.yield [[LOAD1]] : f16
+    // CHECK-NEXT: } else {
+    // CHECK-NEXT:   [[LOAD2]] = tt.load %arg1 : !tt.ptr<f16>
+    // CHECK-NEXT:   scf.yield [[LOAD2]] : f16
+    // CHECK-NEXT: }
+    // CHECK-NEXT: tt.store %arg0, [[IF]] : !tt.ptr<f16>
+
+    %res = scf.if %cond -> (f16) {
+      %a = tt.load %arg0 : !tt.ptr<f16>
+      scf.yield %a : f16
+    } else {
+      %b = tt.load %arg1 : !tt.ptr<f16>
+      scf.yield %b : f16      
+    }
+    tt.store %arg0, %res : !tt.ptr<f16>
     tt.return
   }
 }
