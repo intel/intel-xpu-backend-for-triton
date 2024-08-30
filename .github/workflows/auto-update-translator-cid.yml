@@ -49,16 +49,11 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Setup PyTorch with IPEX
+      - name: Setup PyTorch
         if: ${{ env.TARGET_PRID == null }}
         uses: ./.github/actions/setup-pytorch
         with:
-          repository: Stonepia/pytorch
-          ref: ""
-
-      - name: Setup IPEX
-        if: ${{ env.TARGET_PRID == null }}
-        uses: ./.github/actions/setup-ipex
+          repository: pytorch/pytorch
 
       - name: Install test dependencies
         if: ${{ env.TARGET_PRID == null }}

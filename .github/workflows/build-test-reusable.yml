@@ -1,5 +1,5 @@
 name: Build and test reusable workflow
-run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.install_ipex && 'IPEX' || 'no IPEX' }} - ${{ inputs.runner_label || 'default'}}
+run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.runner_label || 'default'}}
 
 on:
   workflow_call:
@@ -16,15 +16,6 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
-      install_ipex:
-        # This boolean parameter defines what PyTorch will be used in the workflow:
-        #   true: Stonepia/pytorch (fork) with IPEX
-        #   false: pytorch/pytorch (upstream) without IPX
-        # In both cases, pytorch_ref below allows specifying a branch, tag, or commit id in the
-        # corresponding repository. If not specified, a default (pinned) version will be used.
-        description: Install Intel PyTorch Extension
-        type: boolean
-        default: true
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
@@ -100,27 +91,11 @@ jobs:
         with:
           python-version: ${{ inputs.python_version }}
 
-      - name: Setup PyTorch with IPEX
-        if: ${{ inputs.install_ipex }}
-        uses: ./.github/actions/setup-pytorch
-        with:
-          repository: Stonepia/pytorch
-          ref: ${{ inputs.pytorch_ref }}
-
-      - name: Setup PyTorch without IPEX
-        if: ${{ !inputs.install_ipex }}
+      - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
-
-      - name: Setup IPEX
-        if: ${{ inputs.install_ipex }}
-        uses: ./.github/actions/setup-ipex
-
-      - name: Setup no-op IPEX
-        if: ${{ !inputs.install_ipex }}
-        uses: ./.github/actions/setup-no-op-ipex
 
       - name: Install test dependencies
         run: |
