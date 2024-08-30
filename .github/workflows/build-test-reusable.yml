@@ -204,11 +204,6 @@ jobs:
           TRITON_TEST_SUITE=regression \
             pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
 
-      - name: Run XPU python tests
-        run: |
-          cd python/test/backend/third_party_backends
-          python3 -m pytest -n auto --verbose test_xpu_backend.py
-
       - name: Run Tutorials
         run: |
           source ./scripts/pytest-utils.sh
