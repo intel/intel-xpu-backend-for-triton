@@ -8,6 +8,7 @@ from triton_kernels_benchmark import xetla_kernel  # pylint: disable=no-name-in-
 
 benchmark_suit = triton_kernels_benchmark  # triton.testing
 
+
 # pylint: disable=unused-argument
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #

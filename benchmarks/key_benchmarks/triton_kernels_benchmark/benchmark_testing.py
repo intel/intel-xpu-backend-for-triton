@@ -5,12 +5,13 @@ from typing import Any, Dict, List
 from triton.testing import do_bench as triton_do_bench
 
 
+# pylint: disable=unused-argument
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
              device="xpu", sync_submitting=True):
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
-    times = triton_do_bench(fn, warmup=warmup, rep=rep, grad_to_none=grad_to_none, return_mode="all",
-                            device_type=device)
+    times = triton_do_bench(fn, warmup=warmup, rep=rep, grad_to_none=grad_to_none, fast_flush=fast_flush,
+                            return_mode="all", device_type=device)
     times = torch.tensor(times, dtype=torch.float)
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
