@@ -1,7 +1,7 @@
 # Comparing CI Runs
 
 This script can be used to compare the results of two runs of the
-"Performance E2E" CI workflow.
+"Performance E2E" or "Triton benchmarks" CI workflow.
 
 ## Prerequisites
 
