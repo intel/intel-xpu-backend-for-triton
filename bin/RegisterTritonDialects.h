@@ -38,6 +38,7 @@ namespace test {
 void registerTestAliasPass();
 void registerTestAlignmentPass();
 void registerTestAllocationPass();
+void registerTestLivenessPass();
 void registerTestMembarPass();
 } // namespace test
 } // namespace mlir
@@ -50,6 +51,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
+  mlir::test::registerTestLivenessPass();
   mlir::test::registerTestMembarPass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::intel::registerConvertTritonToTritonGPUWarpPass();
