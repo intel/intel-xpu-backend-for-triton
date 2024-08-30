@@ -205,9 +205,9 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
     BLOCK_SIZE_K = 32
 
     # Check constraints.
-    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
-    assert a.is_contiguous(), "Matrix A must be contiguous"
-    assert b.is_contiguous(), "Matrix B must be contiguous"
+    assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
+    assert a.is_contiguous(), 'Matrix A must be contiguous'
+    assert b.is_contiguous(), 'Matrix B must be contiguous'
     M, K = a.shape
     K, N = b.shape
 
@@ -279,11 +279,11 @@ def benchmark(M, N, K, provider):
     elif provider == 'triton':
         triton_fn = lambda: matmul(a, b)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=1e-2, err_msg="triton to torch")
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=1e-2, err_msg='triton to torch')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
                                                               fast_flush=False)
     else:
-        raise NotImplementedError(f"Unsupported provider {provider}")
+        raise NotImplementedError(f'Unsupported provider {provider}')
 
     tflops = lambda mean: 2 * M * N * K * (1e-12) / (mean * 1e-3)
     gbps = lambda mean: 2 * (M * K + K * N) + 4.0 * (M * N) * (1e-9) / (mean * 1e-3)
