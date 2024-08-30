@@ -5,7 +5,6 @@ import sys
 from collections import Counter
 
 import pytest
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton.runtime as tr
 
