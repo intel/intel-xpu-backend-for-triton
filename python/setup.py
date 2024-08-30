@@ -665,8 +665,6 @@ setup(
             "autopep8",
             "flake8",
             "isort",
-            # FIXME: pytorch<2.3.0 doesn't support numpy 2.0
-            "numpy<2.0",
             "pytest",
             "scipy>=1.7.1",
             "llnl-hatchet",
