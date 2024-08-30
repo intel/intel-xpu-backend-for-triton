@@ -33,7 +33,7 @@ from triton_kernels_benchmark import xetla_kernel  # pylint: disable=no-name-in-
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [3, 4, 5, 6]
+            num_stages=s, num_warps=32) for s in [4, 5]
     ],
     key=['M', 'N', 'K'],
 )
@@ -85,20 +85,16 @@ def matmul_kernel_with_block_pointers(
 @triton.autotune(
     configs=[
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [6, 7]
-    ] + [
-        triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=s, num_warps=32) for s in [4, 5, 6, 7]
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [3, 4, 5, 6]
+            num_stages=s, num_warps=32) for s in [3, 5, 6]
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [1, 5, 6, 7]
+            num_stages=s, num_warps=32) for s in [1, 5]
     ],
     key=['M', 'N', 'K'],
 )
