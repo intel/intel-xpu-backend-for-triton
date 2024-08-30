@@ -104,7 +104,7 @@ def parse_data(args: argparse.Namespace, config: str, df: pd.DataFrame, file: Pa
         elif "attn" in case:
             shape = ["Z", "H", "N_CTX", "D_HEAD"]
         raw_data = pd.read_csv(file, header=0, usecols=shape + ["Triton-TFlops", "XeTLA-TFlops"])
-        raw_data["Case"] = raw_data[shape].apply(lambda row: case + ': ' + 'x'.join(row.astype(str)), axis=1)
+        raw_data["Case"] = raw_data[shape].apply(lambda row: case + ": " + "x".join(row.astype(str)), axis=1)
         raw_data.drop(columns=shape, inplace=True)
         raw_data.rename(columns={"Triton-TFlops": f"Triton-TFlops-{config}", "XeTLA-TFlops": f"XeTLA-TFlops-{config}"},
                         inplace=True)
@@ -189,7 +189,7 @@ def summarize_diff(args: argparse.Namespace, df: pd.DataFrame, num_col: str, den
         # Sort by configuration
         order = list(df["xlabel"].unique())
         order.sort()
-        filename = f"performance-plot-{numerator}-{num_col}-{denominator}-{denom_col}.pdf".lower()
+        filename = f"performance-plot-{num_col}-{denom_col}.pdf".lower()
         with PdfPages(filename) as pdf:
             fig = plt.figure()
             plt.xticks(rotation=85)
@@ -216,6 +216,8 @@ def eval_data(args: argparse.Namespace, df: pd.DataFrame, numerator: str, denomi
         denom_triton_col = f"Triton-TFlops-{denominator}"
         num_xetla_col = f"XeTLA-TFlops-{numerator}"
         denom_xetla_col = f"XeTLA-TFlops-{denominator}"
+        num_tri2xe_col = f"Tri2Xe-{numerator}"
+        dem_tri2xe_col = f"Tri2Xe-{denominator}"
 
         df.drop(columns=["Triton-TFlops_x", "XeTLA-TFlops_x", "Triton-TFlops_y", "XeTLA-TFlops_y"], inplace=True)
         print("Summary for Triton\n")
@@ -224,6 +226,9 @@ def eval_data(args: argparse.Namespace, df: pd.DataFrame, numerator: str, denomi
         print("Summary for XeTLA\n")
         df_xetla = df[["Case", num_xetla_col, denom_xetla_col]]
         summarize_diff(args, df_xetla, num_xetla_col, denom_xetla_col, numerator, denominator)
+        print("Summary for Ratio: Triton/XeTLA\n")
+        df_ratio = df[["Case", num_tri2xe_col, dem_tri2xe_col]]
+        summarize_diff(args, df_ratio, num_tri2xe_col, dem_tri2xe_col, numerator, denominator)
     else:
         num_col = f"speedup {numerator}"
         denom_col = f"speedup {denominator}"
@@ -273,7 +278,6 @@ def main():
         df = parse_directory(args, num_cfg, None, num_dir)
         df = parse_directory(args, denom_cfg, df, denom_dir)
 
-        # exclude torch sdpa case https://github.com/intel/intel-xpu-backend-for-triton/issues/2042
         cols = [
             "Case", "Triton-TFlops_x", "XeTLA-TFlops_x", f"Triton-TFlops-{num_cfg}", f"XeTLA-TFlops-{num_cfg}",
             "Triton-TFlops_y", "XeTLA-TFlops_y", f"Triton-TFlops-{denom_cfg}", f"XeTLA-TFlops-{denom_cfg}"
@@ -283,6 +287,9 @@ def main():
         ]
 
         df = df[cols]
+        if args.triton_benchmark:
+            df[f"Tri2Xe-{num_cfg}"] = df[f"Triton-TFlops-{num_cfg}"] / df[f"XeTLA-TFlops-{num_cfg}"]
+            df[f"Tri2Xe-{denom_cfg}"] = df[f"Triton-TFlops-{denom_cfg}"] / df[f"XeTLA-TFlops-{denom_cfg}"]
 
         print(f"Storing preprocessed data to {csv_file}")
         df.to_csv(csv_file, index=False)
