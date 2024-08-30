@@ -1,11 +1,12 @@
-from setuptools import setup
-
-import sysconfig
 import os
+import re
 import shutil
 import subprocess
+import sysconfig
 import sys
-import re
+
+from setuptools import setup
+
 import torch
 
 
@@ -13,14 +14,14 @@ class CMakeBuild():
 
     def __init__(self):
         self.current_dir = os.path.abspath(os.path.dirname(__file__))
-        self.build_temp = self.current_dir + '/build/temp'
-        self.extdir = self.current_dir + '/key_benchmarks/triton_kernels_benchmark'
+        self.build_temp = self.current_dir + "/build/temp"
+        self.extdir = self.current_dir + "/key_benchmarks/triton_kernels_benchmark"
 
     def run(self):
         try:
             out = subprocess.check_output(["cmake", "--version"])
-        except OSError:
-            raise RuntimeError("CMake must be installed to build the following extensions: ")
+        except OSError as error:
+            raise RuntimeError("CMake must be installed") from error
 
         match = re.search(r"version\s*(?P<major>\d+)\.(?P<minor>\d+)([\d.]+)?", out.decode())
         cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
@@ -30,7 +31,7 @@ class CMakeBuild():
         self.build_extension()
 
     def build_extension(self):
-        ninja_dir = shutil.which('ninja')
+        ninja_dir = shutil.which("ninja")
         # create build directories
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
@@ -53,11 +54,11 @@ class CMakeBuild():
         ]
 
         # configuration
-        build_type = 'Debug'
+        build_type = "Debug"
         build_args = ["--config", build_type]
         cmake_args += ["-DCMAKE_BUILD_TYPE=" + build_type]
         max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
-        build_args += ['-j' + max_jobs]
+        build_args += ["-j" + max_jobs]
 
         env = os.environ.copy()
         cmake_dir = self.build_temp
@@ -68,7 +69,7 @@ class CMakeBuild():
 cmake = CMakeBuild()
 cmake.run()
 
-setup(name='triton-kernels-benchmark', packages=[
+setup(name="triton-kernels-benchmark", packages=[
     "triton_kernels_benchmark",
 ], package_dir={
     "triton_kernels_benchmark": "key_benchmarks/triton_kernels_benchmark",

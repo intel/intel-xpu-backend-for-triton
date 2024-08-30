@@ -13,6 +13,7 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suit
 
 
+# pylint: disable=unused-argument
 @triton.jit
 def swizzle_tile(tile_id,
                  # Matrix dimensions
@@ -30,6 +31,7 @@ def swizzle_tile(tile_id,
     return pid_m, pid_n
 
 
+# pylint: disable=unused-argument
 @triton.jit
 def linear_tile(tile_id,
                 # Matrix dimensions
@@ -113,7 +115,8 @@ def first_wave(
         stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Stream-K parameters
-        full_tiles, partial_tiles, iters_per_tile,
+        full_tiles,  # pylint: disable=redefined-outer-name
+        partial_tiles, iters_per_tile,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
 
@@ -199,9 +202,9 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
     BLOCK_SIZE_K = 32
 
     # Check constraints.
-    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
-    assert a.is_contiguous(), "Matrix A must be contiguous"
-    assert b.is_contiguous(), "Matrix B must be contiguous"
+    assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
+    assert a.is_contiguous(), 'Matrix A must be contiguous'
+    assert b.is_contiguous(), 'Matrix B must be contiguous'
     M, K = a.shape
     K, N = b.shape
 
@@ -268,14 +271,16 @@ def benchmark(M, N, K, provider):
     quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
-                                                               quantiles=quantiles, fast_flush=False)
-    if provider == 'triton':
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
+                                                              quantiles=quantiles, fast_flush=False)
+    elif provider == 'triton':
         triton_fn = lambda: matmul(a, b)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=1e-2, err_msg="triton to torch")
-        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                               fast_flush=False)
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=1e-2, err_msg='triton to torch')
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                              fast_flush=False)
+    else:
+        raise NotImplementedError(f'Unsupported provider {provider}')
 
     tflops = lambda mean: 2 * M * N * K * (1e-12) / (mean * 1e-3)
     gbps = lambda mean: 2 * (M * K + K * N) + 4.0 * (M * N) * (1e-9) / (mean * 1e-3)

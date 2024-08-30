@@ -45,7 +45,7 @@ def _kernel(A, B, C,  #
                                     order=(1, 0))
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
-    for k in range(0, K, BLOCK_K * SPLIT_K):
+    for _ in range(0, K, BLOCK_K * SPLIT_K):
         if EVEN_K:
             a = tl.load(a_block_ptr)
             b = tl.load(b_block_ptr)
@@ -88,12 +88,12 @@ class _matmul(torch.autograd.Function):
         if b.stride(0) > 1 and b.stride(1) > 1:
             b = b.contiguous()
         # checks constraints
-        assert a.shape[1] == b.shape[0], "incompatible dimensions"
+        assert a.shape[1] == b.shape[0], 'incompatible dimensions'
         M, K = a.shape
         _, N = b.shape
 
         # allocates output
-        if (output_dtype is None):
+        if output_dtype is None:
             output_dtype = torch.float32
 
         c = torch.empty((M, N), device=device, dtype=output_dtype)
@@ -107,12 +107,12 @@ class _matmul(torch.autograd.Function):
         if acc_dtype is None:
             acc_dtype = torch.float32
         else:
-            assert isinstance(acc_dtype, torch.dtype), "acc_dtype must be a torch.dtype"
-            assert acc_dtype in supported_acc_dtypes[a.dtype], "acc_dtype not compatible with the type of a"
-            assert acc_dtype in supported_acc_dtypes[b.dtype], "acc_dtype not compatible with the type of b"
+            assert isinstance(acc_dtype, torch.dtype), 'acc_dtype must be a torch.dtype'
+            assert acc_dtype in supported_acc_dtypes[a.dtype], 'acc_dtype not compatible with the type of a'
+            assert acc_dtype in supported_acc_dtypes[b.dtype], 'acc_dtype not compatible with the type of b'
 
         def to_tl_type(ty):
-            return getattr(tl, str(ty).split(".")[-1])
+            return getattr(tl, str(ty).rsplit('.', maxsplit=1)[-1])
 
         acc_dtype = to_tl_type(acc_dtype)
         output_dtype = to_tl_type(output_dtype)
@@ -127,6 +127,7 @@ class _matmul(torch.autograd.Function):
             acc_dtype=acc_dtype)
         return c
 
+    # pylint: disable=unused-argument
     @staticmethod
     def forward(ctx, a, b, acc_dtype=None, output_dtype=None):
         return _matmul._call(a, b, acc_dtype=acc_dtype, output_dtype=output_dtype)
@@ -166,15 +167,17 @@ def benchmark(M, N, K, provider):
     quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
-                                                               quantiles=quantiles, fast_flush=False)
-    if provider == 'triton':
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
+                                                              quantiles=quantiles, fast_flush=False)
+    elif provider == 'triton':
         triton_fn = lambda: matmul(a, b)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg="triton to torch")
-        ms, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                               fast_flush=False)
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                              fast_flush=False)
+    else:
+        raise NotImplementedError(f'Unsupported provider {provider}')
 
     tflops = lambda mean: 2 * M * N * K * (1e-12) / (mean * 1e-3)
     gbps = lambda mean: 2 * (M * K + K * N) + 4.0 * (M * N) * (1e-9) / (mean * 1e-3)

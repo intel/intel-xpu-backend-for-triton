@@ -261,7 +261,7 @@ class XPUBackend(BaseBackend):
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         intel.post_process_llir(llvm_mod)
 
         # Get some metadata
