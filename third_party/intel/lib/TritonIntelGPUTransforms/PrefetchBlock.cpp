@@ -411,7 +411,6 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
     auto prefetch =
         b.create<ttgi::PrefetchOp>(loc, args[num + 1 + i], load.getCache(),
                                    load.getEvict(), load.getIsVolatile());
-    prefetchInsertPoint = prefetch;
 
     const LoadInfo &loadInfo = loadToLoadInfo.at(load);
     b.setInsertionPoint(loadInfo.getAdvance());

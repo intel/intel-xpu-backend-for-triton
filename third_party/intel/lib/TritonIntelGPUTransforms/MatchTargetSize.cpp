@@ -591,7 +591,7 @@ void MatchTargetSizePass::initNativeOperationSizes() {
   nativeSizes.setDotShape(32, {8, 16, 8});
 
   nativeSizes.setBlockMemShape(8, {16, 64, 32, 32});
-  nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
+  nativeSizes.setBlockMemShape(16, {32, 32, 32, 16});
   nativeSizes.setBlockMemShape(32, {8, 8, 8, 16});
 
   nativeSizes.setLoadStoreSize(512); // max 512DW;
@@ -1007,7 +1007,7 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
   unsigned dstDim0 = tType.getShape()[0];
   Operation *glue;
   if (srcDim0 == dstDim0) {
-    Value newOp = b.create<ttgi::BroadcastOp>(loc, tType, op.getSrc());
+    Value newOp = b.create<tt::BroadcastOp>(loc, tType, op.getSrc());
     unsigned num = resType.getShape()[1] / tType.getShape()[1];
     SmallVector<Value> ops(num, newOp);
     glue = b.create<ttgi::GlueOp>(loc, resType, ops);
@@ -1015,7 +1015,7 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
     assert(srcDim0 == 2 * dstDim0 && "add more support");
     auto newTy = RankedTensorType::get({srcDim0, tType.getShape()[1]},
                                        tType.getElementType());
-    auto newOp = b.create<ttgi::BroadcastOp>(loc, newTy, op.getSrc());
+    auto newOp = b.create<tt::BroadcastOp>(loc, newTy, op.getSrc());
     auto extract0 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 0);
     auto extract1 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 1);
     SmallVector<Value> ops{extract0, extract1, extract0, extract1,
@@ -1118,7 +1118,7 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
         else {
           subOp = b.create(loc, op->getName().getIdentifier(), newOperands,
                            subType, op->getAttrs());
-          if (dotIdx < 2)
+          if (dotIdx < 2 && !isa<tt::AdvanceOp>(subOp))
             subOp->setAttr("DotIdx", b.getIntegerAttr(b.getI32Type(), dotIdx));
           subOps.push_back(subOp->getResults()[0]);
         }
