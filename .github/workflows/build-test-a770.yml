@@ -8,15 +8,6 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
-      install_ipex:
-        # This boolean parameter defines what PyTorch will be used in the workflow:
-        #   true: Stonepia/pytorch (fork) with IPEX
-        #   false: pytorch/pytorch (upstream) without IPX
-        # In both cases, pytorch_ref below allows specifying a branch, tag, or commit id in the
-        # corresponding repository. If not specified, a default (pinned) version will be used.
-        description: Install Intel PyTorch Extension
-        type: boolean
-        default: false
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
@@ -54,7 +45,6 @@ jobs:
     with:
       device: a770
       runner_label: ${{ inputs.runner_label }}
-      install_ipex: ${{ inputs.install_ipex }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports }}

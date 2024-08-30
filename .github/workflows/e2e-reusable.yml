@@ -3,10 +3,6 @@ name: E2E reusable workflow
 on:
   workflow_call:
     inputs:
-      install_ipex:
-        description: Install Intel PyTorch Extension
-        type: boolean
-        default: false
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
@@ -87,40 +83,17 @@ jobs:
         run: |
           pip install wheel
 
-      - name: Setup PyTorch with IPEX
-        if: ${{ inputs.install_ipex }}
-        uses: ./.github/actions/setup-pytorch
-        with:
-          repository: Stonepia/pytorch
-          ref: ${{ inputs.pytorch_ref }}
-
-      - name: Setup PyTorch without IPEX
-        if: ${{ !inputs.install_ipex }}
+      - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
 
-      - name: Set benchmark repository (IPEX)
-        if: ${{ inputs.install_ipex }}
-        run: |
-          echo "BENCHMARK_REPO=weishi-deng/benchmark" | tee -a "$GITHUB_ENV"
-
-      - name: Set benchmark repository (PyTorch)
-        if: ${{ !inputs.install_ipex }}
+      - name: Set benchmark repository
         run: |
           echo "BENCHMARK_REPO=pytorch/benchmark" | tee -a "$GITHUB_ENV"
 
-      - name: Get benchmark commit id (IPEX)
-        if: ${{ inputs.install_ipex }}
-        uses: ./.github/actions/get-commit-id
-        with:
-          repository: ${{ env.BENCHMARK_REPO }}
-          branch: main
-          variable: BENCHMARK_COMMIT_ID
-
-      - name: Get benchmark commit id (PyTorch)
-        if: ${{ !inputs.install_ipex }}
+      - name: Get benchmark commit id
         run: |
           cd pytorch
           echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
@@ -133,14 +106,6 @@ jobs:
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> "${GITHUB_ENV}"
           echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" >> "${GITHUB_ENV}"
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" >> "${GITHUB_ENV}"
-
-      - name: Setup IPEX
-        if: ${{ inputs.install_ipex }}
-        uses: ./.github/actions/setup-ipex
-
-      - name: Setup no-op IPEX
-        if: ${{ !inputs.install_ipex }}
-        uses: ./.github/actions/setup-no-op-ipex
 
       - name: Generate Triton cache key
         id: triton-key
@@ -194,12 +159,6 @@ jobs:
           repository: pytorch/vision
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
-
-      # FIXME: old PyTorch does not work with torchdata=0.8.0
-      - name: Install torchdata package
-        if: ${{ inputs.suite == 'torchbench' && inputs.install_ipex }}
-        run: |
-          pip install 'torchdata<0.8.0'
 
       - name: Install torchtext package
         if: ${{ inputs.suite == 'torchbench' }}
@@ -290,9 +249,6 @@ jobs:
           PYTORCH_REPO=$PYTORCH_REPO
           PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
           PYTORCH_VERSION=$PYTORCH_VERSION
-          IPEX_REPO=$IPEX_REPO
-          IPEX_COMMIT_ID=$IPEX_COMMIT_ID
-          IPEX_VERSION=$IPEX_VERSION
           LLVM_REPO=llvm/llvm-project
           LLVM_COMMIT_ID=$LLVM_COMMIT_ID
           BENCHMARK_REPO=$BENCHMARK_REPO

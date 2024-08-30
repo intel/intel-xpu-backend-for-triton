@@ -85,7 +85,6 @@ jobs:
     with:
       driver_version: ${{ matrix.driver }}
       runner_label: ${{ inputs.runner_label }}
-      install_ipex: false
       pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports || false }}
