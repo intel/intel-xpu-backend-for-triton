@@ -6,6 +6,7 @@ def test_xpu_backend(cmdopt):
         has_ipex = False
         try:
             # Import IPEX to provide Intel GPU runtime
+            import intel_extension_for_pytorch  # type: ignore # noqa: F401
             has_ipex = True if hasattr(torch, "xpu") else False
         except Exception:
             has_ipex = False
