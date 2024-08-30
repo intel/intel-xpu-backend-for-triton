@@ -14,7 +14,6 @@ Triton automatically selects the correct underlying device function to invoke ba
 # ------------
 
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
