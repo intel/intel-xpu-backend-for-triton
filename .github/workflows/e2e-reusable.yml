@@ -81,7 +81,8 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          pip install wheel
+          # cmake 3.22.1 does not work with the recent torchaudio: https://github.com/intel/intel-xpu-backend-for-triton/issues/2079
+          pip install wheel cmake
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
