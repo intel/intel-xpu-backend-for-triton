@@ -80,7 +80,7 @@ runs:
       shell: bash
       run: |
         cd python
-        pip install wheel
+        pip install wheel pybind11
         ${{ inputs.command }}
 
     - name: Save Triton cache
