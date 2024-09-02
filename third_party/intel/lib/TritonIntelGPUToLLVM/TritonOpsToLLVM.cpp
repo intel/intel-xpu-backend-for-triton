@@ -599,12 +599,10 @@ public:
   }
 };
 
-class TransposeReduceOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<ReduceOp> {
+class ReduceOpConversion : public ConvertTritonGPUOpToLLVMPattern<ReduceOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
       ReduceOp>::ConvertTritonGPUOpToLLVMPattern;
-
   LogicalResult
   matchAndRewrite(ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -705,7 +703,8 @@ public:
     Value src = adaptor.getSrc();
     auto vecTy = dyn_cast<VectorType>(src.getType());
     auto mod = op->getParentOfType<ModuleOp>();
-    constexpr int threadsPerWarp = 16;
+    int threadsPerWarp =
+        mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     if (!vecTy || vecTy.getNumElements() != threadsPerWarp)
       return failure();
     Location loc = op.getLoc();
@@ -847,7 +846,7 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<ArithDivFOpLowering>(typeConverter, benefit);
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
-  patterns.add<TransposeReduceOpConversion>(typeConverter, benefit);
+  patterns.add<ReduceOpConversion>(typeConverter, benefit);
   patterns.add<SubGroupTransposeOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
