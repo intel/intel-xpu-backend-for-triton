@@ -713,6 +713,20 @@ Value MatchTargetSizePass::getSubVal(Operation *op, Value val,
   return dstVal;
 }
 
+static Value hackAlloc(OpBuilder &b, Location loc, Type ptrTy, int64_t size) {
+  auto func = static_cast<FunctionOpInterface>(
+      &*b.getInsertionPoint()
+            ->getParentWithTrait<FunctionOpInterface::Trait>());
+  auto m = func->getParentOfType<ModuleOp>();
+  constexpr StringLiteral SharedAttrName = "triton_gpu.shared";
+  if (!m->getAttr(SharedAttrName)) {
+    m->setAttr(SharedAttrName, b.getIndexAttr(size));
+    func.insertArgument(func.getNumArguments(), ptrTy, b.getDictionaryAttr({}),
+                        loc);
+  }
+  return func.getArguments().back();
+}
+
 void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
   auto loc = op.getLoc();
   OpBuilder b(op);
@@ -727,17 +741,17 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
   auto combine = op.getCombineOp().front().getOperations().begin();
   auto id = combine->getName().getIdentifier();
 
-  // FIXME: 16 is the supported IR reduce length
   SmallVector<Value> glueVals;
-  // fixed 8 for now
-  unsigned step = 8;
+  unsigned step = 16;
   for (unsigned i = 0; i < outer; i += step) {
     SmallVector<Value> subVals;
-    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += 16) {
-      Value subVal = getSubVal(op, src, {i, j}, {step, 16});
+    Type dstType = RankedTensorType::get({srcTy.getShape()[0], step},
+                                         srcTy.getElementType());
+    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += step) {
+      Value subVal = b.create<ttgi::ExtractOp>(loc, dstType, src, j / step);
       subVals.push_back(subVal);
     }
-    auto subType = RankedTensorType::get({step, 16}, srcTy.getElementType());
+    auto subType = dstType;
     auto combine = op.getCombineOp().front().getOperations().begin();
     StringAttr id = combine->getName().getIdentifier();
     Value acc;
@@ -761,23 +775,35 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
     default:
       assert(false && "add more reduce size support");
     }
-    SmallVector<Value> subOps;
-    for (unsigned j = 0; j < step; j++) {
-      auto subType = RankedTensorType::get(16, srcTy.getElementType());
-      Value subAcc = b.create<ttgi::ExtractOp>(loc, subType, acc, j);
-      auto subRed = b.create<tt::ReduceOp>(loc, subAcc, 0);
-      auto &subRegion = subRed.getCombineOp();
-      b.cloneRegionBefore(op.getCombineOp(), subRegion, subRegion.end());
-      subOps.push_back(subRed.getResult()[0]);
-    }
-    // auto glue = b.create<ttgi::GlueOp>(loc, op.getResultTypes()[0],
-    // subOps);
-    glueVals.append(subOps);
+    auto m = op->getParentOfType<ModuleOp>();
+    // Fixed size for num_warps matrices of sg_size^2 shape.
+    int64_t size = cast<RankedTensorType>(acc.getType()).getNumElements() /
+                   step * step * sizeof(float) *
+                   ttg::TritonGPUDialect::getNumWarps(m);
+    Type allocTy = cast<RankedTensorType>(acc.getType()).getElementType();
+    Type ptrTy = tt::PointerType::get(allocTy, tt::TritonGEN::kWorkgroup);
+    Value localBuffer = hackAlloc(b, loc, ptrTy, size);
+    Value accT =
+        b.create<ttgi::SubGroupTranspose>(loc, acc.getType(), localBuffer, acc);
+    auto sgReduce = b.create<tt::ReduceOp>(loc, accT, axis);
+    Region &sgReduceRegion = sgReduce.getCombineOp();
+    b.cloneRegionBefore(op.getCombineOp(), sgReduceRegion,
+                        sgReduceRegion.end());
+    glueVals.push_back(sgReduce->getResult(0));
   }
-  auto glue = b.create<ttgi::GlueOp>(loc, op.getResultTypes()[0], glueVals);
-  op->replaceAllUsesWith(glue->getResults());
+
+  auto resultType = cast<RankedTensorType>(op.getResultTypes()[0]);
+  RankedTensorType glueType =
+      RankedTensorType::get(resultType.getShape(), resultType.getElementType());
+
+  assert(!glueVals.empty() && "Expecting non-empty list of results");
+  Value glue = glueVals.size() > 1
+                   ? b.create<ttgi::GlueOp>(loc, glueType, glueVals).getRes()
+                   : glueVals.front();
+  Value res = b.create<ttg::ConvertLayoutOp>(loc, resultType, glue);
+
+  op->replaceAllUsesWith(ValueRange{res});
   op->erase();
-  return;
 }
 
 void MatchTargetSizePass::transformMakeTensorPtrOp(tt::MakeTensorPtrOp op) {

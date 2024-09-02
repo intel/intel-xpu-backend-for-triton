@@ -144,6 +144,18 @@ def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
   }];
 }
 
+def TritonGEN_SubgroupLocalIdOp : TritonGEN_Op<"subgroup.local.id", [Pure]> {
+  let summary = "Subgroup Local Invocation Index";
+  string baseDescription = [{
+    The `gen.subgroup.local.id` operation returns the local invocation ID of the
+    work-item within the subgroup, which is a number in the range `[0,
+    subgroup_size)`.
+  }];
+  let arguments = (ins);
+  let results = (outs I32 : $res);
+  let assemblyFormat = "attr-dict";
+}
+
 //===----------------------------------------------------------------------===//
 // Synchronization
 //===----------------------------------------------------------------------===//
@@ -485,6 +497,26 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
   }];
 
   let hasVerifier = 1;
+}
+
+def TritonGEN_SIMDBlockWriteOp : TritonGEN_Op<"simdblockwrite">,
+  Arguments<(ins
+    Arg<LLVM_AnyPointer, "", [MemWrite]>:$ptr,
+    FixedVectorOf<[TritonGEN_MatrixElemType]>:$val
+  )> {
+
+  let summary = "simd block write";
+
+  let description = [{
+    The `triton_gen.simdblockwrite` operation performs simd block write to
+      a start address without laneId offset. The parameters are:
+      $ptr - the base address to be written
+      $val - the value vector to write
+  }];
+
+  let assemblyFormat = [{
+    operands ` ` attr-dict `:` `(` type(operands) `)`
+  }];
 }
 
 #endif // TRITONGEN_OPS

@@ -116,4 +116,63 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
   }];
 }
 
+class IsLocalPointerToElementType<string pointer, string value, string summary> :
+    TypesMatchWith<summary, value, pointer, [{
+      ::mlir::triton::PointerType::get( }] # ElementType<"_self">.result # [{,
+          static_cast<unsigned>(::mlir::triton::TritonGEN::kWorkgroup))
+    }]>;
+
+// NOTE: This operation shouldn't be needed, as simply modifying the encoding
+// would be equivalent. As we are not handling encodings much, I created this for
+// prototyping.
+def TTIG_SubGroupTranspose
+    : TTIG_Op<"sub_group_transpose",
+        [AllTypesMatch<["src", "res"]>,
+         IsLocalPointerToElementType<"local_buffer", "src",
+             "local_buffer can be used to store src in local memory">]> {
+  let summary = "Sub-group elements transpose operation";
+  let description = [{
+    For a distribution of tensor elements across a sub-group forming a squared
+    matrix like:
+
+    ```
+
+| Sub-group local id |                       Elements                        |
+|--------------------|-------------------------------------------------------|
+| 0                  | [0,sub_group_size)                                    |
+| 1                  | [sub_group_size,2*sub_group_size)                     |
+| ...                | ...                                                   |
+| sub_group_size-1   | [(sub_group_size-1)*sub_group_size,sub_group_size**2) |
+    ```
+
+    Redistribute elements such as the following mapping applies:
+
+    ```
+
+| Sub-group local id |                           Elements                           |
+|--------------------|--------------------------------------------------------------|
+| 0                  | 0, sub_group_size, 2*sub_group_size, ...                     |
+| 1                  | 1, sub_group_size+1, 2*sub_group_size+1, ...                 |
+| ...                | ...                                                          |
+| sub_group_size-1   | [sub_group_size-1+i*sub_group_size|i in [0, sub_group_size)] |
+    ```
+
+    In order to do this traspose, each sub-group stores its contents to local
+    memory via `$local_buffer`, each of them forming a matrix there, and loads
+    them back transposed. Note no barriers will be needed as no memory is shared
+    across sub-groups.
+
+    Also note the tensor shape does not change, as only the encoding of the tensor
+    is modified.
+
+    Example:
+      ```
+%matrix_t = triton_intel_gpu.sub_group_transpose %local_buffer, %src : tensor<256x32xf16>
+      ```
+  }];
+  let arguments = (ins TT_Ptr: $local_buffer, TT_Tensor:$src);
+  let results = (outs TT_Tensor:$res);
+  let assemblyFormat = "operands attr-dict `:` type($src)";
+}
+
 #endif

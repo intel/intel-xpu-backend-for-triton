@@ -858,6 +858,28 @@ struct TritonGENSubgroupIdLowering
 };
 
 //===----------------------------------------------------------------------===//
+// SubgroupLocalID Op Lowering
+//===----------------------------------------------------------------------===//
+
+struct TritonGENSubgroupLocalIdLowering
+    : ConvertOpToLLVMPattern<TritonGEN::SubgroupLocalIdOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubgroupLocalIdOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubgroupLocalIdOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto retType = rewriter.getIntegerType(32);
+
+    intel::AttributeList attrs;
+    LLVM::CallOp callOp = createDeviceFunctionCall(
+        rewriter, "_Z22get_sub_group_local_idv", retType, {}, {}, attrs);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Synchronization Ops Lowerings
 //===----------------------------------------------------------------------===//
 
@@ -1156,6 +1178,30 @@ struct TritonMatrix2DBlockPrefetchLowering
   }
 };
 
+struct TritonSIMDBlockWriteLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockWriteOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SIMDBlockWriteOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SIMDBlockWriteOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
+    VectorType vecTy = op.getVal().getType();
+
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    const StringLiteral funcName = "llvm.genx.GenISA.simdBlockWrite";
+    intel::AttributeList attrs;
+    LLVM::CallOp call = createDeviceFunctionCall(
+        rewriter, funcName, void_ty(ctx), {ptrTy, vecTy},
+        {op.getPtr(), op.getVal()}, attrs);
+
+    rewriter.replaceOp(op, call);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1220,12 +1266,13 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonGENBlockDimXLowering, TritonGENBlockDimYLowering,
       TritonGENBlockDimZLowering, TritonGENGridDimXLowering,
       TritonGENGridDimYLowering, TritonGENGridDimZLowering,
-      TritonGENSubgroupIdLowering, TritonGENBarrierLowering,
-      TritonGENSplitBarrierSignalLowering, TritonGENSplitBarrierWaitLowering,
-      TritonGENNamedBarrierSignalLowering, TritonGENNamedBarrierWaitLowering,
-      TritonSubGroupShuffleLowering, TritonSubgroupReduceLowering,
-      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering>(
+      TritonGENSubgroupIdLowering, TritonGENSubgroupLocalIdLowering,
+      TritonGENBarrierLowering, TritonGENSplitBarrierSignalLowering,
+      TritonGENSplitBarrierWaitLowering, TritonGENNamedBarrierSignalLowering,
+      TritonGENNamedBarrierWaitLowering, TritonSubGroupShuffleLowering,
+      TritonSubgroupReduceLowering, TritonMatrixDPASLowering,
+      TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+      TritonMatrix2DBlockPrefetchLowering, TritonSIMDBlockWriteLowering>(
       converter);
 }
 

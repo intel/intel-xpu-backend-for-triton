@@ -11,6 +11,7 @@
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h.inc"
 
