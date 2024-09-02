@@ -928,8 +928,10 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
     }
   }
 
+  Type resType = RankedTensorType::get(dot.getType().getShape(),
+                                       dot.getType().getElementType());
   dot->replaceAllUsesWith(
-      b.create<ttgi::GlueOp>(loc, dot.getType(), subCs)->getResults());
+      b.create<ttgi::GlueOp>(loc, resType, subCs)->getResults());
   dot->erase();
 }
 
