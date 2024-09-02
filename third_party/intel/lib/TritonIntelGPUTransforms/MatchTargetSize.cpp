@@ -743,64 +743,57 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
 
   SmallVector<Value> glueVals;
   unsigned step = 16;
-  for (unsigned i = 0; i < outer; i += step) {
-    SmallVector<Value> subVals;
-    Type dstType = RankedTensorType::get({srcTy.getShape()[0], step},
-                                         srcTy.getElementType());
-    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += step) {
-      Value subVal = b.create<ttgi::ExtractOp>(loc, dstType, src, j / step);
-      subVals.push_back(subVal);
-    }
-    auto subType = dstType;
-    auto combine = op.getCombineOp().front().getOperations().begin();
-    StringAttr id = combine->getName().getIdentifier();
-    Value acc;
-    switch (subVals.size()) {
-    case 1:
-      acc = subVals[0];
-      break;
-    case 2: {
-      auto acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
-      acc = acc01->getResult(0);
-      break;
-    }
-    case 4: {
-      auto acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
-      auto acc23 = b.create(loc, id, {subVals[2], subVals[3]}, subType);
-      auto accOp = b.create(loc, id, {acc01->getResult(0), acc23->getResult(0)},
-                            subType);
-      acc = accOp->getResult(0);
-      break;
-    }
-    default:
-      assert(false && "add more reduce size support");
-    }
-    auto m = op->getParentOfType<ModuleOp>();
-    // Fixed size for num_warps matrices of sg_size^2 shape.
-    int64_t size = cast<RankedTensorType>(acc.getType()).getNumElements() /
-                   step * step * sizeof(float) *
-                   ttg::TritonGPUDialect::getNumWarps(m);
-    Type allocTy = cast<RankedTensorType>(acc.getType()).getElementType();
-    Type ptrTy = tt::PointerType::get(allocTy, tt::TritonGEN::kWorkgroup);
-    Value localBuffer = hackAlloc(b, loc, ptrTy, size);
-    Value accT =
-        b.create<ttgi::SubGroupTranspose>(loc, acc.getType(), localBuffer, acc);
-    auto sgReduce = b.create<tt::ReduceOp>(loc, accT, axis);
-    Region &sgReduceRegion = sgReduce.getCombineOp();
-    b.cloneRegionBefore(op.getCombineOp(), sgReduceRegion,
-                        sgReduceRegion.end());
-    glueVals.push_back(sgReduce->getResult(0));
+  assert(outer == 16 && "Single value produced");
+  SmallVector<Value> subVals;
+  Type dstType = RankedTensorType::get({srcTy.getShape()[0], step},
+                                       srcTy.getElementType());
+  for (unsigned j = 0; j < srcTy.getShape()[axis]; j += step) {
+    Value subVal = b.create<ttgi::ExtractOp>(loc, dstType, src, j / step);
+    subVals.push_back(subVal);
   }
+  auto subType = dstType;
+
+  Value acc;
+  switch (subVals.size()) {
+  case 1:
+    acc = subVals[0];
+    break;
+  case 2: {
+    auto acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
+    acc = acc01->getResult(0);
+    break;
+  }
+  case 4: {
+    auto acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
+    auto acc23 = b.create(loc, id, {subVals[2], subVals[3]}, subType);
+    auto accOp =
+        b.create(loc, id, {acc01->getResult(0), acc23->getResult(0)}, subType);
+    acc = accOp->getResult(0);
+    break;
+  }
+  default:
+    assert(false && "add more reduce size support");
+  }
+  auto m = op->getParentOfType<ModuleOp>();
+  // Fixed size for num_warps matrices of sg_size^2 shape.
+  int64_t size = cast<RankedTensorType>(acc.getType()).getNumElements() / step *
+                 step * sizeof(float) * ttg::TritonGPUDialect::getNumWarps(m);
+  Type allocTy = cast<RankedTensorType>(acc.getType()).getElementType();
+  Type ptrTy = tt::PointerType::get(allocTy, tt::TritonGEN::kWorkgroup);
+  Value localBuffer = hackAlloc(b, loc, ptrTy, size);
+  Value accT =
+      b.create<ttgi::SubGroupTranspose>(loc, acc.getType(), localBuffer, acc);
+  auto sgReduce = b.create<tt::ReduceOp>(loc, accT, axis);
+  Region &sgReduceRegion = sgReduce.getCombineOp();
+  b.cloneRegionBefore(op.getCombineOp(), sgReduceRegion, sgReduceRegion.end());
+  Value res = sgReduce->getResult(0);
 
   auto resultType = cast<RankedTensorType>(op.getResultTypes()[0]);
   RankedTensorType glueType =
       RankedTensorType::get(resultType.getShape(), resultType.getElementType());
 
-  assert(!glueVals.empty() && "Expecting non-empty list of results");
-  Value glue = glueVals.size() > 1
-                   ? b.create<ttgi::GlueOp>(loc, glueType, glueVals).getRes()
-                   : glueVals.front();
-  Value res = b.create<ttg::ConvertLayoutOp>(loc, resultType, glue);
+  assert(glueVals.size() != 1 && "Expecting non-empty list of results");
+  res = b.create<ttg::ConvertLayoutOp>(loc, resultType, res);
 
   op->replaceAllUsesWith(ValueRange{res});
   op->erase();
