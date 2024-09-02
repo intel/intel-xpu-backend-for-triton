@@ -531,8 +531,8 @@ public:
       // canonicalization of extract ops and dependent loops.
       auto glue = cast<ttgi::GlueOp>(definingOp);
       auto reglue = rewriter.create<ttgi::GlueOp>(
-            forOp->getLoc(), result.getType(),
-            newForOp->getResults().slice(idx, glue.getOperands().size()));
+          forOp->getLoc(), result.getType(),
+          newForOp->getResults().slice(idx, glue.getOperands().size()));
       result.replaceAllUsesWith(reglue);
       idx += glue->getOperands().size();
     }
