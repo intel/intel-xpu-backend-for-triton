@@ -330,13 +330,6 @@ def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
 // Matrix operations
 //===----------------------------------------------------------------------===//
 
-class FixedVectorOfRankAndType<list<int> allowedRanks,
-                               list<Type> allowedTypes> : AllOfType<
-  [FixedVectorOf<allowedTypes>, FixedVectorOfRank<allowedRanks>],
-  FixedVectorOf<allowedTypes>.summary #
-  FixedVectorOfRank<allowedRanks>.summary,
-  "::mlir::VectorType">;
-
 def TritonGEN_MatrixElemType : AnyTypeOf<[AnyI8, AnyI16, AnyI32, F32, F16, BF16]>;
 
 def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,

@@ -15,12 +15,6 @@ add_triton_ut(
 )
 
 add_triton_ut(
-	NAME DPAStoLinearLayout
-	SRCS DPAStoLinearLayoutTest.cpp
-	LIBS TritonIntelGPUIR
-)
-
-add_triton_ut(
 	NAME DumpLayoutTest
 	SRCS DumpLayoutTest.cpp
 	LIBS TritonGPUIR

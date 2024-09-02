@@ -162,7 +162,6 @@ def print_json_stats(stats: List[ReportStats]):
         'gpu_device': os.getenv('GPU_DEVICE', ''),
         'python_version': platform.python_version(),
         'pytorch_version': os.getenv('PYTORCH_VERSION', ''),
-        'ipex_version': os.getenv('IPEX_VERSION', ''),
         'testsuite': overall.name,
         'passed': overall.passed,
         'failed': overall.failed,
