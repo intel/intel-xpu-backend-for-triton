@@ -769,6 +769,10 @@ struct TritonRaiseBlockPointer
 
     if (isa<triton::ExpandDimsOp>(defOp))
       return true;
+    if (isa<arith::ConstantOp>(defOp))
+      return false;
+    if (isa<triton::MakeRangeOp>(defOp))
+      return false;
     if (isa<triton::BroadcastOp>(defOp) || isa<triton::SplatOp>(defOp) ||
         isa<arith::IndexCastOp>(defOp) || isa<arith::RemUIOp>(defOp) ||
         isa<arith::RemSIOp>(defOp))
@@ -777,7 +781,7 @@ struct TritonRaiseBlockPointer
       return hasExpandOpInDefiningPath(defOp->getOperand(0)) ||
              hasExpandOpInDefiningPath(defOp->getOperand(1));
 
-    return false;
+    return true;
   }
 
   LogicalResult rewriteAddPtrOp(triton::AddPtrOp op) {
