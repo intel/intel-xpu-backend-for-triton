@@ -1319,9 +1319,8 @@ struct FpToFpOpConversion
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
     auto F8E4M3B15TyID = TypeID::get<Float8E4M3B11FNUZType>();
-    auto F8E4M3TyID = TypeID::get<Float8E4M3FNUZType>();
+    auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
-    auto F8E4M3FNTyID = TypeID::get<Float8E4M3FNType>();
     auto F16TyID = TypeID::get<Float16Type>();
     auto BF16TyID = TypeID::get<BFloat16Type>();
     auto F32TyID = TypeID::get<Float32Type>();
@@ -1341,8 +1340,6 @@ struct FpToFpOpConversion
             // F8 -> F16
             {{F8E4M3B15TyID, F16TyID, undefRounding},
              {Fp8E4M3B15_to_Fp16_func, 4}},
-            {{F8E4M3FNTyID, F16TyID, undefRounding},
-             {Fp8E4M3B15x4_to_Fp16_func, 4}},
             {{F8E4M3TyID, F16TyID, undefRounding}, {Fp8E4M3Nv_to_Fp16_func, 2}},
             {{F8E5M2TyID, F16TyID, undefRounding}, {Fp8E5M2_to_Fp16_func, 4}},
             // F16 -> F8
@@ -1351,8 +1348,6 @@ struct FpToFpOpConversion
             {{F16TyID, F8E4M3B15TyID, RoundingMode::RTNE},
              // TODO: provide proper implementation for RTNE rounding.
              {Fp16_to_Fp8E4M3B15_func, 4}},
-            {{F16TyID, F8E4M3FNTyID, RoundingMode::RTZ},
-             {Fp16_to_Fp8E4M3B15x4_func, 4}},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTZ},
              {Fp16_to_Fp8E4M3Nv_func, 2}},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTNE},
@@ -1401,7 +1396,7 @@ struct FpToFpOpConversion
     auto dstElementType = getElementType(op.getResult());
     auto roundingMode = op.getRounding();
 
-    if (dstElementType.isFloat8E5M2() || dstElementType.isFloat8E4M3FNUZ()) {
+    if (dstElementType.isFloat8E5M2() || dstElementType.isFloat8E4M3FN()) {
       assert(roundingMode.has_value() &&
              "Rounding mode must be specified for convertsions to fp8");
 
