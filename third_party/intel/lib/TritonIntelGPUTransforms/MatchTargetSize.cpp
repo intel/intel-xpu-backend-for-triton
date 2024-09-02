@@ -512,55 +512,30 @@ public:
     rewriter.create<scf::YieldOp>(yield.getLoc(), newValues);
     rewriter.eraseOp(yield);
 
-    // Replace uses of the original loop results with the new loop results.
-    userIndexMap.clear();
-
-    // If a results is used by another scf.for loop, we re-glue the individual
-    // results together to allow canonicalization of the dependent loop, too.
-    llvm::SmallDenseMap<OpResult, Value> reglueMap;
-
     rewriter.setInsertionPointAfter(newForOp);
 
     idx = 0;
     for (auto [result, init] :
          llvm::zip(forOp.getResults(), forOp.getInits())) {
       Operation *definingOp = init.getDefiningOp();
+
+      // Loop-carried value was not split by this pattern, just rewire all users
+      // to the new scf.for operation.
       if (!isa_and_nonnull<ttgi::GlueOp>(definingOp)) {
-        userIndexMap[result] = idx++;
+        result.replaceAllUsesWith(newForOp.getResults()[idx]);
+        ++idx;
         continue;
       }
 
+      // Re-glue individual results together _after_ the loop. This enables
+      // canonicalization of extract ops and dependent loops.
       auto glue = cast<ttgi::GlueOp>(definingOp);
-      if (llvm::all_of(result.getUsers(), [](Operation *user) {
-            return isa<ttgi::ExtractOp>(user);
-          })) {
-        for (Operation *user : result.getUsers()) {
-          auto extract = cast<ttgi::ExtractOp>(user);
-          userIndexMap[extract] = idx + extract.getIndex();
-          deleteList.push_back(extract.getOperation());
-        }
-      } else if (llvm::all_of(result.getUsers(), [](Operation *user) {
-                   return isa<scf::ForOp>(user);
-                 })) {
-        // We have encountered a glued operand (and already split its uses
-        // within this loop), but the corresponding result's user(s) are
-        // dependent loops, not extracts. Hence, we have to re-glue the results.
-        auto reglue = rewriter.create<ttgi::GlueOp>(
+      auto reglue = rewriter.create<ttgi::GlueOp>(
             forOp->getLoc(), result.getType(),
             newForOp->getResults().slice(idx, glue.getOperands().size()));
-        reglueMap[result] = reglue;
-      } else {
-        llvm::report_fatal_error("Unexpected users of loop result");
-      }
-
+      result.replaceAllUsesWith(reglue);
       idx += glue->getOperands().size();
     }
-
-    for (auto [user, idx] : userIndexMap)
-      user.replaceAllUsesWith(newForOp.getResults()[idx]);
-
-    for (auto [res, glue] : reglueMap)
-      res.replaceAllUsesWith(glue);
 
     for (Operation *deleteOp : deleteList)
       rewriter.eraseOp(deleteOp);
