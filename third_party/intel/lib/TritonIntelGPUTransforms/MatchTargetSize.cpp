@@ -1118,7 +1118,7 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
         else {
           subOp = b.create(loc, op->getName().getIdentifier(), newOperands,
                            subType, op->getAttrs());
-          if (dotIdx < 2 && !isa<tt::AdvanceOp>(subOp))
+          if (dotIdx < 2)
             subOp->setAttr("DotIdx", b.getIntegerAttr(b.getI32Type(), dotIdx));
           subOps.push_back(subOp->getResults()[0]);
         }
