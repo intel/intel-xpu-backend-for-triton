@@ -83,9 +83,11 @@ struct ConvertTritonGPUToLLVM
 
     // fixed 0 for now
     if (pipelineManager.skipSharedMemoryAllocation()) {
-      mod->setAttr(
-          "triton_gpu.shared",
-          mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32), 0));
+      if (!mod->getAttr("triton_gpu.shared")) {
+        mod->setAttr(
+            "triton_gpu.shared",
+            mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32), 0));
+      }
     } else {
       // Allocate shared memory and set barrier
       ModuleAllocation allocation(mod);
