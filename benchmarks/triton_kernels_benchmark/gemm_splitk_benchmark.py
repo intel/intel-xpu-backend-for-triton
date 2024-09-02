@@ -16,9 +16,6 @@ benchmark_suit = triton_kernels_benchmark  # triton.testing
     ],
     key=['M', 'N', 'K'],
 )
-@triton.heuristics({
-    'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
-})
 @triton.jit
 def _kernel(A, B, C,  #
             M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
@@ -26,7 +23,7 @@ def _kernel(A, B, C,  #
             stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
             acc_dtype: tl.constexpr,  #
             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,  #
+            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr  #
             ):
     # matrix multiplication
     pid = tl.program_id(0)
@@ -49,17 +46,8 @@ def _kernel(A, B, C,  #
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
     for _ in range(0, K, BLOCK_K * SPLIT_K):
-        if EVEN_K:
-            a = tl.load(a_block_ptr)
-            b = tl.load(b_block_ptr)
-        else:
-            # FIXME: Undefined name `rk`
-            # https://github.com/intel/intel-xpu-backend-for-triton/issues/2012
-            raise NotImplementedError()
-            # k_remaining = K - k * (BLOCK_K * SPLIT_K)
-            # _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
-            # a = tl.load(a_block_ptr, mask=rk[None, :] < k_remaining, other=_0)
-            # b = tl.load(b_block_ptr, mask=rk[:, None] < k_remaining, other=_0)
+        a = tl.load(a_block_ptr)
+        b = tl.load(b_block_ptr)
         acc += tl.dot(a, b, out_dtype=acc_dtype)
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_K * SPLIT_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_K * SPLIT_K, 0))
