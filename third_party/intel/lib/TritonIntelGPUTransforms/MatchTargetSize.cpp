@@ -798,7 +798,9 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
   RankedTensorType glueType =
       RankedTensorType::get(resultType.getShape(), resultType.getElementType());
 
-  Value res = glueVals.size() == 1 ? glueVals.front() : b.create<ttgi::GlueOp>(loc, glueType, glueVals).getRes();
+  Value res = glueVals.size() == 1
+                  ? glueVals.front()
+                  : b.create<ttgi::GlueOp>(loc, glueType, glueVals).getRes();
   res = b.create<ttg::ConvertLayoutOp>(loc, resultType, res);
 
   op->replaceAllUsesWith(ValueRange{res});
@@ -934,9 +936,8 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
     }
   }
 
-  Type resultType = RankedTensorType::get(dot.getType().getShape(), dot.getType().getElementType());
   dot->replaceAllUsesWith(
-      b.create<ttgi::GlueOp>(loc, resultType, subCs)->getResults());
+      b.create<ttgi::GlueOp>(loc, dot.getType(), subCs)->getResults());
   dot->erase();
 }
 
