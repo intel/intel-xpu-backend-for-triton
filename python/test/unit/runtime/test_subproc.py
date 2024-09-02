@@ -1,8 +1,6 @@
 import multiprocessing
 import shutil
 
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 import triton
 import triton.language as tl
 from triton.compiler import ASTSource

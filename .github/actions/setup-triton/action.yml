@@ -1,7 +1,7 @@
 # Builds and installs Triton. Uses git clone in the current directory.
 # Sets the following environment variables:
 # * LLVM_COMMIT_ID
-description: Build and install IPEX wheels
+description: Build and install Triton
 inputs:
   build_llvm:
     description: Build LLVM
@@ -80,7 +80,7 @@ runs:
       shell: bash
       run: |
         cd python
-        pip install wheel
+        pip install wheel pybind11
         ${{ inputs.command }}
 
     - name: Save Triton cache

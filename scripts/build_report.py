@@ -35,9 +35,9 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag):
     # Build json with parameters
     df_results = pd.DataFrame()
     df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
-    df_results['tflops'] = df[tflops_col]
+    df_results["tflops"] = df[tflops_col]
     if hbm_col is not None:
-        df_results['hbm_gbs'] = df[hbm_col]
+        df_results["hbm_gbs"] = df[hbm_col]
 
     df_results["run_uuid"] = uuid.uuid4().hex
     df_results["datetime"] = datetime.datetime.now()
