@@ -1,0 +1,144 @@
+name: E2E accuracy
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      install_ipex:
+        description: Install Intel PyTorch Extension
+        type: boolean
+        default: false
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
+      suite:
+        description: Test suite
+        type: choice
+        options:
+          - all
+          - huggingface
+          - timm_models
+          - torchbench
+        default: all
+      mode:
+        description: Inference/Training
+        type: choice
+        options:
+          - all
+          - inference
+          - training
+        default: all
+      dtype:
+        description: Data type
+        type: choice
+        options:
+          - all
+          - amp_bf16
+          - amp_fp16
+          - bfloat16
+          - float16
+          - float32
+        default: all
+      models:
+        description: Run all models or a subset from .github/models/performance/{suite}.txt
+        type: choice
+        options:
+          - all
+          - subset
+        default: all
+      only_one_model:
+        description: Run only this one model
+        type: string
+        default: ""
+      runner_label_matrix:
+        description: Runner label matrix, keep empty for matrix LTS+Rolling
+        type: string
+        default: '["max1550", "lts"]'
+      TORCH_COMPILE_DEBUG:
+        description: TORCH_COMPILE_DEBUG
+        type: string
+        default: ""
+      run_name:
+        description: Custom run name
+        type: string
+        default: "E2E accuracy"
+
+permissions: read-all
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: Linux
+    outputs:
+      suite: ${{ steps.set-matrix.outputs.suite }}
+      mode: ${{ steps.set-matrix.outputs.mode }}
+      dtype: ${{ steps.set-matrix.outputs.dtype }}
+      runner_label: ${{ steps.set-matrix.outputs.runner_label }}
+    timeout-minutes: 10
+    steps:
+      - name: Set matrix
+        id: set-matrix
+        run: |
+          if [[ -z "${{ inputs.suite }}" || "${{ inputs.suite }}" == "all" ]]; then
+            suite='["huggingface", "timm_models", "torchbench"]'
+          else
+            suite='["${{ inputs.suite }}"]'
+          fi
+          if [[ -z "${{ inputs.mode }}" || "${{ inputs.mode }}" == "all" ]]; then
+            mode='["inference", "training"]'
+          else
+            mode='["${{ inputs.mode }}"]'
+          fi
+          if [[ -z "${{ inputs.dtype }}" || "${{ inputs.dtype }}" == "all" ]]; then
+            dtype='["amp_bf16", "amp_fp16", "bfloat16", "float16", "float32"]'
+          else
+            dtype='["${{ inputs.dtype }}"]'
+          fi
+          if [[ -z "${{ inputs.runner_label_matrix }}" ]]; then
+            # 'max1550' means 'rolling'
+            runner_label_matrix='["max1550", "lts"]'
+          else
+            runner_label_matrix='${{ inputs.runner_label_matrix }}'
+          fi
+          echo "suite=$suite" >> $GITHUB_OUTPUT
+          echo "mode=$mode" >> $GITHUB_OUTPUT
+          echo "dtype=$dtype" >> $GITHUB_OUTPUT
+          echo "runner_label=$runner_label" >> $GITHUB_OUTPUT
+
+  print_inputs:
+    name: Print inputs
+    needs: setup
+    runs-on: Linux
+    steps:
+      - name: Print inputs
+        run: |
+          echo "${{ toJSON(github.event.inputs) }}"
+
+      - name: Print setup outputs
+        run: |
+          echo "${{ toJSON(needs.setup.outputs) }}"
+
+  run_tests:
+    name: Run test matrix
+    needs: setup
+    strategy:
+      matrix:
+        suite: ${{ fromJson(needs.setup.outputs.suite) }}
+        mode: ${{ fromJson(needs.setup.outputs.mode) }}
+        dtype: ${{ fromJson(needs.setup.outputs.dtype) }}
+        runner_label: ${{ fromJson(needs.setup.outputs.runner_label) }}
+
+      fail-fast: false
+    uses: ./.github/workflows/e2e-reusable.yml
+    with:
+      install_ipex: ${{ inputs.install_ipex }}
+      pytorch_ref: ${{ inputs.pytorch_ref }}
+      suite: ${{ matrix.suite }}
+      mode: ${{ matrix.mode }}
+      test_mode: accuracy
+      dtype: ${{ matrix.dtype }}
+      models: ${{ inputs.models }}
+      only_one_model: ${{ inputs.only_one_model }}
+      runner_label: ${{ matrix.runner_label }}
+      TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}

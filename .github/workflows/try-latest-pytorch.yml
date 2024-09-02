@@ -54,14 +54,15 @@ jobs:
       - name: Get latest upstream Pytorch ref
         id: pytorch-commit-id
         run: |
-          echo "PyTorch ref: ${{ inputs.pytorch_ref }}"
-          if [[ "${{ inputs.pytorch_ref }}" == "" ]]; then
-            PYTORCH_REF="main"
+          PYTORCH_REF=${{ github.event_name == 'schedule' && 'main' || inputs.pytorch_ref }}
+          echo "PyTorch ref: $ref"
+          (( 16#$PYTORCH_REF )) 2>/dev/null
+          if [[ "$?" != 0 ]]; then
+            ref=$(git ls-remote https://github.com/pytorch/pytorch refs/heads/"${PYTORCH_REF}" | awk '{print $1}')"
           else
-            PYTORCH_REF="${{ inputs.pytorch_ref }}"
+            ref="${{ inputs.pytorch_ref }}"
           fi
-          echo "pytorch_upstream_ref=$(git ls-remote https://github.com/pytorch/pytorch refs/heads/"${PYTORCH_REF}" | awk '{print $1}')" | tee -a $GITHUB_OUTPUT
-
+          echo "pytorch_upstream_ref=$ref | tee -a $GITHUB_OUTPUT
 
       - name: Matrix
         id: matrix
@@ -80,6 +81,7 @@ jobs:
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
       fail-fast: false
+      max-parallel: 1 # to allow PyTorch build to be cached
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
