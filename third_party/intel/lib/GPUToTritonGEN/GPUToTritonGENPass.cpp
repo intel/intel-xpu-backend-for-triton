@@ -196,8 +196,7 @@ void mlir::triton::configureGPUToTritonGENConversionLegality(
   target.addIllegalOp<LLVM::CosOp, LLVM::ExpOp, LLVM::LogOp, LLVM::SinOp>();
 
   // TODO: Remove once we support replacing non-root ops.
-  target.addLegalOp<mlir::gpu::YieldOp, mlir::gpu::GPUModuleOp,
-                    mlir::gpu::ModuleEndOp>();
+  target.addLegalOp<mlir::gpu::YieldOp, mlir::gpu::GPUModuleOp>();
 }
 
 template <typename OpTy>
@@ -224,7 +223,9 @@ void mlir::triton::populateGPUToTritonGENConversionPatterns(
       GPUIndexIntrinsicOpLowering<mlir::gpu::GridDimOp, TritonGEN::GridDimXOp,
                                   TritonGEN::GridDimYOp, TritonGEN::GridDimZOp>,
       SingleDimLaunchConfigLowering<mlir::gpu::SubgroupIdOp,
-                                    TritonGEN::SubgroupIdOp>>(converter);
+                                    TritonGEN::SubgroupIdOp>,
+      SingleDimLaunchConfigLowering<mlir::gpu::LaneIdOp,
+                                    TritonGEN::SubgroupLocalIdOp>>(converter);
   patterns.add<GPUFuncOpLowering>(
       converter,
       /*allocaAddrSpace=*/TritonGEN::TritonGENMemorySpace::kFunction,

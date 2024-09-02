@@ -53,10 +53,12 @@ def benchmark(N, target_type):
     quantiles = [0.5, 0.2, 0.8]
     inputs = torch.rand(N, dtype=torch.float32, device='xpu', requires_grad=True)
 
-    if target_type == "bfloat16":
+    if target_type == 'bfloat16':
         fwd = lambda: launch_conversion(inputs, tl.bfloat16)
-    elif target_type == "float16":
+    elif target_type == 'float16':
         fwd = lambda: launch_conversion(inputs, tl.float16)
+    else:
+        raise NotImplementedError(f'Type {target_type} is not supported')
 
     ms, min_ms, max_ms = triton.testing.do_bench(fwd, quantiles=quantiles)
     gbps = lambda ms: (inputs.numel() * inputs.element_size() * 1e-9) / (ms * 1e-3)
@@ -64,5 +66,5 @@ def benchmark(N, target_type):
     return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     benchmark.run(print_data=True)

@@ -144,6 +144,22 @@ def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// Subgroup local index
+//===----------------------------------------------------------------------===//
+
+def TritonGEN_SubgroupLocalIdOp : TritonGEN_Op<"subgroup.local.id", [Pure]> {
+  let summary = "Subgroup Local Invocation Index";
+  string baseDescription = [{
+    The `triton_gen.subgroup.local.id` operation returns the local invocation ID
+    of the work-item within the sub-group, which is a number in the range `[0,
+    subgroup_size)`.
+  }];
+  let arguments = (ins);
+  let results = (outs I32 : $res);
+  let assemblyFormat = "attr-dict `:` type($res)";
+}
+
+//===----------------------------------------------------------------------===//
 // Synchronization
 //===----------------------------------------------------------------------===//
 
@@ -313,13 +329,6 @@ def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
 //===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
-
-class FixedVectorOfRankAndType<list<int> allowedRanks,
-                               list<Type> allowedTypes> : AllOfType<
-  [FixedVectorOf<allowedTypes>, FixedVectorOfRank<allowedRanks>],
-  FixedVectorOf<allowedTypes>.summary #
-  FixedVectorOfRank<allowedRanks>.summary,
-  "::mlir::VectorType">;
 
 def TritonGEN_MatrixElemType : AnyTypeOf<[AnyI8, AnyI16, AnyI32, F32, F16, BF16]>;
 

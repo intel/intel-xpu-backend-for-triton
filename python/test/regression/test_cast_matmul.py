@@ -6,10 +6,8 @@ fused type convert and matmul, base on triton matmul, the different with matmul:
 
 """
 import warnings
-
 import pytest
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton.runtime as tr
 import triton.language as tl

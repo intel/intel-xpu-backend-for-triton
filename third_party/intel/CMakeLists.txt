@@ -15,3 +15,7 @@ add_triton_plugin(TritonXPU
   TritonIntelGPUTransforms
   TritonToTritonGPUWarp
 )
+
+if(TRITON_BUILD_UT)
+  add_subdirectory(unittest)
+endif()

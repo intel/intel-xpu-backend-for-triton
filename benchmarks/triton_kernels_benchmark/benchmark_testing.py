@@ -17,7 +17,7 @@ def synchronize():
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-             device='xpu', sync_submitting=True):
+             device="xpu", sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -69,7 +69,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         fn()
     # Benchmark
     with torch.autograd.profiler_legacy.profile(True, use_xpu=True) as prof:
-        for i in range(n_repeat):
+        for _ in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
             # if it contains a backward pass. So we clear the
             # provided gradients
@@ -87,7 +87,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         synchronize()
 
     profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.function_events)
-    functions = [func for func in profiling_func_filter]
+    functions = list(profiling_func_filter)
 
     def extract_kernels(funcs):
         kernels = []
@@ -101,7 +101,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
-        if (times.numel() > 2):
+        if times.numel() > 2:
             # exclude max and min times
             times = torch.sort(times).values[1:-1]
         # add coefficient of the variance.
@@ -115,7 +115,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     return getattr(torch, return_mode)(times).item()
 
 
-def assert_close(x, y, atol=None, rtol=None, err_msg=''):
+def assert_close(x, y, atol=None, rtol=None, err_msg=""):
     import numpy as np
     import torch
 
@@ -149,7 +149,7 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
         np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
         return
     if not np.allclose(x, y, atol=atol, rtol=rtol):
-        raise AssertionError(f'{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})')
+        raise AssertionError(f"{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})")
 
 
 def perf_report(benchmarks):
@@ -163,6 +163,7 @@ def perf_report(benchmarks):
     return wrapper
 
 
+# # pylint: disable=too-many-instance-attributes
 class Benchmark:
     """
     This class is used by the :code:`perf_report` function to generate line plots with a concise API.
@@ -177,11 +178,11 @@ class Benchmark:
         line_names: List[str],
         plot_name: str,
         args: Dict[str, Any],
-        xlabel: str = '',
-        ylabel: str = '',
+        xlabel: str = "",
+        ylabel: str = "",
         x_log: bool = False,
         y_log: bool = False,
-        color=None,
+        color=None,  # pylint: disable=unused-argument
         styles=None,
     ):
         """
@@ -235,19 +236,18 @@ class Mark:
         self.fn = fn
         self.benchmarks = benchmarks
 
+    # pylint: disable=too-many-branches
     def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False,
              save_precision=6, **kwrags):
-        import os
-
         import matplotlib.pyplot as plt
         import pandas as pd
         y_vals = []
         for label in bench.ylabel:
-            y_mean = [f'{x}-{label}' for x in bench.line_names]
-            y_min = [f'{x}-{label}-min' for x in bench.line_names]
-            y_max = [f'{x}-{label}-max' for x in bench.line_names]
+            y_mean = [f"{x}-{label}" for x in bench.line_names]
+            y_min = [f"{x}-{label}-min" for x in bench.line_names]
+            y_max = [f"{x}-{label}-max" for x in bench.line_names]
             y_vals += y_mean + y_min + y_max
-        y_vals += [f'{x}-CV' for x in bench.line_names]
+        y_vals += [f"{x}-CV" for x in bench.line_names]
         x_names = list(bench.x_names)
         df = pd.DataFrame(columns=x_names + y_vals)
         for x in bench.x_vals:
@@ -264,11 +264,11 @@ class Mark:
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
                 ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwrags)
-                for id, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
+                for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:
-                        y_mean, y_min, y_max = ret[id]
+                        y_mean, y_min, y_max = ret[i]
                     except TypeError:
-                        y_mean, y_min, y_max = ret[id], None, None
+                        y_mean, y_min, y_max = ret[i], None, None
                     row_vals[label][0].append(y_mean)
                     row_vals[label][1].append(y_min)
                     row_vals[label][2].append(y_max)
@@ -290,8 +290,8 @@ class Mark:
             first_x = x_names[0]
             for label in bench.ylabel:
                 for i, y in enumerate(bench.line_names):
-                    y = f'{y}-{label}'
-                    y_min, y_max = df[y + '-min'], df[y + '-max']
+                    y = f"{y}-{label}"
+                    y_min, y_max = df[y + "-min"], df[y + "-max"]
                     col = bench.styles[i][0] if bench.styles else None
                     sty = bench.styles[i][1] if bench.styles else None
                     ax.plot(df[first_x], df[y], label=y, color=col, ls=sty)
@@ -312,38 +312,37 @@ class Mark:
         # df = df[x_names + bench.line_names]
         if diff_col and df.shape[1] == 2:
             col0, col1 = df.columns.tolist()
-            df['Diff'] = df[col1] - df[col0]
+            df["Diff"] = df[col1] - df[col0]
 
         if print_data:
-            print(bench.plot_name + ':')
+            print(bench.plot_name + ":")
             print(df.to_string())
         if save_path:
             df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format=f"%.{save_precision}f",
                       index=False)
         return df
 
-    def run(self, show_plots=False, print_data=False, save_path='', return_df=False, **kwargs):
+    def run(self, show_plots=False, print_data=False, save_path="", return_df=False, **kwargs):
         save_path = save_path_from_args(save_path)
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
+
+        for bench in benchmarks:
+            result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
+
         if save_path:
             # Create directory if it doesn't exist
             os.makedirs(save_path, exist_ok=True)
-            html = open(os.path.join(save_path, "results.html"), "w")
-            html.write("<html><body>\n")
-        for bench in benchmarks:
-            result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
-            if save_path:
-                html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
-        if save_path:
-            html.write("</body></html>\n")
-            html.close()
+            with open(os.path.join(save_path, "results.html"), "w", encoding="utf-8") as html:
+                html.write("<html><body>\n")
+                for bench in benchmarks:
+                    html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
+                html.write("</body></html>\n")
+
         if return_df:
-            if has_single_bench:
-                return result_dfs[0]
-            else:
-                return result_dfs
+            return result_dfs[0] if has_single_bench else result_dfs
+
         return None
 
 
@@ -353,10 +352,10 @@ def save_path_from_args(save_path: str):
         return save_path
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--reports',
+        "--reports",
         type=str,
-        default='',
-        help='directory to save reports',
+        default="",
+        help="directory to save reports",
     )
     args = parser.parse_args()
     return args.reports
@@ -379,10 +378,10 @@ def cuda_memcheck(**target_kwargs):
                 path = os.path.realpath(test_fn.__globals__["__file__"])
                 # get path of current file
                 env = {"PATH": os.environ["PATH"], "PYTORCH_NO_CUDA_MEMORY_CACHING": "1"}
-                assert 'request' in kwargs, "memcheck'ed test must have a (possibly unused) `request` fixture"
-                test_id = kwargs['request'].node.callspec.id
+                assert "request" in kwargs, "memcheck'ed test must have a (possibly unused) `request` fixture"
+                test_id = kwargs["request"].node.callspec.id
                 cmd = f"{path}::{test_fn.__name__}[{test_id}]"
-                out = subprocess.run(["cuda-memcheck", "pytest", "-vs", cmd], capture_output=True, env=env)
+                out = subprocess.run(["cuda-memcheck", "pytest", "-vs", cmd], capture_output=True, env=env, check=False)
                 assert out.returncode == 0, "cuda-memcheck returned an error: bounds checking failed"
                 assert "ERROR SUMMARY: 0 errors" in str(out.stdout)
             else:
@@ -423,9 +422,9 @@ def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
 
 
 def nvsmi(attrs):
-    attrs = ','.join(attrs)
-    cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
+    attrs = ",".join(attrs)
+    cmd = ["nvidia-smi", "-i", "0", "--query-gpu=" + attrs, "--format=csv,noheader,nounits"]
     out = subprocess.check_output(cmd)
-    ret = out.decode(sys.stdout.encoding).split(',')
+    ret = out.decode(sys.stdout.encoding).split(",")
     ret = [int(x) for x in ret]
     return ret

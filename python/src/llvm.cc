@@ -116,6 +116,8 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   opt.NoInfsFPMath = false;
   opt.NoNaNsFPMath = true;
   opt.TrapUnreachable = true;
+  opt.MCOptions.AsmVerbose = true;
+  opt.MCOptions.PreserveAsmComments = true;
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module.getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
       std::nullopt,
@@ -308,11 +310,13 @@ void init_triton_llvm(py::module &&m) {
     tuningOptions.LoopUnrolling = true;
     tuningOptions.LoopInterleaving = true;
     tuningOptions.LoopVectorization = true;
-    // SLPVectorizer causes test_core.py::test_dot_mulbroadcasted to fail.
-    // It vectorizes @llvm.fmuladd.f32 with @llvm.fmuladd.v32f32. We can
-    // consider to reenable SLP vectorization when the failure is
-    // investigated.
-    tuningOptions.SLPVectorization = false;
+    // TODO: currently we run SLP vectorizer with an empty target machine.
+    // This cause the vectorizer to create larger vector which could be bad.
+    // Disabling it would currently cause regressions as this pass also applies
+    // some scheduling that helps performance in some cases. We should work on
+    // using NVPTX target instead and address the performance regressions with
+    // some scheduling solution.
+    tuningOptions.SLPVectorization = true;
 
     PassBuilder pb(nullptr /*targetMachine*/, tuningOptions, std::nullopt,
                    instrCbPtr);

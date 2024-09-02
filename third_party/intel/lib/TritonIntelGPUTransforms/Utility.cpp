@@ -138,13 +138,21 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
                         Attribute rootEncoding,
                         DenseMap<Value, Attribute> &layout,
                         std::function<bool(Operation *)> stopPropagation) {
-  DenseSet<Value> visited;
-  SmallVector<std::pair<Value, Attribute>> queue = {{root, rootEncoding}};
+  DenseSet<std::pair<Value, Attribute>> seen;
+  SmallVector<std::pair<Value, Attribute>> queue;
+
+  auto enqueue = [&](Value operand, Attribute encoding) {
+    auto x = std::make_pair(operand, encoding);
+    if (!seen.insert(x).second) {
+      return; // Already enqueued, skip
+    }
+    queue.push_back(x);
+  };
+  enqueue(root, rootEncoding);
+
   while (!queue.empty()) {
     auto [currentValue, encoding] = queue.back();
     queue.pop_back();
-    if (!visited.insert(currentValue).second)
-      continue;
     if (!isTensorOrTensorPointerType(currentValue.getType()))
       continue;
     slice.insert(currentValue);
@@ -156,13 +164,13 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       auto results = ifOp.getResults();
-      unsigned argIdx = cast<OpResult>(currentValue).getResultNumber();
+      unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
 
       auto thenValue = ifOp.thenYield().getOperand(argIdx);
       auto elseValue = ifOp.elseYield().getOperand(argIdx);
 
-      queue.push_back({thenValue, encoding});
-      queue.push_back({elseValue, encoding});
+      enqueue(thenValue, encoding);
+      enqueue(elseValue, encoding);
 
       continue;
     }
@@ -172,26 +180,23 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         if (result == currentValue ||
             !isTensorOrTensorPointerType(result.getType()))
           continue;
-        if (layout.find(result) != layout.end()) {
-          if (layout[result] != encoding)
-            return failure();
-          continue;
-        }
-        layout[result] = encoding;
+        enqueue(result, encoding);
       }
-      if (!isFreeConvert(definingOp) &&
-          canFoldIntoConversion(definingOp, encoding))
+      if (isFreeConvert(definingOp)) {
+        enqueue(definingOp->getOperand(0), encoding);
+        continue;
+      }
+      if (canFoldIntoConversion(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
-      if (isa<tt::CatOp>(definingOp))
+      if (isa<triton::CatOp>(definingOp))
         return failure();
       for (Value operand : definingOp->getOperands()) {
         auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
-        if (slice.count(operand) == 0)
-          queue.push_back({operand, *srcEncoding});
+        enqueue(operand, *srcEncoding);
       }
       continue;
     }
@@ -202,8 +207,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
       Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
           blockArg.getArgNumber() - forOp.getNumInductionVars());
-      queue.push_back({initOperand->get(), encoding});
-      queue.push_back({yieldOperand, encoding});
+      enqueue(initOperand->get(), encoding);
+      enqueue(yieldOperand, encoding);
       continue;
     }
     // TODO: add support for WhileOp and other region types.

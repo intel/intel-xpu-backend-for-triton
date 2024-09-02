@@ -9,7 +9,6 @@ import tempfile
 import numpy as np
 import pytest
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import os
 import inspect
 from numpy.random import RandomState
@@ -3135,7 +3134,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
      for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
                       [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
-     for input_precision in ["ieee" if is_hip() else "tf32"]
+     for input_precision in ["tf32" if is_cuda() or is_xpu() else "ieee"]
      for col_a in [True, False]
      for col_b in [True, False]
      for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
@@ -3392,7 +3391,7 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
             if out_dtype_str == "float16":
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
-        input_precision = "tf32" if in_dtype_str == 'float32' else "ieee"
+        input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
 
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
         if torch.cuda.is_available() and triton.runtime.driver.active.utils.get_device_properties(
@@ -3660,12 +3659,19 @@ def test_const(device, choose_const, constexpr, mode):
         with pytest.raises(triton.CompilationError) as exc_info:
             patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
         if constexpr:
-            assert "Cannot store to a constant pointer" in str(exc_info.value.__cause__), "Wrong error message!"
-        elif not constexpr and mode == "call":
-            assert "Inconsistent return types" in str(exc_info.value.__cause__), "Wrong error message!"
+            error = "Cannot store to a constant pointer"
         else:
-            # TODO: Add error messages for the other cases
-            pass
+            if mode == "call":
+                error = "Inconsistent return types"
+            elif mode == "if":
+                error = "Mismatched type for final_out"
+            elif mode == "ternary":
+                error = "Ternary expression with dynamic condition has inconsistent type"
+            else:
+                assert mode == "direct" and choose_const
+                error = "Cannot store to a constant pointer"
+        error_msg = exc_info.value.error_message or str(exc_info.value.__cause__)
+        assert error in error_msg, "Wrong error message!"
     else:
         patched_kernel[(1, )](input, output, output, choose_const, SIZE, SIZE)
         assert torch.all(input == output)
