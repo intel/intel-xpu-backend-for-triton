@@ -669,9 +669,8 @@ std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
 MatchTargetSizePass::getSubTypeAndShape(Type type, bool hack) const {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Attribute layout = tensorType.getEncoding();
-    assert(layout && "Expecting a valid layout");
     SmallVector<int64_t> shape = to_vector(tensorType.getShape());
-    SmallVector<int64_t> subSize = sizePerAttrMap.at(layout);
+    SmallVector<int64_t> subSize = layout ? sizePerAttrMap.at(layout) : shape;
     // hack for attn
     if (hack) {
       subSize[0] = 8;
