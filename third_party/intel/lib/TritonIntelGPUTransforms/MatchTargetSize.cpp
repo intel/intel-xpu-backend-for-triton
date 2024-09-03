@@ -748,14 +748,14 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
 
   for (unsigned i = 0; i < outer; i += step) {
     SmallVector<Value> subVals;
-    Type dstType = RankedTensorType::get({srcTy.getShape()[0], step},
-                                         srcTy.getElementType());
-    Type subGlueType = RankedTensorType::get({srcTy.getShape()[0] / 2, step},
-                                             srcTy.getElementType());
+    RankedTensorType dstType = RankedTensorType::get(
+        {srcTy.getShape()[0], step}, srcTy.getElementType());
+    RankedTensorType subGlueType = RankedTensorType::get(
+        {srcTy.getShape()[0] / 2, step}, srcTy.getElementType());
     for (unsigned j = 0; j < srcTy.getShape()[axis]; j += step) {
       std::array<Value, 2> subGlues{
-          b.create<ttgi::ExtractOp>(loc, subGlueType, src, j / step / 2),
-          b.create<ttgi::ExtractOp>(loc, subGlueType, src, j / step / 2 + 1)};
+          b.create<ttgi::ExtractOp>(loc, subGlueType, src, j / step * 2),
+          b.create<ttgi::ExtractOp>(loc, subGlueType, src, j / step * 2 + 1)};
       Value subVal = b.create<ttgi::GlueOp>(loc, dstType, subGlues);
       subVals.push_back(subVal);
     }
@@ -784,8 +784,7 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
     }
     auto m = op->getParentOfType<ModuleOp>();
     // Fixed size for num_warps matrices of sg_size^2 shape.
-    int64_t size = cast<RankedTensorType>(acc.getType()).getNumElements() /
-                   step * step * sizeof(float) *
+    int64_t size = step * step * srcTy.getElementTypeBitWidth() / 8 *
                    ttg::TritonGPUDialect::getNumWarps(m);
     Type allocTy = cast<RankedTensorType>(acc.getType()).getElementType();
     Type ptrTy = tt::PointerType::get(allocTy, tt::TritonGEN::kWorkgroup);
