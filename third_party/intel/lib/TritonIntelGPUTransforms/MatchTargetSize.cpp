@@ -750,8 +750,13 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
     SmallVector<Value> subVals;
     Type dstType = RankedTensorType::get({srcTy.getShape()[0], step},
                                          srcTy.getElementType());
+    Type subGlueType = RankedTensorType::get({srcTy.getShape()[0] / 2, step},
+                                             srcTy.getElementType());
     for (unsigned j = 0; j < srcTy.getShape()[axis]; j += step) {
-      Value subVal = b.create<ttgi::ExtractOp>(loc, dstType, src, j / step);
+      std::array<Value, 2> subGlues{
+          b.create<ttgi::ExtractOp>(loc, subGlueType, src, j / step / 2),
+          b.create<ttgi::ExtractOp>(loc, subGlueType, src, j / step / 2 + 1)};
+      Value subVal = b.create<ttgi::GlueOp>(loc, dstType, subGlues);
       subVals.push_back(subVal);
     }
     auto subType = dstType;
