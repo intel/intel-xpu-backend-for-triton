@@ -60,7 +60,7 @@ runs:
         mkdir -p ~/wheels
         gh run download ${{ steps.run_id.outputs.run_id }} \
           --repo ${{ inputs.repository }} \
-          --pattern "wheels-py${{ inputs.python_version }}*" \
+          --pattern "*-py${{ inputs.python_version }}*" \
           --dir ~/wheels
 
     - name: Install wheels
@@ -68,7 +68,7 @@ runs:
       run: |
         set -x
         shopt -s extglob
-        cd ~/wheels/wheels-py${{ inputs.python_version }}*
+        cd ~/wheels/*-py${{ inputs.python_version }}*
         ${{ inputs.install_cmd }} ${{ inputs.wheels_pattern }}
 
     - name: Save wheels to cache
