@@ -283,6 +283,58 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
+typedef struct {
+  void *base;
+  uint64_t shape[5];
+  uint64_t strides[5];
+} TMADesc;
+
+// Simple helper to experiment creating TMA descriptors on the host.
+// This is a useful to test TMA operations independently.
+static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
+  unsigned long long global_address;
+  uint64_t dim;
+  uint32_t tensorDim;
+  int elementSize;
+  unsigned long long desc_address;
+  if (!PyArg_ParseTuple(args, "KKiiK", &global_address, &dim, &tensorDim,
+                        &elementSize, &desc_address)) {
+    return NULL;
+  }
+
+  TMADesc *tmaDesc = (TMADesc *)(desc_address);
+  tmaDesc->base = (void *)global_address;
+  tmaDesc->shape[4] = dim;
+  tmaDesc->strides[4] = 1;
+  return Py_None;
+}
+
+// Simple helper to experiment creating TMA descriptors on the host.
+// This is a useful to test TMA operations independently.
+static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
+  unsigned long long global_address;
+  uint64_t dims[2];
+  uint32_t tensorDims[2];
+  int elementSize;
+  unsigned long long desc_address;
+  if (!PyArg_ParseTuple(args, "KKKiiiK", &global_address, &dims[1], &dims[0],
+                        &tensorDims[1], &tensorDims[0], &elementSize,
+                        &desc_address)) {
+    return NULL;
+  }
+  uint64_t globalStrides[2] = {dims[0] * elementSize,
+                               dims[0] * dims[1] * elementSize};
+  uint32_t elementStrides[2] = {1, 1};
+
+  TMADesc *tmaDesc = (TMADesc *)(desc_address);
+  tmaDesc->base = (void *)global_address;
+  tmaDesc->shape[3] = dims[0];
+  tmaDesc->shape[4] = dims[1];
+  tmaDesc->strides[3] = dims[0];
+  tmaDesc->strides[4] = 1;
+  return Py_None;
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
@@ -292,7 +344,12 @@ static PyMethodDef ModuleMethods[] = {
      "Initialize the ZE GPU context"},
     {"init_devices", initDevices, METH_VARARGS,
      "Initialize the ZE GPU devices and return device count"},
+
+    {"fill_1d_tma_descriptor", fill1DTMADescriptor, METH_VARARGS, "doc"},
+    {"fill_2d_tma_descriptor", fill2DTMADescriptor, METH_VARARGS, "doc"},
+
     {NULL, NULL, 0, NULL} // sentinel
+
 };
 
 static struct PyModuleDef ModuleDef = {PyModuleDef_HEAD_INIT, "spirv_utils",

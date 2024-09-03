@@ -232,6 +232,7 @@ class XPUBackend(BaseBackend):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
+        intel.passes.ttgpuir.add_tma_lowering(pm)
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
