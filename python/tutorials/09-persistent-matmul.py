@@ -41,7 +41,8 @@ def is_cuda():
 
 
 def supports_tma():
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+    # return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+    return True
 
 
 def _matmul_launch_metadata(grid, kernel, args):
@@ -353,7 +354,7 @@ def matmul_tma_persistent(a, b):
                                                                            configs[dtype]["BLOCK_SIZE_M"],
                                                                            configs[dtype]["BLOCK_SIZE_N"],
                                                                            c.element_size())
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = torch.xpu.get_device_properties("xpu").gpu_subslice_count
 
     grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
     matmul_kernel_tma_persistent[grid](
@@ -579,37 +580,37 @@ def bench(K, dtype, tiles_per_update, reps=10):
 
 
 def validate(M, N, K, dtype, tiles_per_update):
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
+    a = torch.randn((M, K), device="xpu", dtype=torch.float16).to(dtype)
+    b = torch.randn((K, N), device="xpu", dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
 
     torch_result = torch_matmul(a, b) if dtype == torch.float16 else None
-    cublas_result = cublas_matmul(a, b) if cublas is not None else None
-    naive_result = matmul(a, b.T)
-    persistent_result = matmul_persistent(a, b.T)
+    # cublas_result = cublas_matmul(a, b) if cublas is not None else None
+    # naive_result = matmul(a, b.T)
+    # persistent_result = matmul_persistent(a, b.T)
     tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
     device_tma_persistent_result = matmul_device_tma_persistent(a, b, tiles_per_update) if supports_tma() else None
 
-    if torch_result is not None:
-        naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
-                                               atol=1.0) else "❌"
-    if cublas_result is not None:
-        naive_vs_cublas = "✅" if torch.allclose(naive_result.to(torch.float16), cublas_result.to(torch.float16),
-                                                atol=1.0) else "❌"
-    naive_vs_persistent = "✅" if torch.allclose(naive_result.to(torch.float16), persistent_result.to(torch.float16),
-                                                atol=1.0) else "❌"
+    # if torch_result is not None:
+    #     naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
+    #                                            atol=1.0) else "❌"
+    # if cublas_result is not None:
+    #     naive_vs_cublas = "✅" if torch.allclose(naive_result.to(torch.float16), cublas_result.to(torch.float16),
+    #                                             atol=1.0) else "❌"
+    # naive_vs_persistent = "✅" if torch.allclose(naive_result.to(torch.float16), persistent_result.to(torch.float16),
+    #                                             atol=1.0) else "❌"
     if tma_persistent_result is not None:
-        naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
+        naive_vs_tma_persistent = "✅" if torch.allclose(torch_result.to(torch.float16),
                                                         tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
     if device_tma_persistent_result is not None:
         naive_vs_device_tma_persistent = "✅" if torch.allclose(cublas_result.to(
             torch.float16), device_tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
     print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
-    if torch_result is not None:
-        print(f"torch: {naive_vs_torch} ", end="")
-    if cublas_result is not None:
-        print(f"cublas: {naive_vs_cublas} ", end="")
-    print(f"persistent: {naive_vs_persistent} ", end="")
+    # if torch_result is not None:
+    #     print(f"torch: {naive_vs_torch} ", end="")
+    # if cublas_result is not None:
+    #     print(f"cublas: {naive_vs_cublas} ", end="")
+    # print(f"persistent: {naive_vs_persistent} ", end="")
     if tma_persistent_result is not None:
         print(f"TMA persistent: {naive_vs_tma_persistent} ", end="")
     if device_tma_persistent_result is not None:

@@ -307,4 +307,18 @@ def TritonIntelSpillTensorToSLM: Pass<"tritonintelgpu-spill-tensor-slm", "mlir::
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonIntelGPUTMALoweringPass : Pass<"tritonintelgpu-tma-lowering", "mlir::ModuleOp"> {
+  let summary = "lower TMA descriptor load/store to block io operations";
+
+  let description = [{
+    Lower Triton experimental descriptor load to TMA load/store operations in TritonIntelGPUDialect.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+   "mlir::LLVM::LLVMDialect",
+    "mlir::triton::gpu::intel::TritonIntelGPUDialect"
+  ];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
