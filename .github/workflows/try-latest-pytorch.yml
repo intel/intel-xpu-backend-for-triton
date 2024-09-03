@@ -81,7 +81,7 @@ jobs:
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
       fail-fast: false
-      max-parallel: 1 # to allow PyTorch build to be cached
+      max-parallel: 2 # to allow PyTorch build to be cached
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
@@ -96,7 +96,15 @@ jobs:
       enable_unskip: ${{ inputs.enable_unskip || false }}
 
   inductor-tests:
-    uses: ./.github/workflows/inductor-tests.yml
+    name: Integration tests matrix
+    needs: prepare
+
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
+      max-parallel: 2
+    uses: ./.github/workflows/inductor-tests-reusable.yml
+    
     with:
       pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
       suite: >
@@ -106,3 +114,4 @@ jobs:
         inductor/test_triton_wrapper.py
         inductor/test_triton_kernels.py
       runner_label: ${{ inputs.runner_label }}
+      python_version: ${{ matrix.python }}
