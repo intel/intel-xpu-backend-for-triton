@@ -123,6 +123,7 @@ jobs:
         with:
           name: logs-${{ env.PYTHON_VERSION }}
           path: pytorch/test/test-reports
+          include-hidden-files: true
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
