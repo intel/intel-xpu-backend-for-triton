@@ -28,105 +28,12 @@ env:
   PYTORCH_REPO: pytorch/pytorch
 
 jobs:
-  build:
-    name: Test
-    runs-on:
-      - ${{ inputs.runner_label || 'max1550' }}
-    timeout-minutes: 720
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
-    steps:
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Load pip cache
-        id: pip-cache
-        uses: ./.github/actions/load
-        with:
-          path: $HOME/.cache/pip
-          # pip cache per commit id just to minimize network traffic
-          key: pip-$PYTHON_VERSION-$GITHUB_SHA
-
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
-        with:
-          repository: ${{ env.PYTORCH_REPO}}
-          ref: ${{ inputs.pytorch_ref }}
-
-      - name: Setup Triton
-        uses: ./.github/actions/setup-triton
-
-      - name: Install python test dependencies
-        run: |
-          pip install pandas scipy tqdm
-
-      - name: Run inductor tests
-        run: |
-          cd pytorch
-          pip install -r .ci/docker/requirements-ci.txt
-
-          export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
-
-          test_cmd="python test/run_test.py --include "
-          if [[ -z "${{ github.event.inputs.suite }}" ]]; then
-            for test in $(ls test/inductor | grep test);
-            do
-              test_cmd="${test_cmd} inductor/$test"
-            done
-          else
-            for test in ${{ github.event.inputs.suite }};
-            do
-              test_cmd="${test_cmd} $test"
-            done
-          fi
-          eval $test_cmd
-
-      - name: Report environment details
-        if: always()
-        run: |
-          source ./scripts/capture-hw-details.sh --quiet
-          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          mkdir -p pytorch/test/test-reports
-          cat <<EOF | tee pytorch/test/test-reports/.env
-          TIMESTAMP=$TIMESTAMP
-          JOB_NAME=${{ join(matrix.*, '-') }}
-          GITHUB_RUN_ID=$GITHUB_RUN_ID
-          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
-          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
-          PYTHON_VERSION=$PYTHON_VERSION
-          PYTORCH_REPO=$PYTORCH_REPO
-          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
-          TRITON_REPO=$GITHUB_REPOSITORY
-          TRITON_COMMIT_ID=$GITHUB_SHA
-          TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
-          LIBIGC1_VERSION=$LIBIGC1_VERSION
-          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
-          GPU_DEVICE=$GPU_DEVICE
-          AGAMA_VERSION=$AGAMA_VERSION
-          EOF
-
-      - name: Upload test logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-${{ env.PYTHON_VERSION }}
-          path: pytorch/test/test-reports
-
-      - name: Save pip cache
-        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.pip-cache.outputs.path }}
-          dest: ${{ steps.pip-cache.outputs.dest }}
+  run_tests:
+    name: Run inductor tests
+    uses: ./.github/workflows/inductor-tests-reusable.yml
+    with:
+      pytorch_repo: ${{ env.PYTORCH_REPO }}
+      python_version: ${{ env.PYTHON_VERSION }}
+      runner_label: ${{ inputs.runner_label }}
+      suite: ${{ inputs.suite }}
+      pytorch_ref: ${{ inputs.pytorch_ref }}
