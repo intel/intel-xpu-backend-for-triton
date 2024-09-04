@@ -47,3 +47,12 @@ tt.func @simplify_scf_for(%arg0: tensor<16x8xf16>, %arg1: tensor<16x8xf16>, %arg
   tt.store %ptr, %res {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
   tt.return
 }
+
+// -----
+
+tt.func @triton_intel_gpu.sub_group_transpose(%local_buffer : !tt.ptr<f16, 3>, %src : tensor<16x16xf16>) -> tensor<16x16xf16> {
+  // CHECK-LABEL: @triton_intel_gpu.sub_group_transpose
+  // CHECK:         triton_intel_gpu.sub_group_transpose %arg0, %arg1 : tensor<16x16xf16>
+  %res = triton_intel_gpu.sub_group_transpose %local_buffer, %src : tensor<16x16xf16>
+  tt.return %res : tensor<16x16xf16>
+}

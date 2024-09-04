@@ -11,8 +11,13 @@
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h.inc"
+
+namespace mlir::triton::gpu::intel {
+inline constexpr int64_t transposableSize = 16;
+} // namespace mlir::triton::gpu::intel
 
 #define GET_OP_CLASSES
 #include "intel/include/Dialect/TritonIntelGPU/IR/Ops.h.inc"
