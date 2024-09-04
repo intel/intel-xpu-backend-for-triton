@@ -317,6 +317,9 @@ test_triton() {
   if [ "$TEST_MICRO_BENCHMARKS" = true ]; then
     run_microbench_tests
   fi
+  if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
+    $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned --source --pytorch --ipex
+  fi
   if [ "$TEST_BENCHMARK_SOFTMAX" = true ]; then
     run_benchmark_softmax
   fi

@@ -55,6 +55,11 @@ jobs:
         with:
           repository: pytorch/pytorch
 
+      # TODO: remove this step once ipex is deprecated for benchmarks
+      - name: Setup NO-OP-IPEX
+        if: ${{ env.TARGET_PRID == null }}
+        uses: ./.github/actions/setup-no-op-ipex
+
       - name: Install test dependencies
         if: ${{ env.TARGET_PRID == null }}
         run: |
@@ -84,7 +89,7 @@ jobs:
         if: ${{ env.TARGET_PRID == null }}
         run: |
           env
-          ./scripts/check_update_tranlator_cid.sh $CID_LATEST $CID_CURRENT
+          ./scripts/check-update-translator-cid.sh $CID_LATEST $CID_CURRENT
           if git status --porcelain ./lib/Target/SPIRV/spirv-llvm-translator.conf | grep '^ M'; then
             echo "MODIFIED=true" >> $GITHUB_ENV
             echo "spirv-llvm-translator.conf has been modified"
