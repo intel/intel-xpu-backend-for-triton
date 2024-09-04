@@ -546,7 +546,7 @@ public:
       llvm_unreachable("Unhandled reduction kind");
 
     Value result = rewriter.create<mlir::gpu::SubgroupReduceOp>(
-        loc, convertedTy, adaptor.getSrcs()[0], redKind, true);
+        loc, adaptor.getSrcs()[0], redKind, true);
     rewriter.replaceOp(op, result);
     return success();
   }
