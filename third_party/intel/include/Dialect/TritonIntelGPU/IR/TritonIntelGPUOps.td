@@ -192,6 +192,9 @@ def TTIG_SubGroupTransposeOp
       ```
 %matrix_t = triton_intel_gpu.sub_group_transpose %local_buffer, %src : tensor<256x32xf16>
       ```
+
+      *Note*: It is undefined behavior to use this operation on tensors with a
+      layout different to the one mentioned above.
    }];
   let arguments = (ins TT_Ptr: $local_buffer, TT_Tensor:$src);
   let results = (outs TT_Tensor:$res);
