@@ -263,8 +263,7 @@ public:
     triton::populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
     triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
-
-    mlir::populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
+    populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
   }
 
 private:

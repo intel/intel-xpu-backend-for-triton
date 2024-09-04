@@ -212,6 +212,10 @@ void mlir::triton::populateGPUToTritonGENConversionPatterns(
   populateWithGenerated(patterns);
   // This will ensure that the gpu-to-triton-gen lowering is prefered to the
   // gpu-to-llvm-spv lowering while overlaps exist between the two.
+  // FIXME: Replace the gpu-to-triton-gen lowering of GPUBarrier with the
+  // gpu-to-llvm-spv one. Currently its not done because it results in some
+  // barriers using passthrough attributes, while others don't, which is
+  // confusing to test.
   constexpr int patternBenefitPreferTritonGENLowering = 20;
   patterns.add<GPUBarrierOpLowering, GPUSubgroupReduceOpLowering>(
       converter, patternBenefitPreferTritonGENLowering);
