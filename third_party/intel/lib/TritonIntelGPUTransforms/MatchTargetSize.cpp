@@ -591,7 +591,7 @@ void MatchTargetSizePass::initNativeOperationSizes() {
   nativeSizes.setDotShape(32, {8, 16, 8});
 
   nativeSizes.setBlockMemShape(8, {16, 64, 32, 32});
-  nativeSizes.setBlockMemShape(16, {32, 32, 32, 16});
+  nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
   nativeSizes.setBlockMemShape(32, {8, 8, 8, 16});
 
   nativeSizes.setLoadStoreSize(512); // max 512DW;
