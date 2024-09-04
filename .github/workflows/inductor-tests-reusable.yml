@@ -1,4 +1,4 @@
-name: Pytorch inductor tests
+name: Pytorch inductor tests reusable
 
 on:
   workflow_dispatch:
