@@ -246,9 +246,7 @@ static std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
   return std::nullopt;
 }
 
-// This function folds the `op` operation and returns the constant value if it
-// has successfully folded to a constant. Otherwise, it returns `std::nullopt`.
-static std::optional<int64_t> getFoldedConstantValue(Operation *op) {
+std::optional<int64_t> getFoldedConstantValue(Operation *op) {
   SmallVector<OpFoldResult> results;
   if (failed(op->fold(results))) {
     return std::nullopt;

@@ -15,6 +15,17 @@
 
 #define DEBUG_TYPE "triton-raise-block-pointer"
 
+// This pass does manage to raise tensor of pointers into block pointers for
+// simple cases (e.g. 03 matmul tutorial). However, this pass has several know
+// limitations:
+//   - Masks and modulos are not correctly handled by this pass. Issue #1784
+//   (https://github.com/intel/intel-xpu-backend-for-triton/issues/1784) has
+//   been created to address this limitation.
+//   - The pattern matching method used in this pass makes it prone to fail
+//   raising memory accesses. For the moment, the most fragile part of the pass
+//   is probably the support for fixing the axis of the offsets
+//   (see comment l.867).
+
 using namespace mlir;
 
 namespace mlir::triton::intel {
@@ -657,6 +668,122 @@ struct TritonRaiseBlockPointer
     return success();
   }
 
+  Value getFinalValue(Value value) {
+    auto defOp = value.getDefiningOp();
+    if (!defOp) {
+      // look init values outside the loop
+      BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+      Operation *parentOp = blockArg.getOwner()->getParentOp();
+      scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp);
+      return forOp ? getFinalValue(
+                         forOp.getInitArgs()[blockArg.getArgNumber() - 1])
+                   : value;
+    }
+
+    if (isa<triton::ExpandDimsOp>(defOp) || isa<triton::BroadcastOp>(defOp) ||
+        isa<triton::SplatOp>(defOp) || isa<arith::IndexCastOp>(defOp))
+      return getFinalValue(defOp->getOperand(0));
+    if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
+      if (mlir::triton::gpu::intel::isConstant(addOp.getLhs(), 0))
+        return getFinalValue(addOp.getRhs());
+      if (mlir::triton::gpu::intel::isConstant(addOp.getRhs(), 0))
+        return getFinalValue(addOp.getLhs());
+      return addOp.getResult();
+    } else if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
+      if (mlir::triton::gpu::intel::isConstant(mulOp.getLhs(), 1))
+        return getFinalValue(mulOp.getRhs());
+      if (mlir::triton::gpu::intel::isConstant(mulOp.getRhs(), 1))
+        return getFinalValue(mulOp.getLhs());
+      return mulOp.getResult();
+    }
+    return value;
+  }
+
+  bool lookForMulitplyingValueInDefiningPath(Value &val, Value &ref) {
+    Operation *defOp = getFinalValue(val).getDefiningOp();
+    if (!defOp)
+      return false;
+
+    if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
+      if ((mulOp.getLhs() == ref) || (mulOp.getRhs() == ref))
+        return true;
+    }
+    return false;
+  }
+
+  bool areValuesEqual(Value val1, Value val2) {
+    if (val1 == val2)
+      return true;
+    Operation *op1 = val1.getDefiningOp();
+    Operation *op2 = val2.getDefiningOp();
+    if (op1 && op2) {
+      auto intVal1 = mlir::triton::gpu::intel::getFoldedConstantValue(op1);
+      auto intVal2 = mlir::triton::gpu::intel::getFoldedConstantValue(op2);
+      if (intVal1.has_value() && intVal2.has_value()) {
+        return intVal1.value() == intVal2.value();
+      }
+    }
+    return false;
+  }
+
+  int checkIfOffsetMultipliedByStride(Value operand,
+                                      SmallVector<Value> &strides) {
+    Operation *defOp = operand.getDefiningOp();
+
+    SmallVector<Value> finalStrides;
+    // check all strides different
+    // if not => skip
+    for (auto stride : strides) {
+      Value currentVal = getFinalValue(stride);
+      if (llvm::any_of(finalStrides, [&](Value val) {
+            return areValuesEqual(val, currentVal);
+          }))
+        return -1;
+      finalStrides.push_back(currentVal);
+    }
+
+    int axis = 0;
+    for (auto finalStride : finalStrides) {
+      // search for a mul to finalStride in the predecessors
+      if (lookForMulitplyingValueInDefiningPath(operand, finalStride))
+        return axis;
+      if (mlir::triton::gpu::intel::isConstant(finalStride, 1))
+        return axis;
+      ++axis;
+    }
+    return -1;
+  }
+
+  // Return true if a `triton::ExpandOp` has been found is the defining path.
+  bool hasExpandOpInDefiningPath(Value value) {
+    Operation *defOp = value.getDefiningOp();
+    if (!defOp) {
+      // look init values outside the loop
+      BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+      Operation *parentOp = blockArg.getOwner()->getParentOp();
+      scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp);
+      return forOp ? hasExpandOpInDefiningPath(
+                         forOp.getInitArgs()[blockArg.getArgNumber() - 1])
+                   : false;
+    }
+
+    if (isa<triton::ExpandDimsOp>(defOp))
+      return true;
+    if (isa<arith::ConstantOp>(defOp))
+      return false;
+    if (isa<triton::MakeRangeOp>(defOp))
+      return false;
+    if (isa<triton::BroadcastOp>(defOp) || isa<triton::SplatOp>(defOp) ||
+        isa<arith::IndexCastOp>(defOp) || isa<arith::RemUIOp>(defOp) ||
+        isa<arith::RemSIOp>(defOp))
+      return hasExpandOpInDefiningPath(defOp->getOperand(0));
+    if (isa<arith::AddIOp>(defOp) || isa<arith::MulIOp>(defOp))
+      return hasExpandOpInDefiningPath(defOp->getOperand(0)) ||
+             hasExpandOpInDefiningPath(defOp->getOperand(1));
+
+    return true;
+  }
+
   LogicalResult rewriteAddPtrOp(triton::AddPtrOp op) {
     OpBuilder builder(op);
     Location loc = op.getLoc();
@@ -737,6 +864,41 @@ struct TritonRaiseBlockPointer
     if (failed(visitOperand(addptrOp.getOffset(), offsetState,
                             addptrOp.getLoc(), builder))) {
       return failure();
+    }
+
+    // The axis to which the offset must be applied need to be known.
+    // However, in some cases, the pass fails to detect whether an offset should
+    // be applied to an axis other than the first. We, therefore, try to find
+    // out if the offset is multiplied by a known stride. Example:
+    //    off += BLOCK_SIZE_K * stride_ak
+    // Indeed, as the axis of the stride is known with certainty, we can assume
+    // that if the offset is multiplied by a known stride, the axis of offset
+    // should correspond to the axis of the stride axis. In the previous
+    // example, suppose we have strides = [stride_am, stride_ak] but offsets =
+    // [off, 0] As we found that `off` is multiplied by `stride_ak`, we correct
+    // the axis of the offsets to align the axis of `off` with axis of
+    // `stride_ak`. The corrected offsets then become: [0, off] Limitations:
+    //     - this approach based on pattern matching + user code assumptions is
+    //     (very) fragile.
+    //       if user code does not directly multiply the offset by the stride
+    //       value identified by the pass, the analysis will fail.
+    //     - in theory, this correction support should fail if the analysis
+    //     cannot reach a certain level of certainty.
+    //       Typically, if stride values are the same (e.g. [512, 512]), the
+    //       support is unable to determine the right axis and will not correct
+    //       anything. That said, we do not guarantee the current support does
+    //       not give rise to false positive detections.
+    auto parentOp = addptrOp->getParentOp();
+    if (isa<scf::ForOp>(parentOp)) {
+      // ExpandOp direclty sets offset to the expected axis.
+      // So if an ExpandOp has been found in defining path, the analysis is
+      // skipped.
+      if (!hasExpandOpInDefiningPath(addptrOp.getOffset())) {
+        auto axis = checkIfOffsetMultipliedByStride(addptrOp.getOffset(),
+                                                    ptrState.strides);
+        if (axis >= 1)
+          std::swap(offsetState.offsets[0], offsetState.offsets[axis]);
+      }
     }
 
     assert(ptrState.source && "ptr field should provide source / base pointer");
