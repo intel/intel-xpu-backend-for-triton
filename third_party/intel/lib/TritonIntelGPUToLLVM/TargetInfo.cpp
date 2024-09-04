@@ -35,6 +35,11 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   });
 }
 
+void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
+                                   Value ptr, Value val) const {
+  llvm::report_fatal_error("IntelGPU does not support stmatrix");
+}
+
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Type elemTy,
                               Value pred) const {
@@ -136,14 +141,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   }
 
   return true;
-}
-
-bool TargetInfo::canUseStMatrix(RankedTensorType srcTy,
-                                ArrayRef<unsigned> paddedRepShape,
-                                ArrayRef<unsigned> outOrd,
-                                unsigned accumNumReplicates,
-                                int swizzleByteWidth) const {
-  return false;
 }
 
 bool TargetInfo::processReplicaUsingStMatrix(

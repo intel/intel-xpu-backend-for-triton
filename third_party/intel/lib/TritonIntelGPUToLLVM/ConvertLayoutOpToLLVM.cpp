@@ -21,7 +21,6 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::isaDistributedLayout;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
@@ -44,7 +43,10 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
+    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+            srcLayout) &&
+        isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+            dstLayout)) {
       return lowerDistributedToDistributed(op, adaptor, rewriter);
     }
     if (isa<DpasEncodingAttr>(srcLayout) &&
