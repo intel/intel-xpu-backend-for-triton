@@ -8,7 +8,7 @@ on:
     paths:
       - .github/workflows/no-basekit-build-test.yml
       - scripts/triton.yml
-      - scripts/skiplist/no-basekit/*
+      - scripts/skiplist/no-basekit/language.txt
 
 
 permissions: read-all
