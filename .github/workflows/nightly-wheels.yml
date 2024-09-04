@@ -148,3 +148,4 @@ jobs:
         with:
           name: wheels-pytorch-py${{ matrix.python }}-${{ env.TIMESTAMP }}
           path: wheels
+          include-hidden-files: true
