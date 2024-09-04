@@ -12,7 +12,7 @@ on:
         type: string
         default: all
       mode:
-        description: Inference/Training
+        description: inference, inference, or inference-no-freezing
         type: string
         default: all
       test_mode:
@@ -45,7 +45,6 @@ permissions: read-all
 env:
   TRITON_DISABLE_LINE_INFO: 1
   PYTHON_VERSION: "3.10"
-  BENCHMARK_REPO: weishi-deng/benchmark.git
 
 jobs:
   run_tests:
@@ -246,6 +245,8 @@ jobs:
           GITHUB_RUN_ID=$GITHUB_RUN_ID
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
           GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          E2E_MODE=${{ inputs.mode }}
+          E2E_TEST_MODE=${{ inputs.test_mode }}
           PYTHON_VERSION=$PYTHON_VERSION
           PYTORCH_REPO=$PYTORCH_REPO
           PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
