@@ -74,6 +74,7 @@ jobs:
           set -x
           export DEBUG=1
           cd python
+          conda run --no-capture-output -n triton pip install pybind11
           conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
 
       - name: Run core tests
