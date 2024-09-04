@@ -180,7 +180,7 @@ def TTIG_SubGroupTransposeOp
 | sub_group_size-1   | [sub_group_size-1+i*sub_group_size|i in [0, sub_group_size)] |
     ```
 
-    In order to do this traspose, each sub-group stores its contents to local
+    In order to do this transpose, each sub-group stores its contents to local
     memory via `$local_buffer`, each of them forming a matrix there, and loads
     them back transposed. Note no barriers will be needed as no memory is shared
     across sub-groups.
