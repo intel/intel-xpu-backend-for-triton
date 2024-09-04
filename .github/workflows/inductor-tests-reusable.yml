@@ -1,7 +1,7 @@
 name: Pytorch inductor tests reusable
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       pytorch_ref:
         description: PyTorch ref, keep empty for default
