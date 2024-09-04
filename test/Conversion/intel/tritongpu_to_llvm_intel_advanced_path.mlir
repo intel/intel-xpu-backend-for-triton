@@ -292,3 +292,66 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
     tt.return %0 : tensor<16x16xf32>
   }
 }
+
+// -----
+
+#warp = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+
+// CHECK-LABEL:   llvm.func spir_kernelcc @test(
+// CHECK-SAME:                                  %[[VAL_0:.*]]: f32) -> vector<16xf32> attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [64 : i32, 1 : i32, 1 : i32]} {
+// CHECK:           %[[VAL_2:.*]] = llvm.mlir.poison : vector<16xf32>
+// CHECK:           %[[VAL_3:.*]] = llvm.mlir.constant(0 : i32) : i32
+// CHECK:           %[[VAL_4:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_3]])
+// CHECK:           %[[VAL_5:.*]] = llvm.insertelement %[[VAL_4]], %[[VAL_2]]{{\[}}%[[VAL_3]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_6:.*]] = llvm.mlir.constant(1 : i32) : i32
+// CHECK:           %[[VAL_7:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_6]])
+// CHECK:           %[[VAL_8:.*]] = llvm.insertelement %[[VAL_7]], %[[VAL_5]]{{\[}}%[[VAL_6]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_9:.*]] = llvm.mlir.constant(2 : i32) : i32
+// CHECK:           %[[VAL_10:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_9]])
+// CHECK:           %[[VAL_11:.*]] = llvm.insertelement %[[VAL_10]], %[[VAL_8]]{{\[}}%[[VAL_9]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_12:.*]] = llvm.mlir.constant(3 : i32) : i32
+// CHECK:           %[[VAL_13:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_12]])
+// CHECK:           %[[VAL_14:.*]] = llvm.insertelement %[[VAL_13]], %[[VAL_11]]{{\[}}%[[VAL_12]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_15:.*]] = llvm.mlir.constant(4 : i32) : i32
+// CHECK:           %[[VAL_16:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_15]])
+// CHECK:           %[[VAL_17:.*]] = llvm.insertelement %[[VAL_16]], %[[VAL_14]]{{\[}}%[[VAL_15]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_18:.*]] = llvm.mlir.constant(5 : i32) : i32
+// CHECK:           %[[VAL_19:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_18]])
+// CHECK:           %[[VAL_20:.*]] = llvm.insertelement %[[VAL_19]], %[[VAL_17]]{{\[}}%[[VAL_18]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_21:.*]] = llvm.mlir.constant(6 : i32) : i32
+// CHECK:           %[[VAL_22:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_21]])
+// CHECK:           %[[VAL_23:.*]] = llvm.insertelement %[[VAL_22]], %[[VAL_20]]{{\[}}%[[VAL_21]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_24:.*]] = llvm.mlir.constant(7 : i32) : i32
+// CHECK:           %[[VAL_25:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_24]])
+// CHECK:           %[[VAL_26:.*]] = llvm.insertelement %[[VAL_25]], %[[VAL_23]]{{\[}}%[[VAL_24]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_27:.*]] = llvm.mlir.constant(8 : i32) : i32
+// CHECK:           %[[VAL_28:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_27]])
+// CHECK:           %[[VAL_29:.*]] = llvm.insertelement %[[VAL_28]], %[[VAL_26]]{{\[}}%[[VAL_27]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_30:.*]] = llvm.mlir.constant(9 : i32) : i32
+// CHECK:           %[[VAL_31:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_30]])
+// CHECK:           %[[VAL_32:.*]] = llvm.insertelement %[[VAL_31]], %[[VAL_29]]{{\[}}%[[VAL_30]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_33:.*]] = llvm.mlir.constant(10 : i32) : i32
+// CHECK:           %[[VAL_34:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_33]])
+// CHECK:           %[[VAL_35:.*]] = llvm.insertelement %[[VAL_34]], %[[VAL_32]]{{\[}}%[[VAL_33]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_36:.*]] = llvm.mlir.constant(11 : i32) : i32
+// CHECK:           %[[VAL_37:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_36]])
+// CHECK:           %[[VAL_38:.*]] = llvm.insertelement %[[VAL_37]], %[[VAL_35]]{{\[}}%[[VAL_36]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_39:.*]] = llvm.mlir.constant(12 : i32) : i32
+// CHECK:           %[[VAL_40:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_39]])
+// CHECK:           %[[VAL_41:.*]] = llvm.insertelement %[[VAL_40]], %[[VAL_38]]{{\[}}%[[VAL_39]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_42:.*]] = llvm.mlir.constant(13 : i32) : i32
+// CHECK:           %[[VAL_43:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_42]])
+// CHECK:           %[[VAL_44:.*]] = llvm.insertelement %[[VAL_43]], %[[VAL_41]]{{\[}}%[[VAL_42]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_45:.*]] = llvm.mlir.constant(14 : i32) : i32
+// CHECK:           %[[VAL_46:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_45]])
+// CHECK:           %[[VAL_47:.*]] = llvm.insertelement %[[VAL_46]], %[[VAL_44]]{{\[}}%[[VAL_45]] : i32] : vector<16xf32>
+// CHECK:           %[[VAL_48:.*]] = llvm.mlir.constant(15 : i32) : i32
+// CHECK:           %[[VAL_49:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_48]])
+// CHECK:           %[[VAL_50:.*]] = llvm.insertelement %[[VAL_49]], %[[VAL_47]]{{\[}}%[[VAL_48]] : i32] : vector<16xf32>
+// CHECK:           llvm.return %[[VAL_50]] : vector<16xf32>
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+  tt.func @test(%arg0: tensor<16xf32>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>> {
+    %0 = triton_gpu.convert_layout %arg0 : tensor<16xf32> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
+    tt.return %0 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
+  }
+}

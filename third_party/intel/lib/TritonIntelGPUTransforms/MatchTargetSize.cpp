@@ -41,6 +41,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 
+#include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -805,7 +806,63 @@ Value MatchTargetSizePass::getSubVal(Operation *op, Value val,
   return dstVal;
 }
 
+static Value hackAlloc(OpBuilder &b, Location loc, Type ptrTy, int64_t size) {
+  auto func = static_cast<FunctionOpInterface>(
+      &*b.getInsertionPoint()
+            ->getParentWithTrait<FunctionOpInterface::Trait>());
+  auto m = func->getParentOfType<ModuleOp>();
+  constexpr StringLiteral SharedAttrName = "triton_gpu.shared";
+  if (!m->getAttr(SharedAttrName)) {
+    m->setAttr(SharedAttrName, b.getIndexAttr(size));
+    func.insertArgument(func.getNumArguments(), ptrTy, b.getDictionaryAttr({}),
+                        loc);
+  }
+  return func.getArguments().back();
+}
+
+static SmallVector<Value> glueForReduction(OpBuilder &builder, Location loc,
+                                           ArrayRef<Value> subVals) {
+  assert(subVals.size() % 2 == 0 && "Expecting even number of values");
+  SmallVector<Value> result;
+  SmallVector<Value> lhs;
+  SmallVector<Value> rhs;
+  for (auto [index, value] : llvm::enumerate(subVals))
+    (index % 2 == 0 ? lhs : rhs).push_back(value);
+  auto operandType = cast<RankedTensorType>(subVals.front().getType());
+  SmallVector<int64_t> glueShape(operandType.getShape());
+  assert(glueShape.size() == 2 && "Expecting two-dimensional operator");
+  glueShape[0] *= 2;
+  RankedTensorType glueType =
+      RankedTensorType::get(glueShape, operandType.getElementType());
+  llvm::transform(llvm::zip_equal(lhs, rhs), std::back_inserter(result),
+                  [&builder, loc, glueType](auto pair) -> Value {
+                    auto [lhs, rhs] = pair;
+                    return builder.create<triton::gpu::intel::GlueOp>(
+                        loc, glueType, ValueRange{lhs, rhs});
+                  });
+  return result;
+}
+
+static Value allocateSLMForTransposedReduction(tt::ReduceOp op, unsigned step,
+                                               OpBuilder &b) {
+  auto m = op->getParentOfType<ModuleOp>();
+
+  Value src = op.getSrcs().front();
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  Location loc = op.getLoc();
+
+  // Fixed size for num_warps matrices of sg_size^2 shape.
+  int64_t size = step * step * srcTy.getElementTypeBitWidth() / 8 *
+                 ttg::TritonGPUDialect::getNumWarps(m);
+  Type allocTy = cast<RankedTensorType>(src.getType()).getElementType();
+  Type ptrTy = tt::PointerType::get(allocTy, tt::TritonGEN::kWorkgroup);
+  return hackAlloc(b, loc, ptrTy, size);
+}
+
 void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
+  bool transposedReduction =
+      mlir::triton::gpu::intel::applyTransposedReduction();
+
   Location loc = op.getLoc();
   OpBuilder b(op);
   assert(op.getSrcs().size() == 1 && "only support one src");
@@ -818,14 +875,23 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
   int64_t outer = dims == 2 ? srcTy.getShape()[0] : 1;
 
   SmallVector<Value> glueVals;
-  unsigned step = 8; // FIXME: fixed to 8 for now.
+
+  // Fixed for transpose/warp reduction.
+  constexpr unsigned glueStep = 8;
+  unsigned step = transposedReduction ? 16 : glueStep;
+
+  Value localBuffer = transposedReduction
+                          ? allocateSLMForTransposedReduction(op, step, b)
+                          : Value{};
+
   for (unsigned i = 0; i < outer; i += step) {
     SmallVector<Value> subVals;
-    // FIXME: 16 is the supported IR reduce length
     for (unsigned j = 0; j < srcTy.getShape()[axis]; j += 16) {
-      Value subVal = getSubVal(op, src, {i, j}, {step, 16});
+      Value subVal = getSubVal(op, src, {i, j}, {glueStep, 16});
       subVals.push_back(subVal);
     }
+    if (transposedReduction)
+      subVals = glueForReduction(b, loc, subVals);
     auto subType = RankedTensorType::get({step, 16}, srcTy.getElementType());
     auto combine = op.getCombineOp().front().getOperations().begin();
     StringAttr id = combine->getName().getIdentifier();
@@ -851,20 +917,39 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
       assert(false && "add more reduce size support");
     }
 
-    SmallVector<Value> subOps;
-    for (unsigned j = 0; j < step; j++) {
-      auto subType = RankedTensorType::get(16, srcTy.getElementType());
-      Value subAcc = b.create<ttgi::ExtractOp>(loc, subType, acc, j);
-      auto subRed = b.create<tt::ReduceOp>(loc, subAcc, 0);
-      Region &subRegion = subRed.getCombineOp();
-      b.cloneRegionBefore(op.getCombineOp(), subRegion, subRegion.end());
-      subOps.push_back(subRed.getResult()[0]);
+    if (transposedReduction) {
+      Value accT = b.create<ttgi::SubGroupTransposeOp>(loc, acc.getType(),
+                                                       localBuffer, acc);
+      auto sgReduce = b.create<tt::ReduceOp>(loc, accT, axis);
+      Region &sgReduceRegion = sgReduce.getCombineOp();
+      b.cloneRegionBefore(op.getCombineOp(), sgReduceRegion,
+                          sgReduceRegion.end());
+      glueVals.push_back(sgReduce->getResult(0));
+    } else {
+      SmallVector<Value> subOps;
+      for (unsigned j = 0; j < step; j++) {
+        auto subType = RankedTensorType::get(16, srcTy.getElementType());
+        Value subAcc = b.create<ttgi::ExtractOp>(loc, subType, acc, j);
+        auto subRed = b.create<tt::ReduceOp>(loc, subAcc, 0);
+        Region &subRegion = subRed.getCombineOp();
+        b.cloneRegionBefore(op.getCombineOp(), subRegion, subRegion.end());
+        subOps.push_back(subRed.getResult()[0]);
+      }
+      glueVals.append(subOps);
     }
-    glueVals.append(subOps);
   }
 
-  auto glue = b.create<ttgi::GlueOp>(loc, op.getResultTypes()[0], glueVals);
-  op->replaceAllUsesWith(glue->getResults());
+  if (transposedReduction) {
+    auto resultType = cast<RankedTensorType>(op.getResultTypes()[0]);
+    RankedTensorType glueType = RankedTensorType::get(
+        resultType.getShape(), resultType.getElementType());
+    Value glue = b.create<ttgi::GlueOp>(loc, glueType, glueVals);
+    Value res = b.create<ttg::ConvertLayoutOp>(loc, resultType, glue);
+    op->replaceAllUsesWith(ValueRange{res});
+  } else {
+    auto glue = b.create<ttgi::GlueOp>(loc, op.getResultTypes()[0], glueVals);
+    op->replaceAllUsesWith(glue->getResults());
+  }
   op->erase();
 
   return;
