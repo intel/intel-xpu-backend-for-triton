@@ -4,10 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "5 2 * * *"
-  push:
-    paths:
-      - .github/workflows/conda-build-test.yml
-      - scripts/triton.yml
 
 permissions: read-all
 
