@@ -122,7 +122,11 @@ if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
 fi
 
-$SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --upstream-pytorch --pinned $([ $VENV = true ] && echo "--venv")
+if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
+  $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pytorch --ipex --pinned --source $([ $VENV = true ] && echo "--venv")
+else
+  $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --upstream-pytorch --pinned $([ $VENV = true ] && echo "--venv")
+fi
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then
@@ -316,9 +320,6 @@ test_triton() {
   fi
   if [ "$TEST_MICRO_BENCHMARKS" = true ]; then
     run_microbench_tests
-  fi
-  if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
-    $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned --source --pytorch --ipex
   fi
   if [ "$TEST_BENCHMARK_SOFTMAX" = true ]; then
     run_benchmark_softmax

@@ -6,10 +6,6 @@ import triton.language as tl
 from test_core import check_type_supported
 
 
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target()[0] == "cuda"
-
-
 @triton.jit
 def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option: tl.constexpr):
     pid = tl.program_id(0)
