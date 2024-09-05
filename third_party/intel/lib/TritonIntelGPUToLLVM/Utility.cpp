@@ -18,13 +18,12 @@ using namespace mlir::triton;
 namespace mlir::LLVM::intel {
 
 static Type findShuffleType(RewriterBase &rewriter, Type valType) {
-  if (rewriter.getI8Type() == valType || rewriter.getI16Type() == valType ||
-      rewriter.getI32Type() == valType || rewriter.getI64Type() == valType ||
-      rewriter.getF16Type() == valType || rewriter.getF32Type() == valType ||
-      rewriter.getF64Type() == valType) {
+  if (valType.isInteger(8) || valType.isInteger(16) || valType.isInteger(32) ||
+      valType.isInteger(64) || valType.isF16() || valType.isF32() ||
+      valType.isF64()) {
     return valType;
   }
-  if (rewriter.getBF16Type() == valType) {
+  if (valType.isBF16()) {
     return rewriter.getI16Type();
   }
 
@@ -42,7 +41,8 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
 
   unsigned bitWidth = valType.getIntOrFloatBitWidth();
   if (shuffleType != valType) {
-    assert(shuffleType.isInteger());
+    assert(shuffleType.isInteger() &&
+           "expected to bitcast to an integer for unsupported shuffles");
     if (!valType.isInteger()) {
       val = bitcast(val, int_ty(bitWidth));
     }
