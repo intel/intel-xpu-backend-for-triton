@@ -41,6 +41,7 @@ class XPUOptions:
     threads_per_warp: int = 32
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     allow_fp8e4nv: bool = False
