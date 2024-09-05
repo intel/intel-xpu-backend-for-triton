@@ -51,9 +51,11 @@ jobs:
       - name: Identify pinned versions
         run: |
           cd pytorch
-          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" >> $GITHUB_ENV
-          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" >> $GITHUB_ENV
-          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> $GITHUB_ENV
+          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a $GITHUB_ENV
+          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" | tee -a $GITHUB_ENV
+          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a $GITHUB_ENV
+          echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" | tee -a $GITHUB_ENV
+          echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
 
       - name: Identify Triton commit id
         run: |
@@ -112,6 +114,23 @@ jobs:
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
+      - name: Install timm package
+        uses: ./.github/actions/install-dependency
+        with:
+          package: timm
+          repository: huggingface/pytorch-image-models
+          ref: ${{ env.TIMM_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+
+      - name: Install transformers package
+        uses: ./.github/actions/install-dependency
+        with:
+          package: transformers
+          repository: huggingface/transformers
+          ref: ${{ env.TRANSFORMERS_VERSION }}
+          try-tag-prefix: v
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+
       - name: Prepare wheels for upload
         run: |
           mkdir -p wheels
@@ -120,6 +139,9 @@ jobs:
           cp -L torchvision*/dist/*.whl wheels/
           cp -L torchtext*/dist/*.whl wheels/
           cp -L torchaudio*/dist/*.whl wheels/
+          cp -L timm*/dist/*.whl wheels/
+          cp -L transformers*/dist/*.whl wheels/
+          ls -lh wheels/
 
       - name: Report environment details
         run: |
