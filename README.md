@@ -23,7 +23,7 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [T
 git clone https://github.com/intel/intel-xpu-backend-for-triton.git;
 cd intel-xpu-backend-for-triton;
 
-pip install ninja cmake wheel; # build-time dependencies
+pip install ninja cmake wheel pybind11; # build-time dependencies
 pip install -e python
 ```
 
@@ -36,7 +36,7 @@ cd intel-xpu-backend-for-triton;
 python -m venv .venv --prompt triton;
 source .venv/bin/activate;
 
-pip install ninja cmake wheel; # build-time dependencies
+pip install ninja cmake wheel pybind11; # build-time dependencies
 pip install -e python
 ```
 

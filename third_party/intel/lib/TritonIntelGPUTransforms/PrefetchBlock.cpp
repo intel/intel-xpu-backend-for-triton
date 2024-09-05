@@ -390,6 +390,7 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
   auto newLoop =
       b.create<scf::ForOp>(loop.getLoc(), loop.getLowerBound(),
                            loop.getUpperBound(), loop.getStep(), iterArgs);
+  newLoop->setAttrs(loop->getAttrs());
   auto args = newLoop.getBody()->getArguments();
 
   for (auto [lhs, rhs] :

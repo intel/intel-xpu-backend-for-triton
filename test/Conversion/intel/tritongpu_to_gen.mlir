@@ -22,8 +22,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(i1, i1)>
     // CHECK-NEXT: [[ARG2_0:%.*]] = llvm.extractvalue %arg2[0] : !llvm.struct<(f32, f32)>
     // CHECK:      [[VEC:%.*]] = llvm.mlir.undef : vector<1xf32>
-    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i32
-    // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i32] : vector<1xf32>
+    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i64
+    // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
     // CHECK-NEXT: ^bb1:
@@ -62,8 +62,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(i1, i1)>
     // CHECK-NEXT: [[ARG2_0:%.*]] = llvm.extractvalue %arg2[0] : !llvm.struct<(f32, f32)>
     // CHECK:      [[VEC:%.*]] = llvm.mlir.undef : vector<1xf32>
-    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i32
-    // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i32] : vector<1xf32>
+    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i64
+    // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast {{.*}} : vector<1xf32> to i32
     // CHECK:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i32)
     // CHECK-NEXT: ^bb1:
@@ -114,8 +114,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK-NEXT: [[ARG1_7:%.*]] = llvm.extractvalue %arg1[7] : !llvm.struct<(i1, i1, i1, i1, i1, i1, i1, i1)>
     // CHECK-NEXT: [[ARG2_0:%.*]] = llvm.extractvalue %arg2[0] : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
     // CHECK:      [[VEC:%.*]] = llvm.mlir.undef : vector<1xf16>
-    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i32
-    // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i32] : vector<1xf16>
+    // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : index) : i64
+    // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[ARG2_0]], [[VEC]][[[CST_0]] : i64] : vector<1xf16>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast [[IE1]] : vector<1xf16> to i16
     // CHECK:      llvm.cond_br [[ARG1_0]], ^bb1, ^bb2([[BCAST0]] : i16)
     // CHECK-NEXT: ^bb1:
@@ -806,8 +806,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   tt.func @convert_dot(%A: tensor<16x16xf16, #blocked0>, %B: tensor<16x16xf16, #blocked0>) {
     %AA = triton_gpu.local_alloc %A : (tensor<16x16xf16, #blocked0>) -> !tt.memdesc<16x16xf16, #shared0, #triton_gpu.shared_memory>
     %BB = triton_gpu.local_alloc %B : (tensor<16x16xf16, #blocked0>) -> !tt.memdesc<16x16xf16, #shared0, #triton_gpu.shared_memory>
-    // CHECK: builtin.unrealized_conversion_cast %arg1 : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)> to tensor<16x16xf16, #blocked>
-    // CHECK: builtin.unrealized_conversion_cast %arg0 : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)> to tensor<16x16xf16, #blocked>
     %AA_DOT = triton_gpu.local_load %AA : !tt.memdesc<16x16xf16, #shared0, #triton_gpu.shared_memory> -> tensor<16x16xf16, #dot_operand_a>
     %BB_DOT = triton_gpu.local_load %BB : !tt.memdesc<16x16xf16, #shared0, #triton_gpu.shared_memory> -> tensor<16x16xf16, #dot_operand_b>
     %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #dpas0>
@@ -957,8 +955,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   tt.func @matmul_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:!tt.memdesc<128x32xf16, #shared>, %b:!tt.memdesc<32x256xf16, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
-    // CHECK: builtin.unrealized_conversion_cast %arg2 : !llvm.struct<(ptr<3>, i32, i32, i32, i32)> to !tt.memdesc<32x256xf16, #shared>
-    // CHECK: builtin.unrealized_conversion_cast %arg1 : !llvm.struct<(ptr<3>, i32, i32, i32, i32)> to !tt.memdesc<128x32xf16, #shared>
     %a_mat = triton_gpu.local_load %a : !tt.memdesc<128x32xf16, #shared> -> tensor<128x32xf16, #dot_operand_a>
     %b_mat = triton_gpu.local_load %b : !tt.memdesc<32x256xf16, #shared> -> tensor<32x256xf16, #dot_operand_b>
 
@@ -985,8 +981,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   tt.func @matmul884_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:!tt.memdesc<32x64xf16, #shared0>, %b:!tt.memdesc<64x64xf16, #shared1>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x64xf32, #dpas>
-    // CHECK: builtin.unrealized_conversion_cast %arg2 : !llvm.struct<(ptr<3>, i32, i32, i32, i32)> to !tt.memdesc<64x64xf16, #shared>
-    // CHECK: builtin.unrealized_conversion_cast %arg1 : !llvm.struct<(ptr<3>, i32, i32, i32, i32)> to !tt.memdesc<32x64xf16, #shared1>
     %a_mat = triton_gpu.local_load %a : !tt.memdesc<32x64xf16, #shared0> -> tensor<32x64xf16, #dot_operand_a>
     %b_mat = triton_gpu.local_load %b : !tt.memdesc<64x64xf16, #shared1> -> tensor<64x64xf16, #dot_operand_b>
 
@@ -1034,8 +1028,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   tt.func @matmul_tf32dot(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:!tt.memdesc<32x16xf32, #shared>, %b:!tt.memdesc<16x32xf32, #shared>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
-    // CHECK: builtin.unrealized_conversion_cast %arg2 : !llvm.struct<(ptr<3>, i32, i32, i32, i32)> to !tt.memdesc<16x32xf32, #shared>
-    // CHECK: builtin.unrealized_conversion_cast %arg1 : !llvm.struct<(ptr<3>, i32, i32, i32, i32)> to !tt.memdesc<32x16xf32, #shared>
     %a_mat = triton_gpu.local_load %a : !tt.memdesc<32x16xf32, #shared> -> tensor<32x16xf32, #dot_operand_a>
     %b_mat = triton_gpu.local_load %b : !tt.memdesc<16x32xf32, #shared> -> tensor<16x32xf32, #dot_operand_b>
 
@@ -1126,7 +1118,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT: [[EV1_ARG0:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>)>
     // CHECK:      [[CST_TRUE:%.*]] = llvm.mlir.constant(true) : i1
     // CHECK:      [[UNDEF1:%.*]] = llvm.mlir.undef : vector<1xf32>
-    // CHECK:      [[IE1:%.*]] = llvm.insertelement [[EV0_ARG2]], [[UNDEF1]][{{.*}} : i32] : vector<1xf32>
+    // CHECK:      [[IE1:%.*]] = llvm.insertelement [[EV0_ARG2]], [[UNDEF1]][{{.*}} : i64] : vector<1xf32>
     // CHECK-NEXT: [[PRED1:%.*]] = llvm.and [[CST_TRUE]], {{.*}} : i1
     // CHECK-NEXT: [[ZERO1:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
     // CHECK:      llvm.cond_br [[PRED1]], ^bb1, ^bb2([[ZERO1]] : f32)
@@ -1137,7 +1129,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT: ^bb2([[RMW_PHI1:%.*]]: f32):
     // CHECK-NEXT:   [[RMW_CAST:%.*]] = llvm.bitcast [[RMW_PHI1]] : f32 to f32
     // CHECK-NEXT:   [[UNDEF2:%.*]] = llvm.mlir.undef : vector<1xf32>
-    // CHECK:        [[IE2:%.*]] = llvm.insertelement [[EV1_ARG2]], [[UNDEF2]][{{.*}} : i32] : vector<1xf32>
+    // CHECK:        [[IE2:%.*]] = llvm.insertelement [[EV1_ARG2]], [[UNDEF2]][{{.*}} : i64] : vector<1xf32>
     // CHECK-NEXT:   [[PRED2:%.*]] = llvm.and [[CST_TRUE]], {{.*}} : i1
     // CHECK-NEXT:   [[ZERO2:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
     // CHECK:        llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
@@ -1164,7 +1156,7 @@ module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32,
     // CHECK:      [[CMP1:%.*]] = llvm.icmp "eq"
     // CHECK-NEXT: [[AND1:%.*]] = llvm.and [[AND]], [[CMP1]]  : i1
     // CHECK:      [[UNDEF1:%.*]] = llvm.mlir.undef : vector<1xf32>
-    // CHECK:      [[IE1:%.*]] = llvm.insertelement %arg2, [[UNDEF1]][{{.*}} : i32] : vector<1xf32>
+    // CHECK:      [[IE1:%.*]] = llvm.insertelement %arg2, [[UNDEF1]][{{.*}} : i64] : vector<1xf32>
     // CHECK:      [[PRED:%.*]] = llvm.and [[AND1]], %arg1  : i1
     // CHECK-NEXT: [[ZERO:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
     // CHECK:      llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
@@ -1192,7 +1184,7 @@ module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32,
     // CHECK:      [[CMP1:%.*]] = llvm.icmp "eq"
     // CHECK-NEXT: [[AND1:%.*]] = llvm.and [[AND]], [[CMP1]]  : i1
     // CHECK:      [[UNDEF1:%.*]] = llvm.mlir.undef : vector<1xf32>
-    // CHECK:      [[IE1:%.*]] = llvm.insertelement %arg2, [[UNDEF1]][{{.*}} : i32] : vector<1xf32>
+    // CHECK:      [[IE1:%.*]] = llvm.insertelement %arg2, [[UNDEF1]][{{.*}} : i64] : vector<1xf32>
     // CHECK:      [[PRED:%.*]] = llvm.and [[AND1]], %arg1  : i1
     // CHECK-NEXT: [[ZERO:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
     // CHECK-NEXT: llvm.cond_br [[PRED]], ^bb1, ^bb2([[ZERO]] : f32)
