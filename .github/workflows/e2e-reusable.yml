@@ -247,6 +247,8 @@ jobs:
           GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
           E2E_MODE=${{ inputs.mode }}
           E2E_TEST_MODE=${{ inputs.test_mode }}
+          E2E_SUITE=${{ inputs.suite }}
+          E2E_DTYPE=${{ inputs.dtype }}
           PYTHON_VERSION=$PYTHON_VERSION
           PYTORCH_REPO=$PYTORCH_REPO
           PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
