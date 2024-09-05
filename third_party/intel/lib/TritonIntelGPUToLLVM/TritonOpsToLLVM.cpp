@@ -587,15 +587,14 @@ public:
   LogicalResult
   matchAndRewrite(SubGroupTransposeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    if (op.getType().getRank() != 2)
-      return failure();
     Value src = adaptor.getSrc();
-    auto vecTy = dyn_cast<VectorType>(src.getType());
+    auto vecTy = cast<VectorType>(src.getType());
     auto mod = op->getParentOfType<ModuleOp>();
     int threadsPerWarp =
         mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    if (!vecTy || vecTy.getNumElements() != threadsPerWarp)
-      return failure();
+    assert(vecTy.getNumElements() == threadsPerWarp &&
+           "Valid input tensor types should convert to a vector of size 16");
+
     Location loc = op.getLoc();
     Value localBuffer = adaptor.getLocalBuffer();
     Type offsetType = getTypeConverter()->getIndexType();
