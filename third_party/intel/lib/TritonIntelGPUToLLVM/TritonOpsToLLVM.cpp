@@ -527,7 +527,6 @@ public:
     Location loc = op.getLoc();
     Type resultType = op.getType(0);
     TritonIntelGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
-    Type convertedTy = typeConverter->convertType(resultType);
     Region &combineOp = op.getCombineOp();
     if (!combineOp.hasOneBlock() ||
         combineOp.front().getOperations().size() != 2)

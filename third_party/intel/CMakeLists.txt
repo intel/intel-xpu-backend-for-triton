@@ -8,6 +8,7 @@ add_triton_plugin(TritonXPU
   ${CMAKE_CURRENT_SOURCE_DIR}/triton_xpu.cc
 
   LINK_LIBS
+  MLIRGPUToLLVMSPV
   PostProcessLLVMIR
   TritonGENToLLVM
   TritonGENToLLVMIRTranslation

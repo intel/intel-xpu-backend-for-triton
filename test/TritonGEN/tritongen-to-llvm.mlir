@@ -1,56 +1,12 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
 // CHECK-DAG: llvm.func spir_funccc @_Z16get_sub_group_idv() -> i32
-// CHECK-DAG: llvm.func spir_funccc @_Z14get_num_groupsj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
-// CHECK-DAG: llvm.func spir_funccc @_Z14get_local_sizej(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
-// CHECK-DAG: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
-// CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
 
 llvm.func @gen_special_regs() -> i32 {
   // CHECK-LABEL: gen_special_regs
-  // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: [[CI:%.*]] = llvm.call spir_funccc @_Z12get_local_idj([[ZERO]]) {{.*}} : (i32) -> i64
-  // CHECK-NEXT: llvm.trunc [[CI]] : i64 to i32
-  %1 = triton_gen.workitem.id.x : i32
-  // CHECK: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z12get_local_idj([[ONE]]) {{.*}} : (i32) -> i64
-  %2 = triton_gen.workitem.id.y : i32
-  // CHECK: [[TWO:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z12get_local_idj([[TWO]]) {{.*}} : (i32) -> i64
-  %3 = triton_gen.workitem.id.z : i64
-
-  // CHECK: [[ZERO1:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z12get_group_idj([[ZERO1]]) {{.*}} : (i32) -> i64
-  %4 = triton_gen.workgroup.id.x : i32
-  // CHECK: [[ONE1:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z12get_group_idj([[ONE1]]) {{.*}} : (i32) -> i64
-  %5 = triton_gen.workgroup.id.y : i64
-  // CHECK: [[TWO1:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z12get_group_idj([[TWO1]]) {{.*}} : (i32) -> i64
-  %6 = triton_gen.workgroup.id.z : i32
-
-  // CHECK: [[ZERO2:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z14get_local_sizej([[ZERO2]]) {{.*}} : (i32) -> i64
-  %7 = triton_gen.workgroup.dim.x : i32
-  // CHECK: [[ONE2:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z14get_local_sizej([[ONE2]]) {{.*}} : (i32) -> i64
-  %8 = triton_gen.workgroup.dim.y : i64
-  // CHECK: [[TWO2:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z14get_local_sizej([[TWO2]]) {{.*}} : (i32) -> i64
-  %9 = triton_gen.workgroup.dim.z : i32
-
-  // CHECK: [[ZERO3:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z14get_num_groupsj([[ZERO3]]) {{.*}} : (i32) -> i64
-  %10 = triton_gen.grid.dim.x : i32
-  // CHECK: [[ONE3:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z14get_num_groupsj([[ONE3]]) {{.*}} : (i32) -> i64
-  %11 = triton_gen.grid.dim.y : i64
-  // CHECK: [[TWO3:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z14get_num_groupsj([[TWO3]]) {{.*}} : (i32) -> i64
-  %12 = triton_gen.grid.dim.z : i32
 
   // CHECK: llvm.call spir_funccc @_Z16get_sub_group_idv() {{.*}} : () -> i32
-  %13 = triton_gen.subgroup.id : i32
+  %1 = triton_gen.subgroup.id : i32
 
   // CHECK: llvm.call spir_funccc @_Z22get_sub_group_local_idv() {{.*}} : () -> i32
   %14 = triton_gen.subgroup.local.id : i32

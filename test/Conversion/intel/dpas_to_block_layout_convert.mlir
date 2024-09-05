@@ -18,7 +18,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // CHECK-DAG:           %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK-DAG:           %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COM: The following operations is generated for the conversion of DPAS layout to blocked layout.  The conversion replica size is 128*256. So there is 1 round of load/store with synchronization.
-    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {function_type = !llvm.func<i64 (i32)>, linkage = #llvm.linkage<external>, passthrough = ["nounwind", "willreturn", ["memory", "0"]], sym_name = "_Z12get_local_idj", visibility_ = 0 : i64} : (i32) -> i64
+    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return} : (i32) -> i64
     // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
     // CHECK:           %[[warpId:.*]] = llvm.udiv %[[threadId]], %[[CST_16]]  : i32
     // CHECK:           %[[laneId:.*]] = llvm.urem %[[threadId]], %[[CST_16]]  : i32
@@ -82,7 +82,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // CHECK-DAG:           %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
 
     // COM: The following operations is generated for the conversion of DPAS layout to blocked layout. The conversion replica size is 64*256. So there are 2 round of load/store with synchronization.
-    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {function_type = !llvm.func<i64 (i32)>, linkage = #llvm.linkage<external>, passthrough = ["nounwind", "willreturn", ["memory", "0"]], sym_name = "_Z12get_local_idj", visibility_ = 0 : i64} : (i32) -> i64
+    // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return} : (i32) -> i64
     // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
     // CHECK:           %[[warpId:.*]] = llvm.udiv %[[threadId]], %[[CST_16]]  : i32
     // CHECK:           %[[laneId:.*]] = llvm.urem %[[threadId]], %[[CST_16]]  : i32
