@@ -45,6 +45,7 @@ module {
       %18 = tt.advance %arg8, [%c0_i32, %c32_i32] : <tensor<256x32xf16>, 1>
       %19 = tt.advance %arg9, [%c32_i32, %c0_i32] : <tensor<32x256xf16>, 1>
       scf.yield %17, %18, %19 : tensor<256x256xf32>, !tt.ptr<tensor<256x32xf16>, 1>, !tt.ptr<tensor<32x256xf16>, 1>
+    // CHECK: {triton_gpu.workload = 3 : i32}
     }
     %14 = tt.make_tensor_ptr %arg2, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%9, %11] {order = array<i32: 1, 0>} : <tensor<256x256xf32>, 1>
     tt.store %14, %13#0 : !tt.ptr<tensor<256x256xf32>, 1>
@@ -94,6 +95,7 @@ module {
       %18 = tt.advance %arg8, [%c0_i32, %c32_i32] : <tensor<8x32xf16>, 1>
       %19 = tt.advance %arg9, [%c32_i32, %c0_i32] : <tensor<32x256xf16>, 1>
       scf.yield %17, %18, %19 : tensor<8x256xf32>, !tt.ptr<tensor<8x32xf16>, 1>, !tt.ptr<tensor<32x256xf16>, 1>
+    // CHECK: {triton_gpu.workload = 3 : i32}
     }
     %14 = tt.make_tensor_ptr %arg2, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%9, %11] {order = array<i32: 1, 0>} : <tensor<8x256xf32>, 1>
     tt.store %14, %13#0 : !tt.ptr<tensor<8x256xf32>, 1>
@@ -180,6 +182,7 @@ module {
       %46 = tt.advance %arg10, [%c64_i32, %c0_i32] : <tensor<64x64xf16>>
       %47 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16>>
       scf.yield %39, %45, %29, %46, %47 : tensor<128xf32>, tensor<128x64xf32>, tensor<128xf32>, !tt.ptr<tensor<64x64xf16>>, !tt.ptr<tensor<64x64xf16>>
+    // CHECK: {triton_gpu.workload = 4 : i32}
     }
     %22 = tt.expand_dims %21#0 {axis = 1 : i32} : tensor<128xf32> -> tensor<128x1xf32>
     %23 = tt.broadcast %22 : tensor<128x1xf32> -> tensor<128x64xf32>

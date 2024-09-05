@@ -51,6 +51,7 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -270,10 +271,17 @@ class MatchTargetSizePass
           MatchTargetSizePass> {
 public:
   void runOnOperation() override {
-    initNativeOperationSizes();
-
     MLIRContext *ctx = &getContext();
     ModuleOp m = getOperation();
+
+    Workload workload = Workload::None;
+    m.walk([&](scf::ForOp forOp) {
+      if (Attribute attr = forOp->getAttr(AttrWorkloadName))
+        workload = static_cast<Workload>(cast<IntegerAttr>(attr).getInt());
+    });
+
+    initNativeOperationSizes(workload);
+
     // this is ad-hoc for flash attention load/store Q on SLM
     if (tools::getBoolEnv("TRITON_INTEL_ENABLE_FIRST_LOAD_TO_SLM"))
       rewriteLoadWithSLM(m, dotWithSLMOperands, ctx);
@@ -356,7 +364,7 @@ public:
 private:
   /// Initialize the native operation sizes supported by the target
   /// architecture.
-  void initNativeOperationSizes();
+  void initNativeOperationSizes(Workload workload = Workload::None);
 
   /// Determine whether the given type is a tensor (or a pointer to a tensor)
   /// that has a warp layout or a dot layout with a parent warp layout.
@@ -586,7 +594,7 @@ public:
   }
 };
 
-void MatchTargetSizePass::initNativeOperationSizes() {
+void MatchTargetSizePass::initNativeOperationSizes(Workload workload) {
   // FIXME: sets the target dot shape natively supported by the target
   // architecture using the target architecture information when available.
   // These values works for PVC.
@@ -596,7 +604,11 @@ void MatchTargetSizePass::initNativeOperationSizes() {
   nativeSizes.setDotShape(32, {8, 16, 8});
 
   nativeSizes.setBlockMemShape(8, {16, 64, 32, 32});
-  nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
+  if (workload == Workload::Attention)
+    nativeSizes.setBlockMemShape(16, {32, 32, 32, 16});
+  else
+    nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
+
   nativeSizes.setBlockMemShape(32, {8, 8, 8, 16});
 
   nativeSizes.setLoadStoreSize(512); // max 512DW;

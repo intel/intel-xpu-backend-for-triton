@@ -5,6 +5,16 @@
 
 namespace mlir {
 
+constexpr static char AttrWorkloadName[] = "triton_gpu.workload";
+enum class Workload {
+  // TODO: add more
+  None = 0, // pattern not match any of below
+  ElementWise = 1,
+  Reduction = 2,
+  Gemm = 3,
+  Attention = 4
+};
+
 class ModuleOp;
 template <typename T> class OperationPass;
 

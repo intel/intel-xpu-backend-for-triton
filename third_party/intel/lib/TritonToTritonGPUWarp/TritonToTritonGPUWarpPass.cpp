@@ -50,7 +50,6 @@ namespace mlir::triton::intel {
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace {
-constexpr static char AttrWorkloadName[] = "triton_gpu.workload";
 
 // pass named attrs (e.g., tt.contiguity) from Triton to TritonGPU
 static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
@@ -58,15 +57,6 @@ static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
     if (!op->hasAttr(attr.getName()))
       op->setAttr(attr.getName(), attr.getValue());
 }
-
-enum class Workload {
-  // TODO: add more
-  None = 0, // pattern not match any of below
-  ElementWise = 1,
-  Reduction = 2,
-  Gemm = 3,
-  Attention = 4
-};
 
 struct DotInfo {
   tt::DotOp dot;
