@@ -188,7 +188,8 @@ LinearLayout shrinkCodomain(const LinearLayout &layout, StringAttr inDimName,
   llvm::sort(basesToZero);
   for (int basis : basesToZero) {
     int idx = llvm::Log2_32(basis);
-    for (int i = newBases[outDimName].size() - 1; i > idx; i--) {
+    assert(idx >= 0 && "bad basis");
+    for (size_t i = newBases[outDimName].size() - 1; i > idx; i--) {
       newBases[outDimName][i][outDimIdx] =
           newBases[outDimName][i - 1][outDimIdx];
     }
@@ -332,7 +333,7 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   ctaLayout = ensureLayoutNotLargerThan(ctaLayout, ctaShape);
 
   LinearLayout ret =
-      (ctaLayout * std::move(cgaLayout)).transposeOuts(outDimNames);
+      (std::move(ctaLayout) * std::move(cgaLayout)).transposeOuts(outDimNames);
   for (auto dim : ret.getOutDimNames()) {
     assert(ret.getOutDimSize(dim) == labeledShape[dim] && "bad shape");
   }
@@ -577,7 +578,7 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   tileLayout *= LinearLayout::identity1D(numReps[nonKDim], kRegister,
                                          outDimNames[nonKDim]);
 
-  return combineCtaCgaWithShape(tileLayout,
+  return combineCtaCgaWithShape(std::move(tileLayout),
                                 CTALayoutAttr::getDefault(ctx, rank), shape);
 }
 

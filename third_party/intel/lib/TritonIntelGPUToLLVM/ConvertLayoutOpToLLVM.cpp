@@ -278,8 +278,8 @@ private:
     auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
     unsigned inVec = scratchConfig.inVec;
     unsigned outVec = scratchConfig.outVec;
-    auto &paddedRepShape = scratchConfig.paddedRepShape;
-    auto origRepShape = scratchConfig.repShape;
+    const auto &paddedRepShape = scratchConfig.paddedRepShape;
+    const auto &origRepShape = scratchConfig.repShape;
     if (isa<mlir::Float8E4M3B11FNUZType, mlir::Float8E4M3FNType>(
             getElementTypeOrSelf(op.getType()))) {
       assert(inVec % 4 == 0 && "conversion not supported for FP8E4M3B15");
