@@ -82,6 +82,7 @@ fi
 ############################################################################
 # Check installed torch pinned dependencies
 
+PINNED_TORCH_DEPENDENCIES_REGEX="^torchtext==|^torchaudio==|^torchvision=="
 INSTALLED_PINNED_TORCH_DEPENDENCIES=$(pip list --format=freeze | grep -iE "$PINNED_TORCH_DEPENDENCIES_REGEX" || true)
 
 if [ -n "$INSTALLED_PINNED_TORCH_DEPENDENCIES" ]; then
