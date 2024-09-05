@@ -197,4 +197,16 @@ OpFoldResult ExtractOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+LogicalResult SubGroupTransposeOp::verify() {
+  RankedTensorType srcType = getSrc().getType();
+  auto mod = getOperation()->getParentOfType<mlir::ModuleOp>();
+  int64_t subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  std::array requiredShape{subGroupSize, subGroupSize};
+  if (srcType.getEncoding() ||
+      srcType.getShape() != ArrayRef<int64_t>(requiredShape))
+    return emitOpError("can only be used on tensors of shape <sub_group_size x "
+                       "sub_group_size> with no encoding");
+  return success();
+}
+
 } // namespace mlir::triton::gpu::intel

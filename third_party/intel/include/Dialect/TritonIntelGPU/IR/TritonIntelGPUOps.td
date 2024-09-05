@@ -199,6 +199,7 @@ def TTIG_SubGroupTransposeOp
   let arguments = (ins TT_Ptr: $local_buffer, TT_Tensor:$src);
   let results = (outs TT_Tensor:$res);
   let assemblyFormat = "operands attr-dict `:` type($src)";
+  let hasVerifier = 1;
 }
 
 #endif
