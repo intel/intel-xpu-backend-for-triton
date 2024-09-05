@@ -33,13 +33,11 @@ for arg in "$@"; do
       exit 1
       ;;
     *)
-      ARGS+="${arg} "
-      shift
+      echo "Unknown argument $arg have been provided."
+      exit 1
       ;;
   esac
 done
-
-set +o xtrace
 
 if [ "$VENV" = true ]; then
   echo "**** Activate virtual environment *****"
@@ -54,11 +52,11 @@ ROOT=$(cd $(dirname "$0")/.. && pwd)
 
 if [ "$BUILD_LATEST" = false ]; then
   PYTORCH_PINNED_COMMIT="$(<$ROOT/.github/pins/pytorch-upstream.txt)"
-  echo -e "***** Using pinned PyTorch commit $PYTORCH_PINNED_COMMIT by default. *****\n"
+  echo "***** Using pinned PyTorch commit $PYTORCH_PINNED_COMMIT by default. *****"
 fi
 
 if pip show torch &>/dev/null; then
-  PYTORCH_CURRENT_COMMIT=`python -c "import torch;print(torch.__version__)"`
+  PYTORCH_CURRENT_COMMIT="$(python -c 'import torch;print(torch.__version__)')"
   PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
   echo "**** PyTorch is already installed. Current commit is $PYTORCH_CURRENT_COMMIT ****"
   if [ "$BUILD_LATEST" = false ]; then
@@ -74,7 +72,7 @@ if pip show torch &>/dev/null; then
   if [ "$FORCE_REINSTALL" = false ]; then
     echo "**** Exiting without action. ****"
     echo "**** INFO: Add --force-reinstall flag to force the PyTorch re-installation. ****"
-    exit 0
+    exit 1
   fi
   pip uninstall -y torch
 fi
@@ -86,13 +84,15 @@ PINNED_TORCH_DEPENDENCIES_REGEX="^torchtext==|^torchaudio==|^torchvision=="
 INSTALLED_PINNED_TORCH_DEPENDENCIES=$(pip list --format=freeze | grep -iE "$PINNED_TORCH_DEPENDENCIES_REGEX" || true)
 
 if [ -n "$INSTALLED_PINNED_TORCH_DEPENDENCIES" ]; then
-  echo -e "**** The following pinned torch dependencies are installed: ****\n"
-  echo -e "$INSTALLED_PINNED_TORCH_DEPENDENCIES\n"
+  echo "**** The following pinned torch dependencies are installed: ****"
+  echo
+  echo "$INSTALLED_PINNED_TORCH_DEPENDENCIES"
+  echo
   if [ "$FORCE_REINSTALL" = false ]; then
     echo "**** Exiting without action. ****"
     echo "**** INFO: Add --force-reinstall flag to force the PyTorch pinned dependencies re-installation. ****"
     echo "**** INFO: PyTorch pinned dependencies build from source mode is not supported. ****"
-    exit 0
+    exit 1
   fi
   pip uninstall -y torchtext torchaudio torchvision
 fi
@@ -106,7 +106,7 @@ if [ "$BUILD_PYTORCH" = false ]; then
     exit 1
   fi
   echo "**** Download nightly builds. ****"
-  PYTHON_VERSION=$( python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" )
+  PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
   RUN_ID=$(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
   TEMP_DIR=$(mktemp -d)
   WHEEL_PATTERN="wheels-pytorch-py${PYTHON_VERSION}*"
@@ -124,22 +124,17 @@ fi
 ############################################################################
 # Configure, build and install PyTorch from source.
 
-if [ ! -v BASE ]; then
-  echo "**** BASE is not given *****"
-  BASE=$ROOT/.scripts_cache
-  if [ ! -d "$BASE" ]; then
-    mkdir $BASE
-  fi
-  echo -e "**** Default BASE is set to $BASE ****\n"
-fi
-
+SCRIPTS_DIR=$ROOT/scripts
+BASE=$ROOT/.scripts_cache
 PYTORCH_PROJ=$BASE/pytorch
-SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+echo "**** BASE is set to $BASE ****"
+if [ ! -d "$BASE" ]; then
+  mkdir $BASE
+fi
 
 echo "**** Cleaning $PYTORCH_PROJ before build ****"
-if rm -rf $PYTORCH_PROJ &>/dev/null; then
-  echo "**** $PYTORCH_PROJ have been cleaned ****"
-fi
+rm -rf $PYTORCH_PROJ
 
 echo "**** Cloning $PYTORCH_PROJ ****"
 cd $BASE
