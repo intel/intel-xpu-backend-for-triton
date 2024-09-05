@@ -253,10 +253,6 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
         return op.emitOpError("expecting tile_height to be between 1 and 32");
       if (tileWidth < 1 || tileWidth > 8)
         return op.emitOpError("expecting tile_width to be between 1 and 8");
-      if (tileWidth * vBlocks > 8)
-        return op.emitOpError(
-            "tile_width * v_blocks should be less than or equal "
-            "to 8 for 32 bit elements");
       break;
     case 64:
       if (tileHeight != 8)
