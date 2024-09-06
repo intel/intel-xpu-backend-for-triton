@@ -173,9 +173,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
   int32_t n_spills = props.spillMemSize;
   const int32_t n_regs = 0;
-  constexpr int32_t max_reg_spill = 1000;
-  std::string build_flags_str(build_flags);
-  bool is_GRF_mode_specified = false;
 
   if (is_spv) {
     constexpr int32_t max_reg_spill = 1000;

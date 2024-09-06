@@ -287,8 +287,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_spv(src, metadata, options):
-        # generate SPIRV
-        ret, name = intel.translate_to_spirv(src)
+        spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         if options.grf_mode == 'small':
             metadata["build_flags"] = "-cl-intel-128-GRF-per-thread"
@@ -302,18 +301,12 @@ class XPUBackend(BaseBackend):
             metadata["build_flags"] = ""
 
         if options.generate_native_code is True:
-            assert (False)
-            #return intel.compile_native_binary(metadata["name"], metadata["build_flags"], metadata["shared"], 0, ret)
             with tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.spv') as fsrc, \
                 tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
-                fsrc.write(ret)
+                fsrc.write(spirv)
                 fsrc.flush()
                 fbin = fsrc.name + '.o'
 
-                #line_info = [] if os.environ.get('TRITON_DISABLE_LINE_INFO') else ['-lineinfo']
-                #fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
-                #suffix = 'a' if capability == 90 else ''
-                #opt_level = ['--opt-level', '0'] if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1" else []
                 ocloc_cmd = [
                     'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', 'pvc', '-options',
                     f'{metadata["build_flags"]}'
@@ -352,8 +345,7 @@ class XPUBackend(BaseBackend):
                 if os.path.exists(fbin):
                     os.remove(fbin)
             return zebin
-
-        return ret
+        return spirv
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
