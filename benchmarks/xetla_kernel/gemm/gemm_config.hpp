@@ -162,10 +162,10 @@ public:
   static constexpr size_t mat_m = 4;
   static constexpr size_t mat_k = 4096;
   static constexpr size_t mat_n = 12288;
-  static constexpr size_t wg_m = 256;
-  static constexpr size_t wg_n = 256;
-  static constexpr size_t sg_m = 32;
-  static constexpr size_t sg_n = 64;
+  static constexpr size_t wg_m = 8;
+  static constexpr size_t wg_n = 512;
+  static constexpr size_t sg_m = 8;
+  static constexpr size_t sg_n = 16;
   static constexpr size_t sg_k = 32;
   static constexpr uint32_t local_kslicing = 1;
   static constexpr uint32_t global_kslicing = 1;
