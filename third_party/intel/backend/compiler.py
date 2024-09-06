@@ -65,7 +65,7 @@ class XPUOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
             raise AssertionError("num_warps must be a power of 2")
-        self.generate_native_code = os.getenv("TRITON_XPU_GEN_NATIVE_CODE", False)
+        self.generate_native_code = bool(os.getenv("TRITON_XPU_GEN_NATIVE_CODE", False))
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -314,15 +314,23 @@ class XPUBackend(BaseBackend):
 
                 try:
                     subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog, stderr=subprocess.STDOUT)
-                    if os.path.exists(fsrc.name):
-                        os.remove(fsrc.name)
                     if os.path.exists(flog.name):
                         with open(flog.name) as log_file:
                             log = log_file.read().strip()
                             if 'spilled' in log:
-                                # TODO: handle register spills - can we set the build flag for module load, or do we need to recompile?
-                                print(log)
+                                """
+                                The exact message is something like:
+                                    warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
+                                is "spilled" enough for now?
+                                """
+                                metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+                                # re-run with new build flags
+                                ocloc_cmd[-1] = f'{metadata["build_flags"]}'
+                                subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog,
+                                               stderr=subprocess.STDOUT)
                         os.remove(flog.name)
+                    if os.path.exists(fsrc.name):
+                        os.remove(fsrc.name)
                 except subprocess.CalledProcessError as e:
                     with open(flog.name) as log_file:
                         log = log_file.read()
