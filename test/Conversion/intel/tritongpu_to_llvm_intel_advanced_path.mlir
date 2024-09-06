@@ -1,11 +1,11 @@
 // RUN: TRITON_INTEL_ADVANCED_PATH=1 triton-opt %s --convert-triton-intel-gpu-to-llvm --split-input-file | FileCheck %s
 
 module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
-  // CHECK-DAG: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent"]}
-  // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_read_16b_32r16x2cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {passthrough = ["nounwind"]}
-  // CHECK-DAG: llvm.func spir_funccc @_Z52intel_sub_group_2d_block_read_transform_16b_32r16x2cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {passthrough = ["nounwind"]}
-  // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_write_32b_8r16x1cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.readonly}) attributes {passthrough = ["nounwind"]}
-  // CHECK-DAG: llvm.func spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_8r16x2cPU3AS1viiiDv2_i(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {passthrough = ["nounwind", ["memory", "1"]]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn", ["memory", "0"]]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_read_16b_32r16x2cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {passthrough = ["nofree", "nounwind", "willreturn"]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z52intel_sub_group_2d_block_read_transform_16b_32r16x2cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {passthrough = ["nofree", "nounwind", "willreturn"]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_write_32b_8r16x1cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.readonly}) attributes {passthrough = ["nofree", "nounwind", "willreturn"]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_8r16x2cPU3AS1viiiDv2_i(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "1"]]}
 
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1>, %arg1: !tt.ptr<f16, 1>, %arg2: !tt.ptr<f32, 1>, %arg3: i32, %arg4: i32, %arg5: i32) {
     // CHECK-LABEL: @matmul_kernel_with_block_pointers
@@ -239,7 +239,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %c1_i64 = arith.constant 1 : i64
     %c64_i64 = arith.constant 64 : i64
     %ptr = tt.make_tensor_ptr %arg0, [%c0_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x64xf16, #dot0>, 3>
-    // CHECK: {{.*}} = llvm.call spir_funccc @llvm.genx.GenISA.simdBlockRead({{.*}}) {function_type = !llvm.func<vector<64xi16> (ptr<3>)>, linkage = #llvm.linkage<external>, sym_name = "llvm.genx.GenISA.simdBlockRead", visibility_ = 0 : i64} : (!llvm.ptr<3>) -> vector<64xi16>
+    // CHECK: {{.*}} = llvm.call spir_funccc @llvm.genx.GenISA.simdBlockRead({{.*}}) {{.*}} : (!llvm.ptr<3>) -> vector<64xi16>
     %ld = tt.load %ptr {DotIdx = 0 : i32} : !tt.ptr<tensor<16x64xf16, #dot0>, 3>
     tt.return
   }
@@ -261,7 +261,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %c64_i64 = arith.constant 64 : i64
     %ptr = tt.make_tensor_ptr %arg0, [%c0_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x64xf16, #dot0>, 3>
     // CHECK: [[CAST:%.*]] = llvm.bitcast {{.*}} : vector<64xf16> to vector<64xi16>
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite({{.*}}, [[CAST]]) {function_type = !llvm.func<void (ptr<3>, vector<64xi16>)>, linkage = #llvm.linkage<external>, sym_name = "llvm.genx.GenISA.simdBlockWrite", visibility_ = 0 : i64} : (!llvm.ptr<3>, vector<64xi16>) -> ()
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite({{.*}}, [[CAST]]) {{.*}} : (!llvm.ptr<3>, vector<64xi16>) -> ()
     tt.store %ptr, %arg1 {DotIdx = 0 : i32} : !tt.ptr<tensor<16x64xf16, #dot0>, 3>
     tt.return
   }

@@ -46,7 +46,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // COM: Total 64 stores are generated to save the tensor of the DPAS layout to the SLM. 128*256/(4*8*16) = 64
     // CHECK:           llvm.store %[[VAL_66]], %[[VAL_65]] : vector<1xf16>, !llvm.ptr<3>
     // CHECK-COUNT-63:  llvm.store {{.*}}, {{.*}} : vector<1xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {function_type = !llvm.func<void (i32)>, linkage = #llvm.linkage<external>, passthrough = ["convergent"], sym_name = "_Z7barrierj", visibility_ = 0 : i64} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {{.*}} : (i32) -> ()
 
     // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
     // COM: Total 8 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*8) = 8
@@ -110,16 +110,16 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // COM: Total 32 stores are generated to save the tensor of the DPAS layout to the SLM. 64*256/(4*8*16) = 32
     // CHECK:           llvm.store %[[VAL_66]], %[[VAL_65]] : vector<1xf16>, !llvm.ptr<3>
     // CHECK-COUNT-31:  llvm.store {{.*}}, {{.*}} : vector<1xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {function_type = !llvm.func<void (i32)>, linkage = #llvm.linkage<external>, passthrough = ["convergent"], sym_name = "_Z7barrierj", visibility_ = 0 : i64} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]])
 
     // COM: Because the values per thread of blocked layout is contiguous. The values are loaded from the SLM in a vectorized way.
     // COM: Total 4 loads are generated to load the tensor of the blocked layout from the SLM. 128*256/(16*2*16*8) = 8
     // CHECK-COUNT-4:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<8xf16>
 
     // COM: The 2nd round of exchanging values.
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {function_type = !llvm.func<void (i32)>, linkage = #llvm.linkage<external>, passthrough = ["convergent"], sym_name = "_Z7barrierj", visibility_ = 0 : i64} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]])
     // CHECK-COUNT-32:  llvm.store {{.*}}, {{.*}} : vector<1xf16>, !llvm.ptr<3>
-    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]]) {function_type = !llvm.func<void (i32)>, linkage = #llvm.linkage<external>, passthrough = ["convergent"], sym_name = "_Z7barrierj", visibility_ = 0 : i64} : (i32) -> ()
+    // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[CST_1]])
     // CHECK-COUNT-4:    {{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> vector<8xf16>
 
     %93 = triton_gpu.convert_layout %cst {allocation.offset = 0 : i32} : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
