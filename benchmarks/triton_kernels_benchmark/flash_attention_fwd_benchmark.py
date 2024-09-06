@@ -3,11 +3,9 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
-
-import triton_kernels_benchmark
 from triton_kernels_benchmark import xetla_kernel  # pylint: disable=no-name-in-module
 
-benchmark_suit = triton_kernels_benchmark  # triton.testing
+from .benchmark_testing import do_bench, assert_close, perf_report, Benchmark
 
 
 # pylint: disable=unused-argument
@@ -184,8 +182,8 @@ def forward(q, k, v, causal, sm_scale):
     return o
 
 
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@perf_report(
+    Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD'],
         x_vals=[  #
@@ -219,7 +217,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
     sm_scale = 0.125
     quantiles = [0.5, 0.0, 1.0]
     if provider == 'onednn':
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
+        _, min_ms, max_ms, mean, cv = do_bench(
             lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
                                                                      False, scale=sm_scale), warmup=10, rep=10,
             quantiles=quantiles, fast_flush=False)
@@ -229,15 +227,13 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
         torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(
             q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=sm_scale).to(torch.float32)
         atol = 1e-1 if N_CTX == 16384 else 1e-2
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                              fast_flush=False)
+        assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
+        _, min_ms, max_ms, mean, cv = do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles, fast_flush=False)
 
     elif provider == 'xetla':
         func = getattr(xetla_kernel, 'flash_attn')
         xetla_fn = lambda: func(Z, H, D_HEAD, N_CTX, N_CTX)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                              fast_flush=False)
+        _, min_ms, max_ms, mean, cv = do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles, fast_flush=False)
 
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

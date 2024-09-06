@@ -13,11 +13,9 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.language as tl
 from triton.runtime import driver
-
-import triton_kernels_benchmark
 from triton_kernels_benchmark import xetla_kernel  # pylint: disable=no-name-in-module
 
-benchmark_suit = triton_kernels_benchmark  # triton.testing
+from .benchmark_testing import do_bench, assert_close, perf_report, Benchmark
 
 
 @torch.jit.script
@@ -104,43 +102,41 @@ def softmax(x):
     return y
 
 
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
-        x_names=["N"],  # argument names to use as an x-axis for the plot
-        x_vals=[256, 1024, 2048, 4096, 1024 * 8, 1024 * 16, 1024 * 32],  # different possible values for `x_name`
-        line_arg="provider",  # argument name whose value corresponds to a different line in the plot
-        line_vals=[
-            "triton",
-            # "torch-native",
-            # "torch-jit",
-            "xetla",
-        ],  # possible values for `line_arg``
-        line_names=[
-            "Triton",
-            # "Torch (native)",
-            # "Torch (jit)",
-            "XeTLA",
-        ],  # label name for the lines
-        styles=[("blue", "-"), ("green", "-"), ("green", "--"), ("black", ":")],  # line styles
-        ylabel=["GB/s", "TFlops"],  # label name for the y-axis
-        plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
-        args={"M": 4096},  # values for function arguments not in `x_names` and `y_name`
-    ))
+@perf_report(
+    Benchmark(x_names=["N"],  # argument names to use as an x-axis for the plot
+              x_vals=[256, 1024, 2048, 4096, 1024 * 8, 1024 * 16, 1024 * 32],  # different possible values for `x_name`
+              line_arg="provider",  # argument name whose value corresponds to a different line in the plot
+              line_vals=[
+                  "triton",
+                  # "torch-native",
+                  # "torch-jit",
+                  "xetla",
+              ],  # possible values for `line_arg``
+              line_names=[
+                  "Triton",
+                  # "Torch (native)",
+                  # "Torch (jit)",
+                  "XeTLA",
+              ],  # label name for the lines
+              styles=[("blue", "-"), ("green", "-"), ("green", "--"), ("black", ":")],  # line styles
+              ylabel=["GB/s", "TFlops"],  # label name for the y-axis
+              plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
+              args={"M": 4096},  # values for function arguments not in `x_names` and `y_name`
+              ))
 def benchmark(M, N, provider):
     x = torch.randn(M, N, device="xpu", dtype=torch.bfloat16)
     quantiles = [0.5, 0.0, 1.0]
     if provider == "torch-native":
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles,
-                                                              warmup=10, rep=10)
+        _, min_ms, max_ms, mean, cv = do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles, warmup=10,
+                                               rep=10)
     if provider == "triton":
         triton_fn = lambda: softmax(x)
         torch_fn = lambda: torch.softmax(x, axis=-1)
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), err_msg="triton to torch")
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, warmup=10, rep=10)
+        assert_close(triton_fn(), torch_fn(), err_msg="triton to torch")
+        _, min_ms, max_ms, mean, cv = do_bench(triton_fn, quantiles=quantiles, warmup=10, rep=10)
 
     elif provider == "torch-jit":
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: naive_softmax(x), quantiles=quantiles, warmup=10,
-                                                              rep=10)
+        _, min_ms, max_ms, mean, cv = do_bench(lambda: naive_softmax(x), quantiles=quantiles, warmup=10, rep=10)
 
     elif provider == "xetla":
         name = f"softmax_shape_{M}_{N}"
@@ -148,7 +144,7 @@ def benchmark(M, N, provider):
         xetla_fn = lambda: func(x, 0)
         torch_fn = lambda: torch.softmax(x, axis=-1)
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), err_msg="xetla to torch")
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, warmup=10, rep=10)
+        _, min_ms, max_ms, mean, cv = do_bench(xetla_fn, quantiles=quantiles, warmup=10, rep=10)
 
     else:
         raise NotImplementedError(f"Unsupported provider {provider}")

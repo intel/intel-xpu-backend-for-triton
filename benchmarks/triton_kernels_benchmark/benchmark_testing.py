@@ -2,18 +2,11 @@ import argparse
 import itertools
 import os
 from typing import Any, Dict, List
-
-
-def synchronize():
-    import torch
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    elif torch.xpu.is_available():
-        torch.xpu.synchronize()
+from triton.testing import do_bench as triton_do_bench
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-             device="xpu", sync_submitting=True):
+             device="xpu"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -33,69 +26,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     """
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
-    from torch.autograd.profiler import record_function
 
-    fn()
-    synchronize()
-
-    # We maintain a buffer of 256 MB that we clear
-    # before each kernel call to make sure that the L2
-    # doesn't contain any input data before the run
-    cache_size = 256 * 1024 * 1024
-    if fast_flush:
-        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
-    else:
-        cache = torch.empty(int(cache_size), dtype=torch.int8, device=device)
-
-    # Estimate the runtime of the function
-    start_event = torch.xpu.Event(enable_timing=True)
-    end_event = torch.xpu.Event(enable_timing=True)
-    start_event.record()
-    for _ in range(5):
-        cache.zero_()
-        fn()
-    end_event.record()
-    synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
-
-    # compute number of warmup and repeat
-    n_warmup = max(1, int(warmup / estimate_ms))
-    n_repeat = max(1, int(rep / estimate_ms))
-    # Warm-up
-    for _ in range(n_warmup):
-        fn()
-    # Benchmark
-    with torch.autograd.profiler_legacy.profile(True, use_xpu=True) as prof:
-        for _ in range(n_repeat):
-            # we don't want `fn` to accumulate gradient values
-            # if it contains a backward pass. So we clear the
-            # provided gradients
-            if grad_to_none is not None:
-                for x in grad_to_none:
-                    x.grad = None
-            # we clear the L2 cache before each run
-            cache.zero_()
-            if sync_submitting:
-                synchronize()
-            # record time of `fn`
-            with record_function("__profile_kernel_of_func"):
-                fn()
-        # Record clocks
-        synchronize()
-
-    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.function_events)
-    functions = list(profiling_func_filter)
-
-    def extract_kernels(funcs):
-        kernels = []
-        kernels += list(itertools.chain.from_iterable(map(lambda func: extract_kernels(func.cpu_children), funcs)))
-        kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
-        return kernels
-
-    kernels = [extract_kernels(func.cpu_children) for func in functions]
-    assert len(kernels) == n_repeat, "the profiling number not match"
-    # Make the time to the milliseconds.
-    times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
+    times = triton_do_bench(fn, warmup=warmup, rep=rep, grad_to_none=grad_to_none, fast_flush=fast_flush,
+                            return_mode="all", device_type=device)
+    times = torch.tensor(times, dtype=torch.float)
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
         if times.numel() > 2:

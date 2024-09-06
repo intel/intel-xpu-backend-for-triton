@@ -4,8 +4,8 @@
 #include "stream_k_gemm/stream_k_gemm.h"
 #include <CL/sycl.hpp>
 #include <c10/core/ScalarType.h>
+#include <c10/xpu/XPUStream.h>
 #include <cstdint>
-#include <ipex.h>
 #include <torch/extension.h>
 
 sycl::queue get_current_sycl_queue() {
@@ -13,7 +13,10 @@ sycl::queue get_current_sycl_queue() {
   c10::impl::VirtualGuardImpl impl(at::DeviceType::XPU);
   c10::Stream stream = impl.getStream(impl.getDevice());
 
-  return xpu::get_queue_from_stream(stream);
+  auto xpu_stream = c10::xpu::XPUStream(stream);
+  auto queue = xpu_stream.queue();
+
+  return queue;
 }
 
 #define CHECK_XPU(x)                                                           \
@@ -33,7 +36,6 @@ at::Tensor softmax(const at::Tensor &input, const int64_t dim) {
 
   auto queue = get_current_sycl_queue();
   auto evt = softmax_forward<T>(input.data_ptr(), output.data_ptr(), queue);
-  xpu::profiler_record("xetla kernel", evt);
   return output;
 }
 
@@ -50,7 +52,6 @@ at::Tensor bf16_gemm(const at::Tensor &a, const at::Tensor &b,
   auto queue = get_current_sycl_queue();
   auto evt = gemm_run<T>(a.data_ptr(), b.data_ptr(), c.data_ptr(),
                          acc.data_ptr(), cnt.data_ptr(), queue);
-  xpu::profiler_record("xetla kernel", evt);
   return acc;
 }
 
@@ -66,7 +67,6 @@ at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
   auto queue = get_current_sycl_queue();
   auto evt = stream_k_gemm_run(a.data_ptr(), b.data_ptr(), c.data_ptr(),
                                acc.data_ptr(), cnt.data_ptr(), queue);
-  xpu::profiler_record("xetla kernel", evt);
   return acc;
 }
 
@@ -100,7 +100,6 @@ void flash_attn(const int64_t num_batches, const int64_t num_heads,
               << "\n";
   }
 
-  xpu::profiler_record("xetla kernel", evt);
   return;
 }
 

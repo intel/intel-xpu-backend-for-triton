@@ -11,9 +11,7 @@ import intel_extension_for_pytorch  # type: ignore # noqa: F401
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark
-
-benchmark_suit = triton_kernels_benchmark  # triton.testing
+from .benchmark_testing import do_bench, assert_close, perf_report, Benchmark
 
 
 # pylint: disable=unused-argument
@@ -248,8 +246,8 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
 
 
 # Benchmark Performance
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@perf_report(
+    Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['M', 'K', 'N'],
         x_vals=[[3072, 4096, 3072]],
@@ -274,14 +272,13 @@ def benchmark(M, N, K, provider):
     quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
-                                                              quantiles=quantiles, fast_flush=False)
+        _, min_ms, max_ms, mean, cv = do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10, quantiles=quantiles,
+                                               fast_flush=False)
     elif provider == 'triton':
         triton_fn = lambda: matmul(a, b)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=1e-2, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                              fast_flush=False)
+        assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=1e-2, err_msg='triton to torch')
+        _, min_ms, max_ms, mean, cv = do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles, fast_flush=False)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
