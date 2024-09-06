@@ -283,22 +283,6 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
-static PyObject *getSyclDeviceHandle(PyObject *self, PyObject *args) {
-  int devId;
-  if (!PyArg_ParseTuple(args, "i", &devId))
-    return NULL;
-
-  if (devId > g_sycl_l0_device_list.size()) {
-    std::cerr << "Device is not found " << std::endl;
-    return NULL;
-  }
-
-  auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
-  sycl::device *sycl_device = &sycl_l0_device_pair.first;
-
-  return Py_BuildValue("K", (uint64_t)(sycl_device));
-}
-
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
@@ -308,8 +292,6 @@ static PyMethodDef ModuleMethods[] = {
      "Initialize the ZE GPU context"},
     {"init_devices", initDevices, METH_VARARGS,
      "Initialize the ZE GPU devices and return device count"},
-    {"get_sycl_device_handle", getSyclDeviceHandle, METH_VARARGS,
-     "Get the sycl device handle for a given device"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 
