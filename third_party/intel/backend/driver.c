@@ -140,17 +140,14 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
   const auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
+  const auto l0_context =
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
 
-  auto l0_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
+  const auto use_native_code =
+      isEnvValueBool(getStrEnv("TRITON_XPU_GEN_NATIVE_CODE"));
+  const bool is_spv = use_native_code ? !(*use_native_code) : true;
 
-  const auto cache_native_code_env_opt =
-      isEnvValueBool(getStrEnv("TRITON_XPU_CACHE_NATIVE_CODE"));
-  const bool is_spv =
-      cache_native_code_env_opt
-          ? !(*cache_native_code_env_opt)
-          : false; // default value is false, maybe we should rework this
-
-  ze_module_handle_t l0_module = checkSyclErrors(create_module(
+  auto l0_module = checkSyclErrors(create_module(
       l0_context, l0_device, binary_ptr, binary_size, build_flags, is_spv));
 
   auto checkL0Errors = [&](auto l0_module) -> ze_kernel_handle_t {
@@ -160,7 +157,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     }
     ze_kernel_handle_t l0_kernel =
         checkSyclErrors(create_function(l0_module, kernel_name));
-
     if (PyErr_Occurred()) {
       // check for errors from kernel creation
       return NULL;
