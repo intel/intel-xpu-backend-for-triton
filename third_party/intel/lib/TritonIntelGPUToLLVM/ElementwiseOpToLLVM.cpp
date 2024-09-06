@@ -403,84 +403,6 @@ Fp16_to_Fp8E4M3B15_func(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(i8_ty, b1, i32_val(3))};
 }
 
-/* ----- FP8E4M3B15X4 ------ */
-// NOTE: NOT USED RIGHT NOW
-// Packed variant of FP8E4M3B15
-// A little bit more efficient but elements need are not
-// serialized as you expect when 4 are packed into int32.
-
-// fast conversion code provided by Scott Gray @ OpenAI
-// $0 = (($2 << 1) & 0x80008000u) | (($2 << 7) & 0x3f803f80u);
-// $1 = (($2 << 0) & 0x80008000u) | (($2 << 0) & 0x3f803f80u);
-// WARN: subnormal (0bs0000xxx) are not handled
-static SmallVector<Value>
-Fp8E4M3B15x4_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
-                          const SmallVector<Value> &v) {
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value fp8x4Vec = undef(fp8x4VecTy);
-  fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v[0], i32_val(0));
-  fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v[1], i32_val(1));
-  fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v[2], i32_val(2));
-  fp8x4Vec = insert_element(fp8x4VecTy, fp8x4Vec, v[3], i32_val(3));
-  fp8x4Vec = bitcast(fp8x4Vec, i32_ty);
-
-  Value a0 = add(i32_ty, fp8x4Vec, fp8x4Vec);
-  Value a1 = shl(i32_ty, fp8x4Vec, i32_val(7));
-
-  Value fp16x2Vec0 = and_(i32_ty, a0, i32_val(0x80008000));
-  fp16x2Vec0 = or_(i32_ty, fp16x2Vec0, and_(i32_ty, a1, i32_val(0x3f803f80)));
-  Value fp16x2Vec1 = and_(i32_ty, fp8x4Vec, i32_val(0xbf80bf80));
-
-  auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  fp16x2Vec0 = bitcast(fp16x2Vec0, fp16x2VecTy);
-  fp16x2Vec1 = bitcast(fp16x2Vec1, fp16x2VecTy);
-
-  return {extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
-          extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec1, i32_val(1))};
-}
-
-// Fp16 -> Fp8E4M3B15 (packed)
-// fast conversion code provided by Scott Gray @ OpenAI
-// ret = ((e4.x >> 1) & (0x80008000u >> 1)) |
-//       ((e4.x >> 7) & (0x3f803f80u >> 7)) |
-//       ((e4.y >> 0) & (0x80008000u >> 0)) |
-//       ((e4.y >> 0) & (0x3f803f80u >> 0)) ;
-// WARN: subnormal (0bs0000xxx) are not handled
-
-static SmallVector<Value>
-Fp16_to_Fp8E4M3B15x4_func(Location loc, ConversionPatternRewriter &rewriter,
-                          const SmallVector<Value> &v) {
-  auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  Value fp16x2Vec0 = undef(fp16x2VecTy);
-  Value fp16x2Vec1 = undef(fp16x2VecTy);
-
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[0], i32_val(0));
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[1], i32_val(1));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[2], i32_val(0));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[3], i32_val(1));
-
-  fp16x2Vec0 = bitcast(fp16x2Vec0, i32_ty);
-  fp16x2Vec1 = bitcast(fp16x2Vec1, i32_ty);
-
-  Value a0 = lshr(i32_ty, fp16x2Vec0, i32_val(1));
-  Value a1 = lshr(i32_ty, fp16x2Vec0, i32_val(7));
-
-  Value fp8x4Vec = and_(i32_ty, a0, i32_val(0x40004000));
-  fp8x4Vec = or_(i32_ty, fp8x4Vec, and_(i32_ty, a1, i32_val(0x007f007f)));
-  fp8x4Vec =
-      or_(i32_ty, fp8x4Vec, and_(i32_ty, fp16x2Vec1, i32_val(0xbf80bf80)));
-
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  fp8x4Vec = bitcast(fp8x4Vec, fp8x4VecTy);
-
-  return {extract_element(i8_ty, fp8x4Vec, i32_val(0)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(1)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(2)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(3))};
-}
-
 /* ----- FP8E4M3 ------ */
 // Note: when handled by software, this format
 // has more than a single NaN values.
@@ -1319,9 +1241,8 @@ struct FpToFpOpConversion
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
     auto F8E4M3B15TyID = TypeID::get<Float8E4M3B11FNUZType>();
-    auto F8E4M3TyID = TypeID::get<Float8E4M3FNUZType>();
+    auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
-    auto F8E4M3FNTyID = TypeID::get<Float8E4M3FNType>();
     auto F16TyID = TypeID::get<Float16Type>();
     auto BF16TyID = TypeID::get<BFloat16Type>();
     auto F32TyID = TypeID::get<Float32Type>();
@@ -1341,8 +1262,6 @@ struct FpToFpOpConversion
             // F8 -> F16
             {{F8E4M3B15TyID, F16TyID, undefRounding},
              {Fp8E4M3B15_to_Fp16_func, 4}},
-            {{F8E4M3FNTyID, F16TyID, undefRounding},
-             {Fp8E4M3B15x4_to_Fp16_func, 4}},
             {{F8E4M3TyID, F16TyID, undefRounding}, {Fp8E4M3Nv_to_Fp16_func, 2}},
             {{F8E5M2TyID, F16TyID, undefRounding}, {Fp8E5M2_to_Fp16_func, 4}},
             // F16 -> F8
@@ -1351,8 +1270,6 @@ struct FpToFpOpConversion
             {{F16TyID, F8E4M3B15TyID, RoundingMode::RTNE},
              // TODO: provide proper implementation for RTNE rounding.
              {Fp16_to_Fp8E4M3B15_func, 4}},
-            {{F16TyID, F8E4M3FNTyID, RoundingMode::RTZ},
-             {Fp16_to_Fp8E4M3B15x4_func, 4}},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTZ},
              {Fp16_to_Fp8E4M3Nv_func, 2}},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTNE},
@@ -1401,7 +1318,7 @@ struct FpToFpOpConversion
     auto dstElementType = getElementType(op.getResult());
     auto roundingMode = op.getRounding();
 
-    if (dstElementType.isFloat8E5M2() || dstElementType.isFloat8E4M3FNUZ()) {
+    if (dstElementType.isFloat8E5M2() || dstElementType.isFloat8E4M3FN()) {
       assert(roundingMode.has_value() &&
              "Rounding mode must be specified for convertsions to fp8");
 
@@ -2172,10 +2089,9 @@ struct IndexCastOpLowering
     if (targetBits == sourceBits)
       return {operands[0][0]};
     if (targetBits < sourceBits)
-      return {rewriter.replaceOpWithNewOp<LLVM::TruncOp>(op, elemTy,
-                                                         operands[0][0])};
-    return {
-        rewriter.replaceOpWithNewOp<LLVM::SExtOp>(op, elemTy, operands[0][0])};
+      return {
+          rewriter.create<LLVM::TruncOp>(op.getLoc(), elemTy, operands[0][0])};
+    return {rewriter.create<LLVM::SExtOp>(op.getLoc(), elemTy, operands[0][0])};
   }
 };
 

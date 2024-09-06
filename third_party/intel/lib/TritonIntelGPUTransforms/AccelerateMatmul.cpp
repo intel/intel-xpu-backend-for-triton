@@ -139,7 +139,7 @@ public:
 
     // We are upcasting FP8 to FP16
     if (oldAType.getElementType().isFloat8E5M2() ||
-        oldAType.getElementType().isFloat8E4M3FNUZ())
+        oldAType.getElementType().isFloat8E4M3FN())
       dpasElemBitWidths = 2 * dpasElemBitWidths;
 
     unsigned opsPerChan = dpasCap.opsChanBitWidths / dpasElemBitWidths;
@@ -243,7 +243,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
 
     Type promoteType;
     if (dpasLayout) {
-      bool isNativeFP8 = AElType.isFloat8E5M2() || AElType.isFloat8E4M3FNUZ();
+      bool isNativeFP8 = AElType.isFloat8E5M2() || AElType.isFloat8E4M3FN();
       // fp8 is not natively supported by the the DPAS instruction, promote it
       // to fp16.
       if (!isNativeFP8)

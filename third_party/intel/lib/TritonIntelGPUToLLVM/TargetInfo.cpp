@@ -35,6 +35,11 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   });
 }
 
+void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
+                                   Value ptr, Value val) const {
+  llvm::report_fatal_error("IntelGPU does not support stmatrix");
+}
+
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Type elemTy,
                               Value pred) const {
@@ -175,9 +180,9 @@ void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');
   msgNewline.push_back('\0');
-  Value msgValue =
-      LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
-                              "printfFormat_", msgNewline);
+  Value msgValue = LLVM::intel::addStringToModule(
+      UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
+      msgNewline, /*AddressSpace*/ TritonGEN::kUniformConstant);
   printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
 }
 

@@ -4,9 +4,12 @@ import argparse
 import shutil
 import subprocess
 import os
-import pandas as pd
+import sys
+
 from pathlib import Path
 from typing import Optional
+
+import pandas as pd
 
 
 def get_config(ident: str) -> str:
@@ -18,7 +21,7 @@ def get_config(ident: str) -> str:
 
 
 def download(ident: str) -> bool:
-    """Download artifacts for given configuration and CI run ID from Github."""
+    """Download artifacts for given configuration and CI run ID from GitHub."""
     if not shutil.which("gh"):
         print("Could not find 'gh' executable on the '$PATH'")
         return False
@@ -30,7 +33,7 @@ def download(ident: str) -> bool:
     name, run = ident.split(":", 1)
 
     ret = subprocess.run(["gh", "run", "download", "-R", "intel/intel-xpu-backend-for-triton", "-D", name, run],
-                         capture_output=True)
+                         capture_output=True, check=False)
 
     if ret.returncode != 0:
         print("Downloading run artifacts with 'gh' CLI failed")
@@ -47,28 +50,28 @@ def download(ident: str) -> bool:
 
 def get_raw_data(args: argparse.Namespace) -> tuple[Optional[Path], Optional[Path]]:
     """Discover or download the raw data for both configurations."""
-    numDir = Path(get_config(args.numerator))
-    denomDir = Path(get_config(args.denominator))
+    num_dir = Path(get_config(args.numerator))
+    denom_dir = Path(get_config(args.denominator))
 
     if args.local:
         if ":" in args.numerator or ":" in args.denominator:
             print("Invalid format, expecting only 'name' for local run")
-            return (None, None)
+            return None, None
 
-        if not numDir.is_dir():
-            print(f"Directory {numDir} must exist if no download is happening.")
-            return (None, None)
+        if not num_dir.is_dir():
+            print(f"Directory {num_dir} must exist if no download is happening.")
+            return None, None
 
-        if not denomDir.is_dir():
-            print(f"Directory {denomDir} must exist if no download is happening.")
-            return (None, None)
+        if not denom_dir.is_dir():
+            print(f"Directory {denom_dir} must exist if no download is happening.")
+            return None, None
     else:
         if not download(args.numerator):
-            return (None, None)
+            return None, None
         if not download(args.denominator):
-            return (None, None)
+            return None, None
 
-    return (numDir, denomDir)
+    return num_dir, denom_dir
 
 
 def parse_data(config: str, df: pd.DataFrame, file: Path) -> pd.DataFrame:
@@ -108,36 +111,36 @@ def parse_directory(config: str, previous: pd.DataFrame, directory: Path) -> pd.
 
 def eval_data(df: pd.DataFrame, numerator: str, denominator: str, plot: bool):
     """Evaluate the data, print a summary and plot if enabled."""
-    numCol = f"speedup {numerator}"
-    denomCol = f"speedup {denominator}"
+    num_col = f"speedup {numerator}"
+    denom_col = f"speedup {denominator}"
 
     df.drop(columns=["batch_size_x", "batch_size_y"], inplace=True)
 
-    bothFailed = df.loc[(df[numCol] == 0.0) & (df[denomCol] == 0.0)]
-    print(f"Both failed ({bothFailed.shape[0]} configurations):")
-    print(bothFailed.to_string())
+    both_failed = df.loc[(df[num_col] == 0.0) & (df[denom_col] == 0.0)]
+    print(f"Both failed ({both_failed.shape[0]} configurations):")
+    print(both_failed.to_string())
     print("\n" * 2)
 
-    numFailed = df.loc[(df[numCol] == 0.0) & (df[denomCol] != 0.0)]
-    print(f"Only {numerator} failed ({numFailed.shape[0]} configurations):")
-    print(numFailed.to_string())
+    num_failed = df.loc[(df[num_col] == 0.0) & (df[denom_col] != 0.0)]
+    print(f"Only {numerator} failed ({num_failed.shape[0]} configurations):")
+    print(num_failed.to_string())
     print("\n" * 2)
 
-    denomFailed = df.loc[(df[numCol] != 0.0) & (df[denomCol] == 0.0)]
-    print(f"Only {denominator} failed ({denomFailed.shape[0]} configurations):")
-    print(denomFailed.to_string())
+    denom_failed = df.loc[(df[num_col] != 0.0) & (df[denom_col] == 0.0)]
+    print(f"Only {denominator} failed ({denom_failed.shape[0]} configurations):")
+    print(denom_failed.to_string())
     print("\n" * 2)
 
-    nanEntries = df[df[[numCol, denomCol]].isnull().any(axis=1)]
+    nan_entries = df[df[[num_col, denom_col]].isnull().any(axis=1)]
     print("NaN entries present:")
-    print(nanEntries.to_string())
+    print(nan_entries.to_string())
     print("\n" * 2)
 
     # Filter out NaN and zero values
-    df = df[df[[numCol, denomCol]].notnull().all(1)]
-    df = df.loc[(df[numCol] != 0.0) & (df[denomCol] != 0.0)]
+    df = df[df[[num_col, denom_col]].notnull().all(1)]
+    df = df.loc[(df[num_col] != 0.0) & (df[denom_col] != 0.0)]
 
-    df["relative difference"] = ((df[numCol] - df[denomCol]) / df[denomCol])
+    df["relative difference"] = (df[num_col] - df[denom_col]) / df[denom_col]
 
     print("Overview of relative difference in speedup.\n"
           "Relative difference 0.0 means both perform identically,"
@@ -145,22 +148,23 @@ def eval_data(df: pd.DataFrame, numerator: str, denominator: str, plot: bool):
           f" relative difference < 0.0 means {denominator} performs better")
 
     print(df["relative difference"].describe())
-    print(f"Mean speedup for denominator: {df[denomCol].mean()}")
+    print(f"Mean speedup for denominator: {df[denom_col].mean()}")
     print("\n" * 2)
 
     df.sort_values(by=["relative difference"], inplace=True, ignore_index=True, ascending=True)
-    printCfgs = 10
-    print(f"{printCfgs} fastest configurations ({denominator} faster than "
-          "{numerator}, showing relative difference in speedup)")
-    print(df.head(printCfgs))
+    print_cfgs = 10
+    print(f"{print_cfgs} fastest configurations ({denominator} faster than "
+          f"{numerator}, showing relative difference in speedup)")
+    print(df.head(print_cfgs))
     print("\n" * 2)
     df.sort_values(by=["relative difference"], inplace=True, ignore_index=True, ascending=False)
-    print(f"{printCfgs} slowest configurations ({denominator} slower than "
-          "{numerator}, showing relative difference in speedup)")
-    print(df.head(printCfgs))
+    print(f"{print_cfgs} slowest configurations ({denominator} slower than "
+          f"{numerator}, showing relative difference in speedup)")
+    print(df.head(print_cfgs))
     print("\n" * 2)
 
     if plot:
+        # pylint: disable=import-outside-toplevel
         import seaborn as sns
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_pdf import PdfPages
@@ -190,7 +194,7 @@ def eval_data(df: pd.DataFrame, numerator: str, denominator: str, plot: bool):
             print(f"Saved performance plot to {filename}")
 
 
-if __name__ == "__main__":
+def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(prog="compare-runs", description="Compare performance of two CI runs")
     parser.add_argument("-n", "--numerator", help="Numerator in the comparison. Format 'name[:Github CI Run ID]'.",
@@ -210,32 +214,36 @@ if __name__ == "__main__":
         path.mkdir(parents=True, exist_ok=True)
         os.chdir(path)
 
-    numCfg = get_config(args.numerator)
-    denomCfg = get_config(args.denominator)
-    csvFile = f"preprocessed-data-{numCfg}-{denomCfg}.csv"
+    num_cfg = get_config(args.numerator)
+    denom_cfg = get_config(args.denominator)
+    csv_file = f"preprocessed-data-{num_cfg}-{denom_cfg}.csv"
 
     if args.eval_only:
-        if not Path(csvFile).is_file():
-            print(f"Could not find preprocessed data file {csvFile}")
-            exit(-1)
-        df = pd.read_csv(csvFile, header=0)
+        if not Path(csv_file).is_file():
+            print(f"Could not find preprocessed data file {csv_file}")
+            sys.exit(1)
+        df = pd.read_csv(csv_file, header=0)
     else:
-        (numDir, denomDir) = get_raw_data(args)
+        (num_dir, denom_dir) = get_raw_data(args)
 
-        if not numDir or not denomDir:
+        if not num_dir or not denom_dir:
             print("Failed to obtain raw data")
-            exit(-1)
+            sys.exit(1)
 
-        df = parse_directory(numCfg, None, numDir)
-        df = parse_directory(denomCfg, df, denomDir)
+        df = parse_directory(num_cfg, None, num_dir)
+        df = parse_directory(denom_cfg, df, denom_dir)
 
         cols = [
-            "dev", "suite", "name", "mode", "datatype", "batch_size_x", "batch_size_y", f"speedup {numCfg}",
-            f"speedup {denomCfg}"
+            "dev", "suite", "name", "mode", "datatype", "batch_size_x", "batch_size_y", f"speedup {num_cfg}",
+            f"speedup {denom_cfg}"
         ]
         df = df[cols]
 
-        print(f"Storing preprocessed data to {csvFile}")
-        df.to_csv(csvFile, index=False)
+        print(f"Storing preprocessed data to {csv_file}")
+        df.to_csv(csv_file, index=False)
 
-    eval_data(df, numCfg, denomCfg, (not args.no_plot))
+    eval_data(df, num_cfg, denom_cfg, (not args.no_plot))
+
+
+if __name__ == "__main__":
+    main()

@@ -16,19 +16,6 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
-bool isConstant(Value v, unsigned expected) {
-  if (v.getDefiningOp() == nullptr)
-    return false;
-
-  if (auto stride = dyn_cast<arith::ConstantOp>(v.getDefiningOp())) {
-    if (auto strideInt = dyn_cast<IntegerAttr>(stride.getValue()))
-      if (strideInt.getInt() == expected)
-        return true;
-  }
-
-  return false;
-}
-
 struct TritonIntelGPUMaterializeBlockPointerPass
     : public triton::gpu::intel::impl::
           TritonIntelGPUMaterializeBlockPointerBase<
@@ -67,7 +54,7 @@ public:
 
         // HW 2D block read instruction only supports contiguous access.
         Value fastChangeStride = strides[fastChangeDim];
-        if (!isConstant(fastChangeStride, 1))
+        if (!mlir::triton::gpu::intel::isConstant(fastChangeStride, 1))
           return;
 
         // Across Intel platforms, the strictest pitch restriction is to be a

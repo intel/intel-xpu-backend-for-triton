@@ -261,10 +261,10 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   ArrayRef<unsigned> order = sharedLayout.getOrder();
 
   // (a, b) is the coordinate.
-  auto load = [=, &rewriter, &vals](int a, int b) {
+  auto load = [=, &rewriter, &smemObj, &vals](int a, int b) {
     DpasMatmulLoader<opIdx> loader(dpasLayout, descTy, warpsPerTile,
-                                   smemObj.strides, instrShape, rewriter,
-                                   typeConverter, loc);
+                                   smemObj.strides, std::move(instrShape),
+                                   rewriter, typeConverter, loc);
 
     // Offset of a slice within the original tensor in shared memory.
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);

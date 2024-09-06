@@ -7,6 +7,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <variant>
 
@@ -61,8 +62,6 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
   module_description.pBuildFlags = build_flags;
   ze_module_build_log_handle_t buildlog;
   ze_module_handle_t module;
-  auto context_initial = context;
-  auto device_initial = device;
   auto error_no =
       zeModuleCreate(context, device, &module_description, &module, &buildlog);
   if (error_no != ZE_RESULT_SUCCESS) {
@@ -80,15 +79,14 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
 
 std::tuple<ze_kernel_handle_t, ze_result_t>
 create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
-                std::string func_name) {
+                std::string_view func_name) {
   ze_kernel_handle_t kernel;
   ze_kernel_desc_t kernel_description = {};
   kernel_description.stype = ZE_STRUCTURE_TYPE_KERNEL_DESC;
   kernel_description.pNext = nullptr;
   kernel_description.flags = flag;
-  kernel_description.pKernelName = func_name.c_str();
+  kernel_description.pKernelName = func_name.data();
   assert(module);
-  auto module_initial = module;
   if (getBoolEnv("MLIR_ENABLE_DUMP")) {
     std::cout << "create kernel:" << func_name << std::endl;
   }
@@ -97,7 +95,7 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
 }
 
 std::tuple<ze_kernel_handle_t, ze_result_t>
-create_function(ze_module_handle_t module, std::string func_name) {
+create_function(ze_module_handle_t module, std::string_view func_name) {
   return create_function(module, ZE_KERNEL_FLAG_FORCE_RESIDENCY, func_name);
 }
 
@@ -122,9 +120,11 @@ std::vector<sycl::device> update(sycl::queue sycl_queue,
   ze_context_handle_t hCtxt =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_context);
   // Get l0-device
-  std::vector<sycl::device> sycl_devices = sycl_context.get_devices();
+  const std::vector<sycl::device> &sycl_devices = sycl_context.get_devices();
+  assert(sycl_devices.size() > 0);
   ze_device_handle_t hDev =
-      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_devices[0]);
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+          sycl_devices.front());
   // Get l0-queue
   bool immediate_cmd_list = false;
   std::variant<ze_command_queue_handle_t, ze_command_list_handle_t> queue_var =

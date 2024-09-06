@@ -1,16 +1,16 @@
-from triton.backends.compiler import BaseBackend, GPUTarget
+from triton.backends.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, intel
 
 from dataclasses import dataclass
 import functools
-from typing import Any, Tuple
+from typing import Any, Dict, Tuple
+from types import ModuleType
 import hashlib
 import re
 import os
 import shutil
 import subprocess
 from pathlib import Path
-from packaging.version import Version
 
 
 @functools.lru_cache()
@@ -41,6 +41,7 @@ class XPUOptions:
     threads_per_warp: int = 32
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     allow_fp8e4nv: bool = False
@@ -58,12 +59,12 @@ class XPUOptions:
             extern_libs['libdevice'] = os.getenv("TRITON_LIBDEVICE_PATH",
                                                  str(default_libdir / 'libsycl-spir64-unknown-unknown.bc'))
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
-        assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
-            "num_warps must be a power of 2"
+        if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
+            raise AssertionError("num_warps must be a power of 2")
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
-        return hashlib.md5(key.encode("utf-8")).hexdigest()
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 def min_dot_size(device_props: dict):
@@ -116,7 +117,8 @@ class XPUBackend(BaseBackend):
 
     def __init__(self, target: tuple) -> None:
         super().__init__(target)
-        assert isinstance(target.arch, dict)
+        if not isinstance(target.arch, dict):
+            raise TypeError("target.arch is not a dict")
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
 
@@ -137,7 +139,7 @@ class XPUBackend(BaseBackend):
         dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
-        dev_prop['has_bf16_conversion'] = tgt_prop.get('has_bf16_conversion', True)
+        dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -154,6 +156,10 @@ class XPUBackend(BaseBackend):
         codegen_fns["convert_custom_types"] = convert_custom_float8
         codegen_fns["min_dot_size"] = min_dot_size(self.properties)
         return codegen_fns
+
+    def get_module_map(self) -> Dict[str, ModuleType]:
+        from triton.language.extra.intel import libdevice
+        return {"triton.language.extra.libdevice": libdevice}
 
     def load_dialects(self, ctx):
         intel.load_dialects(ctx)
@@ -186,7 +192,7 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
                                                         properties["has_subgroup_2d_block_io"],
                                                         properties["has_subgroup_matrix_multiply_accumulate"],
-                                                        properties["has_bf16_conversion"], opt.threads_per_warp)
+                                                        properties["has_bfloat16_conversions"], opt.threads_per_warp)
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
@@ -215,7 +221,7 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
-        passes.ttgpuir.add_reduce_data_duplication(pm)
+        intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
@@ -256,7 +262,7 @@ class XPUBackend(BaseBackend):
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         intel.post_process_llir(llvm_mod)
 
         # Get some metadata
@@ -274,7 +280,7 @@ class XPUBackend(BaseBackend):
             metadata["build_flags"] = "-cl-intel-128-GRF-per-thread"
         elif options.grf_mode == 'large':
             if options.num_warps > 32:
-                raise RuntimeError(f"grf_mode = large cannot be used with num_warps > 32")
+                raise RuntimeError("grf_mode = large cannot be used with num_warps > 32")
             metadata["build_flags"] = "-cl-intel-256-GRF-per-thread"
         elif options.grf_mode == 'auto':
             metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"

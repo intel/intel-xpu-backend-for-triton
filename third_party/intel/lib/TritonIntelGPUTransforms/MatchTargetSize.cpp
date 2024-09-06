@@ -51,6 +51,7 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -158,8 +159,7 @@ static bool getTransposeFlagFromValue(Value val) {
       loadPtr = load.getPtr();
   }
 
-  if (auto extractOp =
-          dyn_cast_or_null<ttgi::ExtractOp>(loadPtr.getDefiningOp())) {
+  if (auto extractOp = loadPtr.getDefiningOp<ttgi::ExtractOp>()) {
     loadPtr = extractOp.getBase();
   }
   // forward: from tt.load/tt.advance to dot
@@ -168,10 +168,9 @@ static bool getTransposeFlagFromValue(Value val) {
     if (auto loopLikeOp = dyn_cast<LoopLikeOpInterface>(
             blockArg.getParentBlock()->getParentOp())) {
       auto inits = llvm::to_vector(loopLikeOp.getInits());
-      if (auto glueOp =
-              dyn_cast<ttgi::GlueOp>(inits[argIdx - 1].getDefiningOp())) {
-        if (auto tempPtr = dyn_cast<tt::MakeTensorPtrOp>(
-                glueOp.getOperands()[0].getDefiningOp())) {
+      if (auto glueOp = inits[argIdx - 1].getDefiningOp<ttgi::GlueOp>()) {
+        if (auto tempPtr =
+                glueOp.getOperands()[0].getDefiningOp<tt::MakeTensorPtrOp>()) {
           loadPtr = tempPtr.getResult();
         }
       }
@@ -272,10 +271,17 @@ class MatchTargetSizePass
           MatchTargetSizePass> {
 public:
   void runOnOperation() override {
-    initNativeOperationSizes();
-
     MLIRContext *ctx = &getContext();
     ModuleOp m = getOperation();
+
+    Workload workload = Workload::None;
+    m.walk([&](scf::ForOp forOp) {
+      if (Attribute attr = forOp->getAttr(AttrWorkloadName))
+        workload = static_cast<Workload>(cast<IntegerAttr>(attr).getInt());
+    });
+
+    initNativeOperationSizes(workload);
+
     // this is ad-hoc for flash attention load/store Q on SLM
     if (tools::getBoolEnv("TRITON_INTEL_ENABLE_FIRST_LOAD_TO_SLM"))
       rewriteLoadWithSLM(m, dotWithSLMOperands, ctx);
@@ -300,6 +306,13 @@ public:
       SmallVector<Type> resultTypes(op->getResultTypes().begin(),
                                     op->getResultTypes().end());
       types.append(resultTypes);
+
+      if (auto mr = dyn_cast<tt::MakeRangeOp>(op)) {
+        // FIXME: MakeRange's rank-1 tensors are not candidates in the original
+        // sense of the advance path, but we need to split them here anyways.
+        transformMakeRangeOp(mr);
+        return WalkResult::advance();
+      }
 
       if (llvm::none_of(types, [this](Type type) { return isCandidate(type); }))
         return WalkResult::advance();
@@ -351,7 +364,7 @@ public:
 private:
   /// Initialize the native operation sizes supported by the target
   /// architecture.
-  void initNativeOperationSizes();
+  void initNativeOperationSizes(Workload workload = Workload::None);
 
   /// Determine whether the given type is a tensor (or a pointer to a tensor)
   /// that has a warp layout or a dot layout with a parent warp layout.
@@ -377,6 +390,7 @@ private:
   void transformDotOp(tt::DotOp dot);
   void transformReduceOp(tt::ReduceOp op);
   void transformBroadcastOp(tt::BroadcastOp op);
+  void transformMakeRangeOp(tt::MakeRangeOp op);
 
   /// Generic transformation.
   void transformGenericOp(Operation *op);
@@ -551,8 +565,7 @@ public:
     // If none of the loop init values is defined by a 'glue' operation there is
     // nothing to do.
     if (llvm::none_of(forOp.getInits(), [](Value init) {
-          return init.getDefiningOp() &&
-                 isa<ttgi::GlueOp>(init.getDefiningOp());
+          return init.getDefiningOp<ttgi::GlueOp>();
         })) {
       return false;
     }
@@ -561,7 +574,7 @@ public:
     // operation.
     for (auto [arg, init] :
          llvm::zip(forOp.getRegionIterArgs(), forOp.getInits())) {
-      if (!init.getDefiningOp() || !isa<ttgi::GlueOp>(init.getDefiningOp()))
+      if (!init.getDefiningOp<ttgi::GlueOp>())
         continue;
 
       if (llvm::any_of(arg.getUsers(), [](Operation *user) {
@@ -581,7 +594,7 @@ public:
   }
 };
 
-void MatchTargetSizePass::initNativeOperationSizes() {
+void MatchTargetSizePass::initNativeOperationSizes(Workload workload) {
   // FIXME: sets the target dot shape natively supported by the target
   // architecture using the target architecture information when available.
   // These values works for PVC.
@@ -591,7 +604,11 @@ void MatchTargetSizePass::initNativeOperationSizes() {
   nativeSizes.setDotShape(32, {8, 16, 8});
 
   nativeSizes.setBlockMemShape(8, {16, 64, 32, 32});
-  nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
+  if (workload == Workload::Attention)
+    nativeSizes.setBlockMemShape(16, {32, 32, 32, 16});
+  else
+    nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
+
   nativeSizes.setBlockMemShape(32, {8, 8, 8, 16});
 
   nativeSizes.setLoadStoreSize(512); // max 512DW;
@@ -745,6 +762,10 @@ MatchTargetSizePass::getSubTypeAndShape(Type type, bool isTransposed,
     if (useSLM) {
       subSize[0] = 16;
       subSize[1] = 64;
+    } else {
+      // Never exceed the shape of the original type.
+      subSize[0] = std::min(subSize[0], shape[0]);
+      subSize[1] = std::min(subSize[1], shape[1]);
     }
 
     auto subType = RankedTensorType::get(
@@ -983,9 +1004,10 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
                                       dot.getMaxNumImpreciseAccAttr());
         // hack for attention
         if (triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_INSTR_SCHED"))
-          subDotC.getDefiningOp()->setAttr(
-              "schedule-group",
-              b.getIntegerAttr(b.getI32Type(), nn / dotShape.n));
+          if (auto definingOp = subDotC.getDefiningOp())
+            definingOp->setAttr(
+                "schedule-group",
+                b.getIntegerAttr(b.getI32Type(), nn / dotShape.n));
       }
       subCs.push_back(subDotC);
     }
@@ -1005,14 +1027,17 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
   RankedTensorType srcType = op.getSrc().getType();
   unsigned srcDim0 = srcType.getShape()[0];
   unsigned dstDim0 = tType.getShape()[0];
+  unsigned resDim0 = resType.getShape()[0];
+  unsigned srcDim1 = srcType.getShape()[1];
+  unsigned dstDim1 = tType.getShape()[1];
+  unsigned resDim1 = resType.getShape()[1];
   Operation *glue;
   if (srcDim0 == dstDim0) {
     Value newOp = b.create<tt::BroadcastOp>(loc, tType, op.getSrc());
     unsigned num = resType.getShape()[1] / tType.getShape()[1];
     SmallVector<Value> ops(num, newOp);
     glue = b.create<ttgi::GlueOp>(loc, resType, ops);
-  } else {
-    assert(srcDim0 == 2 * dstDim0 && "add more support");
+  } else if (srcDim0 == 2 * dstDim0) {
     auto newTy = RankedTensorType::get({srcDim0, tType.getShape()[1]},
                                        tType.getElementType());
     auto newOp = b.create<tt::BroadcastOp>(loc, newTy, op.getSrc());
@@ -1021,12 +1046,73 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
     SmallVector<Value> ops{extract0, extract1, extract0, extract1,
                            extract0, extract1, extract0, extract1};
     glue = b.create<ttgi::GlueOp>(loc, resType, ops);
+  } else if (srcDim0 == 1 && srcDim1 == resDim1) {
+    // Handle row-vector broadcasts, e.g. 1x64 --> 16x64.
+    auto subRowVecTy =
+        RankedTensorType::get({1, tType.getShape()[1]}, tType.getElementType());
+
+    // How many extracts do we need to cover the width of the input tensor?
+    unsigned nExtracts = srcDim1 / dstDim1;
+    SmallVector<Value> subBroadcasts;
+    for (int i = 0; i < nExtracts; ++i) {
+      auto ext = b.create<ttgi::ExtractOp>(loc, subRowVecTy, op.getSrc(), i);
+      auto sbc = b.create<tt::BroadcastOp>(loc, tType, ext);
+      subBroadcasts.push_back(sbc);
+    }
+
+    // How often do we need to repeat a sub broadcast to cover the height of the
+    // result tensor?
+    unsigned nRepeats = resDim0 / dstDim0;
+    SmallVector<Value> ops;
+    for (int i = 0; i < nRepeats * nExtracts; ++i)
+      ops.push_back(subBroadcasts[i / nRepeats]);
+
+    glue = b.create<ttgi::GlueOp>(loc, resType, ops);
+  } else {
+    llvm::report_fatal_error("Unhandled broadcast");
   }
 
   op->replaceAllUsesWith(glue->getResults());
   op->erase();
 
   return;
+}
+
+void MatchTargetSizePass::transformMakeRangeOp(tt::MakeRangeOp op) {
+  constexpr unsigned subgroupSize = 16;
+  unsigned start = op.getStart();
+  unsigned end = op.getEnd();
+  assert(start == 0 && end % subgroupSize == 0 && "Unsupported range");
+
+  if (end == subgroupSize)
+    // nothing to do
+    return;
+
+  // Transform the range like this: (SG = subgroup size = 16)
+  // makeRange(0, N) = glue(
+  //   splat(0 * SG) + makeRange(0, SG),
+  //   splat(1 * SG) + makeRange(0, SG),
+  //   ...
+  //   splat((N/SG-1) * SG) + makeRange(0, SG)
+  // )
+
+  OpBuilder b(op);
+  Location loc = op.getLoc();
+  RankedTensorType origTy = op.getType();
+  Type elemTy = origTy.getElementType();
+  auto subRangeTy =
+      RankedTensorType::get({subgroupSize}, elemTy, origTy.getEncoding());
+  auto subRange = b.create<tt::MakeRangeOp>(loc, subRangeTy, 0, subgroupSize);
+  SmallVector<Value> subRanges;
+  for (int i = 0; i < end / subgroupSize; ++i) {
+    Value offset =
+        b.create<arith::ConstantIntOp>(loc, i * subgroupSize, elemTy);
+    Value offsetTensor = b.create<tt::SplatOp>(loc, subRangeTy, offset);
+    subRanges.push_back(b.create<arith::AddIOp>(loc, subRange, offsetTensor));
+  }
+  auto glue = b.create<ttgi::GlueOp>(loc, op.getType(), subRanges);
+  op.replaceAllUsesWith(glue->getResults()[0]);
+  op->erase();
 }
 
 void MatchTargetSizePass::transformGenericOp(Operation *op) {

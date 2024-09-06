@@ -13,7 +13,6 @@ Extra Credits:
 
 import pytest
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
@@ -84,9 +83,7 @@ configs = [
     for BM in [64, 128]\
     for BN in [32, 64]\
     for s in ([1] if is_hip() else [3, 4, 7])\
-    # FIXME: change back once tl.dot uses DPAS instruction.
-    # for w in [4, 8]\
-    for w in [32]\
+    for w in [4, 8]\
 ]
 
 
@@ -570,11 +567,8 @@ except BaseException:
     HAS_FLASH = False
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
-# FIXME: change back once tl.dot uses DPAS instruction.
-if torch.cuda.is_available():
-    BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
-else:
-    BATCH, N_HEADS, HEAD_DIM = 1, 4, 64
+BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
+
 # vary seq length for fixed head and batch=4
 configs = []
 for mode in ["fwd", "bwd"]:
@@ -606,13 +600,8 @@ for mode in ["fwd", "bwd"]:
 @triton.testing.perf_report(configs)
 def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, device="xpu"):
     assert mode in ["fwd", "bwd"]
-    # FIXME: change back once tl.dot uses DPAS instruction
-    if torch.cuda.is_available():
-        warmup = 25
-        rep = 100
-    else:
-        warmup = 1
-        rep = 1
+    warmup = 25
+    rep = 100
     dtype = torch.float16
     if "triton" in provider:
         q = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)

@@ -126,7 +126,9 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<SharedEncodingAttr>(srcLayout) && isaDistributedLayout(dstLayout)) {
+    if (isa<SharedEncodingAttr>(srcLayout) &&
+        isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+            dstLayout)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }

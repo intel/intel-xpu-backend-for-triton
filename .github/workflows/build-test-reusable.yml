@@ -1,5 +1,5 @@
 name: Build and test reusable workflow
-run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.install_ipex && 'IPEX' || 'no IPEX' }} - ${{ inputs.runner_label || 'default'}}
+run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.runner_label || 'default'}}
 
 on:
   workflow_call:
@@ -16,15 +16,6 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
-      install_ipex:
-        # This boolean parameter defines what PyTorch will be used in the workflow:
-        #   true: Stonepia/pytorch (fork) with IPEX
-        #   false: pytorch/pytorch (upstream) without IPX
-        # In both cases, pytorch_ref below allows specifying a branch, tag, or commit id in the
-        # corresponding repository. If not specified, a default (pinned) version will be used.
-        description: Install Intel PyTorch Extension
-        type: boolean
-        default: true
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
@@ -100,31 +91,15 @@ jobs:
         with:
           python-version: ${{ inputs.python_version }}
 
-      - name: Setup PyTorch with IPEX
-        if: ${{ inputs.install_ipex }}
-        uses: ./.github/actions/setup-pytorch
-        with:
-          repository: Stonepia/pytorch
-          ref: ${{ inputs.pytorch_ref }}
-
-      - name: Setup PyTorch without IPEX
-        if: ${{ !inputs.install_ipex }}
+      - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
 
-      - name: Setup IPEX
-        if: ${{ inputs.install_ipex }}
-        uses: ./.github/actions/setup-ipex
-
-      - name: Setup fake IPEX
-        if: ${{ !inputs.install_ipex }}
-        uses: ./.github/actions/setup-fake-ipex
-
       - name: Install test dependencies
         run: |
-          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout expecttest
+          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout expecttest defusedxml
           pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
 
       - name: Setup Triton
@@ -166,10 +141,6 @@ jobs:
         run: |
           echo "TRITON_TEST_SKIPLIST_DIR=$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}" | tee -a $GITHUB_ENV
 
-      - name: Enable XPU fallback for upstream PyTorch
-        run: |
-          echo "PYTORCH_ENABLE_XPU_FALLBACK=${{ inputs.install_ipex && '0' || '1' }}" | tee -a $GITHUB_ENV
-
       - name: Run core tests
         run: |
           source ./scripts/pytest-utils.sh
@@ -195,6 +166,13 @@ jobs:
       - name: Run instrumentation tests
         run: |
           source ./scripts/pytest-utils.sh
+
+          # FIXME: the "instrumentation" test suite currently contains only one test, when all tests
+          # are skipped pytest reports an error. If the only test is the skip list, then we shouldn't
+          # run pytest at all. This must be changed when there is more than one instrumentation test.
+          if [[ $TEST_UNSKIP = false && -s $TRITON_TEST_SKIPLIST_DIR/instrumentation.txt ]]; then
+            exit 0
+          fi
 
           SHARED_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/_C"
           if [ ! -d "${SHARED_LIB_DIR}" ]; then
@@ -225,11 +203,6 @@ jobs:
           cd python/test/regression
           TRITON_TEST_SUITE=regression \
             pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
-
-      - name: Run XPU python tests
-        run: |
-          cd python/test/backend/third_party_backends
-          python3 -m pytest -n auto --verbose test_xpu_backend.py
 
       - name: Run Tutorials
         run: |
@@ -273,6 +246,15 @@ jobs:
           export WORKSPACE=$GITHUB_WORKSPACE
           cd pytorch
           pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+
+          source $GITHUB_WORKSPACE/scripts/capture-hw-details.sh
+          if [[ $GPU_DEVICE = *A770* ]]; then
+            # To enable FP64 type emulation.
+            # For details see: https://github.com/intel/intel-xpu-backend-for-triton/pull/1879
+            export OverrideDefaultFP64Settings=1
+            export IGC_EnableDPEmulation=1
+          fi
+
           # TODO: Find the fastest Hugging Face model
           $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
           # The script above always returns 0, so we need an additional check to see if the accuracy test passed

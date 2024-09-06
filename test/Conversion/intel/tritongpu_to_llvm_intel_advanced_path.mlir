@@ -1,11 +1,11 @@
 // RUN: TRITON_INTEL_ADVANCED_PATH=1 triton-opt %s --convert-triton-intel-gpu-to-llvm --split-input-file | FileCheck %s
 
 module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
-  // CHECK-DAG: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent"]}
-  // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_read_16b_32r16x2cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {passthrough = ["nounwind"]}
-  // CHECK-DAG: llvm.func spir_funccc @_Z52intel_sub_group_2d_block_read_transform_16b_32r16x2cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {passthrough = ["nounwind"]}
-  // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_write_32b_8r16x1cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.readonly}) attributes {passthrough = ["nounwind"]}
-  // CHECK-DAG: llvm.func spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_8r16x2cPU3AS1viiiDv2_i(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {passthrough = ["nounwind", ["memory", "1"]]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn", ["memory", "0"]]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_read_16b_32r16x2cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {passthrough = ["nofree", "nounwind", "willreturn"]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z52intel_sub_group_2d_block_read_transform_16b_32r16x2cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {passthrough = ["nofree", "nounwind", "willreturn"]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_write_32b_8r16x1cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.readonly}) attributes {passthrough = ["nofree", "nounwind", "willreturn"]}
+  // CHECK-DAG: llvm.func spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_8r16x2cPU3AS1viiiDv2_i(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "1"]]}
 
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16, 1>, %arg1: !tt.ptr<f16, 1>, %arg2: !tt.ptr<f32, 1>, %arg3: i32, %arg4: i32, %arg5: i32) {
     // CHECK-LABEL: @matmul_kernel_with_block_pointers
@@ -194,7 +194,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 #warp = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
 
-  // CHECK: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64 attributes {passthrough = ["nounwind", "willreturn", ["memory", "0"]]}
+  // CHECK: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
 
   // CHECK-LABEL: llvm.func spir_kernelcc @broadcast(
   // CHECK-SAME:                                     [[VAL_0:%.*]]: f32) -> vector<16xf32>
@@ -226,25 +226,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 
 // -----
 
-// COM: Checks the correct custom lowering of arithmetic operations.
-
-module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
-  // CHECK-LABEL: llvm.func spir_kernelcc @custom_arith_lowering(
-  // CHECK-SAME:                                                 [[VAL_0:%.*]]: vector<8xf32>) -> vector<8xf32> attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [128 : i32, 1 : i32, 1 : i32]} {
-  tt.func public @custom_arith_lowering(%arg0: tensor<8x16xf32>) -> tensor<8x16xf32> {
-
-    // CHECK: [[VAL_1:%.*]] = llvm.mlir.constant(dense<2.000000e+00> : vector<8xf32>) : vector<8xf32>
-    // CHECK: [[VAL_2:%.*]] = llvm.mlir.constant(dense<1.000000e+00> : vector<8xf32>) : vector<8xf32>
-    // CHECK: [[VAL_3:%.*]] = llvm.fdiv [[VAL_2]], [[VAL_0]]  : vector<8xf32>
-    // CHECK: [[VAL_4:%.*]] = llvm.fmul [[VAL_1]], [[VAL_3]]  : vector<8xf32>
-    %cst = arith.constant dense<2.000000e+00> : tensor<8x16xf32>
-    %0 = arith.divf %cst, %arg0 fastmath<fast> : tensor<8x16xf32>
-    tt.return %0 : tensor<8x16xf32>
-  }
-}
-
-// -----
-
 // COM: Checks tt.load lowering for SLM
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
@@ -258,7 +239,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %c1_i64 = arith.constant 1 : i64
     %c64_i64 = arith.constant 64 : i64
     %ptr = tt.make_tensor_ptr %arg0, [%c0_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x64xf16, #dot0>, 3>
-    // CHECK: {{.*}} = llvm.call spir_funccc @llvm.genx.GenISA.simdBlockRead({{.*}}) {function_type = !llvm.func<vector<64xi16> (ptr<3>)>, linkage = #llvm.linkage<external>, sym_name = "llvm.genx.GenISA.simdBlockRead", visibility_ = 0 : i64} : (!llvm.ptr<3>) -> vector<64xi16>
+    // CHECK: {{.*}} = llvm.call spir_funccc @llvm.genx.GenISA.simdBlockRead({{.*}}) {{.*}} : (!llvm.ptr<3>) -> vector<64xi16>
     %ld = tt.load %ptr {DotIdx = 0 : i32} : !tt.ptr<tensor<16x64xf16, #dot0>, 3>
     tt.return
   }
@@ -280,8 +261,33 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %c64_i64 = arith.constant 64 : i64
     %ptr = tt.make_tensor_ptr %arg0, [%c0_i64, %c64_i64], [%c64_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x64xf16, #dot0>, 3>
     // CHECK: [[CAST:%.*]] = llvm.bitcast {{.*}} : vector<64xf16> to vector<64xi16>
-    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite({{.*}}, [[CAST]]) {function_type = !llvm.func<void (ptr<3>, vector<64xi16>)>, linkage = #llvm.linkage<external>, sym_name = "llvm.genx.GenISA.simdBlockWrite", visibility_ = 0 : i64} : (!llvm.ptr<3>, vector<64xi16>) -> ()
+    // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite({{.*}}, [[CAST]]) {{.*}} : (!llvm.ptr<3>, vector<64xi16>) -> ()
     tt.store %ptr, %arg1 {DotIdx = 0 : i32} : !tt.ptr<tensor<16x64xf16, #dot0>, 3>
     tt.return
+  }
+}
+
+// -----
+
+module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+// CHECK-LABEL:   llvm.func spir_kernelcc @test(
+// CHECK-SAME:                                  %[[VAL_0:.*]]: !llvm.ptr<3>,
+// CHECK-SAME:                                  %[[VAL_1:.*]]: vector<16xf32>) -> vector<16xf32>
+// CHECK:           %[[VAL_2:.*]] = llvm.call spir_funccc @_Z16get_sub_group_idv() {{{.*}}} : () -> i32
+// CHECK:           %[[VAL_3:.*]] = llvm.sext %[[VAL_2]] : i32 to i64
+// CHECK:           %[[VAL_4:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_idv() {{{.*}}} : () -> i32
+// CHECK:           %[[VAL_5:.*]] = llvm.sext %[[VAL_4]] : i32 to i64
+// CHECK:           %[[VAL_6:.*]] = llvm.mlir.constant(16 : i64) : i64
+// CHECK:           %[[VAL_7:.*]] = llvm.mlir.constant(256 : i64) : i64
+// CHECK:           %[[VAL_8:.*]] = llvm.mul %[[VAL_7]], %[[VAL_3]] : i64
+// CHECK:           %[[VAL_9:.*]] = llvm.getelementptr inbounds %[[VAL_0]]{{\[}}%[[VAL_8]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, f32
+// CHECK:           llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite(%[[VAL_9]], %[[VAL_1]]) {{{.*}}} : (!llvm.ptr<3>, vector<16xf32>) -> ()
+// CHECK:           %[[VAL_10:.*]] = llvm.mul %[[VAL_6]], %[[VAL_5]] : i64
+// CHECK:           %[[VAL_11:.*]] = llvm.getelementptr inbounds %[[VAL_9]]{{\[}}%[[VAL_10]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, f32
+// CHECK:           %[[VAL_12:.*]] = llvm.load %[[VAL_11]] : !llvm.ptr<3> -> vector<16xf32>
+// CHECK:           llvm.return %[[VAL_12]] : vector<16xf32>
+  tt.func @test(%arg0: !tt.ptr<f32, 3>, %arg1: tensor<16x16xf32>) -> tensor<16x16xf32> {
+    %0 = triton_intel_gpu.sub_group_transpose %arg0, %arg1 : tensor<16x16xf32>
+    tt.return %0 : tensor<16x16xf32>
   }
 }

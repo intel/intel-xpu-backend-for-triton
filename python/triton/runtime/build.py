@@ -53,8 +53,9 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         cxx = os.environ.get("CXX")
         if cxx is None:
             clangpp = shutil.which("clang++")
+            gxx = shutil.which("g++")
             icpx = shutil.which("icpx")
-            cxx = icpx if icpx is not None else clangpp
+            cxx = icpx or clangpp or gxx
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         import numpy as np
@@ -63,13 +64,20 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         cc_cmd = [cxx]
         if icpx is not None:
             cc_cmd += ["-fsycl"]
+        else:
+            cc_cmd += ["--std=c++17"]
     else:
-        cc_cmd = [cc, "-O3"]
+        cc_cmd = [cc]
 
-    cc_cmd += [src, "-shared", "-fPIC", "-o", so]
+    # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
+    cc_cmd += [src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
     cc_cmd += [f'-l{lib}' for lib in libraries]
     cc_cmd += [f"-L{dir}" for dir in library_dirs]
     cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]
+
+    if os.getenv("VERBOSE"):
+        print(" ".join(cc_cmd))
+
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so

@@ -3,12 +3,10 @@
 #include "softmax/softmax.h"
 #include "stream_k_gemm/stream_k_gemm.h"
 #include <CL/sycl.hpp>
+#include <c10/core/ScalarType.h>
 #include <cstdint>
-
 #include <ipex.h>
 #include <torch/extension.h>
-
-static constexpr float kNegInfinity = INFINITY * -1;
 
 sycl::queue get_current_sycl_queue() {
   // submit kernel
@@ -17,37 +15,6 @@ sycl::queue get_current_sycl_queue() {
 
   return xpu::get_queue_from_stream(stream);
 }
-
-struct Shape {
-  Shape(int B, int N, int F, int T, int H)
-      : num_batches(B), num_heads(N), num_queries(F), num_keys(T),
-        head_size(H) {}
-  const int num_batches;
-  const int num_heads;
-  const int num_queries;
-  const int num_keys;
-  const int head_size;
-
-  inline uint32_t get_query_size() const {
-    return num_batches * num_heads * num_queries * head_size;
-  }
-  inline uint32_t get_key_size() const {
-    return num_batches * num_heads * num_keys * head_size;
-  }
-  inline uint32_t get_score_size() const {
-    return num_batches * num_heads * num_queries * num_keys;
-  }
-  inline uint32_t get_ml_size() const {
-    return num_batches * num_heads * num_queries;
-  }
-  inline uint32_t get_attn_mask_size() const {
-#if _BIAS_AS_INPUT
-    return num_batches * num_heads * num_queries * num_keys;
-#else
-    return num_batches * num_queries * num_keys;
-#endif
-  }
-};
 
 #define CHECK_XPU(x)                                                           \
   TORCH_CHECK(x.device().is_xpu(), #x " must be a XPU tensor")
@@ -103,55 +70,37 @@ at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
   return acc;
 }
 
-// refers to test_fmha.cpp::test_fmha_forward()
-template <typename T, bool IsCausal>
+#define CALL_IMPL_ATTENTION_FUNC(P)                                            \
+  fmha::fmha_forward_impl<P, T, use_mask, IsCausal, use_dropout>(              \
+      queue, num_batches, num_heads, head_size, num_queries, num_keys)
+
+template <bool use_mask = false, bool IsCausal = false,
+          bool use_dropout = false>
 void flash_attn(const int64_t num_batches, const int64_t num_heads,
                 const int64_t head_size, const int64_t num_queries,
                 const int64_t num_keys) {
-  Shape shape(num_batches, num_heads, num_queries, num_keys, head_size);
+  RECORD_FUNCTION("xetla fa",
+                  {num_batches, num_heads, head_size, num_queries, num_keys});
+
   auto queue = get_current_sycl_queue();
 
-  constexpr bool use_mask = false;
-  constexpr bool use_dropout = false;
-  float dropout_prob = 0.0f;
-  if constexpr (use_dropout)
-    dropout_prob = 0.5f;
-  const float scale = 1 / (1 - dropout_prob);
-  const float head_scale = sycl::rsqrt(float(shape.head_size));
+  sycl::event evt;
+  if (head_size <= 64) {
+    evt = CALL_IMPL_ATTENTION_FUNC(fmha_policy_64x128x64);
+  } else if (head_size <= 128) {
+    evt = CALL_IMPL_ATTENTION_FUNC(fmha_policy_64x128x128);
+  } else if (head_size <= 25) {
+    if (num_keys <= 256) {
+      evt = CALL_IMPL_ATTENTION_FUNC(fmha_policy_32x256x256);
+    } else {
+      evt = CALL_IMPL_ATTENTION_FUNC(fmha_policy_64x512x256);
+    }
+  } else {
+    std::cout << "No policy available for current head_size " << head_size
+              << "\n";
+  }
 
-  uint32_t size_query = shape.get_query_size();
-  uint32_t size_key = shape.get_key_size();
-  uint32_t size_score = shape.get_score_size();
-  uint32_t size_attn_mask = shape.get_attn_mask_size();
-  uint32_t size_ml = shape.get_ml_size();
-
-  // forward
-  void *query_ptr = at::empty(size_query, at::kBFloat16).data_ptr();
-  void *key_ptr = at::empty(size_key, at::kBFloat16).data_ptr();
-  void *value_ptr = at::empty(size_key, at::kBFloat16).data_ptr();
-  void *attn_mask_ptr = at::empty(size_attn_mask, at::kBFloat16).data_ptr();
-  void *dropout_mask_ptr = at::empty(size_score, torch::kUInt8).data_ptr();
-
-  void *output_ptr = at::empty(size_query, at::kBFloat16).data_ptr();
-  void *m_ptr = at::empty(size_ml, at::kFloat).data_ptr();
-  void *l_ptr = at::empty(size_ml, at::kFloat).data_ptr();
-
-  // Type cast
-  T *query = static_cast<T *>(query_ptr);
-  T *key = static_cast<T *>(key_ptr);
-  T *value = static_cast<T *>(value_ptr);
-  T *attn_mask = static_cast<T *>(attn_mask_ptr);
-  uint8_t *dropout_mask = static_cast<uint8_t *>(dropout_mask_ptr);
-
-  T *output = static_cast<T *>(output_ptr);
-  float *m = static_cast<float *>(m_ptr);
-  float *l = static_cast<float *>(l_ptr);
-
-  fmha_forward<T, use_mask, IsCausal, use_dropout>(
-      queue, query, key, value, attn_mask, dropout_mask, dropout_prob, output,
-      m, l, shape.num_batches, shape.num_heads, shape.head_size,
-      shape.num_queries, shape.num_keys, head_scale);
-
+  xpu::profiler_record("xetla kernel", evt);
   return;
 }
 
@@ -221,18 +170,6 @@ PYBIND11_MODULE(xetla_kernel, m) {
         &bf16_gemm<Test_4096x8x128x16384_row_row>, "bf16_gemm (XeTLA)");
   m.def("gemm_shape_4096_8_16384_128",
         &bf16_gemm<Test_4096x8x16384x128_row_row>, "bf16_gemm (XeTLA)");
-  // stream_k_gemm
-  m.def("stream_k_gemm_shape_1_3072_4096_3072", &bf16_stream_k_gemm,
-        "bf16_stream_k_gemm (XeTLA)");
-  // flash_attn_shape_$Z_$H_${N_CTX}_${D_HEAD}
-  m.def(
-      "flash_attn_shape_4_48_1024_64",
-      [](const int64_t num_batches, const int64_t num_heads,
-         const int64_t head_size, const int64_t num_queries,
-         const int64_t num_keys) {
-        return flash_attn<sycl::half, false>(num_batches, num_heads, head_size,
-                                             num_queries, num_keys);
-      },
-      py::arg("num_batches"), py::arg("num_heads"), py::arg("head_size"),
-      py::arg("num_queries"), py::arg("num_keys"), "flash attn (XeTLA)");
+  // flash_attn
+  m.def("flash_attn", &flash_attn<false, false, false>, "flash attn (XeTLA)");
 }

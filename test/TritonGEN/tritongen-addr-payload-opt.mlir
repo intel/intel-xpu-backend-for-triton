@@ -6,12 +6,12 @@
 #dot1 = #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
 
 // COM: Test that, instead of 2D block reads, the compiler generates address payload create/set/load builtins.
-// CHECK-DAG: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent"]}
-// CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_block_read_ap_transform_u16_m16k16v1(!llvm.ptr {llvm.nonnull}, i32, i32, i32) -> vector<8xi32> attributes {passthrough = ["nounwind", ["memory", "1"]]}
-// CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_block_read_ap_u16_m8k16v1(!llvm.ptr {llvm.nonnull}, i32, i32, i32) -> vector<8xi16> attributes {passthrough = ["nounwind", ["memory", "1"]]}
-// CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockY(!llvm.ptr {llvm.nonnull}, i32) attributes {passthrough = ["nounwind", ["memory", "2"]]}
-// CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX(!llvm.ptr {llvm.nonnull}, i32) attributes {passthrough = ["nounwind", ["memory", "2"]]}
-// CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_createBlock2DAddressPayload(i64, i32, i32, i32, i32, i32, i32, i32, i32) -> !llvm.ptr attributes {passthrough = ["nounwind", ["memory", "1"]]}
+// CHECK-DAG: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn", ["memory", "0"]]}
+// CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_block_read_ap_transform_u16_m16k16v1(!llvm.ptr {llvm.nonnull}, i32, i32, i32) -> vector<8xi32> attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "1"]]}
+// CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_block_read_ap_u16_m8k16v1(!llvm.ptr {llvm.nonnull}, i32, i32, i32) -> vector<8xi16> attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "1"]]}
+// CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockY(!llvm.ptr {llvm.nonnull}, i32) attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "2"]]}
+// CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX(!llvm.ptr {llvm.nonnull}, i32) attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "2"]]}
+// CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_createBlock2DAddressPayload(i64, i32, i32, i32, i32, i32, i32, i32, i32) -> !llvm.ptr attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "1"]]}
 
 module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 33792 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_kernel_with_addr_payload_opt(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i64, %arg4: i64, %arg5: i64, %arg6: i64, %arg7: i64) {
@@ -47,8 +47,8 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 33792 
     %27 = arith.cmpi slt, %23, %arg5 : i64
     cf.cond_br %27, ^bb2, ^bb3
   ^bb2:
-    %28 = tt.load %25 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x16xf16, #dot0>>
-    %29 = tt.load %26 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x8xf16, #dot1>>
+    %28 = tt.load %25 {boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<8x16xf16, #dot0>>
+    %29 = tt.load %26 {boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<16x8xf16, #dot1>>
     %30 = tt.dot %28, %29, %24, inputPrecision = tf32 : tensor<8x16xf16, #dot0> * tensor<16x8xf16, #dot1> -> tensor<8x8xf32, #mma>
     %31 = tt.advance %25, [%c0_i32, %c32_i32] : <tensor<8x16xf16, #dot0>>
     %32 = tt.advance %26, [%c32_i32, %c0_i32] : <tensor<16x8xf16, #dot1>>

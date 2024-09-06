@@ -19,34 +19,38 @@ def parse_args():
     parser.add_argument("--compiler", help="Name of the compiler, like `triton`.", required=True)
     parser.add_argument("--tflops_col", help="Column name with tflops.", required=True)
     parser.add_argument("--hbm_col", help="Column name with HBM results.", required=False, default=None)
+    parser.add_argument("--tag", help="How to tag results", required=False, default="")
     return parser.parse_args()
 
 
 def check_cols(target_cols, all_cols):
     diff = set(target_cols).difference(all_cols)
-    assert (len(diff) == 0), f"Couldn't find required columns: '{diff}' among available '{all_cols}'"
+    if len(diff) != 0:
+        raise ValueError(f"Couldn't find required columns: '{diff}' among available '{all_cols}'")
 
 
-def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler):
+def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag):
     check_cols(param_cols, df.columns)
     check_cols([tflops_col] + [] if hbm_col is None else [hbm_col], df.columns)
     # Build json with parameters
     df_results = pd.DataFrame()
     df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
-    df_results['tflops'] = df[tflops_col]
+    df_results["tflops"] = df[tflops_col]
     if hbm_col is not None:
-        df_results['hbm_gbs'] = df[hbm_col]
+        df_results["hbm_gbs"] = df[hbm_col]
 
     df_results["run_uuid"] = uuid.uuid4().hex
     df_results["datetime"] = datetime.datetime.now()
     df_results["benchmark"] = benchmark
     df_results["compiler"] = compiler
+    df_results["tag"] = tag
 
     host_info = {
         n: os.getenv(n.upper(), default="")
         for n in ["libigc1_version", "level_zero_version", "gpu_device", "agama_version"]
     }
-    assert host_info['gpu_device'], "Could not find GPU device description, was capture_device.sh called?"
+    if not host_info["gpu_device"]:
+        raise RuntimeError("Could not find GPU device description, was capture_device.sh called?")
     for name, val in host_info.items():
         df_results[name] = val
 
@@ -58,7 +62,7 @@ def main():
     param_cols = args.param_cols.split(",")
     df = pd.read_csv(args.source)
     result_df = transform_df(df, param_cols=param_cols, tflops_col=args.tflops_col, hbm_col=args.hbm_col,
-                             benchmark=args.benchmark, compiler=args.compiler)
+                             benchmark=args.benchmark, compiler=args.compiler, tag=args.tag)
     result_df.to_csv(args.target, index=False)
 
 

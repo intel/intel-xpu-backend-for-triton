@@ -63,8 +63,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
 
   // HW 2D block read instruction only supports contiguous accessing.
   auto fastChangeStride = strides[1];
-  if (auto stride =
-          dyn_cast<arith::ConstantOp>(fastChangeStride.getDefiningOp())) {
+  if (auto stride = fastChangeStride.getDefiningOp<arith::ConstantOp>()) {
     if (auto strideInt = dyn_cast<IntegerAttr>(stride.getValue()))
       return strideInt.getInt() != 1;
   }
@@ -463,7 +462,7 @@ public:
       auto makeTensorPtrOp = getMakeTensorPtrOp(results[i]);
       assert(rewritedInfo.count(makeTensorPtrOp.getResult()) &&
              "Expecting MakeTensorPtrOp of IfOp result in rewritedInfo");
-      auto info = rewritedInfo[makeTensorPtrOp.getResult()];
+      const auto &info = rewritedInfo[makeTensorPtrOp.getResult()];
       for (unsigned j = 0; j < info.length(); ++j) {
         newRetTypes.push_back(builder.getI64Type());
       }

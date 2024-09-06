@@ -196,8 +196,7 @@ void mlir::triton::configureGPUToTritonGENConversionLegality(
   target.addIllegalOp<LLVM::CosOp, LLVM::ExpOp, LLVM::LogOp, LLVM::SinOp>();
 
   // TODO: Remove once we support replacing non-root ops.
-  target.addLegalOp<mlir::gpu::YieldOp, mlir::gpu::GPUModuleOp,
-                    mlir::gpu::ModuleEndOp>();
+  target.addLegalOp<mlir::gpu::YieldOp, mlir::gpu::GPUModuleOp>();
 }
 
 template <typename OpTy>
@@ -211,20 +210,20 @@ static void populateOpPatterns(LLVMTypeConverter &converter,
 void mlir::triton::populateGPUToTritonGENConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
   populateWithGenerated(patterns);
-  patterns.add<GPUBarrierOpLowering, GPUSubgroupReduceOpLowering>(converter);
-  patterns.add<
-      GPUIndexIntrinsicOpLowering<mlir::gpu::ThreadIdOp, TritonGEN::ThreadIdXOp,
-                                  TritonGEN::ThreadIdYOp,
-                                  TritonGEN::ThreadIdZOp>,
-      GPUIndexIntrinsicOpLowering<mlir::gpu::BlockIdOp, TritonGEN::BlockIdXOp,
-                                  TritonGEN::BlockIdYOp, TritonGEN::BlockIdZOp>,
-      GPUIndexIntrinsicOpLowering<mlir::gpu::BlockDimOp, TritonGEN::BlockDimXOp,
-                                  TritonGEN::BlockDimYOp,
-                                  TritonGEN::BlockDimZOp>,
-      GPUIndexIntrinsicOpLowering<mlir::gpu::GridDimOp, TritonGEN::GridDimXOp,
-                                  TritonGEN::GridDimYOp, TritonGEN::GridDimZOp>,
-      SingleDimLaunchConfigLowering<mlir::gpu::SubgroupIdOp,
-                                    TritonGEN::SubgroupIdOp>>(converter);
+  // This will ensure that the gpu-to-triton-gen lowering is prefered to the
+  // gpu-to-llvm-spv lowering while overlaps exist between the two.
+  // FIXME: Replace the gpu-to-triton-gen lowering of GPUBarrier with the
+  // gpu-to-llvm-spv one. Currently its not done because it results in some
+  // barriers using passthrough attributes, while others don't, which is
+  // confusing to test.
+  constexpr int patternBenefitPreferTritonGENLowering = 20;
+  patterns.add<GPUBarrierOpLowering, GPUSubgroupReduceOpLowering>(
+      converter, patternBenefitPreferTritonGENLowering);
+  patterns.add<SingleDimLaunchConfigLowering<mlir::gpu::SubgroupIdOp,
+                                             TritonGEN::SubgroupIdOp>,
+               SingleDimLaunchConfigLowering<mlir::gpu::LaneIdOp,
+                                             TritonGEN::SubgroupLocalIdOp>>(
+      converter);
   patterns.add<GPUFuncOpLowering>(
       converter,
       /*allocaAddrSpace=*/TritonGEN::TritonGENMemorySpace::kFunction,

@@ -78,7 +78,6 @@ struct ConvertTritonGPUToLLVM
 
     intel::TritonGPUToLLVMPipelineManager pipelineManager(mod, context);
     mlir::LowerToLLVMOptions option(context);
-    option.overrideIndexBitwidth(32);
     bool isAdvancedPathEnabled =
         mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                          getSupportSG2DBlockAttrName()) &&
@@ -127,8 +126,11 @@ struct ConvertTritonGPUToLLVM
       return signalPassFailure();
 
     mod.walk([&](LLVM::LLVMFuncOp funcOp) {
-      for (unsigned i = 0; i < funcOp.getNumArguments(); ++i)
+      for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
         funcOp.removeArgAttr(i, "tt.divisibility");
+        funcOp.removeArgAttr(i, "tt.constancy");
+        funcOp.removeArgAttr(i, "tt.contiguity");
+      }
     });
   }
 };

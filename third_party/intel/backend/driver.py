@@ -1,31 +1,108 @@
+import importlib.metadata
 import os
 import hashlib
+import shutil
 import tempfile
 from pathlib import Path
+from functools import cached_property
+
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
+from packaging.version import Version
+from packaging.specifiers import SpecifierSet
 
-ze_root = os.getenv("ZE_PATH", default="/usr/local")
-include_dir = [os.path.join(ze_root, "include")]
 
-oneapi_root = os.getenv("ONEAPI_ROOT")
-if oneapi_root:
-    include_dir += [
-        os.path.join(oneapi_root, "compiler/latest/include"),
-        os.path.join(oneapi_root, "compiler/latest/include/sycl")
-    ]
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Looks for the sycl library in known places.
 
-dirname = os.path.dirname(os.path.realpath(__file__))
-include_dir += [os.path.join(dirname, "include")]
+    Arguments:
+      include_dir: list of include directories to pass to compiler.
 
-library_dir = [os.path.join(dirname, "lib")]
-libraries = ['ze_loader', 'sycl']
+    Returns:
+      enriched include_dir and library_dir.
+
+    Raises:
+      AssertionError: if library was not found.
+    """
+    library_dir = []
+    include_dir = include_dir.copy()
+    assertion_message = ("sycl headers not found, please install `icpx` compiler, "
+                         "or provide `ONEAPI_ROOT` environment "
+                         "or install `intel-sycl-rt>=2025.0.0` wheel")
+
+    if shutil.which("icpx"):
+        # only `icpx` compiler knows where sycl runtime binaries and header files are
+        return include_dir, library_dir
+
+    oneapi_root = os.getenv("ONEAPI_ROOT")
+    if oneapi_root:
+        include_dir += [
+            os.path.join(oneapi_root, "compiler/latest/include"),
+            os.path.join(oneapi_root, "compiler/latest/include/sycl")
+        ]
+        return include_dir, library_dir
+
+    try:
+        sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
+    except importlib.metadata.PackageNotFoundError:
+        raise AssertionError(assertion_message)
+
+    if Version(sycl_rt.get("version", "0.0.0")) in SpecifierSet("<2025.0.0a1"):
+        raise AssertionError(assertion_message)
+
+    for f in importlib.metadata.files("intel-sycl-rt"):
+        # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
+        # being add: include and include/sycl.
+        if f.name == "sycl.hpp":
+            include_dir += [f.locate().parent.parent.resolve().as_posix()]
+        if f.name == "libsycl.so":
+            library_dir += [f.locate().parent.resolve().as_posix()]
+
+    return include_dir, library_dir
+
+
+class CompilationHelper:
+    _library_dir: list[str]
+    _include_dir: list[str]
+
+    def __init__(self):
+        self._library_dir = None
+        self._include_dir = None
+        self.libraries = ['ze_loader', 'sycl']
+
+    @cached_property
+    def _compute_compilation_options_lazy(self):
+        ze_root = os.getenv("ZE_PATH", default="/usr/local")
+        include_dir = [os.path.join(ze_root, "include")]
+
+        include_dir, library_dir = find_sycl(include_dir)
+
+        dirname = os.path.dirname(os.path.realpath(__file__))
+        include_dir += [os.path.join(dirname, "include")]
+        library_dir += [os.path.join(dirname, "lib")]
+
+        self._library_dir = library_dir
+        self._include_dir = include_dir
+
+    @cached_property
+    def library_dir(self) -> list[str]:
+        self._compute_compilation_options_lazy
+        return self._library_dir
+
+    @cached_property
+    def include_dir(self) -> list[str]:
+        self._compute_compilation_options_lazy
+        return self._include_dir
+
+
+compilation_helper = CompilationHelper()
 
 
 def compile_module_from_src(src, name):
-    key = hashlib.md5(src.encode("utf-8")).hexdigest()
+    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     cache_path = cache.get_file(f"{name}.so")
     if cache_path is None:
@@ -33,7 +110,8 @@ def compile_module_from_src(src, name):
             src_path = os.path.join(tmpdir, "main.cpp")
             with open(src_path, "w") as f:
                 f.write(src)
-            so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
+            so = _build(name, src_path, tmpdir, compilation_helper.library_dir, compilation_helper.include_dir,
+                        compilation_helper.libraries)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
     import importlib.util
@@ -129,7 +207,7 @@ def make_launcher(constants, signature, ids):
         }[ty]
 
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
-    format = "iiiOKOOOO" + args_format
+    format = "iiiOOOOOO" + args_format
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
     # generate glue code
@@ -225,27 +303,9 @@ def make_launcher(constants, signature, ids):
       return ptr_info;
     }}
 // start sycl
-  static void set_scalar_arg(
-          sycl::handler& cgh,
-          int index,
-          size_t size,
-          const void* value) {{
-      switch (size) {{
-      case sizeof(uint8_t):
-      cgh.set_arg(index, *static_cast<const uint8_t*>(value));
-      break;
-      case sizeof(uint16_t):
-      cgh.set_arg(index, *static_cast<const uint16_t*>(value));
-      break;
-      case sizeof(uint32_t):
-      cgh.set_arg(index, *static_cast<const uint32_t*>(value));
-      break;
-      case sizeof(uint64_t):
-      cgh.set_arg(index, *static_cast<const uint64_t*>(value));
-      break;
-      default:
-      assert(false && "wrong scalar size in sycl gen.");
-      }}
+  template <class T>
+  static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *value) {{
+    cgh.set_arg(index, *static_cast<const T *>(value));
   }}
   static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
@@ -268,7 +328,7 @@ def make_launcher(constants, signature, ids):
     assert(num_params == expected_num_params && "number of kernel param not matched");
     // Submit the imported kernel.
     auto cgf = [&](sycl::handler &cgh) {{
-      {" ".join(f'set_scalar_arg(cgh, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
+      {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
       if (shared_memory) {{
           using share_mem_t = sycl::local_accessor<int8_t, 1>;
           share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
@@ -289,10 +349,10 @@ def make_launcher(constants, signature, ids):
       PyObject *kernel_metadata = NULL;
       PyObject *launch_metadata = NULL;
       PyObject *py_obj_stream;
-      void* pKrnl;
+      PyObject* py_kernel;
 
       {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &pKrnl,
+      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
         return NULL;
@@ -324,10 +384,12 @@ def make_launcher(constants, signature, ids):
 
       void * pStream = PyLong_AsVoidPtr(py_obj_stream);
       //error check
-      if(pStream == nullptr || pKrnl == nullptr) return NULL;
+      if(pStream == nullptr || py_kernel == nullptr) return NULL;
 
       sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
-      sycl::kernel kernel = *(static_cast<sycl::kernel*>(pKrnl));
+      sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
+      if(kernel_ptr == nullptr) return NULL;
+      sycl::kernel kernel = *kernel_ptr;
 
       {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
       sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});

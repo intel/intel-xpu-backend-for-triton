@@ -100,7 +100,7 @@ DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(DotOp op) {
       // For FP8XFP8->FP32, upcast to FP16
       if (aElemTy.isFloat8E5M2())
         return DPASEngineType::FP32_FP32_FP16_FP16;
-      if (aElemTy.isFloat8E4M3FNUZ())
+      if (aElemTy.isFloat8E4M3FN())
         return DPASEngineType::FP32_FP32_FP16_FP16;
     } else if (dElemTy.isF16()) {
       if (aElemTy.isF16())

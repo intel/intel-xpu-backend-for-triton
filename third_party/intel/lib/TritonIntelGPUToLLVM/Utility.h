@@ -687,9 +687,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
       idxCol = urem(idxCol, numElemsPerSwizzlingRowVal);
       strideRow = numElemsPerSwizzlingRowVal;
     }
-    if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxCol.getDefiningOp())) {
-      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-              add.getRhs().getDefiningOp())) {
+    if (auto add = idxCol.getDefiningOp<LLVM::AddOp>()) {
+      if (auto _cst = add.getRhs().getDefiningOp<LLVM::ConstantOp>()) {
         unsigned cst =
             cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (outVec * maxPhase);
@@ -698,9 +697,8 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
         immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
       }
     }
-    if (auto add = dyn_cast_or_null<LLVM::AddOp>(idxRow.getDefiningOp())) {
-      if (auto _cst = dyn_cast_or_null<LLVM::ConstantOp>(
-              add.getRhs().getDefiningOp())) {
+    if (auto add = idxRow.getDefiningOp<LLVM::AddOp>()) {
+      if (auto _cst = add.getRhs().getDefiningOp<LLVM::ConstantOp>()) {
         unsigned cst =
             cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
         unsigned key = cst % (perPhase * maxPhase);
@@ -740,33 +738,12 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   return ret;
 }
 
-[[nodiscard]] bool emitTransferBetweenDPASAndShared(
-    RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
-    std::optional<int32_t> maxVecElems, Value shmemBase,
-    ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
-
 inline SmallVector<Value>
 loadSharedToDistributed(RankedTensorType dstTy, MemDescType srcTy,
                         Type elemLlvmTy, SharedMemoryObject &memObj,
                         Location loc, RewriterBase &rewriter,
                         const TargetInfoBase &target) {
   SmallVector<Value> ret;
-  if (isa<DpasEncodingAttr>(dstTy.getEncoding())) {
-    if (emitTransferBetweenDPASAndShared(
-            dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt,
-            memObj.getBase(), memObj.getStrides(), loc, rewriter, target,
-            [&](VectorType vecTy, Value vecAddr) {
-              auto vecVal = load(vecTy, vecAddr);
-              vecVal.setAlignment(vecTy.getNumElements() *
-                                  elemLlvmTy.getIntOrFloatBitWidth() / 8);
-              for (int v = 0; v < vecTy.getNumElements(); v++) {
-                ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
-              }
-            }))
-      return ret;
-  }
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, memObj.getBase(),
       memObj.getStrides(), loc, rewriter, target,
@@ -789,23 +766,6 @@ inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
                                      Value smemBase, ArrayRef<Value> dstStrides,
                                      Location loc, RewriterBase &rewriter,
                                      const TargetInfoBase &target) {
-  if (isa<DpasEncodingAttr>(srcTy.getEncoding())) {
-    if (emitTransferBetweenDPASAndShared(
-            srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
-            dstStrides, loc, rewriter, target,
-            [&](VectorType vecTy, Value vecAddr) {
-              ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
-              srcVals = srcVals.drop_front(vecTy.getNumElements());
-              Value vec = undef(vecTy);
-              for (int i = 0; i < vals.size(); i++) {
-                vec = insert_element(vec, vals[i], i32_val(i));
-              }
-              store(vec, vecAddr)
-                  .setAlignment(vecTy.getNumElements() *
-                                elemLlvmTy.getIntOrFloatBitWidth() / 8);
-            }))
-      return;
-  }
   bool success = emitTransferBetweenRegistersAndShared(
       srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
       dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {

@@ -378,7 +378,7 @@ class dtype:
                 self.primitive_bitwidth = 32
                 self.exponent_bias = 127
             elif name == 'fp64':
-                self.fp_mantissa_width = 53
+                self.fp_mantissa_width = 52
                 self.primitive_bitwidth = 64
                 self.exponent_bias = 1023
             else:
@@ -497,6 +497,10 @@ class dtype:
         return self
 
     def to_ir(self, builder: ir.builder) -> ir.type:
+        if self.name.startswith("fp8") and self.name not in builder.options.supported_fp8_dtypes:
+            raise ValueError(f'type {self} not supported in this architecture. '
+                             f'The supported fp8 dtypes are {builder.options.supported_fp8_dtypes}')
+
         if self.name == 'void':
             return builder.get_void_ty()
         elif self.name == 'int1':
@@ -568,7 +572,7 @@ class pointer_type(dtype):
         self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), 1)
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), self.address_space)
 
     def __str__(self):
         return self.name
@@ -593,6 +597,13 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
+
+
+class nv_tma_desc_type(pointer_type):
+
+    def __init__(self, const=True, address_space=0):
+        super().__init__(uint8, const=const, address_space=address_space)
+        self.name = 'nv_tma_desc_type'
 
 
 class block_type(dtype):
@@ -1957,7 +1968,7 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
 
     :param input: the input values
     :type input: Tensor
-    :param axis: the dimension along which the reduction should be done
+    :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
     :type axis: int
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool"""

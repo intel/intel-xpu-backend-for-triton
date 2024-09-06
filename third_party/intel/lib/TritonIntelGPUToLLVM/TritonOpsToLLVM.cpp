@@ -8,7 +8,9 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -68,7 +70,7 @@ public:
 
     for (size_t i = 0; i < offsets.size(); ++i) {
       Value offset = offsets[i];
-      if (auto cst = dyn_cast<LLVM::ConstantOp>(offset.getDefiningOp()))
+      if (auto cst = offset.getDefiningOp<LLVM::ConstantOp>())
         if (auto attr = dyn_cast<mlir::IntegerAttr>(cst.getValue());
             attr && attr.getInt() == 0)
           continue;
@@ -157,14 +159,12 @@ public:
            (vBlks == 1 || vBlks == 2) && "only support 1 or 2 blocks");
 
     Value ptr = op.getPtr();
-    if (auto cast =
-            dyn_cast<mlir::UnrealizedConversionCastOp>(ptr.getDefiningOp()))
+    if (auto cast = ptr.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       ptr = cast.getInputs()[0];
 
     MakeTensorPtrOp ptrOp = getMakeTensorPtrOp(ptr);
     Value base = ptrOp.getBase();
-    if (auto cast =
-            dyn_cast<mlir::UnrealizedConversionCastOp>(base.getDefiningOp()))
+    if (auto cast = base.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       base = cast.getInputs()[0];
     else
       base = rewriter.getRemappedValue(base);
@@ -262,8 +262,7 @@ private:
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op.getLoc();
     Value llPtr = adaptor.getPtr();
-    if (auto cast =
-            dyn_cast<mlir::UnrealizedConversionCastOp>(llPtr.getDefiningOp()))
+    if (auto cast = llPtr.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       llPtr = cast.getInputs()[0];
 
     // sg_size(16) x i64 = 64 x i16
@@ -293,8 +292,7 @@ private:
     if constexpr (std::is_same_v<OpType, StoreOp>) {
       rewriter.restoreInsertionPoint(insertPoint);
       Value val = adaptor.getValue();
-      if (auto shuffleOp =
-              dyn_cast_or_null<LLVM::ShuffleVectorOp>(val.getDefiningOp()))
+      if (auto shuffleOp = val.getDefiningOp<LLVM::ShuffleVectorOp>())
         val = shuffleOp.getRes();
       if (isa<LLVM::LLVMStructType>(val.getType())) {
         SmallVector<Value> unpackedVal = unpackLLElements(loc, val, rewriter);
@@ -374,9 +372,6 @@ public:
   }
 };
 
-/// %glue = ttgi.glue %a, %b : tensor<4xf16>, tensor<4xf16> : tensor<8xf16>
-/// is converted to:
-/// %glue = llvm.shufflevector %a, %b : [0, 1, 2, 3, 4, 5, 6, 7] : vector<8xf16>
 class GlueOpConversion : public ConvertTritonGPUOpToLLVMPattern<GlueOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
@@ -384,48 +379,75 @@ public:
   LogicalResult
   matchAndRewrite(GlueOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    ValueRange operands = adaptor.getOperands();
+    Value result = TypeSwitch<Type, Value>(operands.front().getType())
+                       .Case([this, &rewriter, op, operands](VectorType) {
+                         return vectorGlueOp(op, operands, rewriter);
+                       })
+                       .Default([this, &rewriter, op, operands](auto) {
+                         return scalarGlueOp(op, operands, rewriter);
+                       });
+    if (!result) {
+      // Non-power of 2 number of vector operands case. See comment below.
+      return failure();
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+private:
+  Value vectorGlueOp(GlueOp op, ValueRange operands,
+                     ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
-    SmallVector<Value> operands = adaptor.getOperands();
+    if (!llvm::isPowerOf2_64(operands.size())) {
+      // Legal vector widths: 2, 3, 4, 8, 16. We cannot obtain any of these from
+      // a non-power of 2 number of vector operands (2 and 3 can only be created
+      // from scalar values). Bail out to keep algorithm simple and avoid
+      // illegal codegen.
+      return {};
+    }
+    return treeVectorGlueOp(op.getLoc(), operands, rewriter);
+  }
+
+  Value treeVectorGlueOp(Location loc, ValueRange operands,
+                         ConversionPatternRewriter &rewriter) const {
+    if (operands.size() == 1)
+      return operands.front();
+    assert(llvm::isPowerOf2_64(operands.size()) &&
+           "Expecting power of 2 number of operands");
+    SmallVector<Value> lhs;
+    SmallVector<Value> rhs;
+    for (auto [index, value] : llvm::enumerate(operands))
+      (index % 2 == 0 ? lhs : rhs).push_back(value);
+    SmallVector<Value> res;
+    int32_t numElements =
+        cast<VectorType>(operands.front().getType()).getNumElements();
+    SmallVector<int32_t> concatMask(numElements * 2);
+    std::iota(std::begin(concatMask), std::end(concatMask), 0);
+    llvm::transform(llvm::zip_equal(lhs, rhs), std::back_inserter(res),
+                    [loc, &rewriter, &concatMask](const auto &pair) -> Value {
+                      auto [lhs, rhs] = pair;
+                      return rewriter.create<LLVM::ShuffleVectorOp>(
+                          loc, lhs, rhs, concatMask);
+                    });
+    return treeVectorGlueOp(loc, res, rewriter);
+  }
+
+  Value scalarGlueOp(GlueOp op, ValueRange operands,
+                     ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
     auto dstType =
         cast<VectorType>(getTypeConverter()->convertType(op.getType()));
-    unsigned numElts = dstType.getNumElements();
-    SmallVector<int32_t> indices(numElts);
-    std::iota(indices.begin(), indices.end(), 0);
-    DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
+    Value poison = rewriter.create<LLVM::PoisonOp>(loc, dstType);
 
-    switch (operands.size()) {
-    case 1:
-      rewriter.replaceOp(op, operands[0]);
-      break;
-    case 2:
-      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(
-          op, dstType, operands[0], operands[1], attr);
-      break;
-    case 4: {
-      auto subType = vec_ty(dstType.getElementType(), numElts / 2);
-      indices.pop_back_n(numElts / 2);
-      DenseI32ArrayAttr attr01 = rewriter.getDenseI32ArrayAttr(indices);
-      auto shfl01 = rewriter.create<LLVM::ShuffleVectorOp>(
-          loc, subType, operands[0], operands[1], attr01);
-      DenseI32ArrayAttr attr23 = rewriter.getDenseI32ArrayAttr(indices);
-      auto shfl23 = rewriter.create<LLVM::ShuffleVectorOp>(
-          loc, subType, operands[2], operands[3], attr23);
-      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(op, dstType, shfl01,
-                                                         shfl23, attr);
-    } break;
-    default: {
-      unsigned num = operands.size();
-      Value undef = undef(dstType);
-      for (unsigned i = 0; i < num; ++i)
-        undef =
-            insert_element(dstType, undef, operands[i],
-                           rewriter.create<LLVM::ConstantOp>(loc, i32_ty, i));
-
-      rewriter.replaceOp(op, undef);
-    }
-    }
-
-    return success();
+    auto enumeratedOperands = llvm::enumerate(operands);
+    return std::accumulate(std::begin(enumeratedOperands),
+                           std::end(enumeratedOperands), poison,
+                           [&rewriter, loc](Value acc, const auto &pair) {
+                             auto [index, operand] = pair;
+                             Value idx = i32_val(index);
+                             return insert_element(acc, operand, idx);
+                           });
   }
 };
 
@@ -505,7 +527,6 @@ public:
     Location loc = op.getLoc();
     Type resultType = op.getType(0);
     TritonIntelGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
-    Type convertedTy = typeConverter->convertType(resultType);
     Region &combineOp = op.getCombineOp();
     if (!combineOp.hasOneBlock() ||
         combineOp.front().getOperations().size() != 2)
@@ -524,7 +545,7 @@ public:
       llvm_unreachable("Unhandled reduction kind");
 
     Value result = rewriter.create<mlir::gpu::SubgroupReduceOp>(
-        loc, convertedTy, adaptor.getSrcs()[0], redKind, true);
+        loc, adaptor.getSrcs()[0], redKind, true);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -552,6 +573,58 @@ public:
   matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOp(op, adaptor.getSrc());
+    return success();
+  }
+};
+
+class SubGroupTransposeOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<SubGroupTransposeOp> {
+public:
+  using ConvertTritonGPUOpToLLVMPattern<
+      SubGroupTransposeOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(SubGroupTransposeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    Value src = adaptor.getSrc();
+    auto vecTy = cast<VectorType>(src.getType());
+    auto mod = op->getParentOfType<ModuleOp>();
+    int threadsPerWarp =
+        mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    assert(vecTy.getNumElements() == threadsPerWarp &&
+           "Valid input tensor types should convert to a vector of sub-group "
+           "size");
+
+    Location loc = op.getLoc();
+    Value localBuffer = adaptor.getLocalBuffer();
+    Type offsetType = getTypeConverter()->getIndexType();
+    Value subGroupId = getValueOrCreateCastToIndexLike(
+        rewriter, loc, offsetType,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(
+            loc, /*upper_bound=*/IntegerAttr{}));
+    Value subGroupLocalId = getValueOrCreateCastToIndexLike(
+        rewriter, loc, offsetType,
+        rewriter.create<mlir::gpu::LaneIdOp>(loc,
+                                             /*upper_bound=*/IntegerAttr{}));
+    Value wiStride =
+        rewriter.create<LLVM::ConstantOp>(loc, offsetType, threadsPerWarp);
+    Value sgStride = rewriter.create<LLVM::ConstantOp>(
+        loc, offsetType, threadsPerWarp * threadsPerWarp);
+    Value subGroupOffset = mul(sgStride, subGroupId);
+    Type ptrType = localBuffer.getType();
+    Type elementType =
+        cast<RankedTensorType>(op.getSrc().getType()).getElementType();
+    Value subGroupBasePtr = gep(ptrType, elementType, localBuffer,
+                                ValueRange{subGroupOffset}, /*inbounds=*/true);
+
+    // Store matrix in local memory.
+    rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, subGroupBasePtr, src);
+
+    // Load from matrix, trasposed.
+    Value workItemOffset = mul(wiStride, subGroupLocalId);
+    Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,
+                                ValueRange{workItemOffset}, /*inbounds=*/true);
+    rewriter.replaceOp(op, load(src.getType(), workItemBasePtr));
     return success();
   }
 };
@@ -594,5 +667,6 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, benefit);
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
   patterns.add<ReduceOpConversion>(typeConverter, benefit);
+  patterns.add<SubGroupTransposeOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
 }

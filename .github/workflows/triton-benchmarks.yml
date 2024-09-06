@@ -7,6 +7,10 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
+      tag:
+        description: Tag for benchmark results
+        type: string
+        default: "test"
   schedule:
     - cron: "5 23 * * *"
 
@@ -70,33 +74,97 @@ jobs:
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
       - name: Install benchmarks
+        id: install
         run: |
           cd benchmarks
           python setup.py install
 
       - name: Run Triton Softmax kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python fused_softmax.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops-max --hbm_col "Triton-GB/s-max"
-          python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops-max --hbm_col "XeTLA-GB/s-max"
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton GEMM kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python gemm_benchmark.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM kernel benchmark - default path
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          # Default path:
+          TRITON_INTEL_ADVANCED_PATH=0 \
+          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+          IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+          IGC_DisableLoopUnroll=1 \
+          python gemm_benchmark.py --reports $REPORTS
+
+          TAG=${{ inputs.tag || 'ci' }}-dflt
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-default-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM kernel benchmark - advanced path
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           # Advanced path:
           TRITON_INTEL_ADVANCED_PATH=1 \
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-          IGC_VISAOptions=" -TotalGRFNum 256 -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+          IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
           IGC_DisableLoopUnroll=1 \
-          SYCL_PROGRAM_COMPILE_OPTIONS=" -vc-codegen -vc-disable-indvars-opt -doubleGRF -Xfinalizer ' -printregusage -enableBCR -DPASTokenReduction ' " \
           python gemm_benchmark.py --reports $REPORTS
+
+          TAG=${{ inputs.tag || 'ci' }}-adv
           source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops-max --hbm_col "Triton-GB/s-max"
-          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops-max --hbm_col "XeTLA-GB/s-max"
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-advanced-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM + PreOp (exp) kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python gemm_preop_exp_benchmark.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-preop-exp-triton-report.csv --benchmark gemm-preop-exp --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton FA kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python flash_attention_fwd_benchmark.py --reports $REPORTS
+
+          TAG=${{ inputs.tag || 'ci' }}
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
+
+      - name: Run Triton FA kernel benchmark - default path
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          TRITON_INTEL_ADVANCED_PATH=0 \
+          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+          IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+          IGC_DisableLoopUnroll=1 \
+          python flash_attention_fwd_benchmark.py --reports $REPORTS
+
+          TAG=${{ inputs.tag || 'ci' }}-dflt
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-default-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run micro benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
@@ -109,6 +177,7 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload benchmark reports
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-reports
@@ -166,6 +235,7 @@ jobs:
       - name: Build Triton wheels
         uses: ./llvm-target/.github/actions/setup-triton
         with:
+          build_llvm: true
           command: DEBUG=1 python setup.py bdist_wheel
 
       - name: Install Triton
@@ -176,10 +246,6 @@ jobs:
         run: |
           pip install matplotlib pandas tabulate
 
-      - name: Install a custom libigc from artifacts
-        run: |
-          sudo dpkg -i artifacts/libigc1_1.0.24994.16243-igc+releaseinternal1_amd64.deb
-
       - name: Create reports dir
         run: |
           mkdir reports
@@ -188,12 +254,15 @@ jobs:
       - name: Run flash attention benchmarks
         run: |
           cd python/tutorials
+          # We need latest build report
+          wget https://raw.githubusercontent.com/intel/intel-xpu-backend-for-triton/llvm-target/scripts/build_report.py
           bash run_all.sh
           # This will fix csv file issues, fixing ", "->"," and " " -> "," that exist in raw output
           cp summary.csv $REPORTS/attention-summary.csv
           sed -E 's/, /,/g;s/ /,/g' summary.csv > attention-results.csv
           source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py attention-results.csv $REPORTS/attention-triton-report.csv --benchmark flash_attention --compiler triton --tflops_col max_tflops --param_cols "Z,H,N_CTX,D_HEAD"
+          TAG=${{ inputs.tag || 'ci' }}-adv
+          python ./build_report.py attention-results.csv $REPORTS/attention-triton-advanced-report.csv --benchmark attn --compiler triton --tflops_col max_tflops --param_cols "Z,H,N_CTX,D_HEAD" --tag $TAG
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

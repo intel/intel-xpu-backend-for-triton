@@ -1,33 +1,10 @@
 // RUN: triton-opt %s -split-input-file -verify-diagnostics | FileCheck %s
 
 llvm.func @triton_gen_special_regs() -> i32 {
-  // CHECK-LABEL: triton_gen_special_regs
-  // CHECK: triton_gen.workitem.id.x : i32
-  %0 = triton_gen.workitem.id.x : i32
-  // CHECK: triton_gen.workitem.id.y : i32
-  %1 = triton_gen.workitem.id.y : i32
-  // CHECK: triton_gen.workitem.id.z : i32
-  %2 = triton_gen.workitem.id.z : i32
-  // CHECK: triton_gen.workgroup.id.x : i32
-  %3 = triton_gen.workgroup.id.x : i32
-  // CHECK: triton_gen.workgroup.id.y : i32
-  %4 = triton_gen.workgroup.id.y : i32
-  // CHECK: triton_gen.workgroup.id.z : i32
-  %5 = triton_gen.workgroup.id.z : i32
-  // CHECK: triton_gen.workgroup.dim.x : i32
-  %6 = triton_gen.workgroup.dim.x : i32
-  // CHECK: triton_gen.workgroup.dim.y : i32
-  %7 = triton_gen.workgroup.dim.y : i32
-  // CHECK: triton_gen.workgroup.dim.z : i32
-  %8 = triton_gen.workgroup.dim.z : i32
-  // CHECK: triton_gen.grid.dim.x : i32
-  %9 = triton_gen.grid.dim.x : i32
-  // CHECK: triton_gen.grid.dim.y : i32
-  %10 = triton_gen.grid.dim.y : i32
-  // CHECK: triton_gen.grid.dim.z : i32
-  %11 = triton_gen.grid.dim.z : i32
   // CHECK: triton_gen.subgroup.id : i32
-  %12 = triton_gen.subgroup.id : i32
+  %0 = triton_gen.subgroup.id : i32
+  // CHECK: triton_gen.subgroup.local.id : i32
+  %1 = triton_gen.subgroup.local.id : i32
   llvm.return %0 : i32
 }
 

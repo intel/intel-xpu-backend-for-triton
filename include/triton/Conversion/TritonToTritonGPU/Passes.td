@@ -6,7 +6,13 @@ include "mlir/Pass/PassBase.td"
 def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleOp"> {
     let summary = "Convert Triton to TritonGPU";
     let description = [{
-
+      This pass converts the Triton Dialect into the TritonGPU Dialect.
+      This is a partial conversion that also affects other dialects
+      (namely `Arith`, `Math`, `SCF` and `CF`).
+      For these dialects, and many Triton dialect operations the conversions
+      mainly consists of enhancing the tensor type and the `tt.ptr<tensor<>>`
+      type with an appropriate layout encoding (these encodings generally
+      include information on `numWarps`, `threadsPerWarp` and `numCTAs`).
     }];
     let constructor = "mlir::triton::createConvertTritonToTritonGPUPass()";
 
@@ -33,6 +39,5 @@ def ConvertTritonToTritonGPU: Pass<"convert-triton-to-tritongpu", "mlir::ModuleO
               "the GPU target, e.g., cuda:80, hip:gfx942">
    ];
 }
-
 
 #endif
