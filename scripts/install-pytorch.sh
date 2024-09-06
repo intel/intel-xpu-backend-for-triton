@@ -117,7 +117,7 @@ if [ "$BUILD_PYTORCH" = false ]; then
   cd $TEMP_DIR/$WHEEL_PATTERN
   echo "**** Install PyTorch and pinned dependencies from nightly builds. ****"
   pip install torch*
-  rm -r $TEMP_DIR
+  rm -rf $TEMP_DIR
   exit 0
 fi
 
