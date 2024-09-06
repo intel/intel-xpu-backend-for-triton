@@ -338,7 +338,7 @@ public:
         transformMakeTensorPtrOp(ptrOp);
       } else if (auto dot = dyn_cast<tt::DotOp>(op))
         transformDotOp(dot);
-      else if (auto bc = dyn_cast<tt::BroadcastOp>(op))
+      else if (auto bc = dyn_cast<ttgi::BroadcastOp>(op))
         transformBroadcastOp(bc);
       else
         transformGenericOp(op);
@@ -391,7 +391,7 @@ private:
   void transformDotOp(tt::DotOp dot);
   void transformReduceOp(tt::ReduceOp op);
   void transformTransposedReduceOp(tt::ReduceOp op);
-  void transformBroadcastOp(tt::BroadcastOp op);
+  void transformBroadcastOp(ttgi::BroadcastOp op);
   void transformMakeRangeOp(tt::MakeRangeOp op);
 
   /// Generic transformation.
@@ -1155,7 +1155,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   dot->erase();
 }
 
-void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
+void MatchTargetSizePass::transformBroadcastOp(ttgi::BroadcastOp op) {
   OpBuilder b(op);
   Location loc = op->getLoc();
   RankedTensorType resType = op.getResult().getType();

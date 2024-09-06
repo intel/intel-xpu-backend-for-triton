@@ -770,7 +770,7 @@ public:
       } else if (isa<tt::SplatOp, tt::BroadcastOp, tt::ReduceOp,
                      tt::MakeRangeOp>(def)) {
         chainedVals.insert(def->getResult(0));
-      } else if (tt::ExpandDimsOp>(def)) {
+      } else if (isa<tt::ExpandDimsOp>(def)) {
         ;
       } else {
         assert(0 && "add more support");

@@ -2,6 +2,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -18,7 +19,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-using namespace mlir::triton::gpu::intel;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
@@ -124,8 +125,9 @@ public:
 ///         elemSize 32)
 /// Arg 12: cache controls options (LSC_CACHE_OPTS)
 /// Arg 13: stored value
-template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                               OpType, PrefetchOp, LoadOp, StoreOp>::value>>
+template <typename OpType,
+          typename = std::enable_if_t<llvm::is_one_of<OpType, ttgi::PrefetchOp,
+                                                      LoadOp, StoreOp>::value>>
 class LoadStorePrefetchOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<OpType> {
 public:
@@ -228,7 +230,7 @@ public:
       VERIFY_OPERATION(load)
 
       rewriter.replaceOp(op, bitcast(load, resType));
-    } else if constexpr (std::is_same_v<OpType, PrefetchOp>) {
+    } else if constexpr (std::is_same_v<OpType, ttgi::PrefetchOp>) {
       if (transpose)
         std::swap(offsetX, offsetY);
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
@@ -377,12 +379,12 @@ public:
   }
 };
 
-class GlueOpConversion : public ConvertTritonGPUOpToLLVMPattern<GlueOp> {
+class GlueOpConversion : public ConvertTritonGPUOpToLLVMPattern<ttgi::GlueOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      GlueOp>::ConvertTritonGPUOpToLLVMPattern;
+      ttgi::GlueOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(GlueOp op, OpAdaptor adaptor,
+  matchAndRewrite(ttgi::GlueOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ValueRange operands = adaptor.getOperands();
     Value result = TypeSwitch<Type, Value>(operands.front().getType())
@@ -459,12 +461,13 @@ private:
 /// %extract = ttgi.extract %a[0] : tensor<8xf16> -> tensor<4xf16>
 /// is converted to
 /// %extract = llvm.shufflevector %a, %a : [0, 1, 2, 3] : vector<4xf16>
-class ExtractOpConversion : public ConvertTritonGPUOpToLLVMPattern<ExtractOp> {
+class ExtractOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<ttgi::ExtractOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      ExtractOp>::ConvertTritonGPUOpToLLVMPattern;
+      ttgi::ExtractOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(ExtractOp op, OpAdaptor adaptor,
+  matchAndRewrite(ttgi::ExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value base = adaptor.getBase();
@@ -704,12 +707,12 @@ public:
 };
 
 class BroadcastOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::BroadcastOp> {
+    : public ConvertTritonGPUOpToLLVMPattern<ttgi::BroadcastOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      triton::BroadcastOp>::ConvertTritonGPUOpToLLVMPattern;
+      ttgi::BroadcastOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
+  matchAndRewrite(ttgi::BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     constexpr unsigned subgroupSize = 16;
 
@@ -862,8 +865,8 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<ExtractOpConversion>(typeConverter, benefit);
   patterns.add<GlueOpConversion>(typeConverter, benefit);
-  patterns.add<LoadStorePrefetchOpConversion<PrefetchOp>>(typeConverter,
-                                                          benefit);
+  patterns.add<LoadStorePrefetchOpConversion<ttgi::PrefetchOp>>(typeConverter,
+                                                                benefit);
   patterns.add<LoadStorePrefetchOpConversion<LoadOp>>(typeConverter, benefit);
   patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, benefit);
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
