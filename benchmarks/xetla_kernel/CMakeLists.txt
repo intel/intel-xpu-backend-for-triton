@@ -36,6 +36,11 @@ target_link_libraries(xetla_kernel PUBLIC ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBR
 target_include_directories(xetla_kernel PUBLIC "${PYTHON_INCLUDE_DIRS}")
 target_include_directories(xetla_kernel PUBLIC "${XeTLALibrary_INCLUDE_DIR}")
 
+if(USE_IPEX)
+  target_link_libraries(xetla_kernel PUBLIC "${TORCH_IPEX_LIBRARIES}")
+  target_include_directories(xetla_kernel PUBLIC "${TORCH_IPEX_INCLUDE_DIRS}")
+endif()
+
 add_subdirectory(softmax)
 add_subdirectory(gemm)
 add_subdirectory(stream_k_gemm)
