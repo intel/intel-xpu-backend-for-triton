@@ -283,9 +283,8 @@ int main() {
   auto spirv = read_spirv("add_kernel.spv");
   std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
 
-  auto [kernel_bundle, kernel, n_regs, n_spills] =
-      loadBinary("add_kernel", reinterpret_cast<uint8_t *>(spirv.data()),
-                 spirv.size(), 0);
+  auto [kernel_bundle, kernel, n_regs, n_spills] = loadBinary(
+      "add_kernel", reinterpret_cast<uint8_t *>(spirv.data()), spirv.size(), 0);
 
   // TODO: missing number of registers
   std::cout << "Loaded kernel with " << n_regs << " registers and " << n_spills

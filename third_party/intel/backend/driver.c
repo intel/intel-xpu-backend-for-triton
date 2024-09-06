@@ -14,7 +14,6 @@
 #include <variant>
 #include <vector>
 
-#include "measure.h"
 #include "sycl_functions.h"
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -114,7 +113,7 @@ void freeKernelBundle(PyObject *p) {
       PyCapsule_GetPointer(p, "kernel_bundle"));
 }
 
-static PyObject *loadBinaryImpl(PyObject *self, PyObject *args) {
+static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name, *build_flags;
   int shared;
   PyObject *py_bytes;
@@ -151,29 +150,17 @@ static PyObject *loadBinaryImpl(PyObject *self, PyObject *args) {
           ? !(*cache_native_code_env_opt)
           : false; // default value is false, maybe we should rework this
 
-  ze_module_handle_t l0_module;
-  auto create_module_ms = measure<>::execution([&]() {
-    l0_module = checkSyclErrors(create_module(
-        l0_context, l0_device, binary_ptr, binary_size, build_flags, is_spv));
-  });
-  if (create_module_ms > 0) {
-    std::cout << "Module creation time: " << create_module_ms << " ms"
-              << std::endl;
-  }
+  ze_module_handle_t l0_module = checkSyclErrors(create_module(
+      l0_context, l0_device, binary_ptr, binary_size, build_flags, is_spv));
 
   auto checkL0Errors = [&](auto l0_module) -> ze_kernel_handle_t {
     if (PyErr_Occurred()) {
       // check for errors from module creation
       return NULL;
     }
-    ze_kernel_handle_t l0_kernel;
-    auto create_function_ms = measure<>::execution([&]() {
-      l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
-    });
-    if (create_function_ms > 0) {
-      std::cout << "Function creation time: " << create_function_ms << " ms"
-                << std::endl;
-    }
+    ze_kernel_handle_t l0_kernel =
+        checkSyclErrors(create_function(l0_module, kernel_name));
+
     if (PyErr_Occurred()) {
       // check for errors from kernel creation
       return NULL;
@@ -217,13 +204,9 @@ static PyObject *loadBinaryImpl(PyObject *self, PyObject *args) {
                 << std::endl;
       const std::string new_build_flags =
           build_flags_str.append(" -cl-intel-256-GRF-per-thread");
-      auto create_module_ms = measure<>::execution([&]() {
-        l0_module = checkSyclErrors(
-            create_module(l0_context, l0_device, binary_ptr, binary_size,
-                          new_build_flags.c_str(), is_spv));
-      });
-      std::cout << "Module creation time: " << create_module_ms << " ms"
-                << std::endl;
+      l0_module = checkSyclErrors(
+          create_module(l0_context, l0_device, binary_ptr, binary_size,
+                        new_build_flags.c_str(), is_spv));
 
       l0_kernel = checkL0Errors(l0_module);
       gpuAssert(zeKernelGetProperties(l0_kernel, &props));
@@ -247,13 +230,6 @@ static PyObject *loadBinaryImpl(PyObject *self, PyObject *args) {
                                         "kernel_bundle", freeKernelBundle);
 
   return Py_BuildValue("(OOii)", kernel_bundle_py, kernel_py, n_regs, n_spills);
-}
-
-static PyObject *loadBinary(PyObject *self, PyObject *args) {
-  PyObject *ret;
-  auto load_binary_time_ns = measure<std::chrono::nanoseconds>::execution(
-      [&]() { ret = loadBinaryImpl(self, args); });
-  return ret;
 }
 
 static PyObject *initContext(PyObject *self, PyObject *args) {
@@ -312,12 +288,12 @@ static PyObject *getSyclDeviceHandle(PyObject *self, PyObject *args) {
   if (!PyArg_ParseTuple(args, "i", &devId))
     return NULL;
 
-  if (devId > sycl_l0_device_list.size()) {
+  if (devId > g_sycl_l0_device_list.size()) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
 
-  auto &sycl_l0_device_pair = sycl_l0_device_list[devId];
+  auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
   sycl::device *sycl_device = &sycl_l0_device_pair.first;
 
   return Py_BuildValue("K", (uint64_t)(sycl_device));

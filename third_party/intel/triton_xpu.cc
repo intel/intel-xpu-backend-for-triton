@@ -20,7 +20,6 @@
 #include "triton/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -256,12 +255,4 @@ void init_triton_intel(py::module &&m) {
         return std::make_tuple(py::bytes(spirvBitcode), name);
       },
       ret::take_ownership);
-
-  m.def("compile_native_binary",
-        [](const std::string &kernel_name, const std::string &build_flags_in,
-           int shared, uint64_t sycl_device,
-           const std::string &spirv_kernel) -> py::object {
-          return py::bytes(compile_ze_native_code(
-              kernel_name, build_flags_in, shared, sycl_device, spirv_kernel));
-        });
 }

@@ -53,7 +53,7 @@ class XPUOptions:
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
-    cache_native_code: bool = True
+    generate_native_code: bool = True
     backend_name: str = 'intel'
 
     def __post_init__(self):
@@ -65,7 +65,7 @@ class XPUOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
             raise AssertionError("num_warps must be a power of 2")
-        self.cache_native_code = os.getenv("TRITON_XPU_CACHE_NATIVE_CODE", True)
+        self.generate_native_code = os.getenv("TRITON_XPU_GEN_NATIVE_CODE", False)
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -125,7 +125,7 @@ class XPUBackend(BaseBackend):
         if not isinstance(target.arch, dict):
             raise TypeError("target.arch is not a dict")
         self.properties = self.parse_target(target.arch)
-        self.binary_ext = "zebin"
+        self.binary_ext = "spv"
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
@@ -286,7 +286,7 @@ class XPUBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def make_zebin(src, metadata, options):
+    def make_spv(src, metadata, options):
         # generate SPIRV
         ret, name = intel.translate_to_spirv(src)
         metadata["name"] = name
@@ -301,7 +301,8 @@ class XPUBackend(BaseBackend):
         else:
             metadata["build_flags"] = ""
 
-        if options.cache_native_code is True:
+        if options.generate_native_code is True:
+            assert (False)
             #return intel.compile_native_binary(metadata["name"], metadata["build_flags"], metadata["shared"], 0, ret)
             with tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.spv') as fsrc, \
                 tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
@@ -314,7 +315,8 @@ class XPUBackend(BaseBackend):
                 #suffix = 'a' if capability == 90 else ''
                 #opt_level = ['--opt-level', '0'] if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1" else []
                 ocloc_cmd = [
-                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', 'pvc', '-options', f'{metadata["build_flags"]}'
+                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', 'pvc', '-options',
+                    f'{metadata["build_flags"]}'
                 ]
 
                 try:
@@ -325,7 +327,7 @@ class XPUBackend(BaseBackend):
                         with open(flog.name) as log_file:
                             log = log_file.read().strip()
                             if 'spilled' in log:
-                                # TODO: handle register spills - can we set the build flag for module load, or do we need to recompile? 
+                                # TODO: handle register spills - can we set the build flag for module load, or do we need to recompile?
                                 print(log)
                         os.remove(flog.name)
                 except subprocess.CalledProcessError as e:
@@ -342,8 +344,8 @@ class XPUBackend(BaseBackend):
                         error = f'`ocloc` failed with error code {e.returncode}'
 
                     raise RuntimeError(f'{error}\n'
-                                    f'`ocloc` stderr:\n{log}\n'
-                                    f'Repro command: {ocloc_cmd}\n')
+                                       f'`ocloc` stderr:\n{log}\n'
+                                       f'Repro command: {ocloc_cmd}\n')
 
                 with open(fbin, 'rb') as f:
                     zebin = f.read()
@@ -357,7 +359,7 @@ class XPUBackend(BaseBackend):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
-        stages["zebin"] = lambda src, metadata: self.make_zebin(src, metadata, options)
+        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
 
     @functools.lru_cache()
     def hash(self):
