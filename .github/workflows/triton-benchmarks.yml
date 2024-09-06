@@ -129,6 +129,15 @@ jobs:
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-advanced-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
+      - name: Run Triton GEMM + PreOp (exp) kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python gemm_preop_exp_benchmark.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-preop-exp-triton-report.csv --benchmark gemm-preop-exp --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
       - name: Run Triton FA kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
