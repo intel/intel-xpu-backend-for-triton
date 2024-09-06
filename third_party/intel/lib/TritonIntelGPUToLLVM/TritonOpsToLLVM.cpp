@@ -592,7 +592,8 @@ public:
     int threadsPerWarp =
         mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     assert(vecTy.getNumElements() == threadsPerWarp &&
-           "Valid input tensor types should convert to a vector of size 16");
+           "Valid input tensor types should convert to a vector of sub-group "
+           "size");
 
     Location loc = op.getLoc();
     Value localBuffer = adaptor.getLocalBuffer();
