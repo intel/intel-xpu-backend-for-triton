@@ -390,6 +390,7 @@ private:
   void transformArithConstantOp(arith::ConstantOp op);
   void transformDotOp(tt::DotOp dot);
   void transformReduceOp(tt::ReduceOp op);
+  void transformTransposedReduceOp(tt::ReduceOp op);
   void transformBroadcastOp(tt::BroadcastOp op);
   void transformMakeRangeOp(tt::MakeRangeOp op);
 
@@ -859,10 +860,7 @@ static Value allocateSLMForTransposedReduction(tt::ReduceOp op, unsigned step,
   return hackAlloc(b, loc, ptrTy, size);
 }
 
-void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
-  bool transposedReduction =
-      mlir::triton::gpu::intel::applyTransposedReduction();
-
+void MatchTargetSizePass::transformTransposedReduceOp(tt::ReduceOp op) {
   Location loc = op.getLoc();
   OpBuilder b(op);
   assert(op.getSrcs().size() == 1 && "only support one src");
@@ -876,22 +874,86 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
 
   SmallVector<Value> glueVals;
 
-  // Fixed for transpose/warp reduction.
+  // Fixed for transpose reduction.
   constexpr unsigned glueStep = 8;
-  unsigned step = transposedReduction ? 16 : glueStep;
-
-  Value localBuffer = transposedReduction
-                          ? allocateSLMForTransposedReduction(op, step, b)
-                          : Value{};
-
+  constexpr unsigned step = 16;
+  Value localBuffer = allocateSLMForTransposedReduction(op, step, b);
   for (unsigned i = 0; i < outer; i += step) {
     SmallVector<Value> subVals;
-    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += 16) {
-      Value subVal = getSubVal(op, src, {i, j}, {glueStep, 16});
+    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += step) {
+      Value subVal = getSubVal(op, src, {i, j}, {glueStep, step});
       subVals.push_back(subVal);
     }
-    if (transposedReduction)
-      subVals = glueForReduction(b, loc, subVals);
+    subVals = glueForReduction(b, loc, subVals);
+    auto subType = RankedTensorType::get({step, step}, srcTy.getElementType());
+    auto combine = op.getCombineOp().front().getOperations().begin();
+    StringAttr id = combine->getName().getIdentifier();
+    Value acc;
+    switch (subVals.size()) {
+    case 1:
+      acc = subVals[0];
+      break;
+    case 2: {
+      Operation *acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
+      acc = acc01->getResult(0);
+      break;
+    }
+    case 4: {
+      Operation *acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
+      Operation *acc23 = b.create(loc, id, {subVals[2], subVals[3]}, subType);
+      Operation *accOp = b.create(
+          loc, id, {acc01->getResult(0), acc23->getResult(0)}, subType);
+      acc = accOp->getResult(0);
+      break;
+    }
+    default:
+      assert(false && "add more reduce size support");
+    }
+
+    Value accT = b.create<ttgi::SubGroupTransposeOp>(loc, acc.getType(),
+                                                     localBuffer, acc);
+    auto sgReduce = b.create<tt::ReduceOp>(loc, accT, axis);
+    Region &sgReduceRegion = sgReduce.getCombineOp();
+    b.cloneRegionBefore(op.getCombineOp(), sgReduceRegion,
+                        sgReduceRegion.end());
+    glueVals.push_back(sgReduce->getResult(0));
+  }
+
+  auto resultType = cast<RankedTensorType>(op.getResultTypes()[0]);
+  RankedTensorType glueType =
+      RankedTensorType::get(resultType.getShape(), resultType.getElementType());
+  Value glue = b.create<ttgi::GlueOp>(loc, glueType, glueVals);
+  Value res = b.create<ttg::ConvertLayoutOp>(loc, resultType, glue);
+  op->replaceAllUsesWith(ValueRange{res});
+  op->erase();
+}
+
+void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
+  if (mlir::triton::gpu::intel::applyTransposedReduction()) {
+    transformTransposedReduceOp(op);
+    return;
+  }
+
+  Location loc = op.getLoc();
+  OpBuilder b(op);
+  assert(op.getSrcs().size() == 1 && "only support one src");
+  Value src = op.getSrcs().front();
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  unsigned dims = srcTy.getShape().size();
+  unsigned axis = op.getAxis();
+  assert(axis == dims - 1 && "only support last axis");
+  assert(dims <= 2 && "only support 1D/2D tensor");
+  int64_t outer = dims == 2 ? srcTy.getShape()[0] : 1;
+
+  SmallVector<Value> glueVals;
+  unsigned step = 8; // FIXME: fixed to 8 for now.
+  for (unsigned i = 0; i < outer; i += step) {
+    SmallVector<Value> subVals;
+    // FIXME: 16 is the supported IR reduce length
+    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += 16) {
+      Value subVal = getSubVal(op, src, {i, j}, {step, 16});
+      subVals.push_back(subVal);
+    }
     auto subType = RankedTensorType::get({step, 16}, srcTy.getElementType());
     auto combine = op.getCombineOp().front().getOperations().begin();
     StringAttr id = combine->getName().getIdentifier();
@@ -917,39 +979,20 @@ void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
       assert(false && "add more reduce size support");
     }
 
-    if (transposedReduction) {
-      Value accT = b.create<ttgi::SubGroupTransposeOp>(loc, acc.getType(),
-                                                       localBuffer, acc);
-      auto sgReduce = b.create<tt::ReduceOp>(loc, accT, axis);
-      Region &sgReduceRegion = sgReduce.getCombineOp();
-      b.cloneRegionBefore(op.getCombineOp(), sgReduceRegion,
-                          sgReduceRegion.end());
-      glueVals.push_back(sgReduce->getResult(0));
-    } else {
-      SmallVector<Value> subOps;
-      for (unsigned j = 0; j < step; j++) {
-        auto subType = RankedTensorType::get(16, srcTy.getElementType());
-        Value subAcc = b.create<ttgi::ExtractOp>(loc, subType, acc, j);
-        auto subRed = b.create<tt::ReduceOp>(loc, subAcc, 0);
-        Region &subRegion = subRed.getCombineOp();
-        b.cloneRegionBefore(op.getCombineOp(), subRegion, subRegion.end());
-        subOps.push_back(subRed.getResult()[0]);
-      }
-      glueVals.append(subOps);
+    SmallVector<Value> subOps;
+    for (unsigned j = 0; j < step; j++) {
+      auto subType = RankedTensorType::get(16, srcTy.getElementType());
+      Value subAcc = b.create<ttgi::ExtractOp>(loc, subType, acc, j);
+      auto subRed = b.create<tt::ReduceOp>(loc, subAcc, 0);
+      Region &subRegion = subRed.getCombineOp();
+      b.cloneRegionBefore(op.getCombineOp(), subRegion, subRegion.end());
+      subOps.push_back(subRed.getResult()[0]);
     }
+    glueVals.append(subOps);
   }
 
-  if (transposedReduction) {
-    auto resultType = cast<RankedTensorType>(op.getResultTypes()[0]);
-    RankedTensorType glueType = RankedTensorType::get(
-        resultType.getShape(), resultType.getElementType());
-    Value glue = b.create<ttgi::GlueOp>(loc, glueType, glueVals);
-    Value res = b.create<ttg::ConvertLayoutOp>(loc, resultType, glue);
-    op->replaceAllUsesWith(ValueRange{res});
-  } else {
-    auto glue = b.create<ttgi::GlueOp>(loc, op.getResultTypes()[0], glueVals);
-    op->replaceAllUsesWith(glue->getResults());
-  }
+  auto glue = b.create<ttgi::GlueOp>(loc, op.getResultTypes()[0], glueVals);
+  op->replaceAllUsesWith(glue->getResults());
   op->erase();
 
   return;
