@@ -41,10 +41,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
+    cache_size = 256 * 1024 * 1024
     if fast_flush:
-        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device=device)
+        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
     else:
-        cache = torch.empty(int(256e6), dtype=torch.int8, device=device)
+        cache = torch.empty(int(cache_size), dtype=torch.int8, device=device)
 
     # Estimate the runtime of the function
     start_event = torch.xpu.Event(enable_timing=True)
@@ -58,8 +59,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
-    n_warmup = max(warmup, int(warmup / estimate_ms))
-    n_repeat = max(rep, int(rep / estimate_ms))
+    n_warmup = max(1, int(warmup / estimate_ms))
+    n_repeat = max(1, int(rep / estimate_ms))
     # Warm-up
     for _ in range(n_warmup):
         fn()
