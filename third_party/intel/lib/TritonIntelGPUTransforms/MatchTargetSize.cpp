@@ -1033,14 +1033,14 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
   unsigned resDim1 = resType.getShape()[1];
   Operation *glue;
   if (srcDim0 == dstDim0) {
-    Value newOp = b.create<ttgi::BroadcastOp>(loc, tType, op.getSrc());
+    Value newOp = b.create<tt::BroadcastOp>(loc, tType, op.getSrc());
     unsigned num = resType.getShape()[1] / tType.getShape()[1];
     SmallVector<Value> ops(num, newOp);
     glue = b.create<ttgi::GlueOp>(loc, resType, ops);
   } else if (srcDim0 == 2 * dstDim0) {
     auto newTy = RankedTensorType::get({srcDim0, tType.getShape()[1]},
                                        tType.getElementType());
-    auto newOp = b.create<ttgi::BroadcastOp>(loc, newTy, op.getSrc());
+    auto newOp = b.create<tt::BroadcastOp>(loc, newTy, op.getSrc());
     auto extract0 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 0);
     auto extract1 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 1);
     SmallVector<Value> ops{extract0, extract1, extract0, extract1,

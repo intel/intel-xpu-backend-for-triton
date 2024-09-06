@@ -170,6 +170,11 @@ unsigned ReduceOpHelper::getThreadsReductionAxis() {
 
 bool ReduceOpHelper::isWarpSynchronous() {
   auto srcLayout = getSrcLayout();
+  // FIXME: In the default path tensors will always have a layout. Tensors do
+  // not have a layout only in the advanced path. We need to find a workaround
+  // in order to remove this change.
+  if (!srcLayout)
+    return true;
   auto srcShape = getSrcShape();
   return getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis] == 1;
 }
