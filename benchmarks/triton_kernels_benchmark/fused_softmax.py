@@ -15,7 +15,7 @@ import triton.language as tl
 from triton.runtime import driver
 
 import triton_kernels_benchmark
-from triton_kernels_benchmark import xetla_kernel  # pylint: disable=no-name-in-module
+import xetla_kernel
 
 benchmark_suit = triton_kernels_benchmark  # triton.testing
 
