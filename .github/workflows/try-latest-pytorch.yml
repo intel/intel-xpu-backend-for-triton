@@ -43,7 +43,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       e2e_matrix: ${{ steps.e2e-matrix.outputs.e2e_matrix }}
-      pytorch-commit-id: ${{ steps.pytorch-commit-id.outputs.pytorch_upstream_ref }}
+      pytorch-commit-id: ${{ steps.commit-id.outputs.commit_id }}
 
     steps:
       - name: Inputs
@@ -52,18 +52,11 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
 
-      - name: Get latest upstream Pytorch ref
-        id: pytorch-commit-id
-        run: |
-          PYTORCH_REF=${{ github.event_name == 'schedule' && 'main' || inputs.pytorch_ref }}
-          echo "PyTorch ref: $ref"
-          (( 16#$PYTORCH_REF )) 2>/dev/null
-          if [[ "$?" != 0 ]]; then
-            ref=$(git ls-remote https://github.com/pytorch/pytorch refs/heads/"${PYTORCH_REF}" | awk '{print $1}')"
-          else
-            ref="${{ inputs.pytorch_ref }}"
-          fi
-          echo "pytorch_upstream_ref=$ref | tee -a $GITHUB_OUTPUT
+      - id: commit-id
+        uses: ./.github/actions/get-commit-id
+        with:
+          repository: "pytorch/pytorch"
+          branch: ${{ inputs.pytorch_ref }}
 
       - name: Matrix
         id: matrix
@@ -126,4 +119,19 @@ jobs:
       runner_label: ${{ inputs.runner_label }}
       python_version: ${{ matrix.python }}
 
-  
+  e2e-accuracy:
+    name: Run test matrix
+    needs: prepare
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.e2e_matrix) }}
+      fail-fast: false
+    uses: ./.github/workflows/e2e-reusable.yml
+    with:
+      pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
+      suite: ${{ matrix.suite }}
+      mode: ${{ matrix.mode }}
+      test_mode: accuracy
+      dtype: ${{ matrix.dtype }}
+      models: "all"
+      only_one_model: ""
+      runner_label: "${{ matrix.runner_label }}"
