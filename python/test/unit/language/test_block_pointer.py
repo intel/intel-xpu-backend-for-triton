@@ -1,14 +1,9 @@
 import pytest
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
 from test_core import check_type_supported
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target()[0] == "cuda"
 
 
 @triton.jit

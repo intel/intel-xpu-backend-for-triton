@@ -8,15 +8,6 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
-      install_ipex:
-        # This boolean parameter defines what PyTorch will be used in the workflow:
-        #   true: Stonepia/pytorch (fork) with IPEX
-        #   false: pytorch/pytorch (upstream) without IPX
-        # In both cases, pytorch_ref below allows specifying a branch, tag, or commit id in the
-        # corresponding repository. If not specified, a default (pinned) version will be used.
-        description: Install Intel PyTorch Extension
-        type: boolean
-        default: false
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
@@ -67,7 +58,7 @@ jobs:
           CACHE_NUMBER: 2
         with:
           path: $HOME/.cache/pip
-          key: pip-3.10-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.INSTALL_IPEX }}-${{ env.CACHE_NUMBER }}
+          key: pip-3.10-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Python 3.10
         uses: actions/setup-python@v5
@@ -128,7 +119,6 @@ jobs:
     with:
       driver_version: ${{ matrix.driver }}
       runner_label: ${{ inputs.runner_label }}
-      install_ipex: ${{ inputs.install_ipex || false }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports || false }}

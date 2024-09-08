@@ -27,11 +27,11 @@ FOUND=false
 for cid in $COMMIT_IDS; do
     echo "$cid" > ./lib/Target/SPIRV/spirv-llvm-translator.conf
     if ! ./scripts/compile-triton.sh --clean; then
-        echo "Compile failed for translator commit $cid"
+        echo "Triton compile failed for translator commit $cid"
         continue
-	fi
+    fi
 
-    # build pytorch and IPEX outside of 'test-triton.sh'
+    # execute full tests
     if ./scripts/test-triton.sh --skip-deps; then
         echo "Tests passed for translator commit $cid"
         echo "A newer commit found: $cid"

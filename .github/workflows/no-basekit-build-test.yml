@@ -4,12 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "5 2 * * *"
-  push:
-    paths:
-      - .github/workflows/no-basekit-build-test.yml
-      - scripts/triton.yml
-      - scripts/skiplist/no-basekit/*
-
 
 permissions: read-all
 
@@ -90,7 +84,7 @@ jobs:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           install_cmd: conda run --no-capture-output -n triton pip install
           python_version: ${{ matrix.python }}
-          wheels_pattern: '{intel_extension_for_pytorch-*,torch-*}'
+          wheels_pattern: 'torch-*'
 
       - name: Build Triton
         run: |
@@ -98,6 +92,7 @@ jobs:
           python -m venv ./.venv; source ./.venv/bin/activate
           export DEBUG=1
           cd python
+          conda run --no-capture-output -n triton pip install pybind11
           conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
 
       - name: Run tests

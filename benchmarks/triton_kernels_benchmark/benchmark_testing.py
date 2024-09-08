@@ -1,10 +1,6 @@
 import argparse
-import functools
 import itertools
 import os
-import subprocess
-import sys
-from contextlib import contextmanager
 from typing import Any, Dict, List
 
 
@@ -17,7 +13,7 @@ def synchronize():
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-             device='xpu', sync_submitting=True):
+             device="xpu", sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -45,10 +41,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
+    cache_size = 256 * 1024 * 1024
     if fast_flush:
-        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device=device)
+        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
     else:
-        cache = torch.empty(int(256e6), dtype=torch.int8, device=device)
+        cache = torch.empty(int(cache_size), dtype=torch.int8, device=device)
 
     # Estimate the runtime of the function
     start_event = torch.xpu.Event(enable_timing=True)
@@ -62,8 +59,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
-    n_warmup = max(warmup, int(warmup / estimate_ms))
-    n_repeat = max(rep, int(rep / estimate_ms))
+    n_warmup = max(1, int(warmup / estimate_ms))
+    n_repeat = max(1, int(rep / estimate_ms))
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -115,7 +112,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     return getattr(torch, return_mode)(times).item()
 
 
-def assert_close(x, y, atol=None, rtol=None, err_msg=''):
+def assert_close(x, y, atol=None, rtol=None, err_msg=""):
     import numpy as np
     import torch
 
@@ -149,7 +146,7 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
         np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
         return
     if not np.allclose(x, y, atol=atol, rtol=rtol):
-        raise AssertionError(f'{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})')
+        raise AssertionError(f"{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})")
 
 
 def perf_report(benchmarks):
@@ -178,8 +175,8 @@ class Benchmark:
         line_names: List[str],
         plot_name: str,
         args: Dict[str, Any],
-        xlabel: str = '',
-        ylabel: str = '',
+        xlabel: str = "",
+        ylabel: str = "",
         x_log: bool = False,
         y_log: bool = False,
         color=None,  # pylint: disable=unused-argument
@@ -243,11 +240,11 @@ class Mark:
         import pandas as pd
         y_vals = []
         for label in bench.ylabel:
-            y_mean = [f'{x}-{label}' for x in bench.line_names]
-            y_min = [f'{x}-{label}-min' for x in bench.line_names]
-            y_max = [f'{x}-{label}-max' for x in bench.line_names]
+            y_mean = [f"{x}-{label}" for x in bench.line_names]
+            y_min = [f"{x}-{label}-min" for x in bench.line_names]
+            y_max = [f"{x}-{label}-max" for x in bench.line_names]
             y_vals += y_mean + y_min + y_max
-        y_vals += [f'{x}-CV' for x in bench.line_names]
+        y_vals += [f"{x}-CV" for x in bench.line_names]
         x_names = list(bench.x_names)
         df = pd.DataFrame(columns=x_names + y_vals)
         for x in bench.x_vals:
@@ -290,8 +287,8 @@ class Mark:
             first_x = x_names[0]
             for label in bench.ylabel:
                 for i, y in enumerate(bench.line_names):
-                    y = f'{y}-{label}'
-                    y_min, y_max = df[y + '-min'], df[y + '-max']
+                    y = f"{y}-{label}"
+                    y_min, y_max = df[y + "-min"], df[y + "-max"]
                     col = bench.styles[i][0] if bench.styles else None
                     sty = bench.styles[i][1] if bench.styles else None
                     ax.plot(df[first_x], df[y], label=y, color=col, ls=sty)
@@ -312,17 +309,17 @@ class Mark:
         # df = df[x_names + bench.line_names]
         if diff_col and df.shape[1] == 2:
             col0, col1 = df.columns.tolist()
-            df['Diff'] = df[col1] - df[col0]
+            df["Diff"] = df[col1] - df[col0]
 
         if print_data:
-            print(bench.plot_name + ':')
+            print(bench.plot_name + ":")
             print(df.to_string())
         if save_path:
             df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format=f"%.{save_precision}f",
                       index=False)
         return df
 
-    def run(self, show_plots=False, print_data=False, save_path='', return_df=False, **kwargs):
+    def run(self, show_plots=False, print_data=False, save_path="", return_df=False, **kwargs):
         save_path = save_path_from_args(save_path)
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
@@ -352,79 +349,10 @@ def save_path_from_args(save_path: str):
         return save_path
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--reports',
+        "--reports",
         type=str,
-        default='',
-        help='directory to save reports',
+        default="",
+        help="directory to save reports",
     )
     args = parser.parse_args()
     return args.reports
-
-
-# create decorator that wraps test function into
-# a cuda-memcheck system call
-
-
-def cuda_memcheck(**target_kwargs):
-
-    def decorator(test_fn):
-
-        @functools.wraps(test_fn)
-        def wrapper(*args, **kwargs):
-            import psutil
-            ppid_name = psutil.Process(os.getppid()).name()
-            run_cuda_memcheck = target_kwargs.items() <= kwargs.items()
-            if run_cuda_memcheck and ppid_name != "cuda-memcheck":
-                path = os.path.realpath(test_fn.__globals__["__file__"])
-                # get path of current file
-                env = {"PATH": os.environ["PATH"], "PYTORCH_NO_CUDA_MEMORY_CACHING": "1"}
-                assert 'request' in kwargs, "memcheck'ed test must have a (possibly unused) `request` fixture"
-                test_id = kwargs['request'].node.callspec.id
-                cmd = f"{path}::{test_fn.__name__}[{test_id}]"
-                out = subprocess.run(["cuda-memcheck", "pytest", "-vs", cmd], capture_output=True, env=env, check=False)
-                assert out.returncode == 0, "cuda-memcheck returned an error: bounds checking failed"
-                assert "ERROR SUMMARY: 0 errors" in str(out.stdout)
-            else:
-                test_fn(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
-
-
-@contextmanager
-def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
-    try:
-        subprocess.check_output(["nvidia-smi", "-i", "0", "-pm", "1"])
-        subprocess.check_output([
-            "nvidia-smi",
-            "-i",
-            "0",
-            f"--lock-gpu-clocks={ref_sm_clock},{ref_sm_clock}",
-        ])
-        subprocess.check_output([
-            "nvidia-smi",
-            "-i",
-            "0",
-            f"--lock-memory-clocks={ref_mem_clock},{ref_mem_clock}",
-        ])
-        cur_sm_clock = nvsmi(["clocks.current.sm"])[0]
-        cur_mem_clock = nvsmi(["clocks.current.memory"])[0]
-        assert abs(cur_sm_clock - ref_sm_clock) < 10, f"GPU SMs must run at {ref_sm_clock} MHz"
-        assert abs(cur_mem_clock - ref_mem_clock) < 10, f"GPU SMs must run at {ref_mem_clock} MHz"
-        tflops = 1e-6 * 2 * 108 * 4 * 256 * ref_sm_clock
-        gbps = 640 * 2 * ref_mem_clock * 1e-3
-        yield tflops, gbps
-    finally:
-        subprocess.check_output(["nvidia-smi", "-i", "0", "-pm", "0"])
-        subprocess.check_output(["nvidia-smi", "-i", "0", "-rgc"])
-        subprocess.check_output(["nvidia-smi", "-i", "0", "-rmc"])
-
-
-def nvsmi(attrs):
-    attrs = ','.join(attrs)
-    cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
-    out = subprocess.check_output(cmd)
-    ret = out.decode(sys.stdout.encoding).split(',')
-    ret = [int(x) for x in ret]
-    return ret

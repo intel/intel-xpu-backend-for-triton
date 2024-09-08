@@ -88,6 +88,7 @@ repos:
         # FIXME: will be deleted soon
         exclude: '^scripts/create-noop-ipex\.py$'
         args:
+          - --check-quote-consistency=true
           # Max line length 120 is consistent with ruff's one in upstream
           - --max-line-length=120
           # Disable line-too-long: rely on ruff's check for line length
@@ -110,6 +111,7 @@ repos:
         name: pylint for benchmarks
         files: '^benchmarks/.*\.py$'
         args:
+          - --check-quote-consistency=true
           # Max line length 120 is consistent with ruff's one in upstream
           - --max-line-length=120
           # Disable line-too-long: rely on ruff's check for line length

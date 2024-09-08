@@ -33,7 +33,7 @@ library_dir = [
     os.path.join(torch.utils.cmake_prefix_path, "../../lib"),
     os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../lib")
 ]
-libraries = ['ze_loader', 'sycl', 'torch', 'intel-ext-pt-gpu']
+libraries = ["ze_loader", "sycl", "torch", "intel-ext-pt-gpu"]
 
 
 def compile_module_from_src(src, name):
@@ -90,7 +90,7 @@ class XPUUtils:
 
 
 def ty_to_cpp(ty):
-    if ty[0] == '*':
+    if ty[0] == "*":
         return "void*"
     return {
         "i1": "int32_t",
@@ -114,10 +114,10 @@ def ty_to_cpp(ty):
 def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
+    arg_decls = ", ".join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
-        if ty[0] == '*':
+        if ty[0] == "*":
             return "PyObject*"
         return ty_to_cpp(ty)
 
@@ -137,9 +137,9 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
             "uint64_t": "K",
         }[ty]
 
-    args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    args_format = "".join([format_of(_extracted_type(ty)) for ty in signature.values()])
     fmt = "iiiOOOOOO" + args_format
-    args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+    args_list = ", " + ", ".join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ""
 
     # generate glue code
     src = f"""
@@ -258,11 +258,11 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
       assert(false && "wrong scalar size in sycl gen.");
       }}
   }}
-  static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+  static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {", " + arg_decls if len(arg_decls) > 0 else ""}) {{
 
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
     RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
-    void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
+    void *params[] = {{ {", ".join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
     uint32_t num_params = sizeof(params)/sizeof(params[0]);
     uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
     size_t global_range_x = gridX*threads_per_warp*num_warps;
@@ -280,7 +280,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     assert(num_params == expected_num_params && "number of kernel param not matched");
     // Submit the imported kernel.
     auto cgf = [&](sycl::handler &cgh) {{
-      {" ".join(f'set_scalar_arg(cgh, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
+      {" ".join(f"set_scalar_arg(cgh, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);" for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
       if (shared_memory) {{
           using share_mem_t = sycl::local_accessor<int8_t, 1>;
           share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
@@ -304,7 +304,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
       PyObject *py_obj_stream;
       PyObject *py_kernel;
 
-      {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+      {" ".join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
       if(!PyArg_ParseTuple(args, \"{fmt}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
@@ -345,7 +345,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
       sycl::kernel kernel = *kernel_ptr;
 
       {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
+      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {"," + ", ".join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ""});
 
       if(launch_exit_hook != Py_None){{
         PyObject* args = Py_BuildValue("(O)", launch_metadata);
