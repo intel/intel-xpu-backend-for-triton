@@ -15032,7 +15032,7 @@ bool BoUpSLP::collectValuesToDemote(
         ID != Intrinsic::smax && ID != Intrinsic::umin && ID != Intrinsic::umax)
       break;
     SmallVector<const TreeEntry *, 2> Operands(1, getOperandEntry(&E, 0));
-    function_ref<bool(unsigned, unsigned)> CallChecker = {};
+    function_ref<bool(unsigned, unsigned)> CallChecker{};
     auto CompChecker = [&](unsigned BitWidth, unsigned OrigBitWidth) {
       assert(BitWidth <= OrigBitWidth && "Unexpected bitwidths!");
       return all_of(E.Scalars, [&](Value *V) {
