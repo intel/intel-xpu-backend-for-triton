@@ -143,7 +143,7 @@ def test_print(func: str, data_type: str, device: str):
 
     # Wait until driver complete all the jobs for the device_print, especially test_subprocess
     # require this which captures stdout when child exits.
-    torch.xpu.synchronize()
+    getattr(torch, device).synchronize()
 
 
 if __name__ == "__main__":

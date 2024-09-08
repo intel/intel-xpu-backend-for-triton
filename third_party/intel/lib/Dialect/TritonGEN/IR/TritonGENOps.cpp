@@ -253,10 +253,6 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
         return op.emitOpError("expecting tile_height to be between 1 and 32");
       if (tileWidth < 1 || tileWidth > 8)
         return op.emitOpError("expecting tile_width to be between 1 and 8");
-      if (tileWidth * vBlocks > 8)
-        return op.emitOpError(
-            "tile_width * v_blocks should be less than or equal "
-            "to 8 for 32 bit elements");
       break;
     case 64:
       if (tileHeight != 8)
@@ -264,10 +260,6 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
             "expecting tile_height to be 8 for 64 bit elements");
       if (tileWidth != 1 && tileWidth != 2 && tileWidth != 4)
         return op.emitOpError("expecting tile_width to be 1, 2, or 4");
-      if (tileWidth * vBlocks > 4)
-        return op.emitOpError(
-            "tile_width * v_blocks should be less than or equal "
-            "to 4 for 64 bit elements");
       break;
     default:
       return op.emitOpError("transpose is only supported for 32 and 64 bit "
@@ -293,10 +285,6 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
       return op.emitOpError("expecting tile_height to be between 4 and 32");
     if (tileWidth < 4 || tileWidth > 16)
       return op.emitOpError("expecting tile_width to be between 4 and 16");
-    if (tileWidth * vBlocks > 64)
-      return op.emitOpError(
-          "tile_width * v_blocks should be less than or equal "
-          "to 64 for 8 bit elements");
     break;
   case 16:
     if (tileHeight < 2 || tileHeight > 32)

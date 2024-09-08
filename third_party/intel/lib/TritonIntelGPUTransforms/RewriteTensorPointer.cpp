@@ -462,7 +462,7 @@ public:
       auto makeTensorPtrOp = getMakeTensorPtrOp(results[i]);
       assert(rewritedInfo.count(makeTensorPtrOp.getResult()) &&
              "Expecting MakeTensorPtrOp of IfOp result in rewritedInfo");
-      auto info = rewritedInfo[makeTensorPtrOp.getResult()];
+      const auto &info = rewritedInfo[makeTensorPtrOp.getResult()];
       for (unsigned j = 0; j < info.length(); ++j) {
         newRetTypes.push_back(builder.getI64Type());
       }
