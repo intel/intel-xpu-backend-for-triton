@@ -7,8 +7,8 @@
 #include <cstdint>
 
 #ifdef USE_IPEX
-#include <torch/extension.h>
 #include <ipex.h>
+#include <torch/extension.h>
 #else
 #include <c10/xpu/XPUStream.h>
 #endif
