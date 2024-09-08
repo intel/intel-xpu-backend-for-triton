@@ -142,7 +142,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          python gemm_postop_addmatrix_benchmark.py --reports $REPORTS
+          python gemm_postop_gelu_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-postop-gelu-triton-report.csv --benchmark gemm-postop-gelu --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
