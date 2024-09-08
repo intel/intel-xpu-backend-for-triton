@@ -101,7 +101,7 @@ jobs:
       enable_unskip: ${{ inputs.enable_unskip || false }}
 
   inductor-tests:
-    name: Integration tests matrix
+    name: Inductor tests
     needs: prepare
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
@@ -120,7 +120,7 @@ jobs:
       python_version: ${{ matrix.python }}
 
   e2e-accuracy:
-    name: Run test matrix
+    name: e2e accuracy tests
     needs: prepare
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.e2e_matrix) }}
