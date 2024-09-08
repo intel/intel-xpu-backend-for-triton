@@ -7,13 +7,11 @@
 #include <cstdint>
 
 #ifdef USE_IPEX
-// `#include <ipex.h>` should be before `#include <torch/extension.h>`
+#include <torch/extension.h>
 #include <ipex.h>
 #else
 #include <c10/xpu/XPUStream.h>
 #endif
-
-#include <torch/extension.h>
 
 sycl::queue get_current_sycl_queue() {
   // submit kernel
@@ -41,7 +39,6 @@ sycl::queue get_current_sycl_queue() {
 template <typename T>
 at::Tensor softmax(const at::Tensor &input, const int64_t dim) {
   CHECK_INPUT(input);
-  RECORD_FUNCTION("xetla softmax", {input});
 
   auto output = at::empty_like(input);
 
@@ -58,7 +55,6 @@ at::Tensor bf16_gemm(const at::Tensor &a, const at::Tensor &b,
   CHECK_INPUT(b);
   CHECK_INPUT(c);
   CHECK_INPUT(acc);
-  RECORD_FUNCTION("xetla gemm", {a, b, c, acc});
 
   auto queue = get_current_sycl_queue();
   auto evt = gemm_run<T>(a.data_ptr(), b.data_ptr(), c.data_ptr(),
@@ -73,7 +69,6 @@ at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
   CHECK_INPUT(b);
   CHECK_INPUT(c);
   CHECK_INPUT(acc);
-  RECORD_FUNCTION("xetla stream_k_gemm", {a, b, c, acc});
 
   auto queue = get_current_sycl_queue();
   auto evt = stream_k_gemm_run(a.data_ptr(), b.data_ptr(), c.data_ptr(),
@@ -90,8 +85,6 @@ template <bool use_mask = false, bool IsCausal = false,
 void flash_attn(const int64_t num_batches, const int64_t num_heads,
                 const int64_t head_size, const int64_t num_queries,
                 const int64_t num_keys) {
-  RECORD_FUNCTION("xetla fa",
-                  {num_batches, num_heads, head_size, num_queries, num_keys});
 
   auto queue = get_current_sycl_queue();
 
