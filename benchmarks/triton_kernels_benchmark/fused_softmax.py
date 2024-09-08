@@ -7,8 +7,12 @@ To compare the performance to XeTLA kernel.
 
 """
 
+import os
+
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
+
+if os.getenv("USE_IPEX", "1") == "1":
+    import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl

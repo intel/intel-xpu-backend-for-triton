@@ -6,8 +6,12 @@ This benchmark is modified from gemm_benchmark.py to add a matrix to the output 
 
 """
 
+import os
+
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
+
+if os.getenv("USE_IPEX", "1") == "1":
+    import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl

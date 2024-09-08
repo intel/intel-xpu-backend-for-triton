@@ -5,8 +5,12 @@ Stream K is a approach that aims to resovle quantization inefficiency in GPU wor
 This script implements a Stream K GEMM with block pointers to achieve better hardware utilization.
 """
 
+import os
+
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
+
+if os.getenv("USE_IPEX", "1") == "1":
+    import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 import triton
 import triton.language as tl
