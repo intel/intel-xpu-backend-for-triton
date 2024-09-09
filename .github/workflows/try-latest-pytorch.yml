@@ -84,9 +84,28 @@ jobs:
           }'
           echo e2e_matrix=$e2e_matrix | tee -a $GITHUB_OUTPUT
 
-  integration-tests:
-    name: Integration tests matrix
+  inductor-tests:
+    name: Inductor tests
     needs: prepare
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
+      max-parallel: 2
+    uses: ./.github/workflows/inductor-tests-reusable.yml
+    with:
+      pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
+      suite: >
+        inductor/test_codegen_triton.py
+        inductor/test_triton_extension_backend.py
+        inductor/test_triton_heuristics.py
+        inductor/test_triton_wrapper.py
+        inductor/test_triton_kernels.py
+      runner_label: ${{ inputs.runner_label }}
+      python_version: "3.9"
+
+  integration-tests:
+    name: Integration tests
+    needs: [prepare, inductor-tests]
 
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
@@ -105,28 +124,9 @@ jobs:
       run_name: "${{ inputs.run_name }}: ${{ matrix.driver }} ${{ matrix.python }} ${{ needs.prepare.outputs.pytorch-commit-id }}"
       enable_unskip: ${{ inputs.enable_unskip || false }}
 
-  inductor-tests:
-    name: Inductor tests
-    needs: prepare
-    strategy:
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
-      fail-fast: false
-      max-parallel: 2
-    uses: ./.github/workflows/inductor-tests-reusable.yml
-    with:
-      pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
-      suite: >
-        inductor/test_codegen_triton.py
-        inductor/test_triton_extension_backend.py
-        inductor/test_triton_heuristics.py
-        inductor/test_triton_wrapper.py
-        inductor/test_triton_kernels.py
-      runner_label: ${{ inputs.runner_label }}
-      python_version: ${{ matrix.python }}
-
   e2e-accuracy:
     name: e2e accuracy tests
-    needs: prepare
+    needs: [prepare, inductor-tests]
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.e2e_matrix) }}
       fail-fast: false
