@@ -202,7 +202,7 @@ jobs:
           python prefix_sums.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}
-          python ../../scripts/build_report.py $REPORTS/prefix_sums-performance.csv $REPORTS/prefix_sums-triton-report.csv --benchmark prefix_sums --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/prefix-sums.csv $REPORTS/prefix_sums-triton-report.csv --benchmark prefix_sums --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run micro benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
