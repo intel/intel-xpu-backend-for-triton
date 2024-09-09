@@ -326,8 +326,6 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
-         {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Memory,
           llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
         ctx);
@@ -424,8 +422,6 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     // Function and parameters attributes.
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
-         {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Memory,
           llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
         ctx);
@@ -1300,8 +1296,6 @@ struct TritonMatrix2DBlockPrefetchLowering
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
-         {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Memory,
           llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
         ctx);
@@ -1441,7 +1435,7 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  // This will ensure that the gpu-to-triton-gen lowering is prefered to the
+  // This will ensure that the gpu-to-triton-gen lowering is preferred to the
   // gpu-to-llvm-spv lowering while overlaps exist between the two.
   constexpr int patternBenefitPreferTritonGENLowering = 20;
   patterns.add<
