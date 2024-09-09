@@ -105,7 +105,7 @@ jobs:
 
   integration-tests:
     name: Integration tests matrix
-    needs: prepare
+    needs: [prepare, inductor-tests]
 
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
@@ -126,7 +126,7 @@ jobs:
 
   e2e-accuracy:
     name: e2e accuracy tests
-    needs: prepare
+    needs: [prepare, inductor-tests]
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.e2e_matrix) }}
       fail-fast: false
