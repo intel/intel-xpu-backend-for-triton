@@ -16,7 +16,7 @@ llvm.func @gen_special_regs() -> i32 {
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
+// CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
 
 llvm.func @triton_gen.barrier() {
   // CHECK-LABEL: triton_gen.barrier
@@ -31,8 +31,8 @@ llvm.func @triton_gen.barrier() {
 
 // -----
 
-// CHECK-DAG: llvm.func spir_funccc @_Z31intel_work_group_barrier_arriveii(i32, i32) attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z29intel_work_group_barrier_waitii(i32, i32) attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z31intel_work_group_barrier_arriveii(i32, i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z29intel_work_group_barrier_waitii(i32, i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
 
 llvm.func @triton_gen.split_barrier() {
   // CHECK-LABEL: triton_gen.split_barrier() {
@@ -49,8 +49,8 @@ llvm.func @triton_gen.split_barrier() {
 
 // -----
 
-// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.signal.i32.i32(i32, i32) attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.wait.i32(i32) attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.signal.i32.i32(i32, i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.wait.i32(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
 
 llvm.func @triton_gen.named_barrier(%barrier_id : i32, %thread_group_count : i32) {
   // CHECK-LABEL: triton_gen.named_barrier(%arg0: i32, %arg1: i32) {
@@ -63,13 +63,13 @@ llvm.func @triton_gen.named_barrier(%barrier_id : i32, %thread_group_count : i32
 
 // -----
 
-// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_addij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_mulij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_maxij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_minij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_andij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z29sub_group_clustered_reduce_orij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_xorij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_addij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_mulij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_maxij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_minij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_andij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z29sub_group_clustered_reduce_orij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_xorij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
 
 module attributes {
   spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
@@ -138,21 +138,21 @@ module attributes {
 
 // -----
 
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_addi(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_muli(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_maxi(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_mini(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_andi(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z39sub_group_non_uniform_scan_exclusive_ori(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_xori(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_addi(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_muli(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_maxi(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_mini(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_andi(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z39sub_group_non_uniform_scan_exclusive_ori(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_exclusive_xori(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
 
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_addi(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_muli(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_maxi(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_mini(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_andi(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z39sub_group_non_uniform_scan_inclusive_ori(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_xori(i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_addi(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_muli(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_maxi(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_mini(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_andi(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z39sub_group_non_uniform_scan_inclusive_ori(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z40sub_group_non_uniform_scan_inclusive_xori(i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
 
 module attributes {
   spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
@@ -196,16 +196,16 @@ module attributes {
 
 // -----
 
-// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xordj(f64, i32) -> f64 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorfj(f32, i32) -> f32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorDhj(f16, i32) -> f16 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorlj(i64, i32) -> i64 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorsj(i16, i32) -> i16 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorcj(i8, i32) -> i8 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z17sub_group_shuffleij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z22sub_group_shuffle_downij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z20sub_group_shuffle_upij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
-// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xordj(f64, i32) -> f64 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorfj(f32, i32) -> f32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorDhj(f16, i32) -> f16 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorlj(i64, i32) -> i64 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorsj(i16, i32) -> i16 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorcj(i8, i32) -> i8 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z17sub_group_shuffleij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z22sub_group_shuffle_downij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z20sub_group_shuffle_upij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+// CHECK-DAG: llvm.func spir_funccc @_Z21sub_group_shuffle_xorij(i32, i32) -> i32 attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
 
 llvm.func @triton_gen.sub_group_shuffle() {
   // CHECK-LABEL: triton_gen.sub_group_shuffle
@@ -254,7 +254,7 @@ llvm.func @triton_gen.sub_group_shuffle() {
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iS0_(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn", ["memory", "0"]]}
+// CHECK: llvm.func spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iS0_(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {passthrough = ["convergent", "nounwind", "willreturn", ["memory", "0"]]}
 
 llvm.func @triton_gen.dpas.i8(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:     llvm.func @triton_gen.dpas.i8(%arg0: vector<8xi32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
@@ -265,7 +265,7 @@ llvm.func @triton_gen.dpas.i8(%c : vector<8xi32>, %a : vector<8xi16>, %b : vecto
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z36intel_sub_group_u8_u8_matrix_mad_k32Dv8_sDv8_iS0_(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn", ["memory", "0"]]}
+// CHECK: llvm.func spir_funccc @_Z36intel_sub_group_u8_u8_matrix_mad_k32Dv8_sDv8_iS0_(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {passthrough = ["convergent", "nounwind", "willreturn", ["memory", "0"]]}
 
 llvm.func @triton_gen.dpas.u8(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:     llvm.func @triton_gen.dpas.u8(%arg0: vector<8xi32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
@@ -276,7 +276,7 @@ llvm.func @triton_gen.dpas.u8(%c : vector<8xi32>, %a : vector<8xi16>, %b : vecto
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn", ["memory", "0"]]}
+// CHECK: llvm.func spir_funccc @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent", "nounwind", "willreturn", ["memory", "0"]]}
 
 llvm.func @triton_gen.dpas.bf16(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:     llvm.func @triton_gen.dpas.bf16(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
@@ -287,7 +287,7 @@ llvm.func @triton_gen.dpas.bf16(%c : vector<8xf32>, %a : vector<8xi16>, %b : vec
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn", ["memory", "0"]]}
+// CHECK: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent", "nounwind", "willreturn", ["memory", "0"]]}
 
 llvm.func @triton_gen.dpas.f16(%c : vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:     llvm.func @triton_gen.dpas.f16(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
@@ -298,7 +298,7 @@ llvm.func @triton_gen.dpas.f16(%c : vector<8xf32>, %a : vector<8xi16>, %b : vect
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z39intel_sub_group_tf32_tf32_matrix_mad_k8Dv4_fDv8_fS0_(vector<4xf32>, vector<8xf32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn", ["memory", "0"]]}
+// CHECK: llvm.func spir_funccc @_Z39intel_sub_group_tf32_tf32_matrix_mad_k8Dv4_fDv8_fS0_(vector<4xf32>, vector<8xf32>, vector<8xf32>) -> vector<8xf32> attributes {passthrough = ["convergent", "nounwind", "willreturn", ["memory", "0"]]}
 
 llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vector<8xf32>) {
   // CHECK:     llvm.func @triton_gen.dpas.f32(%arg0: vector<8xf32>, %arg1: vector<4xf32>, %arg2: vector<8xf32>) {
@@ -310,7 +310,7 @@ llvm.func @triton_gen.dpas.f32(%c : vector<8xf32>, %a : vector<4xf32>, %b : vect
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_Dh(vector<8xi16>, vector<8xi32>, vector<8xf16>) -> vector<8xf16> attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn", ["memory", "0"]]}
+// CHECK: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_Dh(vector<8xi16>, vector<8xi32>, vector<8xf16>) -> vector<8xf16> attributes {passthrough = ["convergent", "nounwind", "willreturn", ["memory", "0"]]}
 
 llvm.func @triton_gen.dpas.f16_accum(%c: vector<8xf16>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:     llvm.func @triton_gen.dpas.f16_accum(%arg0: vector<8xf16>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
@@ -322,7 +322,7 @@ llvm.func @triton_gen.dpas.f16_accum(%c: vector<8xf16>, %a : vector<8xi16>, %b :
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iS_(vector<8xi16>, vector<8xi32>, vector<8xi16>) -> vector<8xi16> attributes {passthrough = ["convergent", "nofree", "nounwind", "willreturn", ["memory", "0"]]}
+// CHECK: llvm.func spir_funccc @_Z40intel_sub_group_bf16_bf16_matrix_mad_k16Dv8_sDv8_iS_(vector<8xi16>, vector<8xi32>, vector<8xi16>) -> vector<8xi16> attributes {passthrough = ["convergent", "nounwind", "willreturn", ["memory", "0"]]}
 
 llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:     llvm.func @triton_gen.dpas.bf16_accum(%arg0: vector<8xbf16>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
@@ -336,7 +336,7 @@ llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.simdBlockRead(!llvm.ptr<3>) -> vector<64xi16> attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "1"]]}
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.simdBlockRead(!llvm.ptr<3>) -> vector<64xi16> attributes {passthrough = ["nounwind", "willreturn", ["memory", "1"]]}
 
 llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
   // CHECK:     llvm.func @triton_gen.simdblockread(%arg0: !llvm.ptr<3>) {
@@ -347,7 +347,7 @@ llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.simdBlockWrite(!llvm.ptr<3>, vector<64xi16>) attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "3"]]}
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.simdBlockWrite(!llvm.ptr<3>, vector<64xi16>) attributes {passthrough = ["nounwind", "willreturn", ["memory", "3"]]}
 
 llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val : vector<64xi16>) {
   // CHECK:     llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr<3>, %arg1: vector<64xi16>) {
