@@ -47,8 +47,8 @@ def benchmark(M, N, AXIS, provider):
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
-    tflops = lambda ms: (x.numel() * x.element_size() * 1e-12) / (ms * 1e-3)
-    gbps = lambda ms: (x.numel() * x.element_size() * 1e-9) / (ms * 1e-3)
+    tflops = lambda ms: (x.numel() * 1e-12) / (ms * 1e-3)
+    gbps = lambda ms: (2 * x.numel() * x.element_size() * 1e-9) / (ms * 1e-3)
 
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
