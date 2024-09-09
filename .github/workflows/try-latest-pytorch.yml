@@ -101,7 +101,7 @@ jobs:
         inductor/test_triton_wrapper.py
         inductor/test_triton_kernels.py
       runner_label: ${{ inputs.runner_label }}
-      python_version: ${{ matrix.python }}
+      python_version: "3.9"
 
   integration-tests:
     name: Integration tests matrix
