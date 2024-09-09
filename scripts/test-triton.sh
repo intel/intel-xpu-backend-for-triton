@@ -125,7 +125,7 @@ fi
 if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
   $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pytorch --ipex --pinned --source $([ $VENV = true ] && echo "--venv")
 else
-  $SKIP_DEPS || $SCRIPTS_DIR/install-pytorch-ipex.sh $([ $VENV = true ] && echo "--venv")
+  $SKIP_DEPS || $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
 fi
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
