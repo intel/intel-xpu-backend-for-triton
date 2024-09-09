@@ -25,10 +25,10 @@ sycl::queue get_current_sycl_queue() {
   CHECK_CONTIGUOUS(x)
 
 template <typename T>
-at::Tensor softmax(const at::Tensor &input, const int64_t dim) {
+at::Tensor softmax(const at::Tensor &input, const at::Tensor &output,
+                   const int64_t dim) {
   CHECK_INPUT(input);
-
-  auto output = at::empty_like(input);
+  CHECK_INPUT(output);
 
   auto queue = get_current_sycl_queue();
   auto evt = softmax_forward<T>(input.data_ptr(), output.data_ptr(), queue);
