@@ -6,11 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-
 #include "Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -18,20 +18,18 @@ using namespace mlir::triton;
 namespace mlir::LLVM::intel {
 
 static Type findShuffleType(RewriterBase &rewriter, Type valType) {
-  if (valType.isInteger(8) || valType.isInteger(16) || valType.isInteger(32) ||
-      valType.isInteger(64) || valType.isF16() || valType.isF32() ||
-      valType.isF64()) {
-    return valType;
-  }
-  if (valType.isBF16()) {
+  if (valType.isBF16())
     return rewriter.getI16Type();
-  }
 
   unsigned bitWidth = valType.getIntOrFloatBitWidth();
-  if (bitWidth < 8) {
+  if (bitWidth < 8)
     return rewriter.getI8Type();
-  }
-  return {};
+
+  assert((valType.isInteger(8) || valType.isInteger(16) ||
+          valType.isInteger(32) || valType.isInteger(64) || valType.isF16() ||
+          valType.isF32() || valType.isF64()) &&
+         "Invalid Shuffle Type");
+  return valType;
 }
 
 static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
@@ -39,7 +37,7 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
   Type valType = val.getType();
   Type shuffleType = findShuffleType(rewriter, valType);
 
-  unsigned bitWidth = valType.getIntOrFloatBitWidth();
+  const unsigned bitWidth = valType.getIntOrFloatBitWidth();
   if (shuffleType != valType) {
     assert(shuffleType.isInteger() &&
            "expected to bitcast to an integer for unsupported shuffles");
@@ -52,11 +50,11 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
   }
 
   int width = TritonGEN::getSubgroupSize(i.getDefiningOp());
-  Value widthConstant =
-      rewriter.create<arith::ConstantIntOp>(loc, width, 32).getResult();
+  auto widthAttr = rewriter.getI32IntegerAttr(width);
+  Value widthConstant = rewriter.create<LLVM::ConstantOp>(loc, widthAttr);
   Value result =
       rewriter.create<mlir::gpu::ShuffleOp>(loc, val, i, widthConstant, mode)
-          .getResult(0);
+          .getShuffleResult();
 
   if (shuffleType != valType) {
     if (bitWidth < shuffleType.getIntOrFloatBitWidth()) {
