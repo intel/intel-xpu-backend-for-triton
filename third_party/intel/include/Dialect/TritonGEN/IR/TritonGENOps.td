@@ -203,31 +203,6 @@ def TritonGEN_SubGroupScanOp : TritonGEN_Op<"sub_group_scan", [
   }];
 }
 
-def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
-      AllTypesMatch<["res", "value"]>]>,
-  Results<(outs SignlessIntegerOrFloatLike:$res)>,
-  Arguments<(ins SignlessIntegerOrFloatLike:$value,
-                 I32:$mask,
-                 TritonGEN_ShflKindAttr:$kind)> {
-  let summary = "Subgroup shuffle";
-
-  let description = [{
-    The `triton_gen.sub_group_shuffle` operation is invoked by different work
-    items with different values, given by $value. Different work items have
-    different subgroup local IDs. The shuffle kind, $kind, is given to determine
-    how to calculate the associated subgroup local ID. It returns the associated
-    $value for the work item with subgroup local ID equal to:
-    - $kind == xor, the current invocation’s subgroup local ID xor’ed with $mask.
-    - $kind == up, the current invocation’s subgroup local ID - $mask.
-    - $kind == down, the current invocation’s subgroup local ID + $mask.
-    - $kind == idx, the subgroup local ID $mask.
-  }];
-
-  let assemblyFormat = [{
-    $kind $value `,` $mask attr-dict `:` type($value)
-  }];
-}
-
 //===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
