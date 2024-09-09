@@ -17,15 +17,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
       - name: Install Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Files check
+      - name: Summarize and upload Bandit check
         run: |
           pip install bandit
+          bandit -c bandit.yaml -r ./benchmarks/ ./scripts/ ./third_party/intel/ --exit-zero -f custom --msg-template \
+          "{relpath}:{line:<4}  {test_id}[bandit]:{severity}: {msg}"
           bandit -c bandit.yaml -r ./benchmarks/ ./scripts/ ./third_party/intel/ --exit-zero -f html -o bandit_report.html
 
       - name: Upload report to artifacts
