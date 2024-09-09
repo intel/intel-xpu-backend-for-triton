@@ -220,7 +220,7 @@ public:
       }
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
-          dataSize, blockWidth, blockHeight, vBlks, false /*transpose*/, vnni);
+          dataSize, blockWidth, blockHeight, vBlks, transpose, vnni);
       VERIFY_OPERATION(load)
 
       rewriter.replaceOp(op, bitcast(load, resType));
