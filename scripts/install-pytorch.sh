@@ -71,7 +71,8 @@ if pip show torch &>/dev/null; then
   fi
   if [ "$FORCE_REINSTALL" = false ]; then
     echo "**** Exiting without action. ****"
-    echo "**** INFO: Add --force-reinstall flag to force the PyTorch re-installation. ****"
+    echo "**** INFO: Run the install-pytorch.sh script with the --force-reinstall flag to force reinstallation of PyTorch,
+      or uninstall the current version of PyTorch manually. ****"
     exit 1
   fi
   pip uninstall -y torch
