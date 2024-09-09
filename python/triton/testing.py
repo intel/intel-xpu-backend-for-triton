@@ -209,8 +209,6 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
                 x.grad = None
         # we clear the L2 cache before each run
         cache.zero_()
-        # emulate `sync_submitting` to check influence
-        di.synchronize()
         # record time of `fn`
         start_event[i].record()
         fn()
