@@ -528,30 +528,30 @@ public:
     rewriter.create<scf::YieldOp>(yield.getLoc(), newValues);
     rewriter.eraseOp(yield);
 
-    // Replace uses of the original loop results with the new loop results.
-    userIndexMap.clear();
+    rewriter.setInsertionPointAfter(newForOp);
+
     idx = 0;
     for (auto [result, init] :
          llvm::zip(forOp.getResults(), forOp.getInits())) {
       Operation *definingOp = init.getDefiningOp();
+
+      // Loop-carried value was not split by this pattern, just rewire all users
+      // to the new scf.for operation.
       if (!isa_and_nonnull<ttgi::GlueOp>(definingOp)) {
-        userIndexMap[result] = idx++;
+        result.replaceAllUsesWith(newForOp.getResults()[idx]);
+        ++idx;
         continue;
       }
 
+      // Re-glue individual results together _after_ the loop. This enables
+      // canonicalization of extract ops and dependent loops.
       auto glue = cast<ttgi::GlueOp>(definingOp);
-      for (Operation *user : result.getUsers()) {
-        if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
-          userIndexMap[extract] = idx + extract.getIndex();
-          deleteList.push_back(extract.getOperation());
-        }
-      }
-
+      auto reglue = rewriter.create<ttgi::GlueOp>(
+          forOp->getLoc(), result.getType(),
+          newForOp->getResults().slice(idx, glue.getOperands().size()));
+      result.replaceAllUsesWith(reglue);
       idx += glue->getOperands().size();
     }
-
-    for (auto [user, idx] : userIndexMap)
-      user.replaceAllUsesWith(newForOp.getResults()[idx]);
 
     for (Operation *deleteOp : deleteList)
       rewriter.eraseOp(deleteOp);
@@ -583,10 +583,11 @@ public:
         return false;
     }
 
-    // Bail out if the loop result is not used by an 'extract' operation.
+    // Bail out if the loop result is not used by an 'extract' operation, or
+    // another loop.
     if (forOp->getNumResults() == 1 &&
         llvm::any_of(forOp.getResult(0).getUsers(), [](Operation *user) {
-          return !isa<ttgi::ExtractOp>(user);
+          return !isa<ttgi::ExtractOp, scf::ForOp>(user);
         }))
       return false;
 
