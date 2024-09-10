@@ -20,7 +20,7 @@ std::string getTypeMangling(Type ty, bool isUnsigned) {
       .Case([isUnsigned](IntegerType ty) -> std::string {
         switch (ty.getWidth()) {
         case 8:
-          return "c";
+          return isUnsigned ? "c" : "h";
         case 16:
           return isUnsigned ? "t" : "s";
         case 32:

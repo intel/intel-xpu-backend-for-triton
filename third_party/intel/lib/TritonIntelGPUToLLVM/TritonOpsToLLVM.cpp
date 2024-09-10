@@ -278,8 +278,6 @@ private:
     base = gep(ptrToSharedMemTy, i16_ty, base, index);
 
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      VectorType v64f16Ty = VectorType::get(64, f16_ty);
-
       rewriter.restoreInsertionPoint(insertPoint);
 
       TritonGEN::SIMDBlockReadOp simdRead =
@@ -618,7 +616,14 @@ public:
                                 ValueRange{subGroupOffset}, /*inbounds=*/true);
 
     // Store matrix in local memory.
-    rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, subGroupBasePtr, src);
+    Value val =
+        vecTy.getElementType().isInteger()
+            ? src
+            : bitcast(
+                  src,
+                  vec_ty(int_ty(vecTy.getElementType().getIntOrFloatBitWidth()),
+                         vecTy.getNumElements()));
+    rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, subGroupBasePtr, val);
 
     // Load from matrix, trasposed.
     Value workItemOffset = mul(wiStride, subGroupLocalId);

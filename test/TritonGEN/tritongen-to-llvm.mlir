@@ -289,11 +289,33 @@ llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
 
 // -----
 
+// CHECK: llvm.func spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(!llvm.ptr<3>) -> vector<2xi16> attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "1"]]}
+
+llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
+  // CHECK:     llvm.func @triton_gen.simdblockread(%arg0: !llvm.ptr<3>) {
+  // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {{.*}} : (!llvm.ptr<3>) -> vector<2xi16>
+  %ret = triton_gen.simdblockread %ptr : (!llvm.ptr<3>) -> vector<2xi16>
+  llvm.return
+}
+
+// -----
+
 // CHECK: llvm.func spir_funccc @llvm.genx.GenISA.simdBlockWrite(!llvm.ptr<3>, vector<64xi16>) attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "3"]]}
 
 llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val : vector<64xi16>) {
   // CHECK:     llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr<3>, %arg1: vector<64xi16>) {
   // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite(%arg0, %arg1) {{.*}} : (!llvm.ptr<3>, vector<64xi16>) -> ()
   triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr<3>, vector<64xi16>)
+  llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @_Z31intel_sub_group_block_write_us2PU3AS3tDv2_t(!llvm.ptr<3>, vector<2xi16>) attributes {passthrough = ["nofree", "nounwind", "willreturn", ["memory", "3"]]}
+
+llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val : vector<2xi16>) {
+  // CHECK:     llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr<3>, %arg1: vector<2xi16>) {
+  // CHECK:       llvm.call spir_funccc @_Z31intel_sub_group_block_write_us2PU3AS3tDv2_t(%arg0, %arg1) {{.*}} : (!llvm.ptr<3>, vector<2xi16>) -> ()
+  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr<3>, vector<2xi16>)
   llvm.return
 }

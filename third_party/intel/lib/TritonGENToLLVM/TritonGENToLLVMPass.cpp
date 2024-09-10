@@ -1254,6 +1254,18 @@ struct TritonMatrix2DBlockPrefetchLowering
   }
 };
 
+static bool isTySIMDOCLBuiltinAvailable(VectorType vecTy) {
+  unsigned numElems = vecTy.getNumElements();
+  if (numElems == 1 || numElems == 2 || numElems == 4 || numElems == 8)
+    return true;
+
+  IntegerType elemTy = cast<IntegerType>(vecTy.getElementType());
+  if ((elemTy.getWidth() == 8 || elemTy.getWidth() == 16) && numElems == 16)
+    return true;
+
+  return false;
+}
+
 struct TritonSIMDBlockReadLowering
     : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockReadOp> {
   using ConvertOpToLLVMPattern<
@@ -1266,7 +1278,16 @@ struct TritonSIMDBlockReadLowering
     VectorType vecTy = op.getRes().getType();
 
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    const StringLiteral funcName = "llvm.genx.GenISA.simdBlockRead";
+    std::string funcName = "llvm.genx.GenISA.simdBlockRead";
+    if (isTySIMDOCLBuiltinAvailable(vecTy)) {
+      unsigned numElems = vecTy.getNumElements();
+      funcName = "intel_sub_group_block_read_u" +
+                 intel::getTypeMangling(vecTy.getElementType(), false) +
+                 (numElems == 1 ? "" : std::to_string(numElems));
+      funcName = "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
+                 std::to_string(ptrTy.getAddressSpace()) +
+                 intel::getTypeMangling(vecTy.getElementType(), true);
+    }
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
@@ -1296,7 +1317,18 @@ struct TritonSIMDBlockWriteLowering
     VectorType vecTy = op.getVal().getType();
 
     // TODO: Remove GenISA lowering after PoC productization is completed.
-    const StringLiteral funcName = "llvm.genx.GenISA.simdBlockWrite";
+    std::string funcName = "llvm.genx.GenISA.simdBlockWrite";
+    if (isTySIMDOCLBuiltinAvailable(vecTy)) {
+      unsigned numElems = vecTy.getNumElements();
+      funcName = "intel_sub_group_block_write_u" +
+                 intel::getTypeMangling(vecTy.getElementType(), false) +
+                 (numElems == 1 ? "" : std::to_string(numElems));
+      funcName = "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
+                 std::to_string(ptrTy.getAddressSpace()) +
+                 intel::getTypeMangling(vecTy.getElementType(), true) +
+                 intel::getTypeMangling(vecTy, true);
+    }
+
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
          {llvm::Attribute::WillReturn, std::nullopt},
