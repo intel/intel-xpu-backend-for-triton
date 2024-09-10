@@ -6,7 +6,7 @@ Intel XPU Backend for Triton releases are aligned to the upstream `triton-lang/t
 ```
 [FRONTEND] Fix wrong livein set in loop codegen (#4018)
 ```
-2. Using `git log --graph --oneline` find the selected commit in the `llvm-target` branch. Because upstream commits are merged using merge commits, and GitHub displays commits in chronological order, the ordering of commits on GitHub's website cannot be trusted.
+2. Using `git log --graph --oneline` find the selected commit in the default branch. Because upstream commits are merged using merge commits, and GitHub displays commits in chronological order, the ordering of commits on GitHub's website cannot be trusted.
 ```
 * | 23c4cdf1 [intel] Fix bf16 representation
 * | e4ac248d Merge commit '445d5edb8a3796b0e6e589682231b2c50fe14871'
@@ -31,7 +31,7 @@ Intel XPU Backend for Triton releases are aligned to the upstream `triton-lang/t
 * | 8b91a5b9 Added new workflow to run pytorch inductor test (#1219)
 ```
 
-3. Checkout a commit from the `llvm-target` branch that is close to the desired upstream commit. In this case, the commit we want is in the middle of a merge. But, this particular commit does not effect any of our code and we don't want other commits from the same merge. So in this case, we will select the last commit before the merge and then cherry-pick our way forward.
+3. Checkout a commit from the default branch that is close to the desired upstream commit. In this case, the commit we want is in the middle of a merge. But, this particular commit does not effect any of our code and we don't want other commits from the same merge. So in this case, we will select the last commit before the merge and then cherry-pick our way forward.
 ```
 git checkout c37ca9c6 # [GEN] Update libGenISAIntrinsics
 ```
