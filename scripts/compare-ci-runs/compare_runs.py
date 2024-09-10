@@ -96,42 +96,58 @@ def parse_pytorch_benchmark_data(config: str, df: pd.DataFrame, file: Path) -> p
     return pd.concat([df, raw_data], ignore_index=True)
 
 
-def parse_triton_benchmark_data(config: str, df: pd.DataFrame, file: Path) -> pd.DataFrame:
-    """Parse triton benchmark data from a single CSV file into the dataframe."""
-    path = Path(file).absolute()
-    case = path.parts[-1].split(".")[0]
+def merge_triton_xetla_reports_data(config: str, triton_file: Path, xetla_file: Path) -> pd.DataFrame:
+    """Merge triton and xetla raw data."""
+    try:
+        triton_raw_data, xetla_raw_data = [
+            pd.read_csv(file, header=0, usecols=["params", "tflops", "benchmark"])
+            for file in [triton_file, xetla_file]
+        ]
+        triton_raw_data.rename(columns={"tflops": f"Triton-TFlops-{config}"}, inplace=True)
+        xetla_raw_data.rename(columns={"tflops": f"XeTLA-TFlops-{config}"}, inplace=True)
+        return triton_raw_data.merge(xetla_raw_data, how="outer", on=["params", "benchmark"])
+    except FileNotFoundError:
+        print(f"Warning: One or both files not found: {triton_file} or {xetla_file}")
+        return pd.DataFrame()
 
-    shape = []
-    if "softmax" in case:
-        shape = ["N"]
-    elif "matmul" in case:
-        shape = ["B", "M", "K", "N"]
-    elif "attn" in case:
-        shape = ["Z", "H", "N_CTX", "D_HEAD"]
 
-    raw_data = pd.read_csv(file, header=0, usecols=shape + ["Triton-TFlops", "XeTLA-TFlops"])
-    raw_data["Case"] = raw_data[shape].apply(lambda row: case + ": " + "x".join(row.astype(str)), axis=1)
-    raw_data.drop(columns=shape, inplace=True)
-    raw_data.rename(columns={"Triton-TFlops": f"Triton-TFlops-{config}", "XeTLA-TFlops": f"XeTLA-TFlops-{config}"},
-                    inplace=True)
+def build_triton_benchmark_reports_path(directory: Path, report_name: str) -> str:
+    """Construct the full file path for a given report name."""
+    return os.path.join(directory, f"benchmark-reports/{report_name}-report.csv")
 
-    return pd.concat([df, raw_data], ignore_index=True)
+
+def parse_triton_benchmark_data(config: str, df: pd.DataFrame, directory: Path) -> pd.DataFrame:
+    """Parse triton benchmark data from a merged dataframe into the dataframe.
+        Now focus on dft path for softmax, gemm and attention
+        which include both xetla and triton data with regular name."""
+
+    reports_files = {
+        "softmax": ("softmax-triton", "softmax-xetla"), "gemm": ("gemm-triton", "gemm-xetla"), "attn":
+        ("attn-triton", "attn-xetla")
+    }
+
+    reports_list = [df]
+    for (triton_file, xetla_file) in reports_files.values():
+        triton_path = build_triton_benchmark_reports_path(Path(directory), triton_file)
+        xetla_path = build_triton_benchmark_reports_path(Path(directory), xetla_file)
+        reports_list.append(merge_triton_xetla_reports_data(config, triton_path, xetla_path))
+
+    return pd.concat(reports_list, ignore_index=True)
 
 
 def parse_directory(triton_benchmark: bool, config: str, previous: pd.DataFrame, directory: Path) -> pd.DataFrame:
     """Parse all CSV files for a configuration in a directory, merging with
         the previous dataframe if present."""
     if triton_benchmark:
-        columns_option = ["Case", "Triton-TFlops", "XeTLA-TFlops"]
+        df = pd.DataFrame()
+        df = parse_triton_benchmark_data(config, df, directory)
     else:
-        columns_option = ["dev", "name", "batch_size", f"speedup {config}", "suite", "datatype", "mode"]
-    df = pd.DataFrame(columns=columns_option)
-    for file in Path(directory).rglob("*performance.csv"):
-        df = parse_triton_benchmark_data(config, df, file) if triton_benchmark else parse_pytorch_benchmark_data(
-            config, df, file)
+        df = pd.DataFrame(columns=["dev", "name", "batch_size", f"speedup {config}", "suite", "datatype", "mode"])
+        for file in Path(directory).rglob("*performance.csv"):
+            df = parse_pytorch_benchmark_data(config, df, file)
 
     if previous is not None:
-        df = df.merge(previous, how="outer", on=["Case"]) if triton_benchmark else df.merge(
+        df = df.merge(previous, how="outer", on=["params", "benchmark"]) if triton_benchmark else df.merge(
             previous, how="outer", on=["suite", "datatype", "mode", "name", "dev"])
     return df
 
@@ -192,7 +208,8 @@ def summarize_diff(triton_benchmark: bool, perf_index: str, plot: bool, df: pd.D
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_pdf import PdfPages
 
-        df["xlabel"] = df["Case"] if triton_benchmark else df[["suite", "mode", "datatype"]].agg(", ".join, axis=1)
+        df["xlabel"] = df[["params", "benchmark"]].agg(
+            ", ".join, axis=1) if triton_benchmark else df[["suite", "mode", "datatype"]].agg(", ".join, axis=1)
 
         # Sort by configuration
         order = list(df["xlabel"].unique())
@@ -223,8 +240,7 @@ def eval_data(triton_benchmark: bool, plot: bool, df: pd.DataFrame, numerator: s
         num_tri2xe_col = f"Tri2Xe-{numerator}"
         dem_tri2xe_col = f"Tri2Xe-{denominator}"
 
-        df.drop(columns=["Triton-TFlops_x", "XeTLA-TFlops_x", "Triton-TFlops_y", "XeTLA-TFlops_y"], inplace=True)
-        df_ratio = df[["Case", num_tri2xe_col, dem_tri2xe_col]]
+        df_ratio = df[["params", "benchmark", num_tri2xe_col, dem_tri2xe_col]]
         summarize_diff(triton_benchmark, "tri2xe", plot, df_ratio, num_tri2xe_col, dem_tri2xe_col, numerator,
                        denominator)
     else:
@@ -278,8 +294,8 @@ def main():
 
         if args.triton_benchmark:
             cols = [
-                "Case", "Triton-TFlops_x", "XeTLA-TFlops_x", f"Triton-TFlops-{num_cfg}", f"XeTLA-TFlops-{num_cfg}",
-                "Triton-TFlops_y", "XeTLA-TFlops_y", f"Triton-TFlops-{denom_cfg}", f"XeTLA-TFlops-{denom_cfg}"
+                "params", "benchmark", f"Triton-TFlops-{num_cfg}", f"XeTLA-TFlops-{num_cfg}",
+                f"Triton-TFlops-{denom_cfg}", f"XeTLA-TFlops-{denom_cfg}"
             ]
         else:
             cols = [
