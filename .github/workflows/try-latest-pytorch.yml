@@ -42,7 +42,8 @@ jobs:
 
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
-      pytorch-commit-id: ${{ steps.pytorch-commit-id.outputs.pytorch_upstream_ref }}
+      e2e_matrix: ${{ steps.e2e-matrix.outputs.e2e_matrix }}
+      pytorch-commit-id: ${{ steps.commit-id.outputs.commit_id }}
 
     steps:
       - name: Inputs
@@ -51,17 +52,16 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
 
-      - name: Get latest upstream Pytorch ref
-        id: pytorch-commit-id
-        run: |
-          echo "PyTorch ref: ${{ inputs.pytorch_ref }}"
-          if [[ "${{ inputs.pytorch_ref }}" == "" ]]; then
-            PYTORCH_REF="main"
-          else
-            PYTORCH_REF="${{ inputs.pytorch_ref }}"
-          fi
-          echo "pytorch_upstream_ref=$(git ls-remote https://github.com/pytorch/pytorch refs/heads/"${PYTORCH_REF}" | awk '{print $1}')" | tee -a $GITHUB_OUTPUT
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
+      - id: commit-id
+        uses: ./.github/actions/get-commit-id
+        with:
+          repository: "pytorch/pytorch"
+          branch: ${{ inputs.pytorch_ref }}
 
       - name: Matrix
         id: matrix
@@ -71,15 +71,46 @@ jobs:
           else
             matrix='{"python": ["3.9", "3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
           fi
+
           echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
 
-  integration-tests:
-    name: Integration tests matrix
+      - name: Matrix for e2e
+        id: e2e-matrix
+        run: |
+          e2e_matrix='{
+            "suite": ["huggingface", "timm_models", "torchbench"],
+            "mode": ["inference", "training"],
+            "dtype": ["amp_bf16", "amp_fp16", "bfloat16", "float16", "float32"]
+          }'
+          echo e2e_matrix=$e2e_matrix | tee -a $GITHUB_OUTPUT
+
+  inductor-tests:
+    name: Inductor tests
     needs: prepare
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
+      max-parallel: 2
+    uses: ./.github/workflows/inductor-tests-reusable.yml
+    with:
+      pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
+      suite: >
+        inductor/test_codegen_triton.py
+        inductor/test_triton_extension_backend.py
+        inductor/test_triton_heuristics.py
+        inductor/test_triton_wrapper.py
+        inductor/test_triton_kernels.py
+      runner_label: ${{ inputs.runner_label }}
+      python_version: "3.9"
+
+  integration-tests:
+    name: Integration tests
+    needs: [prepare, inductor-tests]
 
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
       fail-fast: false
+      max-parallel: 2 # to allow PyTorch build to be cached
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
@@ -92,3 +123,20 @@ jobs:
       skip_list: ${{ inputs.skip_list }}
       run_name: "${{ inputs.run_name }}: ${{ matrix.driver }} ${{ matrix.python }} ${{ needs.prepare.outputs.pytorch-commit-id }}"
       enable_unskip: ${{ inputs.enable_unskip || false }}
+
+  e2e-accuracy:
+    name: e2e accuracy tests
+    needs: [prepare, inductor-tests]
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.e2e_matrix) }}
+      fail-fast: false
+    uses: ./.github/workflows/e2e-reusable.yml
+    with:
+      pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
+      suite: ${{ matrix.suite }}
+      mode: ${{ matrix.mode }}
+      test_mode: accuracy
+      dtype: ${{ matrix.dtype }}
+      models: "all"
+      only_one_model: ""
+      runner_label: "${{ matrix.runner_label }}"

@@ -804,10 +804,9 @@ struct TritonGENNamedBarrierWaitLowering
 
 struct TritonSubGroupBase {
 protected:
-  template <typename OpType,
-            typename = std::enable_if_t<llvm::is_one_of<
-                OpType, TritonGEN::SubGroupReduceOp, TritonGEN::SubGroupScanOp,
-                TritonGEN::SubGroupShuffleOp>::value>>
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, TritonGEN::SubGroupReduceOp,
+                                 TritonGEN::SubGroupScanOp>::value>>
   static Value extend(OpType op, Value val, Type type,
                       ConversionPatternRewriter &rewriter) {
     Location loc = op.getLoc();
@@ -817,23 +816,14 @@ protected:
                                   TritonGEN::SubGroupScanOp>::value) {
       if (type.isInteger() && bitWidth < 8)
         val = zext(i8_ty, val);
-    } else if constexpr (std::is_same_v<OpType, TritonGEN::SubGroupShuffleOp>) {
-      if (bitWidth < 8) {
-        if (!type.isInteger())
-          val = bitcast(val, int_ty(bitWidth));
-        val = zext(i8_ty, val);
-      } else if (isa<BFloat16Type>(type)) {
-        val = bitcast(val, i16_ty);
-      }
     }
 
     return val;
   }
 
-  template <typename OpType,
-            typename = std::enable_if_t<llvm::is_one_of<
-                OpType, TritonGEN::SubGroupReduceOp, TritonGEN::SubGroupScanOp,
-                TritonGEN::SubGroupShuffleOp>::value>>
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, TritonGEN::SubGroupReduceOp,
+                                 TritonGEN::SubGroupScanOp>::value>>
   static Value truncate(OpType op, Value val, Type type,
                         ConversionPatternRewriter &rewriter) {
     Location loc = op.getLoc();
@@ -844,14 +834,6 @@ protected:
       if (type.isInteger() && bitWidth < 8)
         val = trunc(type, val);
       return val;
-    } else if constexpr (std::is_same_v<OpType, TritonGEN::SubGroupShuffleOp>) {
-      if (bitWidth < 8) {
-        val = trunc(int_ty(bitWidth), val);
-        if (!type.isInteger())
-          val = bitcast(val, type);
-      } else if (isa<BFloat16Type>(type)) {
-        val = bitcast(val, type);
-      }
     }
 
     return val;
@@ -958,58 +940,6 @@ struct TritonSubGroupScanLowering
     result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
     rewriter.replaceOp(op, result);
 
-    return success();
-  }
-};
-
-struct TritonSubGroupShuffleLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupShuffleOp>,
-      public TritonSubGroupBase {
-  using ConvertOpToLLVMPattern<
-      TritonGEN::SubGroupShuffleOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(TritonGEN::SubGroupShuffleOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Value val = op.getValue();
-    auto origTy = val.getType();
-    val = TritonSubGroupBase::extend(op, op.getValue(), origTy, rewriter);
-    Value value = val;
-    Value mask = op.getMask();
-    TritonGEN::ShflKind kind = op.getKind();
-
-    StringRef func;
-    switch (kind) {
-    case TritonGEN::ShflKind::XOR:
-      func = "sub_group_shuffle_xor";
-      break;
-    case TritonGEN::ShflKind::UP:
-      func = "sub_group_shuffle_up";
-      break;
-    case TritonGEN::ShflKind::DOWN:
-      func = "sub_group_shuffle_down";
-      break;
-    case TritonGEN::ShflKind::IDX:
-      func = "sub_group_shuffle";
-      break;
-    }
-    std::string fnName = intel::mangle(func, {value.getType(), i32_ty},
-                                       /*isUnsigned=*/{false, true});
-
-    intel::AttributeList attrs =
-        createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
-                                  {llvm::Attribute::WillReturn, std::nullopt},
-                                  {llvm::Attribute::NoFree, std::nullopt},
-                                  {llvm::Attribute::Convergent, std::nullopt}},
-                                 rewriter.getContext());
-
-    Value result = createDeviceFunctionCall(rewriter, fnName, value.getType(),
-                                            {value.getType(), mask.getType()},
-                                            {value, mask}, attrs)
-                       .getResult();
-
-    result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
-    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -1449,11 +1379,11 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonGENBarrierLowering, TritonGENSplitBarrierSignalLowering,
       TritonGENSplitBarrierWaitLowering, TritonGENNamedBarrierSignalLowering,
       TritonGENNamedBarrierWaitLowering, TritonSubGroupReduceLowering,
-      TritonSubGroupScanLowering, TritonSubGroupShuffleLowering,
-      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering,
-      TritonSIMDBlockReadLowering, TritonSIMDBlockWriteLowering>(
-      converter, patternBenefitPreferTritonGENLowering);
+      TritonSubGroupScanLowering, TritonMatrixDPASLowering,
+      TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+      TritonMatrix2DBlockPrefetchLowering, TritonSIMDBlockReadLowering,
+      TritonSIMDBlockWriteLowering>(converter,
+                                    patternBenefitPreferTritonGENLowering);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {

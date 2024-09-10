@@ -125,7 +125,7 @@ fi
 if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
   $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pytorch --ipex --pinned --source $([ $VENV = true ] && echo "--venv")
 else
-  $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --upstream-pytorch --pinned $([ $VENV = true ] && echo "--venv")
+  $SKIP_DEPS || $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
 fi
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
@@ -275,14 +275,14 @@ run_benchmark_gemm() {
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+  IGC_VISAOptions=" -enableBCR -nolocalra" \
   IGC_DisableLoopUnroll=1 \
   python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
+  IGC_VISAOptions=" -enableBCR -nolocalra" \
   IGC_DisableLoopUnroll=1 \
   python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
 }
@@ -298,6 +298,13 @@ run_benchmark_attention() {
   cd $TRITON_PROJ/benchmarks; python setup.py install
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
+  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
+  IGC_DisableLoopUnroll=1 \
+  python ${BENCHMARK_TEST_DIR}/flash_attention_fwd_benchmark.py
+
+  echo "Advanced path:"
+  TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
   IGC_DisableLoopUnroll=1 \
