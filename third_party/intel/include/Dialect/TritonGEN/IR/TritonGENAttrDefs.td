@@ -43,17 +43,6 @@ def TritonGEN_ScanKindAttr : I32EnumAttr<"ScanKind", "TritonGEN subgroup scan ki
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
 
-/// Enum attribute of the different subgroup shuffle kinds.
-def TritonGEN_ShflKindAttr : I32EnumAttr<"ShflKind", "TritonGEN subgroup shuffle kind",
-  [
-    I32EnumAttrCase<"XOR",  0, "xor">,
-    I32EnumAttrCase<"UP",   1, "up">,
-    I32EnumAttrCase<"DOWN", 2, "down">,
-    I32EnumAttrCase<"IDX",  3, "idx">
-  ]> {
-  let cppNamespace = "::mlir::triton::TritonGEN";
-}
-
 /// Enum attribute of the different floating-point rounding modes.
 def TritonGEN_RoundingModeAttr : I32EnumAttr<"RoundingMode",
   "TritonGEN floating-point rounding mode",

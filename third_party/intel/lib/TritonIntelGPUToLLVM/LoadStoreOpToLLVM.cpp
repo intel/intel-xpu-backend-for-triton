@@ -221,13 +221,38 @@ struct PrefetchOpConversion
   rewriteTensorPointerPrefetch(triton::gpu::intel::PrefetchOp op,
                                OpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter) const {
+
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    if (!blockIOAttr) {
+      // TODO: Fallback to gather semantic prefetching. Simply erase the
+      // prefetching op which is not supported for now.
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Only support rank 2 block pointer, either row major or column major.
+    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
+    assert((memoryLayoutInfo == "row_major" ||
+            memoryLayoutInfo == "column_major") &&
+           "Only row_major or column_major is supported");
+
+    const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
+
     auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     Location loc = op.getLoc();
     Value ptr = op.getPtr();
     auto ptrType = cast<PointerType>(ptr.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
     Type eltTy = tensorType.getElementType();
-    const ArrayRef<int64_t> tensorShape = tensorType.getShape();
+    const ArrayRef<int64_t> shapeRef = tensorType.getShape();
+    SmallVector<int64_t> tensorShape{shapeRef.begin(), shapeRef.end()};
+
+    if (!memoryRowMajor) {
+      // Swap the shape to make it row major and then get the tiling
+      // size base on row major shape.
+      std::swap(tensorShape[0], tensorShape[1]);
+    }
 
     unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
 
@@ -281,6 +306,12 @@ struct PrefetchOpConversion
     auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
           offsetBaseY] =
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
+
+    if (!memoryRowMajor) {
+      // Swap the width/height and strides to the row major.
+      std::swap(baseWidth, baseHeight);
+      std::swap(colStride, rowStride);
+    }
 
     baseWidth = mul(baseWidth, i64_val(eltTy.getIntOrFloatBitWidth() / 8));
     baseWidth = trunc(i32_ty, baseWidth);
