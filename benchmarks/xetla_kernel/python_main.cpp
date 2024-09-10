@@ -25,11 +25,11 @@ sycl::queue get_current_sycl_queue() {
   CHECK_CONTIGUOUS(x)
 
 template <typename T>
-at::Tensor softmax(const at::Tensor &input, const int64_t dim) {
+at::Tensor softmax(const at::Tensor &input, const at::Tensor &output,
+                   const int64_t dim) {
   CHECK_INPUT(input);
+  CHECK_INPUT(output);
   RECORD_FUNCTION("xetla softmax", {input});
-
-  auto output = at::empty_like(input);
 
   auto queue = get_current_sycl_queue();
   auto evt = softmax_forward<T>(input.data_ptr(), output.data_ptr(), queue);
@@ -72,13 +72,27 @@ at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
 
 #define CALL_IMPL_ATTENTION_FUNC(P)                                            \
   fmha::fmha_forward_impl<P, T, use_mask, IsCausal, use_dropout>(              \
-      queue, num_batches, num_heads, head_size, num_queries, num_keys)
+      queue, q.data_ptr(), k.data_ptr(), v.data_ptr(), out.data_ptr(),         \
+      dropout_mask.data_ptr(), bias.data_ptr(), m.data_ptr(), l.data_ptr(),    \
+      num_batches, num_heads, head_size, num_queries, num_keys)
 
 template <bool use_mask = false, bool IsCausal = false,
           bool use_dropout = false>
-void flash_attn(const int64_t num_batches, const int64_t num_heads,
-                const int64_t head_size, const int64_t num_queries,
-                const int64_t num_keys) {
+void flash_attn(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v,
+                const at::Tensor &out, const at::Tensor &dropout_mask,
+                const at::Tensor &bias, const at::Tensor &m,
+                const at::Tensor &l, const int64_t num_batches,
+                const int64_t num_heads, const int64_t head_size,
+                const int64_t num_queries, const int64_t num_keys) {
+
+  CHECK_INPUT(q);
+  CHECK_INPUT(k);
+  CHECK_INPUT(v);
+  CHECK_INPUT(out);
+  CHECK_INPUT(dropout_mask);
+  CHECK_INPUT(bias);
+  CHECK_INPUT(m);
+  CHECK_INPUT(l);
   RECORD_FUNCTION("xetla fa",
                   {num_batches, num_heads, head_size, num_queries, num_keys});
 
