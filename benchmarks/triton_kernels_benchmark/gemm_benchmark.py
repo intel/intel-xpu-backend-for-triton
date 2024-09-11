@@ -14,7 +14,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
-from triton_kernels_benchmark import xetla_kernel  # pylint: disable=no-name-in-module
+import xetla_kernel
 
 
 @triton.autotune(
