@@ -144,7 +144,6 @@ createGenISASubGroupReduce(TritonGEN::SubGroupReduceOp op, Value val,
 
   intel::AttributeList attrs = createFunctionAttributes(
       {{llvm::Attribute::NoUnwind, std::nullopt},
-       {llvm::Attribute::NoFree, std::nullopt},
        {llvm::Attribute::WillReturn, std::nullopt},
        {llvm::Attribute::Convergent, std::nullopt},
        {llvm::Attribute::Memory,
@@ -291,7 +290,6 @@ static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
 
   intel::AttributeList attrs =
       createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
-                                {llvm::Attribute::NoFree, std::nullopt},
                                 {llvm::Attribute::WillReturn, std::nullopt}},
                                rewriter.getContext());
 
@@ -326,8 +324,6 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
-         {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Memory,
           llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
         ctx);
@@ -347,7 +343,6 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
          {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Memory,
           llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Mod).toIntValue()}},
         ctx);
@@ -383,7 +378,6 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
          {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Memory,
           llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
         ctx);
@@ -424,8 +418,6 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
     // Function and parameters attributes.
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
-         {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Memory,
           llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
         ctx);
@@ -543,8 +535,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
 
   intel::AttributeList attrs =
       createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
-                                {llvm::Attribute::WillReturn, std::nullopt},
-                                {llvm::Attribute::NoFree, std::nullopt}},
+                                {llvm::Attribute::WillReturn, std::nullopt}},
                                ctx);
   LLVM::CallOp call = createDeviceFunctionCall(rewriter, funcName, void_ty(ctx),
                                                argTypes, args, attrs);
@@ -589,8 +580,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
 
   intel::AttributeList attrs =
       createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
-                                {llvm::Attribute::WillReturn, std::nullopt},
-                                {llvm::Attribute::NoFree, std::nullopt}},
+                                {llvm::Attribute::WillReturn, std::nullopt}},
                                ctx);
 
   const StringLiteral funcName = "llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid";
@@ -617,7 +607,6 @@ struct TritonGENSubgroupIdLowering
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
          {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::NoSync, std::nullopt},
          {llvm::Attribute::Memory, llvm::MemoryEffects::none().toIntValue()}},
         ctx);
@@ -645,8 +634,7 @@ struct TritonGENSubgroupLocalIdLowering
 
     intel::AttributeList attrs =
         createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
-                                  {llvm::Attribute::WillReturn, std::nullopt},
-                                  {llvm::Attribute::NoFree, std::nullopt}},
+                                  {llvm::Attribute::WillReturn, std::nullopt}},
                                  ctx);
     LLVM::CallOp callOp = createDeviceFunctionCall(
         rewriter, "_Z22get_sub_group_local_idv", retType, {}, {}, attrs);
@@ -676,7 +664,6 @@ struct TritonGENBarrierLowering
 
         {{llvm::Attribute::NoUnwind, std::nullopt},
          {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Convergent, std::nullopt}},
         ctx);
     LLVM::CallOp callOp = createDeviceFunctionCall(
@@ -709,7 +696,6 @@ protected:
     intel::AttributeList attrs =
         createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
                                   {llvm::Attribute::WillReturn, std::nullopt},
-                                  {llvm::Attribute::NoFree, std::nullopt},
                                   {llvm::Attribute::Convergent, std::nullopt}},
                                  ctx);
     LLVM::CallOp callOp = createDeviceFunctionCall(rewriter, funcName, retType,
@@ -764,7 +750,6 @@ struct TritonGENNamedBarrierSignalLowering
     intel::AttributeList attrs =
         createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
                                   {llvm::Attribute::WillReturn, std::nullopt},
-                                  {llvm::Attribute::NoFree, std::nullopt},
                                   {llvm::Attribute::Convergent, std::nullopt}},
                                  rewriter.getContext());
     LLVM::CallOp callOp = createDeviceFunctionCall(
@@ -791,7 +776,6 @@ struct TritonGENNamedBarrierWaitLowering
     intel::AttributeList attrs =
         createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
                                   {llvm::Attribute::WillReturn, std::nullopt},
-                                  {llvm::Attribute::NoFree, std::nullopt},
                                   {llvm::Attribute::Convergent, std::nullopt}},
                                  rewriter.getContext());
     LLVM::CallOp callOp = createDeviceFunctionCall(
@@ -880,7 +864,6 @@ struct TritonSubGroupReduceLowering
       attrs = createFunctionAttributes(
           {{llvm::Attribute::NoUnwind, std::nullopt},
            {llvm::Attribute::WillReturn, std::nullopt},
-           {llvm::Attribute::NoFree, std::nullopt},
            {llvm::Attribute::Convergent, std::nullopt}},
           ctx);
     }
@@ -930,7 +913,6 @@ struct TritonSubGroupScanLowering
     intel::AttributeList attrs =
         createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
                                   {llvm::Attribute::WillReturn, std::nullopt},
-                                  {llvm::Attribute::NoFree, std::nullopt},
                                   {llvm::Attribute::Convergent, std::nullopt}},
                                  ctx);
 
@@ -1011,7 +993,6 @@ struct TritonMatrixDPASLowering
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
          {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Convergent, std::nullopt},
          {llvm::Attribute::Memory, llvm::MemoryEffects::none().toIntValue()}},
         rewriter.getContext());
@@ -1096,8 +1077,7 @@ struct TritonMatrix2DBlockLoadLowering
 
     intel::AttributeList attrs =
         createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
-                                  {llvm::Attribute::WillReturn, std::nullopt},
-                                  {llvm::Attribute::NoFree, std::nullopt}},
+                                  {llvm::Attribute::WillReturn, std::nullopt}},
                                  ctx);
     SmallVector<NamedAttrList> paramAttrs(argTypes.size());
     paramAttrs[0] = createParameterAttributes(
@@ -1168,8 +1148,7 @@ struct TritonMatrix2DBlockStoreLowering
 
     intel::AttributeList attrs =
         createFunctionAttributes({{llvm::Attribute::NoUnwind, std::nullopt},
-                                  {llvm::Attribute::WillReturn, std::nullopt},
-                                  {llvm::Attribute::NoFree, std::nullopt}},
+                                  {llvm::Attribute::WillReturn, std::nullopt}},
                                  ctx);
     SmallVector<NamedAttrList> paramAttrs(argTypes.size());
     paramAttrs[0] = createParameterAttributes(
@@ -1230,8 +1209,6 @@ struct TritonMatrix2DBlockPrefetchLowering
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
-         {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Memory,
           llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
         ctx);
@@ -1271,7 +1248,6 @@ struct TritonSIMDBlockReadLowering
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
          {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Memory,
           llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::Ref).toIntValue()}},
         rewriter.getContext());
@@ -1300,7 +1276,6 @@ struct TritonSIMDBlockWriteLowering
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
          {llvm::Attribute::WillReturn, std::nullopt},
-         {llvm::Attribute::NoFree, std::nullopt},
          {llvm::Attribute::Memory,
           llvm::MemoryEffects::argMemOnly(llvm::ModRefInfo::ModRef)
               .toIntValue()}},
@@ -1371,7 +1346,7 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  // This will ensure that the gpu-to-triton-gen lowering is prefered to the
+  // This will ensure that the gpu-to-triton-gen lowering is preferred to the
   // gpu-to-llvm-spv lowering while overlaps exist between the two.
   constexpr int patternBenefitPreferTritonGENLowering = 20;
   patterns.add<
