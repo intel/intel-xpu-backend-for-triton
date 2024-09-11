@@ -258,6 +258,8 @@ private:
     assert(ptrType.getAddressSpace() ==
                TritonGEN::TritonGENMemorySpace::kWorkgroup &&
            "expecting local space");
+    auto elemType =
+        cast<RankedTensorType>(ptrType.getPointeeType()).getElementType();
 
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op.getLoc();
@@ -282,7 +284,8 @@ private:
 
       TritonGEN::SIMDBlockReadOp simdRead =
           rewriter.create<TritonGEN::SIMDBlockReadOp>(loc, v64i16Ty, base);
-      rewriter.replaceOp(op, simdRead.getRes());
+      VectorType v64Ty = VectorType::get(64, elemType);
+      rewriter.replaceOp(op, bitcast(simdRead.getRes(), v64Ty));
 
       return success();
     }
