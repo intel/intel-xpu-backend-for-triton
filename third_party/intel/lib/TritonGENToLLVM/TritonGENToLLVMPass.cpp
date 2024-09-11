@@ -1266,6 +1266,27 @@ static bool isTySIMDOCLBuiltinAvailable(VectorType vecTy) {
   return false;
 }
 
+template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                               OpType, TritonGEN::SIMDBlockReadOp,
+                               TritonGEN::SIMDBlockWriteOp>::value>>
+static std::string getSIMDBlockManglingName(OpType op, VectorType vecTy) {
+  const bool isWrite = std::is_same<OpType, TritonGEN::SIMDBlockWriteOp>::value;
+  const LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
+  const unsigned numElems = vecTy.getNumElements();
+  // Note: OCL builtin name here differs from regular mangling.
+  std::string funcName = "intel_sub_group_block_";
+  funcName += (isWrite ? "write" : "read");
+  funcName += "_u" + intel::getTypeMangling(vecTy.getElementType()) +
+              (numElems == 1 ? "" : std::to_string(numElems));
+  funcName =
+      "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
+      std::to_string(ptrTy.getAddressSpace()) +
+      intel::getTypeMangling(vecTy.getElementType(), true /*isUnsigned*/);
+  if (isWrite)
+    funcName += intel::getTypeMangling(vecTy, true /*isUnsigned*/);
+  return funcName;
+}
+
 struct TritonSIMDBlockReadLowering
     : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockReadOp> {
   using ConvertOpToLLVMPattern<
@@ -1279,15 +1300,8 @@ struct TritonSIMDBlockReadLowering
 
     // TODO: Remove GenISA lowering after PoC productization is completed.
     std::string funcName = "llvm.genx.GenISA.simdBlockRead";
-    if (isTySIMDOCLBuiltinAvailable(vecTy)) {
-      unsigned numElems = vecTy.getNumElements();
-      funcName = "intel_sub_group_block_read_u" +
-                 intel::getTypeMangling(vecTy.getElementType(), false) +
-                 (numElems == 1 ? "" : std::to_string(numElems));
-      funcName = "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
-                 std::to_string(ptrTy.getAddressSpace()) +
-                 intel::getTypeMangling(vecTy.getElementType(), true);
-    }
+    if (isTySIMDOCLBuiltinAvailable(vecTy))
+      funcName = getSIMDBlockManglingName(op, vecTy);
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
@@ -1318,16 +1332,8 @@ struct TritonSIMDBlockWriteLowering
 
     // TODO: Remove GenISA lowering after PoC productization is completed.
     std::string funcName = "llvm.genx.GenISA.simdBlockWrite";
-    if (isTySIMDOCLBuiltinAvailable(vecTy)) {
-      unsigned numElems = vecTy.getNumElements();
-      funcName = "intel_sub_group_block_write_u" +
-                 intel::getTypeMangling(vecTy.getElementType(), false) +
-                 (numElems == 1 ? "" : std::to_string(numElems));
-      funcName = "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
-                 std::to_string(ptrTy.getAddressSpace()) +
-                 intel::getTypeMangling(vecTy.getElementType(), true) +
-                 intel::getTypeMangling(vecTy, true);
-    }
+    if (isTySIMDOCLBuiltinAvailable(vecTy))
+      funcName = getSIMDBlockManglingName(op, vecTy);
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
