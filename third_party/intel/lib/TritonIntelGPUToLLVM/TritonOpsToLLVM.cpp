@@ -676,8 +676,7 @@ class ConvertLayoutOpConversion : public ConvertTritonGPUOpToLLVMPattern<
     Value res = rewriter.create<LLVM::PoisonOp>(loc, type);
     for (int i = 0; i < size; ++i) {
       Value idx = i32_val(i);
-      Value element = rewriter.create<TritonGEN::SubGroupShuffleOp>(
-          loc, src.getType(), src, idx, TritonGEN::ShflKind::IDX);
+      Value element = LLVM::intel::shuffleIdx(loc, rewriter, src, idx);
       res = insert_element(res, element, idx);
     }
     rewriter.replaceOp(op, res);
