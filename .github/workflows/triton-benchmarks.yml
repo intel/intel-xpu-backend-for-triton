@@ -54,19 +54,19 @@ jobs:
           pip install wheel
 
       - name: Setup PyTorch with IPEX
-        if: ${{ inputs.install_ipex }}
+        if: ${{ github.event_name == 'schedule' || inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: Stonepia/pytorch
 
       - name: Setup PyTorch without IPEX
-        if: ${{ !inputs.install_ipex }}
+        if: ${{ !(github.event_name == 'schedule' || inputs.install_ipex) }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
 
       - name: Setup IPEX
-        if: ${{ inputs.install_ipex }}
+        if: ${{ github.event_name == 'schedule' || inputs.install_ipex }}
         uses: ./.github/actions/setup-ipex
 
       - name: Build Triton wheels
