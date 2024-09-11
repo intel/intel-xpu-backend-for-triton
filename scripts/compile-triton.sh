@@ -37,8 +37,8 @@ for arg in "$@"; do
       exit 1
       ;;
     *)
-      ARGS+="${arg} "
-      shift
+      echo "Unknown argument: $arg."
+      exit 1
       ;;
   esac
 done
