@@ -599,12 +599,9 @@ public:
       // corresponding to the thread's lane ID and splat it to the desired
       // result size.
       auto loc = op.getLoc();
-      Value laneId = rewriter.create<mlir::gpu::LaneIdOp>(
-          loc, /*upper_bound=*/IntegerAttr{});
-      Value cast = rewriter.create<arith::IndexCastOp>(
-          loc, rewriter.getI32Type(), laneId);
-      Value extract =
-          rewriter.create<LLVM::ExtractElementOp>(loc, adaptor.getSrc(), cast);
+      Value laneId = rewriter.create<TritonGEN::SubgroupLocalIdOp>(loc, i32_ty);
+      Value extract = rewriter.create<LLVM::ExtractElementOp>(
+          loc, adaptor.getSrc(), laneId);
       Value splat =
           rewriter.create<mlir::triton::SplatOp>(loc, op.getType(), extract);
       rewriter.replaceOp(op, splat);
@@ -716,8 +713,7 @@ public:
 
 void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit,
-    bool isAdvancedPathEnabled) {
+    RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AdvanceOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
@@ -733,6 +729,5 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<ReduceOpConversion>(typeConverter, benefit);
   patterns.add<SubGroupTransposeOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
-  if (isAdvancedPathEnabled)
-    patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
+  patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
 }
