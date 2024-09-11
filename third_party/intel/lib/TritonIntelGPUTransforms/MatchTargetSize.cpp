@@ -922,7 +922,9 @@ void MatchTargetSizePass::transformTransposedReduceOp(tt::ReduceOp op) {
   auto resultType = cast<RankedTensorType>(op.getResultTypes()[0]);
   RankedTensorType glueType =
       RankedTensorType::get(resultType.getShape(), resultType.getElementType());
-  Value glue = b.create<ttgi::GlueOp>(loc, glueType, glueVals);
+  Value glue = glueVals.size() == 1
+                   ? glueVals.front()
+                   : b.create<ttgi::GlueOp>(loc, glueType, glueVals);
   Value res = b.create<ttg::ConvertLayoutOp>(loc, resultType, glue);
   op->replaceAllUsesWith(ValueRange{res});
   op->erase();
