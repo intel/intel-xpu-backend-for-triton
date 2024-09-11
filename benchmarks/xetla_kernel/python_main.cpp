@@ -5,10 +5,10 @@
 #include <CL/sycl.hpp>
 #include <c10/core/ScalarType.h>
 #include <cstdint>
+#include <torch/extension.h>
 
 #ifdef USE_IPEX
 #include <ipex.h>
-#include <torch/extension.h>
 #else
 #include <c10/xpu/XPUStream.h>
 #endif

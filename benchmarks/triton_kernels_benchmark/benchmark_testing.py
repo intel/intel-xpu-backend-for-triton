@@ -3,6 +3,8 @@ import itertools
 import os
 from typing import Any, Dict, List
 
+USE_IPEX_OPTION = os.getenv("USE_IPEX", "1") == "1"
+
 
 def synchronize():
     import torch
@@ -30,9 +32,10 @@ def _summarize_statistics(times, quantiles, return_mode):
     return getattr(torch, return_mode)(times).item()
 
 
-if os.getenv("USE_IPEX", "1") == "1":
+if USE_IPEX_OPTION:
+
     def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-                device="xpu", sync_submitting=True):
+                 device="xpu", sync_submitting=True):
         """
         Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
         the 20-th and 80-th performance percentile.
@@ -117,8 +120,9 @@ if os.getenv("USE_IPEX", "1") == "1":
         times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
         return _summarize_statistics(times, quantiles, return_mode)
 else:
+
     def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-                device="xpu"):
+                 device="xpu"):
         """
         Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
         the 20-th and 80-th performance percentile.

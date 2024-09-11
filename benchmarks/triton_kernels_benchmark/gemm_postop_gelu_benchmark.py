@@ -6,18 +6,16 @@ This benchmark is modified from gemm_benchmark.py to include a post-operation (G
 
 """
 
-import os
 import math
 
 import torch
-
-if os.getenv("USE_IPEX", "1") == "1":
-    import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
+
+if benchmark_suit.USE_IPEX_OPTION:
+    import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 kAlpha = tl.constexpr(math.sqrt(2.0 / math.pi))
 
