@@ -11,6 +11,10 @@ on:
         description: Tag for benchmark results
         type: string
         default: "test"
+      install_ipex:
+        description: Install Intel PyTorch Extension
+        type: boolean
+        default: true
   schedule:
     - cron: "5 23 * * *"
 
@@ -49,10 +53,20 @@ jobs:
         run: |
           pip install wheel
 
-      - name: Setup PyTorch
+      - name: Setup PyTorch with IPEX
+        if: ${{ github.event_name == 'schedule' || inputs.install_ipex }}
         uses: ./.github/actions/setup-pytorch
+        with:
+          repository: Stonepia/pytorch
+
+      - name: Setup PyTorch without IPEX
+        if: ${{ !(github.event_name == 'schedule' || inputs.install_ipex) }}
+        uses: ./.github/actions/setup-pytorch
+        with:
+          repository: pytorch/pytorch
 
       - name: Setup IPEX
+        if: ${{ github.event_name == 'schedule' || inputs.install_ipex }}
         uses: ./.github/actions/setup-ipex
 
       - name: Build Triton wheels
