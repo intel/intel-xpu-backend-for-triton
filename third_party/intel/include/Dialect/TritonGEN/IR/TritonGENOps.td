@@ -397,7 +397,7 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
 }
 
 def TritonGEN_SIMDBlockReadOp: TritonGEN_Op<"simdblockread">,
-  Results<(outs FixedVectorOf<[TritonGEN_MatrixElemType]>:$res)>,
+  Results<(outs FixedVectorOf<[AnyTypeOf<[AnyI8, AnyI16, AnyI32, AnyI64]>]>:$res)>,
   Arguments<(ins
     Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr
   )> {
@@ -418,7 +418,7 @@ def TritonGEN_SIMDBlockReadOp: TritonGEN_Op<"simdblockread">,
 def TritonGEN_SIMDBlockWriteOp : TritonGEN_Op<"simdblockwrite">,
   Arguments<(ins
     Arg<LLVM_AnyPointer, "", [MemWrite]>:$ptr,
-    FixedVectorOf<[TritonGEN_MatrixElemType]>:$val
+    FixedVectorOf<[AnyTypeOf<[AnyI8, AnyI16, AnyI32, AnyI64]>]>:$val
   )> {
 
   let summary = "simd block write";
