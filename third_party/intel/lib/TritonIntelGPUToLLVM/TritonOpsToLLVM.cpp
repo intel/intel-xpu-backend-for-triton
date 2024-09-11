@@ -619,7 +619,14 @@ public:
                                 ValueRange{subGroupOffset}, /*inbounds=*/true);
 
     // Store matrix in local memory.
-    rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, subGroupBasePtr, src);
+    Value val =
+        vecTy.getElementType().isInteger()
+            ? src
+            : bitcast(
+                  src,
+                  vec_ty(int_ty(vecTy.getElementType().getIntOrFloatBitWidth()),
+                         vecTy.getNumElements()));
+    rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, subGroupBasePtr, val);
 
     // Load from matrix, trasposed.
     Value workItemOffset = mul(wiStride, subGroupLocalId);

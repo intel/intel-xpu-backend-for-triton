@@ -281,11 +281,12 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 // CHECK:           %[[VAL_7:.*]] = llvm.mlir.constant(256 : i64) : i64
 // CHECK:           %[[VAL_8:.*]] = llvm.mul %[[VAL_7]], %[[VAL_3]] : i64
 // CHECK:           %[[VAL_9:.*]] = llvm.getelementptr inbounds %[[VAL_0]]{{\[}}%[[VAL_8]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, f32
-// CHECK:           llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite(%[[VAL_9]], %[[VAL_1]]) {{{.*}}} : (!llvm.ptr<3>, vector<16xf32>) -> ()
-// CHECK:           %[[VAL_10:.*]] = llvm.mul %[[VAL_6]], %[[VAL_5]] : i64
-// CHECK:           %[[VAL_11:.*]] = llvm.getelementptr inbounds %[[VAL_9]]{{\[}}%[[VAL_10]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, f32
-// CHECK:           %[[VAL_12:.*]] = llvm.load %[[VAL_11]] : !llvm.ptr<3> -> vector<16xf32>
-// CHECK:           llvm.return %[[VAL_12]] : vector<16xf32>
+// CHECK:           %[[VAL_10:.*]] = llvm.bitcast %[[VAL_1]] : vector<16xf32> to vector<16xi32>
+// CHECK:           llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite(%[[VAL_9]], %[[VAL_10]]) {{{.*}}} : (!llvm.ptr<3>, vector<16xi32>) -> ()
+// CHECK:           %[[VAL_11:.*]] = llvm.mul %[[VAL_6]], %[[VAL_5]] : i64
+// CHECK:           %[[VAL_12:.*]] = llvm.getelementptr inbounds %[[VAL_9]]{{\[}}%[[VAL_11]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, f32
+// CHECK:           %[[VAL_13:.*]] = llvm.load %[[VAL_12]] : !llvm.ptr<3> -> vector<16xf32>
+// CHECK:           llvm.return %[[VAL_13]] : vector<16xf32>
   tt.func @test(%arg0: !tt.ptr<f32, 3>, %arg1: tensor<16x16xf32>) -> tensor<16x16xf32> {
     %0 = triton_intel_gpu.sub_group_transpose %arg0, %arg1 : tensor<16x16xf32>
     tt.return %0 : tensor<16x16xf32>
