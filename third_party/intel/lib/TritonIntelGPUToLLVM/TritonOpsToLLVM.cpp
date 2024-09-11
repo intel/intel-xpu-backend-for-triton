@@ -282,8 +282,17 @@ private:
     if constexpr (std::is_same_v<OpType, LoadOp>) {
       rewriter.restoreInsertionPoint(insertPoint);
 
-      TritonGEN::SIMDBlockReadOp simdRead =
-          rewriter.create<TritonGEN::SIMDBlockReadOp>(loc, v64i16Ty, base);
+      VectorType v8i16Ty = VectorType::get(8, i16_ty);
+      SmallVector<Value> values;
+      Value offset = i32_val(128);
+      for (int i = 0; i < 8; ++i) {
+        auto simdRead =
+            rewriter.create<TritonGEN::SIMDBlockReadOp>(loc, v8i16Ty, base);
+        values.push_back(simdRead.getRes());
+        base = gep(ptrToSharedMemTy, i16_ty, base, offset);
+      }
+      auto simdRead = rewriter.create<GlueOp>(loc, v64i16Ty, values);
+
       VectorType v64Ty = VectorType::get(64, elemType);
       rewriter.replaceOp(op, bitcast(simdRead.getRes(), v64Ty));
 
