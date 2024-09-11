@@ -403,7 +403,7 @@ public:
   }
 
 private:
-  Value vectorGlueOp(GlueOp op, ValueRange operands,
+  Value vectorGlueOp(ttgi::GlueOp op, ValueRange operands,
                      ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
     if (!llvm::isPowerOf2_64(operands.size())) {
@@ -440,7 +440,7 @@ private:
     return treeVectorGlueOp(loc, res, rewriter);
   }
 
-  Value scalarGlueOp(GlueOp op, ValueRange operands,
+  Value scalarGlueOp(ttgi::GlueOp op, ValueRange operands,
                      ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
     auto dstType =
@@ -748,13 +748,13 @@ public:
 };
 
 class SubGroupTransposeOpConversion
-    : public ConvertTritonGPUOpToLLVMPattern<SubGroupTransposeOp> {
+    : public ConvertTritonGPUOpToLLVMPattern<ttgi::SubGroupTransposeOp> {
 public:
   using ConvertTritonGPUOpToLLVMPattern<
-      SubGroupTransposeOp>::ConvertTritonGPUOpToLLVMPattern;
+      ttgi::SubGroupTransposeOp>::ConvertTritonGPUOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(SubGroupTransposeOp op, OpAdaptor adaptor,
+  matchAndRewrite(ttgi::SubGroupTransposeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
     Value src = adaptor.getSrc();
     auto vecTy = cast<VectorType>(src.getType());

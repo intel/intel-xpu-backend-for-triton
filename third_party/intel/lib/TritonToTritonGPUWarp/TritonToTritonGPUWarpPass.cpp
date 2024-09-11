@@ -731,13 +731,9 @@ public:
         Value res = loop.getResult(use.getOperandNumber());
         chainedVals.insert(res);
         expandUseChain(res, chainedVals);
-      } else if (auto forLoop = dyn_cast<scf::ForOp>(op)) {
-        auto arg = forLoop.getRegionIterArg(use.getOperandNumber() -
-                                            forLoop.getNumControlOperands());
-        chainedVals.insert(arg);
-        expandUseChain(arg, chainedVals);
         // expanddims, splat, store
-      } else if (isa<tt::ExpandDimsOp, tt::SplatOp, tt::StoreOp>(op)) {
+      } else if (isa<tt::ExpandDimsOp, tt::SplatOp, tt::StoreOp, scf::ForOp>(
+                     op)) {
         continue;
         // other ops
       } else {
