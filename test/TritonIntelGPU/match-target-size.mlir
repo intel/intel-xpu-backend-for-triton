@@ -443,15 +443,16 @@ tt.func public @attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.pt
     %29 = tt.load %arg11 : !tt.ptr<tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>
     %30 = tt.dot %22, %29, %cst_0, inputPrecision = tf32 : tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>> * tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<16x64xf32, #warp>
 
-    // CHECK-TR-RED:             %[[MAX:.*]] = arith.maxnumf {{.*}} : tensor<16x16xf32>
+    // CHECK-TR-RED:             %[[VAL_211:.*]] = arith.maxnumf %{{.*}}, %{{.*}} : tensor<16x16xf32>
+    // CHECK-TR-RED:             %[[VAL_212:.*]] = arith.maxnumf %{{.*}}, %{{.*}} : tensor<16x16xf32>
+    // CHECK-TR-RED:             %[[MAX:.*]] = arith.maxnumf %[[VAL_211]], %[[VAL_212]] : tensor<16x16xf32>
     // CHECK-TR-RED:             %[[MAXT:.*]] = triton_intel_gpu.sub_group_transpose %[[LOCAL_BUFFER]], %[[MAX]] : tensor<16x16xf32>
     // CHECK-TR-RED:             %[[RED:.*]] = "tt.reduce"(%[[MAXT]]) <{axis = 1 : i32}> ({
     // CHECK-TR-RED:             ^bb0(%[[VAL_204:.*]]: f32, %[[VAL_205:.*]]: f32):
     // CHECK-TR-RED:               %[[VAL_206:.*]] = arith.maxnumf %[[VAL_204]], %[[VAL_205]] : f32
     // CHECK-TR-RED:               tt.reduce.return %[[VAL_206]] : f32
     // CHECK-TR-RED:             }) : (tensor<16x16xf32>) -> tensor<16xf32>
-    // CHECK-TR-RED:             %[[GLUE:.*]] = triton_intel_gpu.glue %[[RED]] : (tensor<16xf32>) -> tensor<16xf32>
-    // CHECK-TR-RED:             %[[RES:.*]] = triton_gpu.convert_layout %[[GLUE]] : tensor<16xf32> -> tensor<16xf32, #triton_gpu.slice
+    // CHECK-TR-RED:             %[[RES:.*]] = triton_gpu.convert_layout %[[RED]] : tensor<16xf32> -> tensor<16xf32, #triton_gpu.slice
 
     // CHECK-SG-RED-COUNT-2:     arith.maxnumf {{.*}} : tensor<8x16xf32>
     // CHECK-SG-RED:             [[MAX:%.*]] = arith.maxnumf {{.*}} : tensor<8x16xf32>
