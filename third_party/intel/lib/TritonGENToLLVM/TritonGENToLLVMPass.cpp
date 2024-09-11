@@ -1248,19 +1248,23 @@ template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                OpType, TritonGEN::SIMDBlockReadOp,
                                TritonGEN::SIMDBlockWriteOp>::value>>
 static std::string getSIMDBlockManglingName(OpType op, VectorType vecTy) {
-  const bool isWrite = std::is_same<OpType, TritonGEN::SIMDBlockWriteOp>::value;
+  constexpr bool isWrite =
+      std::is_same<OpType, TritonGEN::SIMDBlockWriteOp>::value;
   const LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
   const unsigned numElems = vecTy.getNumElements();
   // Note: OCL builtin name here differs from regular mangling.
   std::string funcName = "intel_sub_group_block_";
-  funcName += (isWrite ? "write" : "read");
+  if constexpr (isWrite)
+    funcName += "write";
+  else
+    funcName += "read";
   funcName += "_u" + intel::getTypeMangling(vecTy.getElementType()) +
               (numElems == 1 ? "" : std::to_string(numElems));
   funcName =
       "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
       std::to_string(ptrTy.getAddressSpace()) +
       intel::getTypeMangling(vecTy.getElementType(), true /*isUnsigned*/);
-  if (isWrite)
+  if constexpr (isWrite)
     funcName += intel::getTypeMangling(vecTy, true /*isUnsigned*/);
   return funcName;
 }
