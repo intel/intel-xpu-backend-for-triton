@@ -97,7 +97,7 @@ if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER"
 fi
 
 if [ ! -v BASE ]; then
-  echo "**** BASE is not given *****"
+  echo "**** BASE is not given ****"
   BASE=$(cd $(dirname "$0")/../.. && pwd)
   echo "**** Default BASE is set to $BASE ****"
 fi
@@ -117,8 +117,11 @@ fi
 
 install_deps() {
   if [ "$SKIP_DEPS" = true ]; then
-      return 0
+    echo "**** Skipping installation of dependencies ****"
+    return 0
   fi
+
+  echo "**** Installing dependencies ****"
 
   python3 -m pip install -r "$SCRIPTS_DIR/requirements-test.txt"
 
@@ -127,14 +130,14 @@ install_deps() {
   fi
 
   if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
-    $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pytorch --ipex --pinned --source $([ $VENV = true ] && echo "--venv")
+    $SCRIPTS_DIR/compile-pytorch-ipex.sh --pytorch --ipex --pinned --source $([ $VENV = true ] && echo "--venv")
   else
-    $SKIP_DEPS || $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
+    $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
   fi
 }
 
 run_unit_tests() {
-  export TRITON_PROJ_BUILD="$TRITON_PROJ/python/build"
+  TRITON_PROJ_BUILD="$TRITON_PROJ/python/build"
   if [ ! -d "$TRITON_PROJ_BUILD" ]; then
     echo "****** ERROR: Build Triton first ******"
     exit 1
