@@ -273,6 +273,7 @@ jobs:
           source ./scripts/capture-hw-details.sh
           python3 scripts/pass_rate.py --reports reports
           python3 scripts/pass_rate.py --reports reports --json > pass_rate.json
+          python3 scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
 
       - name: Upload pass rate report
         # upload reports only for the default branch
@@ -280,7 +281,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
-          path: pass_rate.json
+          path: pass_rate*.json
 
       - name: Upload test reports
         if: inputs.upload_test_reports
