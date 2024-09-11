@@ -48,6 +48,7 @@ pytest() {
         fi
     fi
 
+    export TEST_UNSKIP
     python3 -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
 }
 
@@ -131,6 +132,7 @@ capture_runtime_env() {
 }
 
 ensure_spirv_dis() {
+    export PATH="$HOME/.local/bin:$PATH"
     local spirv_dis="$(which spirv-dis || true)"
     if [[ $spirv_dis ]]; then
         echo "Found spirv-dis at $spirv_dis"
@@ -138,6 +140,5 @@ ensure_spirv_dis() {
     fi
     echo "Installing spirv-dis to $HOME/.local/bin"
     mkdir -p ~/.local/bin
-    curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C ~/.local/bin --strip-components 3 --no-anchored spirv-dis
-    export PATH="$HOME/.local/bin:$PATH"
+    curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C $HOME/.local/bin --strip-components 3 --no-anchored spirv-dis
 }

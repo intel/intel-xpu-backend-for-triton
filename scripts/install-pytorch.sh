@@ -33,7 +33,7 @@ for arg in "$@"; do
       exit 1
       ;;
     *)
-      echo "Unknown argument $arg have been provided."
+      echo "Unknown argument: $arg."
       exit 1
       ;;
   esac
