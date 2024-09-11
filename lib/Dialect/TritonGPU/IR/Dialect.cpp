@@ -12,6 +12,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -408,10 +409,6 @@ unsigned getNumWarpsPerCTA(Attribute layout) {
 
 unsigned getNumCTAs(Attribute layout) {
   return product<unsigned>(getCTAsPerCGA(layout));
-}
-
-bool isaDistributedLayout(Attribute layout) {
-  return isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(layout);
 }
 
 template <typename T> bool hasEncoding(Value value) {
@@ -2665,22 +2662,21 @@ struct TritonGPUInferLayoutInterface
           loc, "SplitOp requires threadsPerWarp, warpsPerCTA, "
                "and CTAsPerCGA = 1 for the last dimension of the input");
     }
-    if (enc.getOrder().front() != enc.getOrder().size() - 1) {
-      return emitOptionalError(
-          loc, "SplitOp requires the last dimension to be most-minor in order");
-    }
     if (enc.getCTALayout().getCTAsPerCGA().back() != 1) {
       return emitOptionalError(
           loc,
           "SplitOp requires the last dimension to be most-minor in CTAOrder");
     }
-
+    SmallVector<unsigned> newOrder(enc.getOrder());
+    int splitDim = newOrder.size() - 1;
+    // Remove splitDim from order.
+    newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
+                   newOrder.end());
     dstEnc = BlockedEncodingAttr::get(
         enc.getContext(), //
         ArrayRef(enc.getSizePerThread()).drop_back(1),
         ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
-        ArrayRef(enc.getWarpsPerCTA()).drop_back(1),
-        ArrayRef(enc.getOrder()).drop_front(1),
+        ArrayRef(enc.getWarpsPerCTA()).drop_back(1), ArrayRef(newOrder),
         CTALayoutAttr::get(enc.getContext(), //
                            ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
                            ArrayRef(enc.getCTASplitNum()).drop_back(1),
@@ -2764,6 +2760,28 @@ struct CanonicalizeConvertFromLocalStore
       return failure();
     rewriter.replaceOpWithNewOp<triton::gpu::LocalStoreOp>(op, convert.getSrc(),
                                                            op.getDst());
+    return mlir::success();
+  }
+};
+
+struct CanonicalizeConvertFromSplit
+    : public mlir::OpRewritePattern<triton::SplitOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::SplitOp op,
+                  PatternRewriter &rewriter) const override {
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert)
+      return failure();
+    auto srcEncoding = convert.getSrc().getType().getEncoding();
+    // Multiple source layout can give the same output layout, if the source
+    // layout of the convert gives the same destination layout we can skip the
+    // convert.
+    auto dstEncoding = inferDstEncoding(op, srcEncoding);
+    if (dstEncoding != op.getOutLHS().getType().getEncoding())
+      return failure();
+    rewriter.replaceOpWithNewOp<triton::SplitOp>(op, convert.getSrc());
     return mlir::success();
   }
 };
@@ -2900,6 +2918,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   patterns.add<CanonicalizeConvertFromHistogram>(context);
   patterns.add<CanonicalizeConvertFromAlloc>(context);
   patterns.add<CanonicalizeConvertFromLocalStore>(context);
+  patterns.add<CanonicalizeConvertFromSplit>(context);
 }
 
 // LocalAllocOp
@@ -3034,12 +3053,33 @@ LogicalResult MemDescSubviewOp::verify() {
   return success();
 }
 
+// -- LocalAllocOp --
+
+int32_t LocalAllocOp::getAlignmentOrDefault() {
+  auto align = getAlignment();
+  if (align) {
+    return *align;
+  }
+
+  auto ty = getType();
+  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
+  auto bytes =
+      product<int64_t>(shapePerCTA) * (ty.getElementTypeBitWidth() / 8);
+
+  // XXX(Keren): magic numbers 256 and 1024
+  // Software swizzling calculates phase based on offset, while hardware
+  // swizzling do that based on physical address. Thus only by setting the
+  // alignment to 1024 can ensure the correctness.
+  return bytes > 256 ? 1024 : 8;
+}
+
 //===----------------------------------------------------------------------===//
 // Layout debug printing
 //===----------------------------------------------------------------------===//
 
 // Return N-D delinearized indices from a linear index.
-static SmallVector<int64_t> delinearize(int64_t idx, ArrayRef<int64_t> shape) {
+static SmallVector<int64_t> delinearizeIndex(int64_t idx,
+                                             ArrayRef<int64_t> shape) {
   SmallVector<int64_t> ret(shape.size());
   for (int i = shape.size() - 1; i >= 0; i--) {
     ret[i] = idx % shape[i];
@@ -3136,7 +3176,7 @@ std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
     int rank = tensorType.getRank();
     bool newLine = true;
     for (int i = 0; i < tensorSize; i++) {
-      auto indices = delinearize(i, tensorType.getShape());
+      auto indices = delinearizeIndex(i, tensorType.getShape());
       int numOpenBracket = 0;
       for (int j = rank - 1; j >= 0; j--) {
         if (indices[j] % tensorType.getDimSize(j) != 0)
@@ -3151,7 +3191,7 @@ std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
       }
 
       layoutStr += elementMapping[i];
-      auto nextIndices = delinearize(i + 1, tensorType.getShape());
+      auto nextIndices = delinearizeIndex(i + 1, tensorType.getShape());
       for (int j = rank - 1; j >= 0; j--) {
         if (nextIndices[j] % tensorType.getDimSize(j) != 0)
           break;

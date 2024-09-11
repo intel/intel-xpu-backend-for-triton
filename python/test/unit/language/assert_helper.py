@@ -1,7 +1,6 @@
 import sys
 
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
 from torch.testing import assert_close
 
 import triton
@@ -52,8 +51,8 @@ def test_assert(func: str, device: str):
     N = 128  # This value should match with test_print in test_subprocess.py.
     num_warps = N // get_current_target_warp_size()
 
-    x = torch.arange(0, N, dtype=torch.int32, device='xpu')
-    y = torch.zeros((N, ), dtype=x.dtype, device="xpu")
+    x = torch.arange(0, N, dtype=torch.int32, device=device)
+    y = torch.zeros((N, ), dtype=x.dtype, device=device)
     if func == "device_assert":
         kernel_device_assert[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     if func == "device_assert_passes":
@@ -81,7 +80,7 @@ def test_assert(func: str, device: str):
         kernel_assert_passes[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     assert_close(y, x)
     # GPU/host synchronization before exiting the test.
-    torch.xpu.synchronize()
+    getattr(torch, device).synchronize()
 
 
 @triton.jit

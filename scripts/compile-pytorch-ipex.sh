@@ -200,14 +200,15 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
 fi
 
 if [ "$BUILD_FROM_SOURCE" = false ]; then
+  if [ "$UPSTREAM_PYTORCH" = false ] || [ "$NO_OP_IPEX" = false ]; then
+      echo "Nightly wheels with IPEX are deprecated, use upstream PyTorch instead."
+      exit 1
+  fi
   echo "**** Download nightly builds. ****"
   PYTHON_VERSION=$( python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" )
   RUN_ID=$(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
   TEMP_DIR=$(mktemp -d)
-  WHEEL_PATTERN="wheels-py${PYTHON_VERSION}*"
-  if [ "$UPSTREAM_PYTORCH" = true ]; then
-    WHEEL_PATTERN="wheels-pytorch-py${PYTHON_VERSION}*"
-  fi
+  WHEEL_PATTERN="wheels-pytorch-py${PYTHON_VERSION}*"
   gh run download $RUN_ID \
     --repo intel/intel-xpu-backend-for-triton \
     --pattern "$WHEEL_PATTERN" \
@@ -215,13 +216,8 @@ if [ "$BUILD_FROM_SOURCE" = false ]; then
   cd $TEMP_DIR/$WHEEL_PATTERN
   echo "**** Install PyTorch from nightly builds. ****"
   pip install torch-*
-  if [ "$NO_OP_IPEX" = true ]; then
-    echo "**** Setup no-op IPEX ****"
-    python $SCRIPTS_DIR/create-noop-ipex.py
-  else
-    echo "**** Install IPEX from nightly builds. ****"
-    pip install intel_extension_for_pytorch-*
-  fi
+  echo "**** Setup no-op IPEX ****"
+  python $SCRIPTS_DIR/create-noop-ipex.py
   rm -r $TEMP_DIR
   exit 0
 fi

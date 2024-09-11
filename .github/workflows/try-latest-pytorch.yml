@@ -1,0 +1,142 @@
+name: Try latest PyTorch
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      pytorch_ref:
+        description: PyTorch ref
+        type: string
+        default: "main"
+      upload_test_reports:
+        description: Upload test reports
+        type: boolean
+        default: false
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
+      run_name:
+        description: Custom run name prefix
+        type: string
+        default: "Build and test Pytorch"
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
+
+permissions: read-all
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: Linux
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      e2e_matrix: ${{ steps.e2e-matrix.outputs.e2e_matrix }}
+      pytorch-commit-id: ${{ steps.commit-id.outputs.commit_id }}
+
+    steps:
+      - name: Inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - id: commit-id
+        uses: ./.github/actions/get-commit-id
+        with:
+          repository: "pytorch/pytorch"
+          branch: ${{ inputs.pytorch_ref }}
+
+      - name: Matrix
+        id: matrix
+        run: |
+          if [[ -n "${{ inputs.runner_label }}" ]]; then
+            matrix='{"python": ["3.9", "3.10", "3.11", "3.12"]}'
+          else
+            matrix='{"python": ["3.9", "3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
+          fi
+
+          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
+
+      - name: Matrix for e2e
+        id: e2e-matrix
+        run: |
+          e2e_matrix='{
+            "suite": ["huggingface", "timm_models", "torchbench"],
+            "mode": ["inference", "training"],
+            "dtype": ["amp_bf16", "amp_fp16", "bfloat16", "float16", "float32"]
+          }'
+          echo e2e_matrix=$e2e_matrix | tee -a $GITHUB_OUTPUT
+
+  inductor-tests:
+    name: Inductor tests
+    needs: prepare
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
+      max-parallel: 2
+    uses: ./.github/workflows/inductor-tests-reusable.yml
+    with:
+      pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
+      suite: >
+        inductor/test_codegen_triton.py
+        inductor/test_triton_extension_backend.py
+        inductor/test_triton_heuristics.py
+        inductor/test_triton_wrapper.py
+        inductor/test_triton_kernels.py
+      runner_label: ${{ inputs.runner_label }}
+      python_version: "3.9"
+
+  integration-tests:
+    name: Integration tests
+    needs: [prepare, inductor-tests]
+
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
+      max-parallel: 2 # to allow PyTorch build to be cached
+
+    uses: ./.github/workflows/build-test-reusable.yml
+    with:
+      driver_version: ${{ matrix.driver }}
+      runner_label: ${{ inputs.runner_label }}
+      pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
+      python_version: ${{ matrix.python }}
+      upload_test_reports: ${{ inputs.upload_test_reports || false }}
+      ignore_errors: ${{ inputs.ignore_errors || false }}
+      skip_list: ${{ inputs.skip_list }}
+      run_name: "${{ inputs.run_name }}: ${{ matrix.driver }} ${{ matrix.python }} ${{ needs.prepare.outputs.pytorch-commit-id }}"
+      enable_unskip: ${{ inputs.enable_unskip || false }}
+
+  e2e-accuracy:
+    name: e2e accuracy tests
+    needs: [prepare, inductor-tests]
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.e2e_matrix) }}
+      fail-fast: false
+    uses: ./.github/workflows/e2e-reusable.yml
+    with:
+      pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
+      suite: ${{ matrix.suite }}
+      mode: ${{ matrix.mode }}
+      test_mode: accuracy
+      dtype: ${{ matrix.dtype }}
+      models: "all"
+      only_one_model: ""
+      runner_label: "${{ matrix.runner_label }}"

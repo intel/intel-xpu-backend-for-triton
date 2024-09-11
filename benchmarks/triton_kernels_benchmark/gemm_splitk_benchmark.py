@@ -16,9 +16,6 @@ benchmark_suit = triton_kernels_benchmark  # triton.testing
     ],
     key=['M', 'N', 'K'],
 )
-@triton.heuristics({
-    'EVEN_K': lambda args: args['K'] % (args['BLOCK_K'] * args['SPLIT_K']) == 0,
-})
 @triton.jit
 def _kernel(A, B, C,  #
             M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
@@ -26,7 +23,7 @@ def _kernel(A, B, C,  #
             stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
             acc_dtype: tl.constexpr,  #
             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr, EVEN_K: tl.constexpr,  #
+            GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr  #
             ):
     # matrix multiplication
     pid = tl.program_id(0)
@@ -49,17 +46,8 @@ def _kernel(A, B, C,  #
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
     for _ in range(0, K, BLOCK_K * SPLIT_K):
-        if EVEN_K:
-            a = tl.load(a_block_ptr)
-            b = tl.load(b_block_ptr)
-        else:
-            # FIXME: Undefined name `rk`
-            # https://github.com/intel/intel-xpu-backend-for-triton/issues/2012
-            raise NotImplementedError()
-            # k_remaining = K - k * (BLOCK_K * SPLIT_K)
-            # _0 = tl.zeros((1, 1), dtype=C.dtype.element_ty)
-            # a = tl.load(a_block_ptr, mask=rk[None, :] < k_remaining, other=_0)
-            # b = tl.load(b_block_ptr, mask=rk[:, None] < k_remaining, other=_0)
+        a = tl.load(a_block_ptr)
+        b = tl.load(b_block_ptr)
         acc += tl.dot(a, b, out_dtype=acc_dtype)
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_K * SPLIT_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_K * SPLIT_K, 0))
@@ -91,7 +79,7 @@ class _matmul(torch.autograd.Function):
         if b.stride(0) > 1 and b.stride(1) > 1:
             b = b.contiguous()
         # checks constraints
-        assert a.shape[1] == b.shape[0], "incompatible dimensions"
+        assert a.shape[1] == b.shape[0], 'incompatible dimensions'
         M, K = a.shape
         _, N = b.shape
 
@@ -110,12 +98,12 @@ class _matmul(torch.autograd.Function):
         if acc_dtype is None:
             acc_dtype = torch.float32
         else:
-            assert isinstance(acc_dtype, torch.dtype), "acc_dtype must be a torch.dtype"
-            assert acc_dtype in supported_acc_dtypes[a.dtype], "acc_dtype not compatible with the type of a"
-            assert acc_dtype in supported_acc_dtypes[b.dtype], "acc_dtype not compatible with the type of b"
+            assert isinstance(acc_dtype, torch.dtype), 'acc_dtype must be a torch.dtype'
+            assert acc_dtype in supported_acc_dtypes[a.dtype], 'acc_dtype not compatible with the type of a'
+            assert acc_dtype in supported_acc_dtypes[b.dtype], 'acc_dtype not compatible with the type of b'
 
         def to_tl_type(ty):
-            return getattr(tl, str(ty).rsplit(".", maxsplit=1)[-1])
+            return getattr(tl, str(ty).rsplit('.', maxsplit=1)[-1])
 
         acc_dtype = to_tl_type(acc_dtype)
         output_dtype = to_tl_type(output_dtype)
@@ -176,11 +164,11 @@ def benchmark(M, N, K, provider):
         triton_fn = lambda: matmul(a, b)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg="triton to torch")
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
                                                               fast_flush=False)
     else:
-        raise NotImplementedError(f"Unsupported provider {provider}")
+        raise NotImplementedError(f'Unsupported provider {provider}')
 
     tflops = lambda mean: 2 * M * N * K * (1e-12) / (mean * 1e-3)
     gbps = lambda mean: 2 * (M * K + K * N) + 4.0 * (M * N) * (1e-9) / (mean * 1e-3)

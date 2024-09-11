@@ -21,19 +21,19 @@ from triton_kernels_benchmark import xetla_kernel  # pylint: disable=no-name-in-
     configs=[
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=2, num_warps=32),
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=3, num_warps=32),
+            num_stages=s, num_warps=32) for s in [1, 2, 3]
+    ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=2, num_warps=32),
+            num_stages=s, num_warps=32) for s in [2, 3]
+    ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=2, num_warps=32),
+            num_stages=s, num_warps=32) for s in [2]
+    ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
-            num_stages=2, num_warps=32),
+            num_stages=s, num_warps=32) for s in [2, 3]
     ],
     key=['M', 'N', 'K'],
 )
@@ -86,22 +86,23 @@ def matmul_kernel_with_block_pointers(
     configs=[
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=2, num_warps=32),
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=3, num_warps=32),
+            num_stages=s, num_warps=32) for s in [2, 3]
+    ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=2, num_warps=32),
+            num_stages=s, num_warps=32) for s in [2]
+    ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=2, num_warps=32),
+            num_stages=s, num_warps=32) for s in [2]
+    ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
-            num_stages=2, num_warps=32),
+            num_stages=s, num_warps=32) for s in [2]
+    ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
-            num_stages=2, num_warps=4),
+            num_stages=s, num_warps=4) for s in [2]
     ],
     key=['M', 'N', 'K'],
 )
@@ -159,10 +160,10 @@ def matmul_kernel_with_block_pointers_batched(
 def matmul(a, b):
     # Check constraints.
     if len(a.shape) == 3 and len(b.shape) == 3:
-        assert a.shape[0] == b.shape[0], "Incompatible Batch dimension"
-        assert a.shape[2] == b.shape[1], "Incompatible dimensions"
-        assert a.is_contiguous(), "Matrix A must be contiguous"
-        assert b.is_contiguous(), "Matrix B must be contiguous"
+        assert a.shape[0] == b.shape[0], 'Incompatible Batch dimension'
+        assert a.shape[2] == b.shape[1], 'Incompatible dimensions'
+        assert a.is_contiguous(), 'Matrix A must be contiguous'
+        assert b.is_contiguous(), 'Matrix B must be contiguous'
         B, M, K = a.shape
         B, K, N = b.shape
         # Allocates output.
@@ -179,9 +180,9 @@ def matmul(a, b):
             b.stride(0), b.stride(1), b.stride(2),  #
             c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
-        assert a.shape[1] == b.shape[0], "Incompatible dimensions"
-        assert a.is_contiguous(), "Matrix A must be contiguous"
-        assert b.is_contiguous(), "Matrix B must be contiguous"
+        assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
+        assert a.is_contiguous(), 'Matrix A must be contiguous'
+        assert b.is_contiguous(), 'Matrix B must be contiguous'
         M, K = a.shape
         K, N = b.shape
         # Allocates output.
@@ -194,7 +195,7 @@ def matmul(a, b):
             b.stride(0), b.stride(1),  #
             c.stride(0), c.stride(1))
     else:
-        assert False, "Input matrixs dimensions mismatch"
+        assert False, 'Input matrixs dimensions mismatch'
     return c
 
 
@@ -205,36 +206,38 @@ def matmul(a, b):
         x_names=['B', 'M', 'K', 'N'],
         # different possible values for `x_name`
         x_vals=[[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] +  #
-        [[1, 1, 5120, 13824],  #
-         [1, 4, 4096, 12288],  #
-         [1, 512, 8192, 8192],  #
-         [1, 512, 8192, 32768],  #
-         [1, 512, 32768, 8192],  #
-         [1, 1024, 16384, 8192],  #
-         [1, 1024, 28672, 8192],  #
-         [1, 3072, 4096, 3072],  # FIXME: Remove this case when gemm_streamk_benchmark works
-         [1, 4096, 16384, 8192],  #
-         [1, 8192, 16384, 1024],  #
-         [1, 8192, 16384, 4096],  #
-         [1, 16384, 1024, 8192],  #
-         [1, 16384, 4096, 8192],  #
-         [1, 16384, 8192, 1024],  #
-         [1, 16384, 8192, 4096],  #
-         [4, 32768, 128, 4096],  #
-         [4, 32768, 4096, 128],  #
-         [32, 4096, 4096, 128],  #
-         [4096, 8, 128, 16384],  #
-         [4096, 8, 16384, 128]],
+        [  #
+            [1, 1, 5120, 13824],  #
+            [1, 4, 4096, 12288],  #
+            [1, 512, 8192, 8192],  #
+            [1, 512, 8192, 32768],  #
+            [1, 512, 32768, 8192],  #
+            [1, 1024, 16384, 8192],  #
+            [1, 1024, 28672, 8192],  #
+            [1, 3072, 4096, 3072],  # FIXME: Remove this case when gemm_streamk_benchmark works
+            [1, 4096, 16384, 8192],  #
+            [1, 8192, 16384, 1024],  #
+            [1, 8192, 16384, 4096],  #
+            [1, 16384, 1024, 8192],  #
+            [1, 16384, 4096, 8192],  #
+            [1, 16384, 8192, 1024],  #
+            [1, 16384, 8192, 4096],  #
+            [4, 32768, 128, 4096],  #
+            [4, 32768, 4096, 128],  #
+            [32, 4096, 4096, 128],  #
+            [4096, 8, 128, 16384],  #
+            [4096, 8, 16384, 128]
+        ],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
         line_vals=['triton', 'xetla'],
         # label name for the lines
-        line_names=["Triton", "XeTLA"],
+        line_names=['Triton', 'XeTLA'],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel=["GB/s", "TFlops"],  # label name for the y-axis
-        plot_name="matmul-performance",
+        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
+        plot_name='matmul-performance',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
@@ -255,7 +258,7 @@ def benchmark(B, M, N, K, provider):
         triton_fn = lambda: matmul(a, b)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg="triton to torch")
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
                                                                  fast_flush=False)
     elif provider == 'xetla':
@@ -267,15 +270,15 @@ def benchmark(B, M, N, K, provider):
             c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
             acc = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
             cnt = torch.empty((B, M, N), device='xpu', dtype=torch.int32)
-        name = f"gemm_shape_{B}_{M}_{K}_{N}"
+        name = f'gemm_shape_{B}_{M}_{K}_{N}'
         func = getattr(xetla_kernel, name)
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-        # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg="xetla to torch")
+        # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg='xetla to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
                                                                  fast_flush=False)
     else:
-        raise NotImplementedError(f"Unsupported provider {provider}")
+        raise NotImplementedError(f'Unsupported provider {provider}')
 
     tflops = lambda ms: 2 * B * M * N * K * (1e-12) / (ms * 1e-3)
     gbps = lambda ms: B * (2 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (ms * 1e-3)
@@ -283,5 +286,5 @@ def benchmark(B, M, N, K, provider):
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     benchmark.run(show_plots=False, print_data=True)

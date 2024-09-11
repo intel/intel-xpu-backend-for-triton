@@ -24,9 +24,6 @@ jobs:
           - "3.10"
           - "3.11"
           - "3.12"
-        mode:
-          - ipex
-          - pytorch
       fail-fast: false
       max-parallel: 2
     defaults:
@@ -43,16 +40,10 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          pip install wheel
+          # cmake 3.22.1 does not work with the recent torchaudio: https://github.com/intel/intel-xpu-backend-for-triton/issues/2079
+          pip install wheel cmake
 
-      - name: Setup PyTorch with IPEX
-        if: ${{ matrix.mode == 'ipex' }}
-        uses: ./.github/actions/setup-pytorch
-        with:
-          repository: Stonepia/pytorch
-
-      - name: Setup PyTorch without IPEX
-        if: ${{ matrix.mode == 'pytorch' }}
+      - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
@@ -60,13 +51,11 @@ jobs:
       - name: Identify pinned versions
         run: |
           cd pytorch
-          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" >> $GITHUB_ENV
-          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" >> $GITHUB_ENV
-          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> $GITHUB_ENV
-
-      - name: Setup IPEX
-        if: ${{ matrix.mode == 'ipex' }}
-        uses: ./.github/actions/setup-ipex
+          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a $GITHUB_ENV
+          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" | tee -a $GITHUB_ENV
+          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a $GITHUB_ENV
+          echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" | tee -a $GITHUB_ENV
+          echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
 
       - name: Identify Triton commit id
         run: |
@@ -109,12 +98,6 @@ jobs:
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
-      # FIXME: old PyTorch does not work with torchdata=0.8.0
-      - name: Install torchdata package
-        if: ${{ matrix.mode == 'ipex' }}
-        run: |
-          pip install 'torchdata<0.8.0'
-
       - name: Install torchtext package
         uses: ./.github/actions/install-dependency
         with:
@@ -131,6 +114,23 @@ jobs:
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
 
+      - name: Install timm package
+        uses: ./.github/actions/install-dependency
+        with:
+          package: timm
+          repository: huggingface/pytorch-image-models
+          ref: ${{ env.TIMM_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+
+      - name: Install transformers package
+        uses: ./.github/actions/install-dependency
+        with:
+          package: transformers
+          repository: huggingface/transformers
+          ref: ${{ env.TRANSFORMERS_VERSION }}
+          try-tag-prefix: v
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+
       - name: Prepare wheels for upload
         run: |
           mkdir -p wheels
@@ -139,12 +139,9 @@ jobs:
           cp -L torchvision*/dist/*.whl wheels/
           cp -L torchtext*/dist/*.whl wheels/
           cp -L torchaudio*/dist/*.whl wheels/
-
-      - name: Prepare IPEX wheels for upload
-        if: ${{ matrix.mode == 'ipex' }}
-        run: |
-          mkdir -p wheels
-          cp -L intel-extension-for-pytorch/dist/*.whl wheels/
+          cp -L timm*/dist/*.whl wheels/
+          cp -L transformers*/dist/*.whl wheels/
+          ls -lh wheels/
 
       - name: Report environment details
         run: |
@@ -159,8 +156,6 @@ jobs:
           PYTHON_VERSION=$PYTHON_VERSION
           PYTORCH_REPO=$PYTORCH_REPO
           PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
-          IPEX_REPO=$IPEX_REPO
-          IPEX_COMMIT_ID=$IPEX_COMMIT_ID
           LLVM_REPO=llvm/llvm-project
           LLVM_COMMIT_ID=$LLVM_COMMIT_ID
           TRITON_REPO=intel/intel-xpu-backend-for-triton
@@ -170,16 +165,9 @@ jobs:
           TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
           EOF
 
-      - name: Upload IPEX wheels to artifacts
-        if: ${{ matrix.mode == 'ipex' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-py${{ matrix.python }}-${{ env.TIMESTAMP }}
-          path: wheels
-
       - name: Upload PyTorch wheels to artifacts
-        if: ${{ matrix.mode == 'pytorch' }}
         uses: actions/upload-artifact@v4
         with:
           name: wheels-pytorch-py${{ matrix.python }}-${{ env.TIMESTAMP }}
           path: wheels
+          include-hidden-files: true

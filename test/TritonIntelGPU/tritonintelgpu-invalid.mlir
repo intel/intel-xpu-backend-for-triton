@@ -127,3 +127,25 @@ tt.func @triton_intel_gpu.extract(%ptr : !tt.ptr<tensor<32x32xf16>>) {
   triton_intel_gpu.extract %ptr[2] : !tt.ptr<tensor<32x32xf16>> -> !tt.ptr<tensor<24xf16>>
   tt.return
 }
+
+// -----
+
+#warp = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+  tt.func @triton_intel_gpu.sub_group_transpose.encoding(%local_buffer : !tt.ptr<f16, 3>, %src : tensor<16x16xf16, #warp>) -> tensor<16x16xf16, #warp> {
+    // expected-error @below {{'triton_intel_gpu.sub_group_transpose' op can only be used on tensors of shape <sub_group_size x sub_group_size> with no encoding}}
+    %res = triton_intel_gpu.sub_group_transpose %local_buffer, %src : tensor<16x16xf16, #warp>
+    tt.return %res : tensor<16x16xf16, #warp>
+  }
+}
+
+// -----
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+  tt.func @triton_intel_gpu.sub_group_transpose.shape(%local_buffer : !tt.ptr<f16, 3>, %src : tensor<8x16xf16>) -> tensor<8x16xf16> {
+    // expected-error @below {{'triton_intel_gpu.sub_group_transpose' op can only be used on tensors of shape <sub_group_size x sub_group_size> with no encoding}}
+    %res = triton_intel_gpu.sub_group_transpose %local_buffer, %src : tensor<8x16xf16>
+    tt.return %res : tensor<8x16xf16>
+  }
+}

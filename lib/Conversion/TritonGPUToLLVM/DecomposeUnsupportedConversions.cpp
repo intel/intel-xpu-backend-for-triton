@@ -24,8 +24,8 @@ void decomposeSplatOpToSharedLayoutConversion(ModuleOp module) {
   int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
   module.walk([&](triton::SplatOp splatOp) -> void {
     auto dstType = cast<RankedTensorType>(splatOp.getType());
-    auto shared =
-        dyn_cast<triton::gpu::SharedEncodingAttr>(dstType.getEncoding());
+    auto shared = dyn_cast_or_null<triton::gpu::SharedEncodingAttr>(
+        dstType.getEncoding());
     if (shared) {
       OpBuilder builder(splatOp);
       SmallVector<unsigned, 4> sizePerThread(dstType.getRank(), 1);

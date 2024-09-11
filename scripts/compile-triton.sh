@@ -68,7 +68,7 @@ if [ "$VENV" = true ]; then
   echo "**** Creating Python virtualenv ****"
   python3 -m venv .venv --prompt triton
   source .venv/bin/activate
-  pip install ninja cmake wheel
+  pip install ninja cmake wheel pybind11
 fi
 
 if [ ! -d "$PACKAGES_DIR" ]; then
@@ -84,7 +84,7 @@ fi
 if [ ! -d "$TRITON_PROJ" ]; then
   echo "****** Cloning $TRITON_PROJ ******"
   cd $BASE
-  git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
+  git clone https://github.com/intel/intel-xpu-backend-for-triton.git
 fi
 
 ############################################################################
@@ -181,7 +181,7 @@ build_triton() {
   pip install -e .
 
   # Install triton tests.
-  pip install -vvv -e '.[tests]'
+  pip install -vvv -e '.[build,tests]'
 
   # Copy compile_commands.json in the build directory (so that cland vscode plugin can find it).
   cp $TRITON_PROJ_BUILD/"$(ls $TRITON_PROJ_BUILD)"/compile_commands.json $TRITON_PROJ/

@@ -15,7 +15,7 @@ template <unsigned opIdx> class DpasMatmulLoader {
 public:
   DpasMatmulLoader(DpasEncodingAttr dpasLayout, MemDescType descTy,
                    unsigned warpsPerTile, ArrayRef<Value> smemStrides,
-                   SmallVector<unsigned> warpShape,
+                   const SmallVector<unsigned> &warpShape,
                    ConversionPatternRewriter &rewriter,
                    const LLVMTypeConverter *typeConverter, Location loc)
       : dpasLayout(dpasLayout), descTy(descTy), smemStrides(smemStrides),
@@ -261,7 +261,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   ArrayRef<unsigned> order = sharedLayout.getOrder();
 
   // (a, b) is the coordinate.
-  auto load = [=, &rewriter, &vals](int a, int b) {
+  auto load = [=, &rewriter, &smemObj, &instrShape, &vals](int a, int b) {
     DpasMatmulLoader<opIdx> loader(dpasLayout, descTy, warpsPerTile,
                                    smemObj.strides, instrShape, rewriter,
                                    typeConverter, loc);

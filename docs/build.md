@@ -26,7 +26,7 @@ In other Linux distributions, you might have to follow different instructions. N
 First clone this repository:
 
 ```
-git clone https://github.com/intel/intel-xpu-backend-for-triton.git -b llvm-target
+git clone https://github.com/intel/intel-xpu-backend-for-triton.git
 cd intel-xpu-backend-for-triton
 ```
 

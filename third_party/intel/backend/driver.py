@@ -303,27 +303,9 @@ def make_launcher(constants, signature, ids):
       return ptr_info;
     }}
 // start sycl
-  static void set_scalar_arg(
-          sycl::handler& cgh,
-          int index,
-          size_t size,
-          const void* value) {{
-      switch (size) {{
-      case sizeof(uint8_t):
-      cgh.set_arg(index, *static_cast<const uint8_t*>(value));
-      break;
-      case sizeof(uint16_t):
-      cgh.set_arg(index, *static_cast<const uint16_t*>(value));
-      break;
-      case sizeof(uint32_t):
-      cgh.set_arg(index, *static_cast<const uint32_t*>(value));
-      break;
-      case sizeof(uint64_t):
-      cgh.set_arg(index, *static_cast<const uint64_t*>(value));
-      break;
-      default:
-      assert(false && "wrong scalar size in sycl gen.");
-      }}
+  template <class T>
+  static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *value) {{
+    cgh.set_arg(index, *static_cast<const T *>(value));
   }}
   static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
@@ -346,7 +328,7 @@ def make_launcher(constants, signature, ids):
     assert(num_params == expected_num_params && "number of kernel param not matched");
     // Submit the imported kernel.
     auto cgf = [&](sycl::handler &cgh) {{
-      {" ".join(f'set_scalar_arg(cgh, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
+      {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
       if (shared_memory) {{
           using share_mem_t = sycl::local_accessor<int8_t, 1>;
           share_mem_t local_buffer = share_mem_t(shared_memory, cgh);

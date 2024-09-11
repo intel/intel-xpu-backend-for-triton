@@ -220,7 +220,7 @@ public:
       }
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
           loc, vectorType, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY,
-          dataSize, blockWidth, blockHeight, vBlks, false /*transpose*/, vnni);
+          dataSize, blockWidth, blockHeight, vBlks, transpose, vnni);
       VERIFY_OPERATION(load)
 
       rewriter.replaceOp(op, bitcast(load, resType));
@@ -258,6 +258,8 @@ private:
     assert(ptrType.getAddressSpace() ==
                TritonGEN::TritonGENMemorySpace::kWorkgroup &&
            "expecting local space");
+    auto elemType =
+        cast<RankedTensorType>(ptrType.getPointeeType()).getElementType();
 
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op.getLoc();
@@ -278,13 +280,12 @@ private:
     base = gep(ptrToSharedMemTy, i16_ty, base, index);
 
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      VectorType v64f16Ty = VectorType::get(64, f16_ty);
-
       rewriter.restoreInsertionPoint(insertPoint);
 
       TritonGEN::SIMDBlockReadOp simdRead =
           rewriter.create<TritonGEN::SIMDBlockReadOp>(loc, v64i16Ty, base);
-      rewriter.replaceOp(op, simdRead.getRes());
+      VectorType v64Ty = VectorType::get(64, elemType);
+      rewriter.replaceOp(op, bitcast(simdRead.getRes(), v64Ty));
 
       return success();
     }
@@ -533,7 +534,6 @@ public:
     Location loc = op.getLoc();
     Type resultType = op.getType(0);
     TritonIntelGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
-    Type convertedTy = typeConverter->convertType(resultType);
     Region &combineOp = op.getCombineOp();
     if (!combineOp.hasOneBlock() ||
         combineOp.front().getOperations().size() != 2)
@@ -552,7 +552,7 @@ public:
       llvm_unreachable("Unhandled reduction kind");
 
     Value result = rewriter.create<mlir::gpu::SubgroupReduceOp>(
-        loc, convertedTy, adaptor.getSrcs()[0], redKind, true);
+        loc, adaptor.getSrcs()[0], redKind, true);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -612,6 +612,58 @@ public:
     }
 
     return failure();
+  }
+};
+
+class SubGroupTransposeOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<SubGroupTransposeOp> {
+public:
+  using ConvertTritonGPUOpToLLVMPattern<
+      SubGroupTransposeOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(SubGroupTransposeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    Value src = adaptor.getSrc();
+    auto vecTy = cast<VectorType>(src.getType());
+    auto mod = op->getParentOfType<ModuleOp>();
+    int threadsPerWarp =
+        mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    assert(vecTy.getNumElements() == threadsPerWarp &&
+           "Valid input tensor types should convert to a vector of sub-group "
+           "size");
+
+    Location loc = op.getLoc();
+    Value localBuffer = adaptor.getLocalBuffer();
+    Type offsetType = getTypeConverter()->getIndexType();
+    Value subGroupId = getValueOrCreateCastToIndexLike(
+        rewriter, loc, offsetType,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(
+            loc, /*upper_bound=*/IntegerAttr{}));
+    Value subGroupLocalId = getValueOrCreateCastToIndexLike(
+        rewriter, loc, offsetType,
+        rewriter.create<mlir::gpu::LaneIdOp>(loc,
+                                             /*upper_bound=*/IntegerAttr{}));
+    Value wiStride =
+        rewriter.create<LLVM::ConstantOp>(loc, offsetType, threadsPerWarp);
+    Value sgStride = rewriter.create<LLVM::ConstantOp>(
+        loc, offsetType, threadsPerWarp * threadsPerWarp);
+    Value subGroupOffset = mul(sgStride, subGroupId);
+    Type ptrType = localBuffer.getType();
+    Type elementType =
+        cast<RankedTensorType>(op.getSrc().getType()).getElementType();
+    Value subGroupBasePtr = gep(ptrType, elementType, localBuffer,
+                                ValueRange{subGroupOffset}, /*inbounds=*/true);
+
+    // Store matrix in local memory.
+    rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, subGroupBasePtr, src);
+
+    // Load from matrix, trasposed.
+    Value workItemOffset = mul(wiStride, subGroupLocalId);
+    Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,
+                                ValueRange{workItemOffset}, /*inbounds=*/true);
+    rewriter.replaceOp(op, load(src.getType(), workItemBasePtr));
+    return success();
   }
 };
 
@@ -679,6 +731,7 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, benefit);
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
   patterns.add<ReduceOpConversion>(typeConverter, benefit);
+  patterns.add<SubGroupTransposeOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   if (isAdvancedPathEnabled)
     patterns.add<MakeRangeOpConversion>(typeConverter, benefit);

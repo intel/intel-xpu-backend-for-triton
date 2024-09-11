@@ -29,104 +29,6 @@ class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
   Op<TritonGEN_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
-// Thread and Block index
-//===----------------------------------------------------------------------===//
-
-def IndexType : AnyTypeOf<[I32, I64]>;
-
-def TritonGEN_ThreadIdXOp : TritonGEN_Op<"workitem.id.x", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-def TritonGEN_ThreadIdYOp : TritonGEN_Op<"workitem.id.y", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-def TritonGEN_ThreadIdZOp : TritonGEN_Op<"workitem.id.z", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-
-def TritonGEN_BlockIdXOp : TritonGEN_Op<"workgroup.id.x", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-def TritonGEN_BlockIdYOp : TritonGEN_Op<"workgroup.id.y", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-def TritonGEN_BlockIdZOp : TritonGEN_Op<"workgroup.id.z", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-
-//===----------------------------------------------------------------------===//
-// Block and Grid range
-//===----------------------------------------------------------------------===//
-
-def TritonGEN_BlockDimXOp : TritonGEN_Op<"workgroup.dim.x", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-def TritonGEN_BlockDimYOp : TritonGEN_Op<"workgroup.dim.y", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-def TritonGEN_BlockDimZOp : TritonGEN_Op<"workgroup.dim.z", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-
-def TritonGEN_GridDimXOp : TritonGEN_Op<"grid.dim.x", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-def TritonGEN_GridDimYOp : TritonGEN_Op<"grid.dim.y", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-def TritonGEN_GridDimZOp : TritonGEN_Op<"grid.dim.z", [Pure]> {
-  let arguments = (ins);
-  let results = (outs IndexType:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-
-//===----------------------------------------------------------------------===//
 // Subgroup index
 //===----------------------------------------------------------------------===//
 
@@ -301,41 +203,9 @@ def TritonGEN_SubGroupScanOp : TritonGEN_Op<"sub_group_scan", [
   }];
 }
 
-def TritonGEN_SubGroupShuffleOp : TritonGEN_Op<"sub_group_shuffle", [
-      AllTypesMatch<["res", "value"]>]>,
-  Results<(outs SignlessIntegerOrFloatLike:$res)>,
-  Arguments<(ins SignlessIntegerOrFloatLike:$value,
-                 I32:$mask,
-                 TritonGEN_ShflKindAttr:$kind)> {
-  let summary = "Subgroup shuffle";
-
-  let description = [{
-    The `triton_gen.sub_group_shuffle` operation is invoked by different work
-    items with different values, given by $value. Different work items have
-    different subgroup local IDs. The shuffle kind, $kind, is given to determine
-    how to calculate the associated subgroup local ID. It returns the associated
-    $value for the work item with subgroup local ID equal to:
-    - $kind == xor, the current invocation’s subgroup local ID xor’ed with $mask.
-    - $kind == up, the current invocation’s subgroup local ID - $mask.
-    - $kind == down, the current invocation’s subgroup local ID + $mask.
-    - $kind == idx, the subgroup local ID $mask.
-  }];
-
-  let assemblyFormat = [{
-    $kind $value `,` $mask attr-dict `:` type($value)
-  }];
-}
-
 //===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
-
-class FixedVectorOfRankAndType<list<int> allowedRanks,
-                               list<Type> allowedTypes> : AllOfType<
-  [FixedVectorOf<allowedTypes>, FixedVectorOfRank<allowedRanks>],
-  FixedVectorOf<allowedTypes>.summary #
-  FixedVectorOfRank<allowedRanks>.summary,
-  "::mlir::VectorType">;
 
 def TritonGEN_MatrixElemType : AnyTypeOf<[AnyI8, AnyI16, AnyI32, F32, F16, BF16]>;
 

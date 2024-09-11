@@ -39,7 +39,7 @@ export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
 python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select
 
 source $SCRIPTS_DIR/pytest-utils.sh
-$SCRIPTS_DIR/compile-pytorch-ipex.sh --pinned $ARGS
+$SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
 
 if [ ! -d "$TRITON_PROJ_BUILD" ]
 then

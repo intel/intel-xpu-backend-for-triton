@@ -1,10 +1,10 @@
 // RUN: TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s --check-prefixes=CHECK,CHECK-COMMON
 // RUN: TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 TRITONGEN_FORCE_GENISA=1 triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s --check-prefixes=CHECK-GENISA,CHECK-COMMON
 
-// CHECK: llvm.func spir_funccc @__builtin_IB_subgroup_block_read_ap_u8_m8k32v1(!llvm.ptr {llvm.nonnull}, i32, i32, i32) -> vector<8xi16> attributes {passthrough = ["nounwind", ["memory", "1"]]}
-// CHECK-GENISA:  llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockReadAddrPayload.v8i16.p0i8(!llvm.ptr {llvm.nonnull}, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xi16> attributes {passthrough = ["nounwind", ["memory", "1"]]}
-// CHECK-COMMON: llvm.func spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockY(!llvm.ptr {llvm.nonnull}, i32) attributes {passthrough = ["nounwind", ["memory", "2"]]}
-// CHECK-COMMON: llvm.func spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX(!llvm.ptr {llvm.nonnull}, i32) attributes {passthrough = ["nounwind", ["memory", "2"]]}
+// CHECK: llvm.func spir_funccc @__builtin_IB_subgroup_block_read_ap_u8_m8k32v1(!llvm.ptr {llvm.nonnull}, i32, i32, i32) -> vector<8xi16> attributes {passthrough = ["nounwind", "willreturn", ["memory", "1"]]}
+// CHECK-GENISA: llvm.func spir_funccc @llvm.genx.GenISA.LSC2DBlockReadAddrPayload.v8i16.p0i8(!llvm.ptr {llvm.nonnull}, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> vector<8xi16> attributes {passthrough = ["nounwind", ["memory", "1"]]}
+// CHECK-COMMON: llvm.func spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockY(!llvm.ptr {llvm.nonnull}, i32) attributes {passthrough = ["nounwind", "willreturn", ["memory", "2"]]}
+// CHECK-COMMON: llvm.func spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX(!llvm.ptr {llvm.nonnull}, i32) attributes {passthrough = ["nounwind", "willreturn", ["memory", "2"]]}
 // CHECK-COMMON: llvm.func spir_funccc @__builtin_IB_subgroup_createBlock2DAddressPayload(i64, i32, i32, i32, i32, i32, i32, i32, i32) -> !llvm.ptr attributes {passthrough = ["nounwind", ["memory", "1"]]
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
