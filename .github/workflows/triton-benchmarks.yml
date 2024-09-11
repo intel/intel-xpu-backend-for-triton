@@ -52,7 +52,7 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          pip install wheel
+          pip install wheel cmake
 
       - name: Setup PyTorch with IPEX
         if: ${{ github.event_name == 'schedule' || inputs.install_ipex }}
