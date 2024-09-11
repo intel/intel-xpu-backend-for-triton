@@ -306,6 +306,7 @@ run_benchmark_attention() {
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+  TRITON_INTEL_ENABLE_INSTR_SCHED=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
   IGC_DisableLoopUnroll=1 \
   python ${BENCHMARK_TEST_DIR}/flash_attention_fwd_benchmark.py
