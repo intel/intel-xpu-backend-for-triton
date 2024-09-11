@@ -875,17 +875,23 @@ void MatchTargetSizePass::transformTransposedReduceOp(tt::ReduceOp op) {
   SmallVector<Value> glueVals;
 
   // Fixed for transpose reduction.
-  constexpr unsigned glueStep = 8;
-  constexpr unsigned step = 16;
-  Value localBuffer = allocateSLMForTransposedReduction(op, step, b);
+  constexpr unsigned subGroupSize = 16;
+  constexpr unsigned step = subGroupSize;
+  Value localBuffer = allocateSLMForTransposedReduction(op, subGroupSize, b);
   for (unsigned i = 0; i < outer; i += step) {
     SmallVector<Value> subVals;
-    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += glueStep) {
-      Value subVal = getSubVal(op, src, {i, j}, {glueStep, step});
+    RankedTensorType dstType = RankedTensorType::get(
+        {srcTy.getShape()[0], step}, srcTy.getElementType());
+    RankedTensorType subGlueType = RankedTensorType::get(
+        {srcTy.getShape()[0] / 2, step}, srcTy.getElementType());
+    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += step) {
+      std::array<Value, 2> subGlues{
+          b.create<ttgi::ExtractOp>(loc, subGlueType, src, j / step * 2),
+          b.create<ttgi::ExtractOp>(loc, subGlueType, src, j / step * 2 + 1)};
+      Value subVal = b.create<ttgi::GlueOp>(loc, dstType, subGlues);
       subVals.push_back(subVal);
     }
-    subVals = glueForReduction(b, loc, subVals);
-    auto subType = RankedTensorType::get({step, step}, srcTy.getElementType());
+    Type subType = dstType;
     auto combine = op.getCombineOp().front().getOperations().begin();
     StringAttr id = combine->getName().getIdentifier();
     Value acc;
