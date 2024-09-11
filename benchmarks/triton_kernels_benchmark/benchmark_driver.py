@@ -108,6 +108,7 @@ def ty_to_cpp(ty):
         "fp32": "float",
         "f32": "float",
         "fp64": "double",
+        "nvTmaDesc": "TMADesc",
     }[ty]
 
 
@@ -117,8 +118,11 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     arg_decls = ", ".join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
-        if ty[0] == "*":
+        if ty[0] == '*':
             return "PyObject*"
+        if ty == "nvTmaDesc":
+            return "PyObject*"
+
         return ty_to_cpp(ty)
 
     def format_of(ty):
@@ -137,9 +141,19 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
             "uint64_t": "K",
         }[ty]
 
-    args_format = "".join([format_of(_extracted_type(ty)) for ty in signature.values()])
-    fmt = "iiiOOOOOO" + args_format
-    args_list = ", " + ", ".join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ""
+    args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    format = "iiiOOOOOO" + args_format
+    args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+
+    internal_args_list = []
+    for i, ty in signature.items():
+        if ty[0] == "*":
+            internal_args_list.append(f"ptr_info{i}.dev_ptr")
+        elif ty == "nvTmaDesc":
+            # Note: we have to dereference the pointer
+            internal_args_list.append(f"*tma_ptr{i}")
+        else:
+            internal_args_list.append(f"_arg{i}")
 
     # generate glue code
     src = f"""
@@ -156,6 +170,12 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     #include <Python.h>
     #include <stdio.h>
     #include <numpy/arrayobject.h>
+
+    typedef struct {{
+      void* base;
+      uint64_t shape[5];
+      uint64_t stride[5];
+    }} TMADesc;
 
     static inline void gpuAssert(ze_result_t code, const char *file, int line)
     {{
@@ -236,29 +256,11 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
       return ptr_info;
     }}
 // start sycl
-  static void set_scalar_arg(
-          sycl::handler& cgh,
-          int index,
-          size_t size,
-          const void* value) {{
-      switch (size) {{
-      case sizeof(uint8_t):
-      cgh.set_arg(index, *static_cast<const uint8_t*>(value));
-      break;
-      case sizeof(uint16_t):
-      cgh.set_arg(index, *static_cast<const uint16_t*>(value));
-      break;
-      case sizeof(uint32_t):
-      cgh.set_arg(index, *static_cast<const uint32_t*>(value));
-      break;
-      case sizeof(uint64_t):
-      cgh.set_arg(index, *static_cast<const uint64_t*>(value));
-      break;
-      default:
-      assert(false && "wrong scalar size in sycl gen.");
-      }}
+  template <class T>
+  static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *value) {{
+    cgh.set_arg(index, *static_cast<const T *>(value));
   }}
-  static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {", " + arg_decls if len(arg_decls) > 0 else ""}) {{
+  static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
     RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
@@ -280,7 +282,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     assert(num_params == expected_num_params && "number of kernel param not matched");
     // Submit the imported kernel.
     auto cgf = [&](sycl::handler &cgh) {{
-      {" ".join(f"set_scalar_arg(cgh, {idx}, sizeof({ty_to_cpp(item)}), params[{idx}]);" for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
+      {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
       if (shared_memory) {{
           using share_mem_t = sycl::local_accessor<int8_t, 1>;
           share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
@@ -294,6 +296,53 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     xpu::profiler_record(kernel_name, event);
   }}
 // end sycl
+
+    static inline TMADesc* getTmaDesc(PyObject *obj) {{
+      if (sizeof(TMADesc*) != 8) {{
+        PyErr_SetString(PyExc_SystemError, "getTmaDesc() requires 64-bit compilation");
+        return NULL;
+      }}
+
+      PyObject *method_handle = PyObject_GetAttrString(obj, "tma_desc_cpu_ptr");
+      if (!method_handle) {{
+        PyErr_SetString(PyExc_TypeError, "tma_desc_cpu_ptr() method does not exist");
+        return NULL;
+      }}
+
+      PyObject *empty_tuple = PyTuple_New(0);
+      if (!empty_tuple) {{
+        Py_DECREF(method_handle);
+        PyErr_SetString(PyExc_SystemError, "Internal Python error!");
+        return NULL;
+      }}
+      PyObject *method_ret = PyObject_Call(method_handle, empty_tuple, NULL);
+      Py_DECREF(empty_tuple);
+      Py_DECREF(method_handle);
+      if (!method_ret) {{
+        PyErr_SetString(PyExc_SystemError, "Internal Python error!");
+        return NULL;
+      }}
+
+      if (!PyLong_Check(method_ret)) {{
+        PyErr_SetString(PyExc_TypeError, "tma_desc_cpu_ptr() must return 64-bit int");
+        Py_DECREF(method_ret);
+        return NULL;
+      }}
+
+      uint64_t ptr_as_uint = PyLong_AsUnsignedLongLong(method_ret);
+      Py_DECREF(method_ret);
+      if (!ptr_as_uint) {{
+        PyErr_SetString(PyExc_ValueError, "received NULL ptr from tma_desc_cpu_ptr()");
+        return NULL;
+      }}
+      if (ptr_as_uint % 64 != 0) {{
+        PyErr_SetString(PyExc_ValueError, "tma_desc_cpu_ptr() must be 64-byte aligned");
+        return NULL;
+      }}
+
+      return (TMADesc*)(ptr_as_uint);
+    }}
+
     static PyObject* launch(PyObject* self, PyObject* args) {{
 
       int gridX, gridY, gridZ;
@@ -302,10 +351,10 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
       PyObject *kernel_metadata = NULL;
       PyObject *launch_metadata = NULL;
       PyObject *py_obj_stream;
-      PyObject *py_kernel;
+      PyObject* py_kernel;
 
-      {" ".join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if(!PyArg_ParseTuple(args, \"{fmt}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
+      {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
         return NULL;
@@ -344,8 +393,9 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
       if(kernel_ptr == nullptr) return NULL;
       sycl::kernel kernel = *kernel_ptr;
 
-      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {"," + ", ".join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ""});
+      {"".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+      {"".join([f"TMADesc* tma_ptr{i} = getTmaDesc(_arg{i}); if (!tma_ptr{i}) return NULL;" if ty == "nvTmaDesc" else "" for i, ty in signature.items()])};
+      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
 
       if(launch_exit_hook != Py_None){{
         PyObject* args = Py_BuildValue("(O)", launch_metadata);

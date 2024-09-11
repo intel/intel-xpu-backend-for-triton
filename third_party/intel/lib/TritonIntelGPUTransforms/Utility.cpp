@@ -61,6 +61,10 @@ bool isDivisible(Value value, unsigned divisor) {
   if (auto extSIOp = value.getDefiningOp<arith::ExtSIOp>())
     return isDivisible(extSIOp->getOperand(0), divisor);
 
+  // hacking for TMA.
+  if (auto llvmLoad = value.getDefiningOp<LLVM::LoadOp>())
+    return true;
+
   return false;
 }
 
