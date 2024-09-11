@@ -1236,8 +1236,9 @@ static bool isTySIMDOCLBuiltinAvailable(VectorType vecTy) {
   if (numElems == 1 || numElems == 2 || numElems == 4 || numElems == 8)
     return true;
 
+  // FIXME: Allow 16xi16 when SPIRV-LLVM translator supports it.
   IntegerType elemTy = cast<IntegerType>(vecTy.getElementType());
-  if ((elemTy.getWidth() == 8 || elemTy.getWidth() == 16) && numElems == 16)
+  if (elemTy.getWidth() == 8 && numElems == 16)
     return true;
 
   return false;
