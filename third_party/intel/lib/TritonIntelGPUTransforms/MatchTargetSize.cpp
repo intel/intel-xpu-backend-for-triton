@@ -880,7 +880,7 @@ void MatchTargetSizePass::transformTransposedReduceOp(tt::ReduceOp op) {
   Value localBuffer = allocateSLMForTransposedReduction(op, step, b);
   for (unsigned i = 0; i < outer; i += step) {
     SmallVector<Value> subVals;
-    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += step) {
+    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += glueStep) {
       Value subVal = getSubVal(op, src, {i, j}, {glueStep, step});
       subVals.push_back(subVal);
     }
