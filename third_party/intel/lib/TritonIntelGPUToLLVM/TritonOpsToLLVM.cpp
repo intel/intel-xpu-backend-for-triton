@@ -280,12 +280,11 @@ private:
     base = gep(ptrToSharedMemTy, i16_ty, base, index);
 
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      VectorType v64Ty = VectorType::get(64, elemType);
-
       rewriter.restoreInsertionPoint(insertPoint);
 
       TritonGEN::SIMDBlockReadOp simdRead =
           rewriter.create<TritonGEN::SIMDBlockReadOp>(loc, v64i16Ty, base);
+      VectorType v64Ty = VectorType::get(64, elemType);
       rewriter.replaceOp(op, bitcast(simdRead.getRes(), v64Ty));
 
       return success();
