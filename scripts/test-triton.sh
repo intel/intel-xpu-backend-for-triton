@@ -88,7 +88,7 @@ for arg in "$@"; do
   esac
 done
 
-# Only run interpreter test when $TEST_INTERPRETER is ture
+# Only run interpreter test when $TEST_INTERPRETER is true
 if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ]; then
   TEST_UNIT=true
   TEST_CORE=true
