@@ -106,34 +106,40 @@ if [ "$VENV" = true ]; then
   source .venv/bin/activate
 fi
 
-export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
-export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
-export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
+SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+TRITON_PROJ="$BASE/intel-xpu-backend-for-triton"
 
-python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout setuptools==69.5.1 defusedxml
+source "$SCRIPTS_DIR/pytest-utils.sh"
 
-if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
-    python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
-fi
-
-source $SCRIPTS_DIR/pytest-utils.sh
 if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
 fi
 
-if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
-  $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pytorch --ipex --pinned --source $([ $VENV = true ] && echo "--venv")
-else
-  $SKIP_DEPS || $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
-fi
+install_deps() {
+  if [ "$SKIP_DEPS" = true ]; then
+      return 0
+  fi
 
-if [ ! -d "$TRITON_PROJ_BUILD" ]
-then
-  echo "****** ERROR: Build Triton first ******"
-  exit 1
-fi
+  python3 -m pip install -r "$SCRIPTS_DIR/requirements-test.txt"
+
+  if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
+    python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+  fi
+
+  if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
+    $SKIP_DEPS || $SCRIPTS_DIR/compile-pytorch-ipex.sh --pytorch --ipex --pinned --source $([ $VENV = true ] && echo "--venv")
+  else
+    $SKIP_DEPS || $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
+  fi
+}
 
 run_unit_tests() {
+  export TRITON_PROJ_BUILD="$TRITON_PROJ/python/build"
+  if [ ! -d "$TRITON_PROJ_BUILD" ]; then
+    echo "****** ERROR: Build Triton first ******"
+    exit 1
+  fi
+
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
@@ -219,7 +225,7 @@ run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
-  python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
+  python3 $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
 run_benchmark_softmax() {
@@ -227,8 +233,8 @@ run_benchmark_softmax() {
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python setup.py install
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
+  python3 setup.py install
+  python3 $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
 }
 
 run_benchmark_gemm() {
@@ -236,21 +242,21 @@ run_benchmark_gemm() {
   echo "*****              Running GEMM                *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python setup.py install
+  python3 setup.py install
 
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra" \
   IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  python3 $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra" \
   IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  python3 $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 }
 
 run_benchmark_attention() {
@@ -258,21 +264,21 @@ run_benchmark_attention() {
   echo "*****            Running ATTENTION             *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python setup.py install
+  python3 setup.py install
 
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
   IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+  python3 $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
   IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+  python3 $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 }
 
 test_triton() {
@@ -303,4 +309,5 @@ test_triton() {
   fi
 }
 
+install_deps
 test_triton
