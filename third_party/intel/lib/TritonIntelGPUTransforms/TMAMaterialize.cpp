@@ -80,7 +80,8 @@ BlockPointerValues getValuesFromTMADescStruct(Location loc, Value tmaDescPtr,
       .baseWidth = load(int_ty(64), baseHeightPtr),
       .baseHeight = load(int_ty(64), baseWidthPtr),
       .rowStride = load(int_ty(64), rowStridePtr),
-      .colStride = int_val(64, 1), // TMA descriptor is always row major.
+      .colStride = rewriter.create<arith::ConstantIntOp>(
+          loc, 1, 64), // TMA descriptor is always row major.
   };
   return values;
 }
