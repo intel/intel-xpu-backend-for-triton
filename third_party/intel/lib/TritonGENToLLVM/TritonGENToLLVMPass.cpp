@@ -1263,9 +1263,9 @@ static std::string getSIMDBlockManglingName(OpType op, VectorType vecTy) {
   funcName =
       "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
       std::to_string(ptrTy.getAddressSpace()) +
-      intel::getTypeMangling(vecTy.getElementType(), true /*isUnsigned*/);
+      intel::getTypeMangling(vecTy.getElementType(), /*isUnsigned=*/true);
   if constexpr (isWrite)
-    funcName += intel::getTypeMangling(vecTy, true /*isUnsigned*/);
+    funcName += intel::getTypeMangling(vecTy, /*isUnsigned=*/true);
   return funcName;
 }
 
