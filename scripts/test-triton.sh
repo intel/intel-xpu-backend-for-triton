@@ -123,10 +123,10 @@ install_deps() {
 
   echo "**** Installing dependencies ****"
 
-  python3 -m pip install -r "$SCRIPTS_DIR/requirements-test.txt"
+  python -m pip install -r "$SCRIPTS_DIR/requirements-test.txt"
 
   if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
-    python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+    python -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
   fi
 
   if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
@@ -209,7 +209,7 @@ run_tutorial_tests() {
   echo "***************************************************"
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
-  python3 -m pip install matplotlib pandas tabulate -q
+  python -m pip install matplotlib pandas tabulate -q
   cd $TRITON_PROJ/python/tutorials
 
   run_tutorial_test "01-vector-add"
@@ -228,7 +228,7 @@ run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
-  python3 $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
+  python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
 run_benchmark_softmax() {
@@ -236,8 +236,8 @@ run_benchmark_softmax() {
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python3 setup.py install
-  python3 $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
+  python setup.py install
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
 }
 
 run_benchmark_gemm() {
@@ -245,21 +245,21 @@ run_benchmark_gemm() {
   echo "*****              Running GEMM                *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python3 setup.py install
+  python setup.py install
 
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra" \
   IGC_DisableLoopUnroll=1 \
-  python3 $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra" \
   IGC_DisableLoopUnroll=1 \
-  python3 $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 }
 
 run_benchmark_attention() {
@@ -267,21 +267,21 @@ run_benchmark_attention() {
   echo "*****            Running ATTENTION             *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python3 setup.py install
+  python setup.py install
 
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
   IGC_DisableLoopUnroll=1 \
-  python3 $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
   IGC_DisableLoopUnroll=1 \
-  python3 $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 }
 
 test_triton() {
