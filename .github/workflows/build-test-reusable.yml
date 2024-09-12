@@ -114,7 +114,6 @@ jobs:
 
       - name: Create test-triton command line
         run: |
-          set -xv #FIXME
           if [[ -n "${{ inputs.skip_list }}" ]]; then
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
           elif [[ -n "${{ inputs.driver_version }}" ]]; then

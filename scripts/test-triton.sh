@@ -2,8 +2,10 @@
 
 set -euo pipefail
 
-export SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-source "$SCRIPTS_DIR/pytest-utils.sh"
+err() {
+    echo $@
+    exit 1
+}
 
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
@@ -25,8 +27,8 @@ SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
 ARGS=
-for arg in "$@"; do
-  case $arg in
+while test -n ${1:-} do
+  case "$1" in
     --unskip)
       TEST_UNSKIP=true
       shift
@@ -87,6 +89,7 @@ for arg in "$@"; do
       TRITON_TEST_REPORTS=true
       TRITON_TEST_REPORTS_DIR="$2"
       shift 2
+      
       ;;
     --warning-reports)
       TRITON_TEST_WARNING_REPORTS=true
@@ -104,7 +107,7 @@ for arg in "$@"; do
       err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --reports | --warning-reports | --ignore-errors]"
       ;;
     *)
-      ARGS+="${arg} "
+      ARGS+="$1 "
       shift
       ;;
   esac
@@ -128,6 +131,8 @@ if [ "$VENV" = true ]; then
   source .venv/bin/activate
 fi
 
+export SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+source "$SCRIPTS_DIR/pytest-utils.sh"
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
