@@ -237,9 +237,9 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
     elif provider == 'xetla':
         func = getattr(xetla_kernel, 'flash_attn')
         dtype = torch.bfloat16
-        q = torch.randn(Z * H * N_CTX * D_HEAD, device='xpu', dtype=dtype)
-        k = torch.randn(Z * H * N_CTX * D_HEAD, device='xpu', dtype=dtype)
-        v = torch.randn(Z * H * N_CTX * D_HEAD, device='xpu', dtype=dtype)
+        q = torch.empty(Z * H * N_CTX * D_HEAD, device='xpu', dtype=dtype)
+        k = torch.empty(Z * H * N_CTX * D_HEAD, device='xpu', dtype=dtype)
+        v = torch.empty(Z * H * N_CTX * D_HEAD, device='xpu', dtype=dtype)
         out = torch.empty_like(q, device='xpu', dtype=dtype)
         size_score = Z * H * N_CTX * N_CTX
         size_attn_mask = Z * N_CTX * N_CTX
