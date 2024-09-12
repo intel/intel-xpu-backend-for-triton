@@ -96,18 +96,18 @@ at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
 
 #define CALL_IMPL_ATTENTION_FUNC(P)                                            \
   fmha::fmha_forward_impl<P, T, use_mask, IsCausal, use_dropout>(              \
-      queue, k.data_ptr(), v.data_ptr(), out.data_ptr(),         \
+      queue, k.data_ptr(), v.data_ptr(), out.data_ptr(),                       \
       dropout_mask.data_ptr(), bias.data_ptr(), m.data_ptr(), l.data_ptr(),    \
       num_batches, num_heads, head_size, num_queries, num_keys)
 
 template <bool use_mask = false, bool IsCausal = false,
           bool use_dropout = false>
-void flash_attn(const at::Tensor &k, const at::Tensor &v,
-                const at::Tensor &out, const at::Tensor &dropout_mask,
-                const at::Tensor &bias, const at::Tensor &m,
-                const at::Tensor &l, const int64_t num_batches,
-                const int64_t num_heads, const int64_t head_size,
-                const int64_t num_queries, const int64_t num_keys) {
+void flash_attn(const at::Tensor &k, const at::Tensor &v, const at::Tensor &out,
+                const at::Tensor &dropout_mask, const at::Tensor &bias,
+                const at::Tensor &m, const at::Tensor &l,
+                const int64_t num_batches, const int64_t num_heads,
+                const int64_t head_size, const int64_t num_queries,
+                const int64_t num_keys) {
 
   CHECK_INPUT(k);
   CHECK_INPUT(v);
