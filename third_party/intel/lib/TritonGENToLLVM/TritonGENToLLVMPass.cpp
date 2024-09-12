@@ -1369,7 +1369,6 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
-  // TODO +
   registry.addExtension(
       +[](MLIRContext *ctx, TritonGEN::TritonGENDialect *dialect) {
         dialect->addInterfaces<TritonGENToLLVMDialectInterface>();
