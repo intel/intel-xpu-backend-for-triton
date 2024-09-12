@@ -1080,7 +1080,8 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
 }
 
 void MatchTargetSizePass::transformMakeRangeOp(tt::MakeRangeOp op) {
-  constexpr unsigned subgroupSize = 16;
+  auto mod = op->getParentOfType<mlir::ModuleOp>();
+  int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
   unsigned start = op.getStart();
   unsigned end = op.getEnd();
   assert(start == 0 && end % subgroupSize == 0 && "Unsupported range");
