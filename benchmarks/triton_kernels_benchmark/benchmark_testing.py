@@ -52,7 +52,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     end_event = torch.xpu.Event(enable_timing=True)
     start_event.record()
     for _ in range(5):
-        # cache.zero_()
+        cache.zero_()
         fn()
     end_event.record()
     synchronize()
@@ -74,7 +74,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
                 for x in grad_to_none:
                     x.grad = None
             # we clear the L2 cache before each run
-            # cache.zero_()
+            cache.zero_()
             if sync_submitting:
                 synchronize()
             # record time of `fn`
