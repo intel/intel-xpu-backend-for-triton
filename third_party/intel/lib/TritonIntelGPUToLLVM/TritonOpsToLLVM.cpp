@@ -598,7 +598,7 @@ public:
       // Example: 1x16 --> 8x16 broadcast. We have extract the element
       // corresponding to the thread's lane ID and splat it to the desired
       // result size.
-      auto loc = op.getLoc();
+      Location loc = op.getLoc();
       Value laneId = rewriter.create<TritonGEN::SubgroupLocalIdOp>(loc, i32_ty);
       Value extract = rewriter.create<LLVM::ExtractElementOp>(
           loc, adaptor.getSrc(), laneId);
@@ -692,11 +692,12 @@ public:
   LogicalResult
   matchAndRewrite(MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // FIXME: The real lowering has to take the layout into account. Here, we're
-    // just emitting a sequence of ints. Use
-    // `third_party/intel/lib/TritonIntelGPUToLLVM/MakeRangeOpToLLVM.cpp`
-    // instead!
-    auto loc = op->getLoc();
+    // Note: On the default path, the lowering of `tt.make_range` takes the
+    // tensor layout into account. To that end, there is a dedicated lowering
+    // pattern in `MakeRangeOpToLLVM.cpp`. However, with the assumed dense
+    // layout in the advanced path, we can just emit a sequence of integers.
+    
+    Location loc = op->getLoc();
     Value vec = rewriter.create<LLVM::UndefOp>(
         loc, getTypeConverter()->convertType(op.getType()));
     for (int i = op.getStart(); i < op.getEnd(); ++i) {
