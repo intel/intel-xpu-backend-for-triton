@@ -308,6 +308,23 @@ run_benchmark_attention() {
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 }
 
+run_instrumentation_tests() {
+  # FIXME: the "instrumentation" test suite currently contains only one test, when all tests
+  # are skipped pytest reports an error. If the only test is the skip list, then we shouldn't
+  # run pytest at all. This must be changed when there is more than one instrumentation test.
+  if [[ $TEST_UNSKIP = false && -s $TRITON_TEST_SKIPLIST_DIR/instrumentation.txt ]]; then
+    return
+  fi
+
+  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || err "Could not find '${SHARED_LIB_DIR}'"
+
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_TEST_SUITE=instrumentation \
+  TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
+    pytest -vvv --device xpu instrumentation/test_gpuhello.py
+}
+
 test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
