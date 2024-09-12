@@ -27,7 +27,7 @@ SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
 ARGS=
-while [ -v $1 ]; do
+while [ -v 1 ]; do
   case "$1" in
     --unskip)
       TEST_UNSKIP=true
@@ -87,7 +87,7 @@ while [ -v $1 ]; do
       ;;
     --reports-dir)
       TRITON_TEST_REPORTS=true
-      export TRITON_TEST_REPORTS_DIR="$2"
+      TRITON_TEST_REPORTS_DIR="$2"
       shift 2
       ;;
     --warning-reports)
