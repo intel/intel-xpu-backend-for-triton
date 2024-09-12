@@ -112,26 +112,23 @@ jobs:
           cd python
           lit -v build/*/test
 
-      - name: Set a skip list
-        if: inputs.skip_list == ''
+      - name: Create test-triton command line
         run: |
-          if [[ -n "${{ inputs.driver_version }}" ]]; then
+          set -x
+          if [[ -n "${{ inputs.skip_list }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
+          else if [[ -n "${{ inputs.driver_version }}" ]]; then
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
           else
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
           fi
-          if [[ -d $skiplist ]]; then
-            echo "TRITON_TEST_SKIPLIST_DIR=$skiplist" | tee -a $GITHUB_ENV
+            
+          if [ -d "$skiplist" ]; then
+            skiplist="--skip-list $skiplist"
+          else
+            skiplist=
           fi
-
-      - name: Set a custom skip list
-        if: inputs.skip_list != ''
-        run: |
-          echo "TRITON_TEST_SKIPLIST_DIR=$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}" | tee -a $GITHUB_ENV
-
-      - name: Create test-triton command line
-        run: |
-          echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --ignore-errors --skip-list ${{ env.TRITON_TEST_SKIPLIST_DIR }}" | tee -a $GITHUB_ENV
+          echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --ignore-errors $skiplist" | tee -a $GITHUB_ENV
 
       - name: Run core tests
         run: |
