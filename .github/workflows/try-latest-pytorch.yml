@@ -66,11 +66,7 @@ jobs:
       - name: Matrix
         id: matrix
         run: |
-          if [[ -n "${{ inputs.runner_label }}" ]]; then
-            matrix='{"python": ["3.9", "3.10", "3.11", "3.12"]}'
-          else
-            matrix='{"python": ["3.9", "3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
-          fi
+          matrix='{"python": ["3.9", "3.10", "3.11", "3.12"]}'
 
           echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
 
@@ -90,17 +86,17 @@ jobs:
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
       fail-fast: false
-      max-parallel: 2
     uses: ./.github/workflows/inductor-tests-reusable.yml
     with:
       pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
-      suite: >
+      suite: >-
         inductor/test_codegen_triton.py
         inductor/test_triton_extension_backend.py
         inductor/test_triton_heuristics.py
         inductor/test_triton_wrapper.py
         inductor/test_triton_kernels.py
       runner_label: ${{ inputs.runner_label }}
+      driver: "rolling"
       python_version: "3.9"
 
   integration-tests:
@@ -110,7 +106,6 @@ jobs:
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
       fail-fast: false
-      max-parallel: 2 # to allow PyTorch build to be cached
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
