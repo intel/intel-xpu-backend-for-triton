@@ -89,7 +89,6 @@ while [ -v $1 ]; do
       TRITON_TEST_REPORTS=true
       TRITON_TEST_REPORTS_DIR="$2"
       shift 2
-      
       ;;
     --warning-reports)
       TRITON_TEST_WARNING_REPORTS=true
