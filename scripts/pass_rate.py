@@ -203,7 +203,7 @@ def main():
     """Main."""
     args = create_argument_parser().parse_args()
     skiplist_dir = args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR',
-                                                                    'scripts/skiplist/default')
+                                                                   'scripts/skiplist/default')
     stats = parse_reports(pathlib.Path(args.reports), skiplist_dir)
 
     if args.suite == 'all':
