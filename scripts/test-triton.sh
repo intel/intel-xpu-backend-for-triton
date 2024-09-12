@@ -173,28 +173,16 @@ install_deps() {
 }
 
 run_unit_tests() {
-  TRITON_PROJ_BUILD="$TRITON_PROJ/python/build"
-  if [ ! -d "$TRITON_PROJ_BUILD" ]; then
-    echo "****** ERROR: Build Triton first ******"
-    exit 1
-  fi
-
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ_BUILD/* || {
-      echo "Triton build not found in $TRITON_PROJ_BUILD. Build Triton please."
-      exit 1
-  }
+  cd $TRITON_PROJ_BUILD/bdist*
   ctest .
 
   echo "***************************************************"
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
-  cd $TRITON_PROJ_BUILD/*/test || {
-      echo "Triton build not found in $TRITON_PROJ_BUILD. Build Triton please."
-      exit 1
-  }
+  cd $TRITON_PROJ_BUILD/cmake*/test
   lit -v .
 }
 
@@ -206,18 +194,18 @@ run_core_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-  pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+    pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-  pytest -vvv -n 8 --device xpu language/test_subprocess.py
+    pytest -vvv -n 8 --device xpu language/test_subprocess.py
 
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
-  pytest --verbose --device xpu runtime/
+    pytest --verbose --device xpu runtime/
 
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
-  pytest --verbose --device xpu language/test_line_info.py
+    pytest --verbose --device xpu language/test_line_info.py
 }
 
 run_regression_tests() {
@@ -227,7 +215,7 @@ run_regression_tests() {
   cd $TRITON_PROJ/python/test/regression
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
-  pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
+    pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
 }
 
 run_interpreter_tests() {
@@ -237,8 +225,8 @@ run_interpreter_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
-  pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
-  language/test_random.py --device cpu
+    pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+    language/test_random.py --device cpu
 }
 
 run_tutorial_tests() {
@@ -285,17 +273,17 @@ run_benchmark_gemm() {
 
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
-  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -enableBCR -nolocalra" \
-  IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+    IGC_VISAOptions=" -enableBCR -nolocalra" \
+    IGC_DisableLoopUnroll=1 \
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
-  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -enableBCR -nolocalra" \
-  IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+    IGC_VISAOptions=" -enableBCR -nolocalra" \
+    IGC_DisableLoopUnroll=1 \
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 }
 
 run_benchmark_attention() {
@@ -307,18 +295,18 @@ run_benchmark_attention() {
 
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
-  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
-  IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+    IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
+    IGC_DisableLoopUnroll=1 \
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
-  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  TRITON_INTEL_ENABLE_INSTR_SCHED=1 \
-  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
-  IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+    TRITON_INTEL_ENABLE_INSTR_SCHED=1 \
+    IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
+    IGC_DisableLoopUnroll=1 \
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 }
 
 test_triton() {
