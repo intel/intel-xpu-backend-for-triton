@@ -76,7 +76,7 @@ def get_deselected(report_path: pathlib.Path, skiplist_dir: str) -> int:
         return len([line for line in f.readlines() if line and not line.startswith('#')])
 
 
-def parse_report(report_path: pathlib.Path, skiplist_dir: str) -> ReportStats:
+def parse_report(reports_path: pathlib.Path, skiplist_dir: str) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
     root = parse(report_path).getroot()
@@ -135,13 +135,15 @@ def find_stats(stats: List[ReportStats], name: str) -> ReportStats:
     raise ValueError(f'{name} not found')
 
 
-def parse_junit_reports(reports_path: pathlib.Path) -> List[ReportStats]:
+def parse_junit_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
     """Parses junit report in the specified directory."""
-    return [parse_report(report) for report in reports_path.glob('*.xml')]
+    reports_path = pathlib.Path(args.reports)
+    return [parse_report(report, skiplist_dir) for report in reports_path.glob('*.xml')]
 
 
-def parse_tutorials_reports(reports_path: pathlib.Path) -> List[ReportStats]:
+def parse_tutorials_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
     """Parses tutorials reports in the specified directory."""
+    reports_path = pathlib.Path(args.reports)
     stats = ReportStats(name='tutorials')
     for report in reports_path.glob('tutorial-*.txt'):
         result = report.read_text().strip()
@@ -155,9 +157,9 @@ def parse_tutorials_reports(reports_path: pathlib.Path) -> List[ReportStats]:
     return [stats]
 
 
-def parse_reports(reports_path: pathlib.Path) -> List[ReportStats]:
+def parse_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
     """Parses all report in the specified directory."""
-    return parse_junit_reports(reports_path) + parse_tutorials_reports(reports_path)
+    return parse_junit_reports(args) + parse_tutorials_reports(args)
 
 
 def print_text_stats(stats: ReportStats):
@@ -202,9 +204,11 @@ def print_json_stats(stats: ReportStats):
 def main():
     """Main."""
     args = create_argument_parser().parse_args()
-    skiplist_dir = args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR',
-                                                                   'scripts/skiplist/default')
-    stats = parse_reports(pathlib.Path(args.reports), skiplist_dir)
+    args.report_path = pathlib.Path(args.reports)
+    args.skiplist_dir = args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR',
+                                                                        'scripts/skiplist/default')
+
+    stats = parse_reports(args)
 
     if args.suite == 'all':
         summary = overall_stats(stats)
