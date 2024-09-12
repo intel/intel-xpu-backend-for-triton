@@ -644,7 +644,7 @@ sycl::event fmha_forward_impl(sycl::queue &q, void *_q, void *_k, void *_v,
   uint32_t size_ml = shape.get_ml_size();
 
   // forward
-  T *test_query = sycl::malloc_shared<T>(size_query, q);
+  // T *query = sycl::malloc_shared<T>(size_query, q);
   // T *key = sycl::malloc_shared<T>(size_key, q);
   // T *value = sycl::malloc_shared<T>(size_key, q);
   T *query = static_cast<T *>(_q);
@@ -687,7 +687,7 @@ sycl::event fmha_forward_impl(sycl::queue &q, void *_q, void *_k, void *_v,
           fmha_fwd_op(ei, args);
         });
   });
-  sycl::free(test_query, q);
+  // sycl::free(query, q);
   // sycl::free(key, q);
   // sycl::free(value, q);
   // sycl::free(bias, q);
