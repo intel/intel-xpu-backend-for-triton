@@ -107,7 +107,6 @@ while [ -v 1 ]; do
       ;;
     *)
       err "Unknown argument: $1."
-      exit 1
       ;;            
   esac
 done
