@@ -117,7 +117,7 @@ jobs:
           set -xv #FIXME
           if [[ -n "${{ inputs.skip_list }}" ]]; then
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
-          else if [[ -n "${{ inputs.driver_version }}" ]]; then
+          elif [[ -n "${{ inputs.driver_version }}" ]]; then
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
           else
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
@@ -128,9 +128,7 @@ jobs:
           else
             skiplist=
           fi
-          echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install" #FIXME
-          #echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --ignore-errors $skiplist" | tee -a $GITHUB_ENV
-          exit -1
+          echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --ignore-errors $skiplist" | tee -a $GITHUB_ENV
 
       - name: Run core tests
         run: |
