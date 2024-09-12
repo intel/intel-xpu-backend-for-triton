@@ -39,7 +39,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     // CHECK-NEXT:   [[LD_A:%.*]] = tt.load [[A6]]
     // CHECK-NEXT:   [[LD_B:%.*]] = tt.load [[B6]]
     // CHECK:        triton_intel_gpu.prefetch [[A5]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>>
-    // CHECK:        triton_intel_gpu.prefetch [[B5]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>    
+    // CHECK:        triton_intel_gpu.prefetch [[B5]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
     // CHECK-NEXT:   [[DOT:%.*]] = tt.dot [[LD_A]], [[LD_B]], [[CST]]
     // CHECK-NEXT:   tt.advance [[A5]], {{.*}} : <tensor<256x32xf16, #blocked1>>
     // CHECK-DAG:    tt.advance [[A6]], {{.*}} : <tensor<256x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>>>
