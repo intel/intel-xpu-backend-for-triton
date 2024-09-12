@@ -97,6 +97,10 @@ jobs:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
 
+      - name: Install pass_rate dependencies
+        run: |
+          pip install defusedxml
+
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
         with:
@@ -122,7 +126,10 @@ jobs:
           else
             skiplist=
           fi
-          echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --ignore-errors $skiplist" | tee -a $GITHUB_ENV
+          {
+            echo SKIPLIST="$skiplist"
+            echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --ignore-errors $skiplist"
+          } | tee -a $GITHUB_ENV
 
       - name: Run core tests
         run: |
@@ -195,9 +202,9 @@ jobs:
       - name: Pass rate
         run: |
           source ./scripts/capture-hw-details.sh
-          python3 scripts/pass_rate.py --reports reports
-          python3 scripts/pass_rate.py --reports reports --json > pass_rate.json
-          python3 scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
+          python3 scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
+          python3 scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
+          python3 scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
 
       - name: Upload pass rate report
         # upload reports only for the default branch
