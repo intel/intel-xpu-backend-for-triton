@@ -207,8 +207,8 @@ def summarize_diff(triton_benchmark: bool, perf_index: str, plot: bool, df: pd.D
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_pdf import PdfPages
 
-        df["xlabel"] = df[["params", "benchmark"]].agg(
-            ", ".join, axis=1) if triton_benchmark else df[["suite", "mode", "datatype"]].agg(", ".join, axis=1)
+        keys = ["params", "benchmark"] if triton_benchmark else ["suite", "mode", "datatype"]
+        df["xlabel"] = df[keys].agg(", ".join, axis=1)
 
         # Sort by configuration
         order = list(df["xlabel"].unique())
