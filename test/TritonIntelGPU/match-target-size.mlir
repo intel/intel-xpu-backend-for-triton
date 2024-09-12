@@ -1,4 +1,6 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-match-target-size | FileCheck %s
+// RUN: env TRITON_INTEL_REDUCE_TRANSPOSE=1 \
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-match-target-size | FileCheck %s --check-prefixes=CHECK,CHECK-TR-RED
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-match-target-size | FileCheck %s --check-prefixes=CHECK,CHECK-SG-RED
 
 #warp = #triton_intel_gpu.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 #dot0_ = #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>
@@ -385,7 +387,13 @@ tt.func public @matmul_kernel_with_block_pointers_tf32(%arg0: !tt.ptr<f32> {tt.d
 // COM: Test Attention Related Ops
 #warp = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
-// CHECK-LABEL: @attn_fwd
+
+// Transpose reduction requires local memory.
+// CHECK-TR-RED: triton_gpu.shared = 8192 : index
+
+// CHECK-LABEL:   tt.func public @attn_fwd(
+// CHECK-SAME:                             %{{.*}}: !tt.ptr<f16>, %{{.*}}: !tt.ptr<f16>, %{{.*}}: !tt.ptr<f16>, %{{.*}}: f32, %{{.*}}: !tt.ptr<f32>, %{{.*}}: !tt.ptr<f32>
+// CHECK-TR-RED-SAME:                      %[[LOCAL_BUFFER:.*]]: !tt.ptr<f32, 3>) {
 tt.func public @attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: f32, %arg4: !tt.ptr<f32>, %arg5: !tt.ptr<f32>) {
   %c16_i32 = arith.constant 16 : i32
   %c128_i32 = arith.constant 128 : i32
@@ -435,11 +443,22 @@ tt.func public @attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.pt
     %29 = tt.load %arg11 : !tt.ptr<tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>
     %30 = tt.dot %22, %29, %cst_0, inputPrecision = tf32 : tensor<16x64xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #warp}>> * tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<16x64xf32, #warp>
 
-    // CHECK-COUNT-2: arith.maxnumf {{.*}} : tensor<8x16xf32>
-    // CHECK:         [[MAX:%.*]] = arith.maxnumf {{.*}} : tensor<8x16xf32>
-    // CHECK-NEXT:    [[EXTRACT0:%.*]] = triton_intel_gpu.extract [[MAX]][0] : tensor<8x16xf32> -> tensor<16xf32>
-    // CHECK-NEXT:    "tt.reduce"([[EXTRACT0]]) <{axis = 0 : i32}> ({
-    // CHECK:         }) : (tensor<16xf32>) -> f32
+    // CHECK-TR-RED:             %[[VAL_211:.*]] = arith.maxnumf %{{.*}}, %{{.*}} : tensor<16x16xf32>
+    // CHECK-TR-RED:             %[[VAL_212:.*]] = arith.maxnumf %{{.*}}, %{{.*}} : tensor<16x16xf32>
+    // CHECK-TR-RED:             %[[MAX:.*]] = arith.maxnumf %[[VAL_211]], %[[VAL_212]] : tensor<16x16xf32>
+    // CHECK-TR-RED:             %[[MAXT:.*]] = triton_intel_gpu.sub_group_transpose %[[LOCAL_BUFFER]], %[[MAX]] : tensor<16x16xf32>
+    // CHECK-TR-RED:             %[[RED:.*]] = "tt.reduce"(%[[MAXT]]) <{axis = 1 : i32}> ({
+    // CHECK-TR-RED:             ^bb0(%[[VAL_204:.*]]: f32, %[[VAL_205:.*]]: f32):
+    // CHECK-TR-RED:               %[[VAL_206:.*]] = arith.maxnumf %[[VAL_204]], %[[VAL_205]] : f32
+    // CHECK-TR-RED:               tt.reduce.return %[[VAL_206]] : f32
+    // CHECK-TR-RED:             }) : (tensor<16x16xf32>) -> tensor<16xf32>
+    // CHECK-TR-RED:             %[[RES:.*]] = triton_gpu.convert_layout %[[RED]] : tensor<16xf32> -> tensor<16xf32, #triton_gpu.slice
+
+    // CHECK-SG-RED-COUNT-2:     arith.maxnumf {{.*}} : tensor<8x16xf32>
+    // CHECK-SG-RED:             [[MAX:%.*]] = arith.maxnumf {{.*}} : tensor<8x16xf32>
+    // CHECK-SG-RED-NEXT:        [[EXTRACT0:%.*]] = triton_intel_gpu.extract [[MAX]][0] : tensor<8x16xf32> -> tensor<16xf32>
+    // CHECK-SG-RED-NEXT:          "tt.reduce"([[EXTRACT0]]) <{axis = 0 : i32}> ({
+    // CHECK-SG-RED:             }) : (tensor<16xf32>) -> f32
     %31 = "tt.reduce"(%30) <{axis = 1 : i32}> ({
     ^bb0(%arg12: f32, %arg13: f32):
       %53 = arith.maxnumf %arg12, %arg13 : f32
@@ -491,7 +510,7 @@ tt.func public @attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.pt
 // -----
 
 #warp = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd(%arg0: i32, %arg1: !tt.ptr<i32>) {
     // COM: This op primes the map of known layouts
     %cst = arith.constant dense<1> : tensor<16x64xi32, #warp>

@@ -1,16 +1,20 @@
+#include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/FormatVariadic.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -513,6 +517,12 @@ public:
         insert_element(vecTy, poison, adaptor.getSrc(),
                        rewriter.create<LLVM::ConstantOp>(loc, i32_ty, 0));
     Type convertedTy = typeConverter->convertType(resultType);
+    if (!isa<VectorType>(convertedTy)) {
+      // On the advance path, the type converter reduces 1-element vectors to
+      // their element type, making this splat a no-op.
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
+    }
     int64_t num = cast<VectorType>(convertedTy).getNumElements();
     SmallVector<int32_t> indices(num, 0);
     Value result = rewriter.create<LLVM::ShuffleVectorOp>(
@@ -565,6 +575,134 @@ public:
   }
 };
 
+class TransposedReduceOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<ReduceOp> {
+public:
+  using ConvertTritonGPUOpToLLVMPattern<
+      ReduceOp>::ConvertTritonGPUOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(ReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int axis = op.getAxis();
+    ArrayRef<int64_t> shape =
+        cast<RankedTensorType>(op.getInputTypes()[0]).getShape();
+    assert(shape[axis] <= subgroupSize &&
+           "Reduce size should be split into subgroups");
+
+    Location loc = op.getLoc();
+    ValueRange srcs = adaptor.getSrcs();
+    if (srcs.size() != 1)
+      return failure();
+    Value src = srcs.front();
+    auto srcTy = dyn_cast<VectorType>(src.getType());
+    if (!srcTy)
+      return failure();
+    SmallVector<Value> elements;
+    for (int i = 0, size = srcTy.getNumElements(); i < size; ++i)
+      elements.push_back(extract_element(src, i32_val(i)));
+    // Help tree reduce.
+    if (!llvm::isPowerOf2_64(elements.size()))
+      return failure();
+    Value res = treeReduce(op, rewriter, elements);
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+
+private:
+  static LLVM::LLVMFuncOp buildReduceFunc(ReduceOp op,
+                                          ConversionPatternRewriter &rewriter) {
+    Location loc = op.getLoc();
+
+    std::string name = llvm::formatv("__reduceOp_{0}", static_cast<void *>(op));
+    Block *combineBlock = &op.getCombineOp().front();
+    Type elementTy = combineBlock->getArgument(0).getType();
+
+    auto type = rewriter.getType<LLVM::LLVMFunctionType>(
+        elementTy, ArrayRef<Type>{elementTy, elementTy}, /*isVarArg=*/false);
+
+    OpBuilder::InsertionGuard ig(rewriter);
+    auto modOp = op->getParentOfType<ModuleOp>();
+    rewriter.setInsertionPointToStart(modOp.getBody());
+
+    auto funcOp = rewriter.create<LLVM::LLVMFuncOp>(loc, name, type);
+    funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    funcOp.setAlwaysInline(true);
+
+    Block *entryBlock = funcOp.addEntryBlock(rewriter);
+    rewriter.mergeBlocks(combineBlock, entryBlock, entryBlock->getArguments());
+
+    // Clone function
+    {
+      OpBuilder::InsertionGuard ig(rewriter);
+      rewriter.setInsertionPointToEnd(entryBlock);
+      // Replace terminator for llvm.func
+      auto terminatorOp = cast<ReduceReturnOp>(entryBlock->getTerminator());
+      rewriter.create<LLVM::ReturnOp>(loc, terminatorOp.getResult());
+      rewriter.eraseOp(terminatorOp);
+    }
+
+    return funcOp;
+  }
+
+  static Value treeReduce(ReduceOp op, ConversionPatternRewriter &rewriter,
+                          ArrayRef<Value> values) {
+    LLVM::LLVMFuncOp reduceFunc = buildReduceFunc(op, rewriter);
+    SmallVector<Value> res = treeReduce(op, reduceFunc, rewriter, values);
+    assert(res.size() == 1 && "Expecting single result");
+    return res.front();
+  }
+
+  static SmallVector<Value> treeReduce(ReduceOp op, LLVM::LLVMFuncOp reduceFunc,
+                                       ConversionPatternRewriter &rewriter,
+                                       ArrayRef<Value> values) {
+    if (values.size() == 1)
+      return {values.front()};
+    SmallVector<Value> lhs;
+    SmallVector<Value> rhs;
+    for (auto [index, value] : llvm::enumerate(values))
+      (index % 2 == 0 ? lhs : rhs).push_back(value);
+    SmallVector<Value> res;
+    Location loc = op.getLoc();
+    llvm::transform(llvm::zip_equal(lhs, rhs), std::back_inserter(res),
+                    [&](auto pair) -> Value {
+                      auto [lhs, rhs] = pair;
+                      auto callOp = call(reduceFunc, ValueRange{lhs, rhs});
+                      callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+                      return callOp->getResult(0);
+                    });
+    return treeReduce(op, reduceFunc, rewriter, res);
+  }
+};
+
+class ConvertLayoutOpConversion : public ConvertTritonGPUOpToLLVMPattern<
+                                      mlir::triton::gpu::ConvertLayoutOp> {
+  using ConvertTritonGPUOpToLLVMPattern<
+      mlir::triton::gpu::ConvertLayoutOp>::ConvertTritonGPUOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(mlir::triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Value src = adaptor.getSrc();
+    Type type = getTypeConverter()->convertType(op.getType());
+    if (!type)
+      return failure();
+
+    auto m = op->getParentOfType<ModuleOp>();
+    int size = TritonGEN::getSubgroupSize(m);
+
+    Value res = rewriter.create<LLVM::PoisonOp>(loc, type);
+    for (int i = 0; i < size; ++i) {
+      Value idx = i32_val(i);
+      Value element = LLVM::intel::shuffleIdx(loc, rewriter, src, idx);
+      res = insert_element(res, element, idx);
+    }
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
 class ExpandDimsOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<ExpandDimsOp> {
 public:
@@ -586,8 +724,36 @@ public:
   LogicalResult
   matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, adaptor.getSrc());
-    return success();
+    constexpr unsigned subgroupSize = 16;
+
+    auto srcShape = op.getSrc().getType().getShape();
+    auto dstShape = op.getType().getShape();
+    assert(srcShape.size() == 2 && dstShape.size() == 2 &&
+           "Expected 2D broadcast");
+    assert(dstShape[1] == subgroupSize && "Unexpected result shape");
+
+    if (srcShape[0] == dstShape[0]) {
+      // Example: 16x1 --> 16x16 broadcast. Each thread in the subgroup will get
+      // the same value, so we use the source operand directly.
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
+    }
+
+    if (srcShape[1] == dstShape[1]) {
+      // Example: 1x16 --> 8x16 broadcast. We have extract the element
+      // corresponding to the thread's lane ID and splat it to the desired
+      // result size.
+      Location loc = op.getLoc();
+      Value laneId = rewriter.create<TritonGEN::SubgroupLocalIdOp>(loc, i32_ty);
+      Value extract = rewriter.create<LLVM::ExtractElementOp>(
+          loc, adaptor.getSrc(), laneId);
+      Value splat =
+          rewriter.create<mlir::triton::SplatOp>(loc, op.getType(), extract);
+      rewriter.replaceOp(op, splat);
+      return success();
+    }
+
+    return failure();
   }
 };
 
@@ -670,6 +836,32 @@ public:
   }
 };
 
+class MakeRangeOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<MakeRangeOp> {
+public:
+  using ConvertTritonGPUOpToLLVMPattern<
+      MakeRangeOp>::ConvertTritonGPUOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(MakeRangeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Note: On the default path, the lowering of `tt.make_range` takes the
+    // tensor layout into account. To that end, there is a dedicated lowering
+    // pattern in `MakeRangeOpToLLVM.cpp`. However, with the assumed dense
+    // layout in the advanced path, we can just emit a sequence of integers.
+
+    Location loc = op->getLoc();
+    Value vec = rewriter.create<LLVM::UndefOp>(
+        loc, getTypeConverter()->convertType(op.getType()));
+    for (int i = op.getStart(); i < op.getEnd(); ++i) {
+      auto valI = LLVM::createConstantI32(loc, rewriter, i);
+      vec = rewriter.create<LLVM::InsertElementOp>(loc, vec, valI, valI);
+    }
+
+    rewriter.replaceOp(op, vec);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
@@ -678,6 +870,7 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<AdvanceOpConversion>(typeConverter, benefit);
   patterns.add<BroadcastOpConversion>(typeConverter, benefit);
+  patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
   patterns.add<DotOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<ExtractOpConversion>(typeConverter, benefit);
@@ -687,7 +880,11 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<LoadStorePrefetchOpConversion<LoadOp>>(typeConverter, benefit);
   patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, benefit);
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
-  patterns.add<ReduceOpConversion>(typeConverter, benefit);
+  if (applyTransposedReduction())
+    patterns.add<TransposedReduceOpConversion>(typeConverter, benefit);
+  else
+    patterns.add<ReduceOpConversion>(typeConverter, benefit);
   patterns.add<SubGroupTransposeOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
+  patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
 }
