@@ -113,7 +113,7 @@ def merge_triton_xetla_reports_data(config: str, triton_file: Path, xetla_file: 
 
 def build_triton_benchmark_reports_path(directory: Path, report_name: str) -> str:
     """Construct the full file path for a given report name."""
-    return os.path.join(directory, f"benchmark-reports/{report_name}-report.csv")
+    return os.path.join(directory, "benchmark-reports", f"{report_name}-report.csv")
 
 
 def parse_triton_benchmark_data(config: str, df: pd.DataFrame, directory: Path) -> pd.DataFrame:
