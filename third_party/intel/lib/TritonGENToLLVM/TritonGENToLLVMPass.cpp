@@ -1357,9 +1357,6 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  // This will ensure that the gpu-to-triton-gen lowering is preferred to the
-  // gpu-to-llvm-spv lowering while overlaps exist between the two.
-  constexpr int patternBenefitPreferTritonGENLowering = 20;
   patterns.add<
       TritonGENSubgroupIdLowering, TritonGENSubgroupLocalIdLowering,
       TritonGENBarrierLowering, TritonGENSplitBarrierSignalLowering,
@@ -1368,8 +1365,7 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       TritonSubGroupScanLowering, TritonMatrixDPASLowering,
       TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
       TritonMatrix2DBlockPrefetchLowering, TritonSIMDBlockReadLowering,
-      TritonSIMDBlockWriteLowering>(converter,
-                                    patternBenefitPreferTritonGENLowering);
+      TritonSIMDBlockWriteLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
