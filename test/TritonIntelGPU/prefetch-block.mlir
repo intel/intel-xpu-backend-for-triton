@@ -47,7 +47,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     // CHECK-DAG:    tt.advance [[B6]], {{.*}} : <tensor<32x256xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>>
     // CHECK:        triton_gen.split_barrier_wait {mem_fence = None, mem_scope = WorkGroup}
     // CHECK-NEXT:   triton_gen.split_barrier_signal {mem_fence = None, mem_scope = WorkGroup}
-   // CHECK-NEXT:   scf.yield {{.*}}
+    // CHECK-NEXT:   scf.yield {{.*}}
     // CHECK-NEXT: }
     // CHECK-NEXT: triton_gen.split_barrier_wait {mem_fence = None, mem_scope = WorkGroup}
 
