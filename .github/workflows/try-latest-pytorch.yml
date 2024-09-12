@@ -96,7 +96,7 @@ jobs:
         inductor/test_triton_wrapper.py
         inductor/test_triton_kernels.py
       runner_label: ${{ inputs.runner_label }}
-      driver: "rolling"
+      driver_version: "rolling"
       python_version: "3.9"
 
   integration-tests:
