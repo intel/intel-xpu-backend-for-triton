@@ -212,7 +212,7 @@ def forward(q, k, v, causal, sm_scale):
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, provider):
     causal = False
-    dtype = torch.float16
+    dtype = torch.bfloat16
     q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
     k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
     v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
