@@ -405,16 +405,16 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
   SmallVector<Value> advances;
   unsigned i = 0;
   Operation *prefetchInsertPoint = loopLoads.at(loop).back();
+
+  prefetchInsertPoint = yield;
   for (tt::LoadOp load : loopLoads.at(loop)) {
-    b.setInsertionPointAfter(prefetchInsertPoint);
+    const LoadInfo &loadInfo = loadToLoadInfo.at(load);
+    b.setInsertionPoint(loadInfo.getAdvance());
     Location loc = load.getLoc();
     auto prefetch =
         b.create<ttgi::PrefetchOp>(loc, args[num + 1 + i], load.getCache(),
                                    load.getEvict(), load.getIsVolatile());
-    prefetchInsertPoint = prefetch;
 
-    const LoadInfo &loadInfo = loadToLoadInfo.at(load);
-    b.setInsertionPoint(loadInfo.getAdvance());
     loc = loadInfo.getAdvance().getLoc();
     auto advance =
         b.create<tt::AdvanceOp>(loc, args[num + 1 + i].getType(),
