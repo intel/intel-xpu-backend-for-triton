@@ -1,13 +1,13 @@
-name: Build and test A770
+name: Build and test GPU
 run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
     inputs:
       runner_label:
-        description: Runner label, keep empty for default
+        description: Runner label or GPU
         type: string
-        default: ""
+        required: true
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
@@ -23,11 +23,11 @@ on:
       skip_list:
         description: Skip list
         type: string
-        default: ""
+        required: true
       run_name:
         description: Custom run name
         type: string
-        default: "Build and test A770"
+        default: ""
       enable_unskip:
         description: Ignore pytest.skip
         type: boolean
@@ -43,12 +43,12 @@ jobs:
         python: ["3.9"]
     uses: ./.github/workflows/build-test-reusable.yml
     with:
-      device: a770
+      device: ${{ inputs.runner_label }}
       runner_label: ${{ inputs.runner_label }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports }}
       ignore_errors: ${{ inputs.ignore_errors }}
-      skip_list: ${{ inputs.skip_list || 'a770' }}
-      run_name: ${{ inputs.run_name }}
+      skip_list: ${{ inputs.skip_list }}
+      run_name: ${{ inputs.run_name || format('Build and test {}', inputs.runner_label) }}
       enable_unskip: ${{ inputs.enable_unskip }}
