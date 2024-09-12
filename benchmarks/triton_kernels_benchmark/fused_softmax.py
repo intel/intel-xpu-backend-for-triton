@@ -88,7 +88,7 @@ properties = driver.active.utils.get_device_properties(device)
 MAX_WORK_GROUP_SIZE = properties["max_work_group_size"]
 
 
-def softmax(x, y):
+def softmax(x):
     n_rows, n_cols = x.shape
 
     # The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`
@@ -96,6 +96,8 @@ def softmax(x, y):
     BLOCK_SIZE_Y = MAX_WORK_GROUP_SIZE // BLOCK_SIZE_X
     BLOCK_SIZE_Y = BLOCK_SIZE_Y if BLOCK_SIZE_Y > 0 else 1
 
+    # Allocate output
+    y = torch.empty_like(x)
     # Create a number of persistent programs.
     softmax_kernel[(n_rows // BLOCK_SIZE_Y, )](y, x, x.stride(0), y.stride(0), n_cols, BLOCK_SIZE_X=BLOCK_SIZE_X,
                                                BLOCK_SIZE_Y=BLOCK_SIZE_Y)
@@ -131,8 +133,7 @@ def benchmark(M, N, provider):
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles,
                                                               warmup=10, rep=10)
     if provider == "triton":
-        out = torch.empty_like(x, device="xpu")
-        triton_fn = lambda: softmax(x, out)
+        triton_fn = lambda: softmax(x)
         torch_fn = lambda: torch.softmax(x, axis=-1)
         benchmark_suit.assert_close(triton_fn(), torch_fn(), err_msg="triton to torch")
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, warmup=10, rep=10)
@@ -144,8 +145,7 @@ def benchmark(M, N, provider):
     elif provider == "xetla":
         name = f"softmax_shape_{M}_{N}"
         func = getattr(xetla_kernel, name)
-        out = torch.empty_like(x, device="xpu")
-        xetla_fn = lambda: func(x, out, 0)
+        xetla_fn = lambda: func(x, 0)
         torch_fn = lambda: torch.softmax(x, axis=-1)
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), err_msg="xetla to torch")
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, warmup=10, rep=10)
