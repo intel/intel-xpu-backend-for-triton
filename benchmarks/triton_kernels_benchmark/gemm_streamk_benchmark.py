@@ -6,14 +6,13 @@ This script implements a Stream K GEMM with block pointers to achieve better har
 """
 
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark
+import triton_kernels_benchmark as benchmark_suit
 
-benchmark_suit = triton_kernels_benchmark  # triton.testing
+if benchmark_suit.USE_IPEX_OPTION:
+    import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 
 # pylint: disable=unused-argument

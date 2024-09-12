@@ -22,6 +22,7 @@ permissions: read-all
 
 env:
   PYTHON_VERSION: "3.10"
+  USE_IPEX: ${{ github.event_name == 'schedule' && '1' || inputs.install_ipex && '1' || '0' }}
 
 jobs:
   build:
@@ -51,7 +52,7 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          pip install wheel
+          pip install wheel cmake
 
       - name: Setup PyTorch with IPEX
         if: ${{ github.event_name == 'schedule' || inputs.install_ipex }}

@@ -3,6 +3,8 @@ import itertools
 import os
 from typing import Any, Dict, List
 
+USE_IPEX_OPTION = os.getenv("USE_IPEX", "1") == "1"
+
 
 def synchronize():
     import torch
@@ -12,8 +14,26 @@ def synchronize():
         torch.xpu.synchronize()
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-             device="xpu", sync_submitting=True):
+def _summarize_statistics(times, quantiles, return_mode):
+    import torch
+    if quantiles is not None:
+        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+        if times.numel() > 2:
+            # exclude max and min times
+            times = torch.sort(times).values[1:-1]
+        # add coefficient of the variance.
+        std = torch.std(times)
+        mean = torch.mean(times)
+        cv = std / mean
+        ret.extend([mean.tolist(), cv.tolist()])
+        if len(ret) == 1:
+            ret = ret[0]
+        return ret
+    return getattr(torch, return_mode)(times).item()
+
+
+def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
+                  device="xpu", sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -31,6 +51,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     :param fast_flush: Use faster kernel to flush L2 between measurements
     :type fast_flush: bool
     """
+    # TODO: remove this function and switch to `do_bench_no_ipex` after
+    # `XPUEvent.elapsed_time` stops introducing regressions into the results.
+
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
     from torch.autograd.profiler import record_function
@@ -96,20 +119,41 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     assert len(kernels) == n_repeat, "the profiling number not match"
     # Make the time to the milliseconds.
     times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
-    if quantiles is not None:
-        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
-        if times.numel() > 2:
-            # exclude max and min times
-            times = torch.sort(times).values[1:-1]
-        # add coefficient of the variance.
-        std = torch.std(times)
-        mean = torch.mean(times)
-        cv = std / mean
-        ret.extend([mean.tolist(), cv.tolist()])
-        if len(ret) == 1:
-            ret = ret[0]
-        return ret
-    return getattr(torch, return_mode)(times).item()
+    return _summarize_statistics(times, quantiles, return_mode)
+
+
+def do_bench_no_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
+                     device="xpu"):
+    """
+    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
+    the 20-th and 80-th performance percentile.
+
+    :param fn: Function to benchmark
+    :type fn: Callable
+    :param warmup: Warmup time (in ms)
+    :type warmup: int
+    :param rep: Repetition time (in ms)
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensor to None
+    :type grad_to_none: torch.tensor, optional
+    :param quantiles: Performance percentile to return in addition to the median.
+    :type quantiles: list[float]
+    :param fast_flush: Use faster kernel to flush L2 between measurements
+    :type fast_flush: bool
+    """
+    assert return_mode in ["min", "max", "mean", "median"]
+    import torch
+    from triton.testing import do_bench as triton_do_bench
+
+    times = triton_do_bench(fn, warmup=warmup, rep=rep, grad_to_none=grad_to_none, fast_flush=fast_flush,
+                            return_mode="all", device_type=device)
+    times = torch.tensor(times, dtype=torch.float)
+    return _summarize_statistics(times, quantiles, return_mode)
+
+
+do_bench = do_bench_no_ipex
+if USE_IPEX_OPTION:
+    do_bench = do_bench_ipex
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=""):
