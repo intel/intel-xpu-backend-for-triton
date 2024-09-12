@@ -146,8 +146,8 @@ def parse_directory(triton_benchmark: bool, config: str, previous: pd.DataFrame,
             df = parse_pytorch_benchmark_data(config, df, file)
 
     if previous is not None:
-        df = df.merge(previous, how="outer", on=["params", "benchmark"]) if triton_benchmark else df.merge(
-            previous, how="outer", on=["suite", "datatype", "mode", "name", "dev"])
+        on = ["params", "benchmark"] if triton_benchmark else ["suite", "datatype", "mode", "name", "dev"]
+        df = df.merge(previous, how="outer", on=on)
     return df
 
 
