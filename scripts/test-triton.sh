@@ -134,12 +134,6 @@ source "$SCRIPTS_DIR/pytest-utils.sh"
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
-$SKIP_PIP || {
-  python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout setuptools==69.5.1 defusedxml
-
-  $TRITON_TEST_WARNING_REPORTS || python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
-}
-
 if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
 fi
