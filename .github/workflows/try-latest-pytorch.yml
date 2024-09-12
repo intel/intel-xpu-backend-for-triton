@@ -43,7 +43,6 @@ jobs:
     outputs:
       integration_matrix: ${{ steps.matrix.outputs.integration_matrix }}
       e2e_matrix: ${{ steps.matrix.outputs.e2e_matrix }}
-      inductor_matrix: ${{ steps.matrix.outputs.inductor_matrix }}
       pytorch-commit-id: ${{ steps.commit-id.outputs.commit_id }}
 
     steps:
@@ -77,16 +76,10 @@ jobs:
           }'
           echo e2e_matrix=$e2e_matrix | tee -a $GITHUB_OUTPUT
 
-          inductor_matrix='{"python": ["3.9", "3.10", "3.11", "3.12"]}'
-          echo inductor_matrix=$inductor_matrix | tee -a $GITHUB_OUTPUT
-
   inductor-tests:
     name: Inductor tests
     needs: prepare
     uses: ./.github/workflows/inductor-tests-reusable.yml
-    strategy:
-      matrix: ${{ fromJson(needs.prepare.outputs.inductor_matrix) }}
-      fail-fast: false
     with:
       pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
       suite: >-
@@ -96,7 +89,7 @@ jobs:
         inductor/test_triton_wrapper.py
         inductor/test_triton_kernels.py
       runner_label: ${{ inputs.runner_label }}
-      python_version: "${{ matrix.python }}"
+      python_version: "3.9"
 
   integration-tests:
     name: Integration tests
