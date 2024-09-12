@@ -26,7 +26,6 @@ TRITON_TEST_IGNORE_ERRORS=false
 SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
-ARGS=
 while [ -v 1 ]; do
   case "$1" in
     --unskip)
@@ -103,7 +102,7 @@ while [ -v 1 ]; do
       shift 2
       ;;
     --help)
-      err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --reports | --warning-reports | --ignore-errors]"
+      err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --skip-pip-install | --skip-pytorch-install | --reports | --reports-dir DIR | --warning-reports | --ignore-errors | --skip-list SKIPLIST"
       ;;
     *)
       err "Unknown argument: $1."
@@ -132,13 +131,12 @@ fi
 export SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 source "$SCRIPTS_DIR/pytest-utils.sh"
 export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
-export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
 fi
 
-test -d "$TRITON_PROJ_BUILD" || err "****** ERROR: Build Triton first ******"
+test -d "$TRITON_PROJ/python/build" || err "****** ERROR: Build Triton first ******"
 
 install_deps() {
   if [ "$SKIP_PIP" = true ]; then
@@ -168,13 +166,13 @@ run_unit_tests() {
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ_BUILD/bdist*
+  cd $TRITON_PROJ/python/build/bdist*
   ctest .
 
   echo "***************************************************"
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
-  cd $TRITON_PROJ_BUILD/cmake*/test
+  cd $TRITON_PROJ/python/build/cmake*/test
   lit -v .
 }
 
@@ -309,12 +307,12 @@ run_instrumentation_tests() {
     return
   fi
 
-  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || err "Could not find '${SHARED_LIB_DIR}'"
+  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/_C"
 
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_TEST_SUITE=instrumentation \
-  TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
+    TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
     pytest -vvv --device xpu instrumentation/test_gpuhello.py
 }
 

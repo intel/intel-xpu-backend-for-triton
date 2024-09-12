@@ -58,12 +58,16 @@ def create_argument_parser() -> argparse.ArgumentParser:
         default='all',
         help='name of the test suite, default: %(default)s',
     )
+    argument_parser.add_argument(
+        '--skip-list',
+        type=str,
+        help='an exclude list dir used in pass rate calculation, can be passed via TRITON_TEST_SKIPLIST_DIR as well',
+    )
     return argument_parser
 
 
 def get_deselected(report_path: pathlib.Path) -> int:
     """Calculates deselected (via skiplist) tests."""
-    skiplist_dir = os.getenv('TRITON_TEST_SKIPLIST_DIR', 'scripts/skiplist/default')
     skiplist_path = pathlib.Path(skiplist_dir) / f'{report_path.stem}.txt'
     if not skiplist_path.exists():
         return 0
@@ -199,6 +203,7 @@ def main():
     """Main."""
     args = create_argument_parser().parse_args()
     stats = parse_reports(pathlib.Path(args.reports))
+    skiplist_dir = args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR', 'scripts/skiplist/default')
 
     if args.suite == 'all':
         summary = overall_stats(stats)
