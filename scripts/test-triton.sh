@@ -27,7 +27,7 @@ SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
 ARGS=
-while test -n ${1:-}; do
+while [ -v $1 ]; do
   case "$1" in
     --unskip)
       TEST_UNSKIP=true
