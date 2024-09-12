@@ -168,32 +168,37 @@ install_deps() {
 }
 
 run_unit_tests() {
+  TRITON_PROJ_BUILD="$TRITON_PROJ/python/build"
+  if [ ! -d "$TRITON_PROJ_BUILD" ]; then
+    echo "****** ERROR: Build Triton first ******"
+    exit 1
+  fi
+
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
-
-  UNIT_TEST_DIR="$(ls -1d $TRITON_PROJ_BUILD/bdist*)" || err "Not found '${UNIT_TEST_DIR}'. Build Triton please"
-  cd $UNIT_TEST_DIR
+  cd $TRITON_PROJ_BUILD/* || {
+      echo "Triton build not found in $TRITON_PROJ_BUILD. Build Triton please."
+      exit 1
+  }
   ctest .
 
   echo "***************************************************"
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
-  LIT_TEST_DIR=$(ls -1d $TRITON_PROJ_BUILD/cmake*/test) || err "Not found '${LIT_TEST_DIR}'. Build Triton please"
-  lit -v "${LIT_TEST_DIR}"
+  cd $TRITON_PROJ_BUILD/*/test || {
+      echo "Triton build not found in $TRITON_PROJ_BUILD. Build Triton please."
+      exit 1
+  }
+  lit -v .
 }
 
 run_core_tests() {
   echo "***************************************************"
   echo "******      Running Triton Core tests        ******"
   echo "***************************************************"
-  CORE_TEST_DIR=$TRITON_PROJ/python/test/unit
-
-  test -d "${CORE_TEST_DIR}" || err "Not found '${CORE_TEST_DIR}'. Build Triton please"
-
-  cd ${CORE_TEST_DIR}
+  cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
-  export TEST_UNSKIP
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
   pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
@@ -214,11 +219,7 @@ run_regression_tests() {
   echo "***************************************************"
   echo "******   Running Triton Regression tests     ******"
   echo "***************************************************"
-  REGRESSION_TEST_DIR=$TRITON_PROJ/python/test/regression
-  export TEST_UNSKIP
-
-  test -d "${REGRESSION_TEST_DIR}" || err "Not found '${REGRESSION_TEST_DIR}'. Build Triton please"
-  cd ${REGRESSION_TEST_DIR}
+  cd $TRITON_PROJ/python/test/regression
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
   pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
@@ -228,13 +229,10 @@ run_interpreter_tests() {
   echo "***************************************************"
   echo "******   Running Triton Interpreter tests    ******"
   echo "***************************************************"
-  INTERPRETER_TEST_DIR=$TRITON_PROJ/python/test/unit
+  cd $TRITON_PROJ/python/test/unit
 
-  test -d "${INTERPRETER_TEST_DIR}" || err "Not found '${INTERPRETER_TEST_DIR}'. Build Triton please"
-  cd ${INTERPRETER_TEST_DIR}
-  export TEST_UNSKIP
   TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
-    pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+  pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
   language/test_random.py --device cpu
 }
 
@@ -243,10 +241,7 @@ run_tutorial_tests() {
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
   python -m pip install matplotlib pandas tabulate -q
-
-  TUTORIAL_TEST_DIR=$TRITON_PROJ/python/tutorials
-  test -d "${TUTORIAL_TEST_DIR}" || "Not found '${TUTORIAL_TEST_DIR}'."
-  cd $TUTORIAL_TEST_DIR
+  cd $TRITON_PROJ/python/tutorials
 
   run_tutorial_test "01-vector-add"
   run_tutorial_test "02-fused-softmax"
@@ -271,6 +266,8 @@ run_benchmark_softmax() {
   echo "****************************************************"
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
+  cd $TRITON_PROJ/benchmarks
+  python setup.py install
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
 }
 
@@ -278,22 +275,22 @@ run_benchmark_gemm() {
   echo "****************************************************"
   echo "*****              Running GEMM                *****"
   echo "****************************************************"
-  cd $TRITON_PROJ/benchmarks 
+  cd $TRITON_PROJ/benchmarks
   python setup.py install
 
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-    IGC_VISAOptions=" -enableBCR -nolocalra" \
-    IGC_DisableLoopUnroll=1 \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+  IGC_VISAOptions=" -enableBCR -nolocalra" \
+  IGC_DisableLoopUnroll=1 \
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-    IGC_VISAOptions=" -enableBCR -nolocalra" \
-    IGC_DisableLoopUnroll=1 \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+  IGC_VISAOptions=" -enableBCR -nolocalra" \
+  IGC_DisableLoopUnroll=1 \
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 }
 
 run_benchmark_attention() {
@@ -305,34 +302,18 @@ run_benchmark_attention() {
 
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-    IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
-    IGC_DisableLoopUnroll=1 \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
+  IGC_DisableLoopUnroll=1 \
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-    IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
-    IGC_DisableLoopUnroll=1 \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
-}
-
-run_instrumentation_tests() {
-  # FIXME: the "instrumentation" test suite currently contains only one test, when all tests
-  # are skipped pytest reports an error. If the only test is the skip list, then we shouldn't
-  # run pytest at all. This must be changed when there is more than one instrumentation test.
-  if [[ $TEST_UNSKIP = false && -s $TRITON_TEST_SKIPLIST_DIR/instrumentation.txt ]]; then
-    return
-  fi
-
-  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || err "Could not find '${SHARED_LIB_DIR}'"
-
-  cd $TRITON_PROJ/python/test/unit
-
-  TRITON_TEST_SUITE=instrumentation \
-  TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
-    pytest -vvv --device xpu instrumentation/test_gpuhello.py
+  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+  TRITON_INTEL_ENABLE_INSTR_SCHED=1 \
+  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
+  IGC_DisableLoopUnroll=1 \
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 }
 
 test_triton() {
