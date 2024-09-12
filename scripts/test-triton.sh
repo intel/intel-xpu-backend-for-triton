@@ -264,67 +264,61 @@ run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
-  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/micro_benchmarks
-  test -d "${BENCHMARK_TEST_DIR}" || err "Not found '${BENCHMARK_TEST_DIR}'."
-  python ${BENCHMARK_TEST_DIR}/run_benchmarks.py
+  python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
 run_benchmark_softmax() {
   echo "****************************************************"
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
-  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
-  test -d "${BENCHMARK_TEST_DIR}" || err "Not found '${BENCHMARK_TEST_DIR}'."
-  cd $TRITON_PROJ/benchmarks; python setup.py install
-  python ${BENCHMARK_TEST_DIR}/fused_softmax.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
 }
 
 run_benchmark_gemm() {
   echo "****************************************************"
   echo "*****              Running GEMM                *****"
   echo "****************************************************"
-  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
-  test -d "${BENCHMARK_TEST_DIR}" || err "Not found '${BENCHMARK_TEST_DIR}'."
-  cd $TRITON_PROJ/benchmarks; python setup.py install
+  cd $TRITON_PROJ/benchmarks 
+  python setup.py install
+
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
-  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -enableBCR -nolocalra" \
-  IGC_DisableLoopUnroll=1 \
-  python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
+    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+    IGC_VISAOptions=" -enableBCR -nolocalra" \
+    IGC_DisableLoopUnroll=1 \
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
-  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -enableBCR -nolocalra" \
-  IGC_DisableLoopUnroll=1 \
-  python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
+    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+    IGC_VISAOptions=" -enableBCR -nolocalra" \
+    IGC_DisableLoopUnroll=1 \
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 }
 
 run_benchmark_attention() {
   echo "****************************************************"
   echo "*****            Running ATTENTION             *****"
   echo "****************************************************"
-  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
-  test -d "${BENCHMARK_TEST_DIR}" || err "Not found '${BENCHMARK_TEST_DIR}'."
-  cd $TRITON_PROJ/benchmarks; python setup.py install
+  cd $TRITON_PROJ/benchmarks
+  python setup.py install
+
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
-  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
-  IGC_DisableLoopUnroll=1 \
-  python ${BENCHMARK_TEST_DIR}/flash_attention_fwd_benchmark.py
+    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+    IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
+    IGC_DisableLoopUnroll=1 \
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
-  TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
-  IGC_DisableLoopUnroll=1 \
-  python ${BENCHMARK_TEST_DIR}/flash_attention_fwd_benchmark.py
+    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+    IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
+    IGC_DisableLoopUnroll=1 \
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 }
 
 run_instrumentation_tests() {
-  set -x
   # FIXME: the "instrumentation" test suite currently contains only one test, when all tests
   # are skipped pytest reports an error. If the only test is the skip list, then we shouldn't
   # run pytest at all. This must be changed when there is more than one instrumentation test.
