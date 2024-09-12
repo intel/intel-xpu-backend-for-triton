@@ -500,6 +500,12 @@ public:
         insert_element(vecTy, poison, adaptor.getSrc(),
                        rewriter.create<LLVM::ConstantOp>(loc, i32_ty, 0));
     Type convertedTy = typeConverter->convertType(resultType);
+    if (!isa<VectorType>(convertedTy)) {
+      // On the advance path, the type converter reduces 1-element vectors to
+      // their element type, making this splat a no-op.
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
+    }
     int64_t num = cast<VectorType>(convertedTy).getNumElements();
     SmallVector<int32_t> indices(num, 0);
     Value result = rewriter.create<LLVM::ShuffleVectorOp>(
@@ -573,8 +579,36 @@ public:
   LogicalResult
   matchAndRewrite(triton::BroadcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, adaptor.getSrc());
-    return success();
+    constexpr unsigned subgroupSize = 16;
+
+    auto srcShape = op.getSrc().getType().getShape();
+    auto dstShape = op.getType().getShape();
+    assert(srcShape.size() == 2 && dstShape.size() == 2 &&
+           "Expected 2D broadcast");
+    assert(dstShape[1] == subgroupSize && "Unexpected result shape");
+
+    if (srcShape[0] == dstShape[0]) {
+      // Example: 16x1 --> 16x16 broadcast. Each thread in the subgroup will get
+      // the same value, so we use the source operand directly.
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
+    }
+
+    if (srcShape[1] == dstShape[1]) {
+      // Example: 1x16 --> 8x16 broadcast. We have extract the element
+      // corresponding to the thread's lane ID and splat it to the desired
+      // result size.
+      Location loc = op.getLoc();
+      Value laneId = rewriter.create<TritonGEN::SubgroupLocalIdOp>(loc, i32_ty);
+      Value extract = rewriter.create<LLVM::ExtractElementOp>(
+          loc, adaptor.getSrc(), laneId);
+      Value splat =
+          rewriter.create<mlir::triton::SplatOp>(loc, op.getType(), extract);
+      rewriter.replaceOp(op, splat);
+      return success();
+    }
+
+    return failure();
   }
 };
 
@@ -657,6 +691,32 @@ public:
   }
 };
 
+class MakeRangeOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<MakeRangeOp> {
+public:
+  using ConvertTritonGPUOpToLLVMPattern<
+      MakeRangeOp>::ConvertTritonGPUOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(MakeRangeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Note: On the default path, the lowering of `tt.make_range` takes the
+    // tensor layout into account. To that end, there is a dedicated lowering
+    // pattern in `MakeRangeOpToLLVM.cpp`. However, with the assumed dense
+    // layout in the advanced path, we can just emit a sequence of integers.
+
+    Location loc = op->getLoc();
+    Value vec = rewriter.create<LLVM::UndefOp>(
+        loc, getTypeConverter()->convertType(op.getType()));
+    for (int i = op.getStart(); i < op.getEnd(); ++i) {
+      auto valI = LLVM::createConstantI32(loc, rewriter, i);
+      vec = rewriter.create<LLVM::InsertElementOp>(loc, vec, valI, valI);
+    }
+
+    rewriter.replaceOp(op, vec);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
@@ -677,4 +737,5 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<ReduceOpConversion>(typeConverter, benefit);
   patterns.add<SubGroupTransposeOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
+  patterns.add<MakeRangeOpConversion>(typeConverter, benefit);
 }
