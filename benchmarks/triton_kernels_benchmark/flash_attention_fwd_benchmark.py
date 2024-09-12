@@ -244,7 +244,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
         m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
         l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
 
-        xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX)
+        xetla_fn = lambda: func(out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX)
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
                                                               fast_flush=False)
 
