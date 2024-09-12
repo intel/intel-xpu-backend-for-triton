@@ -129,7 +129,8 @@ jobs:
             skiplist=
           fi
           echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install" #FIXME
-          echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --ignore-errors $skiplist" | tee -a $GITHUB_ENV
+          #echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --ignore-errors $skiplist" | tee -a $GITHUB_ENV
+          exit -1
 
       - name: Run core tests
         run: |
