@@ -50,5 +50,5 @@ jobs:
       upload_test_reports: ${{ inputs.upload_test_reports }}
       ignore_errors: ${{ inputs.ignore_errors }}
       skip_list: ${{ inputs.skip_list }}
-      run_name: ${{ inputs.run_name || format('Build and test {}', inputs.runner_label) }}
+      run_name: ${{ inputs.run_name || format('Build and test {0}', inputs.runner_label) }}
       enable_unskip: ${{ inputs.enable_unskip }}
