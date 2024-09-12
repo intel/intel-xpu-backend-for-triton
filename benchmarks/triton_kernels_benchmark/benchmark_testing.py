@@ -32,122 +32,128 @@ def _summarize_statistics(times, quantiles, return_mode):
     return getattr(torch, return_mode)(times).item()
 
 
-if USE_IPEX_OPTION:
+def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
+                  device="xpu", sync_submitting=True):
+    """
+    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
+    the 20-th and 80-th performance percentile.
 
-    def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-                 device="xpu", sync_submitting=True):
-        """
-        Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
-        the 20-th and 80-th performance percentile.
+    :param fn: Function to benchmark
+    :type fn: Callable
+    :param warmup: Warmup time (in ms)
+    :type warmup: int
+    :param rep: Repetition time (in ms)
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensor to None
+    :type grad_to_none: torch.tensor, optional
+    :param quantiles: Performance percentile to return in addition to the median.
+    :type quantiles: list[float]
+    :param fast_flush: Use faster kernel to flush L2 between measurements
+    :type fast_flush: bool
+    """
+    # TODO: remove this function and switch to `do_bench_no_ipex` after
+    # `XPUEvent.elapsed_time` stops introducing regressions into the results.
 
-        :param fn: Function to benchmark
-        :type fn: Callable
-        :param warmup: Warmup time (in ms)
-        :type warmup: int
-        :param rep: Repetition time (in ms)
-        :type rep: int
-        :param grad_to_none: Reset the gradient of the provided tensor to None
-        :type grad_to_none: torch.tensor, optional
-        :param quantiles: Performance percentile to return in addition to the median.
-        :type quantiles: list[float]
-        :param fast_flush: Use faster kernel to flush L2 between measurements
-        :type fast_flush: bool
-        """
-        assert return_mode in ["min", "max", "mean", "median"]
-        import torch
-        from torch.autograd.profiler import record_function
+    assert return_mode in ["min", "max", "mean", "median"]
+    import torch
+    from torch.autograd.profiler import record_function
 
+    fn()
+    synchronize()
+
+    # We maintain a buffer of 256 MB that we clear
+    # before each kernel call to make sure that the L2
+    # doesn't contain any input data before the run
+    cache_size = 256 * 1024 * 1024
+    if fast_flush:
+        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
+    else:
+        cache = torch.empty(int(cache_size), dtype=torch.int8, device=device)
+
+    # Estimate the runtime of the function
+    start_event = torch.xpu.Event(enable_timing=True)
+    end_event = torch.xpu.Event(enable_timing=True)
+    start_event.record()
+    for _ in range(5):
+        cache.zero_()
         fn()
-        synchronize()
+    end_event.record()
+    synchronize()
+    estimate_ms = start_event.elapsed_time(end_event) / 5
 
-        # We maintain a buffer of 256 MB that we clear
-        # before each kernel call to make sure that the L2
-        # doesn't contain any input data before the run
-        cache_size = 256 * 1024 * 1024
-        if fast_flush:
-            cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
-        else:
-            cache = torch.empty(int(cache_size), dtype=torch.int8, device=device)
-
-        # Estimate the runtime of the function
-        start_event = torch.xpu.Event(enable_timing=True)
-        end_event = torch.xpu.Event(enable_timing=True)
-        start_event.record()
-        for _ in range(5):
+    # compute number of warmup and repeat
+    n_warmup = max(1, int(warmup / estimate_ms))
+    n_repeat = max(1, int(rep / estimate_ms))
+    # Warm-up
+    for _ in range(n_warmup):
+        fn()
+    # Benchmark
+    with torch.autograd.profiler_legacy.profile(True, use_xpu=True) as prof:
+        for _ in range(n_repeat):
+            # we don't want `fn` to accumulate gradient values
+            # if it contains a backward pass. So we clear the
+            # provided gradients
+            if grad_to_none is not None:
+                for x in grad_to_none:
+                    x.grad = None
+            # we clear the L2 cache before each run
             cache.zero_()
-            fn()
-        end_event.record()
+            if sync_submitting:
+                synchronize()
+            # record time of `fn`
+            with record_function("__profile_kernel_of_func"):
+                fn()
+        # Record clocks
         synchronize()
-        estimate_ms = start_event.elapsed_time(end_event) / 5
 
-        # compute number of warmup and repeat
-        n_warmup = max(1, int(warmup / estimate_ms))
-        n_repeat = max(1, int(rep / estimate_ms))
-        # Warm-up
-        for _ in range(n_warmup):
-            fn()
-        # Benchmark
-        with torch.autograd.profiler_legacy.profile(True, use_xpu=True) as prof:
-            for _ in range(n_repeat):
-                # we don't want `fn` to accumulate gradient values
-                # if it contains a backward pass. So we clear the
-                # provided gradients
-                if grad_to_none is not None:
-                    for x in grad_to_none:
-                        x.grad = None
-                # we clear the L2 cache before each run
-                cache.zero_()
-                if sync_submitting:
-                    synchronize()
-                # record time of `fn`
-                with record_function("__profile_kernel_of_func"):
-                    fn()
-            # Record clocks
-            synchronize()
+    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.function_events)
+    functions = list(profiling_func_filter)
 
-        profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.function_events)
-        functions = list(profiling_func_filter)
+    def extract_kernels(funcs):
+        kernels = []
+        kernels += list(itertools.chain.from_iterable(map(lambda func: extract_kernels(func.cpu_children), funcs)))
+        kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
+        return kernels
 
-        def extract_kernels(funcs):
-            kernels = []
-            kernels += list(itertools.chain.from_iterable(map(lambda func: extract_kernels(func.cpu_children), funcs)))
-            kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
-            return kernels
+    kernels = [extract_kernels(func.cpu_children) for func in functions]
+    assert len(kernels) == n_repeat, "the profiling number not match"
+    # Make the time to the milliseconds.
+    times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
+    return _summarize_statistics(times, quantiles, return_mode)
 
-        kernels = [extract_kernels(func.cpu_children) for func in functions]
-        assert len(kernels) == n_repeat, "the profiling number not match"
-        # Make the time to the milliseconds.
-        times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
-        return _summarize_statistics(times, quantiles, return_mode)
-else:
 
-    def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-                 device="xpu"):
-        """
-        Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
-        the 20-th and 80-th performance percentile.
+def do_bench_no_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
+                     device="xpu"):
+    """
+    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
+    the 20-th and 80-th performance percentile.
 
-        :param fn: Function to benchmark
-        :type fn: Callable
-        :param warmup: Warmup time (in ms)
-        :type warmup: int
-        :param rep: Repetition time (in ms)
-        :type rep: int
-        :param grad_to_none: Reset the gradient of the provided tensor to None
-        :type grad_to_none: torch.tensor, optional
-        :param quantiles: Performance percentile to return in addition to the median.
-        :type quantiles: list[float]
-        :param fast_flush: Use faster kernel to flush L2 between measurements
-        :type fast_flush: bool
-        """
-        assert return_mode in ["min", "max", "mean", "median"]
-        import torch
-        from triton.testing import do_bench as triton_do_bench
+    :param fn: Function to benchmark
+    :type fn: Callable
+    :param warmup: Warmup time (in ms)
+    :type warmup: int
+    :param rep: Repetition time (in ms)
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensor to None
+    :type grad_to_none: torch.tensor, optional
+    :param quantiles: Performance percentile to return in addition to the median.
+    :type quantiles: list[float]
+    :param fast_flush: Use faster kernel to flush L2 between measurements
+    :type fast_flush: bool
+    """
+    assert return_mode in ["min", "max", "mean", "median"]
+    import torch
+    from triton.testing import do_bench as triton_do_bench
 
-        times = triton_do_bench(fn, warmup=warmup, rep=rep, grad_to_none=grad_to_none, fast_flush=fast_flush,
-                                return_mode="all", device_type=device)
-        times = torch.tensor(times, dtype=torch.float)
-        return _summarize_statistics(times, quantiles, return_mode)
+    times = triton_do_bench(fn, warmup=warmup, rep=rep, grad_to_none=grad_to_none, fast_flush=fast_flush,
+                            return_mode="all", device_type=device)
+    times = torch.tensor(times, dtype=torch.float)
+    return _summarize_statistics(times, quantiles, return_mode)
+
+
+do_bench = do_bench_no_ipex
+if USE_IPEX_OPTION:
+    do_bench = do_bench_ipex
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=""):
