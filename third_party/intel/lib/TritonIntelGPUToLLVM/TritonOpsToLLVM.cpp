@@ -696,7 +696,7 @@ public:
     // tensor layout into account. To that end, there is a dedicated lowering
     // pattern in `MakeRangeOpToLLVM.cpp`. However, with the assumed dense
     // layout in the advanced path, we can just emit a sequence of integers.
-    
+
     Location loc = op->getLoc();
     Value vec = rewriter.create<LLVM::UndefOp>(
         loc, getTypeConverter()->convertType(op.getType()));
