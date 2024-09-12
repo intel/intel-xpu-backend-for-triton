@@ -156,8 +156,8 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base
 
 llvm.func @triton_gen.simdblockread(%ptr : !llvm.ptr) {
   // CHECK:      llvm.func @triton_gen.simdblockread(%arg0: !llvm.ptr) {
-  // CHECK-NEXT:   triton_gen.simdblockread %arg0 : (!llvm.ptr) -> vector<64xi16>
-  triton_gen.simdblockread %ptr : (!llvm.ptr) -> vector<64xi16>
+  // CHECK-NEXT:   triton_gen.simdblockread %arg0 : (!llvm.ptr) -> vector<2xi16>
+  triton_gen.simdblockread %ptr : (!llvm.ptr) -> vector<2xi16>
   llvm.return
 }
 

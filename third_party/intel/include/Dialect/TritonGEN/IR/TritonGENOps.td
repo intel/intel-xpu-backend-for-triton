@@ -413,6 +413,8 @@ def TritonGEN_SIMDBlockReadOp: TritonGEN_Op<"simdblockread">,
   let assemblyFormat = [{
     operands ` ` attr-dict `:` functional-type(operands, results)
   }];
+
+  let hasVerifier = 1;
 }
 
 def TritonGEN_SIMDBlockWriteOp : TritonGEN_Op<"simdblockwrite">,
