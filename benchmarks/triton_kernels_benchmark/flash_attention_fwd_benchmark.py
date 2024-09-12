@@ -213,10 +213,9 @@ def forward(q, k, v, causal, sm_scale):
 def benchmark(Z, H, N_CTX, D_HEAD, provider):
     causal = False
     dtype = torch.float16
-    if provider != 'xetla':
-        q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
-        k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
-        v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
+    q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
+    k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
+    v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
     sm_scale = 0.125
     quantiles = [0.5, 0.0, 1.0]
     if provider == 'onednn':
@@ -236,20 +235,16 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
 
     elif provider == 'xetla':
         func = getattr(xetla_kernel, 'flash_attn')
-        dtype = torch.bfloat16
-        q = torch.empty(Z * H * N_CTX * D_HEAD, device='xpu', dtype=dtype)
-        k = torch.empty(Z * H * N_CTX * D_HEAD, device='xpu', dtype=dtype)
-        v = torch.empty(Z * H * N_CTX * D_HEAD, device='xpu', dtype=dtype)
         out = torch.empty_like(q, device='xpu', dtype=dtype)
         size_score = Z * H * N_CTX * N_CTX
         size_attn_mask = Z * N_CTX * N_CTX
-        dropout_mask = torch.empty(size_score, device='xpu', dtype=torch.uint8)
-        bias = torch.empty(size_attn_mask, device='xpu', dtype=dtype)
+        dropout_mask = torch.empty((size_score, ), device='xpu', dtype=torch.uint8)
+        bias = torch.empty((size_attn_mask, ), device='xpu', dtype=dtype)
         size_ml = Z * H * N_CTX
-        m = torch.empty(size_ml, device='xpu', dtype=torch.float)
-        l = torch.empty(size_ml, device='xpu', dtype=torch.float)
+        m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
+        l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
 
-        xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX)
+        xetla_fn = lambda: func(k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX)
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
                                                               fast_flush=False)
 

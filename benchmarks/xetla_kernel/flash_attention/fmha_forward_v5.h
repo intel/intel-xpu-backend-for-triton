@@ -620,7 +620,7 @@ class FmhaForwardKernel;
 // The launcher of fmha forward kernel
 template <typename fmha_policy, typename T, bool kUseBias = false,
           bool kIsCausal = false, bool kIsTraining = false>
-sycl::event fmha_forward_impl(sycl::queue &q, void *_q, void *_k, void *_v,
+sycl::event fmha_forward_impl(sycl::queue &q, void *_k, void *_v,
                               void *_out, void *_dropout_mask, void *_bias,
                               void *_m, void *_l, uint32_t num_batches,
                               uint32_t num_heads, uint32_t head_size,
@@ -647,7 +647,6 @@ sycl::event fmha_forward_impl(sycl::queue &q, void *_q, void *_k, void *_v,
   T *query = sycl::malloc_shared<T>(size_query, q);
   // T *key = sycl::malloc_shared<T>(size_key, q);
   // T *value = sycl::malloc_shared<T>(size_key, q);
-  T *test_query = static_cast<T *>(_q);
   T *key = static_cast<T *>(_k);
   T *value = static_cast<T *>(_v);
 
