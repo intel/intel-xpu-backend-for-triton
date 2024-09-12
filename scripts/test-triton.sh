@@ -106,9 +106,9 @@ while [ -v 1 ]; do
       err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --reports | --warning-reports | --ignore-errors]"
       ;;
     *)
-      ARGS+="$1 "
-      shift
-      ;;
+      err "Unknown argument: $1."
+      exit 1
+      ;;            
   esac
 done
 
