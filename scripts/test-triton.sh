@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+export SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+source "$SCRIPTS_DIR/pytest-utils.sh"
+
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Select which tests to run.
@@ -13,12 +16,15 @@ TEST_MICRO_BENCHMARKS=false
 TEST_BENCHMARK_SOFTMAX=false
 TEST_BENCHMARK_GEMM=false
 TEST_BENCHMARK_ATTENTION=false
+TEST_INSTRUMENTATION=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
 TRITON_TEST_IGNORE_ERRORS=false
-SKIP_DEPS=false
+SKIP_PIP=false
+SKIP_PYTORCH=false
 TEST_UNSKIP=false
+ARGS=
 for arg in "$@"; do
   case $arg in
     --unskip)
@@ -57,17 +63,30 @@ for arg in "$@"; do
       TEST_BENCHMARK_ATTENTION=true
       shift
       ;;
+    --instrumentation)
+      TEST_INSTRUMENTATION=true
+      shift
+      ;;
     --venv)
       VENV=true
       shift
       ;;
-    --skip-deps)
-      SKIP_DEPS=true
+    --skip-pip-install)
+      SKIP_PIP=true
+      shift
+      ;;
+    --skip-pytorch-install)
+      SKIP_PYTORCH=true
       shift
       ;;
     --reports)
       TRITON_TEST_REPORTS=true
       shift
+      ;;
+    --reports-dir)
+      TRITON_TEST_REPORTS=true
+      TRITON_TEST_REPORTS_DIR="$2"
+      shift 2
       ;;
     --warning-reports)
       TRITON_TEST_WARNING_REPORTS=true
@@ -77,19 +96,22 @@ for arg in "$@"; do
       TRITON_TEST_IGNORE_ERRORS=true
       shift
       ;;
+    --skip-list)
+      TRITON_TEST_SKIPLIST_DIR="$2"
+      shift 2
+      ;;
     --help)
-      echo "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --reports | --warning-reports | --ignore-errors]"
-      exit 1
+      err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --reports | --warning-reports | --ignore-errors]"
       ;;
     *)
-      echo "Unknown argument: $arg."
-      exit 1
+      ARGS+="${arg} "
+      shift
       ;;
   esac
 done
 
 # Only run interpreter test when $TEST_INTERPRETER is true
-if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ]; then
+if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ] && [ "$TEST_INSTRUMENTATION" = false ]; then
   TEST_UNIT=true
   TEST_CORE=true
   TEST_TUTORIAL=true
@@ -106,68 +128,72 @@ if [ "$VENV" = true ]; then
   source .venv/bin/activate
 fi
 
-SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-TRITON_PROJ="$BASE/intel-xpu-backend-for-triton"
+export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
+export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
-source "$SCRIPTS_DIR/pytest-utils.sh"
+$SKIP_PIP || {
+  python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout setuptools==69.5.1 defusedxml
+
+  $TRITON_TEST_WARNING_REPORTS || python3 -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+}
 
 if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
 fi
 
+test -d "$TRITON_PROJ_BUILD" || err "****** ERROR: Build Triton first ******"
+
 install_deps() {
-  if [ "$SKIP_DEPS" = true ]; then
-    echo "**** Skipping installation of dependencies ****"
-    return 0
-  fi
-
-  echo "**** Installing dependencies ****"
-
-  python -m pip install -r "$SCRIPTS_DIR/requirements-test.txt"
-
-  if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
-    python -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
-  fi
-
-  if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
-    $SCRIPTS_DIR/compile-pytorch-ipex.sh --pytorch --ipex --pinned --source $([ $VENV = true ] && echo "--venv")
+  if [ "$SKIP_PIP" = true ]; then
+    echo "**** Skipping installation of pip dependencies ****"
   else
-    $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
+    echo "**** Installing pip dependencies ****"
+    python -m pip install -r "$SCRIPTS_DIR/requirements-test.txt"
+
+    if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
+      python -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+    fi
+  fi
+
+  if [ "$SKIP_PYTORCH" = true ]; then
+    echo "**** Skipping installation of pytorch ****"
+  else
+    echo "**** Installing pytorch ****"
+    if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
+      $SCRIPTS_DIR/compile-pytorch-ipex.sh --pytorch --ipex --pinned --source $([ $VENV = true ] && echo "--venv")
+    else
+      $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
+    fi
   fi
 }
 
 run_unit_tests() {
-  TRITON_PROJ_BUILD="$TRITON_PROJ/python/build"
-  if [ ! -d "$TRITON_PROJ_BUILD" ]; then
-    echo "****** ERROR: Build Triton first ******"
-    exit 1
-  fi
-
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ_BUILD/* || {
-      echo "Triton build not found in $TRITON_PROJ_BUILD. Build Triton please."
-      exit 1
-  }
+
+  UNIT_TEST_DIR="$(ls -1d $TRITON_PROJ_BUILD/bdist*)" || err "Not found '${UNIT_TEST_DIR}'. Build Triton please"
+  cd $UNIT_TEST_DIR
   ctest .
 
   echo "***************************************************"
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
-  cd $TRITON_PROJ_BUILD/*/test || {
-      echo "Triton build not found in $TRITON_PROJ_BUILD. Build Triton please."
-      exit 1
-  }
-  lit -v .
+  LIT_TEST_DIR=$(ls -1d $TRITON_PROJ_BUILD/cmake*/test) || err "Not found '${LIT_TEST_DIR}'. Build Triton please"
+  lit -v "${LIT_TEST_DIR}"
 }
 
 run_core_tests() {
   echo "***************************************************"
   echo "******      Running Triton Core tests        ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/test/unit
+  CORE_TEST_DIR=$TRITON_PROJ/python/test/unit
+
+  test -d "${CORE_TEST_DIR}" || err "Not found '${CORE_TEST_DIR}'. Build Triton please"
+
+  cd ${CORE_TEST_DIR}
   ensure_spirv_dis
+  export TEST_UNSKIP
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
   pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
@@ -188,7 +214,11 @@ run_regression_tests() {
   echo "***************************************************"
   echo "******   Running Triton Regression tests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/test/regression
+  REGRESSION_TEST_DIR=$TRITON_PROJ/python/test/regression
+  export TEST_UNSKIP
+
+  test -d "${REGRESSION_TEST_DIR}" || err "Not found '${REGRESSION_TEST_DIR}'. Build Triton please"
+  cd ${REGRESSION_TEST_DIR}
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
   pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
@@ -198,10 +228,13 @@ run_interpreter_tests() {
   echo "***************************************************"
   echo "******   Running Triton Interpreter tests    ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/test/unit
+  INTERPRETER_TEST_DIR=$TRITON_PROJ/python/test/unit
 
+  test -d "${INTERPRETER_TEST_DIR}" || err "Not found '${INTERPRETER_TEST_DIR}'. Build Triton please"
+  cd ${INTERPRETER_TEST_DIR}
+  export TEST_UNSKIP
   TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
-  pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+    pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
   language/test_random.py --device cpu
 }
 
@@ -210,7 +243,10 @@ run_tutorial_tests() {
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
   python -m pip install matplotlib pandas tabulate -q
-  cd $TRITON_PROJ/python/tutorials
+
+  TUTORIAL_TEST_DIR=$TRITON_PROJ/python/tutorials
+  test -d "${TUTORIAL_TEST_DIR}" || "Not found '${TUTORIAL_TEST_DIR}'."
+  cd $TUTORIAL_TEST_DIR
 
   run_tutorial_test "01-vector-add"
   run_tutorial_test "02-fused-softmax"
@@ -228,61 +264,81 @@ run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
-  python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/micro_benchmarks
+  test -d "${BENCHMARK_TEST_DIR}" || err "Not found '${BENCHMARK_TEST_DIR}'."
+  python ${BENCHMARK_TEST_DIR}/run_benchmarks.py
 }
 
 run_benchmark_softmax() {
   echo "****************************************************"
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
-  cd $TRITON_PROJ/benchmarks
-  python setup.py install
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
+  test -d "${BENCHMARK_TEST_DIR}" || err "Not found '${BENCHMARK_TEST_DIR}'."
+  cd $TRITON_PROJ/benchmarks; python setup.py install
+  python ${BENCHMARK_TEST_DIR}/fused_softmax.py
 }
 
 run_benchmark_gemm() {
   echo "****************************************************"
   echo "*****              Running GEMM                *****"
   echo "****************************************************"
-  cd $TRITON_PROJ/benchmarks
-  python setup.py install
-
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
+  test -d "${BENCHMARK_TEST_DIR}" || err "Not found '${BENCHMARK_TEST_DIR}'."
+  cd $TRITON_PROJ/benchmarks; python setup.py install
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra" \
   IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra" \
   IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  python ${BENCHMARK_TEST_DIR}/gemm_benchmark.py
 }
 
 run_benchmark_attention() {
   echo "****************************************************"
   echo "*****            Running ATTENTION             *****"
   echo "****************************************************"
-  cd $TRITON_PROJ/benchmarks
-  python setup.py install
-
+  BENCHMARK_TEST_DIR=$TRITON_PROJ/benchmarks/triton_kernels_benchmark
+  test -d "${BENCHMARK_TEST_DIR}" || err "Not found '${BENCHMARK_TEST_DIR}'."
+  cd $TRITON_PROJ/benchmarks; python setup.py install
   echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
   IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+  python ${BENCHMARK_TEST_DIR}/flash_attention_fwd_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
   TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-  TRITON_INTEL_ENABLE_INSTR_SCHED=1 \
   IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
   IGC_DisableLoopUnroll=1 \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+  python ${BENCHMARK_TEST_DIR}/flash_attention_fwd_benchmark.py
+}
+
+run_instrumentation_tests() {
+  set -x
+  # FIXME: the "instrumentation" test suite currently contains only one test, when all tests
+  # are skipped pytest reports an error. If the only test is the skip list, then we shouldn't
+  # run pytest at all. This must be changed when there is more than one instrumentation test.
+  if [[ $TEST_UNSKIP = false && -s $TRITON_TEST_SKIPLIST_DIR/instrumentation.txt ]]; then
+    return
+  fi
+
+  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || err "Could not find '${SHARED_LIB_DIR}'"
+
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_TEST_SUITE=instrumentation \
+  TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
+    pytest -vvv --device xpu instrumentation/test_gpuhello.py
 }
 
 test_triton() {
@@ -310,6 +366,9 @@ test_triton() {
   fi
   if [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
     run_benchmark_attention
+  fi
+  if [ "$TEST_INSTRUMENTATION" == true ]; then
+    run_instrumentation_tests
   fi
 }
 

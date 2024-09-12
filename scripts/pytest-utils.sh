@@ -15,6 +15,11 @@ TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
 # absolute path for the current skip list
 CURRENT_SKIPLIST_DIR="$SCRIPTS_DIR/skiplist/current"
 
+err() {
+    echo $@
+    exit 1
+}
+
 pytest() {
     pytest_extra_args=()
 
