@@ -49,6 +49,15 @@ using namespace mlir::triton::gpu;
 // Helper Functions
 //===----------------------------------------------------------------------===//
 
+struct Passthrough {
+  llvm::Attribute::AttrKind kind;
+  std::optional<int64_t> val = std::nullopt;
+
+  Passthrough(llvm::Attribute::AttrKind kind) : kind(kind) {}
+  Passthrough(llvm::Attribute::AttrKind kind, int64_t val)
+      : kind(kind), val(val) {}
+};
+
 struct LLVMFuncAttributeOptions {
   bool isConvergent = false;
   bool isNoUnwind = false;
@@ -70,7 +79,8 @@ static LLVM::CallOp createDeviceFunctionCall(
     ConversionPatternRewriter &rewriter, StringRef funcName, Type retType,
     ArrayRef<Type> argTypes, ArrayRef<Value> args,
     mlir::ArrayRef<std::pair<unsigned, mlir::StringRef>> paramAttrs,
-    LLVMFuncAttributeOptions funcAttributeOptions) {
+    LLVMFuncAttributeOptions funcAttributeOptions,
+    ArrayRef<Passthrough> funcPassthroughAttrs = {}) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *ctx = rewriter.getContext();
   Location loc = UnknownLoc::get(ctx);
@@ -87,6 +97,25 @@ static LLVM::CallOp createDeviceFunctionCall(
 
   for (auto [idx, attrName] : paramAttrs) {
     funcOp.setArgAttr(idx, attrName, rewriter.getUnitAttr());
+  }
+
+  if (!funcPassthroughAttrs.empty()) {
+    OpBuilder builder(ctx);
+    SmallVector<Attribute> attrs;
+    for (auto [kind, val] : funcPassthroughAttrs) {
+      auto name =
+          builder.getStringAttr(llvm::Attribute::getNameFromAttrKind(kind));
+      if (val) {
+        std::array<Attribute, 2> kvp;
+        kvp[0] = name;
+        kvp[1] = builder.getStringAttr(std::to_string(*val));
+        attrs.push_back(ArrayAttr::get(ctx, kvp));
+      } else {
+        attrs.push_back(name);
+      }
+    }
+    auto p = ArrayAttr::get(ctx, attrs);
+    funcOp->setAttr("passthrough", p);
   }
 
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
