@@ -404,9 +404,7 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
 
   SmallVector<Value> advances;
   unsigned i = 0;
-  Operation *prefetchInsertPoint = loopLoads.at(loop).back();
-
-  prefetchInsertPoint = yield;
+  Operation *prefetchInsertPoint = yield;
   for (tt::LoadOp load : loopLoads.at(loop)) {
     const LoadInfo &loadInfo = loadToLoadInfo.at(load);
     b.setInsertionPoint(loadInfo.getAdvance());
