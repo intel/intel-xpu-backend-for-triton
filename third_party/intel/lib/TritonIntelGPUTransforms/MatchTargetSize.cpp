@@ -1081,9 +1081,7 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
 
 void MatchTargetSizePass::transformMakeRangeOp(tt::MakeRangeOp op) {
   auto mod = op->getParentOfType<mlir::ModuleOp>();
-  auto subgroupSizeAttr = mod->getAttrOfType<IntegerAttr>(
-      ttgi::TritonIntelGPUDialect::getMinSGSizeAttrName());
-  int subgroupSize = subgroupSizeAttr ? subgroupSizeAttr.getInt() : 16;
+  int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
   unsigned start = op.getStart();
   unsigned end = op.getEnd();

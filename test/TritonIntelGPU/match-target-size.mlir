@@ -491,7 +491,7 @@ tt.func public @attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.pt
 // -----
 
 #warp = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd(%arg0: i32, %arg1: !tt.ptr<i32>) {
     // COM: This op primes the map of known layouts
     %cst = arith.constant dense<1> : tensor<16x64xi32, #warp>
