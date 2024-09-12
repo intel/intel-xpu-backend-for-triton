@@ -283,16 +283,17 @@ private:
       rewriter.restoreInsertionPoint(insertPoint);
 
       constexpr unsigned maxBlockLoadi16Width = 8;
-      VectorType v8i16Ty = VectorType::get(maxBlockLoadi16Width, i16_ty);
+      VectorType decomposedVecTy =
+          VectorType::get(maxBlockLoadi16Width, i16_ty);
       auto mod = op->template getParentOfType<mlir::ModuleOp>();
       Value offset =
           i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
       SmallVector<Value> values;
       for (int i = 0; i < 64 / maxBlockLoadi16Width; ++i) {
-        auto simdRead =
-            rewriter.create<TritonGEN::SIMDBlockReadOp>(loc, v8i16Ty, base);
+        auto simdRead = rewriter.create<TritonGEN::SIMDBlockReadOp>(
+            loc, decomposedVecTy, base);
         values.push_back(simdRead.getRes());
-        base = gep(ptrToSharedMemTy, v8i16Ty, base, offset);
+        base = gep(ptrToSharedMemTy, decomposedVecTy, base, offset);
       }
       auto simdRead = rewriter.create<GlueOp>(loc, v64i16Ty, values);
 
