@@ -121,13 +121,12 @@ def parse_triton_benchmark_data(config: str, df: pd.DataFrame, directory: Path) 
         Now focus on dft path for softmax, gemm and attention
         which include both xetla and triton data with regular name."""
 
-    reports_files = {
-        "softmax": ("softmax-triton", "softmax-xetla"), "gemm": ("gemm-triton", "gemm-xetla"), "attn":
-        ("attn-triton", "attn-xetla")
-    }
+    reports = ["softmax", "gemm", "attn"]
 
     reports_list = [df]
-    for (triton_file, xetla_file) in reports_files.values():
+    for report in reports:
+        triton_file = f"{report}-triton"
+        xetla_file = f"{report}-xetla"
         triton_path = build_triton_benchmark_reports_path(Path(directory), triton_file)
         xetla_path = build_triton_benchmark_reports_path(Path(directory), xetla_file)
         reports_list.append(merge_triton_xetla_reports_data(config, triton_path, xetla_path))
