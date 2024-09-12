@@ -83,9 +83,6 @@ jobs:
   inductor-tests:
     name: Inductor tests
     needs: prepare
-    strategy:
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
-      fail-fast: false
     uses: ./.github/workflows/inductor-tests-reusable.yml
     with:
       pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
