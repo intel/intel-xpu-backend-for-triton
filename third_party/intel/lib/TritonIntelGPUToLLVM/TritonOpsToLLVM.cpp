@@ -282,13 +282,13 @@ private:
     if constexpr (std::is_same_v<OpType, LoadOp>) {
       rewriter.restoreInsertionPoint(insertPoint);
 
-      const unsigned maxOCLVectorSize = 8;
-      VectorType v8i16Ty = VectorType::get(maxOCLVectorSize, i16_ty);
+      constexpr unsigned maxBlockLoadi16Width = 8;
+      VectorType v8i16Ty = VectorType::get(maxBlockLoadi16Width, i16_ty);
       auto mod = op->template getParentOfType<mlir::ModuleOp>();
       Value offset =
           i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
       SmallVector<Value> values;
-      for (int i = 0; i < 64 / maxOCLVectorSize; ++i) {
+      for (int i = 0; i < 64 / maxBlockLoadi16Width; ++i) {
         auto simdRead =
             rewriter.create<TritonGEN::SIMDBlockReadOp>(loc, v8i16Ty, base);
         values.push_back(simdRead.getRes());
