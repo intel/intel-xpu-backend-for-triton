@@ -7,12 +7,13 @@ This benchmark is modified from gemm_benchmark.py to add a matrix to the output 
 """
 
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
+
+if benchmark_suit.USE_IPEX_OPTION:
+    import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 
 @triton.autotune(
