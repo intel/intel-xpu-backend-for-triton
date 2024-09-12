@@ -76,11 +76,10 @@ def get_deselected(report_path: pathlib.Path, skiplist_dir: str) -> int:
         return len([line for line in f.readlines() if line and not line.startswith('#')])
 
 
-def parse_report(report_path: pathlib.Path) -> ReportStats:
+def parse_report(report_path: pathlib.Path, skiplist_dir: str) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
     root = parse(report_path).getroot()
-    skiplist_dir = args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR', 'scripts/skiplist/default')
     for testsuite in root:
         testsuite_fixme_tests = set()
         stats.total += int(testsuite.get('tests'))
@@ -203,7 +202,9 @@ def print_json_stats(stats: ReportStats):
 def main():
     """Main."""
     args = create_argument_parser().parse_args()
-    stats = parse_reports(pathlib.Path(args.reports))
+    skiplist_dir = args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR',
+                                                                    'scripts/skiplist/default')
+    stats = parse_reports(pathlib.Path(args.reports), skiplist_dir)
 
     if args.suite == 'all':
         summary = overall_stats(stats)
