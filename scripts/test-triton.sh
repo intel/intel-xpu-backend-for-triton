@@ -128,15 +128,13 @@ if [ "$VENV" = true ]; then
   source .venv/bin/activate
 fi
 
-export SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 source "$SCRIPTS_DIR/pytest-utils.sh"
-export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
+TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 
 if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
 fi
-
-test -d "$TRITON_PROJ/python/build" || err "****** ERROR: Build Triton first ******"
 
 install_deps() {
   if [ "$SKIP_PIP" = true ]; then
@@ -166,7 +164,7 @@ run_unit_tests() {
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/build/bdist*
+  cd $TRITON_PROJ/python/build/bdist* || err "****** ERROR: Build Triton first ******"
   ctest .
 
   echo "***************************************************"
@@ -307,7 +305,7 @@ run_instrumentation_tests() {
     return
   fi
 
-  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/_C"
+  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/_C, build Triton first"
 
   cd $TRITON_PROJ/python/test/unit
 

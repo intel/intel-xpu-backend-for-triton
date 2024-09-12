@@ -66,9 +66,9 @@ def create_argument_parser() -> argparse.ArgumentParser:
     return argument_parser
 
 
-def get_deselected(report_path: pathlib.Path, skiplist_dir: str) -> int:
+def get_deselected(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> int:
     """Calculates deselected (via skiplist) tests."""
-    skiplist_path = pathlib.Path(skiplist_dir) / f'{report_path.stem}.txt'
+    skiplist_path = skiplist_dir / f'{report_path.stem}.txt'
     if not skiplist_path.exists():
         return 0
     with skiplist_path.open('r') as f:
@@ -76,7 +76,7 @@ def get_deselected(report_path: pathlib.Path, skiplist_dir: str) -> int:
         return len([line for line in f.readlines() if line and not line.startswith('#')])
 
 
-def parse_report(reports_path: pathlib.Path, skiplist_dir: str) -> ReportStats:
+def parse_report(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
     root = parse(report_path).getroot()
@@ -138,7 +138,7 @@ def find_stats(stats: List[ReportStats], name: str) -> ReportStats:
 def parse_junit_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
     """Parses junit report in the specified directory."""
     reports_path = pathlib.Path(args.reports)
-    return [parse_report(report, skiplist_dir) for report in reports_path.glob('*.xml')]
+    return [parse_report(report, args.skiplist_dir) for report in reports_path.glob('*.xml')]
 
 
 def parse_tutorials_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
@@ -205,8 +205,8 @@ def main():
     """Main."""
     args = create_argument_parser().parse_args()
     args.report_path = pathlib.Path(args.reports)
-    args.skiplist_dir = args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR',
-                                                                        'scripts/skiplist/default')
+    args.skiplist_dir = pathlib.Path(args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR',
+                                                                                     'scripts/skiplist/default'))
 
     stats = parse_reports(args)
 

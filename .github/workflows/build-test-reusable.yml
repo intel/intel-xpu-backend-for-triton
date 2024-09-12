@@ -97,11 +97,6 @@ jobs:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
 
-      - name: Install test dependencies
-        run: |
-          pip install pytest pytest-xdist pytest-rerunfailures pytest-select pytest-timeout expecttest defusedxml
-          pip install git+https://github.com/kwasd/pytest-capturewarnings-ng.git@v1.2.0
-
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
         with:
