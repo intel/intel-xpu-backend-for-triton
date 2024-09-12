@@ -66,7 +66,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
     return argument_parser
 
 
-def get_deselected(report_path: pathlib.Path) -> int:
+def get_deselected(report_path: pathlib.Path, skiplist_dir: str) -> int:
     """Calculates deselected (via skiplist) tests."""
     skiplist_path = pathlib.Path(skiplist_dir) / f'{report_path.stem}.txt'
     if not skiplist_path.exists():
@@ -80,6 +80,7 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
     root = parse(report_path).getroot()
+    skiplist_dir = args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR', 'scripts/skiplist/default')
     for testsuite in root:
         testsuite_fixme_tests = set()
         stats.total += int(testsuite.get('tests'))
@@ -107,7 +108,7 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
     if test_unskip not in ('true', 'false'):
         raise ValueError('Error: please set TEST_UNSKIP true or false')
     if test_unskip == 'false':
-        deselected = get_deselected(report_path)
+        deselected = get_deselected(report_path, skiplist_dir)
         stats.skipped += deselected
         stats.total += deselected
     stats.passed = stats.total - stats.failed - stats.skipped - stats.xfailed
@@ -203,7 +204,6 @@ def main():
     """Main."""
     args = create_argument_parser().parse_args()
     stats = parse_reports(pathlib.Path(args.reports))
-    skiplist_dir = args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR', 'scripts/skiplist/default')
 
     if args.suite == 'all':
         summary = overall_stats(stats)
