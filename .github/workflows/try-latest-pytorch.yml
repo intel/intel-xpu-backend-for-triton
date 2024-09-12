@@ -41,8 +41,9 @@ jobs:
     runs-on: Linux
 
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      e2e_matrix: ${{ steps.e2e-matrix.outputs.e2e_matrix }}
+      integration_matrix: ${{ steps.matrix.outputs.integration_matrix }}
+      e2e_matrix: ${{ steps.matrix.outputs.e2e_matrix }}
+      inductor_matrix: ${{ steps.matrix.outputs.inductor_matrix }}
       pytorch-commit-id: ${{ steps.commit-id.outputs.commit_id }}
 
     steps:
@@ -66,13 +67,9 @@ jobs:
       - name: Matrix
         id: matrix
         run: |
-          matrix='{"python": ["3.9", "3.10", "3.11", "3.12"]}'
+          integration_matrix='{"python": ["3.9", "3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
 
-          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
-
-      - name: Matrix for e2e
-        id: e2e-matrix
-        run: |
+          echo "integration_matrix=$integration_matrix" | tee -a $GITHUB_OUTPUT
           e2e_matrix='{
             "suite": ["huggingface", "timm_models", "torchbench"],
             "mode": ["inference", "training"],
@@ -80,10 +77,16 @@ jobs:
           }'
           echo e2e_matrix=$e2e_matrix | tee -a $GITHUB_OUTPUT
 
+          inductor_matrix='{"python": ["3.9", "3.10", "3.11", "3.12"]}'
+          echo inductor_matrix=$inductor_matrix | tee -a $GITHUB_OUTPUT
+
   inductor-tests:
     name: Inductor tests
     needs: prepare
     uses: ./.github/workflows/inductor-tests-reusable.yml
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.inductor_matrix) }}
+      fail-fast: false
     with:
       pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
       suite: >-
@@ -93,14 +96,14 @@ jobs:
         inductor/test_triton_wrapper.py
         inductor/test_triton_kernels.py
       runner_label: ${{ inputs.runner_label }}
-      python_version: "3.9"
+      python_version: "${{ matrix.python }}"
 
   integration-tests:
     name: Integration tests
     needs: [prepare, inductor-tests]
 
     strategy:
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJson(needs.prepare.outputs.integration_matrix) }}
       fail-fast: false
 
     uses: ./.github/workflows/build-test-reusable.yml
