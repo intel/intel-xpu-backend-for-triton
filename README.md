@@ -42,9 +42,10 @@ pip install torch-*.whl triton-*.whl
 ```
 
 Before using Intel® XPU Backend for Triton\* you need to initialize the toolchain.
-By default, it is installed to `/opt/intel/oneapi`:
+The default location is `/opt/intel/oneapi` (if installed as a `root` user) or `~/intel/oneapi` (if installed as a regular user).
 
 ```shell
+# replace /opt/intel/oneapi with the actual location of PyTorch Prerequisites for Intel GPUs
 source /opt/intel/oneapi/setvars.sh
 ```
 
@@ -61,9 +62,10 @@ source /opt/intel/oneapi/setvars.sh
 Currently, Intel® XPU Backend for Triton\* requires a special version of PyTorch and both need to be compiled at the same time.
 
 Before compiling PyTorch and Intel® XPU Backend for Triton\* you need to initialize the toolchain.
-By default, it is installed to `/opt/intel/oneapi`:
+The default location is `/opt/intel/oneapi` (if installed as a `root` user) or `~/intel/oneapi` (if installed as a regular user).
 
 ```shell
+# replace /opt/intel/oneapi with the actual location of PyTorch Prerequisites for Intel GPUs
 source /opt/intel/oneapi/setvars.sh
 ```
 
