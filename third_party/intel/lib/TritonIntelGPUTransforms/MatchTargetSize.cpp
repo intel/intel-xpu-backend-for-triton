@@ -338,7 +338,7 @@ public:
         transformMakeTensorPtrOp(ptrOp);
       } else if (auto dot = dyn_cast<tt::DotOp>(op))
         transformDotOp(dot);
-      else if (auto bc = dyn_cast<tt::BroadcastOp>(op))
+      else if (auto bc = dyn_cast<ttgi::BroadcastOp>(op))
         transformBroadcastOp(bc);
       else
         transformGenericOp(op);
@@ -391,7 +391,7 @@ private:
   void transformDotOp(tt::DotOp dot);
   void transformReduceOp(tt::ReduceOp op);
   void transformTransposedReduceOp(tt::ReduceOp op);
-  void transformBroadcastOp(tt::BroadcastOp op);
+  void transformBroadcastOp(ttgi::BroadcastOp op);
   void transformMakeRangeOp(tt::MakeRangeOp op);
 
   /// Generic transformation.
@@ -1155,7 +1155,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   dot->erase();
 }
 
-void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
+void MatchTargetSizePass::transformBroadcastOp(ttgi::BroadcastOp op) {
   OpBuilder b(op);
   Location loc = op->getLoc();
   RankedTensorType resType = op.getResult().getType();
@@ -1170,14 +1170,14 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
   unsigned resDim1 = resType.getShape()[1];
   Operation *glue;
   if (srcDim0 == dstDim0) {
-    Value newOp = b.create<tt::BroadcastOp>(loc, tType, op.getSrc());
+    Value newOp = b.create<ttgi::BroadcastOp>(loc, tType, op.getSrc());
     unsigned num = resType.getShape()[1] / tType.getShape()[1];
     SmallVector<Value> ops(num, newOp);
     glue = b.create<ttgi::GlueOp>(loc, resType, ops);
   } else if (srcDim0 == 2 * dstDim0) {
     auto newTy = RankedTensorType::get({srcDim0, tType.getShape()[1]},
                                        tType.getElementType());
-    auto newOp = b.create<tt::BroadcastOp>(loc, newTy, op.getSrc());
+    auto newOp = b.create<ttgi::BroadcastOp>(loc, newTy, op.getSrc());
     auto extract0 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 0);
     auto extract1 = b.create<ttgi::ExtractOp>(loc, tType, newOp, 1);
     SmallVector<Value> ops{extract0, extract1, extract0, extract1,
@@ -1193,7 +1193,7 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
     SmallVector<Value> subBroadcasts;
     for (int i = 0; i < nExtracts; ++i) {
       auto ext = b.create<ttgi::ExtractOp>(loc, subRowVecTy, op.getSrc(), i);
-      auto sbc = b.create<tt::BroadcastOp>(loc, tType, ext);
+      auto sbc = b.create<ttgi::BroadcastOp>(loc, tType, ext);
       subBroadcasts.push_back(sbc);
     }
 
