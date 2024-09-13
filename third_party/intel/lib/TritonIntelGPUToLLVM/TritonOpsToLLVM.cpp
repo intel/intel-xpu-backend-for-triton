@@ -301,7 +301,8 @@ private:
         values.push_back(simdRead.getRes());
         base = gep(ptrToSharedMemTy, decomposedVecTy, base, offset);
       }
-      auto simdRead = rewriter.create<GlueOp>(loc, v64i16Ty, values);
+      auto simdRead =
+          rewriter.create<triton::gpu::intel::GlueOp>(loc, v64i16Ty, values);
 
       VectorType v64Ty = VectorType::get(64, elemType);
       rewriter.replaceOp(op, bitcast(simdRead.getRes(), v64Ty));
