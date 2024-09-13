@@ -11,4 +11,5 @@ add_triton_library(TritonToTritonGPUWarp
     TritonIR
     TritonGPUIR
     TritonGPUTransforms
+    TritonIntelGPUIR
 )
