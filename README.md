@@ -26,7 +26,7 @@ Note that Intel® XPU Backend for Triton\* is not compatible with Intel® Extens
 
 ## Prerequisites
 
-1. Latest [Rolling Release of GPU driver](https://dgpu-docs.intel.com/driver/installation.html)
+1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation.html) of GPU driver
 2. Latest release of [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 3. Latest release of [Profiling Tools Interfaces for Intel GPU (PTI for GPU)](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 
@@ -52,7 +52,7 @@ source /opt/intel/oneapi/setvars.sh
 
 ## Prerequisites
 
-1. Latest [Rolling Release of GPU driver](https://dgpu-docs.intel.com/driver/installation.html)
+1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation.html) of GPU driver
 2. Latest release of [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 3. Latest release of [Profiling Tools Interfaces for Intel GPU (PTI for GPU)](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 
