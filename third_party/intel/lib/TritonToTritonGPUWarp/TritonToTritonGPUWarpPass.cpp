@@ -18,6 +18,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -38,6 +39,7 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::intel {
 #define GEN_PASS_DECL_CONVERTTRITONTOTRITONGPUWARP
@@ -279,6 +281,15 @@ public:
           assert(info1.chainOpsA.empty());
           for (auto val : info1.chainOpsB)
             valueAttrMap[val] = vLayout;
+          {
+            Value val = info1.dot;
+            DenseSet<Value> chainedVals;
+            chainedVals.insert(val);
+            expandUseChain(val, chainedVals);
+            for (auto val : chainedVals) {
+              valueAttrMap[val] = oLayout;
+            }
+          }
           for (auto val : info1.chainOpsC) {
             if (valueAttrMap.count(val) == 0) {
               valueAttrMap[val] = oLayout;
@@ -463,6 +474,14 @@ public:
       // else: will patch the encoding later in the causal-attention-specific
       // layout propagation.
       // FIXME: Remove this workaround.
+    }
+    // relax upstream broadcast constraint
+    if (auto bc = dyn_cast<tt::BroadcastOp>(op)) {
+      OpBuilder b(op);
+      auto newOp = b.create<ttgi::BroadcastOp>(op->getLoc(), result.getType(),
+                                               op->getOperands());
+      op->replaceAllUsesWith(newOp);
+      op->erase();
     }
   }
 
@@ -712,13 +731,9 @@ public:
         Value res = loop.getResult(use.getOperandNumber());
         chainedVals.insert(res);
         expandUseChain(res, chainedVals);
-      } else if (auto forLoop = dyn_cast<scf::ForOp>(op)) {
-        auto arg = forLoop.getRegionIterArg(use.getOperandNumber() -
-                                            forLoop.getNumControlOperands());
-        chainedVals.insert(arg);
-        expandUseChain(arg, chainedVals);
         // expanddims, splat, store
-      } else if (isa<tt::ExpandDimsOp, tt::SplatOp, tt::StoreOp>(op)) {
+      } else if (isa<tt::ExpandDimsOp, tt::SplatOp, tt::StoreOp, scf::ForOp>(
+                     op)) {
         continue;
         // other ops
       } else {
@@ -751,6 +766,8 @@ public:
       } else if (isa<tt::SplatOp, tt::BroadcastOp, tt::ReduceOp,
                      tt::MakeRangeOp>(def)) {
         chainedVals.insert(def->getResult(0));
+      } else if (isa<tt::ExpandDimsOp>(def)) {
+        ;
       } else {
         assert(0 && "add more support");
       }
