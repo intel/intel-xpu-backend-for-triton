@@ -262,6 +262,11 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       }
     }
 
+    if (n_spills) {
+      std::cout << "(I): Detected " << n_spills << " spills for  \""
+                << kernel_name << "\"" << std::endl;
+    }
+
     auto n_regs = build_flags.n_regs();
 
     auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
