@@ -8,13 +8,14 @@ To compare the performance to XeTLA kernel.
 """
 
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 import xetla_kernel
+
+if benchmark_suit.USE_IPEX_OPTION:
+    import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 
 @triton.autotune(
