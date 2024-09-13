@@ -37,6 +37,21 @@ VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
   return vec_ty(elemType, num);
 };
 
+static void decomposeBlockStore(ConversionPatternRewriter &rewriter,
+                                Location loc, Value base, Value val,
+                                VectorType vecTy, unsigned subGroupSize) {
+  constexpr unsigned maxBlockStoreWidth = 8;
+  VectorType decomposedVecTy =
+      VectorType::get(maxBlockStoreWidth, vecTy.getElementType());
+  Value offset = i32_val(subGroupSize);
+  for (int i = 0; i < vecTy.getNumElements() / maxBlockStoreWidth; ++i) {
+    rewriter.create<TritonGEN::SIMDBlockWriteOp>(
+        loc, base,
+        rewriter.create<ExtractOp>(loc, decomposedVecTy, val, i).getRes());
+    base = gep(base.getType(), decomposedVecTy, base, offset);
+  }
+}
+
 /// v2i32 [offsetX, offsetY] for 2D tensor desc.
 class MakeTensorPtrOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<MakeTensorPtrOp> {
@@ -318,8 +333,10 @@ private:
       }
       val = bitcast(val, v64i16Ty);
 
-      TritonGEN::SIMDBlockWriteOp simdWrite =
-          rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, base, val);
+      auto mod = op->template getParentOfType<mlir::ModuleOp>();
+      decomposeBlockStore(
+          rewriter, loc, base, val, v64i16Ty,
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 
       rewriter.eraseOp(op);
       return success();
@@ -798,14 +815,13 @@ public:
                                 ValueRange{subGroupOffset}, /*inbounds=*/true);
 
     // Store matrix in local memory.
+    VectorType intVecTy =
+        vec_ty(int_ty(vecTy.getElementType().getIntOrFloatBitWidth()),
+               vecTy.getNumElements());
     Value val =
-        vecTy.getElementType().isInteger()
-            ? src
-            : bitcast(
-                  src,
-                  vec_ty(int_ty(vecTy.getElementType().getIntOrFloatBitWidth()),
-                         vecTy.getNumElements()));
-    rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, subGroupBasePtr, val);
+        vecTy.getElementType().isInteger() ? src : bitcast(src, intVecTy);
+    decomposeBlockStore(rewriter, loc, subGroupBasePtr, val, intVecTy,
+                        threadsPerWarp);
 
     // Load from matrix, trasposed.
     Value workItemOffset = mul(wiStride, subGroupLocalId);

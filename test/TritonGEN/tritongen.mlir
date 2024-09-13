@@ -161,9 +161,9 @@ llvm.func @triton_gen.simdblockread(%ptr : !llvm.ptr) {
   llvm.return
 }
 
-llvm.func @triton_gen.simdblockwrite(%ptr : !llvm.ptr, %val : vector<64xi16>) {
-  // CHECK:      llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr, %arg1: vector<64xi16>) {
-  // CHECK-NEXT:    triton_gen.simdblockwrite %arg0, %arg1 : (!llvm.ptr, vector<64xi16>)
-  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr, vector<64xi16>)
+llvm.func @triton_gen.simdblockwrite(%ptr : !llvm.ptr, %val : vector<2xi16>) {
+  // CHECK:      llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr, %arg1: vector<2xi16>) {
+  // CHECK-NEXT:    triton_gen.simdblockwrite %arg0, %arg1 : (!llvm.ptr, vector<2xi16>)
+  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr, vector<2xi16>)
   llvm.return
 }

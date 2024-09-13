@@ -435,5 +435,7 @@ def TritonGEN_SIMDBlockWriteOp : TritonGEN_Op<"simdblockwrite">,
   let assemblyFormat = [{
     operands ` ` attr-dict `:` `(` type(operands) `)`
   }];
+
+  let hasVerifier = 1;
 }
 #endif // TRITONGEN_OPS

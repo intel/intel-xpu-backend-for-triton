@@ -436,3 +436,11 @@ llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
   %ret = triton_gen.simdblockread %ptr : (!llvm.ptr<3>) -> vector<64xi16>
   llvm.return
 }
+
+// -----
+
+llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val: vector<64xi16>) {
+  // expected-error @+1 {{'triton_gen.simdblockwrite' op unsupported vector type}}
+  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr<3>, vector<64xi16>)
+  llvm.return
+}
