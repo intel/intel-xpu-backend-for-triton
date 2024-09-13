@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Attributes.h"
 #include "Utils/Mangling.h"
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
@@ -49,14 +50,22 @@ using namespace mlir::triton::gpu;
 // Helper Functions
 //===----------------------------------------------------------------------===//
 
-struct Passthrough {
-  llvm::Attribute::AttrKind kind;
-  std::optional<int64_t> val = std::nullopt;
+static intel::AttributeList createFunctionAttributes(
+    ArrayRef<std::pair<llvm::Attribute::AttrKind, std::optional<uint64_t>>>
+        attributes,
+    MLIRContext *ctx) {
+  intel::AttrBuilder funcAttrBuilder(*ctx);
+  for (auto [kind, optValue] : attributes) {
+    if (optValue)
+      funcAttrBuilder.addPassthroughAttribute(kind, *optValue);
+    else
+      funcAttrBuilder.addPassthroughAttribute(kind);
+  }
 
-  Passthrough(llvm::Attribute::AttrKind kind) : kind(kind) {}
-  Passthrough(llvm::Attribute::AttrKind kind, int64_t val)
-      : kind(kind), val(val) {}
-};
+  intel::AttributeList attrs;
+  attrs.addFnAttributes(funcAttrBuilder);
+  return attrs;
+}
 
 struct LLVMFuncAttributeOptions {
   bool isConvergent = false;
@@ -65,7 +74,6 @@ struct LLVMFuncAttributeOptions {
   LLVM::MemoryEffectsAttr memEffectsAttr{};
 };
 
-static constexpr LLVM::ModRefInfo noModRef = LLVM::ModRefInfo::NoModRef;
 static constexpr LLVMFuncAttributeOptions convergentAttrs = {
     true, false, false, {}};
 static constexpr LLVMFuncAttributeOptions noUnwindAttrs = {
@@ -80,7 +88,7 @@ static LLVM::CallOp createDeviceFunctionCall(
     ArrayRef<Type> argTypes, ArrayRef<Value> args,
     mlir::ArrayRef<std::pair<unsigned, mlir::StringRef>> paramAttrs,
     LLVMFuncAttributeOptions funcAttributeOptions,
-    ArrayRef<Passthrough> funcPassthroughAttrs = {}) {
+    intel::AttributeList passthroughAttrs = {}) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *ctx = rewriter.getContext();
   Location loc = UnknownLoc::get(ctx);
@@ -91,32 +99,15 @@ static LLVM::CallOp createDeviceFunctionCall(
   funcOp.setConvergent(funcAttributeOptions.isConvergent);
   funcOp.setNoUnwind(funcAttributeOptions.isNoUnwind);
   funcOp.setWillReturn(funcAttributeOptions.isWillReturn);
-  if (funcAttributeOptions.memEffectsAttr) {
+
+  if (funcAttributeOptions.memEffectsAttr)
     funcOp.setMemoryEffectsAttr(funcAttributeOptions.memEffectsAttr);
-  }
 
-  for (auto [idx, attrName] : paramAttrs) {
+  for (auto [idx, attrName] : paramAttrs)
     funcOp.setArgAttr(idx, attrName, rewriter.getUnitAttr());
-  }
 
-  if (!funcPassthroughAttrs.empty()) {
-    OpBuilder builder(ctx);
-    SmallVector<Attribute> attrs;
-    for (auto [kind, val] : funcPassthroughAttrs) {
-      auto name =
-          builder.getStringAttr(llvm::Attribute::getNameFromAttrKind(kind));
-      if (val) {
-        std::array<Attribute, 2> kvp;
-        kvp[0] = name;
-        kvp[1] = builder.getStringAttr(std::to_string(*val));
-        attrs.push_back(ArrayAttr::get(ctx, kvp));
-      } else {
-        attrs.push_back(name);
-      }
-    }
-    auto p = ArrayAttr::get(ctx, attrs);
-    funcOp->setAttr("passthrough", p);
-  }
+  if (!passthroughAttrs.getFnAttributes().empty())
+    funcOp->setAttrs(passthroughAttrs.getFnAttributes().getDictionary(ctx));
 
   auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
   callOp->setAttrs(funcOp->getAttrs());
@@ -165,8 +156,9 @@ createGenISASubGroupReduce(TritonGEN::SubGroupReduceOp op, Value val,
   SmallVector<Value> args = {val, kind, i32_val(0)};
 
   auto inaccessibleMemOnly = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-      /*other=*/noModRef,
-      /*argMem=*/noModRef, /*inaccessibleMem=*/LLVM::ModRefInfo::ModRef);
+      /*other=*/LLVM::ModRefInfo::NoModRef,
+      /*argMem=*/LLVM::ModRefInfo::NoModRef,
+      /*inaccessibleMem=*/LLVM::ModRefInfo::ModRef);
   auto funcAttrs = convergentNoUnwindWillReturnAttrs;
   funcAttrs.memEffectsAttr = inaccessibleMemOnly;
 
@@ -338,8 +330,9 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
                             i32_val(op.getVBlocks())};
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/noModRef,
-        /*argMem=*/LLVM::ModRefInfo::Ref, /*inaccessibleMem=*/noModRef);
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::Ref,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = noUnwindAttrs;
     funcAttrs.memEffectsAttr = memAttr;
 
@@ -359,8 +352,9 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
         std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName())};
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/noModRef,
-        /*argMem=*/LLVM::ModRefInfo::Mod, /*inaccessibleMem=*/noModRef);
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::Mod,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
 
@@ -395,8 +389,9 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
         std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName())};
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/noModRef,
-        /*argMem=*/LLVM::ModRefInfo::Ref, /*inaccessibleMem=*/noModRef);
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::Ref,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
 
@@ -435,8 +430,9 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
         std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName())};
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/noModRef,
-        /*argMem=*/LLVM::ModRefInfo::Ref, /*inaccessibleMem=*/noModRef);
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::Ref,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = noUnwindAttrs;
     funcAttrs.memEffectsAttr = memAttr;
 
@@ -613,11 +609,12 @@ struct TritonGENSubgroupIdLowering
 
     auto funcAttrs = noUnwindWillReturnAttrs;
     auto memory_zero = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/noModRef,
-        /*argMem=*/noModRef, /*inaccessibleMem=*/noModRef);
-
-    std::array<Passthrough, 1> passthroughAttrs{llvm::Attribute::NoSync};
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::NoModRef,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
     funcAttrs.memEffectsAttr = memory_zero;
+    intel::AttributeList passthroughAttrs = createFunctionAttributes(
+        {{llvm::Attribute::NoSync, std::nullopt}}, ctx);
     LLVM::CallOp callOp =
         createDeviceFunctionCall(rewriter, "_Z16get_sub_group_idv", retType, {},
                                  {}, {}, funcAttrs, passthroughAttrs);
@@ -968,8 +965,9 @@ struct TritonMatrixDPASLowering
 
     SmallVector<Value> args{a, b, c};
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/noModRef,
-        /*argMem=*/noModRef, /*inaccessibleMem=*/noModRef);
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::NoModRef,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = convergentNoUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
 
@@ -1182,8 +1180,9 @@ struct TritonMatrix2DBlockPrefetchLowering
     };
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/noModRef,
-        /*argMem=*/LLVM::ModRefInfo::Ref, /*inaccessibleMem=*/noModRef);
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::Ref,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = noUnwindAttrs;
     funcAttrs.memEffectsAttr = memAttr;
 
@@ -1257,8 +1256,9 @@ struct TritonSIMDBlockReadLowering
       funcName = getSIMDBlockManglingName(op, vecTy);
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/noModRef,
-        /*argMem=*/LLVM::ModRefInfo::Ref, /*inaccessibleMem=*/noModRef);
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::Ref,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = createDeviceFunctionCall(
@@ -1287,8 +1287,9 @@ struct TritonSIMDBlockWriteLowering
       funcName = getSIMDBlockManglingName(op, vecTy);
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/noModRef,
-        /*argMem=*/LLVM::ModRefInfo::ModRef, /*inaccessibleMem=*/noModRef);
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::ModRef,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
     auto funcAttrs = noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = createDeviceFunctionCall(

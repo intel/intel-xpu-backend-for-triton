@@ -1,4 +1,5 @@
 add_triton_library(TritonGENToLLVM
+  Attributes.cpp
   TritonGENToLLVMPass.cpp
 
   DEPENDS
