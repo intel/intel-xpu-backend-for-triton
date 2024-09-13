@@ -48,6 +48,18 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
   return success();
 }
 
+static LogicalResult verifySIMDBlockTy(Operation *op, VectorType vecTy) {
+  unsigned numElems = vecTy.getNumElements();
+  IntegerType elemTy = cast<IntegerType>(vecTy.getElementType());
+
+  // FIXME: Allow 16xi16 when SPIRV-LLVM translator supports it.
+  if (numElems != 1 && numElems != 2 && numElems != 4 && numElems != 8 &&
+      (elemTy.getWidth() != 8 || numElems != 16))
+    return op->emitOpError("unsupported vector type");
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // gen.sub_group_reduce
 //===----------------------------------------------------------------------===//
@@ -441,14 +453,13 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::SIMDBlockReadOp::verify() {
-  VectorType vecTy = getRes().getType();
-  unsigned numElems = vecTy.getNumElements();
-  IntegerType elemTy = cast<IntegerType>(vecTy.getElementType());
+  return verifySIMDBlockTy(*this, getRes().getType());
+}
 
-  // FIXME: Allow 16xi16 when SPIRV-LLVM translator supports it.
-  if (numElems != 1 && numElems != 2 && numElems != 4 && numElems != 8 &&
-      (elemTy.getWidth() != 8 || numElems != 16))
-    return emitOpError("unsupported vector type");
+//===----------------------------------------------------------------------===//
+// gen.simdblockwrite
+//===----------------------------------------------------------------------===//
 
-  return success();
+LogicalResult TritonGEN::SIMDBlockWriteOp::verify() {
+  return verifySIMDBlockTy(*this, getVal().getType());
 }

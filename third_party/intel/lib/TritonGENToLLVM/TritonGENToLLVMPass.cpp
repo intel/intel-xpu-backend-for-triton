@@ -1231,19 +1231,6 @@ struct TritonMatrix2DBlockPrefetchLowering
   }
 };
 
-static bool isTySIMDOCLBuiltinAvailable(VectorType vecTy) {
-  unsigned numElems = vecTy.getNumElements();
-  if (numElems == 1 || numElems == 2 || numElems == 4 || numElems == 8)
-    return true;
-
-  // FIXME: Allow 16xi16 when SPIRV-LLVM translator supports it.
-  IntegerType elemTy = cast<IntegerType>(vecTy.getElementType());
-  if (elemTy.getWidth() == 8 && numElems == 16)
-    return true;
-
-  return false;
-}
-
 template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                OpType, TritonGEN::SIMDBlockReadOp,
                                TritonGEN::SIMDBlockWriteOp>::value>>
@@ -1307,10 +1294,7 @@ struct TritonSIMDBlockWriteLowering
     LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
     VectorType vecTy = op.getVal().getType();
 
-    // TODO: Remove GenISA lowering after PoC productization is completed.
-    std::string funcName = "llvm.genx.GenISA.simdBlockWrite";
-    if (isTySIMDOCLBuiltinAvailable(vecTy))
-      funcName = getSIMDBlockManglingName(op, vecTy);
+    std::string funcName = getSIMDBlockManglingName(op, vecTy);
 
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
