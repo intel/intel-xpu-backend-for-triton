@@ -853,7 +853,7 @@ static Value allocateSLMForTransposedReduction(tt::ReduceOp op, unsigned step,
   Location loc = op.getLoc();
 
   // Fixed size for num_warps matrices of sg_size^2 shape.
-  int64_t size = step * step * srcTy.getElementTypeBitWidth() / 8 *
+  int64_t size = (int64_t)step * step * srcTy.getElementTypeBitWidth() / 8 *
                  ttg::TritonGPUDialect::getNumWarps(m);
   Type allocTy = cast<RankedTensorType>(src.getType()).getElementType();
   Type ptrTy = tt::PointerType::get(allocTy, tt::TritonGEN::kWorkgroup);
