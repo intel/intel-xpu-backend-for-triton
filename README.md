@@ -15,7 +15,8 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [T
   * [Intel® Data Center Flex Series](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/flex-series.html)
   * [Intel Arc A770](https://www.intel.com/content/www/us/en/products/sku/229151/intel-arc-a770-graphics-16gb/specifications.html)
 * GPU Drivers:
-  * Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation.html)
+  * Latest [Long Term Support (LTS) Release](https://dgpu-docs.intel.com/driver/installation.html)
+  * Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html)
 * Toolchain:
   * Latest [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 
