@@ -29,7 +29,7 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [T
 
 ## Install PyTorch and Triton from nightly wheels
 
-Currently, Intel XPU Backend for Triton requires a special version of PyTorch and both can be installed from nightly wheels.
+Currently, Intel® XPU Backend for Triton\* requires a special version of PyTorch and both can be installed from nightly wheels.
 Navigate to the [nightly wheels workflow](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml),
 select the most recent successful run on the top of the page and download an artifact for the corresponding Python version.
 Extract the archive and in the extracted directory execute:
@@ -38,7 +38,7 @@ Extract the archive and in the extracted directory execute:
 pip install torch-*.whl triton-*.whl
 ```
 
-Before using Intel XPU Backend for Triton you need to initialize the toolchain.
+Before using Intel® XPU Backend for Triton\* you need to initialize the toolchain.
 By default, it is installed to `/opt/intel/oneapi`:
 
 ```shell
@@ -55,9 +55,9 @@ source /opt/intel/oneapi/setvars.sh
 
 ## Compile PyTorch and Triton from source
 
-Currently, Intel XPU Backend for Triton requires a special version of PyTorch and both need to be compiled at the same time.
+Currently, Intel® XPU Backend for Triton\* requires a special version of PyTorch and both need to be compiled at the same time.
 
-Before compiling PyTorch and Intel XPU Backend for Triton you need to initialize the toolchain.
+Before compiling PyTorch and Intel® XPU Backend for Triton\* you need to initialize the toolchain.
 By default, it is installed to `/opt/intel/oneapi`:
 
 ```shell
@@ -90,7 +90,7 @@ Compile and install PyTorch:
 scripts/install-pytorch.sh --source
 ```
 
-Compile and install Intel XPU Backend for Triton:
+Compile and install Intel® XPU Backend for Triton\*:
 
 ```shell
 scripts/compile-triton.sh
