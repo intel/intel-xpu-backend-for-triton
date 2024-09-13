@@ -284,34 +284,12 @@ llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.simdBlockRead(!llvm.ptr<3>) -> vector<64xi16> attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none>, no_unwind, will_return}
-
-llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
-  // CHECK:     llvm.func @triton_gen.simdblockread(%arg0: !llvm.ptr<3>) {
-  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.simdBlockRead(%arg0) {{.*}} : (!llvm.ptr<3>) -> vector<64xi16>
-  %ret = triton_gen.simdblockread %ptr : (!llvm.ptr<3>) -> vector<64xi16>
-  llvm.return
-}
-
-// -----
-
 // CHECK: llvm.func spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(!llvm.ptr<3>) -> vector<2xi16> attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
   // CHECK:     llvm.func @triton_gen.simdblockread(%arg0: !llvm.ptr<3>) {
   // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {{.*}} : (!llvm.ptr<3>) -> vector<2xi16>
   %ret = triton_gen.simdblockread %ptr : (!llvm.ptr<3>) -> vector<2xi16>
-  llvm.return
-}
-
-// -----
-
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.simdBlockWrite(!llvm.ptr<3>, vector<64xi16>) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = readwrite, inaccessibleMem = none>, no_unwind, will_return}
-
-llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val : vector<64xi16>) {
-  // CHECK:     llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr<3>, %arg1: vector<64xi16>) {
-  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.simdBlockWrite(%arg0, %arg1) {{.*}} : (!llvm.ptr<3>, vector<64xi16>) -> ()
-  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr<3>, vector<64xi16>)
   llvm.return
 }
 

@@ -50,10 +50,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
-
 #include <optional>
 
 namespace mlir::triton::gpu::intel {
@@ -408,8 +404,6 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
   Attribute attr = loop->getAttr(AttrWorkloadName);
   assert(attr && "Expecting a workload attribute");
   Workload workload = static_cast<Workload>(cast<IntegerAttr>(attr).getInt());
-  llvm::errs() << "workload: " << cast<IntegerAttr>(attr).getInt() << "\n";
-
   SmallVector<Value> advances;
   unsigned i = 0;
 

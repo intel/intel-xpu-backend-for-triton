@@ -38,6 +38,23 @@ VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
   return vec_ty(elemType, num);
 };
 
+static void decomposeBlockStore(ConversionPatternRewriter &rewriter,
+                                Location loc, Value base, Value val,
+                                VectorType vecTy, unsigned subGroupSize) {
+  constexpr unsigned maxBlockStoreWidth = 8;
+  VectorType decomposedVecTy =
+      VectorType::get(maxBlockStoreWidth, vecTy.getElementType());
+  Value offset = i32_val(subGroupSize);
+  for (int i = 0; i < vecTy.getNumElements() / maxBlockStoreWidth; ++i) {
+    rewriter.create<TritonGEN::SIMDBlockWriteOp>(
+        loc, base,
+        rewriter
+            .create<triton::gpu::intel::ExtractOp>(loc, decomposedVecTy, val, i)
+            .getRes());
+    base = gep(base.getType(), decomposedVecTy, base, offset);
+  }
+}
+
 /// v2i32 [offsetX, offsetY] for 2D tensor desc.
 class MakeTensorPtrOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<MakeTensorPtrOp> {
@@ -288,8 +305,22 @@ private:
     if constexpr (std::is_same_v<OpType, LoadOp>) {
       rewriter.restoreInsertionPoint(insertPoint);
 
-      TritonGEN::SIMDBlockReadOp simdRead =
-          rewriter.create<TritonGEN::SIMDBlockReadOp>(loc, v64i16Ty, base);
+      constexpr unsigned maxBlockLoadi16Width = 8;
+      VectorType decomposedVecTy =
+          VectorType::get(maxBlockLoadi16Width, i16_ty);
+      auto mod = op->template getParentOfType<mlir::ModuleOp>();
+      Value offset =
+          i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+      SmallVector<Value> values;
+      for (int i = 0; i < 64 / maxBlockLoadi16Width; ++i) {
+        auto simdRead = rewriter.create<TritonGEN::SIMDBlockReadOp>(
+            loc, decomposedVecTy, base);
+        values.push_back(simdRead.getRes());
+        base = gep(ptrToSharedMemTy, decomposedVecTy, base, offset);
+      }
+      auto simdRead =
+          rewriter.create<triton::gpu::intel::GlueOp>(loc, v64i16Ty, values);
+
       VectorType v64Ty = VectorType::get(64, elemType);
       rewriter.replaceOp(op, bitcast(simdRead.getRes(), v64Ty));
 
@@ -307,8 +338,10 @@ private:
       }
       val = bitcast(val, v64i16Ty);
 
-      TritonGEN::SIMDBlockWriteOp simdWrite =
-          rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, base, val);
+      auto mod = op->template getParentOfType<mlir::ModuleOp>();
+      decomposeBlockStore(
+          rewriter, loc, base, val, v64i16Ty,
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 
       rewriter.eraseOp(op);
       return success();
@@ -788,14 +821,13 @@ public:
                                 ValueRange{subGroupOffset}, /*inbounds=*/true);
 
     // Store matrix in local memory.
+    VectorType intVecTy =
+        vec_ty(int_ty(vecTy.getElementType().getIntOrFloatBitWidth()),
+               vecTy.getNumElements());
     Value val =
-        vecTy.getElementType().isInteger()
-            ? src
-            : bitcast(
-                  src,
-                  vec_ty(int_ty(vecTy.getElementType().getIntOrFloatBitWidth()),
-                         vecTy.getNumElements()));
-    rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, subGroupBasePtr, val);
+        vecTy.getElementType().isInteger() ? src : bitcast(src, intVecTy);
+    decomposeBlockStore(rewriter, loc, subGroupBasePtr, val, intVecTy,
+                        threadsPerWarp);
 
     // Load from matrix, trasposed.
     Value workItemOffset = mul(wiStride, subGroupLocalId);

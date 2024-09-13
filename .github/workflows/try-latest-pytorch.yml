@@ -41,8 +41,8 @@ jobs:
     runs-on: Linux
 
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      e2e_matrix: ${{ steps.e2e-matrix.outputs.e2e_matrix }}
+      integration_matrix: ${{ steps.matrix.outputs.integration_matrix }}
+      e2e_matrix: ${{ steps.matrix.outputs.e2e_matrix }}
       pytorch-commit-id: ${{ steps.commit-id.outputs.commit_id }}
 
     steps:
@@ -66,17 +66,9 @@ jobs:
       - name: Matrix
         id: matrix
         run: |
-          if [[ -n "${{ inputs.runner_label }}" ]]; then
-            matrix='{"python": ["3.9", "3.10", "3.11", "3.12"]}'
-          else
-            matrix='{"python": ["3.9", "3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
-          fi
+          integration_matrix='{"python": ["3.9", "3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
 
-          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
-
-      - name: Matrix for e2e
-        id: e2e-matrix
-        run: |
+          echo "integration_matrix=$integration_matrix" | tee -a $GITHUB_OUTPUT
           e2e_matrix='{
             "suite": ["huggingface", "timm_models", "torchbench"],
             "mode": ["inference", "training"],
@@ -87,14 +79,10 @@ jobs:
   inductor-tests:
     name: Inductor tests
     needs: prepare
-    strategy:
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
-      fail-fast: false
-      max-parallel: 2
     uses: ./.github/workflows/inductor-tests-reusable.yml
     with:
       pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
-      suite: >
+      suite: >-
         inductor/test_codegen_triton.py
         inductor/test_triton_extension_backend.py
         inductor/test_triton_heuristics.py
@@ -108,9 +96,8 @@ jobs:
     needs: [prepare, inductor-tests]
 
     strategy:
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJson(needs.prepare.outputs.integration_matrix) }}
       fail-fast: false
-      max-parallel: 2 # to allow PyTorch build to be cached
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
