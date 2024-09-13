@@ -8,39 +8,90 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [T
 
 # Compatibility
 
-  |Category|Requirement|Installation|
-  |-|-|-|
-  |OS|Ubuntu [22.04](http://releases.ubuntu.com/22.04/)| [Install Ubuntu](https://ubuntu.com/tutorials)|
-  |GPU Card | Intel® Data Center GPU Max, Flex Series or Intel Arc A770 |[Max](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/max-series.html), [Flex](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/flex-series.html), [Arc](https://www.intel.com/content/www/us/en/products/sku/229151/intel-arc-a770-graphics-16gb/specifications.html)|
-  |GPU Driver | [Stable 812.26](https://dgpu-docs.intel.com/releases/stable_821_36_20240430.html) or [later](https://dgpu-docs.intel.com/driver/release-streams.html#ubuntu-rolling-stable)|[Install Intel GPU driver](https://dgpu-docs.intel.com/driver/installation.html)|
-  |Toolchain |[PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)|[Install PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html#inpage-nav-1-1)|
+* Operating system: [Ubuntu 22.04](http://releases.ubuntu.com/22.04)
+* GPU Card:
+  * [Intel® Data Center GPU Max Series](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/max-series.html)
+  * [Intel® Data Center Flex Series](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/flex-series.html)
+  * [Intel Arc A770](https://www.intel.com/content/www/us/en/products/sku/229151/intel-arc-a770-graphics-16gb/specifications.html)
+* GPU Driver: latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation.html)
+* Toolchain: latest [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 
-<!-- @endcond -->
+# Quick Installation
+
+## Prerequisites
+
+1. Latest [Rolling Release of GPU driver](https://dgpu-docs.intel.com/driver/installation.html)
+2. Latest release of [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
+3. Latest release of [Profiling Tools Interfaces for Intel GPU (PTI for GPU)](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
+
+## Install PyTorch and Triton from nightly wheels
+
+Currently, Intel XPU Backend for Triton requires a special version of PyTorch and both can be installed from nightly wheels.
+Navigate to the [nightly wheels workflow](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml),
+select the most recent successful run on the top of the page and download an artifact for the corresponding Python version.
+Extract the archive and in the extracted directory execute:
+
+```shell
+pip install torch-*.whl triton-*.whl
+```
+
+Before using Intel XPU Backend for Triton you need to initialize the toolchain.
+By default, it is installed to `/opt/intel/oneapi`:
+
+```shell
+source /opt/intel/oneapi/setvars.sh
+```
 
 # Install from source
 
-```
-git clone https://github.com/intel/intel-xpu-backend-for-triton.git;
-cd intel-xpu-backend-for-triton;
+## Prerequisites
 
-pip install ninja cmake wheel pybind11; # build-time dependencies
-pip install -e python
-```
+1. Latest [Rolling Release of GPU driver](https://dgpu-docs.intel.com/driver/installation.html)
+2. Latest release of [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
+3. Latest release of [Profiling Tools Interfaces for Intel GPU (PTI for GPU)](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 
-Or with a virtualenv:
+## Compile PyTorch and Triton from source
 
-```
-git clone https://github.com/intel/intel-xpu-backend-for-triton.git;
-cd intel-xpu-backend-for-triton;
+Currently, Intel XPU Backend for Triton requires a special version of PyTorch and both need to be compiled at the same time.
 
-python -m venv .venv --prompt triton;
-source .venv/bin/activate;
+Before compiling PyTorch and Intel XPU Backend for Triton you need to initialize the toolchain.
+By default, it is installed to `/opt/intel/oneapi`:
 
-pip install ninja cmake wheel pybind11; # build-time dependencies
-pip install -e python
+```shell
+source /opt/intel/oneapi/setvars.sh
 ```
 
-Note that `$HOME/.triton` folder is used as default cache location at build time. Developers might find `scripts/compile-triton.sh` script useful for advanced build options.
+Clone this repository:
+
+```shell
+git clone https://github.com/intel/intel-xpu-backend-for-triton.git
+cd intel-xpu-backend-for-triton
+```
+
+To avoid potential conflicts with installed packages it is recommended to create and activate a new Python virtual environment:
+
+```shell
+python -m venv .venv --prompt triton
+source .venv/bin/activate
+```
+
+Install build tools:
+
+```shell
+pip install ninja cmake wheel pybind11
+```
+
+Compile and install PyTorch:
+
+```shell
+scripts/install-pytorch.sh --source
+```
+
+Compile and install Intel XPU Backend for Triton:
+
+```shell
+scripts/compile-triton.sh
+```
 
 # Building with a custom LLVM
 
@@ -118,24 +169,6 @@ follow the following recipe.
 
 ```shell
 scripts/test-triton.sh
-```
-Or with a virtualenv:
-```shell
-scripts/test-triton.sh --venv
-```
-
-You may find it helpful to make a symlink to the builddir and tell your local
-git to ignore it.
-
-```
-$ ln -s python/build/cmake<...> build
-$ echo build >> .git/info/exclude
-```
-
-Then you can e.g. rebuild and run lit with the following command.
-
-```
-$ ninja -C build && ( cd build ; lit test )
 ```
 
 # Tips for hacking
@@ -310,11 +343,14 @@ Community contributions are more than welcome, whether it be to fix bugs or to a
 # Compatibility
 
 Supported Platforms:
-  * Linux or WSL2
+  * Linux
+  * WSL2
 
 Supported Hardware:
-  * Intel GPU Max Series 1100/1550, Intel Flex Series, Intel Arc A770
-  * Coming soon: MeteorLake and later laptop GPU support. Stay tuned!
+  * NVIDIA GPUs (Compute Capability 7.0+)
+  * AMD GPUs (ROCm 5.2+)
+  * Intel GPU Max 1100/1550, Intel Flex, Intel Arc A770
+  * Under development: CPUs
 
 ## License
 
