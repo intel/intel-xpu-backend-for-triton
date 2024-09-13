@@ -164,7 +164,7 @@ run_unit_tests() {
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/build/bdist* || err "****** ERROR: Build Triton first ******"
+  cd $TRITON_PROJ/python/build/cmake* || err "****** ERROR: Build Triton first ******"
   ctest .
 
   echo "***************************************************"
