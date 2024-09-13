@@ -19,6 +19,8 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [T
 * Toolchain:
   * Latest [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 
+Note that Intel® XPU Backend for Triton\* is not compatible with Intel® Extension for PyTorch\* and Intel® oneAPI Base Toolkit\*.
+
 # Quick Installation
 
 ## Prerequisites
