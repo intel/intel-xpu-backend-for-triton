@@ -48,8 +48,7 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
   return success();
 }
 
-template <typename Op>
-static LogicalResult verifySIMDBlockTy(Op op, VectorType vecTy) {
+static LogicalResult verifySIMDBlockTy(Operation *op, VectorType vecTy) {
   unsigned numElems = vecTy.getNumElements();
   IntegerType elemTy = cast<IntegerType>(vecTy.getElementType());
 
@@ -454,7 +453,7 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::SIMDBlockReadOp::verify() {
-  return verifySIMDBlockTy(this, getRes().getType());
+  return verifySIMDBlockTy(*this, getRes().getType());
 }
 
 //===----------------------------------------------------------------------===//
@@ -462,5 +461,5 @@ LogicalResult TritonGEN::SIMDBlockReadOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::SIMDBlockWriteOp::verify() {
-  return verifySIMDBlockTy(this, getVal().getType());
+  return verifySIMDBlockTy(*this, getVal().getType());
 }
