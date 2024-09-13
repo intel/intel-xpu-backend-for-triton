@@ -48,7 +48,9 @@ static void decomposeBlockStore(ConversionPatternRewriter &rewriter,
   for (int i = 0; i < vecTy.getNumElements() / maxBlockStoreWidth; ++i) {
     rewriter.create<TritonGEN::SIMDBlockWriteOp>(
         loc, base,
-        rewriter.create<ExtractOp>(loc, decomposedVecTy, val, i).getRes());
+        rewriter
+            .create<triton::gpu::intel::ExtractOp>(loc, decomposedVecTy, val, i)
+            .getRes());
     base = gep(base.getType(), decomposedVecTy, base, offset);
   }
 }
