@@ -469,9 +469,9 @@ tt.func public @attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.pt
     %34 = arith.mulf %30, %24 : tensor<16x64xf32, #warp>
 
     // CHECK: tt.expand_dims {{.*}} {axis = 1 : i32} : tensor<16xf32
-    // CHECK: tt.broadcast {{.*}} -> tensor<16x16xf32>
+    // CHECK: triton_intel_gpu.broadcast {{.*}} -> tensor<16x16xf32>
     %35 = tt.expand_dims %33 {axis = 1 : i32} : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>> -> tensor<16x1xf32, #warp>
-    %36 = tt.broadcast %35 : tensor<16x1xf32, #warp> -> tensor<16x64xf32, #warp>
+    %36 = triton_intel_gpu.broadcast %35 : tensor<16x1xf32, #warp> -> tensor<16x64xf32, #warp>
     %37 = arith.subf %34, %36 : tensor<16x64xf32, #warp>
     %38 = math.exp2 %37 : tensor<16x64xf32, #warp>
     %39 = "tt.reduce"(%38) <{axis = 1 : i32}> ({
@@ -484,7 +484,7 @@ tt.func public @attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.pt
     %42 = arith.mulf %arg7, %41 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
     %43 = arith.addf %42, %39 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
     %44 = tt.expand_dims %41 {axis = 1 : i32} : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>> -> tensor<16x1xf32, #warp>
-    %45 = tt.broadcast %44 : tensor<16x1xf32, #warp> -> tensor<16x64xf32, #warp>
+    %45 = triton_intel_gpu.broadcast %44 : tensor<16x1xf32, #warp> -> tensor<16x64xf32, #warp>
     %46 = arith.mulf %arg8, %45 : tensor<16x64xf32, #warp>
     %47 = tt.load %arg10 : !tt.ptr<tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>
     %48 = arith.truncf %38 : tensor<16x64xf32, #warp> to tensor<16x64xf16, #warp>
@@ -500,7 +500,7 @@ tt.func public @attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.pt
     scf.yield %43, %50, %33, %51, %52 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>>, tensor<16x64xf32, #warp>, tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>>, !tt.ptr<tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>, !tt.ptr<tensor<64x64xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #warp}>>>
   } {triton_gpu.workload = 4 : i32, tt.divisibility_arg1 = dense<64> : tensor<1xi32>}
   %26 = tt.expand_dims %25#0 {axis = 1 : i32} : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>> -> tensor<16x1xf32, #warp>
-  %27 = tt.broadcast %26 : tensor<16x1xf32, #warp> -> tensor<16x64xf32, #warp>
+  %27 = triton_intel_gpu.broadcast %26 : tensor<16x1xf32, #warp> -> tensor<16x64xf32, #warp>
   %28 = arith.divf %25#1, %27 : tensor<16x64xf32, #warp>
   tt.store %20, %28 : !tt.ptr<tensor<16x64xf32, #warp>>
   tt.return
@@ -534,18 +534,18 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 1, parent = #warp}>> -> tensor<16x1xi32, #warp>
     %3 = tt.expand_dims %1 {axis = 0 : i32} : tensor<64xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>> -> tensor<1x64xi32, #warp>
 
-    // CHECK: %[[BC1:.*]] = tt.broadcast %[[ED1]] : tensor<16x1xi32, #warp> -> tensor<16x16xi32>
-    %4 = tt.broadcast %2 : tensor<16x1xi32, #warp> -> tensor<16x64xi32, #warp>
+    // CHECK: %[[BC1:.*]] = triton_intel_gpu.broadcast %[[ED1]] : tensor<16x1xi32, #warp> -> tensor<16x16xi32>
+    %4 = triton_intel_gpu.broadcast %2 : tensor<16x1xi32, #warp> -> tensor<16x64xi32, #warp>
 
     // CHECK: %[[EX0:.*]] = triton_intel_gpu.extract %[[ED2]][0] : tensor<1x64xi32, #warp> -> tensor<1x16xi32>
-    // CHECK: %[[BC20:.*]] = tt.broadcast %[[EX0]] : tensor<1x16xi32> -> tensor<16x16xi32>
+    // CHECK: %[[BC20:.*]] = triton_intel_gpu.broadcast %[[EX0]] : tensor<1x16xi32> -> tensor<16x16xi32>
     // CHECK: %[[EX1:.*]] = triton_intel_gpu.extract %[[ED2]][1] : tensor<1x64xi32, #warp> -> tensor<1x16xi32>
-    // CHECK: %[[BC21:.*]] = tt.broadcast %[[EX1]] : tensor<1x16xi32> -> tensor<16x16xi32>
+    // CHECK: %[[BC21:.*]] = triton_intel_gpu.broadcast %[[EX1]] : tensor<1x16xi32> -> tensor<16x16xi32>
     // CHECK: %[[EX2:.*]] = triton_intel_gpu.extract %[[ED2]][2] : tensor<1x64xi32, #warp> -> tensor<1x16xi32>
-    // CHECK: %[[BC22:.*]] = tt.broadcast %[[EX2]] : tensor<1x16xi32> -> tensor<16x16xi32>
+    // CHECK: %[[BC22:.*]] = triton_intel_gpu.broadcast %[[EX2]] : tensor<1x16xi32> -> tensor<16x16xi32>
     // CHECK: %[[EX3:.*]] = triton_intel_gpu.extract %[[ED2]][3] : tensor<1x64xi32, #warp> -> tensor<1x16xi32>
-    // CHECK: %[[BC23:.*]] = tt.broadcast %[[EX3]] : tensor<1x16xi32> -> tensor<16x16xi32>
-    %5 = tt.broadcast %3 : tensor<1x64xi32, #warp> -> tensor<16x64xi32, #warp>
+    // CHECK: %[[BC23:.*]] = triton_intel_gpu.broadcast %[[EX3]] : tensor<1x16xi32> -> tensor<16x16xi32>
+    %5 = triton_intel_gpu.broadcast %3 : tensor<1x64xi32, #warp> -> tensor<16x64xi32, #warp>
 
     // CHECK: arith.addi %[[BC1]], %[[BC20]] : tensor<16x16xi32>
     // CHECK: arith.addi %[[BC1]], %[[BC21]] : tensor<16x16xi32>

@@ -32,7 +32,7 @@ for cid in $COMMIT_IDS; do
     fi
 
     # execute full tests
-    if ./scripts/test-triton.sh --skip-deps; then
+    if ./scripts/test-triton.sh --skip-pytorch; then
         echo "Tests passed for translator commit $cid"
         echo "A newer commit found: $cid"
         FOUND=true
