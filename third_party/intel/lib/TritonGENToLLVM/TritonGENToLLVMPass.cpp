@@ -1038,7 +1038,7 @@ struct TritonMatrix2DBlockLoadLowering
               std::to_string(op.getVBlocks()) + "c";
     fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iP";
     fnName +=
-        (resType.getElementType().getIntOrFloatBitWidth() == 32) ? "j" : "t";
+        intel::getTypeMangling(resType.getElementType(), /*isUnsigned=*/true);
     VectorType vecType = vec_ty(i32_ty, 2);
     Value byteCoord = insert_element(
         vecType, insert_element(vecType, undef(vecType), op.getX(), i32_val(0)),

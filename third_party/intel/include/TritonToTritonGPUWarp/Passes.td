@@ -16,7 +16,8 @@ def ConvertTritonToTritonGPUWarp: Pass<"convert-triton-to-tritongpu-warp", "mlir
                              "mlir::math::MathDialect",
                              "mlir::scf::SCFDialect",
                              "mlir::triton::TritonDialect",
-                             "mlir::triton::gpu::TritonGPUDialect"];
+                             "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 
    let options = [
        Option<"numWarps", "num-warps",
