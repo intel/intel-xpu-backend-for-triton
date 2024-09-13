@@ -870,7 +870,7 @@ void mlir::triton::intel::populateTritonOpsToLLVMPatterns(
   patterns.add<LoadStorePrefetchOpConversion<LoadOp>>(typeConverter, benefit);
   patterns.add<LoadStorePrefetchOpConversion<StoreOp>>(typeConverter, benefit);
   patterns.add<MakeTensorPtrOpConversion>(typeConverter, benefit);
-  if (applyTransposedReduction())
+  if (ttgi::applyTransposedReduction())
     patterns.add<TransposedReduceOpConversion>(typeConverter, benefit);
   else
     patterns.add<ReduceOpConversion>(typeConverter, benefit);

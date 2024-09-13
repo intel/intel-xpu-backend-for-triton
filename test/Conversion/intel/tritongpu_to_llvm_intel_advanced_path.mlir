@@ -222,7 +222,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: llvm.shufflevector [[VEC]], [[EMPTY]] [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] : vector<1xi32>
     %0 = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
     %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>> -> tensor<1x16xi32, #warp>
-    %2 = tt.broadcast %1 : tensor<1x16xi32, #warp> -> tensor<16x16xi32>
+    %2 = triton_intel_gpu.broadcast %1 : tensor<1x16xi32, #warp> -> tensor<16x16xi32>
     tt.return %2 : tensor<16x16xi32>
   }
 
