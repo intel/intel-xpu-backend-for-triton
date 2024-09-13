@@ -81,12 +81,6 @@ python -m venv .venv --prompt triton
 source .venv/bin/activate
 ```
 
-Install build tools:
-
-```shell
-pip install ninja cmake wheel pybind11
-```
-
 Compile and install PyTorch:
 
 ```shell
