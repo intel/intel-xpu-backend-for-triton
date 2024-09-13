@@ -1,6 +1,6 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
-// CHECK-DAG: llvm.func spir_funccc @_Z16get_sub_group_idv() -> i32 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, passthrough = ["nosync"], will_return} 
+// CHECK-DAG: llvm.func spir_funccc @_Z16get_sub_group_idv() -> i32 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, passthrough = ["nosync"], will_return}
 
 llvm.func @gen_special_regs() -> i32 {
   // CHECK-LABEL: gen_special_regs
