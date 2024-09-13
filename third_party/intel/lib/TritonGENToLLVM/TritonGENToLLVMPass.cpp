@@ -1263,9 +1263,9 @@ static std::string getSIMDBlockManglingName(OpType op, VectorType vecTy) {
   funcName =
       "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
       std::to_string(ptrTy.getAddressSpace()) +
-      intel::getTypeMangling(vecTy.getElementType(), true /*isUnsigned*/);
+      intel::getTypeMangling(vecTy.getElementType(), /*isUnsigned=*/true);
   if constexpr (isWrite)
-    funcName += intel::getTypeMangling(vecTy, true /*isUnsigned*/);
+    funcName += intel::getTypeMangling(vecTy, /*isUnsigned=*/true);
   return funcName;
 }
 
@@ -1280,11 +1280,7 @@ struct TritonSIMDBlockReadLowering
     LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
     VectorType vecTy = op.getRes().getType();
 
-    // TODO: Remove GenISA lowering after PoC productization is completed.
-    std::string funcName = "llvm.genx.GenISA.simdBlockRead";
-    if (isTySIMDOCLBuiltinAvailable(vecTy))
-      funcName = getSIMDBlockManglingName(op, vecTy);
-
+    std::string funcName = getSIMDBlockManglingName(op, vecTy);
     intel::AttributeList attrs = createFunctionAttributes(
         {{llvm::Attribute::NoUnwind, std::nullopt},
          {llvm::Attribute::WillReturn, std::nullopt},
