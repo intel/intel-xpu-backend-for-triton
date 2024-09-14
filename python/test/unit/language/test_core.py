@@ -2503,14 +2503,10 @@ def test_histogram(M, N, device):
     torch.manual_seed(17)
     x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
     z = torch.empty(N, dtype=torch.int32, device=device)
-    # FIXME: use regular histc when supported for xpu.
-    if is_xpu():
-        z_torch = torch.histc(x.to('cpu').to(torch.float32), bins=N, min=0, max=N - 1).to(torch.int32).to('xpu')
-    else:
-        # torch.histc does not work when the input type is not float and the device is CPU
-        # https://github.com/pytorch/pytorch/issues/74236
-        # This is a workload by converting the input to float
-        z_torch = torch.histc(x.float(), bins=N, min=0, max=N - 1)
+    # torch.histc does not work when the input type is not float and the device is CPU
+    # https://github.com/pytorch/pytorch/issues/74236
+    # This is a workload by converting the input to float
+    z_torch = torch.histc(x.float(), bins=N, min=0, max=N - 1)
     histogram_kernel[(1, )](x, z, M=M, N=N)
     assert (z_torch == z).all()
 

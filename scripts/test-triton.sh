@@ -164,7 +164,7 @@ run_unit_tests() {
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/build/bdist* || err "****** ERROR: Build Triton first ******"
+  cd $TRITON_PROJ/python/build/cmake* || err "****** ERROR: Build Triton first ******"
   ctest .
 
   echo "***************************************************"
@@ -240,7 +240,7 @@ run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
-  python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
+  USE_IPEX=0 python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
 run_benchmark_softmax() {

@@ -428,3 +428,19 @@ llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_hei
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
 }
+
+// -----
+
+llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
+  // expected-error @+1 {{'triton_gen.simdblockread' op unsupported vector type}}
+  %ret = triton_gen.simdblockread %ptr : (!llvm.ptr<3>) -> vector<64xi16>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val: vector<64xi16>) {
+  // expected-error @+1 {{'triton_gen.simdblockwrite' op unsupported vector type}}
+  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr<3>, vector<64xi16>)
+  llvm.return
+}

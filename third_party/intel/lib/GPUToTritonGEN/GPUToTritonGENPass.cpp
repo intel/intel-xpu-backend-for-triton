@@ -58,19 +58,6 @@ namespace {
 /// Import the GPU Ops to TritonGEN Patterns.
 #include "GPUToTritonGEN.cpp.inc"
 
-struct GPUBarrierOpLowering
-    : public ConvertOpToLLVMPattern<mlir::gpu::BarrierOp> {
-  using ConvertOpToLLVMPattern<mlir::gpu::BarrierOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(mlir::gpu::BarrierOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<TritonGEN::BarrierOp>(
-        op, TritonGEN::MemFence::LOCAL);
-    return success();
-  }
-};
-
 struct GPUSubgroupReduceOpLowering
     : public ConvertOpToLLVMPattern<mlir::gpu::SubgroupReduceOp> {
   using ConvertOpToLLVMPattern<
@@ -210,15 +197,7 @@ static void populateOpPatterns(LLVMTypeConverter &converter,
 void mlir::triton::populateGPUToTritonGENConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
   populateWithGenerated(patterns);
-  // This will ensure that the gpu-to-triton-gen lowering is prefered to the
-  // gpu-to-llvm-spv lowering while overlaps exist between the two.
-  // FIXME: Replace the gpu-to-triton-gen lowering of GPUBarrier with the
-  // gpu-to-llvm-spv one. Currently its not done because it results in some
-  // barriers using passthrough attributes, while others don't, which is
-  // confusing to test.
-  constexpr int patternBenefitPreferTritonGENLowering = 20;
-  patterns.add<GPUBarrierOpLowering, GPUSubgroupReduceOpLowering>(
-      converter, patternBenefitPreferTritonGENLowering);
+  patterns.add<GPUSubgroupReduceOpLowering>(converter);
   patterns.add<SingleDimLaunchConfigLowering<mlir::gpu::SubgroupIdOp,
                                              TritonGEN::SubgroupIdOp>,
                SingleDimLaunchConfigLowering<mlir::gpu::LaneIdOp,
