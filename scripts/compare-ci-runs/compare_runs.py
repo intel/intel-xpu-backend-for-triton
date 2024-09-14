@@ -116,38 +116,33 @@ def build_triton_benchmark_reports_path(directory: Path, report_name: str) -> st
     return os.path.join(directory, "benchmark-reports", f"{report_name}-report.csv")
 
 
-def parse_triton_benchmark_data(config: str, df: pd.DataFrame, directory: Path) -> pd.DataFrame:
+def parse_triton_benchmark_data(config: str, directory: Path) -> pd.DataFrame:
     """Parse triton benchmark data from a merged dataframe into the dataframe.
         Now focus on dft path for softmax, gemm and attention
         which include both xetla and triton data with regular name."""
 
     reports = ["softmax", "gemm", "attn"]
 
-    reports_list = [df]
+    reports_list = []
     for report in reports:
         triton_file = f"{report}-triton"
         xetla_file = f"{report}-xetla"
-        triton_path = build_triton_benchmark_reports_path(Path(directory), triton_file)
-        xetla_path = build_triton_benchmark_reports_path(Path(directory), xetla_file)
+        triton_path = build_triton_benchmark_reports_path(directory, triton_file)
+        xetla_path = build_triton_benchmark_reports_path(directory, xetla_file)
         reports_list.append(merge_triton_xetla_reports_data(config, triton_path, xetla_path))
 
     return pd.concat(reports_list, ignore_index=True)
 
 
-def parse_directory(triton_benchmark: bool, config: str, previous: pd.DataFrame, directory: Path) -> pd.DataFrame:
-    """Parse all CSV files for a configuration in a directory, merging with
-        the previous dataframe if present."""
+def parse_directory(triton_benchmark: bool, config: str, directory: Path) -> pd.DataFrame:
+    """Parse all CSV files for a configuration in a directory."""
     if triton_benchmark:
-        df = pd.DataFrame()
-        df = parse_triton_benchmark_data(config, df, directory)
+        df = parse_triton_benchmark_data(config, directory)
     else:
         df = pd.DataFrame(columns=["dev", "name", "batch_size", f"speedup {config}", "suite", "datatype", "mode"])
         for file in Path(directory).rglob("*performance.csv"):
             df = parse_pytorch_benchmark_data(config, df, file)
 
-    if previous is not None:
-        on = ["params", "benchmark"] if triton_benchmark else ["suite", "datatype", "mode", "name", "dev"]
-        df = df.merge(previous, how="outer", on=on)
     return df
 
 
@@ -288,8 +283,10 @@ def main():
             print("Failed to obtain raw data")
             sys.exit(1)
 
-        df = parse_directory(args.triton_benchmark, num_cfg, None, num_dir)
-        df = parse_directory(args.triton_benchmark, denom_cfg, df, denom_dir)
+        num_df = parse_directory(args.triton_benchmark, num_cfg, num_dir)
+        denom_df = parse_directory(args.triton_benchmark, denom_cfg, denom_dir)
+        on = ["params", "benchmark"] if args.triton_benchmark else ["suite", "datatype", "mode", "name", "dev"]
+        df = denom_df.merge(num_df, how="outer", on=on)
 
         if args.triton_benchmark:
             cols = [
