@@ -24,7 +24,9 @@ else
     export LIBIGC1_VERSION="Not Installed"
 fi
 
-if dpkg-query --show intel-level-zero-gpu &> /dev/null; then
+if dpkg-query --show libze1 &> /dev/null; then
+    export LEVEL_ZERO_VERSION=$(dpkg-query --show --showformat='${version}\n' libze1 | grep -oP '.+(?=~)')
+elif dpkg-query --show intel-level-zero-gpu &> /dev/null; then
     export LEVEL_ZERO_VERSION=$(dpkg-query --show --showformat='${version}\n' intel-level-zero-gpu | grep -oP '.+(?=~)')
 else
     export LEVEL_ZERO_VERSION="Not Installed"
