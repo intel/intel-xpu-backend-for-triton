@@ -166,10 +166,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     fn()
     di.synchronize()
 
-    # We maintain a buffer of 256 MB that we clear
+    # We maintain a buffer of 512 MB that we clear
     # before each kernel call to make sure that the L2 cache
     # doesn't contain any input data before the run
-    cache_size = 256 * 1024 * 1024
+    cache_size = 512 * 1024 * 1024
     if fast_flush:
         cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device_type)
     else:
