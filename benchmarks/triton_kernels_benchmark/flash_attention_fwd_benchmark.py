@@ -217,10 +217,11 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
     v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
     sm_scale = 0.125
     quantiles = [0.5, 0.0, 1.0]
+    warmup, rep = 100, 100
     if provider == 'onednn':
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
             lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
-                                                                     False, scale=sm_scale), warmup=10, rep=10,
+                                                                     False, scale=sm_scale), warmup=warmup, rep=rep,
             quantiles=quantiles, fast_flush=False)
 
     elif provider == 'triton':
@@ -231,7 +232,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
                 q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=sm_scale).to(torch.float32)
             atol = 1e-1 if N_CTX == 16384 else 1e-2
             benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=warmup, rep=rep, quantiles=quantiles,
                                                               fast_flush=False)
 
     elif provider == 'xetla':
@@ -246,7 +247,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
         l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
 
         xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=warmup, rep=rep, quantiles=quantiles,
                                                               fast_flush=False)
 
     else:
