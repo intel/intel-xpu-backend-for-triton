@@ -104,81 +104,79 @@ auto load_tensor(const std::string &filename) {
 }
 
 argsDict parseArgsJson(const std::string& filename, const std::string& outtensorname) {
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open JSON file");
-    } 
+  std::ifstream file(filename);
+  if (!file.is_open()) {
+      throw std::runtime_error("Failed to open JSON file");
+  } 
 
-    ordered_json jsonData;
-    try {
-        file >> jsonData;
-    } catch (const json::parse_error& e) {
-        std::cerr << "Parsing error :-" << e.what() << std::endl;
-        throw;
+  ordered_json jsonData;
+  try {
+      file >> jsonData;
+  } catch (const json::parse_error& e) {
+      std::cerr << "Parsing error :-" << e.what() << std::endl;
+      throw;
+  }
+  file.close();
+
+#if _DEBUG
+  for (ordered_json::iterator it = jsonData.begin(); it != jsonData.end(); ++it) {
+      std::cout << "Key: " << it.key() << std::endl;
+  }
+#endif
+
+  argsDict triton_args;
+  try {
+    triton_args.jsonData = jsonData;
+    triton_args.gridX = jsonData.value("gridX", 0);
+    triton_args.gridY = jsonData.value("gridY", 0);
+    triton_args.gridZ = jsonData.value("gridZ", 0);
+    triton_args.num_ctas = jsonData.value("num_ctas", 0);
+    triton_args.num_stages = jsonData.value("num_stages", 0);
+    triton_args.num_warps = jsonData.value("num_warps", 0);
+    triton_args.shared_memory = jsonData.value("shared_memory", 0);
+    triton_args.threads_per_warp = jsonData.value("threads_per_warp", 0);
+    triton_args.kernel_name = jsonData.value("kernel_name", " ");
+    triton_args.spv_name = jsonData.value("spv_name", " ");
+
+    std::regex tensor_pattern(R"(tensor_\d+)");
+    std::regex tensor_iarg_pattern(R"(intArg_\d+)");
+    std::vector<std::string> tensor_keys;
+    std::vector<std::string> tensor_iarg_keys;
+    for (auto it = jsonData.begin(); it != jsonData.end(); ++it) {
+        if (std::regex_match(it.key(), tensor_pattern)) 
+          tensor_keys.push_back(it.key());
+        if (std::regex_match(it.key(), tensor_iarg_pattern))
+          tensor_iarg_keys.push_back(it.key());
     }
-    file.close();
+    // Sort the keys in numerical order based on the extracted number
+    std::sort(tensor_keys.begin(), tensor_keys.end(), [](const std::string& a, const std::string& b) {
+        return extractNumber(a) < extractNumber(b);
+    });
+    // Sort the keys in numerical order based on the extracted number
+    std::sort(tensor_iarg_keys.begin(), tensor_iarg_keys.end(), [](const std::string& a, const std::string& b) {
+        return extractNumber(a) < extractNumber(b);
+    });
 
-    for (ordered_json::iterator it = jsonData.begin(); it != jsonData.end(); ++it) {
-        std::cout << "Key: " << it.key() << std::endl;
+    // Add tensors
+    for (const auto& key : tensor_keys) {
+        auto tensor_type = jsonData.value(key, " ");
+        triton_args.addTensorType(tensor_type);
+        std::string tsname = key+".pt";
+        auto tensor = load_tensor(tsname.c_str());
+        triton_args.addTensor(tensor);
+        if (tsname == outtensorname) {
+            std::get<0>(triton_args.outTensorProp) = triton_args.tensor_vec.size() - 1;
+            std::get<1>(triton_args.outTensorProp) = triton_args.ttype_vec.back();
+        }
     }
 
-    argsDict triton_args;
-    try {
-        triton_args.jsonData = jsonData;
-        triton_args.gridX = jsonData.value("gridX", 0);
-        triton_args.gridY = jsonData.value("gridY", 0);
-        triton_args.gridZ = jsonData.value("gridZ", 0);
-        triton_args.num_ctas = jsonData.value("num_ctas", 0);
-        triton_args.num_stages = jsonData.value("num_stages", 0);
-        triton_args.num_warps = jsonData.value("num_warps", 0);
-        triton_args.shared_memory = jsonData.value("shared_memory", 0);
-        triton_args.threads_per_warp = jsonData.value("threads_per_warp", 0);
-        triton_args.kernel_name = jsonData.value("kernel_name", " ");
-        triton_args.spv_name = jsonData.value("spv_name", " ");
+    // Add tensor int args
+    for (const auto& key: tensor_iarg_keys) 
+      triton_args.addTensorIarg(jsonData[key].get<int>());
 
-        std::regex tensor_pattern(R"(tensor_\d+)");
-        std::regex tensor_iarg_pattern(R"(intArg_\d+)");
-        std::vector<std::string> tensor_keys;
-        std::vector<std::string> tensor_iarg_keys;
-        for (auto it = jsonData.begin(); it != jsonData.end(); ++it) {
-            if (std::regex_match(it.key(), tensor_pattern)) 
-              tensor_keys.push_back(it.key());
-            if (std::regex_match(it.key(), tensor_iarg_pattern))
-              tensor_iarg_keys.push_back(it.key());
-        }
-        // Sort the keys in numerical order based on the extracted number
-        std::sort(tensor_keys.begin(), tensor_keys.end(), [](const std::string& a, const std::string& b) {
-            return extractNumber(a) < extractNumber(b);
-        });
-        // Sort the keys in numerical order based on the extracted number
-        std::sort(tensor_iarg_keys.begin(), tensor_iarg_keys.end(), [](const std::string& a, const std::string& b) {
-            return extractNumber(a) < extractNumber(b);
-        });
-
-        // Add tensors
-        for (const auto& key : tensor_keys) {
-            auto tensor_type = jsonData.value(key, " ");
-            triton_args.addTensorType(tensor_type);
-            std::string tsname = key+".pt";
-            auto tensor = load_tensor(tsname.c_str());
-            triton_args.addTensor(tensor);
-            if (tsname == outtensorname) {
-                std::get<0>(triton_args.outTensorProp) = triton_args.tensor_vec.size() - 1;
-                std::get<1>(triton_args.outTensorProp) = triton_args.ttype_vec.back();
-            }
-        }
-
-        int idx = 0;
-        // Add tensor int args
-        while (idx < tensor_iarg_keys.size()) {
-            auto val = jsonData[tensor_iarg_keys[idx]].get<int>() * jsonData[tensor_iarg_keys[idx+1]].get<int>();
-            triton_args.addTensorIarg(val);
-            idx += 2;
-        }
-
-    } catch (const json::exception& e) {
-        std::cerr << "Error parsing JSON data: " << e.what() << std::endl;    
-    }
+  } catch (const json::exception& e) {
+      std::cerr << "Error parsing JSON data: " << e.what() << std::endl;    
+  }
   return triton_args;
 }
 
@@ -324,9 +322,7 @@ static void set_scalar_arg(sycl::handler &cgh, int index, size_t size,
     cgh.set_arg(index, *static_cast<const uint16_t *>(value));
     break;
   case sizeof(uint32_t):
-    std::cout << "About to set the argument " << std::endl;
     cgh.set_arg(index, *static_cast<const uint32_t *>(value));
-    std::cout << "Done setting argument " << std::endl;
     break;
   case sizeof(uint64_t):
     cgh.set_arg(index, *static_cast<const uint64_t *>(value));
@@ -344,7 +340,6 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
   
   uint32_t num_params = params.size();
-  std::cout << "num_params" << num_params << std::endl;
   uint32_t expected_num_params =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
   
@@ -426,6 +421,8 @@ at::Tensor  launchKernel(sycl::queue stream, sycl::kernel kernel,
 
   // This block sets up params in kernel arg order
   auto it = triton_args.jsonData.begin();
+  // Skip first 11 items from JSON
+  // Post this kernel arguments sections starts
   std::advance(it,11);
 
   std::vector<void*> params;
@@ -434,19 +431,15 @@ at::Tensor  launchKernel(sycl::queue stream, sycl::kernel kernel,
   for (; it != triton_args.jsonData.end(); ++it) {
       auto value = it.value();
       if (value.is_number_integer()) {
-          std::cout << value << std::endl;
-          if (value == 1)
-            continue;
-          params.push_back(static_cast<void*>(&triton_args.tensor_iarg_vec[intIdx]));
+          if (value == 1);
+          else
+            params.push_back(static_cast<void*>(&triton_args.tensor_iarg_vec[intIdx]));
           intIdx++;
       } else if (value.is_string()) {
-          std::cout << value << std::endl;
           params.push_back(static_cast<void*>(&dev_buffers[tensorIdx]));
           tensorIdx++;
       }
   }
-
-  std::cout << "Kali: Total number of arguments <int,tensor> " << intIdx << ", " << tensorIdx << std::endl;
 
   sycl_kernel_launch(triton_args.gridX, triton_args.gridY, triton_args.gridZ, triton_args.num_warps, triton_args.threads_per_warp,
                      triton_args.shared_memory, stream, kernel, params);
@@ -454,7 +447,7 @@ at::Tensor  launchKernel(sycl::queue stream, sycl::kernel kernel,
   // copy back
   stream.memcpy(tensor_ptr(output), dev_buffers[outTensorIndex], output.nbytes()).wait();
 
-#if 1
+#if _DEBUG
   std::cout << "Output Tensor Printed: " << std::endl;
   std::cout << output << std::endl;
 #endif
@@ -468,6 +461,7 @@ at::Tensor  launchKernel(sycl::queue stream, sycl::kernel kernel,
 int main(int argc, char **argv) {
 
   if (argc < 3) {
+      std::cout << "Help: " << std::endl;
       std::cout << "<Executable> <ArgsJSON> <Output Tensor File Name>" << std::endl;
       std::cout << "./build/SPIRVRunner data.json tensor_10.pt" << std::endl;
       return -1;
@@ -484,7 +478,7 @@ int main(int argc, char **argv) {
 #if _DEBUG
   std::cout << tritonArgDict;
 #endif
-#if 1
+
   // read spirv
   auto spirv = read_spirv(tritonArgDict.spv_name);
   std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
@@ -501,5 +495,5 @@ int main(int argc, char **argv) {
   std::cout << "Kernel return output: " << output[0] << std::endl;
 
   write_tensor("cpp_outs.pt", output);
-#endif
+
 }

@@ -316,7 +316,6 @@ def make_launcher(constants, signature, ids):
     void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
     uint32_t num_params = sizeof(params)/sizeof(params[0]);
     uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
-    std::cout << "Kali: " << num_params << "Expected Num Params: " << expected_num_params << std::endl;
     size_t global_range_x = gridX*threads_per_warp*num_warps;
     size_t global_range_y = gridY;
     size_t global_range_z = gridZ;
@@ -462,7 +461,7 @@ def kernel_meta_extractor(kmeta_str, args_dict):
     
 # TODO: Add it as part of a debug/verbose macro
 def serialize_args(args):
-    print(len(args))
+    #print(len(args))
     cnt = 0
     args_dict = {
         "gridX": args[cnt],
@@ -470,16 +469,16 @@ def serialize_args(args):
         "gridZ": args[cnt + 2]
     }
     cnt = 4
-    print(f"Printing preprocessing of data of Triton kernel: \n")
+    #print(f"Printing preprocessing of data of Triton kernel: \n")
     for arg in args[4:]:
-        print(f"Kali_Arg_Name: {type(arg).__name__} {cnt}\n")
+        #print(f"Arg_Name: {type(arg).__name__} {cnt}\n")
         if type(arg).__name__ == "KernelMetadata":
             args_dict = kernel_meta_extractor(str(arg), args_dict)
         
         if type(arg).__name__ == "Tensor":
-            print(f"Tensor data at argument  {cnt}\n")
+            #print(f"Tensor data at argument  {cnt}\n")
             cpu_tensor = arg.cpu()
-            print(cpu_tensor)
+            #print(cpu_tensor)
             with open(f"tensor_{cnt}.pt", 'wb') as f:
                 torch.save(cpu_tensor, f)
             tensor_type = arg.dtype
@@ -489,7 +488,7 @@ def serialize_args(args):
         if isinstance(arg, int):
             args_dict.update({f"intArg_{cnt}":args[cnt]})
         cnt = cnt + 1
-    print(args_dict)           
+    #print(args_dict)           
     # Dump argument info as a JSON file
     with open('args_data.json', 'w') as json_file:
         json.dump(args_dict, json_file, indent=4)
@@ -507,7 +506,6 @@ class XPULauncher(object):
         self.launch = mod.launch
 
     def __call__(self, *args, **kwargs):
-        print(args)    
         # TODO: add this call as part of debug/verbose
         serialize_args(args)
         self.launch(*args, **kwargs)
@@ -518,10 +516,10 @@ class XPULauncher(object):
             if type(arg).__name__ == "Tensor":
                 print(f"Printing argument at index = {cnt}\n")
                 cpu_tensor = arg.cpu()
+                #torch.set_printoptions(threshold=torch.inf)
                 print(cpu_tensor)
             cnt = cnt + 1
         
-
 
 
 class XPUDriver(DriverBase):
