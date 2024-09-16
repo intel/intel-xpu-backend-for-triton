@@ -52,26 +52,6 @@ struct argsDict {
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const argsDict& container) {
-    os << "gridX: " << container.gridX << "\n"
-       << "gridY: " << container.gridY << "\n"
-       << "gridZ: " << container.gridZ << "\n"
-       << "num_ctas: " << container.num_ctas << "\n"
-       << "threads_per_warp: " << container.threads_per_warp << "\n"
-       << "shared_memory: " << container.shared_memory << "\n"
-       << "kernel_name: " << container.kernel_name << "\n"
-       << "spv_name: " << container.spv_name << "\n"
-       << "num_warps: " << container.num_warps << "\n"; 
-#if _DEBUG
-    // Print the tensors
-    os << "Tensors:\n";
-    for (const auto& tensor : container.tensor_vector) {
-        os << tensor << "\n";  // Prints the tensor
-    }
-#endif
-    return os;  // Return the stream object to allow chaining
-}
-
 // Function to extract the numerical part from keys like "tensor_9"
 int extractNumber(const std::string& key) {
     std::regex number_pattern(R"(\d+)");
@@ -117,12 +97,6 @@ argsDict parseArgsJson(const std::string& filename, const std::string& outtensor
       throw;
   }
   file.close();
-
-#if _DEBUG
-  for (ordered_json::iterator it = jsonData.begin(); it != jsonData.end(); ++it) {
-      std::cout << "Key: " << it.key() << std::endl;
-  }
-#endif
 
   argsDict triton_args;
   try {
@@ -474,10 +448,8 @@ int main(int argc, char **argv) {
   initContext(&q);
   initDevices(&q);
 
+  // Parse the JSON file and create argument dictionary
   auto tritonArgDict = parseArgsJson(argv[1], argv[2]);
-#if _DEBUG
-  std::cout << tritonArgDict;
-#endif
 
   // read spirv
   auto spirv = read_spirv(tritonArgDict.spv_name);
