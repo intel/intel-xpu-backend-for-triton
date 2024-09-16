@@ -509,18 +509,6 @@ class XPULauncher(object):
         # TODO: add this call as part of debug/verbose
         serialize_args(args)
         self.launch(*args, **kwargs)
-        
-        print("Kali Output: Post Processing Data\n")
-        cnt = 0
-        for arg in args:
-            if type(arg).__name__ == "Tensor":
-                print(f"Printing argument at index = {cnt}\n")
-                cpu_tensor = arg.cpu()
-                #torch.set_printoptions(threshold=torch.inf)
-                print(cpu_tensor)
-            cnt = cnt + 1
-        
-
 
 class XPUDriver(DriverBase):
 
