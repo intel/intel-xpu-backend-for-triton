@@ -118,19 +118,14 @@ if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER"
   TEST_MICRO_BENCHMARKS=true
 fi
 
-if [ ! -v BASE ]; then
-  echo "**** BASE is not given ****"
-  BASE=$(cd $(dirname "$0")/../.. && pwd)
-  echo "**** Default BASE is set to $BASE ****"
-fi
-
 if [ "$VENV" = true ]; then
   source .venv/bin/activate
 fi
 
-SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+TRITON_PROJ="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && cd .. && pwd )"
+SCRIPTS_DIR="$TRITON_PROJ/scripts"
 source "$SCRIPTS_DIR/pytest-utils.sh"
-TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 
 if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
