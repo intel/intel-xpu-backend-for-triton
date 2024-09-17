@@ -438,30 +438,15 @@ def make_launcher(constants, signature, ids):
     return src
 
 # TODO: Add it as part of debug/verbose macro
-def kernel_meta_extractor(kmeta_str, args_dict):
-    num_ctas = re.search(r'num_ctas=(\d+)', kmeta_str).group(1)
-    num_stages = re.search(r'num_stages=(\d+)', kmeta_str).group(1)
-    kernel_name = re.findall(r'name=\'([^\']+)\'', kmeta_str)
-    num_warps = re.search(r'num_warps=(\d+)',kmeta_str).group(1)
-    threads_per_warp = re.search(r'threads_per_warp=(\d+)',kmeta_str).group(1)
-    shared_memory = re.search(r'shared=(\d+)',kmeta_str).group(1)
-    hash = re.search(r'hash=\'([^\']+)\'',kmeta_str).group(1)
-    args_dict.update({"num_ctas": int(num_ctas)})
-    args_dict.update({'num_stages': int(num_stages)})
-    args_dict.update({'num_warps': int(num_warps)})
-    args_dict.update({'threads_per_warp': int(threads_per_warp)})
-    args_dict.update({'shared_memory': int(shared_memory)})
-    args_dict.update({'hash': hash})
-    for name in kernel_name:
-        if name != "intel":
-            args_dict.update({'kernel_name':name})
-            spvname = f"{name}.spv"
-            args_dict.update({"spv_name": spvname})
-    return args_dict
-    
+def kernel_meta_extractor(arg, args_dict):
+    args_dict.update({'num_warps': getattr(arg, 'num_warps')})
+    args_dict.update({'threads_per_warp': getattr(arg, 'threads_per_warp')})
+    args_dict.update({'shared_memory': getattr(arg, 'shared')})
+    args_dict.update({'kernel_name': getattr(arg, 'name')})
+    args_dict.update({'spv_name': f"{getattr(arg, 'name')}.spv"})
+
 # TODO: Add it as part of a debug/verbose macro
 def serialize_args(args):
-    #print(len(args))
     cnt = 0
     args_dict = {
         "gridX": args[cnt],
@@ -469,26 +454,22 @@ def serialize_args(args):
         "gridZ": args[cnt + 2]
     }
     cnt = 4
-    #print(f"Printing preprocessing of data of Triton kernel: \n")
     for arg in args[4:]:
-        #print(f"Arg_Name: {type(arg).__name__} {cnt}\n")
         if type(arg).__name__ == "KernelMetadata":
-            args_dict = kernel_meta_extractor(str(arg), args_dict)
-        
+          kernel_meta_extractor(arg, args_dict)
+
         if type(arg).__name__ == "Tensor":
-            #print(f"Tensor data at argument  {cnt}\n")
             cpu_tensor = arg.cpu()
-            #print(cpu_tensor)
             with open(f"tensor_{cnt}.pt", 'wb') as f:
                 torch.save(cpu_tensor, f)
             tensor_type = arg.dtype
             tensor_name = f"tensor_{cnt}"
             args_dict.update({tensor_name: str(tensor_type)})
-        
+
         if isinstance(arg, int):
-            args_dict.update({f"intArg_{cnt}":args[cnt]})
+          args_dict.update({f"intArg_{cnt}":args[cnt]})
+
         cnt = cnt + 1
-    #print(args_dict)           
     # Dump argument info as a JSON file
     with open('args_data.json', 'w') as json_file:
         json.dump(args_dict, json_file, indent=4)
