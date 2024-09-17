@@ -2,132 +2,129 @@
 #include <sycl/sycl.hpp>
 #include <torch/torch.h>
 
+#include <algorithm>
 #include <fstream>
 #include <ios>
 #include <iostream>
+#include <regex>
 #include <string>
 #include <vector>
-#include <regex>
-#include <algorithm>
 
-#include "sycl_functions.h"
 #include "json.hpp"
+#include "sycl_functions.h"
 
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
 
 auto load_tensor(const std::string &filename) {
-    std::ifstream ins(filename, std::ios::binary);
-    if (!ins.is_open()) {
-      throw std::runtime_error("Failed to open file " + filename);
-    }
-    ins.seekg(0, std::ios::end);
-    auto fileSize = ins.tellg();
+  std::ifstream ins(filename, std::ios::binary);
+  if (!ins.is_open()) {
+    throw std::runtime_error("Failed to open file " + filename);
+  }
+  ins.seekg(0, std::ios::end);
+  auto fileSize = ins.tellg();
 
-    std::vector<char> bytes(fileSize);
-    ins.seekg(0, std::ios::beg);
-    ins.read(bytes.data(), fileSize);
+  std::vector<char> bytes(fileSize);
+  ins.seekg(0, std::ios::beg);
+  ins.read(bytes.data(), fileSize);
 
-    return torch::pickle_load(bytes).toTensor();
+  return torch::pickle_load(bytes).toTensor();
 }
 
 // Function to extract the numerical part from keys like "tensor_9"
-int extractNumber(const std::string& key) {
-    std::regex number_pattern(R"(\d+)");
-    std::smatch match;
-    if (std::regex_search(key, match, number_pattern)) {
-        return std::stoi(match.str());
-    }
-    return 0;
+int extractNumber(const std::string &key) {
+  std::regex number_pattern(R"(\d+)");
+  std::smatch match;
+  if (std::regex_search(key, match, number_pattern)) {
+    return std::stoi(match.str());
+  }
+  return 0;
 }
 
 // Structure that contains Triton kernel arguments
 struct KernelArguments {
-    int gridX;
-    int gridY;
-    int gridZ;
-    int num_ctas;
-    int num_stages;
-    int num_warps;
-    int threads_per_warp;
-    int shared_memory;
-    std::string kernel_name;
-    std::string spv_name;
-    std::vector<torch::Tensor> tensor_vec;
-    std::vector<std::string> ttype_vec;
-    std::vector<int> tensor_iarg_vec;
-    std::tuple<int, std::string> outTensorProp;
-    ordered_json jsonData;
+  int gridX;
+  int gridY;
+  int gridZ;
+  int num_ctas;
+  int num_stages;
+  int num_warps;
+  int threads_per_warp;
+  int shared_memory;
+  std::string kernel_name;
+  std::string spv_name;
+  std::vector<torch::Tensor> tensor_vec;
+  std::vector<std::string> ttype_vec;
+  std::vector<int> tensor_iarg_vec;
+  std::tuple<int, std::string> outTensorProp;
+  ordered_json jsonData;
 
-    KernelArguments(const std::string& filename, const std::string& outtensorname) {
-      std::ifstream file(filename);
-      if (!file.is_open()) {
-        throw std::runtime_error("Failed to open JSON file");
-      }
-
-      file >> jsonData;
-      if (jsonData.is_discarded()) {
-        throw std::runtime_error("Invalid JSON format in the file");
-      }
-      file.close();
-
-      gridX = jsonData.value("gridX", 0);
-      gridY = jsonData.value("gridY", 0);
-      gridZ = jsonData.value("gridZ", 0);
-      num_warps = jsonData.value("num_warps", 0);
-      shared_memory = jsonData.value("shared_memory", 0);
-      threads_per_warp = jsonData.value("threads_per_warp", 0);
-      kernel_name = jsonData.value("kernel_name", " ");
-      spv_name = jsonData.value("spv_name", " ");
-
-      std::regex tensor_pattern(R"(tensor_\d+)");
-      std::regex tensor_iarg_pattern(R"(intArg_\d+)");
-      std::vector<std::string> tensor_keys;
-      std::vector<std::string> tensor_iarg_keys;
-      for (auto it = jsonData.begin(); it != jsonData.end(); ++it) {
-        if (std::regex_match(it.key(), tensor_pattern)) 
-          tensor_keys.push_back(it.key());
-        if (std::regex_match(it.key(), tensor_iarg_pattern))
-          tensor_iarg_keys.push_back(it.key());
-      }
-      // Sort the keys in numerical order based on the extracted number
-      std::sort(tensor_keys.begin(), tensor_keys.end(), [](const std::string& a, const std::string& b) {
-        return extractNumber(a) < extractNumber(b);
-      });
-      // Sort the keys in numerical order based on the extracted number
-      std::sort(tensor_iarg_keys.begin(), tensor_iarg_keys.end(), [](const std::string& a, const std::string& b) {
-        return extractNumber(a) < extractNumber(b);
-      });
-
-      // Add tensors
-      for (const auto& key : tensor_keys) {
-        auto tensor_type = jsonData.value(key, " ");
-        addTensorType(tensor_type);
-        std::string tsname = key+".pt";
-        auto tensor = load_tensor(tsname.c_str());
-        addTensor(tensor);
-        if (tsname == outtensorname) {
-            std::get<0>(outTensorProp) = tensor_vec.size() - 1;
-            std::get<1>(outTensorProp) = ttype_vec.back();
-        }
-      }
-
-      // Add tensor int args
-      for (const auto& key: tensor_iarg_keys)
-        addScalarArg(jsonData[key].get<int>());
+  KernelArguments(const std::string &filename,
+                  const std::string &outtensorname) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+      throw std::runtime_error("Failed to open JSON file");
     }
 
-    void addTensor(const torch::Tensor& tensor) {
-      tensor_vec.push_back(tensor);
+    file >> jsonData;
+    if (jsonData.is_discarded()) {
+      throw std::runtime_error("Invalid JSON format in the file");
+    }
+    file.close();
+
+    gridX = jsonData.value("gridX", 0);
+    gridY = jsonData.value("gridY", 0);
+    gridZ = jsonData.value("gridZ", 0);
+    num_warps = jsonData.value("num_warps", 0);
+    shared_memory = jsonData.value("shared_memory", 0);
+    threads_per_warp = jsonData.value("threads_per_warp", 0);
+    kernel_name = jsonData.value("kernel_name", " ");
+    spv_name = jsonData.value("spv_name", " ");
+
+    std::regex tensor_pattern(R"(tensor_\d+)");
+    std::regex tensor_iarg_pattern(R"(intArg_\d+)");
+    std::vector<std::string> tensor_keys;
+    std::vector<std::string> tensor_iarg_keys;
+    for (auto it = jsonData.begin(); it != jsonData.end(); ++it) {
+      if (std::regex_match(it.key(), tensor_pattern))
+        tensor_keys.push_back(it.key());
+      if (std::regex_match(it.key(), tensor_iarg_pattern))
+        tensor_iarg_keys.push_back(it.key());
+    }
+    // Sort the keys in numerical order based on the extracted number
+    std::sort(tensor_keys.begin(), tensor_keys.end(),
+              [](const std::string &a, const std::string &b) {
+                return extractNumber(a) < extractNumber(b);
+              });
+    // Sort the keys in numerical order based on the extracted number
+    std::sort(tensor_iarg_keys.begin(), tensor_iarg_keys.end(),
+              [](const std::string &a, const std::string &b) {
+                return extractNumber(a) < extractNumber(b);
+              });
+
+    // Add tensors
+    for (const auto &key : tensor_keys) {
+      auto tensor_type = jsonData.value(key, " ");
+      addTensorType(tensor_type);
+      std::string tsname = key + ".pt";
+      auto tensor = load_tensor(tsname.c_str());
+      addTensor(tensor);
+      if (tsname == outtensorname) {
+        std::get<0>(outTensorProp) = tensor_vec.size() - 1;
+        std::get<1>(outTensorProp) = ttype_vec.back();
+      }
     }
 
-    void addTensorType(std::string type) {
-      ttype_vec.push_back(type);
-    }
+    // Add tensor int args
+    for (const auto &key : tensor_iarg_keys)
+      addScalarArg(jsonData[key].get<int>());
+  }
 
-    void addScalarArg(int arg) {
-      tensor_iarg_vec.push_back(arg);
-    }
+  void addTensor(const torch::Tensor &tensor) { tensor_vec.push_back(tensor); }
+
+  void addTensorType(std::string type) { ttype_vec.push_back(type); }
+
+  void addScalarArg(int arg) { tensor_iarg_vec.push_back(arg); }
 };
 
 // Create an exception handler for asynchronous SYCL exceptions
@@ -263,37 +260,39 @@ size_t initDevices(sycl::queue *sycl_queue) {
 }
 
 template <class T>
-static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *value) {
+static inline void set_scalar_arg(sycl::handler &cgh, int index,
+                                  const void *value) {
   cgh.set_arg(index, *static_cast<const T *>(value));
 }
 
-static void sycl_kernel_launch(sycl::queue &stream,
-                               sycl::kernel &kernel_ptr, KernelArguments triton_args,
-                               std::vector<char*>& dev_buffers) {
+static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
+                               KernelArguments triton_args,
+                               std::vector<char *> &dev_buffers) {
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
-  
+
   uint32_t expected_num_params =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
-  
-  size_t global_range_x = triton_args.gridX * triton_args.threads_per_warp * triton_args.num_warps;
+
+  size_t global_range_x =
+      triton_args.gridX * triton_args.threads_per_warp * triton_args.num_warps;
   size_t global_range_y = triton_args.gridY;
   size_t global_range_z = triton_args.gridZ;
   size_t local_range_x = triton_args.num_warps * triton_args.threads_per_warp;
   size_t local_range_y = 1;
   size_t local_range_z = 1;
-  
+
   sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
   sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
-  
+
   if (triton_args.shared_memory) {
     expected_num_params -= 1;
   }
   auto it = triton_args.jsonData.begin();
   // Skip first 8 items from JSON
   // Post this kernel arguments sections starts
-  std::advance(it,8);
+  std::advance(it, 8);
   int intIdx = 0;
   int tensorIdx = 0;
   int narg = 0;
@@ -302,12 +301,16 @@ static void sycl_kernel_launch(sycl::queue &stream,
     for (; it != triton_args.jsonData.end(); ++it) {
       auto value = it.value();
       if (value.is_number_integer()) {
-        if (value == 1);
+        if (value == 1)
+          ;
         else
-          set_scalar_arg<int32_t>(cgh, narg++, static_cast<void*>(&triton_args.tensor_iarg_vec[intIdx]));
+          set_scalar_arg<int32_t>(
+              cgh, narg++,
+              static_cast<void *>(&triton_args.tensor_iarg_vec[intIdx]));
         intIdx++;
       } else if (value.is_string()) {
-        set_scalar_arg<void*>(cgh, narg++, static_cast<void*>(&dev_buffers[tensorIdx]));
+        set_scalar_arg<void *>(cgh, narg++,
+                               static_cast<void *>(&dev_buffers[tensorIdx]));
         tensorIdx++;
       }
     }
@@ -324,51 +327,54 @@ static void sycl_kernel_launch(sycl::queue &stream,
   stream.wait();
 }
 
-at::TensorOptions getTensorOptions(const std::string& dtype) {
-    if (dtype == "torch.float32") {
-        return at::TensorOptions{c10::ScalarType::Float};
-    } else if (dtype == "torch.float64") {
-        return at::TensorOptions{c10::ScalarType::Double};
-    } else if (dtype == "torch.float16" || dtype == "torch.half") {
-        return at::TensorOptions{c10::ScalarType::Half};
-    } else if (dtype == "torch.uint8") {
-        return at::TensorOptions{c10::ScalarType::Byte};
-    } else if (dtype == "torch.int8") {
-        return at::TensorOptions{c10::ScalarType::Char};
-    } else if (dtype == "torch.int16" || dtype == "torch.short") {
-        return at::TensorOptions{c10::ScalarType::Short};
-    } else if (dtype == "torch.int32" || dtype == "torch.int") {
-        return at::TensorOptions{c10::ScalarType::Int};
-    } else if (dtype == "torch.int64" || dtype == "torch.long") {
-        return at::TensorOptions{c10::ScalarType::Long};
-    } 
+at::TensorOptions getTensorOptions(const std::string &dtype) {
+  if (dtype == "torch.float32") {
+    return at::TensorOptions{c10::ScalarType::Float};
+  } else if (dtype == "torch.float64") {
+    return at::TensorOptions{c10::ScalarType::Double};
+  } else if (dtype == "torch.float16" || dtype == "torch.half") {
+    return at::TensorOptions{c10::ScalarType::Half};
+  } else if (dtype == "torch.uint8") {
+    return at::TensorOptions{c10::ScalarType::Byte};
+  } else if (dtype == "torch.int8") {
+    return at::TensorOptions{c10::ScalarType::Char};
+  } else if (dtype == "torch.int16" || dtype == "torch.short") {
+    return at::TensorOptions{c10::ScalarType::Short};
+  } else if (dtype == "torch.int32" || dtype == "torch.int") {
+    return at::TensorOptions{c10::ScalarType::Int};
+  } else if (dtype == "torch.int64" || dtype == "torch.long") {
+    return at::TensorOptions{c10::ScalarType::Long};
+  }
 }
 
-at::Tensor  launchKernel(sycl::queue stream, sycl::kernel kernel,
+at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
                         KernelArguments triton_args) {
 
-   auto tensor_ptr = [](const torch::Tensor &t) -> void * {
+  auto tensor_ptr = [](const torch::Tensor &t) -> void * {
     return reinterpret_cast<void *>(t.data_ptr());
   };
 
-  std::vector<char*> dev_buffers;
+  std::vector<char *> dev_buffers;
   for (auto tensor : triton_args.tensor_vec) {
-      auto dev = sycl::malloc_device<char>(tensor.nbytes(), stream);
-      dev_buffers.push_back(dev);
-      stream.memcpy(dev, tensor_ptr(tensor), tensor.nbytes()).wait();
+    auto dev = sycl::malloc_device<char>(tensor.nbytes(), stream);
+    dev_buffers.push_back(dev);
+    stream.memcpy(dev, tensor_ptr(tensor), tensor.nbytes()).wait();
   }
 
   auto outTensorIndex = std::get<0>(triton_args.outTensorProp);
   auto outTensorType = std::get<1>(triton_args.outTensorProp);
-  auto output = torch::zeros({triton_args.tensor_vec[outTensorIndex].sizes()}, getTensorOptions(outTensorType));
+  auto output = torch::zeros({triton_args.tensor_vec[outTensorIndex].sizes()},
+                             getTensorOptions(outTensorType));
   std::cout << "Tensor output: " << output.sizes() << ", "
-      << output.scalar_type() << " (" << output.nbytes() << " bytes)"
-      << std::endl;
+            << output.scalar_type() << " (" << output.nbytes() << " bytes)"
+            << std::endl;
 
   sycl_kernel_launch(stream, kernel, triton_args, dev_buffers);
 
   // copy back
-  stream.memcpy(tensor_ptr(output), dev_buffers[outTensorIndex], output.nbytes()).wait();
+  stream
+      .memcpy(tensor_ptr(output), dev_buffers[outTensorIndex], output.nbytes())
+      .wait();
 
 #if 0
   std::cout << "Output Tensor Printed: " << std::endl;
@@ -376,7 +382,7 @@ at::Tensor  launchKernel(sycl::queue stream, sycl::kernel kernel,
 #endif
 
   for (auto &dev_ptr : dev_buffers)
-      sycl::free(dev_ptr, stream);
+    sycl::free(dev_ptr, stream);
 
   return output;
 }
@@ -384,10 +390,11 @@ at::Tensor  launchKernel(sycl::queue stream, sycl::kernel kernel,
 int main(int argc, char **argv) {
 
   if (argc < 3) {
-      std::cout << "Help: " << std::endl;
-      std::cout << "<Executable> <ArgsJSON> <Output Tensor File Name>" << std::endl;
-      std::cout << "./build/SPIRVRunner data.json tensor_10.pt" << std::endl;
-      return -1;
+    std::cout << "Help: " << std::endl;
+    std::cout << "<Executable> <ArgsJSON> <Output Tensor File Name>"
+              << std::endl;
+    std::cout << "./build/SPIRVRunner data.json tensor_10.pt" << std::endl;
+    return -1;
   }
   // initialize sycl runtime
   sycl::queue q = sycl::queue(sycl::gpu_selector_v, exception_handler);
@@ -404,9 +411,9 @@ int main(int argc, char **argv) {
   auto spirv = read_spirv(tritonArgDict.spv_name);
   std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
 
-  auto [kernel_bundle, kernel, n_regs, n_spills] =
-      loadBinary(tritonArgDict.kernel_name, reinterpret_cast<uint8_t *>(spirv.data()),
-                 spirv.size() / sizeof(uint32_t), 0);
+  auto [kernel_bundle, kernel, n_regs, n_spills] = loadBinary(
+      tritonArgDict.kernel_name, reinterpret_cast<uint8_t *>(spirv.data()),
+      spirv.size() / sizeof(uint32_t), 0);
 
   // TODO: missing number of registers
   std::cout << "Loaded kernel with " << n_regs << " registers and " << n_spills
