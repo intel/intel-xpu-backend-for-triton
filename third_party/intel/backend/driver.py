@@ -6,7 +6,6 @@ import tempfile
 from pathlib import Path
 from functools import cached_property
 import torch
-import re
 import json
 
 from triton.runtime.build import _build
@@ -437,6 +436,7 @@ def make_launcher(constants, signature, ids):
     """
     return src
 
+
 # TODO: Add it as part of debug/verbose macro
 def kernel_meta_extractor(arg, args_dict):
     args_dict.update({'num_warps': getattr(arg, 'num_warps')})
@@ -445,18 +445,15 @@ def kernel_meta_extractor(arg, args_dict):
     args_dict.update({'kernel_name': getattr(arg, 'name')})
     args_dict.update({'spv_name': f"{getattr(arg, 'name')}.spv"})
 
+
 # TODO: Add it as part of a debug/verbose macro
 def serialize_args(args):
     cnt = 0
-    args_dict = {
-        "gridX": args[cnt],
-        "gridY": args[cnt + 1],
-        "gridZ": args[cnt + 2]
-    }
+    args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
     cnt = 4
     for arg in args[4:]:
         if type(arg).__name__ == "KernelMetadata":
-          kernel_meta_extractor(arg, args_dict)
+            kernel_meta_extractor(arg, args_dict)
 
         if type(arg).__name__ == "Tensor":
             cpu_tensor = arg.cpu()
@@ -467,12 +464,13 @@ def serialize_args(args):
             args_dict.update({tensor_name: str(tensor_type)})
 
         if isinstance(arg, int):
-          args_dict.update({f"intArg_{cnt}":args[cnt]})
+            args_dict.update({f"intArg_{cnt}": args[cnt]})
 
         cnt = cnt + 1
     # Dump argument info as a JSON file
     with open('args_data.json', 'w') as json_file:
         json.dump(args_dict, json_file, indent=4)
+
 
 class XPULauncher(object):
 
@@ -490,6 +488,7 @@ class XPULauncher(object):
         # TODO: add this call as part of debug/verbose
         serialize_args(args)
         self.launch(*args, **kwargs)
+
 
 class XPUDriver(DriverBase):
 
