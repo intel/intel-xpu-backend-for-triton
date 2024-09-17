@@ -31,16 +31,6 @@ auto load_tensor(const std::string &filename) {
   return torch::pickle_load(bytes).toTensor();
 }
 
-// Function to extract the numerical part from keys like "tensor_9"
-int extractNumber(const std::string &key) {
-  std::regex number_pattern(R"(\d+)");
-  std::smatch match;
-  if (std::regex_search(key, match, number_pattern)) {
-    return std::stoi(match.str());
-  }
-  return 0;
-}
-
 // Structure that contains Triton kernel arguments
 struct KernelArguments {
   int gridX;
@@ -55,7 +45,6 @@ struct KernelArguments {
   std::string spv_name;
   std::vector<torch::Tensor> tensor_vec;
   std::vector<std::string> ttype_vec;
-  std::vector<int> tensor_iarg_vec;
   std::tuple<int, std::string> outTensorProp;
   ordered_json jsonData;
 
@@ -82,49 +71,23 @@ struct KernelArguments {
     spv_name = jsonData.value("spv_name", " ");
 
     std::regex tensor_pattern(R"(tensor_\d+)");
-    std::regex tensor_iarg_pattern(R"(intArg_\d+)");
     std::vector<std::string> tensor_keys;
-    std::vector<std::string> tensor_iarg_keys;
     for (auto it = jsonData.begin(); it != jsonData.end(); ++it) {
-      if (std::regex_match(it.key(), tensor_pattern))
-        tensor_keys.push_back(it.key());
-      if (std::regex_match(it.key(), tensor_iarg_pattern))
-        tensor_iarg_keys.push_back(it.key());
-    }
-    // Sort the keys in numerical order based on the extracted number
-    std::sort(tensor_keys.begin(), tensor_keys.end(),
-              [](const std::string &a, const std::string &b) {
-                return extractNumber(a) < extractNumber(b);
-              });
-    // Sort the keys in numerical order based on the extracted number
-    std::sort(tensor_iarg_keys.begin(), tensor_iarg_keys.end(),
-              [](const std::string &a, const std::string &b) {
-                return extractNumber(a) < extractNumber(b);
-              });
-
-    // Add tensors
-    for (const auto &key : tensor_keys) {
-      auto tensor_type = jsonData.value(key, " ");
-      addTensorType(tensor_type);
-      std::string tsname = key + ".pt";
-      auto tensor = load_tensor(tsname.c_str());
-      addTensor(tensor);
-      if (tsname == outtensorname) {
-        std::get<0>(outTensorProp) = tensor_vec.size() - 1;
-        std::get<1>(outTensorProp) = ttype_vec.back();
+      if (std::regex_match(it.key(), tensor_pattern)) {
+        addTensorType(it.value());
+        auto tsname = it.key() + ".pt";
+        addTensor(load_tensor(tsname));
+        if (tsname == outtensorname) {
+          std::get<0>(outTensorProp) = tensor_vec.size() - 1;
+          std::get<1>(outTensorProp) = ttype_vec.back();
+        }
       }
     }
-
-    // Add tensor int args
-    for (const auto &key : tensor_iarg_keys)
-      addScalarArg(jsonData[key].get<int>());
   }
 
   void addTensor(const torch::Tensor &tensor) { tensor_vec.push_back(tensor); }
 
   void addTensorType(std::string type) { ttype_vec.push_back(type); }
-
-  void addScalarArg(int arg) { tensor_iarg_vec.push_back(arg); }
 };
 
 // Create an exception handler for asynchronous SYCL exceptions
@@ -303,10 +266,9 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
       if (value.is_number_integer()) {
         if (value == 1)
           ;
-        else
-          set_scalar_arg<int32_t>(
-              cgh, narg++,
-              static_cast<void *>(&triton_args.tensor_iarg_vec[intIdx]));
+        else {
+          set_scalar_arg<int32_t>(cgh, narg++, static_cast<void *>(&value));
+        }
         intIdx++;
       } else if (value.is_string()) {
         set_scalar_arg<void *>(cgh, narg++,

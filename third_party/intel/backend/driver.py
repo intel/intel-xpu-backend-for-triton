@@ -437,7 +437,6 @@ def make_launcher(constants, signature, ids):
     return src
 
 
-# TODO: Add it as part of debug/verbose macro
 def kernel_meta_extractor(arg, args_dict):
     args_dict.update({'num_warps': getattr(arg, 'num_warps')})
     args_dict.update({'threads_per_warp': getattr(arg, 'threads_per_warp')})
@@ -446,8 +445,11 @@ def kernel_meta_extractor(arg, args_dict):
     args_dict.update({'spv_name': f"{getattr(arg, 'name')}.spv"})
 
 
-# TODO: Add it as part of a debug/verbose macro
 def serialize_args(args):
+    dir_path = os.path.realpath('spirv_runner_data')
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
+        print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
     cnt = 0
     args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
     cnt = 4
@@ -457,7 +459,8 @@ def serialize_args(args):
 
         if type(arg).__name__ == "Tensor":
             cpu_tensor = arg.cpu()
-            with open(f"tensor_{cnt}.pt", 'wb') as f:
+            tensor_path = os.path.join(dir_path, f"tensor_{cnt}.pt")
+            with open(tensor_path, 'wb') as f:
                 torch.save(cpu_tensor, f)
             tensor_type = arg.dtype
             tensor_name = f"tensor_{cnt}"
@@ -468,7 +471,8 @@ def serialize_args(args):
 
         cnt = cnt + 1
     # Dump argument info as a JSON file
-    with open('args_data.json', 'w') as json_file:
+    json_path = os.path.join(dir_path, 'args_data.json')
+    with open(json_path, 'w') as json_file:
         json.dump(args_dict, json_file, indent=4)
 
 
@@ -485,9 +489,11 @@ class XPULauncher(object):
         self.launch = mod.launch
 
     def __call__(self, *args, **kwargs):
-        # TODO: add this call as part of debug/verbose
-        serialize_args(args)
         self.launch(*args, **kwargs)
+        # Serialize KernelArguments for SPIR-V Runner
+        debug_mode = os.getenv('TRITON_DEBUG')
+        if debug_mode:
+            serialize_args(args)
 
 
 class XPUDriver(DriverBase):

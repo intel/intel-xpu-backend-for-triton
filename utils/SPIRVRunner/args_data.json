@@ -1,14 +1,14 @@
 {
-  "gridX": 97,
-  "gridY": 1,
-  "gridZ": 1,
-  "num_warps": 4,
-  "threads_per_warp": 32,
-  "shared_memory": 0,
-  "kernel_name": "add_kernel",
-  "spv_name": "add_kernel.spv",
-  "tensor_9": "torch.float32",
-  "tensor_10": "torch.float32",
-  "tensor_11": "torch.float32",
-  "intArg_12": 98432
+    "gridX": 97,
+    "gridY": 1,
+    "gridZ": 1,
+    "num_warps": 4,
+    "threads_per_warp": 32,
+    "shared_memory": 0,
+    "kernel_name": "add_kernel",
+    "spv_name": "add_kernel.spv",
+    "tensor_9": "torch.float32",
+    "tensor_10": "torch.float32",
+    "tensor_11": "torch.float32",
+    "intArg_12": 98432
 }
