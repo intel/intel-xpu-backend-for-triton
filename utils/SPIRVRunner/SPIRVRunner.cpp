@@ -250,13 +250,13 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   // Post this kernel arguments sections starts
   std::advance(it, kernelArgsJsonIdx);
   int tensorIdx = 0;
-  int narg = 0;
+  uint32_t narg = 0;
   // Submit the imported kernel.
   auto cgf = [&](sycl::handler &cgh) {
     for (; it != triton_args.jsonData.end(); ++it) {
       auto value = it.value();
       if (value.is_number_integer()) {
-        if (value == 1)
+        if (value.get<int>() == 1)
           ;
         else
           set_scalar_arg<int32_t>(cgh, narg++, &value);
@@ -271,10 +271,11 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(triton_args.shared_memory, cgh);
       cgh.set_arg(narg++, local_buffer);
-      cgh.parallel_for(parallel_work_size, kernel_ptr);
-    } else {
-      cgh.parallel_for(parallel_work_size, kernel_ptr);
     }
+    std::cout << "#Args Set=" << narg
+              << " :: #Expected ArgCount=" << expected_num_params << std::endl;
+    assert(narg == expected_num_params);
+    cgh.parallel_for(parallel_work_size, kernel_ptr);
   };
   auto event = stream.submit(cgf);
   stream.wait();
@@ -297,6 +298,8 @@ at::TensorOptions getTensorOptions(const std::string &dtype) {
     return at::TensorOptions{c10::ScalarType::Int};
   } else if (dtype == "torch.int64" || dtype == "torch.long") {
     return at::TensorOptions{c10::ScalarType::Long};
+  } else {
+    return at::TensorOptions();
   }
 }
 
