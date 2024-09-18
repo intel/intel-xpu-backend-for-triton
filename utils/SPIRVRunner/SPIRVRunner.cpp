@@ -16,19 +16,34 @@
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
 
-auto load_tensor(const std::string &filename) {
+auto readFileAsBytes(const std::string &filename) {
   std::ifstream ins(filename, std::ios::binary);
   if (!ins.is_open()) {
     throw std::runtime_error("Failed to open file " + filename);
   }
+
   ins.seekg(0, std::ios::end);
   auto fileSize = ins.tellg();
 
   std::vector<char> bytes(fileSize);
   ins.seekg(0, std::ios::beg);
   ins.read(bytes.data(), fileSize);
+  return bytes;
+}
 
+auto load_tensor(const std::string &filename) {
+  auto bytes = readFileAsBytes(filename);
   return torch::pickle_load(bytes).toTensor();
+}
+
+void write_tensor(const std::string &filename, torch::Tensor &tensor) {
+  std::ofstream outs(filename, std::ios::binary | std::ios::trunc);
+  auto output_bytes = torch::pickle_save(tensor);
+  outs.write(output_bytes.data(), output_bytes.size());
+}
+
+auto read_spirv(const std::string &filename) {
+  return readFileAsBytes(filename);
 }
 
 // Structure that contains Triton kernel arguments
@@ -47,6 +62,7 @@ struct KernelArguments {
   std::vector<std::string> ttype_vec;
   std::tuple<int, std::string> outTensorProp;
   ordered_json jsonData;
+  std::vector<char *> dev_buffers;
 
   KernelArguments(const std::string &filename,
                   const std::string &outtensorname) {
@@ -103,28 +119,6 @@ static auto exception_handler = [](sycl::exception_list e_list) {
     }
   }
 };
-
-void write_tensor(const std::string &filename, torch::Tensor &tensor) {
-  std::ofstream outs(filename, std::ios::binary | std::ios::trunc);
-  auto output_bytes = torch::pickle_save(tensor);
-  outs.write(output_bytes.data(), output_bytes.size());
-}
-
-std::vector<char> read_spirv(const std::string &filename) {
-  std::ifstream ins(filename, std::ios::binary);
-  if (!ins.is_open()) {
-    throw std::runtime_error("Failed to open file " + filename);
-  }
-
-  ins.seekg(0, std::ios::end);
-  auto fileSize = ins.tellg();
-
-  std::vector<char> bytes(fileSize);
-  ins.seekg(0, std::ios::beg);
-  ins.read(bytes.data(), fileSize);
-
-  return bytes;
-}
 
 /** SYCL Globals **/
 SyclQueueMap g_sycl_queue_map;
@@ -229,8 +223,7 @@ static inline void set_scalar_arg(sycl::handler &cgh, int index,
 }
 
 static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
-                               KernelArguments triton_args,
-                               std::vector<char *> &dev_buffers) {
+                               KernelArguments triton_args) {
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
 
@@ -256,7 +249,6 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   // Skip first 8 items from JSON
   // Post this kernel arguments sections starts
   std::advance(it, 8);
-  int intIdx = 0;
   int tensorIdx = 0;
   int narg = 0;
   // Submit the imported kernel.
@@ -266,13 +258,12 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
       if (value.is_number_integer()) {
         if (value == 1)
           ;
-        else {
-          set_scalar_arg<int32_t>(cgh, narg++, static_cast<void *>(&value));
-        }
-        intIdx++;
+        else
+          set_scalar_arg<int32_t>(cgh, narg++, &value);
       } else if (value.is_string()) {
-        set_scalar_arg<void *>(cgh, narg++,
-                               static_cast<void *>(&dev_buffers[tensorIdx]));
+        set_scalar_arg<void *>(
+            cgh, narg++,
+            static_cast<void *>(&triton_args.dev_buffers[tensorIdx]));
         tensorIdx++;
       }
     }
@@ -316,10 +307,9 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
     return reinterpret_cast<void *>(t.data_ptr());
   };
 
-  std::vector<char *> dev_buffers;
   for (auto tensor : triton_args.tensor_vec) {
     auto dev = sycl::malloc_device<char>(tensor.nbytes(), stream);
-    dev_buffers.push_back(dev);
+    triton_args.dev_buffers.push_back(dev);
     stream.memcpy(dev, tensor_ptr(tensor), tensor.nbytes()).wait();
   }
 
@@ -331,19 +321,20 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
             << output.scalar_type() << " (" << output.nbytes() << " bytes)"
             << std::endl;
 
-  sycl_kernel_launch(stream, kernel, triton_args, dev_buffers);
+  sycl_kernel_launch(stream, kernel, triton_args);
 
   // copy back
   stream
-      .memcpy(tensor_ptr(output), dev_buffers[outTensorIndex], output.nbytes())
+      .memcpy(tensor_ptr(output), triton_args.dev_buffers[outTensorIndex],
+              output.nbytes())
       .wait();
 
-#if 0
+#if _DEBUG
   std::cout << "Output Tensor Printed: " << std::endl;
   std::cout << output << std::endl;
 #endif
 
-  for (auto &dev_ptr : dev_buffers)
+  for (auto &dev_ptr : triton_args.dev_buffers)
     sycl::free(dev_ptr, stream);
 
   return output;
