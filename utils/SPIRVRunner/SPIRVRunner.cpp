@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "json.hpp"
 #include "sycl_functions.h"
+#include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
