@@ -15,6 +15,7 @@
 
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
+constexpr int kernelArgsJsonIdx = 8;
 
 auto readFileAsBytes(const std::string &filename) {
   std::ifstream ins(filename, std::ios::binary);
@@ -87,7 +88,6 @@ struct KernelArguments {
     spv_name = jsonData.value("spv_name", " ");
 
     std::regex tensor_pattern(R"(tensor_\d+)");
-    std::vector<std::string> tensor_keys;
     for (auto it = jsonData.begin(); it != jsonData.end(); ++it) {
       if (std::regex_match(it.key(), tensor_pattern)) {
         addTensorType(it.value());
@@ -248,7 +248,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   auto it = triton_args.jsonData.begin();
   // Skip first 8 items from JSON
   // Post this kernel arguments sections starts
-  std::advance(it, 8);
+  std::advance(it, kernelArgsJsonIdx);
   int tensorIdx = 0;
   int narg = 0;
   // Submit the imported kernel.
