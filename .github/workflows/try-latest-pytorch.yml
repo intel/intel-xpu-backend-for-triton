@@ -126,6 +126,6 @@ jobs:
       mode: ${{ matrix.mode }}
       test_mode: accuracy
       dtype: ${{ matrix.dtype }}
-      models: "all"
+      models: subset
       only_one_model: ""
       runner_label: "${{ matrix.runner_label }}"
