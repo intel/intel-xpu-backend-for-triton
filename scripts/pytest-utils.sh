@@ -48,6 +48,7 @@ pytest() {
         fi
     fi
 
+    export TEST_UNSKIP
     python3 -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
 }
 
@@ -127,10 +128,11 @@ capture_runtime_env() {
     python -c 'import platform; print(platform.python_version())' > $TRITON_TEST_REPORTS_DIR/triton_version.txt
     python -c 'import triton; print(triton.__version__)' >  $TRITON_TEST_REPORTS_DIR/triton_version.txt
     python -c 'import torch; print(torch.__version__)' > $TRITON_TEST_REPORTS_DIR/pytorch_version.txt
-    python -c 'import intel_extension_for_pytorch as ipex; print(ipex.__version__)' > $TRITON_TEST_REPORTS_DIR/IPEX_version.txt
+    python -c 'import intel_extension_for_pytorch as ipex; print(ipex.__version__)' > $TRITON_TEST_REPORTS_DIR/IPEX_version.txt || true
 }
 
 ensure_spirv_dis() {
+    export PATH="$HOME/.local/bin:$PATH"
     local spirv_dis="$(which spirv-dis || true)"
     if [[ $spirv_dis ]]; then
         echo "Found spirv-dis at $spirv_dis"
@@ -138,6 +140,5 @@ ensure_spirv_dis() {
     fi
     echo "Installing spirv-dis to $HOME/.local/bin"
     mkdir -p ~/.local/bin
-    curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C ~/.local/bin --strip-components 3 --no-anchored spirv-dis
-    export PATH="$HOME/.local/bin:$PATH"
+    curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C $HOME/.local/bin --strip-components 3 --no-anchored spirv-dis
 }

@@ -48,6 +48,18 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
   return success();
 }
 
+static LogicalResult verifySIMDBlockTy(Operation *op, VectorType vecTy) {
+  unsigned numElems = vecTy.getNumElements();
+  IntegerType elemTy = cast<IntegerType>(vecTy.getElementType());
+
+  // FIXME: Allow 16xi16 when SPIRV-LLVM translator supports it.
+  if (numElems != 1 && numElems != 2 && numElems != 4 && numElems != 8 &&
+      (elemTy.getWidth() != 8 || numElems != 16))
+    return op->emitOpError("unsupported vector type");
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // gen.sub_group_reduce
 //===----------------------------------------------------------------------===//
@@ -224,10 +236,6 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
         return op.emitOpError("expecting tile_width to be between 1 and 8");
       if (vBlocks != 1)
         return op.emitOpError("expecting v_blocks to be 1");
-      if (tileWidth * vBlocks > 8)
-        return op.emitOpError(
-            "tile_width * v_blocks should be less than or equal "
-            "to 8 for 64 bit elements");
       break;
     default:
       return op.emitOpError(
@@ -285,10 +293,6 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
       return op.emitOpError("expecting tile_height to be between 4 and 32");
     if (tileWidth < 4 || tileWidth > 16)
       return op.emitOpError("expecting tile_width to be between 4 and 16");
-    if (tileWidth * vBlocks > 64)
-      return op.emitOpError(
-          "tile_width * v_blocks should be less than or equal "
-          "to 64 for 8 bit elements");
     break;
   case 16:
     if (tileHeight < 2 || tileHeight > 32)
@@ -442,4 +446,20 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
   }
 
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// gen.simdblockread
+//===----------------------------------------------------------------------===//
+
+LogicalResult TritonGEN::SIMDBlockReadOp::verify() {
+  return verifySIMDBlockTy(*this, getRes().getType());
+}
+
+//===----------------------------------------------------------------------===//
+// gen.simdblockwrite
+//===----------------------------------------------------------------------===//
+
+LogicalResult TritonGEN::SIMDBlockWriteOp::verify() {
+  return verifySIMDBlockTy(*this, getVal().getType());
 }

@@ -111,11 +111,11 @@ jobs:
             echo "${PR_BRANCH} not exist"
           fi
 
-          git checkout llvm-target # make sure checkout a new branch that is based on llvm-target
+          git checkout main # make sure checkout a new branch that is based on main
           git checkout -b ${PR_BRANCH}
           git branch --show-current # bot/update_translator_cid
           git status
           git add ./lib/Target/SPIRV/spirv-llvm-translator.conf
           git commit -m "Update spirv-llvm-translator.conf"
           git push origin ${PR_BRANCH}
-          pr_url=$(gh pr create --title "[github-bot] Update spirv-llvm-translator.conf" --body "Automated PR to update translator commit id." --reviewer whitneywhtsang --head ${PR_BRANCH} --base llvm-target)
+          pr_url=$(gh pr create --title "[github-bot] Update spirv-llvm-translator.conf" --body "Automated PR to update translator commit id." --reviewer whitneywhtsang --head ${PR_BRANCH} --base main)

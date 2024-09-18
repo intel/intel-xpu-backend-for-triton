@@ -204,7 +204,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
       ptr_info.dev_ptr = 0;
       ptr_info.valid = true;
       if (PyLong_Check(obj)) {{
-        ptr_info.dev_ptr = (void*) PyLong_AsLongLong(obj);
+        ptr_info.dev_ptr = PyLong_AsVoidPtr(obj);
         checkDevicePointer(&ptr_info, idx, queue);
         return ptr_info;
       }}
@@ -223,7 +223,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
           ptr_info.valid = false;
           return ptr_info;
         }}
-        ptr_info.dev_ptr = (void*) PyLong_AsLongLong(ret);
+        ptr_info.dev_ptr = PyLong_AsVoidPtr(ret);
         if(!ptr_info.dev_ptr) {{
           return ptr_info;
         }}

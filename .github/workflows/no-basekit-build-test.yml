@@ -20,7 +20,7 @@ jobs:
       - runner-0.0.19
     strategy:
       matrix:
-        python: ${{ github.ref_name == 'llvm-target' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
+        python: ${{ github.ref_name == 'main' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source {0}"

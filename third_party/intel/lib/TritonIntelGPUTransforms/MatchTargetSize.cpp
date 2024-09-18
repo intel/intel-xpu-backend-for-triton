@@ -41,6 +41,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 
+#include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -337,7 +338,7 @@ public:
         transformMakeTensorPtrOp(ptrOp);
       } else if (auto dot = dyn_cast<tt::DotOp>(op))
         transformDotOp(dot);
-      else if (auto bc = dyn_cast<tt::BroadcastOp>(op))
+      else if (auto bc = dyn_cast<ttgi::BroadcastOp>(op))
         transformBroadcastOp(bc);
       else
         transformGenericOp(op);
@@ -389,7 +390,8 @@ private:
   void transformArithConstantOp(arith::ConstantOp op);
   void transformDotOp(tt::DotOp dot);
   void transformReduceOp(tt::ReduceOp op);
-  void transformBroadcastOp(tt::BroadcastOp op);
+  void transformTransposedReduceOp(tt::ReduceOp op);
+  void transformBroadcastOp(ttgi::BroadcastOp op);
   void transformMakeRangeOp(tt::MakeRangeOp op);
 
   /// Generic transformation.
@@ -528,30 +530,30 @@ public:
     rewriter.create<scf::YieldOp>(yield.getLoc(), newValues);
     rewriter.eraseOp(yield);
 
-    // Replace uses of the original loop results with the new loop results.
-    userIndexMap.clear();
+    rewriter.setInsertionPointAfter(newForOp);
+
     idx = 0;
     for (auto [result, init] :
          llvm::zip(forOp.getResults(), forOp.getInits())) {
       Operation *definingOp = init.getDefiningOp();
+
+      // Loop-carried value was not split by this pattern, just rewire all users
+      // to the new scf.for operation.
       if (!isa_and_nonnull<ttgi::GlueOp>(definingOp)) {
-        userIndexMap[result] = idx++;
+        result.replaceAllUsesWith(newForOp.getResults()[idx]);
+        ++idx;
         continue;
       }
 
+      // Re-glue individual results together _after_ the loop. This enables
+      // canonicalization of extract ops and dependent loops.
       auto glue = cast<ttgi::GlueOp>(definingOp);
-      for (Operation *user : result.getUsers()) {
-        if (auto extract = dyn_cast<ttgi::ExtractOp>(user)) {
-          userIndexMap[extract] = idx + extract.getIndex();
-          deleteList.push_back(extract.getOperation());
-        }
-      }
-
+      auto reglue = rewriter.create<ttgi::GlueOp>(
+          forOp->getLoc(), result.getType(),
+          newForOp->getResults().slice(idx, glue.getOperands().size()));
+      result.replaceAllUsesWith(reglue);
       idx += glue->getOperands().size();
     }
-
-    for (auto [user, idx] : userIndexMap)
-      user.replaceAllUsesWith(newForOp.getResults()[idx]);
 
     for (Operation *deleteOp : deleteList)
       rewriter.eraseOp(deleteOp);
@@ -583,10 +585,11 @@ public:
         return false;
     }
 
-    // Bail out if the loop result is not used by an 'extract' operation.
+    // Bail out if the loop result is not used by an 'extract' operation, or
+    // another loop.
     if (forOp->getNumResults() == 1 &&
         llvm::any_of(forOp.getResult(0).getUsers(), [](Operation *user) {
-          return !isa<ttgi::ExtractOp>(user);
+          return !isa<ttgi::ExtractOp, scf::ForOp>(user);
         }))
       return false;
 
@@ -804,7 +807,142 @@ Value MatchTargetSizePass::getSubVal(Operation *op, Value val,
   return dstVal;
 }
 
+static Value hackAlloc(OpBuilder &b, Location loc, Type ptrTy, int64_t size) {
+  auto func = static_cast<FunctionOpInterface>(
+      &*b.getInsertionPoint()
+            ->getParentWithTrait<FunctionOpInterface::Trait>());
+  auto m = func->getParentOfType<ModuleOp>();
+  constexpr StringLiteral SharedAttrName = "triton_gpu.shared";
+  if (!m->getAttr(SharedAttrName)) {
+    m->setAttr(SharedAttrName, b.getIndexAttr(size));
+    func.insertArgument(func.getNumArguments(), ptrTy, b.getDictionaryAttr({}),
+                        loc);
+  }
+  return func.getArguments().back();
+}
+
+static SmallVector<Value> glueForReduction(OpBuilder &builder, Location loc,
+                                           ArrayRef<Value> subVals) {
+  assert(subVals.size() % 2 == 0 && "Expecting even number of values");
+  SmallVector<Value> result;
+  SmallVector<Value> lhs;
+  SmallVector<Value> rhs;
+  for (auto [index, value] : llvm::enumerate(subVals))
+    (index % 2 == 0 ? lhs : rhs).push_back(value);
+  auto operandType = cast<RankedTensorType>(subVals.front().getType());
+  SmallVector<int64_t> glueShape(operandType.getShape());
+  assert(glueShape.size() == 2 && "Expecting two-dimensional operator");
+  glueShape[0] *= 2;
+  RankedTensorType glueType =
+      RankedTensorType::get(glueShape, operandType.getElementType());
+  llvm::transform(llvm::zip_equal(lhs, rhs), std::back_inserter(result),
+                  [&builder, loc, glueType](auto pair) -> Value {
+                    auto [lhs, rhs] = pair;
+                    return builder.create<triton::gpu::intel::GlueOp>(
+                        loc, glueType, ValueRange{lhs, rhs});
+                  });
+  return result;
+}
+
+static Value allocateSLMForTransposedReduction(tt::ReduceOp op, unsigned step,
+                                               OpBuilder &b) {
+  auto m = op->getParentOfType<ModuleOp>();
+
+  Value src = op.getSrcs().front();
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  Location loc = op.getLoc();
+
+  // Fixed size for num_warps matrices of sg_size^2 shape.
+  int64_t size = static_cast<int64_t>(step) * step *
+                 srcTy.getElementTypeBitWidth() / 8 *
+                 ttg::TritonGPUDialect::getNumWarps(m);
+  Type allocTy = cast<RankedTensorType>(src.getType()).getElementType();
+  Type ptrTy = tt::PointerType::get(allocTy, tt::TritonGEN::kWorkgroup);
+  return hackAlloc(b, loc, ptrTy, size);
+}
+
+void MatchTargetSizePass::transformTransposedReduceOp(tt::ReduceOp op) {
+  Location loc = op.getLoc();
+  OpBuilder b(op);
+  assert(op.getSrcs().size() == 1 && "only support one src");
+  Value src = op.getSrcs().front();
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  unsigned dims = srcTy.getShape().size();
+  unsigned axis = op.getAxis();
+  assert(axis == dims - 1 && "only support last axis");
+  assert(dims <= 2 && "only support 1D/2D tensor");
+  int64_t outer = dims == 2 ? srcTy.getShape()[0] : 1;
+
+  SmallVector<Value> glueVals;
+
+  // Fixed for transpose reduction.
+  constexpr unsigned subGroupSize = 16;
+  constexpr unsigned step = subGroupSize;
+  Value localBuffer = allocateSLMForTransposedReduction(op, subGroupSize, b);
+  for (unsigned i = 0; i < outer; i += step) {
+    SmallVector<Value> subVals;
+    RankedTensorType dstType = RankedTensorType::get(
+        {srcTy.getShape()[0], step}, srcTy.getElementType());
+    RankedTensorType subGlueType = RankedTensorType::get(
+        {srcTy.getShape()[0] / 2, step}, srcTy.getElementType());
+    for (unsigned j = 0; j < srcTy.getShape()[axis]; j += step) {
+      std::array<Value, 2> subGlues{
+          b.create<ttgi::ExtractOp>(loc, subGlueType, src, j / step * 2),
+          b.create<ttgi::ExtractOp>(loc, subGlueType, src, j / step * 2 + 1)};
+      Value subVal = b.create<ttgi::GlueOp>(loc, dstType, subGlues);
+      subVals.push_back(subVal);
+    }
+    Type subType = dstType;
+    auto combine = op.getCombineOp().front().getOperations().begin();
+    StringAttr id = combine->getName().getIdentifier();
+    Value acc;
+    switch (subVals.size()) {
+    case 1:
+      acc = subVals[0];
+      break;
+    case 2: {
+      Operation *acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
+      acc = acc01->getResult(0);
+      break;
+    }
+    case 4: {
+      Operation *acc01 = b.create(loc, id, {subVals[0], subVals[1]}, subType);
+      Operation *acc23 = b.create(loc, id, {subVals[2], subVals[3]}, subType);
+      Operation *accOp = b.create(
+          loc, id, {acc01->getResult(0), acc23->getResult(0)}, subType);
+      acc = accOp->getResult(0);
+      break;
+    }
+    default:
+      assert(false && "add more reduce size support");
+    }
+
+    Value accT = b.create<ttgi::SubGroupTransposeOp>(loc, acc.getType(),
+                                                     localBuffer, acc);
+    auto sgReduce = b.create<tt::ReduceOp>(loc, accT, axis);
+    Region &sgReduceRegion = sgReduce.getCombineOp();
+    b.cloneRegionBefore(op.getCombineOp(), sgReduceRegion,
+                        sgReduceRegion.end());
+    glueVals.push_back(sgReduce->getResult(0));
+  }
+
+  auto resultType = cast<RankedTensorType>(op.getResultTypes()[0]);
+  RankedTensorType glueType =
+      RankedTensorType::get(resultType.getShape(), resultType.getElementType());
+  Value glue = glueVals.size() == 1
+                   ? glueVals.front()
+                   : b.create<ttgi::GlueOp>(loc, glueType, glueVals);
+  Value res = b.create<ttg::ConvertLayoutOp>(loc, resultType, glue);
+  op->replaceAllUsesWith(ValueRange{res});
+  op->erase();
+}
+
 void MatchTargetSizePass::transformReduceOp(tt::ReduceOp op) {
+  if (mlir::triton::gpu::intel::applyTransposedReduction()) {
+    transformTransposedReduceOp(op);
+    return;
+  }
+
   Location loc = op.getLoc();
   OpBuilder b(op);
   assert(op.getSrcs().size() == 1 && "only support one src");
@@ -1018,7 +1156,7 @@ void MatchTargetSizePass::transformDotOp(tt::DotOp dot) {
   dot->erase();
 }
 
-void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
+void MatchTargetSizePass::transformBroadcastOp(ttgi::BroadcastOp op) {
   OpBuilder b(op);
   Location loc = op->getLoc();
   RankedTensorType resType = op.getResult().getType();
@@ -1056,7 +1194,7 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
     SmallVector<Value> subBroadcasts;
     for (int i = 0; i < nExtracts; ++i) {
       auto ext = b.create<ttgi::ExtractOp>(loc, subRowVecTy, op.getSrc(), i);
-      auto sbc = b.create<tt::BroadcastOp>(loc, tType, ext);
+      auto sbc = b.create<ttgi::BroadcastOp>(loc, tType, ext);
       subBroadcasts.push_back(sbc);
     }
 
@@ -1079,7 +1217,9 @@ void MatchTargetSizePass::transformBroadcastOp(tt::BroadcastOp op) {
 }
 
 void MatchTargetSizePass::transformMakeRangeOp(tt::MakeRangeOp op) {
-  constexpr unsigned subgroupSize = 16;
+  auto mod = op->getParentOfType<mlir::ModuleOp>();
+  int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
   unsigned start = op.getStart();
   unsigned end = op.getEnd();
   assert(start == 0 && end % subgroupSize == 0 && "Unsupported range");

@@ -42,6 +42,7 @@ class XPUOptions:
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
+    deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     allow_fp8e4nv: bool = False
@@ -242,10 +243,17 @@ class XPUBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        intel.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
+        # FIXME: Advanced path drops tensor layouts, so this will crash on some
+        # operations being used, e.g., convert_layout.
+        if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
+            intel.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        intel.passes.ttgpuir.add_allocate_shared_memory(pm)
+        # FIXME: Advanced path uses custom type conversion and needs hacky
+        # solutions for SLM allocation, so this will crash on some operations
+        # being used, e.g., convert_layout.
+        if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
+            intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)

@@ -37,6 +37,7 @@
 ///     tt.advance %prefetch_ptr
 //===----------------------------------------------------------------------===//
 
+#include "TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -49,8 +50,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Debug.h"
-
 #include <optional>
 
 namespace mlir::triton::gpu::intel {
@@ -402,25 +401,53 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
   auto yield = cast<scf::YieldOp>(newLoop.getBody()->getTerminator());
   loop.erase();
 
+  Attribute attr = loop->getAttr(AttrWorkloadName);
+  assert(attr && "Expecting a workload attribute");
+  Workload workload = static_cast<Workload>(cast<IntegerAttr>(attr).getInt());
   SmallVector<Value> advances;
   unsigned i = 0;
-  Operation *prefetchInsertPoint = loopLoads.at(loop).back();
-  for (tt::LoadOp load : loopLoads.at(loop)) {
-    b.setInsertionPointAfter(prefetchInsertPoint);
-    Location loc = load.getLoc();
-    auto prefetch =
-        b.create<ttgi::PrefetchOp>(loc, args[num + 1 + i], load.getCache(),
-                                   load.getEvict(), load.getIsVolatile());
-    prefetchInsertPoint = prefetch;
 
-    const LoadInfo &loadInfo = loadToLoadInfo.at(load);
-    b.setInsertionPoint(loadInfo.getAdvance());
-    loc = loadInfo.getAdvance().getLoc();
-    auto advance =
-        b.create<tt::AdvanceOp>(loc, args[num + 1 + i].getType(),
-                                args[num + 1 + i], loadInfo.getOffsets());
-    advances.push_back(advance);
-    i++;
+  // Inject prefetches in a different fashion depending on workload type.
+  switch (workload) {
+  case Workload::Gemm: {
+    Operation *prefetchInsertPoint = loopLoads.at(loop).back();
+    for (tt::LoadOp load : loopLoads.at(loop)) {
+      b.setInsertionPointAfter(prefetchInsertPoint);
+      Location loc = load.getLoc();
+      auto prefetch =
+          b.create<ttgi::PrefetchOp>(loc, args[num + 1 + i], load.getCache(),
+                                     load.getEvict(), load.getIsVolatile());
+      prefetchInsertPoint = prefetch;
+
+      const LoadInfo &loadInfo = loadToLoadInfo.at(load);
+      b.setInsertionPoint(loadInfo.getAdvance());
+      loc = loadInfo.getAdvance().getLoc();
+      auto advance =
+          b.create<tt::AdvanceOp>(loc, args[num + 1 + i].getType(),
+                                  args[num + 1 + i], loadInfo.getOffsets());
+      advances.push_back(advance);
+      i++;
+    }
+  } break;
+  case mlir::Workload::Attention: {
+    for (tt::LoadOp load : loopLoads.at(loop)) {
+      const LoadInfo &loadInfo = loadToLoadInfo.at(load);
+      b.setInsertionPoint(loadInfo.getAdvance());
+      Location loc = load.getLoc();
+      auto prefetch =
+          b.create<ttgi::PrefetchOp>(loc, args[num + 1 + i], load.getCache(),
+                                     load.getEvict(), load.getIsVolatile());
+
+      loc = loadInfo.getAdvance().getLoc();
+      auto advance =
+          b.create<tt::AdvanceOp>(loc, args[num + 1 + i].getType(),
+                                  args[num + 1 + i], loadInfo.getOffsets());
+      advances.push_back(advance);
+      i++;
+    }
+  } break;
+  default:
+    llvm_unreachable("unexpected workload kind");
   }
 
   // FIXME: try to use a named barrier to increase performance.

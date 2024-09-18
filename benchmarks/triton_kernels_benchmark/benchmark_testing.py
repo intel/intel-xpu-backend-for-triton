@@ -1,11 +1,9 @@
 import argparse
-import functools
 import itertools
 import os
-import subprocess
-import sys
-from contextlib import contextmanager
 from typing import Any, Dict, List
+
+USE_IPEX_OPTION = os.getenv("USE_IPEX", "1") == "1"
 
 
 def synchronize():
@@ -16,8 +14,26 @@ def synchronize():
         torch.xpu.synchronize()
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-             device="xpu", sync_submitting=True):
+def _summarize_statistics(times, quantiles, return_mode):
+    import torch
+    if quantiles is not None:
+        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+        if times.numel() > 2:
+            # exclude max and min times
+            times = torch.sort(times).values[1:-1]
+        # add coefficient of the variance.
+        std = torch.std(times)
+        mean = torch.mean(times)
+        cv = std / mean
+        ret.extend([mean.tolist(), cv.tolist()])
+        if len(ret) == 1:
+            ret = ret[0]
+        return ret
+    return getattr(torch, return_mode)(times).item()
+
+
+def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
+                  device="xpu", sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -35,6 +51,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     :param fast_flush: Use faster kernel to flush L2 between measurements
     :type fast_flush: bool
     """
+    # TODO: remove this function and switch to `do_bench_no_ipex` after
+    # `XPUEvent.elapsed_time` stops introducing regressions into the results.
+
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
     from torch.autograd.profiler import record_function
@@ -45,10 +64,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
+    cache_size = 256 * 1024 * 1024
     if fast_flush:
-        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device=device)
+        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
     else:
-        cache = torch.empty(int(256e6), dtype=torch.int8, device=device)
+        cache = torch.empty(int(cache_size), dtype=torch.int8, device=device)
 
     # Estimate the runtime of the function
     start_event = torch.xpu.Event(enable_timing=True)
@@ -62,8 +82,8 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
-    n_warmup = max(warmup, int(warmup / estimate_ms))
-    n_repeat = max(rep, int(rep / estimate_ms))
+    n_warmup = max(1, int(warmup / estimate_ms))
+    n_repeat = max(1, int(rep / estimate_ms))
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -99,20 +119,41 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     assert len(kernels) == n_repeat, "the profiling number not match"
     # Make the time to the milliseconds.
     times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
-    if quantiles is not None:
-        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
-        if times.numel() > 2:
-            # exclude max and min times
-            times = torch.sort(times).values[1:-1]
-        # add coefficient of the variance.
-        std = torch.std(times)
-        mean = torch.mean(times)
-        cv = std / mean
-        ret.extend([mean.tolist(), cv.tolist()])
-        if len(ret) == 1:
-            ret = ret[0]
-        return ret
-    return getattr(torch, return_mode)(times).item()
+    return _summarize_statistics(times, quantiles, return_mode)
+
+
+def do_bench_no_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
+                     device="xpu"):
+    """
+    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
+    the 20-th and 80-th performance percentile.
+
+    :param fn: Function to benchmark
+    :type fn: Callable
+    :param warmup: Warmup time (in ms)
+    :type warmup: int
+    :param rep: Repetition time (in ms)
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensor to None
+    :type grad_to_none: torch.tensor, optional
+    :param quantiles: Performance percentile to return in addition to the median.
+    :type quantiles: list[float]
+    :param fast_flush: Use faster kernel to flush L2 between measurements
+    :type fast_flush: bool
+    """
+    assert return_mode in ["min", "max", "mean", "median"]
+    import torch
+    from triton.testing import do_bench as triton_do_bench
+
+    times = triton_do_bench(fn, warmup=warmup, rep=rep, grad_to_none=grad_to_none, fast_flush=fast_flush,
+                            return_mode="all", device_type=device)
+    times = torch.tensor(times, dtype=torch.float)
+    return _summarize_statistics(times, quantiles, return_mode)
+
+
+do_bench = do_bench_no_ipex
+if USE_IPEX_OPTION:
+    do_bench = do_bench_ipex
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=""):
@@ -359,72 +400,3 @@ def save_path_from_args(save_path: str):
     )
     args = parser.parse_args()
     return args.reports
-
-
-# create decorator that wraps test function into
-# a cuda-memcheck system call
-
-
-def cuda_memcheck(**target_kwargs):
-
-    def decorator(test_fn):
-
-        @functools.wraps(test_fn)
-        def wrapper(*args, **kwargs):
-            import psutil
-            ppid_name = psutil.Process(os.getppid()).name()
-            run_cuda_memcheck = target_kwargs.items() <= kwargs.items()
-            if run_cuda_memcheck and ppid_name != "cuda-memcheck":
-                path = os.path.realpath(test_fn.__globals__["__file__"])
-                # get path of current file
-                env = {"PATH": os.environ["PATH"], "PYTORCH_NO_CUDA_MEMORY_CACHING": "1"}
-                assert "request" in kwargs, "memcheck'ed test must have a (possibly unused) `request` fixture"
-                test_id = kwargs["request"].node.callspec.id
-                cmd = f"{path}::{test_fn.__name__}[{test_id}]"
-                out = subprocess.run(["cuda-memcheck", "pytest", "-vs", cmd], capture_output=True, env=env, check=False)
-                assert out.returncode == 0, "cuda-memcheck returned an error: bounds checking failed"
-                assert "ERROR SUMMARY: 0 errors" in str(out.stdout)
-            else:
-                test_fn(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
-
-
-@contextmanager
-def set_gpu_clock(ref_sm_clock=1350, ref_mem_clock=1215):
-    try:
-        subprocess.check_output(["nvidia-smi", "-i", "0", "-pm", "1"])
-        subprocess.check_output([
-            "nvidia-smi",
-            "-i",
-            "0",
-            f"--lock-gpu-clocks={ref_sm_clock},{ref_sm_clock}",
-        ])
-        subprocess.check_output([
-            "nvidia-smi",
-            "-i",
-            "0",
-            f"--lock-memory-clocks={ref_mem_clock},{ref_mem_clock}",
-        ])
-        cur_sm_clock = nvsmi(["clocks.current.sm"])[0]
-        cur_mem_clock = nvsmi(["clocks.current.memory"])[0]
-        assert abs(cur_sm_clock - ref_sm_clock) < 10, f"GPU SMs must run at {ref_sm_clock} MHz"
-        assert abs(cur_mem_clock - ref_mem_clock) < 10, f"GPU SMs must run at {ref_mem_clock} MHz"
-        tflops = 1e-6 * 2 * 108 * 4 * 256 * ref_sm_clock
-        gbps = 640 * 2 * ref_mem_clock * 1e-3
-        yield tflops, gbps
-    finally:
-        subprocess.check_output(["nvidia-smi", "-i", "0", "-pm", "0"])
-        subprocess.check_output(["nvidia-smi", "-i", "0", "-rgc"])
-        subprocess.check_output(["nvidia-smi", "-i", "0", "-rmc"])
-
-
-def nvsmi(attrs):
-    attrs = ",".join(attrs)
-    cmd = ["nvidia-smi", "-i", "0", "--query-gpu=" + attrs, "--format=csv,noheader,nounits"]
-    out = subprocess.check_output(cmd)
-    ret = out.decode(sys.stdout.encoding).split(",")
-    ret = [int(x) for x in ret]
-    return ret

@@ -23,7 +23,7 @@
 // Set to 1 to get raw output, not permuted
 #define _RAW_OUTPUT 0
 #define _USE_BFNH 1
-using T = sycl::ext::oneapi::bfloat16;
+using T = sycl::half;
 
 namespace gpu::xetla {
 
@@ -620,7 +620,9 @@ class FmhaForwardKernel;
 // The launcher of fmha forward kernel
 template <typename fmha_policy, typename T, bool kUseBias = false,
           bool kIsCausal = false, bool kIsTraining = false>
-sycl::event fmha_forward_impl(sycl::queue &q, uint32_t num_batches,
+sycl::event fmha_forward_impl(sycl::queue &q, void *_q, void *_k, void *_v,
+                              void *_out, void *_dropout_mask, void *_bias,
+                              void *_m, void *_l, uint32_t num_batches,
                               uint32_t num_heads, uint32_t head_size,
                               uint32_t num_queries, uint32_t num_keys,
                               uint64_t seed = 0, uint64_t offset = 123) {
@@ -642,14 +644,23 @@ sycl::event fmha_forward_impl(sycl::queue &q, uint32_t num_batches,
   uint32_t size_ml = shape.get_ml_size();
 
   // forward
-  T *query = sycl::malloc_shared<T>(size_query, q);
-  T *key = sycl::malloc_shared<T>(size_key, q);
-  T *value = sycl::malloc_shared<T>(size_key, q);
-  T *bias = sycl::malloc_shared<T>(size_attn_mask, q);
-  uint8_t *dropout_mask = sycl::malloc_shared<uint8_t>(size_score, q);
-  T *out = sycl::malloc_shared<T>(size_query, q);
-  float *m = sycl::malloc_shared<float>(size_ml, q);
-  float *l = sycl::malloc_shared<float>(size_ml, q);
+  // T *query = sycl::malloc_shared<T>(size_query, q);
+  // T *key = sycl::malloc_shared<T>(size_key, q);
+  // T *value = sycl::malloc_shared<T>(size_key, q);
+  T *query = static_cast<T *>(_q);
+  T *key = static_cast<T *>(_k);
+  T *value = static_cast<T *>(_v);
+
+  // T *bias = sycl::malloc_shared<T>(size_attn_mask, q);
+  T *bias = static_cast<T *>(_bias);
+  // uint8_t *dropout_mask = sycl::malloc_shared<uint8_t>(size_score, q);
+  uint8_t *dropout_mask = static_cast<uint8_t *>(_dropout_mask);
+  // T *out = sycl::malloc_shared<T>(size_query, q);
+  T *out = static_cast<T *>(_out);
+  // float *m = sycl::malloc_shared<float>(size_ml, q);
+  float *m = static_cast<float *>(_m);
+  // float *l = sycl::malloc_shared<float>(size_ml, q);
+  float *l = static_cast<float *>(_l);
 
   // fmha forward kernel
   using fmha_forward_op_t =
@@ -676,12 +687,12 @@ sycl::event fmha_forward_impl(sycl::queue &q, uint32_t num_batches,
           fmha_fwd_op(ei, args);
         });
   });
-  sycl::free(query, q);
-  sycl::free(key, q);
-  sycl::free(value, q);
-  sycl::free(bias, q);
-  sycl::free(dropout_mask, q);
-  sycl::free(out, q);
+  // sycl::free(query, q);
+  // sycl::free(key, q);
+  // sycl::free(value, q);
+  // sycl::free(bias, q);
+  // sycl::free(dropout_mask, q);
+  // sycl::free(out, q);
   return event;
 }
 

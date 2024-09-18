@@ -428,7 +428,8 @@ public:
         else if (auto makeRange = dyn_cast<tt::MakeRangeOp>(op))
           distributeMakeRangeOp(makeRange, warpId);
         else if (isa<tt::LoadOp, tt::DotOp, tt::AdvanceOp, tt::ReduceOp,
-                     tt::SplatOp, tt::BroadcastOp, tt::ExpandDimsOp>(op) ||
+                     tt::SplatOp, tt::BroadcastOp, ttgi::BroadcastOp,
+                     tt::ExpandDimsOp>(op) ||
                  op->getDialect() == arithDialect ||
                  op->getDialect() == mathDialect)
           distributeGenericOp(op);

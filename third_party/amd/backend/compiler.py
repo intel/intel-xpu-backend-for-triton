@@ -36,6 +36,7 @@ class HIPOptions:
     debug: bool = False
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
+    deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
@@ -177,6 +178,8 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if use_new_pipeliner or options.num_stages != 0:
             amd.passes.ttgpuir.add_reorder_instructions(pm)
+        amd.passes.ttgpuir.add_canonicalize_pointers(pm)
+        passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         pm.run(mod)
