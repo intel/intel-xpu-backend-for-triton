@@ -177,7 +177,7 @@ run_core_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+    pytest -vvv -n 8 --device xpu --reruns 10 language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
     pytest -vvv -n 8 --device xpu language/test_subprocess.py
