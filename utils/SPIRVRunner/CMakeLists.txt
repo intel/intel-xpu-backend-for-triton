@@ -34,4 +34,3 @@ add_dependencies(${TARGET_NAME} json)
 
 target_link_libraries(${TARGET_NAME} "${TORCH_LIBRARIES}")
 set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 17)
-
