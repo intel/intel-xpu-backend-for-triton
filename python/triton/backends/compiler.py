@@ -16,12 +16,6 @@ class GPUTarget(object):
     arch: Union[int, str, dict]
     warp_size: int
 
-    def __post_init__(self):
-        # Remove `<bound method PyCapsule._pybind11_conduit_v1_ of _XpuDeviceProperties..>`
-        # to fix `json.dumps(metadata, default=vars)` serialization.
-        # This field appears after updating pybind to 2.13.6.
-        self.arch.pop('_pybind11_conduit_v1_', None)
-
 
 class BaseBackend(metaclass=ABCMeta):
 
