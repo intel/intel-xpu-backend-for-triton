@@ -4,9 +4,6 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 
-if benchmark_suit.USE_IPEX_OPTION:
-    import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 
 @triton.jit
 def scan_kernel(x_ptr, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,  #
