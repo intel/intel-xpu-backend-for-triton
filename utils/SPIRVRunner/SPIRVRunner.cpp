@@ -258,8 +258,10 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
       if (value.is_number_integer()) {
         if (value.get<int>() == 1)
           ;
-        else
-          set_scalar_arg<int32_t>(cgh, narg++, &value);
+        else {
+          int32_t iarg = value.get<int>();
+          set_scalar_arg<int32_t>(cgh, narg++, static_cast<void *>(&iarg));
+        }
       } else if (value.is_string()) {
         set_scalar_arg<void *>(
             cgh, narg++,
@@ -270,7 +272,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     if (triton_args.shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(triton_args.shared_memory, cgh);
-      cgh.set_arg(narg++, local_buffer);
+      cgh.set_arg(narg, local_buffer);
     }
     std::cout << "#Args Set=" << narg
               << " :: #Expected ArgCount=" << expected_num_params << std::endl;
