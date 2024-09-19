@@ -726,50 +726,6 @@ struct TritonGENSplitBarrierWaitLowering
   }
 };
 
-struct TritonGENNamedBarrierSignalLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::NamedBarrierSignalOp> {
-  using ConvertOpToLLVMPattern<
-      TritonGEN::NamedBarrierSignalOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(TritonGEN::NamedBarrierSignalOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Value barrierId = op.getBarrierId();
-    Value threadGroupCount = op.getThreadGroupCount();
-    std::string funcName = "llvm.genx.GenISA.threadgroupnamedbarriers.signal." +
-                           getGenISATypeMangling(barrierId.getType()) + "." +
-                           getGenISATypeMangling(threadGroupCount.getType());
-    SmallVector<Type> argTypes{barrierId.getType(), threadGroupCount.getType()};
-    SmallVector<Value> args{barrierId, threadGroupCount};
-    LLVM::CallOp callOp = createDeviceFunctionCall(
-        rewriter, funcName, void_ty(rewriter.getContext()), argTypes, args, {},
-        convergentNoUnwindWillReturnAttrs);
-    rewriter.replaceOp(op, callOp);
-    return success();
-  }
-};
-
-struct TritonGENNamedBarrierWaitLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::NamedBarrierWaitOp> {
-  using ConvertOpToLLVMPattern<
-      TritonGEN::NamedBarrierWaitOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(TritonGEN::NamedBarrierWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Value barrierId = op.getBarrierId();
-    std::string funcName = "llvm.genx.GenISA.threadgroupnamedbarriers.wait." +
-                           getGenISATypeMangling(barrierId.getType());
-    SmallVector<Type> argTypes{barrierId.getType()};
-    SmallVector<Value> args{barrierId};
-    LLVM::CallOp callOp = createDeviceFunctionCall(
-        rewriter, funcName, void_ty(rewriter.getContext()), argTypes, args, {},
-        convergentNoUnwindWillReturnAttrs);
-    rewriter.replaceOp(op, callOp);
-    return success();
-  }
-};
-
 struct TritonSubGroupBase {
 protected:
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
@@ -1338,15 +1294,14 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  patterns.add<
-      TritonGENSubgroupIdLowering, TritonGENSubgroupLocalIdLowering,
-      TritonGENBarrierLowering, TritonGENSplitBarrierSignalLowering,
-      TritonGENSplitBarrierWaitLowering, TritonGENNamedBarrierSignalLowering,
-      TritonGENNamedBarrierWaitLowering, TritonSubGroupReduceLowering,
-      TritonSubGroupScanLowering, TritonMatrixDPASLowering,
-      TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
-      TritonMatrix2DBlockPrefetchLowering, TritonSIMDBlockReadLowering,
-      TritonSIMDBlockWriteLowering>(converter);
+  patterns
+      .add<TritonGENSubgroupIdLowering, TritonGENSubgroupLocalIdLowering,
+           TritonGENBarrierLowering, TritonGENSplitBarrierSignalLowering,
+           TritonGENSplitBarrierWaitLowering, TritonSubGroupReduceLowering,
+           TritonSubGroupScanLowering, TritonMatrixDPASLowering,
+           TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+           TritonMatrix2DBlockPrefetchLowering, TritonSIMDBlockReadLowering,
+           TritonSIMDBlockWriteLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
