@@ -148,7 +148,7 @@ install_deps() {
   else
     echo "**** Installing pytorch ****"
     if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
-      $SCRIPTS_DIR/compile-pytorch-ipex.sh --pytorch --ipex --pinned --source $([ $VENV = true ] && echo "--venv")
+      $SCRIPTS_DIR/compile-pytorch-ipex.sh $([ $VENV = true ] && echo "--venv")
     else
       $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
     fi

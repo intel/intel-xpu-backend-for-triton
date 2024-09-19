@@ -122,41 +122,6 @@ def TritonGEN_SplitBarrierWaitOp : TritonGEN_Op<"split_barrier_wait"> {
   }];
 }
 
-def TritonGEN_NamedBarrierSignalOp : TritonGEN_Op<"named_barrier_signal">,
-  Arguments<(ins I32:$barrier_id, I32:$thread_group_count)> {
-  let summary = "Named barrier signal";
-
-  let description = [{
-    The `triton_gen.named_barrier_signal` operation signals the arrival of a
-    thread at the current program point. The '$barrier_id' parameter is an
-    integer value which identifies the named barrier. The '$thread_group_count'
-    parameter specifies the number of threads participating in the barrier. Once
-    all participating threads have signaled their arrival, any other participating
-    thread waiting at the `triton_gen.named_barrier_wait` operation associated
-    with the same '$barrier_id' can exit the wait operation.
-  }];
-
-  let assemblyFormat = [{
-    operands attr-dict `:` `(` type(operands) `)`
-  }];
-}
-
-def TritonGEN_NamedBarrierWaitOp : TritonGEN_Op<"named_barrier_wait">,
-  Arguments<(ins I32:$barrier_id)> {
-  let summary = "Named barrier wait";
-
-  let description = [{
-    The `triton_gen.named_barrier_wait` operation blocks threads participating in
-    the named barrier operation identified by '$barrier_id' until all
-    participating threads have reached the `triton_gen.named_barrier_signal`
-    operation associated with the same '$barrier_id'.
-  }];
-
-  let assemblyFormat = [{
-    operands attr-dict `:` type(operands)
-  }];
-}
-
 def TritonGEN_SubGroupReduceOp : TritonGEN_Op<"sub_group_reduce", [
       AllTypesMatch<["res", "value"]>]>,
   Results<(outs SignlessIntegerOrFloatLike:$res)>,

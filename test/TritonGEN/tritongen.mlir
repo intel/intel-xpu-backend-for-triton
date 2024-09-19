@@ -29,20 +29,6 @@ llvm.func @triton_gen.split_barrier_wait() {
   llvm.return
 }
 
-llvm.func @triton_gen.named_barrier_signal(%barrier_id : i32, %thread_group_count : i32) {
-  // CHECK-LABEL: triton_gen.named_barrier_signal(%arg0: i32, %arg1: i32) {
-  // CHECK-NEXT: triton_gen.named_barrier_signal %arg0, %arg1 : (i32, i32)
-  triton_gen.named_barrier_signal %barrier_id, %thread_group_count : (i32, i32)
-  llvm.return
-}
-
-llvm.func @triton_gen.named_barrier_wait(%barrier_id : i32) {
-  // CHECK-LABEL: triton_gen.named_barrier_wait(%arg0: i32) {
-  // CHECK-NEXT: triton_gen.named_barrier_wait %arg0 : i32
-  triton_gen.named_barrier_wait %barrier_id : i32
-  llvm.return
-}
-
 // -----
 
 module attributes {
