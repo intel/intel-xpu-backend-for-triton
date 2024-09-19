@@ -98,7 +98,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          ZE_FLAT_DEVICE_HIERARCHY=COMPOSITE IPEX_TILE_AS_DEVICE=0 python fused_softmax.py --reports $REPORTS
+          python fused_softmax.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
@@ -179,7 +179,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          python flash_attention_fwd_benchmark.py --reports $REPORTS
+          ZE_FLAT_DEVICE_HIERARCHY=COMPOSITE python flash_attention_fwd_benchmark.py --reports $REPORTS
 
           TAG=${{ inputs.tag || 'ci' }}
           source ../../scripts/capture-hw-details.sh
@@ -194,7 +194,7 @@ jobs:
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
           IGC_DisableLoopUnroll=1 \
-          python flash_attention_fwd_benchmark.py --reports $REPORTS
+          ZE_FLAT_DEVICE_HIERARCHY=COMPOSITE python flash_attention_fwd_benchmark.py --reports $REPORTS
 
           TAG=${{ inputs.tag || 'ci' }}-dflt
           source ../../scripts/capture-hw-details.sh
@@ -209,7 +209,7 @@ jobs:
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
           IGC_DisableLoopUnroll=1 \
-          python flash_attention_fwd_benchmark.py --reports $REPORTS
+          ZE_FLAT_DEVICE_HIERARCHY=COMPOSITE python flash_attention_fwd_benchmark.py --reports $REPORTS
 
           TAG=${{ inputs.tag || 'ci' }}-adv
           source ../../scripts/capture-hw-details.sh
