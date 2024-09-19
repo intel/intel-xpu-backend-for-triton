@@ -98,7 +98,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          python fused_softmax.py --reports $REPORTS
+          ZE_FLAT_DEVICE_HIERARCHY=COMPOSITE IPEX_TILE_AS_DEVICE=0 python fused_softmax.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
