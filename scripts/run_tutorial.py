@@ -47,14 +47,18 @@ def run_tutorial(path: pathlib.Path):
 def main():
     """Main."""
     args = create_argument_parser().parse_args()
+    tutorial_path = pathlib.Path(args.tutorial)
     reports_path = pathlib.Path(args.reports)
+    name = tutorial_path.stem
+    report_path = reports_path / name
+    report_path.mkdir(parents=True, exist_ok=True)
 
     def perf_report(benchmarks):
         """Marks a function for benchmarking."""
-        return lambda fn: CustomMark(fn, benchmarks, reports_path)
+        return lambda fn: CustomMark(fn, benchmarks, report_path)
 
     triton.testing.perf_report = perf_report
-    run_tutorial(pathlib.Path(args.tutorial))
+    run_tutorial(tutorial_path)
 
 
 if __name__ == '__main__':
