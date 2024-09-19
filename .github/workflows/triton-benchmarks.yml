@@ -94,6 +94,87 @@ jobs:
           cd benchmarks
           python setup.py install
 
+      - name: Run Triton Softmax kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python fused_softmax.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python gemm_benchmark.py --reports $REPORTS
+          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-base.csv
+          source ../../scripts/capture-hw-details.sh
+
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM kernel benchmark - default path
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          # Default path:
+          TRITON_INTEL_ADVANCED_PATH=0 \
+          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+          IGC_VISAOptions=" -enableBCR -nolocalra" \
+          IGC_DisableLoopUnroll=1 \
+          python gemm_benchmark.py --reports $REPORTS
+          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-default-path.csv
+
+          TAG=${{ inputs.tag || 'ci' }}-dflt
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-default-path.csv $REPORTS/gemm-triton-default-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM kernel benchmark - advanced path
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          # Advanced path:
+          TRITON_INTEL_ADVANCED_PATH=1 \
+          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+          IGC_VISAOptions=" -enableBCR -nolocalra" \
+          IGC_DisableLoopUnroll=1 \
+          python gemm_benchmark.py --reports $REPORTS
+          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-adv-path.csv
+
+          TAG=${{ inputs.tag || 'ci' }}-adv
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-adv-path.csv $REPORTS/gemm-triton-advanced-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM + PreOp (exp) kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python gemm_preop_exp_benchmark.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-preop-exp.csv $REPORTS/gemm-preop-exp-triton-report.csv --benchmark gemm-preop-exp --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM + PostOp (Gelu) kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python gemm_postop_gelu_benchmark.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-gelu.csv $REPORTS/gemm-postop-gelu-triton-report.csv --benchmark gemm-postop-gelu --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python gemm_postop_addmatrix_benchmark.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix.csv $REPORTS/gemm-postop-addmatrix-triton-report.csv --benchmark gemm-postop-addmatrix --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
       - name: Run Triton FA kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
