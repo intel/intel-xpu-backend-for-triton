@@ -9,8 +9,9 @@ import tempfile
 import triton.testing
 
 
-class CustomMark(triton.testing.Mark):
+class CustomMark(triton.testing.Mark):  # pylint: disable=too-few-public-methods
     """Custom Mark to set save_path."""
+
     def __init__(self, fn, benchmarks, reports_path: pathlib.Path):
         self.fn = fn
         self.benchmarks = benchmarks
@@ -21,19 +22,19 @@ class CustomMark(triton.testing.Mark):
         if 'save_path' in kwargs:
             return super().run(**kwargs)
         with tempfile.TemporaryDirectory() as tmp_dir:
-            super().run(save_path=tmp_dir, **kwargs)
+            result = super().run(save_path=tmp_dir, **kwargs)
             for file in pathlib.Path(tmp_dir).glob('*.csv'):
                 print(f'Report file: {file.name}')
                 shutil.move(file, self.reports_path)
+            return result
 
 
 def create_argument_parser() -> argparse.ArgumentParser:
     """Creates argument parser."""
     parser = argparse.ArgumentParser()
     parser.add_argument('tutorial', help='Tutorial to run')
-    parser.add_argument(
-        '--reports', required=False, type=str, default='.',
-        help='Directory to store tutorial CSV reports, default: %(default)s')
+    parser.add_argument('--reports', required=False, type=str, default='.',
+                        help='Directory to store tutorial CSV reports, default: %(default)s')
     return parser
 
 
@@ -63,4 +64,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
