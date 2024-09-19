@@ -66,7 +66,7 @@ run_tutorial_test() {
     fi
 
     if [[ $TRITON_TEST_REPORTS = true ]]; then
-        RUN_TUTORIAL="python3 -u $SCRIPTS_DIR/run_tutorial.py --reports $TRITON_TEST_REPORTS $1.py"
+        RUN_TUTORIAL="python3 -u $SCRIPTS_DIR/run_tutorial.py --reports $TRITON_TEST_REPORTS_DIR $1.py"
     else
         RUN_TUTORIAL="python3 -u $1.py"
     fi
