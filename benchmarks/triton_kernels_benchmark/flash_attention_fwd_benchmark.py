@@ -225,7 +225,6 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
 
     elif provider == 'triton':
         triton_fn = lambda: forward(q, k, v, causal, sm_scale)
-        # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
         torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(
             q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=sm_scale).to(torch.float32)
         atol = 1e-1 if N_CTX == 16384 else 1e-2
