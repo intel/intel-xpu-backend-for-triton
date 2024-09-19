@@ -235,7 +235,7 @@ run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
-  USE_IPEX=0 python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
+  python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
 run_benchmark_softmax() {

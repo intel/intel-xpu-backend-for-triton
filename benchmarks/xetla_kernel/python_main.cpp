@@ -4,27 +4,17 @@
 #include "stream_k_gemm/stream_k_gemm.h"
 #include <CL/sycl.hpp>
 #include <c10/core/ScalarType.h>
+#include <c10/xpu/XPUStream.h>
 #include <cstdint>
 #include <torch/extension.h>
-
-#ifdef USE_IPEX
-#include <ipex.h>
-#else
-#include <c10/xpu/XPUStream.h>
-#endif
 
 sycl::queue get_current_sycl_queue() {
   // submit kernel
   c10::impl::VirtualGuardImpl impl(at::DeviceType::XPU);
   c10::Stream stream = impl.getStream(impl.getDevice());
 
-#ifdef USE_IPEX
-  auto queue = xpu::get_queue_from_stream(stream);
-#else
   auto xpu_stream = c10::xpu::XPUStream(stream);
   auto queue = xpu_stream.queue();
-#endif
-
   return queue;
 }
 
