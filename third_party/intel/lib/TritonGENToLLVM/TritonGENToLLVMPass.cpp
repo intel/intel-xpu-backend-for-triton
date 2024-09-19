@@ -88,7 +88,7 @@ static LLVM::CallOp createDeviceFunctionCall(
     ArrayRef<Type> argTypes, ArrayRef<Value> args,
     mlir::ArrayRef<std::pair<unsigned, mlir::StringRef>> paramAttrs,
     const LLVMFuncAttributeOptions &funcAttributeOptions,
-    intel::AttributeList passthroughAttrs = {}) {
+    const intel::AttributeList &passthroughAttrs = {}) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *ctx = rewriter.getContext();
   Location loc = UnknownLoc::get(ctx);
@@ -615,9 +615,9 @@ struct TritonGENSubgroupIdLowering
     funcAttrs.memEffectsAttr = memory_zero;
     intel::AttributeList passthroughAttrs = createFunctionAttributes(
         {{llvm::Attribute::NoSync, std::nullopt}}, ctx);
-    LLVM::CallOp callOp =
-        createDeviceFunctionCall(rewriter, "_Z16get_sub_group_idv", retType, {},
-                                 {}, {}, funcAttrs, passthroughAttrs);
+    LLVM::CallOp callOp = createDeviceFunctionCall(
+        rewriter, "_Z16get_sub_group_idv", retType, {}, {}, {},
+        std::move(funcAttrs), std::move(passthroughAttrs));
     rewriter.replaceOp(op, callOp);
     return success();
   }
