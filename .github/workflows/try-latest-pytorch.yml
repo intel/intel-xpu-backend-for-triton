@@ -2,6 +2,8 @@ name: Try latest PyTorch
 run-name: ${{ inputs.run_name }}
 
 on:
+  schedule:
+    - cron: '0 5 * * 1,3'
   workflow_dispatch:
     inputs:
       runner_label:
@@ -21,7 +23,7 @@ on:
         type: boolean
         default: false
       skip_list:
-        description: Skip list
+        description: Skip list for Tutorials and UT (empty is "default")
         type: string
         default: ""
       run_name:
@@ -124,6 +126,6 @@ jobs:
       mode: ${{ matrix.mode }}
       test_mode: accuracy
       dtype: ${{ matrix.dtype }}
-      models: "all"
+      models: subset
       only_one_model: ""
       runner_label: "${{ matrix.runner_label }}"

@@ -23,7 +23,7 @@
 // Set to 1 to get raw output, not permuted
 #define _RAW_OUTPUT 0
 #define _USE_BFNH 1
-using T = sycl::ext::oneapi::bfloat16;
+using T = sycl::half;
 
 namespace gpu::xetla {
 

@@ -87,7 +87,7 @@ static LLVM::CallOp createDeviceFunctionCall(
     ConversionPatternRewriter &rewriter, StringRef funcName, Type retType,
     ArrayRef<Type> argTypes, ArrayRef<Value> args,
     mlir::ArrayRef<std::pair<unsigned, mlir::StringRef>> paramAttrs,
-    LLVMFuncAttributeOptions funcAttributeOptions,
+    const LLVMFuncAttributeOptions &funcAttributeOptions,
     intel::AttributeList passthroughAttrs = {}) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *ctx = rewriter.getContext();
