@@ -42,6 +42,9 @@ def run_tutorial(path: pathlib.Path):
     """Runs """
     spec = importlib.util.spec_from_file_location('__main__', path)
     module = importlib.util.module_from_spec(spec)
+    # set __file__ to the absolute name, a workaround for 10i-experimental-block-pointer, which
+    # uses dirname of its location to find 10-experimental-block-pointer.
+    module.__file__ = path.resolve().as_posix()
     spec.loader.exec_module(module)
 
 
