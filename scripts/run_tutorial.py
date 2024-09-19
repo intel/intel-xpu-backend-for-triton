@@ -1,4 +1,4 @@
-"""Script to run a Triton tutorial and collect csv files generated the tutorial."""
+"""Script to run a Triton tutorial and collect generated csv files."""
 
 import argparse
 import importlib.util
