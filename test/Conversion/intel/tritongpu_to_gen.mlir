@@ -700,7 +700,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_blocked_blocked({{.*}}%arg1: !llvm.ptr<3>)
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.store
@@ -747,7 +747,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_blocked_blocked_vec({{.*}}%arg1: !llvm.ptr<3>)
   tt.func @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.store
@@ -770,7 +770,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_blocked_blocked_multi_rep({{.*}}%arg1: !llvm.ptr<3>)
   tt.func @convert_layout_blocked_blocked_multi_rep(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.store
@@ -831,7 +831,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_dpas_block
   tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x16xf32, #dpas>) {
     // CHECK: llvm.store
@@ -851,7 +851,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_dpas_block
   tt.func @convert_layout_dpas_blocked(%arg0: tensor<32x64xf32, #dpas>) {
     // CHECK: llvm.store
@@ -931,7 +931,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_blocked_to_blocked_ptr
   tt.func @convert_blocked_to_blocked_ptr(%src:tensor<32x!tt.ptr<f32>, #blocked0>) {
     // CHECK: llvm.ptrtoint
@@ -1045,7 +1045,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // -----
 
 module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: atomic_cas_f32_scalar_no_store
   tt.func @atomic_cas_f32_scalar_no_store(%ptr : !tt.ptr<f32>, %cmp : f32, %val : f32) {
     // CHECK:      [[TRUE:%.*]] = llvm.mlir.constant(true) : i1
@@ -1072,7 +1072,7 @@ module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32,
 // -----
 
 module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: atomic_cas_f32_scalar
   tt.func @atomic_cas_f32_scalar(%ptr : !tt.ptr<f32>, %cmp : f32, %val : f32) {
     // CHECK:      [[TRUE:%.*]] = llvm.mlir.constant(true) : i1
@@ -1109,7 +1109,7 @@ module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32,
 
 #blocked0 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: atomic_add_f32
   tt.func @atomic_add_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
     // CHECK:      [[EV0_ARG2:%.*]] = llvm.extractvalue %arg2[0] : !llvm.struct<(f32, f32)>
@@ -1147,7 +1147,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // -----
 
 module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: atomic_add_f32_scalar_no_store
   tt.func @atomic_add_f32_scalar_no_store(%arg0 : !tt.ptr<f32>, %arg1 : i1, %arg2 : f32) {
     // CHECK:      [[CST_TRUE:%.*]] = llvm.mlir.constant(true) : i1
@@ -1175,7 +1175,7 @@ module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32,
 // -----
 
 module attributes {"triton_gpu.target" = "xpu", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {passthrough = ["convergent", "nounwind", "willreturn"]}
+  // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: atomic_add_f32_scalar
   tt.func @atomic_add_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : i1, %arg2 : f32) {
     // CHECK:      [[CST_TRUE:%.*]] = llvm.mlir.constant(true) : i1
@@ -1641,7 +1641,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 // CHECK-LABEL: sum_reduction
 // CHECK: llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_addi(%{{.*}}) {{.*}} : (i32) -> i32
 // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
-// CHECK: llvm.call spir_funccc @_Z30sub_group_clustered_reduce_addij(%{{.*}}, %{{.*}}) {{.*}} passthrough = ["convergent", "nounwind", "willreturn"]{{.*}} : (i32, i32) -> i32
+// CHECK: llvm.call spir_funccc @_Z30sub_group_clustered_reduce_addij(%{{.*}}, %{{.*}}) {{.*}}convergent{{.*}}no_unwind{{.*}}will_return{{.*}} : (i32, i32) -> i32
+
 // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>

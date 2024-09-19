@@ -35,10 +35,10 @@ on:
 
   pull_request:
     branches:
-      - llvm-target
+      - main
   push:
     branches:
-      - llvm-target
+      - main
 
 permissions: read-all
 

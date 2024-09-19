@@ -24,6 +24,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     :param fast_flush: Use faster kernel to flush L2 between measurements
     :type fast_flush: bool
     """
+    # TODO: remove this function and switch to `do_bench_no_ipex` after
+    # `XPUEvent.elapsed_time` stops introducing regressions into the results.
+
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
 

@@ -8,16 +8,12 @@ To compare the performance to XeTLA kernel.
 """
 
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 import triton
 import triton.language as tl
 from triton.runtime import driver
 
-import triton_kernels_benchmark
+import triton_kernels_benchmark as benchmark_suit
 import xetla_kernel
-
-benchmark_suit = triton_kernels_benchmark  # triton.testing
 
 
 @torch.jit.script

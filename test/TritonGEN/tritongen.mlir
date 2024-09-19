@@ -29,20 +29,6 @@ llvm.func @triton_gen.split_barrier_wait() {
   llvm.return
 }
 
-llvm.func @triton_gen.named_barrier_signal(%barrier_id : i32, %thread_group_count : i32) {
-  // CHECK-LABEL: triton_gen.named_barrier_signal(%arg0: i32, %arg1: i32) {
-  // CHECK-NEXT: triton_gen.named_barrier_signal %arg0, %arg1 : (i32, i32)
-  triton_gen.named_barrier_signal %barrier_id, %thread_group_count : (i32, i32)
-  llvm.return
-}
-
-llvm.func @triton_gen.named_barrier_wait(%barrier_id : i32) {
-  // CHECK-LABEL: triton_gen.named_barrier_wait(%arg0: i32) {
-  // CHECK-NEXT: triton_gen.named_barrier_wait %arg0 : i32
-  triton_gen.named_barrier_wait %barrier_id : i32
-  llvm.return
-}
-
 // -----
 
 module attributes {
@@ -156,14 +142,14 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base
 
 llvm.func @triton_gen.simdblockread(%ptr : !llvm.ptr) {
   // CHECK:      llvm.func @triton_gen.simdblockread(%arg0: !llvm.ptr) {
-  // CHECK-NEXT:   triton_gen.simdblockread %arg0 : (!llvm.ptr) -> vector<64xi16>
-  triton_gen.simdblockread %ptr : (!llvm.ptr) -> vector<64xi16>
+  // CHECK-NEXT:   triton_gen.simdblockread %arg0 : (!llvm.ptr) -> vector<2xi16>
+  triton_gen.simdblockread %ptr : (!llvm.ptr) -> vector<2xi16>
   llvm.return
 }
 
-llvm.func @triton_gen.simdblockwrite(%ptr : !llvm.ptr, %val : vector<64xi16>) {
-  // CHECK:      llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr, %arg1: vector<64xi16>) {
-  // CHECK-NEXT:    triton_gen.simdblockwrite %arg0, %arg1 : (!llvm.ptr, vector<64xi16>)
-  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr, vector<64xi16>)
+llvm.func @triton_gen.simdblockwrite(%ptr : !llvm.ptr, %val : vector<2xi16>) {
+  // CHECK:      llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr, %arg1: vector<2xi16>) {
+  // CHECK-NEXT:    triton_gen.simdblockwrite %arg0, %arg1 : (!llvm.ptr, vector<2xi16>)
+  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr, vector<2xi16>)
   llvm.return
 }

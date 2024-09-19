@@ -37,8 +37,8 @@ for arg in "$@"; do
       exit 1
       ;;
     *)
-      ARGS+="${arg} "
-      shift
+      echo "Unknown argument: $arg."
+      exit 1
       ;;
   esac
 done
@@ -178,13 +178,11 @@ build_triton() {
   fi
 
   cd python
-  pip install -e .
-
-  # Install triton tests.
+  # Install triton and its dependencies.
   pip install -vvv -e '.[build,tests]'
 
   # Copy compile_commands.json in the build directory (so that cland vscode plugin can find it).
-  cp $TRITON_PROJ_BUILD/"$(ls $TRITON_PROJ_BUILD)"/compile_commands.json $TRITON_PROJ/
+  cp $(find $TRITON_PROJ_BUILD -name compile_commands.json) $TRITON_PROJ/
 }
 
 build() {

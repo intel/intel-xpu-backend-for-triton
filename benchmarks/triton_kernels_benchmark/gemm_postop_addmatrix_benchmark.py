@@ -7,8 +7,6 @@ This benchmark is modified from gemm_benchmark.py to add a matrix to the output 
 """
 
 import torch
-import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 import triton
 import triton.language as tl
 
@@ -249,7 +247,7 @@ def matmul(a, b, d):
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='matmul-performance',
+        plot_name='matmul-performance-postop-addmatrix',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))

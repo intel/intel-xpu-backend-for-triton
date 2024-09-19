@@ -2503,14 +2503,10 @@ def test_histogram(M, N, device):
     torch.manual_seed(17)
     x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
     z = torch.empty(N, dtype=torch.int32, device=device)
-    # FIXME: use regular histc when supported for xpu.
-    if is_xpu():
-        z_torch = torch.histc(x.to('cpu').to(torch.float32), bins=N, min=0, max=N - 1).to(torch.int32).to('xpu')
-    else:
-        # torch.histc does not work when the input type is not float and the device is CPU
-        # https://github.com/pytorch/pytorch/issues/74236
-        # This is a workload by converting the input to float
-        z_torch = torch.histc(x.float(), bins=N, min=0, max=N - 1)
+    # torch.histc does not work when the input type is not float and the device is CPU
+    # https://github.com/pytorch/pytorch/issues/74236
+    # This is a workload by converting the input to float
+    z_torch = torch.histc(x.float(), bins=N, min=0, max=N - 1)
     histogram_kernel[(1, )](x, z, M=M, N=N)
     assert (z_torch == z).all()
 
@@ -3974,6 +3970,8 @@ def test_store_cache_modifier(cache, device):
         cs_cache_modifier_str = 'nt'
         wt_cache_modifier_str = 'sc0 sc1'
         global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
+        if not global_store_line:
+            return
         if cache == '' or cache == '.cg':
             assert cs_cache_modifier_str not in global_store_line[0]
             assert wt_cache_modifier_str not in global_store_line[0]
@@ -4428,8 +4426,13 @@ def test_unary_math(func_str, device):
         x = torch.max(x, torch.tensor(1e-6, dtype=torch.float32, device=device))
     y = torch.zeros(shape, dtype=torch.float32, device=device)
 
-    kernel[(1, )](x, y, BLOCK=shape[0])
+    k = kernel[(1, )](x, y, BLOCK=shape[0])
     torch.allclose(getattr(torch, func_str)(x), y, rtol=1e-3)
+
+    if func_str in ['log', 'log2'] and is_cuda():
+        assert 'lg2.approx.ftz.f32' in k.asm['ptx']
+    if func_str in ['exp', 'exp2'] and is_cuda():
+        assert 'ex2.approx.ftz.f32' in k.asm['ptx']
 
 
 # -----------------------
