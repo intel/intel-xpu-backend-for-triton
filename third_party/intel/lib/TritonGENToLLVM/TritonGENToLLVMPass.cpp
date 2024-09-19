@@ -615,9 +615,9 @@ struct TritonGENSubgroupIdLowering
     funcAttrs.memEffectsAttr = memory_zero;
     intel::AttributeList passthroughAttrs = createFunctionAttributes(
         {{llvm::Attribute::NoSync, std::nullopt}}, ctx);
-    LLVM::CallOp callOp = createDeviceFunctionCall(
-        rewriter, "_Z16get_sub_group_idv", retType, {}, {}, {},
-        std::move(funcAttrs), std::move(passthroughAttrs));
+    LLVM::CallOp callOp =
+        createDeviceFunctionCall(rewriter, "_Z16get_sub_group_idv", retType, {},
+                                 {}, {}, funcAttrs, passthroughAttrs);
     rewriter.replaceOp(op, callOp);
     return success();
   }
