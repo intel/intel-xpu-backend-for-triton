@@ -15,9 +15,6 @@ from triton.runtime import driver
 import triton_kernels_benchmark as benchmark_suit
 import xetla_kernel
 
-if benchmark_suit.USE_IPEX_OPTION:
-    import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 
 @torch.jit.script
 def naive_softmax(x):
