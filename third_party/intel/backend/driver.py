@@ -477,6 +477,7 @@ class XPUDriver(DriverBase):
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
         warp_size = 32
+        print(f"DEV_PROPERTY: {dev_property}")
         return GPUTarget("xpu", dev_property, warp_size)
 
     @staticmethod
