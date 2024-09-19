@@ -565,8 +565,10 @@ struct LoadOpConversion
     unsigned numRepOuter = numReps[opIdx];
     unsigned numRepInner = numReps[!opIdx];
 
-    Value pitch = trunc(i32_ty, rowStride);
-    if (!memoryRowMajor) {
+    Value pitch;
+    if (memoryRowMajor) {
+      pitch = trunc(i32_ty, rowStride);
+    } else {
       // Column major memory. We need to swap the width and height because HW
       // only support row major memory layout.
       pitch = trunc(i32_ty, colStride);
