@@ -64,7 +64,10 @@ def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fas
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
-    cache_size = 256 * 1024 * 1024
+    factor = 1
+    if os.getenv("ZE_FLAT_DEVICE_HIERARCHY", "FLAT") == "COMPOSITE":
+        factor = 2
+    cache_size = factor * 256 * 1024 * 1024
     if fast_flush:
         cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
     else:
