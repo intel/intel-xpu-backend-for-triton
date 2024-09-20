@@ -444,7 +444,7 @@ def kernel_meta_extractor(arg, args_dict):
 
 
 def serialize_args(args):
-    dir_path = os.path.realpath('spirv_runner_data')
+    dir_path = os.getenv('TRITON_XPU_DUMP_KERNEL_ARGS')
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
         print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
@@ -491,7 +491,7 @@ class XPULauncher(object):
     def __call__(self, *args, **kwargs):
         self.launch(*args, **kwargs)
         # Serialize KernelArguments for SPIR-V Runner
-        debug_mode = os.getenv('TRITON_DEBUG')
+        debug_mode = os.getenv('TRITON_SPIRV_RUNNER_ARGS')
         if debug_mode:
             serialize_args(args)
 
