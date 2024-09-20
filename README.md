@@ -330,13 +330,6 @@ Note that the user needs to explicitly set `TRITON_XPU_PROFILE=1` when the user 
 export TRITON_XPU_PROFILE=1
 ```
 
-# Changelog
-
-Version 2.2 is out! New features include:
-- Many, many bug fixes
-- Performance improvements for Intel GPU Max series
-- Support for kernels that contain back-to-back matmuls (e.g., flash attention)
-
 # Contributing
 
 Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/intel/intel-xpu-backend-for-triton). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
