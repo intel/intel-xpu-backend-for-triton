@@ -334,19 +334,6 @@ export TRITON_XPU_PROFILE=1
 
 Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/intel/intel-xpu-backend-for-triton). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
 
-
-# Compatibility
-
-Supported Platforms:
-  * Linux
-  * WSL2
-
-Supported Hardware:
-  * NVIDIA GPUs (Compute Capability 7.0+)
-  * AMD GPUs (ROCm 5.2+)
-  * Intel GPU Max 1100/1550, Intel Flex, Intel Arc A770
-  * Under development: CPUs
-
 ## License
 
 _MIT License_. As found in [LICENSE](https://github.com/intel/intel-xpu-backend-for-triton/blob/main/LICENSE) file.
