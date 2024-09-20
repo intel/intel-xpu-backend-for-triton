@@ -5,8 +5,6 @@ import shutil
 import tempfile
 from pathlib import Path
 from functools import cached_property
-import torch
-import json
 
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -453,7 +451,7 @@ def serialize_args(args):
     cnt = 0
     args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
     cnt = 4
-    for arg in args[4:]:
+    for arg in args[cnt:]:
         if type(arg).__name__ == "KernelMetadata":
             kernel_meta_extractor(arg, args_dict)
 
@@ -461,6 +459,7 @@ def serialize_args(args):
             cpu_tensor = arg.cpu()
             tensor_path = os.path.join(dir_path, f"tensor_{cnt}.pt")
             with open(tensor_path, 'wb') as f:
+                import torch
                 torch.save(cpu_tensor, f)
             tensor_type = arg.dtype
             tensor_name = f"tensor_{cnt}"
@@ -473,6 +472,7 @@ def serialize_args(args):
     # Dump argument info as a JSON file
     json_path = os.path.join(dir_path, 'args_data.json')
     with open(json_path, 'w') as json_file:
+        import json
         json.dump(args_dict, json_file, indent=4)
 
 
