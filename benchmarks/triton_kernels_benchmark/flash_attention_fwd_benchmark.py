@@ -60,6 +60,16 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     return acc, l_i, m_i
 
 
+configs = [
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w) \
+    for BM in [64, 128] \
+    for BN in [32, 64] \
+    for s in [3, 4] \
+    for w in [8, 16] \
+    ]
+
+
+@triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
 @triton.jit
 def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr, stride_qk: tl.constexpr,  #
@@ -157,13 +167,9 @@ def forward(q, k, v, causal, sm_scale):
     assert Lq == Lk and Lk == Lv
     assert Lk in {16, 32, 64, 128}
     o = torch.empty_like(q, dtype=torch.float32)
-    BLOCK_M = 128
-    BLOCK_N = 64 if Lk <= 64 else 32
-    num_stages = 4 if Lk <= 64 else 3
-    num_warps = 8 if Lq == 64 else 16
     causal = False
     stage = 3 if causal else 1
-    grid = (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], BLOCK_M))
+    grid = lambda args: (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], args['BLOCK_M']))
     M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
     _attn_fwd[grid](
         q, k, v, sm_scale, M, o,  #
@@ -173,12 +179,8 @@ def forward(q, k, v, causal, sm_scale):
         o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
         q.shape[0], q.shape[1],  #
         N_CTX=q.shape[2],  #
-        BLOCK_M=BLOCK_M,  #
-        BLOCK_N=BLOCK_N,  #
         BLOCK_DMODEL=Lk,  #
         STAGE=stage,  #
-        num_warps=num_warps,  #
-        num_stages=num_stages  #
     )
     return o
 
