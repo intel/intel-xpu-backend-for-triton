@@ -1106,10 +1106,6 @@ struct TritonMatrix2DBlockPrefetchLowering
                   ConversionPatternRewriter &rewriter) const override {
     // TODO: Remove GenISA lowering after PoC productization is completed.
     bool useGenISA = tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
-    if (tools::getBoolEnv("TRITON_INTEL_ENABLE_FAST_PREFETCH") &&
-        ((op.getElemSizeInBits() == 8 && op.getTileWidth() == 64) ||
-         (op.getElemSizeInBits() == 16 && op.getTileWidth() == 32)))
-      useGenISA = true;
     if (useGenISA) {
       rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
       return success();

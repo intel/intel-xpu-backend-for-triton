@@ -276,25 +276,23 @@ struct PrefetchOpConversion
     unsigned tileWidthInElem = shapePerWarp[1];
     unsigned tileHeightInElem = shapePerWarp[0];
     unsigned vBlocks = 1;
-    if (!tools::getBoolEnv("TRITON_INTEL_ENABLE_FAST_PREFETCH")) {
-      switch (elemSizeInBits) {
-      case 8:
-        if (tileWidthInElem == 64) {
-          // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
-          // element.
-          vBlocks = 2;
-          tileWidthInElem = 32;
-        }
-        break;
-      case 16:
-        if (tileWidthInElem == 32) {
-          // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
-          // element.
-          vBlocks = 2;
-          tileWidthInElem = 16;
-        }
-        break;
+    switch (elemSizeInBits) {
+    case 8:
+      if (tileWidthInElem == 64) {
+        // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 32;
       }
+      break;
+    case 16:
+      if (tileWidthInElem == 32) {
+        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 16;
+      }
+      break;
     }
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
