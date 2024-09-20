@@ -562,6 +562,19 @@ struct LoadOpConversion
 
     unsigned numRepOuter = numReps[opIdx];
     unsigned numRepInner = numReps[!opIdx];
+
+    Value pitch;
+    if (memoryRowMajor) {
+      pitch = trunc(i32_ty, rowStride);
+    } else {
+      // Column major memory. We need to swap the width and height because HW
+      // only support row major memory layout.
+      pitch = trunc(i32_ty, colStride);
+      std::swap(baseWidth, baseHeight);
+    }
+    baseWidth = trunc(i32_ty, baseWidth);
+    baseHeight = trunc(i32_ty, baseHeight);
+
     unsigned originalElemBits = elemBits;
     if (isTransposeRequired) {
       // adjust the block io parameter to align HW's limitations on
@@ -569,6 +582,8 @@ struct LoadOpConversion
       tileWidth = tileWidth / (32 / originalElemBits);
       elemBits = 32;
     }
+    Value elemSizeInBytes = i32_val(originalElemBits / 8);
+
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
@@ -588,17 +603,11 @@ struct LoadOpConversion
 
           offsetX = add(offsetX, offsetBaseX);
           offsetY = add(offsetY, offsetBaseY);
-          baseWidth = trunc(i32_ty, baseWidth);
-          baseHeight = trunc(i32_ty, baseHeight);
-          Value pitch = trunc(i32_ty, rowStride);
-          Value elemSizeInBytes = i32_val(originalElemBits / 8);
 
           if (!memoryRowMajor) {
             // Column major memory. We need to swap the X and Y because HW only
             // support row major memory layout.
-            pitch = trunc(i32_ty, colStride);
             std::swap(offsetX, offsetY);
-            std::swap(baseWidth, baseHeight);
           }
 
           if (isTransposeRequired) {

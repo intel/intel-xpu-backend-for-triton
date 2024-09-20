@@ -121,9 +121,10 @@ jobs:
           else
             skiplist=
           fi
+
           {
             echo SKIPLIST="$skiplist"
-            echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --ignore-errors $skiplist"
+            echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
           } | tee -a $GITHUB_ENV
 
       - name: Run unit tests
@@ -204,6 +205,13 @@ jobs:
         with:
           name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate*.json
+
+      - name: Upload tutorials performance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: reports/*/*.csv
+          if-no-files-found: warn
 
       - name: Upload test reports
         if: inputs.upload_test_reports
