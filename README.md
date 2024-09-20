@@ -228,6 +228,8 @@ Intel® XPU Backend for Triton\* requires a special version of PyTorch that can 
 1. Add `import torch` for xpu support.
 2. Put the tensor and models to XPU by calling `to('xpu')`.
 
+This repository contains modified [tutorials](python/tutorials) that must be used with Intel® XPU Backend for Triton\*.
+
 The following examples show modifications for the user code.
 
 ### Example 1 : Triton Kernel
@@ -285,10 +287,8 @@ print(
 )
 ```
 
-
 ### Example 2 : End-to-End Model
 Triton is transparent for end-to-end models. One could easily use `torch.compile` with `inductor` as backend by default. It will automatically generates triton kernel and gets benefit from it.
-
 
 ```Python
 import torch
@@ -313,10 +313,6 @@ optimized_mod = torch.compile(xpu_model)
 
 graph_result = optimized_mod(x)
 ```
-
-## More Examples on Tests
-If you wish to take a look at more examples, please refer to the [Unit Tests](docs/test_docs/unit_tests.md) and [End-to-End Benchmark Tests](docs/test_docs/end_to_end_tests.md).
-
 
 ## Performance Analysis Guide
 
