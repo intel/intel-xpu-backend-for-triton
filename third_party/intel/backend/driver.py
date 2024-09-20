@@ -436,11 +436,11 @@ def make_launcher(constants, signature, ids):
 
 
 def kernel_meta_extractor(arg, args_dict):
-    args_dict.update({'num_warps': getattr(arg, 'num_warps')})
-    args_dict.update({'threads_per_warp': getattr(arg, 'threads_per_warp')})
-    args_dict.update({'shared_memory': getattr(arg, 'shared')})
-    args_dict.update({'kernel_name': getattr(arg, 'name')})
-    args_dict.update({'spv_name': f"{getattr(arg, 'name')}.spv"})
+    args_dict['num_warps'] = arg.num_warps
+    args_dict['threads_per_warp'] = arg.threads_per_warp
+    args_dict['shared_memory'] = arg.shared
+    args_dict['kernel_name'] = arg.name
+    args_dict['spv_name'] = f"{arg.name}.spv"
 
 
 def serialize_args(args):
