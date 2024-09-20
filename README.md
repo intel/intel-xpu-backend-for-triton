@@ -223,7 +223,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 # Usage Guide
 
 ## Code Modifications
-Intel® XPU Backend for Triton\* doesn't require any modifications and will work with PyTorch 2.4 release out of the box.
+Intel® XPU Backend for Triton\* requires a special version of PyTorch that can be built from sources or installed from nightly wheels.
 
 1. Add `import torch` for xpu support.
 2. Put the tensor and models to XPU by calling `to('xpu')`.
