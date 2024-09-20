@@ -9,12 +9,6 @@ from setuptools import setup
 
 import torch
 
-ipex_cmake_prefix_path = ""
-USE_IPEX_OPTION = os.getenv("USE_IPEX", "1")
-if USE_IPEX_OPTION == "1":
-    import intel_extension_for_pytorch
-    ipex_cmake_prefix_path = f";{intel_extension_for_pytorch.cmake_prefix_path}"
-
 
 class CMakeBuild():
 
@@ -48,8 +42,7 @@ class CMakeBuild():
             "Ninja",  # Ninja is much faster than make
             "-DCMAKE_MAKE_PROGRAM=" +
             ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
-            f"-DCMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path}{ipex_cmake_prefix_path}",
-            f"-DUSE_IPEX={USE_IPEX_OPTION}",
+            f"-DCMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path}",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=" + self.extdir,
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + self.extdir,

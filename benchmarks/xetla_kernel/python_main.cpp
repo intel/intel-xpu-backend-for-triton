@@ -4,27 +4,17 @@
 #include "stream_k_gemm/stream_k_gemm.h"
 #include <CL/sycl.hpp>
 #include <c10/core/ScalarType.h>
+#include <c10/xpu/XPUStream.h>
 #include <cstdint>
 #include <torch/extension.h>
-
-#ifdef USE_IPEX
-#include <ipex.h>
-#else
-#include <c10/xpu/XPUStream.h>
-#endif
 
 sycl::queue get_current_sycl_queue() {
   // submit kernel
   c10::impl::VirtualGuardImpl impl(at::DeviceType::XPU);
   c10::Stream stream = impl.getStream(impl.getDevice());
 
-#ifdef USE_IPEX
-  auto queue = xpu::get_queue_from_stream(stream);
-#else
   auto xpu_stream = c10::xpu::XPUStream(stream);
   auto queue = xpu_stream.queue();
-#endif
-
   return queue;
 }
 
@@ -41,15 +31,9 @@ at::Tensor softmax(const at::Tensor &input, const at::Tensor &output,
                    const int64_t dim) {
   CHECK_INPUT(input);
   CHECK_INPUT(output);
-#ifdef USE_IPEX
-  RECORD_FUNCTION("xetla softmax", {input});
-#endif
 
   auto queue = get_current_sycl_queue();
   auto evt = softmax_forward<T>(input.data_ptr(), output.data_ptr(), queue);
-#ifdef USE_IPEX
-  xpu::profiler_record("xetla kernel", evt);
-#endif
   return output;
 }
 
@@ -61,16 +45,10 @@ at::Tensor bf16_gemm(const at::Tensor &a, const at::Tensor &b,
   CHECK_INPUT(b);
   CHECK_INPUT(c);
   CHECK_INPUT(acc);
-#ifdef USE_IPEX
-  RECORD_FUNCTION("xetla gemm", {a, b, c, acc});
-#endif
 
   auto queue = get_current_sycl_queue();
   auto evt = gemm_run<T>(a.data_ptr(), b.data_ptr(), c.data_ptr(),
                          acc.data_ptr(), cnt.data_ptr(), queue);
-#ifdef USE_IPEX
-  xpu::profiler_record("xetla kernel", evt);
-#endif
   return acc;
 }
 
@@ -81,16 +59,10 @@ at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
   CHECK_INPUT(b);
   CHECK_INPUT(c);
   CHECK_INPUT(acc);
-#ifdef USE_IPEX
-  RECORD_FUNCTION("xetla stream_k_gemm", {a, b, c, acc});
-#endif
 
   auto queue = get_current_sycl_queue();
   auto evt = stream_k_gemm_run(a.data_ptr(), b.data_ptr(), c.data_ptr(),
                                acc.data_ptr(), cnt.data_ptr(), queue);
-#ifdef USE_IPEX
-  xpu::profiler_record("xetla kernel", evt);
-#endif
   return acc;
 }
 
@@ -117,10 +89,6 @@ void flash_attn(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v,
   CHECK_INPUT(bias);
   CHECK_INPUT(m);
   CHECK_INPUT(l);
-#ifdef USE_IPEX
-  RECORD_FUNCTION("xetla fa",
-                  {num_batches, num_heads, head_size, num_queries, num_keys});
-#endif
 
   auto queue = get_current_sycl_queue();
 
@@ -140,9 +108,6 @@ void flash_attn(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v,
               << "\n";
   }
 
-#ifdef USE_IPEX
-  xpu::profiler_record("xetla kernel", evt);
-#endif
   return;
 }
 
